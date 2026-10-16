@@ -200,8 +200,9 @@ def next_check(store, now):
 
 
 def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print,
-                 configure=None, static=None):
-    """One refresh check; returns (delay before the next check, consecutive failures)."""
+                 configure=None, static=None, label='GitHub token chain'):
+    """One refresh check; returns (delay before the next check, consecutive failures). `label`
+    names the chain in the log: the GitHub chain, or the package read access."""
     try:
         # An install that was cut off, such as by a closed SSH connection, left repositories
         # configured for a chain it never stored; the stored state decides again.
@@ -216,25 +217,25 @@ def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=rando
         with store.lock():
             store.retry_pending()
     except Exception as error:
-        log('GitHub token chain still not stored: ' + type(error).__name__, flush=True)
+        log(label + ' still not stored: ' + type(error).__name__, flush=True)
     try:
         outcome = refresh_once(store, now, post)
     # Storage or lock failures are retried; the refresh thread must never end.
     except Exception as error:
-        log('GitHub refresh failed: ' + type(error).__name__, flush=True)
+        log(label + ' refresh failed: ' + type(error).__name__, flush=True)
         outcome = 'retry'
     if outcome == 'retry':
         failures += 1
         return retry_delay(failures, jitter), failures
     if outcome in ('refreshed', 'revoked'):
-        log('GitHub token chain ' + outcome, flush=True)
+        log(label + ' ' + outcome, flush=True)
     return next_check(store, now()), 0
 
 
-def refresh_loop(store, sleep=time.sleep):
+def refresh_loop(store, sleep=time.sleep, label='GitHub token chain'):
     failures = 0
     while True:
-        delay, failures = refresh_step(store, failures)
+        delay, failures = refresh_step(store, failures, label=label)
         sleep(delay)
 
 
@@ -289,11 +290,16 @@ def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitp
     # The socket opens only after the repositories match the stored chain, so the supervisor
     # never publishes a service that does not answer yet.
     book = agents.Book(store.runtime)
+    # One package chain store for the broker and its renewal, made before either runs.
+    packages.store_for(store)
     servers = start(store, path, prepare=lambda: prepare(store), proxy=proxy, authority=authority)
     if servers is None:
         return 1
     server = servers[0]
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
+    # The package read access renews the same way, from its own store, also with Horizon off.
+    threading.Thread(target=refresh_loop, args=(packages.store_for(store),),
+                     kwargs={'label': 'Package read access'}, daemon=True).start()
     # The Upkeep of this worker keeps working without Horizon: its loop starts again after a
     # container restart, Git and gh already routed, and its own requests are allowed here.
     threading.Thread(target=upkeep_loop.start_loop, args=(store, book), daemon=True).start()
@@ -467,7 +473,7 @@ def status(store, now=time.time):
     if state is None:
         return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
                 'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
-                'repositories': [], 'pending_requests': pending, 'packages': packages.load(store) is not None}
+                'repositories': [], 'pending_requests': pending, 'packages': packages.summary(store)}
     # A cloud grant routes credentials only; it has no target repository on the worker.
     repositories = [{key: grant[key] for key in ('repository', 'target', 'access')} for grant in state['grants']]
     repositories += [{'repository': grant['repository'], 'target': None, 'access': grant['access']}
@@ -477,7 +483,7 @@ def status(store, now=time.time):
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
             'repositories': repositories, 'pending_requests': pending,
-            'packages': packages.load(store) is not None}
+            'packages': packages.summary(store)}
 
 
 def host_status(store, path=agents.SOCKET):

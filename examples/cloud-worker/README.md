@@ -1505,25 +1505,33 @@ ID or to look up the IDs of a mutation, and then refused it.
 
 **Package read access.** GitHub's package API and its NuGet registry accept only
 a token with the `read:packages` scope, such as the token of Horizon's OAuth app;
-the GitHub App's user token never reads them. Horizon gives such a
-token, the package read access of the cloud, to root on the worker with JSON on
-stdin, never in argv or a log:
+the GitHub App's user token never reads them. Horizon gives the token chain of
+such an OAuth app, the package read access of the cloud, to root on the worker
+with JSON on stdin, never in argv or a log:
 
 ```sh
-horizon-worker-github packages < private-file   # {"version":1,"token":"..."}
-horizon-worker-github packages < private-file   # {"version":1,"token":null} removes it
+horizon-worker-github packages < private-file
+# {"version":1,"client_id":"...","chain":{"access_token":"...","access_expires_at":...,
+#  "refresh_token":"...","refresh_expires_at":...}}, with "client_secret" for a web sign-in
+horizon-worker-github packages < private-file   # {"version":1,"chain":null} removes it
 ```
 
-The service keeps it in root-only `packages.json` copies beside the chain, on the
-volume and on tmpfs, and reports only whether it holds one (`packages` in
-`status`). Two copies that differ, or a copy that is not private, serve no token.
-`horizon-worker-github clear` removes it with the chain. A revoked chain opens
-no owner; the static token file still opens its own.
+A new chain replaces the one that the worker holds. The service keeps it in a
+second chain store with the same rules as the GitHub chain's:
+`/workspace/.horizon-root/github-packages` on the volume, or
+`/run/horizon-github-packages` on tmpfs, root-only. It renews the chain in the
+same way and with the same waits, with the client ID alone (a device sign-in) or
+with the client secret when one came, so the access keeps working while Horizon
+is off. `bad_refresh_token` or an expired refresh token ends it. `status` reports
+`packages`: `null`, or the state and times of the chain, never a token.
+`horizon-worker-github clear` removes it with the GitHub chain. A revoked GitHub
+chain opens no owner; the static token file still opens its own.
 No agent gets the token: no variable, no file and no NuGet configuration holds
-it. The broker adds it only to the package reads above. Without a token, those
-reads get `gh: Horizon: this worker has no package read access, ...`, which tells
-that the person can give the cloud package read access in Horizon. When GitHub
-refuses the token, the broker says so. Through these paths the token reads every
+it. The broker adds the access token only to the package reads above, and none
+that expires within a minute. Without a chain, those reads get
+`gh: Horizon: this worker has no package read access, ...`, which tells that the
+person can give the cloud package read access in Horizon. An ended chain and a
+token that GitHub refuses get their own refusals. Through these paths the token reads every
 NuGet and npm package that its account can read, for the owners of the granted
 repositories. Give a worker a token that can only read packages, never one with
 other scopes.

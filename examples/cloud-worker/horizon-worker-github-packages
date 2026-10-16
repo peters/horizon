@@ -1,16 +1,22 @@
 """The package read access of the worker's GitHub access. GitHub's package API and its NuGet
-registry take only a token with the `read:packages` scope, such as an OAuth app's token,
-which a GitHub App's user token never has. Horizon gives such a token to this root
-service (`horizon-worker-github packages`, JSON on stdin, never in argv or a log). It lives in root-only files next to the chain, and no agent gets it: no variable, no
-file, no NuGet.Config. The API broker adds it only to the package reads that the REST policy
-allows (horizon-worker-github-api-rest), and only for an owner of a repository that the
-cloud's GitHub access grants. A module that horizon-worker-github loads, not a command."""
+registry take only a token with the `read:packages` scope, such as an OAuth app's token, which
+a GitHub App's user token never has. Horizon gives this root service a token chain of such an
+app (`horizon-worker-github packages`, JSON on stdin, never in argv or a log): its client ID,
+an optional client secret and the chain. The service keeps it in a second chain store beside
+the GitHub chain's, root-only, and renews it like that chain, with the client ID alone or with
+the secret when one came, so it keeps working while Horizon is off. No agent gets it: no
+variable, no file, no NuGet.Config. The API broker adds the access token only to the package
+reads that the REST policy allows (horizon-worker-github-api-rest), and only for an owner of a
+repository that the cloud's GitHub access grants. A module that horizon-worker-github loads,
+not a command."""
 import importlib.machinery
 import importlib.util
 import json
-import os
 from pathlib import Path
+import re
 import sys
+import threading
+import time
 
 
 def load_common():
@@ -27,100 +33,103 @@ def load_common():
 common = load_common()
 auth = common.auth
 
-TOKEN = 'packages.json'
-# Held for a whole install or removal, and shared by each read, so no read sees the copies
-# of two tokens and no two installs leave copies that differ.
-LOCK = 'packages.lock'
 MAX_SOURCE = 4096
-FIELDS = {'version', 'token'}
+# Guards the creation of the one package chain store of each GitHub store.
+STORES = threading.Lock()
+FIELDS = {'version', 'client_id', 'client_secret', 'chain'}
+# Fields a request may leave out.
+OPTIONAL = {'client_id', 'client_secret'}
+CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
 MISSING = ('this worker has no package read access, so GitHub\'s package API stays closed to agents. The person '
            'can give the cloud package read access in Horizon.')
-REFUSED = 'GitHub refused the package read access of this worker. The person can give the cloud package read access again in Horizon.'
+REVOKED = ('the package read access of this worker ended (GitHub refused to renew it). The person can give the '
+           'cloud package read access again in Horizon.')
+EXPIRED = ('the package read access of this worker expired and was not renewed yet; try again in a minute. If '
+           'this stays, the person can give the cloud package read access again in Horizon.')
+REFUSED = ('GitHub refused the package read access of this worker. The person can give the cloud package read '
+           'access again in Horizon.')
 
 
-def parse(value):
-    """The token of Horizon's request, or None to remove the one that the worker holds."""
-    if not isinstance(value, dict) or set(value) != FIELDS or type(value['version']) is not int \
-            or value['version'] != 1:
-        raise ValueError('Invalid package token request')
-    if value['token'] is not None and not auth.valid_token(value['token']):
-        raise ValueError('Invalid package token')
-    return value['token']
+def store_for(store):
+    """The chain store of the package read access, beside the GitHub chain's store: its own
+    root-only directories on the volume and on tmpfs, with their own locks. One per GitHub
+    store, so the broker sees a renewed chain that only the renewal's memory holds."""
+    with STORES:
+        if getattr(store, 'package_chains', None) is None:
+            store.package_chains = common.Store(store.persistent.with_name(store.persistent.name + '-packages'),
+                                                store.runtime.with_name(store.runtime.name + '-packages'))
+        return store.package_chains
 
 
-def directories(store):
-    return (store.persistent, store.runtime)
+def parse(value, now):
+    """The state to store for Horizon's request, or None to remove the package read access."""
+    if not isinstance(value, dict) or not FIELDS - OPTIONAL <= set(value) <= FIELDS \
+            or type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('Invalid package read access request')
+    if value['chain'] is None:
+        if set(value) != {'version', 'chain'}:
+            raise ValueError('Invalid package read access request')
+        return None
+    if not isinstance(value.get('client_id'), str) or not CLIENT_ID.fullmatch(value['client_id']):
+        raise ValueError('Invalid package read access client')
+    if 'client_secret' in value and not auth.valid_token(value['client_secret']):
+        raise ValueError('Invalid package read access client')
+    chain = common.validate_chain(value['chain'])
+    if chain['refresh_expires_at'] <= now:
+        raise ValueError('The package read access chain expired')
+    state = {'version': 1, 'state': 'ok', 'client_id': value['client_id'], 'chain': chain}
+    if 'client_secret' in value:
+        state['client_secret'] = value['client_secret']
+    return state
 
 
-def lock(store, shared=False):
-    return common.locked(store.runtime, LOCK, shared)
+def install(store, source, now=time.time):
+    """Stores Horizon's chain in place of any earlier one, or removes it for a null chain.
+    Returns what the worker holds now. The chain store's own lock serializes this with the
+    renewal, which may rotate the stored chain at any time."""
+    state = parse(json.loads(source), int(now()))
+    chains = store_for(store)
+    with chains.lock():
+        if state is None:
+            chains.clear()
+        else:
+            # A failed install keeps the earlier chain: GitHub did not cancel it.
+            chains.save(state, retain=False)
+    return {'packages': summary(store)}
 
 
 def remove(store):
-    """Removes every copy, durably, as when GitHub is disconnected. Raises OSError when a copy
-    stays."""
-    with lock(store):
-        remove_copies(store)
+    """Removes the package read access, as when GitHub is disconnected."""
+    chains = store_for(store)
+    with chains.lock():
+        chains.clear()
 
 
-def remove_copies(store):
-    for directory in directories(store):
-        common.remove_durably(directory, TOKEN)
-
-
-def install(store, source):
-    """Saves Horizon's token in every private storage of the store, or removes it from each
-    with a null token. A storage that does not take a new token loses its older one, so no
-    copy of an earlier token stays to be served. Returns whether the worker holds a token."""
-    token = parse(json.loads(source))
-    with lock(store):
-        if token is None:
-            remove_copies(store)
-            return {'packages': False}
-        save(store, token)
-    return {'packages': True}
-
-
-def save(store, token):
-    data = json.dumps({'version': 1, 'token': token}, separators=(',', ':'))
-    saved = False
-    for directory in directories(store):
-        try:
-            if directory == store.persistent:
-                common.private_directory(directory.parent, create=True)
-            common.write_private(common.private_directory(directory, create=True), TOKEN, data)
-            saved = True
-        except common.Unsynced:
-            saved = True
-        except (OSError, ValueError):
-            try:
-                common.remove_durably(directory, TOKEN)
-            except OSError:
-                raise ValueError('A storage kept an older package token') from None
-    if not saved:
-        raise ValueError('No private storage accepted the package token')
-
-
-def load(store):
-    """The token that the worker holds, or None. A copy that cannot be read, or two copies
-    that differ, give none: root cannot tell which one Horizon gave last."""
-    found = set()
-    try:
-        with lock(store, shared=True):
-            for directory in directories(store):
-                path = directory / TOKEN
-                value = common.read_json(path, MAX_SOURCE)
-                if value is None and not os.path.lexists(path):
-                    continue
-                # A copy that is there but names no token is not a removal: removal deletes
-                # the copies, so such a copy serves no token from the other one either.
-                token = None if value is None else parse(value)
-                if token is None:
-                    return None
-                found.add(token)
-    except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+def summary(store):
+    """What `status` reports: None, or the state and times of the chain, never a token."""
+    state, persistent = store_for(store).load()
+    if state is None:
         return None
-    return found.pop() if len(found) == 1 else None
+    return {'state': state['state'], 'persistent': persistent,
+            'access_expires_at': state['chain']['access_expires_at'],
+            'refresh_expires_at': state['chain']['refresh_expires_at'],
+            'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error')}
+
+
+def load(store, now=time.time):
+    """(access token, None) of the package read access, or (None, why there is none). A chain
+    that is not stored yet, or whose access token is about to expire, serves nothing."""
+    try:
+        state, _ = store_for(store).load(serving=True)
+    except (OSError, ValueError):
+        state = None
+    if state is None:
+        return None, MISSING
+    if state['state'] != 'ok':
+        return None, REVOKED
+    if state['chain']['access_expires_at'] - now() <= common.SERVE_MARGIN:
+        return None, EXPIRED
+    return state['chain']['access_token'], None
 
 
 def owners(store, static=None):
@@ -145,8 +154,7 @@ def token_for(store, owner, static=None):
     if owner.casefold() not in owners(store, static):
         return None, ('%s owns no repository that this worker has a GitHub grant for, so its packages stay closed.'
                       % owner)
-    token = load(store)
-    return (token, None) if token is not None else (None, MISSING)
+    return load(store)
 
 
 if __name__ == '__main__':

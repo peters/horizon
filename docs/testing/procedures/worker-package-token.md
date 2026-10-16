@@ -1,10 +1,10 @@
 ---
 procedure: worker-package-token
-feature: Package reads on a worker with a read-only package token that only root holds
+feature: Package reads on a worker with a read-only token chain that only root holds and renews
 platforms: [linux]
 cost: rents compute
 destructive: yes
-secrets: [a token with only the read:packages scope from a device sign-in of Horizon's OAuth app, in <evidence>/chain.json and <evidence>/packages-token.json, the SSH identity of Cloud settings]
+secrets: [a token with only the read:packages scope from a device sign-in of Horizon's OAuth app, in <evidence>/chain.json and <evidence>/packages-chain.json, the SSH identity of Cloud settings]
 owner: peters
 ---
 
@@ -12,9 +12,9 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that root on a worker keeps a package token that no agent
-can read, and that the API broker adds it only to package reads for the owners of
-the granted repositories. An agent can then read the versions of a private NuGet
+This procedure proves that root on a worker keeps and renews a package token
+chain that no agent can read, and that the API broker adds its token only to
+package reads for the owners of the granted repositories. An agent can then read the versions of a private NuGet
 package and their dates. Without a token, the refusal says that the cloud has no
 package read access.
 
@@ -42,8 +42,9 @@ package read access.
 > token of your own `gh` login or of Horizon's image publishing.
 
 > **CAUTION:** DO NOT REVOKE HORIZON'S OAUTH APP ON GITHUB IN THE CLEANUP. That
-> also ends the image publishing sign-in of Horizon. The test token runs out
-> after 8 hours.
+> also ends the image publishing sign-in of Horizon. W05 rotates the test chain,
+> so the copy in the evidence stops working, and the worker that holds the new
+> chain is deleted in the cleanup.
 
 > **CAUTION:** DELETE THE TEST CLOUD IN THE CLEANUP. The cloud rents compute until
 > somebody deletes it.
@@ -87,11 +88,14 @@ package read access.
    (umask 077; curl -sS -X POST -H 'Accept: application/json' \
      -d "client_id=Ov23liPNCPgWraJDo6XM&device_code=$(jq -r .device_code <evidence>/device.json)&grant_type=urn:ietf:params:oauth:grant-type:device_code" \
      https://github.com/login/oauth/access_token > <evidence>/chain.json
-    jq '{version: 1, token: .access_token}' <evidence>/chain.json > <evidence>/packages-token.json)
+    jq '{version: 1, client_id: "Ov23liPNCPgWraJDo6XM", chain: {access_token, refresh_token,
+      access_expires_at: ((now | floor) + .expires_in),
+      refresh_expires_at: ((now | floor) + .refresh_token_expires_in)}}' \
+      <evidence>/chain.json > <evidence>/packages-chain.json)
    jq -r .scope <evidence>/chain.json
    ```
 
-   Result: The last command shows `read:packages`. `<evidence>/packages-token.json`
+   Result: The last command shows `read:packages`. `<evidence>/packages-chain.json`
    has mode `0600`.
 
 4. If the image of the worker is older than the candidate, copy the candidate's
@@ -99,7 +103,7 @@ package read access.
    process `horizon-worker-github serve` and start it again as root with
    `setsid nohup horizon-worker-github serve </dev/null >/dev/null 2>&1 &`.
 
-   Result: `horizon-worker-github status` on the worker shows `"packages":false`.
+   Result: `horizon-worker-github status` on the worker shows `"packages":null`.
 
 ## 6. Tasks
 
@@ -124,19 +128,19 @@ package read access.
    Result: `gh` stops with an error. The message starts with
    `Horizon: this worker has no package read access`.
 
-### 6.3 W02 — Root keeps the token
+### 6.3 W02 — Root keeps the chain
 
-1. Give the token to root on the worker with stdin. Do not put it in argv.
+1. Give the chain to root on the worker with stdin. Do not put it in argv.
 
    ```sh
-   ssh root@<worker> horizon-worker-github packages < <evidence>/packages-token.json
+   ssh root@<worker> horizon-worker-github packages < <evidence>/packages-chain.json
    ```
 
-   Result: The output is `{"packages":true}`.
+   Result: The output starts with `{"packages":{"state":"ok"`.
 
 2. On the worker, run `horizon-worker-github status`.
 
-   Result: The output has `"packages":true` and no token.
+   Result: The output has `"packages":{"state":"ok"` and no token.
 
 3. On the worker, search the files and the environment of the agent for the
    token. Use the first eight characters of the token as `PREFIX`.
@@ -148,13 +152,14 @@ package read access.
 
    Result: Both commands show `0`.
 
-4. On the worker, examine the token files.
+4. On the worker, examine the chain files.
 
    ```sh
-   stat -c '%a %U %n' /workspace/.horizon-root/github/packages.json /run/horizon-github/packages.json
+   stat -c '%a %U %n' /workspace/.horizon-root/github-packages/state.json /run/horizon-github-packages/state.json
    ```
 
-   Result: Each file has mode `600` and the owner `root`.
+   Result: Each file that exists has mode `600` and the owner `root`. At least one
+   exists.
 
 ### 6.4 W03 — The agent reads a package version and its date
 
@@ -194,26 +199,47 @@ package read access.
    Result: The lines of W03 have `"request":"package"` and `"granted":true`. The
    lines of the refusals have `"granted":false`. No line has the token.
 
-### 6.6 W05 — Root removes the token
+### 6.6 W05 — Root renews the chain
 
-1. Give root a request without a token.
+1. Give root the chain again, with an access token that the service renews at its
+   next check (in 31 minutes or less it renews).
 
    ```sh
-   printf '{"version":1,"token":null}' | ssh root@<worker> horizon-worker-github packages
+   jq '.chain.access_expires_at = ((now | floor) + 1860)' <evidence>/packages-chain.json \
+     | ssh root@<worker> horizon-worker-github packages
    ```
 
-   Result: The output is `{"packages":false}`.
+   Result: The output starts with `{"packages":{"state":"ok"`.
+
+2. Wait two minutes. On the worker, run `horizon-worker-github status`.
+
+   Result: `packages` has a `last_refresh_at` and an `access_expires_at` about 8
+   hours from now, and `last_error` is `null`.
+
+3. Run the package read of W03 again.
+
+   Result: The output shows a version and a date.
+
+### 6.7 W06 — Root removes the chain
+
+1. Give root a request without a chain.
+
+   ```sh
+   printf '{"version":1,"chain":null}' | ssh root@<worker> horizon-worker-github packages
+   ```
+
+   Result: The output is `{"packages":null}`.
 
 2. Run the package read of W03 again.
 
    Result: The message starts with `Horizon: this worker has no package read access`.
-   `/workspace/.horizon-root/github/packages.json` and
-   `/run/horizon-github/packages.json` do not exist.
+   `/workspace/.horizon-root/github-packages/state.json` and
+   `/run/horizon-github-packages/state.json` do not exist.
 
 ## 7. Pass criteria
 
 - Lane U shows `OK`.
-- W01 to W05 give each result.
+- W01 to W06 give each result.
 - No evidence shows the token.
 
 ## 8. Cleanup
@@ -223,9 +249,9 @@ package read access.
    Result: The provider shows no server, volume or SSH key of the test cloud.
 
 2. Delete `<evidence>/device.json`, `<evidence>/chain.json` and
-   `<evidence>/packages-token.json`. Do not revoke Horizon's OAuth app on GitHub.
+   `<evidence>/packages-chain.json`. Do not revoke Horizon's OAuth app on GitHub.
 
-   Result: The files do not exist. The access token runs out after 8 hours.
+   Result: The files do not exist.
 
 ## 9. Record of results
 

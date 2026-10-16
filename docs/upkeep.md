@@ -860,12 +860,14 @@ Horizon and the worker do not guarantee these items:
 
 GitHub's package API and its NuGet registry accept only a token with the
 `read:packages` scope. The token of the GitHub App never reads them. Thus Horizon
-sets up a separate package token for the worker, the cloud's package read access. The worker uses it
+sets up a separate token chain of its own OAuth app for the worker, with only the
+`read:packages` scope: the cloud's package read access. The worker renews it, also
+while Horizon is off. The worker uses it
 for package reads only.
 
 Trusted input:
 
-- The package token that Horizon gives root on the worker. Horizon never reads it
+- The token chain that Horizon gives root on the worker. Horizon never reads it
   from repository files, and an agent cannot set it.
 - The repositories that the cloud's GitHub access grants: those of the Upkeep, and
   any other that you allowed for the whole cloud on the cloud card.
@@ -877,8 +879,8 @@ Untrusted input:
 
 The worker guarantees these items:
 
-- Horizon gives the token to root with JSON on stdin, never in argv or a log. Root
-  keeps it in files that only root can read. No agent gets the token: no
+- Horizon gives the chain to root with JSON on stdin, never in argv or a log. Root
+  keeps it in files that only root can read, and renews it as root. No agent gets the token: no
   environment variable, no file and no NuGet configuration holds it. The rule
   "the agent never holds a GitHub token" stays true.
 - Root adds the token only to `GET` and `HEAD` requests for the NuGet and npm

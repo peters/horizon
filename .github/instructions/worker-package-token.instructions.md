@@ -1,5 +1,5 @@
 ---
-applyTo: "examples/cloud-worker/horizon-worker-github-packages,examples/cloud-worker/horizon-worker-github-api,examples/cloud-worker/horizon-worker-github-api-rest,examples/cloud-worker/test_github_packages.py,docs/testing/procedures/worker-package-token.md"
+applyTo: "examples/cloud-worker/horizon-worker-github-packages,examples/cloud-worker/horizon-worker-github,examples/cloud-worker/horizon-worker-github-api,examples/cloud-worker/horizon-worker-github-api-rest,examples/cloud-worker/test_github_packages.py,docs/testing/procedures/worker-package-token.md"
 ---
 
 # Trust boundary of the worker's package token
@@ -10,15 +10,19 @@ GitHub's package API and its NuGet registry accept only a token with the
 `docs/upkeep.md`, section "Trust boundary of the package token", and in
 `examples/cloud-worker/README.md`, "Package token".
 
-## Trusted: the token that Horizon gives root, and the cloud's grants
+## Trusted: the chain that Horizon gives root, and the cloud's grants
 
-- The token arrives only on root's stdin. It never enters argv, a log, the request log,
-  a refusal or the `status` output (which says only whether a token is held).
-- Root keeps it only in root-private copies (`common.write_private`) and reads them with
-  `common.read_json`. An install or removal holds `packages.lock` for all copies, and each
-  read shares it, so overlapping installs never leave copies that differ. A copy that is not private, cannot be parsed, or differs from the
-  other copy serves no token. A storage that does not take a new token loses its older
-  copy.
+- The chain arrives only on root's stdin. No token or secret enters argv, a log, the
+  request log, a refusal or the `status` output (which reports the state and times only).
+- Root keeps it in its own `common.Store` (`packages.store_for`), with the GitHub chain's
+  rules for private copies, serials, pending writes and clear marks. One store object per
+  GitHub store, so the broker sees a rotated chain that only the renewal's memory holds.
+- The renewal (`refresh_loop` with the package store) sends the client secret only when
+  one was installed. A chain that GitHub refuses with `bad_refresh_token`, or whose refresh
+  token expired, is revoked and serves nothing; other renewal errors are retried, and an
+  access token within `SERVE_MARGIN` of its expiry is not sent.
+- `install` replaces the chain under the store lock, so it never interleaves with a
+  renewal; a null chain clears the store.
 
 ## Untrusted: every request of an agent
 
