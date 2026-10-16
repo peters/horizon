@@ -165,6 +165,26 @@ class WorkflowShardTests(unittest.TestCase):
             self.assertEqual(job.count("bash scripts/ci-cargo-test-shard.sh"), 1)
             self.assertNotIn("cargo test --locked --workspace\n", job)
 
+    def test_apple_mobile_targets_install_retries_three_times(self):
+        workflow = WORKFLOW.read_text()
+        start = workflow.index("          for attempt in 1 2 3; do\n")
+        retry = workflow[start:workflow.index("\n          done\n", start) + len("\n          done\n")]
+        self.assertIn("rustup target add aarch64-apple-ios aarch64-apple-ios-sim", retry)
+        for failures, status in [(0, 0), (2, 0), (3, 1)]:
+            with self.subTest(failures=failures), tempfile.TemporaryDirectory() as bin_dir:
+                calls = Path(bin_dir) / "calls"
+                for name, body in [("rustup", f"echo x >> {calls}\n[ $(wc -l < {calls}) -gt {failures} ]\n"),
+                                   ("sleep", "exit 0\n")]:
+                    tool = Path(bin_dir) / name
+                    tool.write_text("#!/usr/bin/env bash\n" + body)
+                    tool.chmod(0o755)
+                env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+                result = subprocess.run(["bash", "-eo", "pipefail", "-c", retry], env=env,
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                self.assertEqual(len(calls.read_text().splitlines()), min(failures + 1, 3))
+                self.assertEqual("failed three times" in result.stdout, status == 1)
+
 
 if __name__ == "__main__":
     unittest.main()
