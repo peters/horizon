@@ -110,3 +110,40 @@ fn private_exchange_cancellation_stops_transport_without_emitting_output() {
     thread.join().unwrap();
     assert!(started.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn private_bytes_delivers_exact_bytes_from_memory_and_bounds_them() {
+    let cancel = Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| panic!("private output was emitted"),
+        secrets: Vec::new(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let received = dir.path().join("received");
+    let payload = b"private-fixture\n\xff\x00";
+    runner
+        .private_bytes(
+            Command::new("sh")
+                .args([
+                    "-c",
+                    "cat > \"$1\"; printf 'private stdout'; printf 'private stderr' >&2",
+                    "sh",
+                ])
+                .arg(&received),
+            payload,
+        )
+        .unwrap();
+    assert_eq!(std::fs::read(&received).unwrap(), payload);
+    assert!(matches!(
+        runner.private_bytes(Command::new("cat").arg("-"), &vec![b'x'; 256 * 1024 + 1]),
+        Err(Error::Invalid(_))
+    ));
+    assert!(runner.private_bytes(&mut Command::new("false"), b"private").is_err());
+    // A child that reads nothing must not hold a payload larger than the pipe buffer.
+    let started = std::time::Instant::now();
+    runner
+        .private_bytes(&mut Command::new("true"), &vec![b'x'; 256 * 1024])
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
