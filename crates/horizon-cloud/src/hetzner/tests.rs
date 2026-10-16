@@ -328,14 +328,17 @@ fn a_budgeted_inspection_ends_with_its_budget_as_a_transport_failure() {
         let address = listener.local_addr().unwrap();
         let task = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             let mut input = [0; 4096];
             let _ = stream.read(&mut input);
-            write!(
+            // On a slow runner the budget can end before the headers are written. The
+            // client gives up just the same, so a write to a client that left is no error.
+            let _ = write!(
                 stream,
                 "HTTP/1.1 {status}\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
-            )
-            .unwrap();
-            thread::sleep(Duration::from_millis(600));
+            );
+            // The body never comes: hold the connection until the client leaves.
+            let _ = stream.read(&mut input);
         });
         let mut hetzner = Hetzner::new(Credential::new("secret-test-key".into()).unwrap());
         hetzner.endpoint = format!("http://{address}");
