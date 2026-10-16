@@ -100,7 +100,12 @@ impl super::Job {
             .map_err(|error| format!("cannot make the bundle: {error}"))?;
         let bundle = folder.join("head.bundle");
         let mut create = super::super::commit::git_command(&borrowed);
-        create.args(["bundle", "create", "--quiet"]).arg(&bundle).arg("--all");
+        // In English whatever the locale, so an empty bundle is known by its message.
+        create
+            .env("LC_ALL", "C")
+            .args(["bundle", "create", "--quiet"])
+            .arg(&bundle)
+            .arg("--all");
         let kept = known(&borrowed, kept)?;
         if !kept.is_empty() {
             create.arg("--not").args(&kept);
