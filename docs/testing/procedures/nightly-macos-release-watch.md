@@ -23,6 +23,7 @@ This procedure proves three behaviors of the Watch job in `.github/workflows/mac
 - Candidate: the workflow file and `scripts/nightly-release-watch.py` on `main`.
 - Platforms: GitHub Actions on `peters/horizon`.
 - This procedure does not test: the release build steps. The CI change detection tests and the build itself examine them.
+- This procedure does not test: the skip gate after a failure, a cancelled run between a failure and a green run, or a re-run. `scripts/test_nightly_release_watch.py` examines these cases in Repo checks.
 
 ## 3. Safety
 
@@ -58,7 +59,11 @@ This procedure proves three behaviors of the Watch job in `.github/workflows/mac
 
    Result: A new run starts.
 
-2. Wait until the run is complete (`gh run watch <run-id>`).
+2. Wait until the run is complete:
+
+   ```bash
+   gh run watch "$(gh run list --repo peters/horizon --workflow macos-release-builds.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --repo peters/horizon
+   ```
 
    Result: The run fails. The **Simulated failure** job fails. The **Artifacts** jobs do not run. The **Watch** job is green.
 
@@ -76,7 +81,7 @@ This procedure proves three behaviors of the Watch job in `.github/workflows/mac
 
    Result: A new run starts. It builds macOS arm64 and macOS x64, which can take 25 minutes or more.
 
-2. Wait until the run is complete.
+2. Wait until the run is complete. Use the command in W1 step 2.
 
    Result: The run is green.
 
