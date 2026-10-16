@@ -48,7 +48,7 @@ This procedure uses no credentials, account, provider resource or paid capacity.
 
 1. Run `cargo test -p horizon-core --features cloud-exposure cloud_runtime::state::exposure::tests`.
 
-   Result: The five model tests pass.
+   Result: The seven model tests pass.
    Renewal changes only the selected service and requires a new operation.
    Currently retained operation IDs, rollback, expiry, overflow and conflicting ingress are refused.
 

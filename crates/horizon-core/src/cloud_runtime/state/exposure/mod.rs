@@ -4,6 +4,7 @@ mod provider;
 pub use provider::{ProviderPhase, ProviderProgress, Step as ProviderStep};
 #[cfg(feature = "cloud-exposure")]
 mod lifecycle;
+use crate::cloud_runtime::allocation::legacy::unique_json::UniqueValue;
 pub use binding::{Binding, ProviderBinding};
 use horizon_cloud_protocol::exposure::{EXPOSURE_LEASE_SECONDS, ExposureMode, ExposureRequest};
 use serde::{Deserialize, Serialize};
@@ -112,20 +113,30 @@ struct Fields {
     intents: Vec<Intent>,
     observed_at_millis: i64,
     #[serde(default)]
-    provider: Option<ProviderProgress>,
+    provider: Option<UniqueValue>,
 }
 
 const INVALID: &str = "Invalid retained exposure startup intent";
 impl TryFrom<Fields> for Record {
     type Error = &'static str;
     fn try_from(fields: Fields) -> Result<Self, Self::Error> {
+        let provider = fields
+            .provider
+            .map(|value| {
+                let provider: ProviderProgress = serde_json::from_value(value.0.clone()).map_err(|_| INVALID)?;
+                if serde_json::to_value(&provider).map_err(|_| INVALID)? != value.0 {
+                    return Err(INVALID);
+                }
+                Ok(provider)
+            })
+            .transpose()?;
         let record = Self {
             binding: fields.binding,
             epoch: fields.epoch,
             startup: fields.startup,
             intents: fields.intents,
             observed_at_millis: fields.observed_at_millis,
-            provider: fields.provider,
+            provider,
         };
         if record.valid() { Ok(record) } else { Err(INVALID) }
     }
@@ -183,10 +194,10 @@ impl Record {
                 Startup::Finishing { custody, operation } | Startup::FinishUnknown { custody, operation } => {
                     !custody.is_nil()
                         && !operation.is_nil()
-                        && self
-                            .intents
-                            .iter()
-                            .all(|intent| matches!(intent.phase, Phase::Closing { .. } | Phase::Closed { .. }))
+                        && self.intents.iter().all(|intent| {
+                            intent.operation != operation
+                                && matches!(intent.phase, Phase::Closing { .. } | Phase::Closed { .. })
+                        })
                 }
                 Startup::Unknown { custody: None } => {
                     self.intents.iter().all(|intent| intent.phase == (Phase::Opening {}))

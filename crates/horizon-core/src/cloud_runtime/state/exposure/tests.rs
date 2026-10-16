@@ -300,3 +300,59 @@ fn bounded_service_history_and_shared_management_policy_cannot_be_bypassed_by_ro
     assert!(record.add(epoch, custody, extra, Uuid::new_v4(), 1000).is_err());
     assert_eq!(record, before);
 }
+
+#[test]
+fn raw_provider_progress_cannot_overwrite_duplicate_or_aliased_map_keys() {
+    let mut record = retained("exposure-cloud", "worker-a", None);
+    let service = record.intents()[0].service.id;
+    record.provider = Some(ProviderProgress {
+        epoch: record.epoch(),
+        phase: ProviderPhase::Observed {},
+        firewall_id: Some(7),
+        rules_json: "[]".into(),
+        foreign: [(5, "a".repeat(64))].into(),
+        action_ids: vec![],
+        services: [(service, 20000)].into(),
+    });
+    let encoded = serde_json::to_string(&record).unwrap();
+    assert_eq!(serde_json::from_str::<Record>(&encoded).unwrap(), record);
+    for (original, replacement) in [
+        (
+            format!("\"{service}\":20000"),
+            format!("\"{service}\":20000,\"{service}\":20001"),
+        ),
+        (
+            format!("\"5\":\"{}\"", "a".repeat(64)),
+            format!("\"5\":\"{}\",\"5\":\"{}\"", "b".repeat(64), "a".repeat(64)),
+        ),
+        (
+            format!("\"5\":\"{}\"", "a".repeat(64)),
+            format!("\"05\":\"{}\",\"5\":\"{}\"", "b".repeat(64), "a".repeat(64)),
+        ),
+    ] {
+        let duplicate = encoded.replacen(&original, &replacement, 1);
+        assert_ne!(duplicate, encoded);
+        assert!(serde_json::from_str::<Record>(&duplicate).is_err());
+    }
+}
+
+#[test]
+fn decoded_finish_and_finish_unknown_cannot_reuse_a_retained_service_operation() {
+    let mut record = retained("exposure-cloud", "worker-a", None);
+    let epoch = record.epoch();
+    let custody = Uuid::new_v4();
+    let service_operation = record.intents()[0].operation;
+    let finish_operation = Uuid::new_v4();
+    record.observed(epoch, custody, 2000).unwrap();
+    assert!(record.finishing(epoch, custody, service_operation).is_err());
+    record.finishing(epoch, custody, finish_operation).unwrap();
+    for state in ["finishing", "finish_unknown"] {
+        let mut value = serde_json::to_value(&record).unwrap();
+        value["startup"]["state"] = json!(state);
+        let mut decoded: Record = serde_json::from_value(value.clone()).unwrap();
+        assert!(decoded.finished(epoch, custody, service_operation).is_err());
+        decoded.finished(epoch, custody, finish_operation).unwrap();
+        value["startup"]["operation"] = json!(service_operation);
+        assert!(serde_json::from_value::<Record>(value).is_err());
+    }
+}
