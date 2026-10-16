@@ -84,7 +84,7 @@ impl Transport {
     }
     pub(crate) fn complete_setup(&mut self) -> Result<()> {
         if let Some(cancel) = &self.cancellation {
-            cancel.cancellation().release()?;
+            cancel.cancellation().release().inspect_err(|_| self.abandon())?;
         }
         self.cancellation = None;
         Ok(())
@@ -125,7 +125,7 @@ impl Transport {
     }
     pub(crate) fn request(&mut self, method: &str, path: &str, headers: &str, body: &[u8]) -> Result<Response> {
         if let Some(cancel) = &self.cancellation {
-            cancel.cancellation().check()?;
+            cancel.cancellation().check().inspect_err(|_| self.abandon())?;
         }
         self.sequence = self
             .sequence
@@ -218,12 +218,22 @@ impl Transport {
     /// instead of the socket error that the shutdown caused.
     fn interrupted(&self) -> Result<()> {
         if self.closed.load(Ordering::Acquire) {
+            self.abandon();
             return Err(std::io::Error::new(ErrorKind::ConnectionAborted, "receiver connection closed").into());
         }
         match &self.cancellation {
-            Some(registration) if !self.event_idle => registration.cancellation().check(),
+            Some(registration) if !self.event_idle => {
+                registration.cancellation().check().inspect_err(|_| self.abandon())
+            }
             _ => Ok(()),
         }
+    }
+    /// Ends the connection for the receiver once this transport sees a cancellation
+    /// or a close. The shutdown in [`Cancellation::stop`] and [`Closer::close`] uses
+    /// a cloned handle, and on Windows a clone of a socket that a timed dial connected
+    /// can report that it is not connected, so that shutdown can fail.
+    fn abandon(&self) {
+        let _ = self.socket.shutdown(Shutdown::Both);
     }
     fn socket_read_exact(&mut self, mut output: &mut [u8]) -> Result<()> {
         while !output.is_empty() {
@@ -432,7 +442,11 @@ mod tests {
             Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
                 .expect("connect");
         let (mut receiver, _) = listener.accept().expect("accept");
-        let worker = thread::spawn(move || transport.request("SETUP", "/stream", "", &[]).err());
+        // The worker returns the transport, so only a shutdown, not a drop, can end the connection.
+        let worker = thread::spawn(move || {
+            let error = transport.request("SETUP", "/stream", "", &[]).err();
+            (error, transport)
+        });
         let mut request = Vec::new();
         let mut byte = [0];
         while !request.ends_with(b"\r\n\r\n") {
@@ -440,9 +454,13 @@ mod tests {
             request.push(byte[0]);
         }
         cancel.stop();
-        let error = worker.join().expect("worker");
+        let (error, transport) = worker.join().expect("worker");
         assert!(matches!(error, Some(Error::Protocol("casting cancelled"))), "{error:?}");
-        drop(receiver);
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("hang guard");
+        assert_eq!(receiver.read(&mut [0]).expect("the receiver sees the close"), 0);
+        drop(transport);
     }
 
     #[test]
@@ -450,23 +468,30 @@ mod tests {
         use std::sync::mpsc;
         let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
         let mut transport = Transport::connect(listener.local_addr().expect("address")).expect("connect");
-        let (receiver, _) = listener.accept().expect("accept");
+        let (mut receiver, _) = listener.accept().expect("accept");
         transport.wait_for_events();
         let closer = transport.closer().expect("closer");
         let (send, ended) = mpsc::channel();
-        thread::spawn(move || send.send(transport.message().err()));
+        thread::spawn(move || {
+            let error = transport.message().err();
+            let _ = send.send((error, transport));
+        });
         // Gives the read time to block; closing before it starts must also end it.
         thread::sleep(Duration::from_millis(100));
         closer.close();
         // Only guards against a hang: an idle event read has no deadline of its own.
-        let error = ended
+        let (error, transport) = ended
             .recv_timeout(Duration::from_secs(60))
             .expect("idle event read ended");
         assert!(
             matches!(&error, Some(Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionAborted),
             "{error:?}"
         );
-        drop(receiver);
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .expect("hang guard");
+        assert_eq!(receiver.read(&mut [0]).expect("the receiver sees the close"), 0);
+        drop(transport);
     }
 
     #[test]
