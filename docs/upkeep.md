@@ -634,7 +634,7 @@ advisories (`gh api /advisories`), which are public, for example for a safety
 review of an update.
 
 When the cloud has package read access, every agent of a worker can also read the
-NuGet and npm packages of the owners of its repositories, for example to make sure
+NuGet and npm packages of the owners of the cloud's own repositories, for example to make sure
 that a private package version exists and to read its age
 (`gh api /orgs/OWNER/packages/nuget/NAME/versions`). The agent does not get the
 token. See [Trust boundary of the package token](#trust-boundary-of-the-package-token).
@@ -862,47 +862,60 @@ GitHub's package API and its NuGet registry accept only a token with the
 `read:packages` scope. The token of the GitHub App never reads them. Thus Horizon
 sets up a separate token chain of its own OAuth app for the worker, with only the
 `read:packages` scope: the cloud's package read access. The worker renews it, also
-while Horizon is off. The worker uses it
-for package reads only.
+while Horizon is off, and uses it for package reads only.
 
 Trusted input:
 
 - The token chain that Horizon gives root on the worker. Horizon never reads it
   from repository files, and an agent cannot set it.
-- The repositories that the cloud's GitHub access grants: those of the Upkeep, and
-  any other that you allowed for the whole cloud on the cloud card.
+- The cloud's own repositories, which Horizon names with the chain: for an Upkeep,
+  its list of repositories. Only their owners open packages.
+- GitHub's answers about the scopes of the token.
 
 Untrusted input:
 
 - Every request of an agent to the root GitHub service of the worker: its method,
-  its path, its query and its owner.
+  its path, its query, its body and its owner.
+- Every repository that an agent asked for with `github_access`, also when you
+  allowed it for the whole cloud: it opens no packages.
+- GitHub's package replies, which name repositories outside the cloud.
 
 The worker guarantees these items:
 
 - Horizon gives the chain to root with JSON on stdin, never in argv or a log. Root
-  keeps it in files that only root can read, and renews it as root. No agent gets the token: no
-  environment variable, no file and no NuGet configuration holds it. The rule
-  "the agent never holds a GitHub token" stays true.
-- Root adds the token only to `GET` and `HEAD` requests for the NuGet and npm
-  packages of an owner of a granted repository: the list of packages of one type,
-  a package, its versions and one version. A task grant of one session does not
-  open the packages of its owner.
+  keeps it in files that only root can read (directories `0700`, files `0600`) and
+  renews it as root, without a subprocess. No agent gets the token or the refresh
+  token: no environment variable, no file, no process argument and no NuGet
+  configuration holds them, and no log, status, refusal or reply shows them. The
+  rule "the agent never holds a GitHub token" stays true.
+- Root keeps a chain only when GitHub says that its only scope is
+  `read:packages`, when Horizon gives it and after each renewal. A renewal that
+  brings another scope removes the chain. A token that can write never stays on
+  the worker.
+- Root adds the token only to `GET` and `HEAD` requests without a body for the
+  NuGet and npm packages of an owner of the cloud's own repositories: the list of
+  packages of one type, a package, its versions and one version, with only the
+  query parameters `package_type`, `visibility`, `page`, `per_page` and `state`.
 - Root refuses every other request with the token: a change or a delete of a
-  package, another owner, another package type, such as container images, and a
-  path with a dot segment or an encoded slash.
+  package, another owner, another package type, such as container images, another
+  query parameter, and a path with a dot segment, an encoded slash or a backslash.
+- Root never follows a redirect: it returns it to `gh` without the token, and
+  `gh` follows it through root again, so the token goes only to `api.github.com`.
+- Root passes a package reply on only after it read it as JSON: the repository
+  object of a package stays only for the cloud's own repositories. A reply that is
+  not JSON, is too large or holds the token is refused.
 - When the worker has no token, a package read gets a refusal that tells the
   agent that the cloud has no package read access.
-- When GitHub revokes the access of the cloud, the repositories of that access
-  open no owner. Disconnecting GitHub (`horizon-worker-github clear`) also
-  removes the token from the worker.
+- Disconnecting GitHub (`horizon-worker-github clear`) and a request without a
+  chain remove every copy. When a copy cannot be removed, none is served.
+  Deleting the cloud deletes the worker and the chain with it.
 
 The worker does not guarantee these items:
 
 - The token reads every package of every owner that its account can read. The
-  worker limits the paths and the owners, but GitHub limits only the scope. Give a
-  worker only a token whose scope is `read:packages`.
-- An agent can read every NuGet and npm package of the owners of the granted
-  repositories, also one that the repositories do not use.
+  worker limits the paths and the owners, but GitHub limits only the scope.
+- An agent can read every NuGet and npm package of the owners of the cloud's own
+  repositories, also one that the repositories do not use, and its versions.
 
 ## Trust boundary of New Upkeep
 

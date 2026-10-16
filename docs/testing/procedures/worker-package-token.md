@@ -14,7 +14,7 @@ owner: peters
 
 This procedure proves that root on a worker keeps and renews a package token
 chain that no agent can read, and that the API broker adds its token only to
-package reads for the owners of the granted repositories. An agent can then read the versions of a private NuGet
+package reads for the owners of the cloud's own repositories. An agent can then read the versions of a private NuGet
 package and their dates. Without a token, the refusal says that the cloud has no
 package read access.
 
@@ -88,7 +88,8 @@ package read access.
    (umask 077; curl -sS -X POST -H 'Accept: application/json' \
      -d "client_id=Ov23liPNCPgWraJDo6XM&device_code=$(jq -r .device_code <evidence>/device.json)&grant_type=urn:ietf:params:oauth:grant-type:device_code" \
      https://github.com/login/oauth/access_token > <evidence>/chain.json
-    jq '{version: 1, client_id: "Ov23liPNCPgWraJDo6XM", chain: {access_token, refresh_token,
+    jq '{version: 1, client_id: "Ov23liPNCPgWraJDo6XM", repositories: ["OWNER/REPOSITORY"],
+      chain: {access_token, refresh_token,
       access_expires_at: ((now | floor) + .expires_in),
       refresh_expires_at: ((now | floor) + .refresh_token_expires_in)}}' \
       <evidence>/chain.json > <evidence>/packages-chain.json)
@@ -186,15 +187,27 @@ package read access.
 
    | Command | The message has |
    |---|---|
-   | `gh api /orgs/github/packages/nuget/x/versions` | `github owns no repository` |
+   | `gh api /orgs/github/packages/nuget/x/versions` | `github owns none of this cloud` |
    | `gh api /orgs/OWNER/packages/container/x/versions` | `only NuGet and npm` |
    | `gh api -X DELETE /orgs/OWNER/packages/nuget/PACKAGE/versions/ID` | `never a change of a package` |
    | `gh api /orgs/OWNER/packages` | `only NuGet and npm` |
+   | `gh api '/orgs/OWNER/packages?package_type=nuget&q=x'` | `only the query parameters` |
+   | `gh api -X GET /orgs/OWNER/packages/nuget/PACKAGE/versions -f x=1` | `only the query parameters` |
 
    Result: Each command stops with an error, and the message has the text in the
    table. The package still exists on GitHub.
 
-2. On the worker, read the last lines of `/run/horizon-github/requests.log`.
+2. List the NuGet packages of `OWNER` as the agent user.
+
+   ```sh
+   horizon-worker-tailnet agent gh api '/orgs/OWNER/packages?package_type=nuget&per_page=100' \
+     --jq '[.[].repository.full_name] | unique'
+   ```
+
+   Result: The list has `OWNER/REPOSITORY` and `null` at most. It has no other
+   repository.
+
+3. On the worker, read the last lines of `/run/horizon-github/requests.log`.
 
    Result: The lines of W03 have `"request":"package"` and `"granted":true`. The
    lines of the refusals have `"granted":false`. No line has the token.

@@ -1,13 +1,13 @@
 """The package read access of the worker's GitHub access: root keeps and renews its chain, the
 REST policy names the package reads, and the API broker adds its token only to those reads for
-an owner of a granted repository. Synthetic tokens only."""
+an owner of the cloud's own repositories, and filters their replies. Synthetic tokens only."""
 import json
 import os
 import unittest
 from unittest import mock
 
 from test_github_api_broker import APIHandler, BrokerTestCase
-from test_github_git_proxy import STATIC, bind_static
+from test_github_git_proxy import bind_static
 from test_horizon_worker_github import ACCESS, ServiceTestCase, chain, service
 
 broker = service.broker
@@ -16,18 +16,21 @@ packages = service.packages
 TOKEN = 'gho_synthetic-packages'
 OTHER = 'gho_synthetic-packages-two'
 CLIENT = 'Ov23synthetic'
-SECRET = 'synthetic-client-secret'
 VERSIONS = '/orgs/example/packages/nuget/Operator.Push/versions'
+READ = ['read:packages']
 
 
-def request(token=TOKEN, secret=None):
-    """Horizon's request: the OAuth app's client ID and a chain, or a null chain."""
+def request(token=TOKEN, repositories=('example/project', 'Example/Library')):
+    """Horizon's request: the OAuth app's client ID, the cloud's repositories and a chain, or a
+    null chain."""
     if token is None:
         return json.dumps({'version': 1, 'chain': None})
-    value = {'version': 1, 'client_id': CLIENT, 'chain': chain(access=token)}
-    if secret is not None:
-        value['client_secret'] = secret
-    return json.dumps(value)
+    return json.dumps({'version': 1, 'client_id': CLIENT, 'repositories': list(repositories),
+                       'chain': chain(access=token)})
+
+
+def install(store, source=None, scopes=READ):
+    return packages.install(store, source or request(), check=lambda token: scopes)
 
 
 class RouteTests(unittest.TestCase):
@@ -62,7 +65,14 @@ class RouteTests(unittest.TestCase):
                 ('GET', '/orgs/example/packages/nuget/%2e%2e/container', 400),
                 ('GET', '/orgs/example/packages/nuget/a%2Fb', 400),
                 ('GET', '/orgs/example/packages/nuget/a%5cb', 400),
-                ('GET', '/orgs/example//packages/nuget/x', 400)]:
+                ('GET', '/orgs/example//packages/nuget/x', 400),
+                ('GET', '/orgs/example/packages/nuget/x\\y', 400),
+                ('GET', '/orgs/example/packages/nuget/%252e%252e/container', 403),
+                ('GET', '/orgs/example/packages/%6Euget/x', 403),
+                ('GET', '/orgs/example/packages?package_type=nuget&q=x', 400),
+                ('GET', '/orgs/example/packages?package_type=nuget&visibility[]=private', 400),
+                ('GET', '/orgs/example/packages?package_type=nuget&package%255Ftype=container', 400),
+                ('GET', '/orgs/example/packages/docker/x', 403), ('GET', '/orgs/example/packages/rubygems/x', 403)]:
             with self.assertRaises(rest.Refused, msg=(method, target)) as refused:
                 rest.route(method, 'api.github.com', target)
             self.assertEqual(refused.exception.status, status, target)
@@ -70,105 +80,185 @@ class RouteTests(unittest.TestCase):
 
 class StorageTests(ServiceTestCase):
     def test_root_keeps_the_chain_in_its_own_private_store_and_removes_it(self):
-        self.assertEqual(packages.load(self.store), (None, packages.MISSING))
-        held = packages.install(self.store, request())['packages']
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        held = install(self.store)['packages']
         self.assertEqual((held['state'], held['persistent']), ('ok', True))
-        self.assertEqual(packages.load(self.store), (TOKEN, None))
+        self.assertEqual(held['repositories'], ['example/project', 'Example/Library'])
+        self.assertEqual(packages.token_for(self.store, 'EXAMPLE'), (TOKEN, None))
         chains = packages.store_for(self.store)
         self.assertIs(chains, packages.store_for(self.store))
         self.assertEqual(chains.persistent.name, 'github-packages')
         state = chains.persistent / service.STATE
         self.assertEqual(os.stat(state).st_mode & 0o777, 0o600)
-        self.assertNotIn('client_secret', json.loads(state.read_text()))
+        self.assertEqual(os.stat(chains.persistent).st_mode & 0o777, 0o700)
         report = service.status(self.store)
         self.assertEqual(report['packages']['state'], 'ok')
         self.assertNotIn(TOKEN, json.dumps(report))
-        packages.install(self.store, request(OTHER, secret=SECRET))
-        self.assertEqual(packages.load(self.store), (OTHER, None))
-        self.assertEqual(json.loads(state.read_text())['client_secret'], SECRET)
-        self.assertEqual(packages.install(self.store, json.dumps({'version': 1, 'chain': None})), {'packages': None})
-        self.assertEqual(packages.load(self.store), (None, packages.MISSING))
+        self.assertNotIn(chain()['refresh_token'], json.dumps(report))
+        install(self.store, request(OTHER))
+        self.assertEqual(packages.token_for(self.store, 'example'), (OTHER, None))
+        self.assertEqual(install(self.store, request(None)), {'packages': None})
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        self.assertFalse(state.exists())
         self.assertIsNone(service.status(self.store)['packages'])
 
-    def test_malformed_requests_are_refused_without_echoing_a_token(self):
+    def test_malformed_requests_and_other_scopes_are_refused_without_echoing_a_token(self):
         good = json.loads(request())
         cases = [dict(good, version=2), dict(good, version=True), dict(good, extra=1),
+                 dict(good, client_secret='synthetic-secret'),
                  {key: value for key, value in good.items() if key != 'client_id'},
-                 dict(good, client_id='bad id'), dict(good, client_secret='bad\nsecret'),
+                 {key: value for key, value in good.items() if key != 'repositories'},
+                 dict(good, client_id='bad id'), dict(good, repositories=[]),
+                 dict(good, repositories=['example/a'] * 2), dict(good, repositories=['Example/a', 'example/A']),
+                 dict(good, repositories=['example']), dict(good, repositories=['-x/y']),
+                 dict(good, repositories=['a/b'] * 51), dict(good, repositories='example/project'),
                  dict(good, chain=dict(good['chain'], access_token=TOKEN + '\n')),
                  dict(good, chain=dict(good['chain'], refresh_expires_at=1)),
                  {'version': 1, 'chain': None, 'client_id': CLIENT}, [], {'version': 1}]
         for value in cases:
             with self.assertRaises(ValueError, msg=value) as refused:
-                packages.install(self.store, json.dumps(value))
+                install(self.store, json.dumps(value))
             self.assertNotIn(TOKEN, str(refused.exception))
-        self.assertEqual(packages.load(self.store), (None, packages.MISSING))
+        for scopes in (['write:packages'], ['read:packages', 'repo'], [], None, ['READ:PACKAGES']):
+            with self.assertRaises(ValueError, msg=scopes):
+                install(self.store, scopes=scopes)
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
 
-    def test_the_root_service_renews_the_chain_with_the_client_id_or_the_secret(self):
-        packages.install(self.store, request())
+    def test_the_scope_is_asked_from_github_with_the_token(self):
+        seen = []
+        with mock.patch.object(packages.common, 'opener') as opener:
+            response = opener.return_value.open.return_value.__enter__.return_value
+            response.headers = {'X-OAuth-Scopes': 'read:packages'}
+            opener.return_value.open.side_effect = lambda request, timeout: (
+                seen.append(request), opener.return_value.open.return_value)[1]
+            self.assertEqual(packages.scopes_of(TOKEN, {service.TEST_URL: 'http://127.0.0.1:9'}), READ)
+        self.assertEqual(seen[0].get_header('Authorization'), 'token ' + TOKEN)
+        with mock.patch.object(packages.common, 'opener') as opener:
+            opener.return_value.open.side_effect = OSError('unreachable')
+            with self.assertRaises(ValueError) as refused:
+                packages.scopes_of(TOKEN, {service.TEST_URL: 'http://127.0.0.1:9'})
+        self.assertNotIn(TOKEN, str(refused.exception))
+
+    def test_the_root_service_renews_the_chain_with_the_client_id_and_keeps_only_read(self):
+        install(self.store)
         chains = packages.store_for(self.store)
-        forms = []
+        forms, scope = [], ['read:packages']
 
         def post(form):
             forms.append(form)
             return {'access_token': OTHER, 'refresh_token': 'ghr_synthetic-packages-two', 'expires_in': 28800,
-                    'refresh_token_expires_in': 15897600, 'token_type': 'bearer'}
+                    'refresh_token_expires_in': 15897600, 'token_type': 'bearer', 'scope': scope[0]}
         due = chain(access=TOKEN)['access_expires_at'] - 60
-        self.assertEqual(service.refresh_once(chains, lambda: due, post), 'refreshed')
+        self.assertEqual(service.refresh_once(chains, lambda: due, post, packages.SCOPE), 'refreshed')
         self.assertEqual(forms[-1], {'client_id': CLIENT, 'grant_type': 'refresh_token',
                                      'refresh_token': chain()['refresh_token']})
-        self.assertEqual(packages.load(self.store, lambda: due), (OTHER, None))
-        packages.install(self.store, request(secret=SECRET))
-        self.assertEqual(service.refresh_once(chains, lambda: due, post), 'refreshed')
-        self.assertEqual(forms[-1]['client_secret'], SECRET)
-        # The access token close to its expiry serves nothing until the renewal stores a new one.
-        packages.install(self.store, request())
-        self.assertEqual(packages.load(self.store, lambda: due + 3600 * 8), (None, packages.EXPIRED))
-        self.assertEqual(service.refresh_once(chains, lambda: due, lambda form: {'error': 'bad_refresh_token'}),
-                         'revoked')
-        self.assertEqual(packages.load(self.store), (None, packages.REVOKED))
+        self.assertEqual(packages.token_for(self.store, 'example', lambda: due), (OTHER, None))
+        # A renewal that brings another scope removes the chain: no token that can write stays.
+        install(self.store)
+        scope[0] = 'read:packages,write:packages'
+        self.assertEqual(service.refresh_once(chains, lambda: due, post, packages.SCOPE), 'revoked')
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        self.assertNotIn(OTHER, json.dumps(chains.copies()))
+        install(self.store)
+        self.assertEqual(packages.token_for(self.store, 'example', lambda: due + 3600 * 8),
+                         (None, packages.EXPIRED))
+        self.assertEqual(service.refresh_once(chains, lambda: due, lambda form: {'error': 'bad_refresh_token'},
+                                              packages.SCOPE), 'revoked')
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.REVOKED))
         self.assertEqual(service.status(self.store)['packages']['last_error'], 'bad_refresh_token')
         logged = []
         service.refresh_step(chains, 0, now=lambda: due, log=lambda *line, **_: logged.append(line[0]),
-                             label='Package read access')
+                             label='Package read access', scope=packages.SCOPE)
         self.assertEqual(logged, ['Package read access revoked'])
 
-    def test_a_revoked_github_chain_opens_no_owner_and_disconnecting_removes_the_access(self):
+    def test_only_the_owners_of_the_cloud_repositories_open_never_a_grant(self):
         self.install()
-        packages.install(self.store, request())
+        install(self.store, request(repositories=['acme/api']))
+        self.assertEqual(packages.token_for(self.store, 'ACME'), (TOKEN, None))
+        # The chain's grants and an allowed cloud grant open nothing; neither does the static binding.
         state = self.stored()
-        self.store.save(dict(state, state='revoked', serial=state['serial'] + 1))
-        self.assertEqual(packages.owners(self.store, lambda: None), set())
-        self.assertIsNone(packages.token_for(self.store, 'example', lambda: None)[0])
+        self.store.save(dict(state, cloud_grants=[{'repository': 'otherorg/repo', 'access': 'read'}],
+                             serial=state['serial'] + 1))
+        bind_static(self.root / 'credentials/github.json', 'bound/tool')
+        for owner in ('example', 'otherorg', 'bound'):
+            token, reason = packages.token_for(self.store, owner)
+            self.assertIsNone(token, owner)
+            self.assertIn('owns none of this cloud', reason)
+
+    def test_a_task_grant_opens_no_owner(self):
+        self.install()
+        install(self.store, request(repositories=['acme/api']))
+        with mock.patch.object(service.agents.tasks, 'access', return_value='push'):
+            self.assertIsNone(packages.token_for(self.store, 'tasked')[0])
+
+    def test_disconnecting_removes_the_access(self):
+        self.install()
+        install(self.store)
         service.clear(self.store, retire=lambda: None)
-        self.assertEqual(packages.load(self.store), (None, packages.MISSING))
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
         self.assertFalse((packages.store_for(self.store).persistent / service.STATE).exists())
 
-    def test_owners_come_from_the_cloud_grants_and_the_static_binding(self):
-        self.assertEqual(packages.owners(self.store, lambda: None), set())
-        self.install()
-        static = (2, [{'repository': 'Bound-Owner/tool'}])
-        self.assertEqual(packages.owners(self.store, lambda: static), {'example', 'bound-owner'})
-        packages.install(self.store, request())
-        self.assertEqual(packages.token_for(self.store, 'EXAMPLE', lambda: None), (TOKEN, None))
-        token, reason = packages.token_for(self.store, 'elsewhere', lambda: None)
-        self.assertIsNone(token)
-        self.assertIn('elsewhere owns no repository', reason)
-        packages.remove(self.store)
-        self.assertEqual(packages.token_for(self.store, 'example', lambda: None), (None, packages.MISSING))
+    def test_a_removal_or_replacement_that_fails_leaves_nothing_served(self):
+        install(self.store)
+        chains = packages.store_for(self.store)
+        with mock.patch.object(packages.common, 'remove_durably', side_effect=OSError('stuck')):
+            with self.assertRaises(ValueError):
+                packages.remove(self.store)
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        install(self.store)
+        self.assertEqual(packages.token_for(self.store, 'example'), (TOKEN, None))
+        with mock.patch.object(chains, 'write', side_effect=ValueError('no storage')):
+            with self.assertRaises(ValueError):
+                install(self.store, request(OTHER))
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+
+    def test_repository_objects_of_other_repositories_are_removed_from_replies(self):
+        own = {'example/project'}
+        listing = [{'name': 'a', 'repository': {'full_name': 'Example/Project', 'private': True}},
+                   {'name': 'b', 'repository': {'full_name': 'example/secret', 'description': 'private plans'}},
+                   {'name': 'c', 'repository': 'odd'}, {'name': 'd'}]
+        kept = json.loads(packages.filtered(json.dumps(listing).encode(), own))
+        self.assertEqual([item.get('repository') for item in kept],
+                         [{'full_name': 'Example/Project', 'private': True}, None, None, None])
+        self.assertNotIn('private plans', json.dumps(kept))
+        single = json.loads(packages.filtered(json.dumps(listing[1]).encode(), own))
+        self.assertIsNone(single['repository'])
+        with self.assertRaises(packages.Unchecked):
+            packages.filtered(b'<html>', own)
+        with self.assertRaises(packages.Unchecked):
+            packages.filtered(json.dumps({'note': TOKEN}).encode(), own, (TOKEN,))
 
 
 class BrokerTests(BrokerTestCase):
-    def test_without_a_package_token_a_package_read_never_reaches_github(self):
+    def answer_with(self, status, data, fields=()):
+        """Makes the fake GitHub answer package paths with `status`, `data` and `fields`."""
+        answer = APIHandler.answer
+
+        def scripted(handler):
+            if '/packages' not in handler.path:
+                return answer(handler)
+            handler.server.seen.append((handler.command, handler.headers.get('Host'), handler.path,
+                                        handler.headers.get('Authorization'), b''))
+            handler.send_response(status)
+            for name, value in fields:
+                handler.send_header(name, value)
+            handler.send_header('Content-Length', str(len(data)))
+            handler.end_headers()
+            handler.wfile.write(data)
+        patch = mock.patch.object(APIHandler, 'answer', scripted)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_without_package_read_access_a_package_read_never_reaches_github(self):
         status, _, payload = self.send('GET', VERSIONS)
         self.assertEqual(status, 403)
         self.assertIn(b'no package read access', payload)
         self.assertIn(b'in Horizon', payload)
         self.assertEqual(self.api.seen, [])
 
-    def test_a_package_read_of_a_granted_owner_gets_only_the_package_token(self):
-        packages.install(self.store, request())
-        status, _, payload = self.send('GET', VERSIONS + '?per_page=5')
+    def test_a_package_read_of_an_own_owner_gets_only_the_package_token(self):
+        install(self.store)
+        status, _, payload = self.send('GET', VERSIONS + '?per_page=5', fields=['Accept-Encoding: gzip'])
         self.assertEqual((status, json.loads(payload)), (200, {'path': VERSIONS + '?per_page=5'}))
         self.assertEqual(self.api.seen[-1][:4], ('GET', 'api.github.com', VERSIONS + '?per_page=5', 'token ' + TOKEN))
         self.assertEqual(self.send('GET', '/orgs/EXAMPLE/packages?package_type=nuget')[0], 200)
@@ -181,48 +271,71 @@ class BrokerTests(BrokerTestCase):
                          ('package', True, 'relayed'))
         self.assertNotIn(TOKEN, json.dumps(records))
 
-    def test_other_owners_changes_and_other_types_are_refused_before_github(self):
-        packages.install(self.store, request())
-        for method, target, reason in [
-                ('GET', '/orgs/elsewhere/packages/nuget/x/versions', b'elsewhere owns no repository'),
-                ('DELETE', VERSIONS + '/1', b'never a change of a package'),
-                ('GET', '/orgs/example/packages/container/image/versions', b'only NuGet and npm')]:
-            status, _, payload = self.send(method, target)
-            self.assertEqual(status, 403, target)
+    def test_other_owners_changes_bodies_and_other_types_are_refused_before_github(self):
+        install(self.store)
+        for method, target, status, reason, fields in [
+                ('GET', '/orgs/elsewhere/packages/nuget/x/versions', 403, b'owns none of this cloud', ()),
+                ('DELETE', VERSIONS + '/1', 403, b'never a change of a package', ()),
+                ('POST', VERSIONS, 403, b'never a change of a package', ()),
+                ('GET', '/orgs/example/packages/container/image/versions', 403, b'only NuGet and npm', ()),
+                ('GET', VERSIONS + '?q=x', 400, b'only the query parameters', ())]:
+            status_seen, _, payload = self.send(method, target, fields=fields)
+            self.assertEqual(status_seen, status, target)
             self.assertIn(reason, payload)
+        status, _, payload = self.send('GET', VERSIONS, body=b'{}')
+        self.assertEqual(status, 400)
+        self.assertIn(b'has no body', payload)
         self.assertEqual(self.api.seen, [])
 
-    def test_the_static_binding_opens_its_owner(self):
-        packages.install(self.store, request())
-        self.assertEqual(self.send('GET', '/users/bound/packages/npm/tool')[0], 403)
-        bind_static(self.credential, 'bound/tool')
-        self.assertEqual(self.send('GET', '/users/bound/packages/npm/tool')[0], 200)
-        self.assertEqual(self.api.seen[-1][3], 'token ' + TOKEN)
-        self.assertNotIn('token ' + STATIC, [seen[3] for seen in self.api.seen])
+    def test_a_redirect_goes_back_without_the_token_and_is_not_followed(self):
+        install(self.store)
+        location = 'https://pkg-containers.githubusercontent.com/blob?sig=synthetic'
+        self.answer_with(302, b'', [('Location', location)])
+        status, fields, _ = self.send('GET', VERSIONS)
+        self.assertEqual((status, fields['location']), (302, location))
+        self.assertEqual(len(self.api.seen), 1)
+        self.assertEqual(self.api.seen[0][1], 'api.github.com')
+        status, _, _ = self.send('GET', '/blob?sig=synthetic', host='pkg-containers.githubusercontent.com')
+        self.assertEqual(status, 200)
+        self.assertIsNone(self.api.seen[-1][3])
 
-    def test_a_token_that_github_refuses_asks_for_a_new_one(self):
-        packages.install(self.store, request())
-        answer = APIHandler.answer
+    def test_replies_lose_other_repositories_and_unreadable_replies_are_refused(self):
+        install(self.store)
+        listing = [{'name': 'a', 'repository': {'full_name': 'example/project'}},
+                   {'name': 'b', 'repository': {'full_name': 'example/secret'}}]
+        self.answer_with(200, json.dumps(listing).encode(), [('Content-Type', 'application/json')])
+        status, _, payload = self.send('GET', '/orgs/example/packages?package_type=nuget')
+        self.assertEqual(status, 200)
+        self.assertEqual([item['repository'] for item in json.loads(payload)],
+                         [{'full_name': 'example/project'}, None])
+        self.assertNotIn(b'example/secret', payload)
 
-        def refuse(handler):
-            if '/packages/' not in handler.path:
-                return answer(handler)
-            handler.server.seen.append((handler.command, handler.headers.get('Host'), handler.path,
-                                        handler.headers.get('Authorization'), b''))
-            return handler.reply(401, b'{"message":"Bad credentials"}')
-        with mock.patch.object(APIHandler, 'answer', refuse):
-            status, _, payload = self.send('GET', VERSIONS)
+    def test_a_reply_that_is_not_json_or_echoes_the_token_is_refused(self):
+        install(self.store)
+        for data, reason in [(b'<html>oops</html>', b'not JSON'),
+                             (json.dumps({'echo': 'token ' + TOKEN}).encode(), b'held the package read access')]:
+            with self.subTest(data=data):
+                self.answer_with(200, data)
+                status, _, payload = self.send('GET', VERSIONS)
+                self.assertEqual(status, 502)
+                self.assertIn(reason, payload)
+                self.assertNotIn(TOKEN.encode(), payload)
+
+    def test_a_token_that_github_refuses_asks_for_new_access(self):
+        install(self.store)
+        self.answer_with(401, b'{"message":"Bad credentials"}')
+        status, _, payload = self.send('GET', VERSIONS)
         self.assertEqual(status, 403)
         self.assertIn(b'refused the package read access', payload)
 
     def test_a_token_replaced_while_the_request_is_read_does_not_go_out(self):
-        packages.install(self.store, request())
+        install(self.store)
         candidate = self.broker.package_candidate('example')
         exchange = broker.Exchange(self.broker, None, None, {})
         self.assertEqual(exchange.fresh(candidate, owner='example').token, TOKEN)
-        packages.install(self.store, request(OTHER))
+        install(self.store, request(OTHER))
         self.assertIsNone(exchange.fresh(candidate, owner='example'))
-        packages.install(self.store, request(None))
+        install(self.store, request(None))
         self.assertIsNone(exchange.fresh(candidate, owner='example'))
 
 

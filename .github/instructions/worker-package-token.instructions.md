@@ -10,38 +10,41 @@ GitHub's package API and its NuGet registry accept only a token with the
 `docs/upkeep.md`, section "Trust boundary of the package token", and in
 `examples/cloud-worker/README.md`, "Package token".
 
-## Trusted: the chain that Horizon gives root, and the cloud's grants
+## Trusted: the chain and the repositories that Horizon gives root
 
-- The chain arrives only on root's stdin. No token or secret enters argv, a log, the
-  request log, a refusal or the `status` output (which reports the state and times only).
+- The chain arrives only on root's stdin with the cloud's own `repositories` (1 to 50).
+  No token or refresh token enters argv, an environment, a log, the request log, a
+  refusal, a reply or the `status` output (state, times and repositories only).
+- `install` asks GitHub for the token's scopes (`scopes_of`, `X-OAuth-Scopes`) and keeps
+  the chain only when they are exactly `read:packages`. A renewal (`refresh_once` with
+  `scope`) whose reply names any other scope clears the store. No client secret exists
+  anywhere in this path.
 - Root keeps it in its own `common.Store` (`packages.store_for`), with the GitHub chain's
   rules for private copies, serials, pending writes and clear marks. One store object per
   GitHub store, so the broker sees a rotated chain that only the renewal's memory holds.
-- The renewal (`refresh_loop` with the package store) sends the client secret only when
-  one was installed. A chain that GitHub refuses with `bad_refresh_token`, or whose refresh
-  token expired, is revoked and serves nothing; other renewal errors are retried, and an
-  access token within `SERVE_MARGIN` of its expiry is not sent.
-- `install` replaces the chain under the store lock, so it never interleaves with a
-  renewal; a null chain clears the store.
+- `install` replaces the chain under the store lock; a failed replacement clears the
+  store, so no older chain is served. `packages.clear` writes a clear mark above every copy
+  when a copy cannot be removed. `horizon-worker-github clear` removes it inside the
+  GitHub store lock.
 
-## Untrusted: every request of an agent
+## Untrusted: every request of an agent, and GitHub's package replies
 
-Requests from uid 10001 reach the API broker with any method, path, query and owner.
-Check that:
+Requests from uid 10001 reach the API broker with any method, path, query, body and
+owner. Check that:
 
-- Only `GET` and `HEAD` of `/orgs|users/OWNER/packages` (with exactly one
+- Only `GET` and `HEAD` without a body of `/orgs|users/OWNER/packages` (with exactly one
   `package_type` of `nuget` or `npm`), `.../packages/TYPE/NAME`, `.../versions` and
-  `.../versions/ID` get the package token, with TYPE exactly `nuget` or `npm`. A
-  container image, any other type, a write, a restore and a delete are refused before
-  any request reaches GitHub. `rest.split` already refuses dot segments, encoded
-  slashes, backslashes and NUL.
-- OWNER must be the owner (compared with `casefold`) of a repository in the
-  `grants` or `cloud_grants` of a chain that may serve (`store.load(serving=True)`,
-  state `ok`), or of the static binding. A revoked chain and a task grant never open
-  an owner's packages. `clear` removes the token before the chain.
+  `.../versions/ID` get the package token, with TYPE exactly `nuget` or `npm` and only the
+  query keys of `PACKAGE_QUERY`. A container image, any other type or key, a write, a
+  restore and a delete are refused before any request reaches GitHub. `rest.split`
+  already refuses dot segments, encoded slashes, backslashes and NUL.
+- OWNER must be the owner (compared with `casefold`) of one of the chain's own
+  `repositories`. No grant opens an owner: not `grants`, not `cloud_grants` that an agent
+  asked for, not a task grant, not the static binding.
+- The broker never follows a redirect; a 3xx goes back to gh without the token.
+- A package reply is read uncompressed (at most `MAX_REPLY`), parsed as JSON, and its
+  `repository` objects are kept only for the chain's own repositories (`filtered`). A
+  reply that is not JSON, larger or holding the token is refused, never relayed.
 - A package route never gets the chain's or the static binding's token, and a
   repository route never gets the package token.
-- `Exchange.fresh` checks the token again right before it goes out, so a token that
-  Horizon removed or replaced, or an owner that lost its grant, stops the request.
-- Agents never get the token: no environment variable, no file in their home and no
-  `NuGet.Config` with a password.
+- `Exchange.fresh` checks the token again right before it goes out.

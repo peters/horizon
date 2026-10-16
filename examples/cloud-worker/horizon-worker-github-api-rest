@@ -61,6 +61,9 @@ PACKAGES = re.compile(r'/(?:orgs|users)/(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,3
                       r'(?:/versions(?:/[1-9][0-9]{0,19})?)?)?)?')
 # Container images stay closed: the package token reads every image that the account can.
 PACKAGE_TYPES = ('nuget', 'npm')
+# The query parameters of the package API that a read may use; no other key, also not a
+# bracketed one, reaches GitHub.
+PACKAGE_QUERY = {'package_type', 'visibility', 'page', 'per_page', 'state'}
 ASSETS = re.compile(r'/repos/%s/%s/releases/[1-9][0-9]{0,19}/assets' % (OWNER, NAME))
 QUERY = re.compile(r'[A-Za-z0-9._~%!$&\'()*+,;=:@/?-]{0,8192}')
 # The first part of a repository path that a push grant may change, and for `actions` the
@@ -171,7 +174,11 @@ def package_route(host, method, match, query):
     if ';' in query:
         # Some servers also split a query at `;`; then GitHub could read another type.
         raise Refused(400, 'a package read on this worker separates its query parameters with & only.')
-    named = urllib.parse.parse_qs(query, keep_blank_values=True).get('package_type', [])
+    pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+    if any(key not in PACKAGE_QUERY for key, _ in pairs):
+        raise Refused(400, 'a package read on this worker takes only the query parameters %s.'
+                      % ', '.join(sorted(PACKAGE_QUERY)))
+    named = [value for key, value in pairs if key == 'package_type']
     kinds = named if match['type'] is None else [match['type'], *named]
     if not kinds or match['type'] is None and len(named) != 1 or any(kind not in PACKAGE_TYPES for kind in kinds):
         raise Refused(403, 'this worker reads only NuGet and npm packages on GitHub (package_type nuget or npm).')

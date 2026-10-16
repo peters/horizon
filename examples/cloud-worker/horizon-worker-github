@@ -146,8 +146,9 @@ def rotated_chain(reply, now):
             'refresh_token': refresh, 'refresh_expires_at': now + refresh_lifetime}
 
 
-def refresh_once(store, now=time.time, post=post_refresh):
-    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'."""
+def refresh_once(store, now=time.time, post=post_refresh, scope=None):
+    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'. With `scope`, a
+    renewed chain whose scopes are not exactly that one is removed, never stored."""
     with store.lock():
         state, _ = store.load()
         if state is None:
@@ -181,6 +182,9 @@ def refresh_once(store, now=time.time, post=post_refresh):
                 return 'revoked'
             store.save(dict(state, last_error=code))
             return 'retry'
+        if scope is not None and [part.strip() for part in str(reply.get('scope', '')).split(',')] != [scope]:
+            store.clear()
+            return 'revoked'
         # GitHub already invalidated the old chain: store the new one before any agent can use it.
         store.save(dict(state, chain=rotated, last_refresh_at=started, last_error=None))
         return 'refreshed'
@@ -200,7 +204,7 @@ def next_check(store, now):
 
 
 def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print,
-                 configure=None, static=None, label='GitHub token chain'):
+                 configure=None, static=None, label='GitHub token chain', scope=None):
     """One refresh check; returns (delay before the next check, consecutive failures). `label`
     names the chain in the log: the GitHub chain, or the package read access."""
     try:
@@ -219,7 +223,7 @@ def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=rando
     except Exception as error:
         log(label + ' still not stored: ' + type(error).__name__, flush=True)
     try:
-        outcome = refresh_once(store, now, post)
+        outcome = refresh_once(store, now, post, scope)
     # Storage or lock failures are retried; the refresh thread must never end.
     except Exception as error:
         log(label + ' refresh failed: ' + type(error).__name__, flush=True)
@@ -232,10 +236,10 @@ def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=rando
     return next_check(store, now()), 0
 
 
-def refresh_loop(store, sleep=time.sleep, label='GitHub token chain'):
+def refresh_loop(store, sleep=time.sleep, label='GitHub token chain', scope=None):
     failures = 0
     while True:
-        delay, failures = refresh_step(store, failures, label=label)
+        delay, failures = refresh_step(store, failures, label=label, scope=scope)
         sleep(delay)
 
 
@@ -299,7 +303,7 @@ def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitp
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
     # The package read access renews the same way, from its own store, also with Horizon off.
     threading.Thread(target=refresh_loop, args=(packages.store_for(store),),
-                     kwargs={'label': 'Package read access'}, daemon=True).start()
+                     kwargs={'label': 'Package read access', 'scope': packages.SCOPE}, daemon=True).start()
     # The Upkeep of this worker keeps working without Horizon: its loop starts again after a
     # container restart, Git and gh already routed, and its own requests are allowed here.
     threading.Thread(target=upkeep_loop.start_loop, args=(store, book), daemon=True).start()
@@ -505,8 +509,8 @@ def clear(store, retire=None):
     # Under the book's lock, so an install under way ends before it.
     with book.lock():
         upkeep_loop.remove(store)
-    packages.remove(store)
     with store.lock():
+        packages.remove(store)
         store.clear()
     book.clear()
 

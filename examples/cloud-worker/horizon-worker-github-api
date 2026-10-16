@@ -163,7 +163,7 @@ class Broker:
 
     def package_candidate(self, owner):
         """The package token for a read of the packages of `owner`, or a refusal."""
-        token, reason = packages.token_for(self.store, owner, self.static)
+        token, reason = packages.token_for(self.store, owner)
         if token is None:
             raise refusal(403, reason)
         return Candidate(token, lambda repository, access: False, 'packages')
@@ -281,6 +281,8 @@ class Exchange(checks.Checks):
         self.record.update(request=route.kind, host=host)
         if route.kind == 'graphql':
             return self.graphql(request)
+        if route.kind == 'package' and (request.chunked or getattr(request, 'length', 0)):
+            raise refusal(400, 'a package read on this worker has no body.')
         rules = self.broker.policy() if route.kind == 'repository' else None
         reason = upkeep.rest_refusal(rules, request.method, route.parts)
         if reason is not None:
@@ -307,7 +309,9 @@ class Exchange(checks.Checks):
 
     def forward(self, request, route, candidate, names=(), data=None):
         """Relays the request; `data` is its body when the broker read it already."""
-        fields = [(name, value) for name, value in request.fields if name in REQUEST_FIELDS]
+        # A package reply is examined before it goes on, so it must come uncompressed.
+        fields = [(name, value) for name, value in request.fields if name in REQUEST_FIELDS
+                  and not (route.kind == 'package' and name == 'accept-encoding')]
         secrets = ()
         if candidate is not None:
             secrets = (candidate.token,)
@@ -338,11 +342,31 @@ class Exchange(checks.Checks):
             if response.status == 401 and candidate is not None:
                 raise refusal(403, packages.REFUSED if candidate.source == 'packages' else
                               'GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
+            data = self.package_reply(response, request, secrets) if route.kind == 'package' else None
             self.started = True
-            relay.relay(self.output, response, REPLY_FIELDS, secrets, None, request.version == 'HTTP/1.1')
+            relay.relay(self.output, response, REPLY_FIELDS, secrets, data, request.version == 'HTTP/1.1')
             self.record['outcome'] = 'relayed'
         finally:
             connection.close()
+
+    def package_reply(self, response, request, secrets):
+        """A package reply's body without the repository objects of other repositories, or None
+        to relay it as it is (HEAD, a redirect); refuses a reply that cannot be examined."""
+        if request.method == 'HEAD' or 300 <= response.status < 400:
+            return None
+        if (response.getheader('Content-Encoding') or 'identity').lower() != 'identity':
+            raise refusal(502, 'the package reply from GitHub is compressed, so it cannot be examined.')
+        try:
+            data = response.read(packages.MAX_REPLY + 1)
+        except (OSError, http.client.HTTPException):
+            raise refusal(502, 'the package reply from GitHub broke off.') from None
+        if len(data) > packages.MAX_REPLY:
+            raise refusal(502, 'the package reply from GitHub is too large to examine.')
+        state, _ = packages.served(self.broker.store)
+        try:
+            return packages.filtered(data, packages.repositories(state) if state else set(), secrets) if data else data
+        except packages.Unchecked as unchecked:
+            raise refusal(502, str(unchecked)) from None
 
     def graphql(self, request):
         relay.continue_if_asked(request, self.output)
