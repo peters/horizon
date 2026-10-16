@@ -47,12 +47,21 @@ class ShardCommandTests(unittest.TestCase):
             [
                 "cargo test --locked --workspace --exclude horizon-ui",
                 "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
+                "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                 "cargo test --locked -p horizon-chromecast --features encoder",
             ],
         )
 
     def test_enabled_gateway_contract_runs_once_on_each_platform(self):
         command = "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::"
+        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
+            with self.subTest(shard=shard, runner_os=runner_os):
+                result = shard_commands(shard, runner_os)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines().count(command), 1)
+
+    def test_enabled_owner_custody_runs_once_on_each_platform(self):
+        command = "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::"
         for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
@@ -100,13 +109,18 @@ class ShardCommandTests(unittest.TestCase):
                     [
                         "cargo test --locked --workspace --exclude horizon-ui",
                         "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
+                        "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                         "cargo test --locked -p horizon-chromecast --features encoder",
                         "cargo test --locked -p horizon-ui --features speech",
                     ],
                 )
 
     def test_all_runs_every_shard_and_fails_when_one_fails(self):
-        for failing_flag in ["--exclude horizon-ui", "--features one-service-gateway"]:
+        for failing_flag in [
+            "--exclude horizon-ui",
+            "--features one-service-gateway cloud_runtime::local_network::",
+            "--features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
+        ]:
             with self.subTest(failing_flag=failing_flag):
                 env = os.environ.copy()
                 env.update(HORIZON_CI_SHARD="all", RUNNER_OS="macOS")
@@ -133,6 +147,7 @@ class ShardCommandTests(unittest.TestCase):
                     [
                         "test --locked --workspace --exclude horizon-ui",
                         "test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
+                        "test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                         "test --locked -p horizon-chromecast --features encoder",
                         "test --locked -p horizon-ui --features speech",
                     ],

@@ -24,6 +24,8 @@ pub(crate) mod mutation;
 pub use horizon_cloud::{offers, provider};
 pub mod offer_publication;
 pub mod owner;
+#[cfg(feature = "one-service-gateway")]
+pub mod owner_custody;
 pub mod prices;
 pub mod progress;
 pub mod project_reservations;

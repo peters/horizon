@@ -43,8 +43,9 @@ A missing real counterexample is blocked, not a pass. Do not count ignored tests
 as executed, or component tests as owner/worker qualification.
 
 Read docs/architecture/pinned-unix-ssh-attachment.md for the attachment boundary.
-Keep it default-off and internal. No owner controller, OriginalCloud, saved-membership
-path or public activation belongs to this primitive. Preserve the original SSH pins
+Keep the attachment default-off and internal. The separate trusted controller is
+covered by one-device-owner-admission.instructions.md; neither component supplies
+saved-membership approval or public activation. Preserve the original SSH pins
 and unchanged worker protocol; no new discovery or credential grant is permitted.
 Unix attachment must use its fresh private Unix target, never a reusable TCP port.
 Keep fixed parent ownership, non-symlink, directory0700 and socket0600 guards.

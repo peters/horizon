@@ -328,11 +328,33 @@ private start and attachment return UnsupportedSource. Existing Gateway::start
 retains TCP behavior on every platform; attachment refuses that ordinary gateway.
 Source revocation prevents SSH retry; bounded input prevents a stalled child from
 blocking heartbeat or Drop. Exact receipt close cannot affect a successor.
-No discovery, owner controller, retained dispatch or public activation is added.
+The attachment primitive supplies no owner approval or public activation.
 Keep actual original-worker LAN and tailnet checks on first/final candidate inputs
 separate from synthetic tests and native owner evidence. Read
 docs/architecture/pinned-unix-ssh-attachment.md and
 docs/testing/procedures/pinned-unix-ssh-attachment.md.
+
+## Trusted Core one-device admission
+
+The default-off `one-service-gateway` controller accepts current trusted owner
+context and one explicitly approved checked endpoint, not public approval data.
+It saves Armed before starting an explicit private gateway and pinned SSH helper,
+rechecks the original ready worker/full launch/settings, and retains the original
+Store lock through cancellation and retirement. Fresh field transactions preserve
+all sibling metadata, including the passive Main exposure format. No future M2
+reservation or runtime controller is activated.
+Original Store custody needs Unix directory durability. Non-Unix hosts refuse
+Store acquisition before state or provider effects; metadata cannot bypass it.
+
+An I/O-free watcher revokes the physical source even while a record read blocks.
+Exact owner and operation/generation govern close; invalid finish arguments leave
+the live handle intact. Closed is saved only after original resources retire and
+the exact original field still matches. Drop never manufactures durable cleanup.
+No UI, CLI or MCP path invokes this component. Native saved membership and explicit
+approval, actual LAN/tailnet/worker SSH, public parity and Native evidence remain
+required for M1. There is no share expiry or credential/enrollment grant here.
+Read docs/architecture/one-device-owner-admission.md and
+docs/testing/procedures/one-device-owner-admission.md.
 
 ## Cloud cards on the canvas
 

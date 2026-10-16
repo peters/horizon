@@ -75,6 +75,7 @@ documents that are not yet STE.
 | [native-app-automate](procedures/native-app-automate.md) | Native app matrix, MCP, CLI and exact cleanup | paid device |
 | [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
 | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | Feature-off LAN/tailnet endpoint engine prerequisite | none |
+| [one-device-owner-admission](procedures/one-device-owner-admission.md) | Default-off original Store, durable dispatch and physical cancellation | none |
 | [pinned-unix-ssh-attachment](procedures/pinned-unix-ssh-attachment.md) | Default-off private Unix ingress and original pinned worker SSH | none |
 | [tailnet-enrollment-ledger](procedures/tailnet-enrollment-ledger.md) | Saved enrollment receipts, allocation identity and capture attempts | none |
 | [runpod-exposure-ports](procedures/runpod-exposure-ports.md) | Default-off decoder for observed existing TCP mappings | none |
