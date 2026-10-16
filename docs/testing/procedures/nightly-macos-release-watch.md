@@ -49,7 +49,7 @@ This procedure proves three behaviors of the Watch job in `.github/workflows/mac
 
 ## 6. Tasks
 
-### 6.1 W1 — Failure comment
+### 6.1 W1: Failure comment
 
 1. Start a run that fails on purpose:
 
@@ -71,7 +71,7 @@ This procedure proves three behaviors of the Watch job in `.github/workflows/mac
 
    Result: One new comment shows. It starts with `<!-- nightly-macos-release -->`, gives the run link and the commit, and gives `Failed jobs: Simulated failure`.
 
-### 6.2 W2 — Recovery comment
+### 6.2 W2: Recovery comment
 
 1. Start a normal run:
 
@@ -89,7 +89,7 @@ This procedure proves three behaviors of the Watch job in `.github/workflows/mac
 
    Result: One new comment shows. It says that the macOS release builds recovered and gives the run link.
 
-### 6.3 W3 — Silent success
+### 6.3 W3: Silent success
 
 1. Wait for the next scheduled run at 02:17 UTC.
 
