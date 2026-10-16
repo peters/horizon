@@ -98,7 +98,10 @@ fn acknowledge_signal(child: &Child, group: rustix::process::Pid, result: rustix
     let _ = group; // Only an XNU EPERM needs the group's state as proof.
     match result {
         Ok(()) => Ok(()),
+        #[cfg(not(target_os = "macos"))]
         Err(rustix::io::Errno::SRCH) if exited(child)? => Ok(()),
+        #[cfg(target_os = "macos")]
+        Err(rustix::io::Errno::SRCH) if settled(|| exited(child))? => Ok(()),
         // XNU skips zombies and returns EPERM when no live recipient remains. This is not
         // permission to ignore EPERM for a live child or any executing group member.
         #[cfg(target_os = "macos")]
@@ -214,7 +217,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn a_settling_proof_is_polled_until_it_holds_and_never_past_its_deadline() {
+    fn a_settling_proof_is_polled_until_it_holds_or_its_deadline_passes() {
         let mut polls = 0;
         assert_eq!(
             settled(|| {
