@@ -111,8 +111,7 @@ mod tests {
     fn instructions_the_person_changed_stay() {
         let config = parse(&saved("Only merge patch updates.", None)).expect("an older choice");
         assert_eq!(config.instructions, "Only merge patch updates.");
-        let config =
-            parse(&saved("Only merge patch updates.", Some(true))).expect("a marked choice");
+        let config = parse(&saved("Only merge patch updates.", Some(true))).expect("a marked choice");
         assert_eq!(config.instructions, "Only merge patch updates.");
         assert!(edited("Only merge patch updates."));
         assert!(!edited(&format!("{DEFAULT_INSTRUCTIONS}\n")));
