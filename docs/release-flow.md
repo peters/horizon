@@ -52,6 +52,10 @@ If the stable tag for the current base version already exists, the script stops 
 ## Publish From GitHub Releases
 
 1. Make sure the target commit is already on GitHub and has green CI.
+   CI on `main` builds the macOS release assets only for a change to how they are built or packaged.
+   The **macOS release builds** workflow builds them each night from the tip of `main`.
+   Make sure that a run of that workflow for the target commit is green.
+   If no such run exists, start **GitHub Actions → macOS release builds → Run workflow** on `main` while the target commit is the tip of `main`. Wait for a green result.
 2. Run `./scripts/next-version.sh <alpha|beta|stable>` locally.
 3. Open **GitHub → Releases → Draft a new release**.
 4. Create or select the suggested tag.

@@ -1,0 +1,112 @@
+name: Release artifacts
+
+# Builds and packages the release asset of each selected platform, as a check
+# that a release build still compiles and packages. Nothing downloads these
+# artifacts: release.yml builds the published assets with its own caches.
+#
+# Two callers:
+# - ci.yml, on a push to main with release inputs and on a manual dispatch.
+#   It builds Linux and Windows for every release input change, and macOS only
+#   when the change touches this file or the packaging scripts (see
+#   scripts/detect-ci-build-inputs.sh) and on a manual dispatch.
+# - macos-release-builds.yml, which builds macOS each night against main.
+# GitHub-hosted accounts get about five concurrent macOS jobs, so two macOS
+# builds on every merge kept the macOS test jobs on main queued.
+on:
+  workflow_call:
+    inputs:
+      platforms:
+        description: >-
+          Whitespace-separated platform ids from
+          scripts/select-release-artifact-platforms.py, for example
+          "linux-x64 windows-x64".
+        required: true
+        type: string
+
+# A called workflow does not inherit the caller's `env`. These values match
+# ci.yml: rust-cache hashes every CARGO_* and RUST* variable into its key, so a
+# different set would start every artifact cache cold, and RUSTFLAGS keeps a
+# compiler warning fatal in the release build too.
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  # A matrix `include` entry that matches no combination becomes a new job, so
+  # the platform table cannot filter itself; this small job does it instead.
+  platforms:
+    name: Select platforms
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.select.outputs.include }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/select-release-artifact-platforms.py
+          sparse-checkout-cone-mode: false
+      - id: select
+        name: Select the platform matrix
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: python3 -B scripts/select-release-artifact-platforms.py "$PLATFORMS" >> "$GITHUB_OUTPUT"
+
+  # Keep the job id `rust-artifacts`: rust-cache adds the job id to its key,
+  # and this id kept the existing cache entries when the job moved here from
+  # ci.yml. Cache saves stay on main only (see the cache policy in ci.yml).
+  rust-artifacts:
+    name: ${{ matrix.name }}
+    needs: platforms
+    runs-on: ${{ matrix.os }}
+    # A cold macOS x64 build takes about 22 minutes.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # The `'[]'` fallback only gives `localci check`, which reads empty
+      # `needs` outputs, a value to parse. On GitHub this job does not run
+      # when Select platforms fails, and that job never prints an empty list.
+      matrix:
+        include: ${{ fromJSON(needs.platforms.outputs.include || '[]') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+      - name: Keep Defender off the build tree
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci-windows-defender.ps1
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cache_key }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Report rust-cache status
+        shell: bash
+        run: |
+          if [ "${{ steps.rust-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "rust-cache: HIT ($(du -sh target 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # The uploaded asset is the horizon binary. The other workspace bins are
+      # outside its dependency graph, and each one repeated a thin-LTO link.
+      - name: Install video assembler
+        if: ${{ !env.LOCALCI }}
+        shell: bash
+        run: bash scripts/install-ci-video-build-tools.sh
+      - run: cargo build --locked --release -p horizon-ui
+      - name: Package release asset
+        shell: bash
+        run: |
+          ./scripts/package-release-asset.sh \
+            --binary "${{ matrix.binary_path }}" \
+            --kind "${{ matrix.asset_kind }}" \
+            --output "${{ matrix.release_asset }}"
+      - name: Upload release asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.release_asset }}
+          path: ${{ matrix.release_asset }}

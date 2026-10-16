@@ -1,0 +1,61 @@
+name: macOS release builds
+
+# Builds the two macOS release assets against main once each night. ci.yml
+# builds them on a push only when the change touches the packaging (see
+# scripts/detect-ci-build-inputs.sh), because GitHub-hosted accounts get about
+# five concurrent macOS jobs and two release builds on every merge kept the
+# macOS test jobs on main queued.
+#
+# GitHub emails a failed scheduled run only to the person who last changed the
+# cron line below, so a failure here is easy to miss.
+on:
+  schedule:
+    # Off the hour: GitHub delays or drops scheduled runs at busy times.
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A scheduled run skips the build when a run of this workflow already
+  # succeeded for the same main commit. A manual dispatch always builds, and so
+  # does a scheduled run when this job fails or cannot read the run history.
+  changes:
+    name: Detect new commits
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.last.outputs.build }}
+    steps:
+      - id: last
+        name: Look for a successful run of this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id) \
+            && built=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?branch=main&status=success&head_sha=$GITHUB_SHA&per_page=1" --jq .total_count) \
+            || built=unknown
+          case "$built" in
+            ''|*[!0-9]*) build=true; echo "::warning::Run history unavailable ($built); building." ;;
+            0) build=true ;;
+            *) build=false; echo "A run of this workflow already succeeded for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  rust-artifacts:
+    name: Artifacts
+    needs: changes
+    # Anything but an explicit false builds: a dispatch skips the detection
+    # job and a failed detection leaves its output empty.
+    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      platforms: macos-arm64 macos-x64
