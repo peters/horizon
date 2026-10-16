@@ -80,6 +80,16 @@ this procedure does not authorize resources or enrollments.
    occurs. Status generation runs only after a successful config mutation.
    Service VIP ports retain their distinct routing namespace.
 
+4. Attempt raw opt-in on an existing TUN service and over same-port TLS, HTTP or
+   HTTPS handlers, with the original service both drained and advertised. Also
+   replace a raw handler and add raw forwarding beside a different-port handler.
+
+   Result: Each incompatible transition refuses before preference/config writes,
+   leaves advertisements and original configuration unchanged, and prints no
+   success. Valid raw replacement and different-port coexistence retain normal
+   advertisement behavior. Recursive opted-in TUN handlers refuse; ordinary
+   false/absent handlers and the original preference-error behavior are unchanged.
+
 ### 6.2 U02 — Actual handler and original-flow retirement
 
 1. Run real TCP-to-Unix and userspace gonet handler fixtures with ancillary receive.

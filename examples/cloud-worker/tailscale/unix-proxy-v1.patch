@@ -130,7 +130,7 @@
 +}
 --- /dev/null
 +++ b/cmd/tailscale/cli/serve_horizon_test.go
-@@ -0,0 +1,264 @@
+@@ -0,0 +1,340 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -395,6 +395,82 @@
 +		})
 +	}
 +}
++
++func TestHorizonFlowCancelCLIServiceTransitionsPreserveState(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("valid raw Unix flow cancellation requires Linux")
++	}
++	for _, mode := range []string{"tun", "tls", "http", "https", "raw", "other-port-tls", "other-port-http", "other-port-https"} {
++		for _, advertised := range []bool{false, true} {
++			name := mode + "/drained"
++			if advertised {
++				name = mode + "/advertised"
++			}
++			t.Run(name, func(t *testing.T) {
++				lc := newHorizonValidationClient()
++				service := &ipn.ServiceConfig{}
++				switch mode {
++				case "tun":
++					service.Tun = true
++				case "tls":
++					service.TCP = map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "localhost:8080", TerminateTLS: "new.test.ts.net"}}
++				case "http", "https":
++					service.TCP = map[uint16]*ipn.TCPPortHandler{20000: {HTTP: mode == "http", HTTPS: mode == "https"}}
++					service.Web = map[ipn.HostPort]*ipn.WebServerConfig{"new.test.ts.net:20000": {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "original"}}}}
++				case "raw":
++					service.TCP = map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "localhost:8080"}}
++				case "other-port-tls":
++					service.TCP = map[uint16]*ipn.TCPPortHandler{20001: {TCPForward: "localhost:8080", TerminateTLS: "new.test.ts.net"}}
++				case "other-port-http", "other-port-https":
++					service.TCP = map[uint16]*ipn.TCPPortHandler{20001: {HTTP: mode == "other-port-http", HTTPS: mode == "other-port-https"}}
++					service.Web = map[ipn.HostPort]*ipn.WebServerConfig{"new.test.ts.net:20001": {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "original"}}}}
++				}
++				lc.config = &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{"svc:new": service}}
++				lc.prefs.AdvertiseServices = []string{"svc:kept"}
++				if advertised {
++					lc.prefs.AdvertiseServices = append(lc.prefs.AdvertiseServices, "svc:new")
++				}
++				before := lc.state(t)
++				var flagOut, stdout, stderr bytes.Buffer
++				e := &serveEnv{lc: lc, testFlagOut: &flagOut, testStdout: &stdout, testStderr: &stderr}
++				args := []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "unix:/run/original.sock"}
++				err := newServeV2Command(e, serve).ParseAndRun(t.Context(), args)
++				if mode == "tun" || mode == "tls" || mode == "http" || mode == "https" {
++					if err == nil {
++						t.Fatal("incompatible service mode accepted")
++					}
++					if lc.prefsEdits != 0 || lc.setCount != 0 || lc.featureQueries != 0 || lc.watches != 0 || !bytes.Equal(before, lc.state(t)) || stdout.Len() != 0 {
++						t.Fatal("rejected transition changed config/advertisements, performed effects, or printed success")
++					}
++					return
++				}
++				if err != nil {
++					t.Fatal(err)
++				}
++				wantPrefs := 1
++				if advertised {
++					wantPrefs = 0
++				}
++				if lc.prefsEdits != wantPrefs || lc.setCount != 1 || lc.featureQueries != 0 || lc.watches != 0 || stdout.Len() == 0 {
++					t.Fatal("valid raw replacement did not retain ordinary advertisement and persistence behavior")
++				}
++				if got := lc.prefs.AdvertiseServices; len(got) != 2 || got[0] != "svc:kept" || got[1] != "svc:new" {
++					t.Fatalf("advertisements changed unexpectedly: %v", got)
++				}
++				handler := lc.config.Services["svc:new"].TCP[20000]
++				if handler == nil || !handler.HorizonFlowCancel || handler.TCPForward != "unix:/run/original.sock" || handler.ProxyProtocol != 1 {
++					t.Fatal("valid raw replacement lost the requested handler")
++				}
++				if mode != "raw" {
++					other := lc.config.Services["svc:new"].TCP[20001]
++					if other == nil || other.HorizonFlowCancel || (mode == "other-port-tls" && other.TerminateTLS == "") || (mode == "other-port-http" && !other.HTTP) || (mode == "other-port-https" && !other.HTTPS) {
++						t.Fatal("valid update changed the distinct-port handler")
++					}
++				}
++			})
++		}
++	}
++}
 --- a/cmd/tailscale/cli/serve_legacy.go
 +++ b/cmd/tailscale/cli/serve_legacy.go
 @@ -163,19 +163,20 @@
@@ -586,7 +662,7 @@
  		}
  		fwdAddr = targetURL
  	} else {
-@@ -1327,6 +1363,17 @@
+@@ -1327,6 +1363,28 @@
  		fwdAddr = dstURL.Host
  	}
  
@@ -601,10 +677,21 @@
 +		return err
 +	}
 +
++	if e.horizonFlowCancel && sc != nil && svcName != "" {
++		if service := sc.Services[svcName]; service != nil {
++			if service.Tun {
++				return fmt.Errorf("Horizon flow cancellation cannot replace TUN mode for %s", svcName)
++			}
++			if previous := service.TCP[srcPort]; previous != nil && previous.TerminateTLS != "" {
++				return fmt.Errorf("Horizon flow cancellation cannot replace TLS-terminated TCP on %d for %s", srcPort, svcName)
++			}
++		}
++	}
++
  	if sc.IsServingWeb(srcPort, svcName) {
  		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
  	}
-@@ -1334,16 +1381,19 @@
+@@ -1334,16 +1392,19 @@
  	// TODO: needs to account for multiple configs from foreground mode
  	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
  		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
@@ -2190,7 +2277,7 @@
  	"runtime"
  	"slices"
  	"strconv"
-@@ -160,6 +161,78 @@
+@@ -160,6 +161,81 @@
  	//
  	// This is only valid if TCPForward is non-empty.
  	ProxyProtocol int `json:",omitzero"`
@@ -2260,6 +2347,9 @@
 +			continue
 +		}
 +		for port, handler := range service.TCP {
++			if service.Tun && handler != nil && handler.HorizonFlowCancel {
++				return fmt.Errorf("Horizon flow cancellation cannot combine TUN mode with a service TCP handler")
++			}
 +			if err := handler.CheckHorizonFlowCancel(port); err != nil {
 +				return err
 +			}
@@ -2271,7 +2361,7 @@
  // HTTPHandler is either a path or a proxy to serve.
 --- /dev/null
 +++ b/ipn/serve_horizon_test.go
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,201 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -2281,6 +2371,7 @@
 +	"bytes"
 +	"encoding/json"
 +	"runtime"
++	"strings"
 +	"testing"
 +
 +	"tailscale.com/tailcfg"
@@ -2437,6 +2528,38 @@
 +	} {
 +		if err := sc.CheckHorizonFlowCancel(); err != nil {
 +			t.Fatalf("unrelated Funnel rejected: %v", err)
++		}
++	}
++}
++
++func TestHorizonFlowCancelServiceTUNScopes(t *testing.T) {
++	for _, scope := range []string{"top", "foreground", "nested"} {
++		for _, mode := range []string{"tun-only", "nil-handler", "ordinary-handler", "opted-handler"} {
++			t.Run(scope+"/"+mode, func(t *testing.T) {
++				service := &ServiceConfig{Tun: true}
++				if mode != "tun-only" {
++					var handler *TCPPortHandler
++					if mode != "nil-handler" {
++						handler = &TCPPortHandler{TCPForward: "unix:/run/private/producer.sock", ProxyProtocol: 1, HorizonFlowCancel: mode == "opted-handler"}
++					}
++					service.TCP = map[uint16]*TCPPortHandler{20000: handler}
++				}
++				sc := &ServeConfig{Services: map[tailcfg.ServiceName]*ServiceConfig{"svc:original": service}}
++				if scope != "top" {
++					sc = &ServeConfig{Foreground: map[string]*ServeConfig{"original": sc}}
++				}
++				if scope == "nested" {
++					sc = &ServeConfig{Foreground: map[string]*ServeConfig{"outer": sc}}
++				}
++				err := sc.CheckHorizonFlowCancel()
++				if mode == "opted-handler" {
++					if err == nil || !strings.Contains(err.Error(), "TUN mode") {
++						t.Fatalf("opted-in TUN service did not fail at the service guard: %v", err)
++					}
++				} else if err != nil {
++					t.Fatalf("ordinary false/absent handler behavior changed: %v", err)
++				}
++			})
 +		}
 +	}
 +}
