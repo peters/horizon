@@ -463,6 +463,49 @@ mod tests {
         drop(transport);
     }
 
+    // Sets only the stop flag, as when the shutdown in `Cancellation::stop` fails
+    // (on Windows a cloned handle can report that it is not connected).
+    #[test]
+    fn a_cancelled_transport_ends_the_connection_without_the_stop_shutdown() {
+        use std::sync::atomic::AtomicBool;
+        for reading in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let stopped = Arc::new(AtomicBool::new(false));
+            let cancel = Arc::new(Cancellation::new(stopped.clone()));
+            let mut transport =
+                Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel)).expect("connect");
+            let (mut receiver, _) = listener.accept().expect("accept");
+            receiver
+                .set_read_timeout(Some(Duration::from_secs(60)))
+                .expect("hang guard");
+            let transport = if reading {
+                let worker = thread::spawn(move || {
+                    let error = transport.request("SETUP", "/stream", "", &[]).err();
+                    (error, transport)
+                });
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    receiver.read_exact(&mut byte).expect("request");
+                    request.push(byte[0]);
+                }
+                stopped.store(true, Ordering::Relaxed);
+                let (error, transport) = worker.join().expect("worker");
+                assert!(matches!(error, Some(Error::Protocol("casting cancelled"))), "{error:?}");
+                transport
+            } else {
+                stopped.store(true, Ordering::Relaxed);
+                assert!(matches!(
+                    transport.request("POST", "/pair-verify", "", &[]),
+                    Err(Error::Protocol("casting cancelled"))
+                ));
+                transport
+            };
+            assert_eq!(receiver.read(&mut [0]).expect("the receiver sees the close"), 0);
+            drop(transport);
+        }
+    }
+
     #[test]
     fn closing_ends_an_idle_event_read_while_the_receiver_stays_open() {
         use std::sync::mpsc;
