@@ -56,6 +56,12 @@ Credentials are desktop-global, so a workspace agent cannot approve its own requ
 Status qualification uses the production UI, actual CLI and normal AGENT public
 MCP responses; baseline id/name evidence alone does not qualify API status.
 
+The internal `one-service-gateway` feature is off by default. It supplies only
+an exact LAN/tailnet TCP endpoint engine. No UI, CLI or MCP operation enables it.
+Use the existing owner-enabled Local Network Bridge tools for current operations.
+The engine is a prerequisite; #1335 M1-1 still needs owner controls, durable
+attempts, worker SSH, interface parity and actual LAN/tailnet qualification.
+
 Machine-local destination preference helpers retain a checkout/profile scope and
 nonsecret account or exact registry grant metadata. The launch engine retains
 that choice before image work. A saved preference is not proof of authentication or registry

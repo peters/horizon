@@ -545,6 +545,14 @@ heartbeat. `horizon-cloud-protocol::local_network` holds the shared contract.
 session and owns its sockets, `forward` owns the loopback listeners, and `mcp`
 only adapts requests. The UI keeps the switch in memory only.
 
+The optional `local_network::endpoint` tree owns the one-device engine.
+`source` captures LAN/tailnet bindings; `tailnet` reads existing client metadata.
+The LAN source checks the complete canonical IPv4 answer set before it passes
+one literal to the existing `Scope` policy. The bridge keeps its current policy.
+The parent owns exact-endpoint admission, gateway receipts and relay revocation.
+Its `one-service-gateway` feature is off by default. Owner, durable and worker
+controllers must use this engine before M1-1 can complete.
+
 `cloud_runtime::companions` owns machine-local selection and grant reconciliation.
 `inventory` reads committed declarations and repository identity away from UI
 frames; `journal` durably pins ownership and grant identities; `transport` uses

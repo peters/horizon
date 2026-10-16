@@ -67,6 +67,7 @@ documents that are not yet STE.
 | [new-cloud-source-search](procedures/new-cloud-source-search.md) | New cloud source field: search over checkouts and GitHub repositories, folder paths and links | none |
 | [native-app-automate](procedures/native-app-automate.md) | Native app matrix, MCP, CLI and exact cleanup | paid device |
 | [new-cloud-picker](procedures/new-cloud-picker.md) | New cloud dialog, worker list, filters, picks and data centers | none |
+| [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | Feature-off LAN/tailnet endpoint engine prerequisite | none |
 | [tailnet-enrollment-ledger](procedures/tailnet-enrollment-ledger.md) | Saved enrollment receipts, allocation identity and capture attempts | none |
 | [tailnet-receipt-capture](procedures/tailnet-receipt-capture.md) | Device ID capture before Ready and after stop/resume | rents compute (LIVE only) |
 | [tailnet-stable-device-name](procedures/tailnet-stable-device-name.md) | Cloud tailnet device name after stop and resume | rents compute |
@@ -85,6 +86,7 @@ documents that are not yet STE.
 
 | Report | Procedure | Date |
 |---|---|---|
+| [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
 | [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |
 | [2026-10-14-tailnet-api-removal](reports/2026-10-14-tailnet-api-removal.md) | [tailnet-api-removal](procedures/tailnet-api-removal.md) | 2026-10-14 |

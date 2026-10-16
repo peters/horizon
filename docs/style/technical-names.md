@@ -64,6 +64,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | SSH alias | The name `companion-<alias>` that a source worker uses to open SSH to a companion cloud. | host alias |
 | agent user | The account `horizon-agent` (UID 10001) that runs agent and shell panels on a worker. | agent account |
 | Local Network Bridge | The function that lets a worker reach the local network of the PC. | LNB, network share |
+| endpoint | One IPv4 host or DNS name and one TCP port. | network grant |
+| source binding | The observed LAN route or tailnet device identity for one endpoint. | owner permission |
+| gateway receipt | The operation ID, generation and proxy port of one endpoint gateway. | reusable port authority |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts, the cloud actions and Settings. | More menu, overflow menu, Cloud menu |
 | New cloud button | The accent **+ New cloud** button in the toolbar. It makes a workspace and opens New cloud for it. | Cloud ▾, place menu |
