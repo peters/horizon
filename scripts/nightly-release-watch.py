@@ -9,8 +9,8 @@ Usage: nightly-release-watch.py --needs <json> --runs <file> --jobs <file>
 
 --needs is the `toJSON(needs)` of the Watch job. --runs is the
 `workflow_runs` list of this workflow, newest first, and --jobs is the `jobs`
-list of the current run attempt; an empty or unreadable file counts as
-unknown. Prints `action=failure`, `action=recovery` or `action=none` in the
+list of the current run attempt. An unreadable --runs file makes the history
+unknown, and an unreadable --jobs file names the failed jobs from --needs. Prints `action=failure`, `action=recovery` or `action=none` in the
 form a workflow step appends to $GITHUB_OUTPUT, and writes the comment to
 --body-out unless the action is `none`.
 
@@ -21,7 +21,8 @@ form a workflow step appends to $GITHUB_OUTPUT, and writes the comment to
   or dispatched run.
 - none: everything else, routine success included. A green run also stays
   silent when a newer run has finished, because that run already reported
-  the current state. An unknown history never posts a recovery.
+  the current state. An unknown history never posts a recovery, not even
+  after a failed previous attempt: a newer run can be red.
 
 A run that failed only because the Watch job could not post still counts as
 a failed run, so the next green run posts a recovery for it.
@@ -57,7 +58,12 @@ def finished_runs(runs):
 
 
 def previous_conclusion(runs, run_id, run_attempt=1, previous_attempt=None):
-    """The conclusion of the run before this one, or None when it is unknown."""
+    """The conclusion of the run before this one, or None when it is unknown.
+
+    `runs` is None when the history could not be read.
+    """
+    if runs is None:
+        return None
     finished = finished_runs(runs)
     if any(other > int(run_id) for other, _ in finished):
         return None
@@ -93,14 +99,14 @@ def body(action, *, run_url, sha, failed_jobs):
 
 
 def read_list(path, key):
-    """The `key` list of a JSON file, or an empty list when it is unreadable."""
+    """The `key` list of a JSON file, or None when it is unreadable."""
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError):
-        return []
+        return None
     items = data.get(key) if isinstance(data, dict) else data
-    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else None
 
 
 def main(argv):
@@ -121,7 +127,7 @@ def main(argv):
     action = decide(needs, read_list(args.runs, "workflow_runs"), args.run_id,
                     args.run_attempt, args.previous_attempt)
     if action != "none":
-        failed_jobs = failed_job_names(read_list(args.jobs, "jobs"), needs)
+        failed_jobs = failed_job_names(read_list(args.jobs, "jobs") or [], needs)
         with open(args.body_out, "w", encoding="utf-8") as handle:
             handle.write(body(action, run_url=args.run_url, sha=args.sha, failed_jobs=failed_jobs))
     print(f"action={action}")

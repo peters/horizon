@@ -84,6 +84,12 @@ class DecisionTests(unittest.TestCase):
                                  "recovery")
         self.assertEqual(watch.decide(RED, older_green, 30, 2, "failure"), "failure")
 
+    def test_an_unknown_history_never_posts_a_recovery(self):
+        for attempt, previous in [(1, None), (2, "failure"), (2, "timed_out")]:
+            with self.subTest(attempt=attempt, previous=previous):
+                self.assertEqual(watch.decide(GREEN, None, 30, attempt, previous), "none")
+                self.assertEqual(watch.decide(RED, None, 30, attempt, previous), "failure")
+
     def test_a_green_run_stays_silent_once_a_newer_run_finished(self):
         for newer in ["failure", "success"]:
             with self.subTest(newer=newer):
@@ -133,7 +139,9 @@ class CommandTests(unittest.TestCase):
         paths = {}
         for name, data in [("runs", runs), ("jobs", jobs)]:
             paths[name] = self.dir / f"{name}.json"
-            if data is not None:
+            if data is None:
+                paths[name].unlink(missing_ok=True)
+            else:
                 paths[name].write_text(data if isinstance(data, str) else json.dumps(data))
         return subprocess.run(
             [sys.executable, "-B", str(SCRIPT), "--needs", needs_json,
@@ -151,7 +159,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("recovered", self.body.read_text())
 
     def test_an_unreadable_history_still_reports_a_failure(self):
-        for runs in [None, "{", {"workflow_runs": "x"}, []]:
+        for runs in [None, "{", {"workflow_runs": "x"}, {}, []]:
             with self.subTest(runs=runs):
                 result = self.call(json.dumps(RED), runs=runs, jobs="not json")
                 self.assertEqual(result.stdout, "action=failure\n")
@@ -170,6 +178,12 @@ class CommandTests(unittest.TestCase):
         result = self.call(json.dumps(GREEN), runs=runs,
                            extra=["--run-attempt", "2", "--previous-attempt", "failure"])
         self.assertEqual(result.stdout, "action=recovery\n")
+        # A failed history request writes `{}`; a green re-run then stays silent.
+        for unreadable in ["{}", "{", None]:
+            with self.subTest(unreadable=unreadable):
+                result = self.call(json.dumps(GREEN), runs=unreadable,
+                                   extra=["--run-attempt", "2", "--previous-attempt", "failure"])
+                self.assertEqual(result.stdout, "action=none\n")
         result = self.call(json.dumps(GREEN), runs=runs, extra=["--run-attempt", "x"])
         self.assertEqual((result.returncode, result.stdout), (2, ""))
 
