@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
     thread,
 };
+mod builder;
 #[cfg(feature = "exposure-firewall")]
 mod firewalls;
 mod keys;

@@ -22,7 +22,7 @@ pub(in crate::app::cloud_panel::production) struct Starting {
     /// The repository as the person entered it.
     pub(super) entered: String,
     /// The Docker host its proof builds on; none for this computer.
-    build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
+    build_on: Option<super::build_on::Target>,
     receiver: std::sync::mpsc::Receiver<Result<Prepared, String>>,
 }
 
@@ -118,10 +118,7 @@ impl HorizonApp {
     fn prepare_cloud_setup(
         &mut self,
         ctx: &egui::Context,
-        (preset, build_on): (
-            horizon_core::PresetConfig,
-            Option<horizon_core::cloud_runtime::docker_host::Host>,
-        ),
+        (preset, build_on): (horizon_core::PresetConfig, Option<super::build_on::Target>),
         chosen_mode: super::Mode,
         entered: String,
     ) {
@@ -297,6 +294,10 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
         self.close_orphaned_setup_panels(ctx);
         self.poll_cloud_setup_start(ctx);
+        let root = self.cloud_prototype.root.clone();
+        let production = &mut self.cloud_prototype.production;
+        let wanted = production.setup_runs.iter().any(Run::wants_rented_builder);
+        production.setup_builder.tick(wanted, root.as_deref(), ctx);
         for run in self.cloud_prototype.production.setup_run_panels() {
             self.sync_cloud_setup_run(ctx, run);
         }
@@ -310,30 +311,17 @@ impl HorizonApp {
         if self.poll_cloud_setup_use(ctx, key) {
             return;
         }
+        let builder = &self.cloud_prototype.production.setup_builder;
+        let (rented_host, builder_wait) = (builder.host(), builder.waiting());
         let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         run.poll(ctx);
-        // The finished card's list of changed files, made off the dialog's thread.
-        if run.finished() && run.files.is_none() {
-            if let Some(job) = &run.files_job {
-                if let Ok(files) = job.try_recv() {
-                    run.files = Some(files);
-                    run.files_job = None;
-                }
-            } else {
-                let (sender, receiver) = std::sync::mpsc::channel();
-                let repository = run.repository.clone();
-                let wake = ctx.clone();
-                std::thread::spawn(move || {
-                    let _ = sender.send(changed_files(&repository));
-                    wake.request_repaint();
-                });
-                run.files_job = Some(receiver);
-            }
-        }
-        // The agent asked for a (new) proof: Horizon builds and runs it itself.
-        if let Some((request, spec)) = run.proof_wanted() {
+        list_changed_files(run, ctx);
+        // The agent asked for a (new) proof: Horizon builds and runs it itself, on the
+        // rented builder once it answers.
+        let place = run.proof_place((rented_host, builder_wait));
+        if let (Some((request, spec)), run::board::ProofPlace::Ready(build_on)) = (run.proof_wanted(), place) {
             run.proved_request = request;
             run.proof_stale_reported = false;
             run.forget_inputs();
@@ -350,7 +338,7 @@ impl HorizonApp {
             run.previewed_request = 0;
             run.proof = Some(super::proof::Proof::start(
                 (&run.repository, &id, run.identity),
-                run.build_on.clone(),
+                build_on,
                 (request, spec),
                 log,
                 (run.host_restore, run.root_dirty.clone(), access),
@@ -769,6 +757,8 @@ impl HorizonApp {
         super::proof::keep_unremoved();
         // The resources kept on a Docker host are retried with a new forward next time.
         super::proof::close_forwards();
+        // The rented builder goes last: the runs' resources on it go with it.
+        self.cloud_prototype.production.setup_builder.give_back_for_exit();
     }
 
     /// The process the agent's panel started, which leads its own process group.
@@ -908,6 +898,28 @@ fn files_summary(changes: &[String]) -> String {
         shown.push(format!("and {} more", changes.len() - SHOWN_FILES));
     }
     shown.join(" · ")
+}
+
+/// The finished card's list of changed files, made off the dialog's thread.
+fn list_changed_files(run: &mut Run, ctx: &egui::Context) {
+    if !run.finished() || run.files.is_some() {
+        return;
+    }
+    if let Some(job) = &run.files_job {
+        if let Ok(files) = job.try_recv() {
+            run.files = Some(files);
+            run.files_job = None;
+        }
+        return;
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let repository = run.repository.clone();
+    let wake = ctx.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(changed_files(&repository));
+        wake.request_repaint();
+    });
+    run.files_job = Some(receiver);
 }
 
 #[cfg(test)]
