@@ -171,7 +171,10 @@ fn an_already_pinned_grant_does_not_wait_for_another_scopes_first_pin() {
             tx.send(Prepared::for_image(&settings, &image(), None, false).is_ok_and(|prepared| prepared.is_some()))
                 .unwrap();
         });
-        let result = rx.recv_timeout(Duration::from_secs(2));
+        // The lock stays held until the answer comes, so a call that waits for it never
+        // answers. The bound only guards against that hang; the call's own synced
+        // writes can take seconds on a slow disk.
+        let result = rx.recv_timeout(Duration::from_secs(60));
         identity.unlock().unwrap();
         result
     });
