@@ -580,6 +580,61 @@ access to it, and install the app only on the repositories that agents may use.
 of running clouds: delete the app on GitHub for that. Deleting the app ends every
 token at once.
 
+### Package read access
+
+GitHub's package API accepts no token of the GitHub App from
+[Connect GitHub](#connect-github). Thus agents on a worker cannot read the
+versions of private packages, for example to make sure that a private NuGet
+version exists and to read its age, unless the cloud has package read access.
+
+When a deployment of a cloud with Connect GitHub reaches the worker, Horizon asks
+the worker whether it has package read access. When it does not, the card shows a
+second code right after the cloud's GitHub access: **Let this cloud's agents read
+packages**.
+
+1. Click **Open GitHub**. Horizon copies the code.
+2. Paste the code on GitHub and click **Authorize**. You authorize Horizon's own
+   OAuth app, with your own GitHub account, for the scope `read:packages` only.
+
+Horizon makes sure that GitHub granted exactly `read:packages`. It refuses a
+broader grant: the worker then gets nothing. Horizon gives the token chain to the
+root GitHub service of the worker over SSH standard input, never in a command line,
+a log or the cloud board, and keeps no copy. The worker renews the chain with the
+OAuth app's client ID alone, also while this computer is off. No agent gets the
+token: the service adds it only to reads of the NuGet and npm packages of the
+owners of the cloud's repositories, as
+[the trust boundary of the package token](upkeep.md#trust-boundary-of-the-package-token)
+tells. An agent reads them with `gh`, for example
+`gh api /orgs/OWNER/packages/nuget/NAME/versions`.
+
+**Skip: package checks need a person** continues without package read access. The
+deployment output says so, and an agent that needs a package check reports that
+the cloud has no package read access. Horizon does not ask again for that cloud
+until Horizon starts again or you choose **Connect GitHub again** on the card.
+
+An organization that limits OAuth apps hides its packages from Horizon's OAuth
+app. Then the deployment output names the organization and the page where an
+owner grants Horizon:
+`https://github.com/organizations/ORG/settings/oauth_application_policy`. Other
+members can ask for it on the app's page,
+`https://github.com/settings/connections/applications/Ov23liPNCPgWraJDo6XM`.
+
+What you grant: the token reads every package that your account can read, of every
+type and owner. The worker limits its use to NuGet and npm package reads of the
+owners of the cloud's repositories. Only the root service of the worker holds it.
+
+To end the access:
+
+- For one cloud: delete the cloud. The chain goes with its worker. Its refresh
+  token then stays valid on GitHub for up to six months, held by nobody.
+- For every cloud: click **Revoke** for **Horizon** on
+  `https://github.com/settings/connections/applications/Ov23liPNCPgWraJDo6XM`.
+  This ends every token of Horizon's OAuth app for your account, also the one that
+  lets Horizon publish images.
+
+A worker image without package read access does not ask for the code. Rebuild the
+image of such a cloud.
+
 ### Your repositories in New cloud
 
 **Where is your code?** in **New cloud** is one search field:

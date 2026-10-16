@@ -433,6 +433,17 @@ fn print_event(event: Event) {
                     if allowed { "allowed" } else { "not allowed" }
                 );
             }
+            Prompt::Packages {
+                user_code,
+                verification_uri,
+                ..
+            } => println!("[{at:7.1}s] GitHub: to let agents read packages, enter {user_code} at {verification_uri}"),
+            Prompt::PackagesEnded { allowed } => {
+                println!(
+                    "[{at:7.1}s] GitHub: package reads {}",
+                    if allowed { "allowed" } else { "not allowed" }
+                );
+            }
         },
         _ => {}
     }

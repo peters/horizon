@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 pub mod connect;
 pub mod host;
+pub mod packages;
 pub mod publish;
 pub mod requests;
 mod signin;

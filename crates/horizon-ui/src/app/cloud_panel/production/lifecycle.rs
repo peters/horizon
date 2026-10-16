@@ -104,8 +104,13 @@ impl Runtime {
             tracing::warn!(%error, "could not open the GitHub sign-in page");
         }
         match prompt {
-            cloud_runtime::github::Prompt::Publish { .. } => self.publish = Some(prompt),
-            cloud_runtime::github::Prompt::Published { .. } => self.publish = None,
+            // The package sign-in uses the same one-time box as the publishing sign-in.
+            cloud_runtime::github::Prompt::Publish { .. } | cloud_runtime::github::Prompt::Packages { .. } => {
+                self.publish = Some(prompt);
+            }
+            cloud_runtime::github::Prompt::Published { .. } | cloud_runtime::github::Prompt::PackagesEnded { .. } => {
+                self.publish = None;
+            }
             prompt => self.github = Some(prompt),
         }
     }
