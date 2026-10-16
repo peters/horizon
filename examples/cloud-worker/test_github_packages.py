@@ -110,6 +110,7 @@ class StorageTests(ServiceTestCase):
         change = json.dumps({'version': 1, 'repositories': ['other-org/lib', 'acme/web']})
         held = packages.install(self.store, change, check=lambda token: self.fail('no scope request'))
         self.assertEqual(held['packages']['repositories'], ['other-org/lib', 'acme/web'])
+        self.assertIs(held['packages']['repositories_change'], True)
         self.assertEqual(packages.token_for(self.store, 'OTHER-ORG'), (TOKEN, None))
         self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
         install(self.store, request(repositories=['acme/api']))

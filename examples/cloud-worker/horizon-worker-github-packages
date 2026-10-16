@@ -261,7 +261,9 @@ def summary(store):
             'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
-            'repositories': read_repositories(chains, state) or []}
+            'repositories': read_repositories(chains, state) or [],
+            # Horizon may send only new repositories for this chain (change_repositories).
+            'repositories_change': True}
 
 
 def served(store, now=time.time):
