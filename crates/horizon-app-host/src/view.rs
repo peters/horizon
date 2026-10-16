@@ -777,7 +777,9 @@ mod tests {
         };
         observer.observe(&mut event).unwrap();
         let mut client = TcpStream::connect(&event.view.take().unwrap().endpoint).unwrap();
-        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // The view is quiet while the reset runs, and lane completion closes it. The
+        // timeout only guards against a hang, not how long a busy runner takes.
+        client.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
         rfb_handshake(&mut client);
         read_metadata(&mut client);
         let receiver = std::thread::spawn(move || {
