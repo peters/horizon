@@ -150,7 +150,15 @@ impl Transport {
         self.send(&message)?;
         self.response()
     }
+    /// A write that fails because this transport was closed or cancelled reports that reason.
     pub(crate) fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        let result = self.write_message(bytes);
+        if matches!(result, Err(Error::Io(_))) {
+            self.interrupted()?;
+        }
+        result
+    }
+    fn write_message(&mut self, bytes: &[u8]) -> Result<()> {
         if let Some(security) = &mut self.security {
             for chunk in bytes.chunks(1024) {
                 let next = security
@@ -251,7 +259,11 @@ impl Transport {
                     .min(cancellation::POLL),
                 None => cancellation::POLL,
             };
-            self.socket.set_read_timeout(Some(slice))?;
+            // On macOS a socket that another thread shut down rejects the timeout.
+            if let Err(error) = self.socket.set_read_timeout(Some(slice)) {
+                self.interrupted()?;
+                return Err(error.into());
+            }
             let count = match self.socket.read(output) {
                 Ok(0) => {
                     self.interrupted()?;
@@ -512,6 +524,42 @@ mod tests {
             };
             assert_eq!(receiver.read(&mut [0]).expect("the receiver sees the close"), 0);
             drop(transport);
+        }
+    }
+
+    // On macOS, setting a read timeout on a socket that was already shut down fails
+    // with EINVAL, and so can a write. Both must report the close or the cancellation.
+    #[test]
+    fn a_transport_closed_or_cancelled_before_its_read_reports_why() {
+        use std::sync::atomic::AtomicBool;
+        for closed in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+            let cancel = Arc::new(Cancellation::new(Arc::new(AtomicBool::new(false))));
+            let mut transport = if closed {
+                Transport::connect(listener.local_addr().expect("address")).expect("connect")
+            } else {
+                Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
+                    .expect("connect")
+            };
+            let receiver = accept_from(&listener, transport.socket_local_addr().expect("transport address"));
+            let expected = |error: &Option<Error>| {
+                if closed {
+                    matches!(error, Some(Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionAborted)
+                } else {
+                    matches!(error, Some(Error::Protocol("casting cancelled")))
+                }
+            };
+            if closed {
+                transport.wait_for_events();
+                transport.closer().expect("closer").close();
+            } else {
+                cancel.stop();
+            }
+            let error = transport.message().err();
+            assert!(expected(&error), "read: {error:?}");
+            let error = transport.send(b"POST /late RTSP/1.0\r\n\r\n").err();
+            assert!(expected(&error), "write: {error:?}");
+            drop(receiver);
         }
     }
 
