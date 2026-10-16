@@ -2,7 +2,7 @@
 procedure: cloud-setup-agent
 feature: Set up from CI in New cloud (setup agent and Horizon's proof)
 platforms: [linux]
-cost: none
+cost: rents compute  # S24 only; S01 to S23 use only this computer
 destructive: yes
 secrets: [the local login of the agent (Codex or Claude)]
 owner: peters
@@ -23,8 +23,9 @@ setup** commits `.horizon` and reads it as the repository profile.
 - Platforms: Linux with Docker. The isolated fixture of
   [area S of the cloud panels procedure](cloud-panels/s-test-fixture.md) is
   recommended.
-- This procedure does not test: a deploy, a provider, or a paid agent API key.
-  No step rents compute.
+- This procedure does not test: a deploy or a paid agent API key. Only S24 rents
+  compute: a Hetzner server that Horizon deletes again. S01 to S23 use only this
+  computer.
 - For a pull request that changes the setup agent, the proof or the desktop preview,
   also run [the setup gate](cloud-setup-gate.md). It runs the proof on real
   repositories.
@@ -669,6 +670,10 @@ checked on the cloud card, and an agent panel in the same workspace.
 
 This step rents a Hetzner server for some minutes and costs a few cents.
 
+> **CAUTION:** HETZNER BILLS THE RENTED BUILDER UNTIL IT IS DELETED. Do steps 5 and 6
+> to the end, and make sure at the end that the Hetzner console lists no server or SSH
+> key named `horizon-cloud-setup-builder-<id>`. Delete one that is left there by hand.
+
 1. Connect Hetzner in **Cloud settings**.
 
    Result: **Build on** in **New cloud** shows **Rented builder**.
@@ -698,6 +703,9 @@ This step rents a Hetzner server for some minutes and costs a few cents.
 
 6. Start a setup with **Rented builder**, wait until the builder line shows a price,
    and end Horizon with `kill -9`. Start Horizon again.
+
+   > **CAUTION:** AFTER `kill -9` THE BUILDER STAYS BILLED UNTIL HORIZON STARTS AGAIN.
+   > Start Horizon again at once, with the same Cloud settings folder.
 
    Result: Within one minute of the start, the Hetzner console lists no builder.
 
