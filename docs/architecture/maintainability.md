@@ -608,6 +608,11 @@ action waits, announcements and termination persistence.
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
 caller's `Records` before the provider request that record guards.
+
+SDK `host::Plan` retains ordinary startup unchanged and embeds the separate
+`host/ingress.py` opt-in original Docker receipt producer. Its pure Python tests
+exercise bounded child and publication failure paths; Protocol checks the exact
+encoder against its canonical receipt format without a reverse SDK dependency.
 `hetzner::cloud::{check, stop, resumable, delete}` are the lifecycle: stopping
 releases the server and keeps the volume, and every step is recorded through
 `Records` and `StopRecords` first. Provider code lives here so it can be reused

@@ -192,12 +192,16 @@ impl Default for Storage {
 pub struct Bootstrap {
     pub readiness_seconds: u16,
     pub contract_version: u16,
+    /// New Hetzner workers may publish protected exposure ingress; never upgrades a worker.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub exposure_ingress: bool,
 }
 impl Default for Bootstrap {
     fn default() -> Self {
         Self {
             readiness_seconds: 600,
             contract_version: 1,
+            exposure_ingress: false,
         }
     }
 }
@@ -298,6 +302,7 @@ impl Profile {
             bootstrap: Bootstrap {
                 readiness_seconds: next.bootstrap.readiness_seconds,
                 contract_version: self.bootstrap.contract_version,
+                exposure_ingress: self.bootstrap.exposure_ingress,
             },
             idle_stop_minutes: next.idle_stop_minutes,
             build: next.build.clone(),
@@ -347,6 +352,11 @@ impl Profile {
         if self.bootstrap.contract_version != 1 || !(10..=3600).contains(&self.bootstrap.readiness_seconds) {
             return Err(ProfileError::Invalid(
                 "Unsupported worker contract or readiness timeout",
+            ));
+        }
+        if self.bootstrap.exposure_ingress && self.provider != crate::hetzner::PROVIDER {
+            return Err(ProfileError::Invalid(
+                "Protected exposure ingress requires a new Hetzner worker",
             ));
         }
         if self
@@ -436,6 +446,31 @@ pub const DESIGN_EXAMPLE: &str = include_str!("../examples/design-fixtures.yml")
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protected_ingress_defaults_false_is_hetzner_only_and_is_not_a_rebuild_setting() {
+        let mut bound: Profile = serde_json::from_value(serde_json::json!({
+            "provider": "hetzner", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8
+        }))
+        .unwrap();
+        assert!(!bound.bootstrap.exposure_ingress);
+        assert!(
+            serde_json::to_value(&bound.bootstrap)
+                .unwrap()
+                .get("exposure_ingress")
+                .is_none()
+        );
+        bound.bootstrap.exposure_ingress = true;
+        assert!(bound.validate(false).is_ok());
+        let mut requested = bound.clone();
+        requested.bootstrap.exposure_ingress = false;
+        assert!(bound.with_rebuild_settings(&requested).bootstrap.exposure_ingress);
+        assert!(!requested.with_rebuild_settings(&bound).bootstrap.exposure_ingress);
+        for provider in ["runpod", "docker-host"] {
+            bound.provider = provider.into();
+            assert!(bound.validate(false).is_err());
+        }
+    }
 
     #[test]
     fn explicit_minimums_accept_legacy_profiles_without_changing_worker_records() {

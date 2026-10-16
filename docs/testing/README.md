@@ -29,6 +29,7 @@ documents that are not yet STE.
 | [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through image preparation | none |
 | [portable-image-publishing](procedures/portable-image-publishing.md) | Ordinary defaults, portable setup and first/final local publishing proof | none |
 | [bound-worker-pull](procedures/bound-worker-pull.md) | Exact read-only registry material for CPU hosts | none |
+| [protected-host-ingress](procedures/protected-host-ingress.md) | Opt-in original Hetzner Docker publication, root-only port pools and immutable readback | Separately capped VM for real smoke |
 | [host-pull-journal](procedures/host-pull-journal.md) | Separate direct-host and provider pull records | none |
 | [registry-docker-context](procedures/registry-docker-context.md) | Keep daemon selection with isolated registry credentials | none |
 | [host-registry-management](procedures/host-registry-management.md) | Host-only pull checks and separate provider access | none |
@@ -90,6 +91,7 @@ documents that are not yet STE.
 | Report | Procedure | Date |
 |---|---|---|
 | [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
+| [2026-10-16-protected-host-ingress](reports/2026-10-16-protected-host-ingress.md) | [protected-host-ingress](procedures/protected-host-ingress.md) | 2026-10-16 |
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
 | [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |
 | [2026-10-14-tailnet-api-removal](reports/2026-10-14-tailnet-api-removal.md) | [tailnet-api-removal](procedures/tailnet-api-removal.md) | 2026-10-14 |

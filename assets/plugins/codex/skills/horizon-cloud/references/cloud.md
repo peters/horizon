@@ -653,6 +653,16 @@ The M2 eight-hour constant does not expire M1 one-device sharing. Worker, provid
 owner and public interface qualification remain required for the full feature.
 See docs/architecture/exposure-policy.md and docs/testing/procedures/exposure-policy.md.
 
+For new Hetzner development workers, `bootstrap.exposure_ingress: true` selects
+the protected host publication producer. It defaults false, does not upgrade an
+existing worker, and cannot change through rebuild. It publishes logical TCP
+20000–20031 to root-only physical ports 600–631; private backends 632–663 stay unpublished.
+The root host emits an immutable read-only receipt from actual Docker and kernel
+observations. Existing SDK snapshots still report SSH22 only. This component adds
+no exposure action or readiness claim: actual original runtime consumers, source
+preservation and protected Gate/keeper qualification remain required. See
+docs/architecture/protected-host-ingress.md and docs/testing/procedures/protected-host-ingress.md.
+
 Protected-ingress helpers calculate physical listeners 600–631 and backends 632–663
 for logical ports 20000–20031. Strict bounded receipts retain a complete claimed
 SSH22 plus 32 TCP publication set, container/image/generation and namespace facts.

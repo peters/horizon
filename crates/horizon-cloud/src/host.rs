@@ -25,6 +25,7 @@ const REGISTRY_FILE: &str = "/root/.docker/config.json";
 const GUARD: &str = "/usr/local/sbin/horizon-worker-guard";
 const SETUP: &str = "/usr/local/sbin/horizon-worker-setup";
 const START: &str = "/usr/local/sbin/horizon-worker-start";
+const INGRESS: &str = "/usr/local/sbin/horizon-worker-ingress";
 const UNIT: &str = "/etc/systemd/system/horizon-worker.service";
 const DEVICE_PREFIX: &str = "/dev/disk/by-id/";
 
@@ -63,6 +64,8 @@ pub struct Plan {
     pub workspace_device: String,
     /// Size of `/dev/shm` in GB, which Chromium needs beyond Docker's 64 MB default.
     pub shm_gb: u8,
+    /// Explicitly requested only when this new host is provisioned.
+    pub exposure_ingress: bool,
 }
 
 /// Serialized in field order; `write_files` is last so the registry login can be
@@ -96,7 +99,14 @@ impl Plan {
             format!("{}\n", self.image),
             setup_script(),
             guard_script(),
-            start_script(self.shm_gb),
+            if self.exposure_ingress {
+                format!(
+                    "#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} {}\n",
+                    self.shm_gb
+                )
+            } else {
+                start_script(self.shm_gb)
+            },
             unit(),
         );
         let file = |path, permissions, content| WriteFile {
@@ -105,7 +115,7 @@ impl Plan {
             permissions,
             content,
         };
-        let write_files = vec![
+        let mut write_files = vec![
             file(ENVIRONMENT_FILE, "0600", environment.as_str()),
             file(IMAGE_FILE, "0600", &image),
             file(SETUP, "0700", &setup),
@@ -113,6 +123,9 @@ impl Plan {
             file(START, "0700", &start),
             file(UNIT, "0644", &unit),
         ];
+        if self.exposure_ingress {
+            write_files.push(file(INGRESS, "0700", include_str!("host/ingress.py")));
+        }
         let config = CloudConfig {
             ssh_pwauth: false,
             disable_root: true,
@@ -148,6 +161,16 @@ impl Plan {
     }
 
     fn validate(&self) -> Result<(), CloudError> {
+        if self.exposure_ingress
+            && !self
+                .environment
+                .get("HORIZON_CLOUD_OPERATION")
+                .is_some_and(|id| crate::valid_id(id))
+        {
+            return Err(CloudError::Invalid(
+                "Protected ingress requires the allocation operation ID",
+            ));
+        }
         if !valid_image(&self.image) || !valid_digest_reference(&self.image) {
             return Err(CloudError::Invalid("Host image must be an immutable image digest"));
         }
