@@ -1,0 +1,304 @@
+"""The package read access of the worker's GitHub access. GitHub's package API and its NuGet
+registry take only a token with the `read:packages` scope, such as an OAuth app's token, which
+a GitHub App's user token never has. Horizon gives this root service a device-flow token chain
+of its OAuth app (`horizon-worker-github packages`, JSON on stdin, never in argv or a log): the
+client ID, the cloud's own repositories and the chain. The service checks with GitHub that the
+token's only scope is `read:packages`, keeps it in a second chain store beside the GitHub
+chain's, root-only, and renews it with the client ID alone, so it keeps working while Horizon
+is off; a renewal that brings another scope removes it. No agent gets it: no variable, no file,
+no NuGet.Config. The API broker adds the access token only to the package reads that the REST
+policy allows (horizon-worker-github-api-rest), only for an owner of those repositories, and
+passes on a package reply only after it removed the repository objects of other repositories.
+A module that horizon-worker-github loads, not a command."""
+import contextlib
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+
+MAX_SOURCE = 16384
+# The largest package reply the broker reads to filter it: 100 packages with their repositories.
+MAX_REPLY = 8 << 20
+# Guards the creation of the one package chain store of each GitHub store.
+STORES = threading.Lock()
+FIELDS = {'version', 'client_id', 'repositories', 'chain'}
+CLIENT_ID = re.compile(r'[A-Za-z0-9._-]{1,128}')
+OWNER = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})')
+MAX_REPOSITORIES = 50
+SCOPE = 'read:packages'
+MISSING = ('this worker has no package read access, so GitHub\'s package API stays closed to agents. The person '
+           'can give the cloud package read access in Horizon.')
+REVOKED = ('the package read access of this worker ended (GitHub refused to renew it). The person can give the '
+           'cloud package read access again in Horizon.')
+EXPIRED = ('the package read access of this worker expired and was not renewed yet; try again in a minute. If '
+           'this stays, the person can give the cloud package read access again in Horizon.')
+REFUSED = ('GitHub refused the package read access of this worker. The person can give the cloud package read '
+           'access again in Horizon.')
+OTHER_OWNER = ('%s owns none of this cloud\'s repositories, so the package read access of the cloud does not read '
+               'its packages.')
+
+
+# A repository's address on GitHub or its API, as package replies carry it; `orgs/` and
+# `users/` addresses name an owner, not a repository.
+REPOSITORY_ADDRESS = re.compile(r'https?://(?:www\.)?(?:github\.com/(?!orgs/|users/)|api\.github\.com/repos/)'
+                                r'(?P<name>[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})', re.IGNORECASE)
+
+
+# The only fields of a client's package read that reach GitHub: no range, condition, encoding
+# or API version, so GitHub sends the whole reply that the broker examines, in the version
+# whose `repository` field the filter knows.
+REQUEST_FIELDS = {'accept', 'user-agent'}
+API_VERSION = '2022-11-28'
+# Reply fields that describe the reply before the filter changed it.
+UNFILTERED = {'content-range', 'accept-ranges', 'content-encoding', 'etag', 'last-modified'}
+
+
+class Unchecked(Exception):
+    """A package reply that the broker could not examine, so it is not passed on."""
+
+
+def store_for(store):
+    """The chain store of the package read access, beside the GitHub chain's store: its own
+    root-only directories on the volume and on tmpfs, with their own locks. One per GitHub
+    store, so the broker sees a renewed chain that only the renewal's memory holds."""
+    with STORES:
+        if getattr(store, 'package_chains', None) is None:
+            store.package_chains = common.Store(store.persistent.with_name(store.persistent.name + '-packages'),
+                                                store.runtime.with_name(store.runtime.name + '-packages'))
+        return store.package_chains
+
+
+def repositories_of(value):
+    """The cloud's own repositories as Horizon names them: 1 to MAX_REPOSITORIES owner/name pairs,
+    each one time."""
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_REPOSITORIES:
+        raise ValueError('Invalid package read access repositories')
+    seen = set()
+    for name in value:
+        if not auth.valid_repository(name) or not OWNER.fullmatch(name.split('/')[0]) or name.casefold() in seen:
+            raise ValueError('Invalid package read access repositories')
+        seen.add(name.casefold())
+    return list(value)
+
+
+def parse(value, now):
+    """The state to store for Horizon's request, or None to remove the package read access."""
+    if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] != 1:
+        raise ValueError('Invalid package read access request')
+    if set(value) == {'version', 'chain'} and value['chain'] is None:
+        return None
+    if set(value) != FIELDS:
+        raise ValueError('Invalid package read access request')
+    if not isinstance(value['client_id'], str) or not CLIENT_ID.fullmatch(value['client_id']):
+        raise ValueError('Invalid package read access client')
+    chain = common.validate_chain(value['chain'])
+    if chain['refresh_expires_at'] <= now:
+        raise ValueError('The package read access chain expired')
+    return {'version': 1, 'state': 'ok', 'client_id': value['client_id'],
+            'repositories': repositories_of(value['repositories']), 'chain': chain}
+
+
+def scopes_of(token, environ=os.environ, timeout=30):
+    """The scopes GitHub names for `token` (X-OAuth-Scopes), or None when it names none."""
+    _, api, loopback = common.github_bases(environ)
+    request = urllib.request.Request(api + '/', method='GET', headers={
+        'Accept': 'application/vnd.github+json', 'Authorization': 'token ' + token,
+        'User-Agent': 'horizon-worker-github/1'})
+    try:
+        with common.opener(loopback).open(request, timeout=timeout) as response:
+            named = response.headers.get('X-OAuth-Scopes')
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+        raise ValueError('GitHub did not confirm the scope of the package read access') from None
+    return None if named is None else [scope.strip() for scope in named.split(',') if scope.strip()]
+
+
+def only_read(scopes):
+    """Whether `scopes` are exactly read:packages: a token that can write never stays here."""
+    return scopes == [SCOPE]
+
+
+def install(store, source, now=time.time, check=None):
+    """Stores Horizon's chain in place of any earlier one, after GitHub confirmed that its only
+    scope is read:packages, or removes it for a null chain. Returns what the worker holds now.
+    A failed replacement leaves no chain served: neither the new one nor the earlier one. The
+    chain store's own lock serializes this with the renewal."""
+    chains = store_for(store)
+    # The whole replacement holds the store lock, the scope request included, so a renewal
+    # never rotates the chain between the check and the save.
+    with chains.lock():
+        try:
+            state = parse(json.loads(source), int(now()))
+            if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
+                raise ValueError('The package read access token has other scopes than read:packages')
+            if state is None:
+                clear(chains)
+            else:
+                chains.save(state, retain=False)
+        except Exception:
+            # Whatever failed, the earlier chain and its owners stop too: Horizon meant to replace them.
+            with contextlib.suppress(OSError, ValueError):
+                clear(chains)
+            raise
+    return {'packages': summary(store)}
+
+
+def remove(store):
+    """Removes the package read access, as when GitHub is disconnected or a request to replace
+    it could not even be read."""
+    chains = store_for(store)
+    with chains.lock():
+        clear(chains)
+
+
+def clear(chains):
+    """Removes every copy. When a copy stays, a clear mark above every copy is written and the
+    tmpfs copy removed anyway, so no copy is served, and the failure is raised."""
+    try:
+        chains.clear()
+    except (OSError, ValueError):
+        try:
+            chains.pending = None
+            common.write_private(common.private_directory(chains.runtime, create=True), common.CLEARED,
+                                 json.dumps({'serial': chains.highest(), 'nonce': uuid.uuid4().hex}))
+        except (OSError, ValueError):
+            pass  # The tmpfs copy still goes below.
+        (chains.runtime / common.STATE).unlink(missing_ok=True)
+        raise ValueError('A copy of the package read access stayed; none is served') from None
+
+
+def summary(store):
+    """What `status` reports: None, or the state and times of the chain, never a token."""
+    state, persistent = store_for(store).load()
+    if state is None:
+        return None
+    return {'state': state['state'], 'persistent': persistent,
+            'access_expires_at': state['chain']['access_expires_at'],
+            'refresh_expires_at': state['chain']['refresh_expires_at'],
+            'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
+            'repositories': list(state.get('repositories', []))}
+
+
+def served(store, now=time.time):
+    """(state, None) of a chain that may serve now, or (None, why not). A chain that is not
+    stored yet, or whose access token is about to expire, serves nothing."""
+    try:
+        state, _ = store_for(store).load(serving=True)
+    except (OSError, ValueError):
+        state = None
+    if state is None:
+        return None, MISSING
+    if state['state'] != 'ok':
+        return None, REVOKED
+    if state['chain']['access_expires_at'] - now() <= common.SERVE_MARGIN:
+        return None, EXPIRED
+    return state, None
+
+
+def repositories(state):
+    """The cloud's own repositories of a served chain, in lowercase."""
+    return {name.casefold() for name in state.get('repositories', [])}
+
+
+def owners(state):
+    """The owners of the cloud's own repositories, in lowercase: the only owners whose packages
+    the chain reads. No owner comes from a grant that an agent asked for."""
+    return {name.split('/')[0] for name in repositories(state)}
+
+
+def token_for(store, owner, now=time.time):
+    """The token for a package read of `owner`, or the reason why there is none."""
+    state, reason = served(store, now)
+    if state is None:
+        return None, reason
+    if owner.casefold() not in owners(state):
+        return None, OTHER_OWNER % owner
+    return state['chain']['access_token'], None
+
+
+def checked_reply(response, own, keep, secrets=()):
+    """(body, reply fields to keep) of GitHub's reply to a package read: a redirect without its
+    body and with only its Location (gh follows it through the broker again, so the token never
+    goes along), any other reply read whole, uncompressed and at most MAX_REPLY, and passed on
+    only as `filtered` JSON. A partial reply is refused: a slice of an unfiltered reply could
+    show what the filter removes. Raises Unchecked."""
+    if 300 <= response.status < 400:
+        return b'', {'location'}
+    if response.status == 206 or response.getheader('Content-Range') is not None:
+        raise Unchecked('GitHub sent part of a package reply, which cannot be examined, so it was not passed on.')
+    if (response.getheader('Content-Encoding') or 'identity').lower() != 'identity':
+        raise Unchecked('the package reply from GitHub is compressed, so it cannot be examined.')
+    try:
+        data = response.read(MAX_REPLY + 1)
+    except (OSError, http.client.HTTPException):
+        raise Unchecked('the package reply from GitHub broke off.') from None
+    if len(data) > MAX_REPLY:
+        raise Unchecked('the package reply from GitHub is too large to examine.')
+    return filtered(data, own, secrets), keep - UNFILTERED
+
+
+def filtered(data, own, secrets=()):
+    """A package reply without what it tells about repositories outside the cloud: the
+    repository object of each package is kept only for the cloud's own repositories (`own`,
+    lowercase owner/name), and any text that names another repository by its GitHub address,
+    such as an `html_url` under the repository, becomes null. Raises Unchecked for a reply
+    that is not JSON or holds a secret."""
+    try:
+        value = json.loads(data)
+    except (ValueError, RecursionError):
+        raise Unchecked('the package reply from GitHub is not JSON, so it was not passed on.') from None
+
+    def foreign(text):
+        return any(match.group('name').removesuffix('.git').casefold() not in own
+                   for match in REPOSITORY_ADDRESS.finditer(text))
+
+    def clean(node):
+        if isinstance(node, str):
+            return None if foreign(node) else node
+        if isinstance(node, dict):
+            repository = node.get('repository')
+            if 'repository' in node and not (isinstance(repository, dict) and isinstance(
+                    repository.get('full_name'), str) and repository['full_name'].casefold() in own):
+                node['repository'] = None
+            for key, item in node.items():
+                node[key] = clean(item)
+        elif isinstance(node, list):
+            return [clean(item) for item in node]
+        return node
+    try:
+        value = clean(value)
+    except RecursionError:
+        raise Unchecked('the package reply from GitHub is nested too deeply, so it was not passed on.') from None
+    text = json.dumps(value, separators=(',', ':'))
+    if any(secret in text for secret in secrets):
+        raise Unchecked('the package reply from GitHub held the package read access; it was not passed on.')
+    return text.encode()
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-packages is a module of horizon-worker-github, not a command.')

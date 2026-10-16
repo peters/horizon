@@ -19,7 +19,7 @@ WORKER_SCRIPTS = (
     'horizon-worker-github-api-rest', 'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy',
     'horizon-worker-github-tasks', 'horizon-worker-github-mcp', 'horizon-worker-github-upkeep',
     'horizon-worker-github-api-upkeep', 'horizon-worker-github-git-upkeep', 'horizon-worker-github-upkeep-loop',
-    'horizon-worker-gh-repository',
+    'horizon-worker-github-packages', 'horizon-worker-gh-repository',
     'horizon-worker-browserstack',
 )
 CONTEXT_FILES = ('Dockerfile', '.dockerignore', *WORKER_SCRIPTS)

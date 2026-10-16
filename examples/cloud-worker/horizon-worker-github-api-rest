@@ -7,6 +7,8 @@ host, so the policy also names the hosts that GitHub redirects to, which get no 
   `/meta`, and reads of the global security advisories (`/advisories`), which are public. A read needs a read grant. A change needs a push grant and must be one of the
   changes that pull requests, issues, releases, commits, checks and workflow runs make; no
   change to a repository's settings, access, secrets or hooks, and no delete of a repository.
+  Reads of an owner's NuGet and npm packages and their versions get the package token
+  instead (horizon-worker-github-packages); no other package type and no change of a package.
 - uploads.github.com: a release asset upload, with a push grant.
 - codeload.github.com and *.githubusercontent.com (archives, release assets, raw files and
   workflow logs that GitHub redirects to): a GET or HEAD only, without the token. The address
@@ -53,6 +55,15 @@ SEARCH = re.compile(r'/search/(?P<kind>issues|commits|code|repositories)')
 PLAIN = {'/', '/rate_limit', '/meta'}
 # The global security advisories: public data in no repository, read only.
 ADVISORIES = re.compile(r'/advisories(?:/GHSA(?:-[0-9A-Za-z]{4}){3})?')
+# An owner's packages of one type (`?package_type=`), a package, its versions and one version.
+PACKAGES = re.compile(r'/(?:orgs|users)/(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/packages'
+                      r'(?:/(?P<type>[^/]{1,64})(?:/(?P<name>[A-Za-z0-9._-]{1,214})'
+                      r'(?:/versions(?:/[1-9][0-9]{0,19})?)?)?)?')
+# Container images stay closed: the package token reads every image that the account can.
+PACKAGE_TYPES = ('nuget', 'npm')
+# The query parameters of the package API that a read may use; no other key, also not a
+# bracketed one, reaches GitHub.
+PACKAGE_QUERY = {'package_type', 'visibility', 'page', 'per_page', 'state'}
 ASSETS = re.compile(r'/repos/%s/%s/releases/[1-9][0-9]{0,19}/assets' % (OWNER, NAME))
 QUERY = re.compile(r'[A-Za-z0-9._~%!$&\'()*+,;=:@/?-]{0,8192}')
 # The first part of a repository path that a push grant may change, and for `actions` the
@@ -87,11 +98,12 @@ class Route:
     """Where one request goes and what it needs. `repository` is owner/name, or None with
     `repository_id` set for a `/repositories/ID` path that the broker resolves first. `access`
     is `read` or `push`; `token` is whether the request carries the cloud's token. `repositories`
-    are the granted repositories that a search is limited to."""
+    are the granted repositories that a search is limited to. `owner` is the account whose
+    packages a `package` route reads."""
 
     def __init__(self, host, kind, access=None, repository=None, repository_id=None, repositories=(),
-                 token=True, parts=()):
-        self.host, self.kind, self.access, self.token = host, kind, access, token
+                 token=True, parts=(), owner=None):
+        self.host, self.kind, self.access, self.token, self.owner = host, kind, access, token, owner
         self.repository, self.repository_id, self.repositories = repository, repository_id, tuple(repositories)
         # The decoded segments of a repository path after OWNER/NAME or ID.
         self.parts = list(parts)
@@ -155,6 +167,25 @@ def repository_route(host, method, owner, name, rest):
                  parts=parts_of(rest))
 
 
+def package_route(host, method, match, query):
+    """A read of an owner's NuGet or npm packages. The list names its type in the query."""
+    if method != 'GET':
+        # Not even HEAD: its length would tell the size of the reply before the broker filters it.
+        raise Refused(403, 'this worker sends only GET package reads to GitHub, never a change of a package.')
+    if ';' in query:
+        # Some servers also split a query at `;`; then GitHub could read another type.
+        raise Refused(400, 'a package read on this worker separates its query parameters with & only.')
+    pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+    if any(key not in PACKAGE_QUERY for key, _ in pairs):
+        raise Refused(400, 'a package read on this worker takes only the query parameters %s.'
+                      % ', '.join(sorted(PACKAGE_QUERY)))
+    named = [value for key, value in pairs if key == 'package_type']
+    kinds = named if match['type'] is None else [match['type'], *named]
+    if not kinds or match['type'] is None and len(named) != 1 or any(kind not in PACKAGE_TYPES for kind in kinds):
+        raise Refused(403, 'this worker reads only NuGet and npm packages on GitHub (package_type nuget or npm).')
+    return Route(host, 'package', 'read', owner=match['owner'])
+
+
 def route(method, host, target):
     """The Route of one request from gh, or Refused."""
     host = (host or '').lower()
@@ -186,12 +217,14 @@ def route(method, host, target):
             return Route(host, 'search', 'read', repositories=repositories)
         if (path in PLAIN or ADVISORIES.fullmatch(path)) and method in READS:
             return Route(host, 'plain')
+        if (match := PACKAGES.fullmatch(path)):
+            return package_route(host, method, match, query)
         if path == '/graphql':
             if method != 'POST':
                 raise Refused(405, 'GraphQL is a POST.')
             return Route(host, 'graphql')
         raise Refused(403, 'this worker does not let an agent reach %s on GitHub\'s API: only a granted '
-                           'repository\'s own paths, searches in granted repositories and GraphQL.' % path)
+                           'repository\'s own paths, searches in granted repositories, package reads and GraphQL.' % path)
     if host == UPLOADS:
         if (match := ASSETS.fullmatch(path)) and method == 'POST':
             return Route(host, 'repository', 'push', repository=match['owner'] + '/' + match['name'],

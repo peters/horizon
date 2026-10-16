@@ -500,8 +500,13 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   or changes only those repositories. Pass `-R owner/name` or work in a checkout.
   It also reads the public global security advisories (`gh api /advisories`, with
   filters such as `?ecosystem=npm&affects=name`, and `gh api /advisories/GHSA-...`)
-  without a repository grant. It refuses account-wide and organization-wide requests, such as `gh api
-  user/repos`, and changes to repository settings. A refusal shows as
+  without a repository grant. When the cloud has package read access, it also reads
+  the NuGet and npm packages of the owners of the cloud's own repositories
+  (`gh api /orgs/OWNER/packages/nuget/NAME/versions`, `.../versions/ID`), for example
+  the `created_at` of a version. Without it, the refusal says that the cloud has no
+  package read access: report that reason, do not look for a way around it. Apart
+  from those package reads, it refuses account-wide and organization-wide requests,
+  such as `gh api user/repos`, and changes to repository settings. A refusal shows as
   `Horizon: ...` (`GraphQL: Horizon: ...` for GraphQL); for a repository the
   task needs, ask with `github_access`.
 - On workers whose image provides it, `horizon-worker-github mcp` offers

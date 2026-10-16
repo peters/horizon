@@ -5,8 +5,8 @@ granted repositories, so Git never holds the token. Agents never hold the refres
 still gets an access token for a granted repository until the API broker replaces that. Never
 prints a token. Root
 operations: install (JSON on stdin), serve (started by horizon-worker-supervise), status,
-clear, requests, decide and upkeep (the Upkeep policy, JSON on stdin). Agents run `mcp` for the
-github_access tool."""
+clear, requests, decide, upkeep (the Upkeep policy, JSON on stdin) and packages (the package
+token, JSON on stdin). Agents run `mcp` for the github_access tool."""
 import contextlib
 import http.client
 import importlib.machinery
@@ -45,6 +45,7 @@ broker = common.load_sibling('horizon-worker-github-api', 'horizon_worker_github
 mcp = common.load_sibling('horizon-worker-github-mcp', 'horizon_worker_github_mcp')
 upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
 upkeep_loop = common.load_sibling('horizon-worker-github-upkeep-loop', 'horizon_worker_github_upkeep_loop')
+packages = common.load_sibling('horizon-worker-github-packages', 'horizon_worker_github_packages')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -145,8 +146,9 @@ def rotated_chain(reply, now):
             'refresh_token': refresh, 'refresh_expires_at': now + refresh_lifetime}
 
 
-def refresh_once(store, now=time.time, post=post_refresh):
-    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'."""
+def refresh_once(store, now=time.time, post=post_refresh, scope=None):
+    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'. With `scope`, a
+    renewed chain whose scopes are not exactly that one is removed, never stored."""
     with store.lock():
         state, _ = store.load()
         if state is None:
@@ -180,6 +182,11 @@ def refresh_once(store, now=time.time, post=post_refresh):
                 return 'revoked'
             store.save(dict(state, last_error=code))
             return 'retry'
+        if scope is not None and [part.strip() for part in str(reply.get('scope', '')).split(',')] != [scope]:
+            # The package store's own clear: a copy it cannot remove is hidden by a clear mark,
+            # so the old chain stops at once also on a read-only volume.
+            packages.clear(store)
+            return 'revoked'
         # GitHub already invalidated the old chain: store the new one before any agent can use it.
         store.save(dict(state, chain=rotated, last_refresh_at=started, last_error=None))
         return 'refreshed'
@@ -199,8 +206,9 @@ def next_check(store, now):
 
 
 def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=random.random, log=print,
-                 configure=None, static=None):
-    """One refresh check; returns (delay before the next check, consecutive failures)."""
+                 configure=None, static=None, label='GitHub token chain', scope=None):
+    """One refresh check; returns (delay before the next check, consecutive failures). `label`
+    names the chain in the log: the GitHub chain, or the package read access."""
     try:
         # An install that was cut off, such as by a closed SSH connection, left repositories
         # configured for a chain it never stored; the stored state decides again.
@@ -215,25 +223,25 @@ def refresh_step(store, failures, now=time.time, post=post_refresh, jitter=rando
         with store.lock():
             store.retry_pending()
     except Exception as error:
-        log('GitHub token chain still not stored: ' + type(error).__name__, flush=True)
+        log(label + ' still not stored: ' + type(error).__name__, flush=True)
     try:
-        outcome = refresh_once(store, now, post)
+        outcome = refresh_once(store, now, post, scope)
     # Storage or lock failures are retried; the refresh thread must never end.
     except Exception as error:
-        log('GitHub refresh failed: ' + type(error).__name__, flush=True)
+        log(label + ' refresh failed: ' + type(error).__name__, flush=True)
         outcome = 'retry'
     if outcome == 'retry':
         failures += 1
         return retry_delay(failures, jitter), failures
     if outcome in ('refreshed', 'revoked'):
-        log('GitHub token chain ' + outcome, flush=True)
+        log(label + ' ' + outcome, flush=True)
     return next_check(store, now()), 0
 
 
-def refresh_loop(store, sleep=time.sleep):
+def refresh_loop(store, sleep=time.sleep, label='GitHub token chain', scope=None):
     failures = 0
     while True:
-        delay, failures = refresh_step(store, failures)
+        delay, failures = refresh_step(store, failures, label=label, scope=scope)
         sleep(delay)
 
 
@@ -288,11 +296,16 @@ def serve(store=None, path=agents.SOCKET, proxy=gitproxy.ADDRESS, authority=gitp
     # The socket opens only after the repositories match the stored chain, so the supervisor
     # never publishes a service that does not answer yet.
     book = agents.Book(store.runtime)
+    # One package chain store for the broker and its renewal, made before either runs.
+    packages.store_for(store)
     servers = start(store, path, prepare=lambda: prepare(store), proxy=proxy, authority=authority)
     if servers is None:
         return 1
     server = servers[0]
     threading.Thread(target=refresh_loop, args=(store,), daemon=True).start()
+    # The package read access renews the same way, from its own store, also with Horizon off.
+    threading.Thread(target=refresh_loop, args=(packages.store_for(store),),
+                     kwargs={'label': 'Package read access', 'scope': packages.SCOPE}, daemon=True).start()
     # The Upkeep of this worker keeps working without Horizon: its loop starts again after a
     # container restart, Git and gh already routed, and its own requests are allowed here.
     threading.Thread(target=upkeep_loop.start_loop, args=(store, book), daemon=True).start()
@@ -466,7 +479,7 @@ def status(store, now=time.time):
     if state is None:
         return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
                 'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
-                'repositories': [], 'pending_requests': pending}
+                'repositories': [], 'pending_requests': pending, 'packages': packages.summary(store)}
     # A cloud grant routes credentials only; it has no target repository on the worker.
     repositories = [{key: grant[key] for key in ('repository', 'target', 'access')} for grant in state['grants']]
     repositories += [{'repository': grant['repository'], 'target': None, 'access': grant['access']}
@@ -475,7 +488,8 @@ def status(store, now=time.time):
             'login': state.get('login'), 'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
-            'repositories': repositories, 'pending_requests': pending}
+            'repositories': repositories, 'pending_requests': pending,
+            'packages': packages.summary(store)}
 
 
 def host_status(store, path=agents.SOCKET):
@@ -488,15 +502,17 @@ def host_status(store, path=agents.SOCKET):
 
 
 def clear(store, retire=None):
-    """Removes the static Git binding first, then the Upkeep policy, then the chain. When the
-    binding or the policy cannot be removed, the chain stays, so agents never keep access while
-    status reports none, and no policy of an earlier sign-in waits for the next one."""
+    """Removes the static Git binding first, then the Upkeep policy and the package token, then
+    the chain. When the binding, the policy or the token cannot be removed, the chain stays, so
+    agents never keep access while status reports none, and no policy or token of an earlier
+    sign-in waits for the next one."""
     (retire or run_retire)()
     book = agents.Book(store.runtime)
     # Under the book's lock, so an install under way ends before it.
     with book.lock():
         upkeep_loop.remove(store)
     with store.lock():
+        packages.remove(store)
         store.clear()
     book.clear()
 
@@ -511,9 +527,9 @@ def main(argv):
         # The agent's own process: it asks the root service over the socket.
         mcp.serve_mcp()
         return 0
-    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests', 'upkeep')
+    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests', 'upkeep', 'packages')
             or len(argv) == 3 and operation == 'decide' and argv[2] in agents.DECISIONS):
-        print('Usage: horizon-worker-github install|serve|status|clear|requests|upkeep|mcp\n'
+        print('Usage: horizon-worker-github install|serve|status|clear|requests|upkeep|packages|mcp\n'
               '       horizon-worker-github decide ID allow-cloud|allow-task|deny', file=sys.stderr)
         return 2
     if os.geteuid() != 0:
@@ -549,6 +565,22 @@ def main(argv):
         if len(source) > upkeep.MAX_POLICY:
             raise ValueError('Upkeep policy is too large')
         print_json(upkeep_loop.install(store, source.decode(), agents.Book(store.runtime)))
+    elif operation == 'packages':
+        # The package read access from Horizon; see horizon-worker-github-packages. Only under
+        # agent isolation does the agent account stay out of its root-only files.
+        if not common.AGENT_ISOLATION.exists():
+            raise ValueError('A package token requires agent isolation')
+        try:
+            source = sys.stdin.buffer.read(packages.MAX_SOURCE + 1)
+            if len(source) > packages.MAX_SOURCE:
+                raise ValueError('Package read access request is too large')
+            text = source.decode()
+        except (OSError, ValueError):
+            # A request that cannot even be read still stops the earlier chain.
+            with contextlib.suppress(OSError, ValueError):
+                packages.remove(store)
+            raise
+        print_json(packages.install(store, text))
     else:
         clear(store)
     return 0

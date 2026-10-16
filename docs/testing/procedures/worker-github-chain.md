@@ -29,7 +29,8 @@ the decision.
   `horizon-worker-github-graphql`, `horizon-worker-github-graphql-policy`,
   `horizon-worker-github-tasks`, `horizon-worker-github-mcp`,
   `horizon-worker-github-upkeep`, `horizon-worker-github-upkeep-loop`,
-  `horizon-worker-github-api-upkeep`, `horizon-worker-github-git-upkeep` and
+  `horizon-worker-github-api-upkeep`, `horizon-worker-github-git-upkeep`,
+  `horizon-worker-github-packages` and
   `horizon-worker-gh-repository`,
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.

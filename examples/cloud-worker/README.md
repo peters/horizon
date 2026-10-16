@@ -1444,6 +1444,18 @@ The broker does these steps for each connection:
     directly before a word.
   - `GET /`, `/rate_limit` and `/meta`, and the global security advisories
     (`/advisories` and `/advisories/GHSA-...`), which are public.
+  - `GET` of an owner's NuGet and npm packages:
+    `/orgs/OWNER/packages?package_type=nuget` (or `npm`, also under `/users/`),
+    `/orgs/OWNER/packages/TYPE/NAME`, `.../versions` and `.../versions/ID`, where
+    TYPE is `nuget` or `npm`, without a body, with only the request fields
+    `Accept` and `User-Agent` (no range, condition or encoding reaches GitHub, and
+    `X-GitHub-Api-Version` is always `2022-11-28`), and with only the query parameters
+    `package_type`, `visibility`, `page`, `per_page` and `state`. OWNER must own
+    one of the cloud's own repositories that Horizon named with the package read
+    access below; no grant, also not one that an agent asked for, opens an owner.
+    These reads get the package read access below, never the chain's. Other
+    package types, such as container images, and every change of a package are
+    refused.
   - `POST /graphql`, checked by the GraphQL policy below.
 - On `uploads.github.com` it accepts only a release asset upload, with `push`.
 - On `codeload.github.com` and `*.githubusercontent.com` it accepts only `GET`
@@ -1490,10 +1502,59 @@ asks GitHub for once per start:
 
 The broker writes one line for each connection to the request log below, with
 `kind` set to `api`, the `host`, the `request` kind (`repository`, `search`,
-`plain`, `content`, `graphql` or `invalid`), `repository`, `uid`, `pid`,
+`plain`, `content`, `package`, `graphql` or `invalid`), `repository`, `uid`, `pid`,
 `granted` and `outcome` as for the Git proxy. `granted` is also true when the
 broker itself sent the token to GitHub for the request, to resolve a repository
 ID or to look up the IDs of a mutation, and then refused it.
+
+**Package read access.** GitHub's package API and its NuGet registry accept only
+a token with the `read:packages` scope, such as the token of Horizon's OAuth app;
+the GitHub App's user token never reads them. Horizon gives a device sign-in
+chain of its OAuth app, the package read access of the cloud, to root on the
+worker with JSON on stdin, never in argv or a log, with the cloud's own
+repositories (1 to 50):
+
+```sh
+horizon-worker-github packages < private-file
+# {"version":1,"client_id":"...","repositories":["owner/name",...],
+#  "chain":{"access_token":"...","access_expires_at":...,"refresh_token":"...","refresh_expires_at":...}}
+horizon-worker-github packages < private-file   # {"version":1,"chain":null} removes it
+```
+
+Before it keeps a chain, root asks GitHub for the token's scopes
+(`X-OAuth-Scopes`); anything but exactly `read:packages` is refused. A new chain
+replaces the one that the worker holds; a replacement that fails for any reason
+leaves no chain
+served. The service keeps it in a second chain store with the same rules as the
+GitHub chain's: `/workspace/.horizon-root/github-packages` on the volume, or
+`/run/horizon-github-packages` on tmpfs, root-only (directories `0700`, files
+`0600`). It renews the chain in the same way and with the same waits, with the
+client ID alone, so the access keeps working while Horizon is off. A renewal
+whose reply names another scope than exactly `read:packages` removes the chain.
+`bad_refresh_token` or an expired refresh token ends it. `status` reports
+`packages`: `null`, or the state, times and repositories of the chain, never a
+token. `horizon-worker-github clear` removes it, under the store lock, before the
+GitHub chain; a copy that cannot be removed is outranked by a clear mark on
+tmpfs, so none is served while the worker runs, and the failure is reported. A
+request that cannot be read (too large, not UTF-8) also removes the chain.
+
+No agent gets the token: no variable, no file and no NuGet configuration holds
+it. The broker adds the access token only to the package reads above, and none
+that expires within a minute. It asks GitHub for an uncompressed reply, reads it
+(at most 8 MiB), and passes it on only as JSON, with the `repository` object of
+each package kept only for the cloud's own repositories and `null` otherwise, and
+each text that names another repository by its address on `github.com` or
+`api.github.com/repos` replaced by `null`; a
+reply that is not JSON, is larger, holds the token, or is partial (206 or
+`Content-Range`) is refused. `ETag` and `Last-Modified` describe the reply before
+the filter, so they do not go on. A redirect goes back to `gh` with an empty body and
+only its `Location`, without the token; `gh` follows it through the broker again.
+`HEAD` is refused: its length would tell the size of the unfiltered reply. Without a chain, package reads get
+`gh: Horizon: this worker has no package read access, ...`, which tells that the
+person can give the cloud package read access in Horizon. An ended chain and a
+token that GitHub refuses get their own refusals. Through these paths the token
+reads every NuGet and npm package that its account can read, for the owners of
+the cloud's own repositories.
 
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
