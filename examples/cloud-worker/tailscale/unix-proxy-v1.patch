@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/cmd/tailscale/cli/serve_horizon_test.go
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,264 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -8,9 +8,15 @@
 +
 +import (
 +	"bytes"
++	"context"
 +	"encoding/json"
++	"errors"
 +	"runtime"
 +	"testing"
++
++	"tailscale.com/client/local"
++	"tailscale.com/ipn"
++	"tailscale.com/tailcfg"
 +)
 +
 +func TestHorizonFlowCancelCLI(t *testing.T) {
@@ -66,6 +72,199 @@
 +		t.Fatal("ordinary route retained stale opt-in")
 +	}
 +}
++
++// GetServeConfig deliberately returns the original pointer to detect mutation
++// before a rejected command reaches SetServeConfig.
++type horizonValidationClient struct {
++	fakeLocalServeClient
++	prefsEdits     int
++	featureQueries int
++	watches        int
++	editErr        error
++}
++
++func (lc *horizonValidationClient) GetServeConfig(context.Context) (*ipn.ServeConfig, error) {
++	return lc.config, nil
++}
++
++func (lc *horizonValidationClient) EditPrefs(ctx context.Context, prefs *ipn.MaskedPrefs) (*ipn.Prefs, error) {
++	lc.prefsEdits++
++	if lc.editErr != nil {
++		return nil, lc.editErr
++	}
++	return lc.fakeLocalServeClient.EditPrefs(ctx, prefs)
++}
++
++func (lc *horizonValidationClient) QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error) {
++	lc.featureQueries++
++	return lc.fakeLocalServeClient.QueryFeature(ctx, feature)
++}
++
++func (lc *horizonValidationClient) WatchIPNBus(context.Context, ipn.NotifyWatchOpt) (*local.IPNBusWatcher, error) {
++	lc.watches++
++	return nil, errors.New("unexpected foreground session before validation")
++}
++
++func newHorizonValidationClient() *horizonValidationClient {
++	status := *fakeStatus
++	self := *fakeStatus.Self
++	self.Tags = ptrToReadOnlySlice([]string{"tag:horizon-worker"})
++	status.Self = &self
++	return &horizonValidationClient{
++		fakeLocalServeClient: fakeLocalServeClient{
++			statusWithoutPeers: &status,
++			prefs:              ipn.NewPrefs(),
++		},
++	}
++}
++
++func (lc *horizonValidationClient) state(t *testing.T) []byte {
++	t.Helper()
++	b, err := json.Marshal(struct {
++		Config *ipn.ServeConfig
++		Prefs  *ipn.Prefs
++	}{lc.config, lc.prefs})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return b
++}
++
++func TestHorizonFlowCancelCLIRejectsBeforeSideEffects(t *testing.T) {
++	for _, tt := range []struct {
++		name string
++		args []string
++	}{
++		{"unconfigured-service-tun", []string{"--service=svc:new", "--tun", "--horizon-flow-cancel"}},
++		{"service-http", []string{"--service=svc:new", "--http=20000", "--horizon-flow-cancel", "text:hello"}},
++		{"service-https", []string{"--service=svc:new", "--horizon-flow-cancel", "localhost:8080"}},
++		{"service-tls", []string{"--service=svc:new", "--tls-terminated-tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "unix:/run/original.sock"}},
++		{"service-missing-proxy", []string{"--service=svc:new", "--tcp=20000", "--horizon-flow-cancel", "unix:/run/original.sock"}},
++		{"service-proxy-v2", []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=2", "--horizon-flow-cancel", "unix:/run/original.sock"}},
++		{"service-tcp-target", []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "tcp://localhost:8080"}},
++		{"service-relative-unix", []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "unix:relative.sock"}},
++		{"service-mount", []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--set-path=/bad", "--horizon-flow-cancel", "unix:/run/original.sock"}},
++		{"foreground-missing-proxy", []string{"--tcp=20000", "--horizon-flow-cancel", "unix:/run/original.sock"}},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			lc := newHorizonValidationClient()
++			before := lc.state(t)
++			var flagOut, stdout, stderr bytes.Buffer
++			e := &serveEnv{lc: lc, testFlagOut: &flagOut, testStdout: &stdout, testStderr: &stderr}
++			if err := newServeV2Command(e, serve).ParseAndRun(t.Context(), tt.args); err == nil {
++				t.Fatal("invalid opt-in accepted")
++			}
++			if lc.prefsEdits != 0 || lc.featureQueries != 0 || lc.watches != 0 || lc.setCount != 0 {
++				t.Fatalf("rejected command performed side effects: prefs=%d feature=%d watch=%d config=%d", lc.prefsEdits, lc.featureQueries, lc.watches, lc.setCount)
++			}
++			if !bytes.Equal(before, lc.state(t)) || stdout.Len() != 0 {
++				t.Fatal("rejected command changed state or printed success")
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelCLIValidatesParentBeforeAdvertisement(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("valid raw Unix flow cancellation requires Linux")
++	}
++	for _, tt := range []struct {
++		name   string
++		config *ipn.ServeConfig
++		args   []string
++	}{
++		{
++			name: "node-update-conflicts-with-foreground-funnel",
++			config: &ipn.ServeConfig{
++				TCP: map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "localhost:8080"}},
++				Foreground: map[string]*ipn.ServeConfig{
++					"original-session": {AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:20000": true}},
++				},
++			},
++			args: []string{"--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "--bg", "unix:/run/original.sock"},
++		},
++		{
++			name: "service-update-keeps-parent-node-conflict-visible",
++			config: &ipn.ServeConfig{
++				AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:20001": true},
++				Foreground: map[string]*ipn.ServeConfig{
++					"original-session": {TCP: map[uint16]*ipn.TCPPortHandler{
++						20001: {TCPForward: "unix:/run/earlier.sock", ProxyProtocol: 1, HorizonFlowCancel: true},
++					}},
++				},
++			},
++			args: []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "unix:/run/original.sock"},
++		},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			lc := newHorizonValidationClient()
++			lc.config = tt.config
++			before := lc.state(t)
++			var flagOut, stdout, stderr bytes.Buffer
++			e := &serveEnv{lc: lc, testFlagOut: &flagOut, testStdout: &stdout, testStderr: &stderr}
++			if err := newServeV2Command(e, serve).ParseAndRun(t.Context(), tt.args); err == nil {
++				t.Fatal("invalid parent accepted")
++			}
++			if lc.prefsEdits != 0 || lc.setCount != 0 || lc.watches != 0 || !bytes.Equal(before, lc.state(t)) || stdout.Len() != 0 {
++				t.Fatal("parent rejection mutated original config, advertised a service, or printed success")
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelCLIPreferenceFailurePreservesConfig(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("valid raw Unix flow cancellation requires Linux")
++	}
++	lc := newHorizonValidationClient()
++	lc.config = &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{20001: {TCPForward: "localhost:8080"}}}
++	lc.editErr = errors.New("preference write refused")
++	before := lc.state(t)
++	var flagOut, stdout, stderr bytes.Buffer
++	e := &serveEnv{lc: lc, testFlagOut: &flagOut, testStdout: &stdout, testStderr: &stderr}
++	args := []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "unix:/run/original.sock"}
++	if err := newServeV2Command(e, serve).ParseAndRun(t.Context(), args); err == nil {
++		t.Fatal("failed preference write accepted")
++	}
++	if lc.prefsEdits != 1 || lc.setCount != 0 || !bytes.Equal(before, lc.state(t)) || stdout.Len() != 0 {
++		t.Fatal("failed preference write changed original config or printed success")
++	}
++}
++
++func TestHorizonFlowCancelCLIServiceCompatibility(t *testing.T) {
++	for _, optIn := range []bool{false, true} {
++		t.Run(map[bool]string{false: "ordinary-new-tun-service", true: "service-vip-is-not-node-funnel"}[optIn], func(t *testing.T) {
++			if optIn && runtime.GOOS != "linux" {
++				t.Skip("valid raw Unix flow cancellation requires Linux")
++			}
++			lc := newHorizonValidationClient()
++			lc.config = &ipn.ServeConfig{AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:20000": true}}
++			lc.prefs.AdvertiseServices = []string{"svc:kept"}
++			var flagOut, stdout, stderr bytes.Buffer
++			e := &serveEnv{lc: lc, testFlagOut: &flagOut, testStdout: &stdout, testStderr: &stderr}
++			args := []string{"--service=svc:new", "--tun"}
++			if optIn {
++				args = []string{"--service=svc:new", "--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "unix:/run/original.sock"}
++			}
++			if err := newServeV2Command(e, serve).ParseAndRun(t.Context(), args); err != nil {
++				t.Fatal(err)
++			}
++			if lc.prefsEdits != 1 || lc.setCount != 1 || lc.watches != 0 || stdout.Len() == 0 {
++				t.Fatal("valid service did not advertise, persist, and print success")
++			}
++			if got := lc.prefs.AdvertiseServices; len(got) != 2 || got[0] != "svc:kept" || got[1] != "svc:new" {
++				t.Fatalf("advertisements changed unexpectedly: %v", got)
++			}
++			if !lc.config.AllowFunnel["foo.test.ts.net:20000"] {
++				t.Fatal("service update changed the separate node Funnel route")
++			}
++			svc := lc.config.Services["svc:new"]
++			if svc == nil || (optIn && (svc.TCP[20000] == nil || !svc.TCP[20000].HorizonFlowCancel)) || (!optIn && !svc.Tun) {
++				t.Fatal("service mode did not match explicit opt-in")
++			}
++		})
++	}
++}
 --- a/cmd/tailscale/cli/serve_legacy.go
 +++ b/cmd/tailscale/cli/serve_legacy.go
 @@ -163,19 +163,20 @@
@@ -114,7 +313,75 @@
  			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
  		}),
  		UsageFunc: usageFuncNoDefaultValues,
-@@ -991,6 +994,9 @@
+@@ -392,6 +395,22 @@
+ 			return err
+ 		}
+ 
++		turnOff := len(args) > 0 && "off" == args[len(args)-1]
++		if e.horizonFlowCancel && !turnOff {
++			// Reject invalid opt-ins before HTTPS, preferences, or foreground sessions.
++			srvType, srvPort, err := srvTypeAndPortFromFlags(e)
++			if err != nil {
++				return err
++			}
++			target := ""
++			if len(args) > 0 {
++				target = args[0]
++			}
++			if err := e.setServe(new(ipn.ServeConfig), "", srvType, srvPort, "", target, subcmd == funnel, "", nil, int(e.proxyProtocol)); err != nil {
++				return err
++			}
++		}
++
+ 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+ 		defer cancel()
+ 
+@@ -443,6 +462,10 @@
+ 		// nil if no config
+ 		if sc == nil {
+ 			sc = new(ipn.ServeConfig)
++		}
++		if e.horizonFlowCancel {
++			// Validate a candidate without changing the client's original config.
++			sc = sc.Clone()
+ 		}
+ 		st, err := e.getLocalClientStatusWithoutPeers(ctx)
+ 		if err != nil {
+@@ -457,7 +480,6 @@
+ 		// foreground or background.
+ 		parentSC := sc
+ 
+-		turnOff := len(args) > 0 && "off" == args[len(args)-1]
+ 		if !turnOff && srvType == serveTypeHTTPS {
+ 			// Running serve with https requires that the tailnet has enabled
+ 			// https cert provisioning. Send users through an interactive flow
+@@ -514,7 +536,7 @@
+ 			// only unset serve when trying to unset with type and port flags.
+ 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount, magicDNSSuffix)
+ 		} else {
+-			if forService {
++			if forService && !e.horizonFlowCancel {
+ 				e.addServiceToPrefs(ctx, svcName)
+ 			}
+ 			target := ""
+@@ -525,7 +547,15 @@
+ 				return err
+ 			}
+ 			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
+-			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
++			if err == nil && e.horizonFlowCancel {
++				err = parentSC.CheckHorizonFlowCancel()
++				if err == nil && forService {
++					err = e.addServiceToPrefs(ctx, svcName)
++				}
++			}
++			if err == nil {
++				msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
++			}
+ 		}
+ 		if err != nil {
+ 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
+@@ -991,6 +1021,9 @@
  }
  
  func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability, proxyProtocol int) error {
@@ -124,7 +391,7 @@
  	// update serve config based on the type
  	switch srvType {
  	case serveTypeHTTPS, serveTypeHTTP:
-@@ -1129,6 +1135,9 @@
+@@ -1129,6 +1162,9 @@
  		if tcpHandler.TerminateTLS != "" {
  			annotations = append(annotations, "TLS terminated")
  		}
@@ -134,7 +401,7 @@
  		if ver := tcpHandler.ProxyProtocol; ver != 0 {
  			annotations = append(annotations, fmt.Sprintf("PROXY protocol v%d", ver))
  		}
-@@ -1312,8 +1321,8 @@
+@@ -1312,8 +1348,8 @@
  	// For tcp: targets, extract the host:port from the parsed URL.
  	var fwdAddr string
  	if strings.HasPrefix(targetURL, "unix:") {
@@ -145,7 +412,7 @@
  		}
  		fwdAddr = targetURL
  	} else {
-@@ -1327,6 +1336,17 @@
+@@ -1327,6 +1363,17 @@
  		fwdAddr = dstURL.Host
  	}
  
@@ -163,7 +430,7 @@
  	if sc.IsServingWeb(srcPort, svcName) {
  		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
  	}
-@@ -1334,16 +1354,19 @@
+@@ -1334,16 +1381,19 @@
  	// TODO: needs to account for multiple configs from foreground mode
  	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
  		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
@@ -410,7 +677,7 @@
  		hasTCP := svcCfg.TCP().Len() > 0
 --- /dev/null
 +++ b/ipn/ipnlocal/serve_horizon_cancel_linux_test.go
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,226 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -562,6 +829,81 @@
 +	}
 +	t.Fatal("original descriptor send was not observed blocked in network poll")
 +}
++
++// Pause the success path on each side of its linearization point, using the same
++// completion operation as the forwarder and an actual control socketpair.
++func TestHorizonUnixCompletionCancellationOrder(t *testing.T) {
++	for _, afterCommit := range []bool{false, true} {
++		name := "cancellation-before-commit"
++		if afterCommit {
++			name = "cancellation-after-commit"
++		}
++		t.Run(name, func(t *testing.T) {
++			writer, receiver, err := horizonCancellationPair()
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { writer.Close(); receiver.Close() })
++			if err := receiver.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
++				t.Fatal(err)
++			}
++			var completion horizonFlowCompletion
++			cause := errors.New("recorded consumer cancellation")
++			paused := make(chan struct{})
++			release := make(chan struct{})
++			t.Cleanup(func() {
++				select {
++				case <-release:
++				default:
++					close(release)
++				}
++			})
++			done := make(chan error, 1)
++			go func() {
++				if !afterCommit {
++					close(paused)
++					<-release
++				}
++				err := completion.finish(context.Background(), func() error {
++					if afterCommit {
++						close(paused)
++						<-release
++					}
++					n, err := writer.Write([]byte{horizonFlowDrained})
++					if err == nil && n != 1 {
++						err = io.ErrShortWrite
++					}
++					return err
++				})
++				writer.Close()
++				done <- err
++			}()
++			select {
++			case <-paused:
++			case <-time.After(5 * time.Second):
++				t.Fatal("completion did not reach terminal barrier")
++			}
++			completion.fail(cause)
++			close(release)
++			data, readErr := io.ReadAll(receiver)
++			if readErr != nil {
++				t.Fatal(readErr)
++			}
++			select {
++			case err := <-done:
++				if afterCommit {
++					if err != nil || !bytes.Equal(data, []byte{horizonFlowDrained}) {
++						t.Fatalf("committed success changed: %x, %v", data, err)
++					}
++				} else if !errors.Is(err, cause) || len(data) != 0 {
++					t.Fatalf("cancelled flow acknowledged: %x, %v", data, err)
++				}
++			case <-time.After(5 * time.Second):
++				t.Fatal("completion leaked")
++			}
++		})
++	}
++}
 --- /dev/null
 +++ b/ipn/ipnlocal/serve_horizon_config_test.go
 @@ -0,0 +1,115 @@
@@ -682,7 +1024,7 @@
 +}
 --- /dev/null
 +++ b/ipn/ipnlocal/serve_horizon_unix_linux.go
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,234 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -692,16 +1034,54 @@
 +
 +import (
 +	"context"
-+	"errors"
 +	"fmt"
 +	"io"
 +	"net"
 +	"os"
++	"sync"
 +
 +	"golang.org/x/sys/unix"
 +)
 +
 +const horizonFlowDrained byte = 0x01
++
++// The mutex orders cancellation recording against the single success commit.
++// Once committed, reader errors are cleanup; the consumer still independently
++// enforces its own cancellation and deadline before accepting DRAINED.
++type horizonFlowCompletion struct {
++	mu        sync.Mutex
++	cause     error
++	committed bool
++}
++
++func (c *horizonFlowCompletion) fail(err error) error {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !c.committed && c.cause == nil {
++		c.cause = err
++	}
++	if c.cause != nil {
++		return c.cause
++	}
++	return err
++}
++
++func (c *horizonFlowCompletion) finish(ctx context.Context, acknowledge func() error) error {
++	c.mu.Lock()
++	if c.cause == nil {
++		c.cause = ctx.Err()
++	}
++	if c.cause != nil {
++		err := c.cause
++		c.mu.Unlock()
++		return err
++	}
++	c.committed = true
++	c.mu.Unlock()
++	// Do not hold the mutex across socket I/O. A concurrent reader must always
++	// be able to finish so the controller can join it on every terminal path.
++	return acknowledge()
++}
 +
 +// forwardHorizonUnix retains the original payload connections until both write
 +// halves drain, or the separate descriptor channel explicitly cancels the flow.
@@ -726,6 +1106,7 @@
 +		return err
 +	}
 +	defer cancelRead.Close()
++	var completion horizonFlowCompletion
 +	cancelled := make(chan error, 1)
 +	go func() {
 +		var byte [1]byte
@@ -737,7 +1118,8 @@
 +		} else if err == nil {
 +			err = io.ErrNoProgress
 +		}
-+		cancelled <- err
++		// Record before notifying: the controller may already have both copies.
++		cancelled <- completion.fail(err)
 +	}()
 +	copied := make(chan error, 2)
 +	go func() {
@@ -766,7 +1148,7 @@
 +			return
 +		}
 +		stopped = true
-+		result = err
++		result = completion.fail(err)
 +		front.Close()
 +		back.Close()
 +		cancelRead.Close()
@@ -791,35 +1173,22 @@
 +	// Both copies and their CloseWrite have succeeded before a normal commit.
 +	// The receiver must retain its endpoint until this acknowledgement and EOF.
 +	if !stopped {
-+		select {
-+		case err := <-cancelResult:
-+			cancelResult = nil
-+			stop(err)
-+		default:
-+		}
-+		if err := ctx.Err(); err != nil {
-+			stop(err)
-+		}
-+		if !stopped {
++		err := completion.finish(ctx, func() error {
 +			n, err := cancelRead.Write([]byte{horizonFlowDrained}) // DRAINED; never payload data.
 +			if err == nil && n != 1 {
 +				err = io.ErrShortWrite
 +			}
-+			if err != nil {
-+				stop(err)
-+			}
++			return err
++		})
++		if err != nil {
++			stop(err)
 +		}
 +	}
 +	cancelRead.Close()
 +	if cancelResult != nil {
-+		// Local Close induces net.ErrClosed. Peer EOF/unexpected data retain
-+		// their distinct meaningful failure, including a cancellation race.
-+		if err := <-cancelResult; !stopped && !errors.Is(err, net.ErrClosed) {
-+			stop(err)
-+		}
-+	}
-+	if err := ctx.Err(); err != nil && !stopped {
-+		stop(err)
++		// Cancellation recorded before commit prevented the ACK. After commit,
++		// reader errors cannot turn the emitted success sequence into failure.
++		<-cancelResult
 +	}
 +	return result
 +}

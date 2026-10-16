@@ -68,6 +68,15 @@ this procedure does not authorize resources or enrollments.
    Ordinary TCP v1/v2, Unix without PROXY and Unix PROXY1
    remain unchanged. Text status distinguishes opted-in cancellation.
 
+3. On a tagged fixture with no service configuration or advertisement, reject
+   `serve --service=svc:new --tun --horizon-flow-cancel` and the other invalid
+   opt-in combinations. Also reject conflicts in the shared node/Foreground
+   port space before any service preference change.
+
+   Result: No panic, preference edit, persisted config change or HTTPS enablement
+   occurs. Status generation runs only after a successful config mutation.
+   Service VIP ports retain their distinct routing namespace.
+
 ### 6.2 U02 — Actual handler and original-flow retirement
 
 1. Run real TCP-to-Unix and userspace gonet handler fixtures with ancillary receive.
@@ -97,6 +106,14 @@ this procedure does not authorize resources or enrollments.
    conversions and sent-end duplicates. No result sender remains blocked.
    Cancellation before terminal success wins; induced close errors do not erase
    the first meaningful failure. No production timeout is enlarged.
+
+4. Pause completion before and after its synchronized success transition, and
+   record consumer cancellation while paused. Observe the actual control socket.
+
+   Result: Cancellation recorded before commit produces an error and EOF without
+   an ACK. After commit, `0x01` plus EOF and the daemon result agree on success;
+   cleanup reader errors cannot change that result. The consumer independently
+   applies its original cancellation/deadline checks before accepting success.
 
 ### 6.3 U03 — Native images, notices and reproducibility
 
