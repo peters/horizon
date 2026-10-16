@@ -106,7 +106,13 @@ pub(super) struct Server {
 
 impl Server {
     pub(super) fn start(replies: Vec<Reply>) -> Self {
-        let replies = replies.into_iter().flat_map(|mut reply| {
+        Self::generated(replies.into_iter())
+    }
+
+    /// Answers one connection per reply. The worker takes the next reply before
+    /// it accepts the connection, so a generated reply cannot see that request.
+    pub(super) fn generated(replies: impl Iterator<Item = Reply> + Send + 'static) -> Self {
+        let replies = replies.flat_map(|mut reply| {
             let following = std::mem::take(&mut reply.following);
             std::iter::once(reply).chain(following)
         });
