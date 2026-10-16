@@ -308,8 +308,9 @@ unforward closes their active connections. This network path does not permit a
 browser controller outside the public `browser_*` MCP contract.
 
 The internal Core feature `one-service-gateway` is off by default. It narrows the
-existing relay to one checked LAN or tailnet endpoint. It adds no public tool,
-worker forward or owner approval path. Do not start it from a saved path, parsed
+existing relay to one checked LAN or tailnet endpoint. Its internal attachment
+uses the original pinned SSH connection and unchanged worker protocol. It adds no
+public tool or owner approval path. Do not start it from a saved path, parsed
 endpoint or gateway receipt. The feature cannot enroll a desktop client or grant
 agent access. Its tailnet source needs an existing Linux kernel-mode Tailscale
 client; userspace mode and Self as a target are refused. Actual M1 delivery still
@@ -319,6 +320,19 @@ one terminal dot. LAN preflight checks the complete canonical IPv4 answer set
 before policy filters or limits it; another address requires refusal or revocation.
 It applies LAN policy to the single literal without a second lookup. Current
 bridge tools retain their existing filtering and candidate limit.
+
+The attachment targets a fresh private Unix socket, never its reserved numeric
+receipt port. Its fixed `/tmp` parent must be non-symlink, root-owned and mode01777;
+its directory/socket modes are0700/0600. Unsupported parents refuse, and non-Unix
+private start and attachment return UnsupportedSource. Existing Gateway::start
+retains TCP behavior on every platform; attachment refuses that ordinary gateway.
+Source revocation prevents SSH retry; bounded input prevents a stalled child from
+blocking heartbeat or Drop. Exact receipt close cannot affect a successor.
+No discovery, owner controller, retained dispatch or public activation is added.
+Keep actual original-worker LAN and tailnet checks on first/final candidate inputs
+separate from synthetic tests and native owner evidence. Read
+docs/architecture/pinned-unix-ssh-attachment.md and
+docs/testing/procedures/pinned-unix-ssh-attachment.md.
 
 ## Cloud cards on the canvas
 

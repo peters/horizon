@@ -37,11 +37,17 @@ const UNCONFIRMED: &str = "The worker did not confirm the bridge";
 pub(super) trait Transport: Send + 'static {
     /// Must print [`PREPARED`] on a worker that supports the bridge.
     fn prepare(&self) -> Command;
-    /// Holds one session: the worker's bridge socket forwarded to `127.0.0.1:proxy_port`
-    /// here, and the worker helper reading heartbeats from standard input.
+    /// Holds one session: the worker's bridge socket forwarded to this transport's local
+    /// target, and the worker helper reading heartbeats from standard input.
     fn hold(&self, nonce: &Nonce, subnet: Subnet, proxy_port: u16) -> Command;
     fn heartbeat(&self) -> Duration {
         HEARTBEAT_INTERVAL
+    }
+    fn current(&self) -> bool {
+        true
+    }
+    fn bounded_input(&self) -> bool {
+        false
     }
 }
 
@@ -80,7 +86,7 @@ pub(super) fn supervise(
     cancel: &Cancellation,
 ) {
     let mut retry = FIRST_RETRY;
-    while !cancel.is_cancelled() {
+    while !cancel.is_cancelled() && transport.current() {
         let mut active_since = None;
         let error = match attempt(
             transport,
@@ -107,7 +113,7 @@ pub(super) fn supervise(
         }
         let resume = Instant::now() + retry;
         while Instant::now() < resume {
-            if cancel.is_cancelled() {
+            if cancel.is_cancelled() || !transport.current() {
                 return;
             }
             thread::sleep(POLL);
@@ -131,7 +137,7 @@ fn attempt(
         secrets: Vec::new(),
     };
     let prepared = runner.run("Local network preparation", &mut transport.prepare(), PREPARE_TIMEOUT);
-    if cancel.is_cancelled() {
+    if cancel.is_cancelled() || !transport.current() {
         return Ended::Cancelled;
     }
     match prepared.map(|output| preparation(&output)) {
@@ -145,13 +151,13 @@ fn attempt(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut hold = match Hold::spawn(command, answers) {
+    let mut hold = match Hold::spawn_input(command, answers, transport.bounded_input()) {
         Ok(hold) => hold,
         Err(error) => return Ended::Lost(format!("Cannot start SSH: {error}")),
     };
     let deadline = Instant::now() + READY_TIMEOUT;
     let ready = loop {
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled() || !transport.current() {
             return Ended::Cancelled;
         }
         if let Some(ended) = hold.exited() {
@@ -169,7 +175,7 @@ fn attempt(
     *active_since = Some(Instant::now());
     let mut beat = Instant::now() + transport.heartbeat();
     loop {
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled() || !transport.current() {
             return Ended::Cancelled;
         }
         if let Some(ended) = hold.exited() {
@@ -312,7 +318,7 @@ fn answer_calls(queue: &mpsc::Receiver<(u64, Result<Request, String>)>, answers:
 }
 
 impl Hold {
-    fn spawn(mut command: Command, answers: &Arc<dyn Answers>) -> std::io::Result<Self> {
+    fn spawn_input(mut command: Command, answers: &Arc<dyn Answers>, bounded: bool) -> std::io::Result<Self> {
         let mut child = command.spawn()?;
         // Only the first ready line is read; later output keeps draining but is not kept.
         let (sender, ready) = mpsc::sync_channel(1);
@@ -324,7 +330,23 @@ impl Hold {
             child,
         };
         // From here on, a failure drops `hold`, which stops the process.
-        let _ = send(&hold.input, &message(&Message::Hello(answers.hello())), true);
+        if bounded {
+            #[cfg(unix)]
+            {
+                let input = hold.input.lock().unwrap_or_else(PoisonError::into_inner);
+                let input = input
+                    .as_ref()
+                    .ok_or_else(|| std::io::Error::other("SSH input unavailable"))?;
+                let flags = rustix::fs::fcntl_getfl(input)?;
+                rustix::fs::fcntl_setfl(input, flags | rustix::fs::OFlags::NONBLOCK)?;
+            }
+            #[cfg(not(unix))]
+            return Err(std::io::Error::other("Bounded one-service SSH input requires Unix"));
+        }
+        let hello = send(&hold.input, &message(&Message::Hello(answers.hello())), true);
+        if bounded {
+            hello?;
+        }
         let (calls, queue) = mpsc::sync_channel(MAX_QUEUED);
         if let Some(output) = hold.child.stdout.take() {
             hold.readers
@@ -427,4 +449,51 @@ fn spawn_reader(
             }
         }
     })
+}
+
+#[cfg(all(test, unix, feature = "one-service-gateway"))]
+mod bounded_tests {
+    use super::*;
+    struct Empty;
+    impl Answers for Empty {
+        fn hello(&self) -> horizon_cloud_protocol::local_network::discovery::Hello {
+            horizon_cloud_protocol::local_network::discovery::Hello {
+                discovery: 0,
+                sources: Vec::new(),
+                note: None,
+            }
+        }
+        fn answer(&self, _: Request) -> Answer {
+            Answer::Refused("off".into())
+        }
+    }
+    #[test]
+    fn stalled_one_service_child_cannot_block_heartbeat_write_or_owned_drop() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "exec sleep 10"])
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let answers: Arc<dyn Answers> = Arc::new(Empty);
+        let hold = Hold::spawn_input(command, &answers, true).unwrap();
+        let before = Instant::now();
+        {
+            let mut input = hold.input.lock().unwrap();
+            let input = input.as_mut().unwrap();
+            let bytes = [0; 4096];
+            loop {
+                match input.write(&bytes) {
+                    Ok(0) => panic!("child pipe unexpectedly closed"),
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => panic!("unexpected pipe failure: {error}"),
+                }
+            }
+        }
+        assert_eq!(hold.beat().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        drop(hold);
+        assert!(before.elapsed() < Duration::from_secs(2));
+    }
 }

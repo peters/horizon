@@ -63,11 +63,13 @@ not recreate custody or prove source preservation. Rootless/remapped workers,
 Gate activation and full M2 qualification remain unsupported by this component.
 Read docs/architecture/protected-ingress-reader.md before its owned-VM test.
 
-The internal `one-service-gateway` feature is off by default. It supplies only
-an exact LAN/tailnet TCP endpoint engine. No UI, CLI or MCP operation enables it.
-Use the existing owner-enabled Local Network Bridge tools for current operations.
-The engine is a prerequisite; #1335 M1-1 still needs owner controls, durable
-attempts, worker SSH, interface parity and actual LAN/tailnet qualification.
+The internal `one-service-gateway` feature stays off by default. It supplies an
+exact LAN/tailnet endpoint engine and an internal pinned Unix SSH attachment.
+No UI, CLI or MCP operation enables it. Use the existing owner-enabled Local
+Network Bridge tools for current operations. Private attachment needs the trusted
+non-symlink `/tmp` policy; non-Unix attachment is unsupported. M1-1 still needs owner
+controls, durable dispatch, saved membership, interface parity and actual native
+LAN/tailnet qualification. Read docs/architecture/pinned-unix-ssh-attachment.md.
 
 The Linux worker `exposure-gate` feature is also off by default. It provides a
 bounded actual-peer CIDR/Public TCP component only; no public operation starts

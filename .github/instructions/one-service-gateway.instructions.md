@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_runtime/local_network/endpoint.rs,crates/horizon-core/src/cloud_runtime/local_network/endpoint/**,crates/horizon-core/src/cloud_runtime/local_network.rs,crates/horizon-core/Cargo.toml"
+applyTo: "crates/horizon-core/src/cloud_runtime/local_network/endpoint.rs,crates/horizon-core/src/cloud_runtime/local_network/endpoint/**,crates/horizon-core/src/cloud_runtime/local_network/session.rs,crates/horizon-core/src/cloud_runtime/local_network/socks.rs,crates/horizon-core/src/cloud_runtime/local_network/socks/private/**,crates/horizon-core/src/cloud_runtime/local_network/socks/private.rs,crates/horizon-core/src/cloud_runtime/local_network.rs,crates/horizon-core/Cargo.toml"
 ---
 
 # One-device endpoint engine
@@ -41,3 +41,18 @@ Real-kernel tests run only in explicitly owned disposable guests with an origina
 Self/Peer fixture; no host execution or fabricated wrong-route outcome.
 A missing real counterexample is blocked, not a pass. Do not count ignored tests
 as executed, or component tests as owner/worker qualification.
+
+Read docs/architecture/pinned-unix-ssh-attachment.md for the attachment boundary.
+Keep it default-off and internal. No owner controller, OriginalCloud, saved-membership
+path or public activation belongs to this primitive. Preserve the original SSH pins
+and unchanged worker protocol; no new discovery or credential grant is permitted.
+Unix attachment must use its fresh private Unix target, never a reusable TCP port.
+Keep fixed parent ownership, non-symlink, directory0700 and socket0600 guards.
+Keep Gateway::start TCP behavior on every platform, including macOS.
+Only explicit Gateway::start_private supplies Unix custody; attachment has no TCP fallback.
+Non-Unix private start and attachment must refuse before SSH.
+Keep ordinary Bridge TCP and default session behavior unchanged.
+Source revocation must prevent SSH retry and close the exact physical source.
+Stalled input cannot block heartbeat or owned Drop. Stale close changes nothing.
+Require actual original-worker LAN and tailnet SSH tasks on first/final candidate
+inputs before qualification; ignored, synthetic or historical combined tests cannot replace them.

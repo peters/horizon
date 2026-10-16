@@ -46,9 +46,18 @@ class ShardCommandTests(unittest.TestCase):
             libs.stdout.splitlines(),
             [
                 "cargo test --locked --workspace --exclude horizon-ui",
+                "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                 "cargo test --locked -p horizon-chromecast --features encoder",
             ],
         )
+
+    def test_enabled_gateway_contract_runs_once_on_each_platform(self):
+        command = "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::"
+        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
+            with self.subTest(shard=shard, runner_os=runner_os):
+                result = shard_commands(shard, runner_os)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines().count(command), 1)
 
     def test_speech_tests_run_on_unix_and_only_build_on_windows(self):
         linux = shard_commands("speech", "Linux", ref="refs/pull/1/merge", cache_hit="true")
@@ -90,40 +99,44 @@ class ShardCommandTests(unittest.TestCase):
                     result.stdout.splitlines(),
                     [
                         "cargo test --locked --workspace --exclude horizon-ui",
+                        "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                         "cargo test --locked -p horizon-chromecast --features encoder",
                         "cargo test --locked -p horizon-ui --features speech",
                     ],
                 )
 
     def test_all_runs_every_shard_and_fails_when_one_fails(self):
-        env = os.environ.copy()
-        env.update(HORIZON_CI_SHARD="all", RUNNER_OS="macOS")
-        env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
-        with tempfile.TemporaryDirectory() as bin_dir:
-            log = Path(bin_dir) / "calls"
-            fake = Path(bin_dir) / "cargo"
-            # The libs workspace run fails; every later command must still run.
-            fake.write_text(
-                "#!/usr/bin/env bash\n"
-                f"echo \"$*\" >> {log}\n"
-                "[[ \"$*\" == *'--exclude horizon-ui'* ]] && exit 101\n"
-                "exit 0\n"
-            )
-            fake.chmod(0o755)
-            env["PATH"] = f"{bin_dir}:{env['PATH']}"
-            result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
-                                    capture_output=True, text=True, check=False)
-            calls = log.read_text().splitlines()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Failed CI test shards: libs", result.stderr)
-        self.assertEqual(
-            calls,
-            [
-                "test --locked --workspace --exclude horizon-ui",
-                "test --locked -p horizon-chromecast --features encoder",
-                "test --locked -p horizon-ui --features speech",
-            ],
-        )
+        for failing_flag in ["--exclude horizon-ui", "--features one-service-gateway"]:
+            with self.subTest(failing_flag=failing_flag):
+                env = os.environ.copy()
+                env.update(HORIZON_CI_SHARD="all", RUNNER_OS="macOS")
+                env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
+                with tempfile.TemporaryDirectory() as bin_dir:
+                    log = Path(bin_dir) / "calls"
+                    fake = Path(bin_dir) / "cargo"
+                    # A failing libs command cannot hide the remaining checks.
+                    fake.write_text(
+                        "#!/usr/bin/env bash\n"
+                        f"echo \"$*\" >> {log}\n"
+                        f"[[ \"$*\" == *'{failing_flag}'* ]] && exit 101\n"
+                        "exit 0\n"
+                    )
+                    fake.chmod(0o755)
+                    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+                    result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
+                                            capture_output=True, text=True, check=False)
+                    calls = log.read_text().splitlines()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Failed CI test shards: libs", result.stderr)
+                self.assertEqual(
+                    calls,
+                    [
+                        "test --locked --workspace --exclude horizon-ui",
+                        "test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
+                        "test --locked -p horizon-chromecast --features encoder",
+                        "test --locked -p horizon-ui --features speech",
+                    ],
+                )
 
     def test_unknown_shard_fails(self):
         result = shard_commands("every", "Linux")

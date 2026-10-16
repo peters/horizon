@@ -290,8 +290,8 @@ endpoint and counters; it does not publish raw account or WhoIs responses.
 
 ### Engine limits and delivery evidence
 
-The engine reuses the existing loopback SOCKS5 TCP relay and its 64-connection and
-64-GiB bounds. It supplies no worker listener, SSH custody, public exposure, UDP,
+The engine reuses the existing SOCKS5 TCP relay and its 64-connection and
+64-GiB bounds. The engine alone supplies no worker listener, public exposure, UDP,
 Mosh or general IPv6 support. These limits do not remove LAN/tailnet endpoint
 requirements from M1-1.
 
@@ -301,6 +301,26 @@ A component result does not qualify owner approval, durable recovery or worker S
 Actual LAN and tailnet sharing must pass through the completed owner path before
 M1-1 delivery. Use the [engine procedure](testing/procedures/one-service-gateway-engine.md)
 for prerequisite evidence and the existing bridge procedures for regression evidence.
+
+### Pinned Unix SSH attachment prerequisite
+
+The same default-off feature provides an internal attachment to the original pinned
+worker connection. Explicit private gateways use fresh mode0700 directories and mode0600 sockets
+under the trusted non-symlink root-owned sticky `/tmp` parent. SSH targets that exact
+private path, never the reserved numeric receipt port. Stale paths cannot reach
+successors through numeric port reuse. Existing engine startup and the ordinary bridge
+keep their TCP listeners on all supported platforms. Attachment refuses a TCP gateway.
+Non-Unix hosts refuse private start and attachment before SSH starts.
+A Unix host that cannot satisfy the private parent policy also refuses ingress.
+
+The attachment uses unchanged worker prepare, hold, Ready and heartbeat messages.
+Source revocation retires the helper and prevents retry. Bounded Unix input keeps a
+stalled child from blocking heartbeat or Drop. Exact receipts close only the original
+gateway. A helper Ready reply does not prove service reachability or owner approval.
+No public interface starts this primitive, and it adds no durable recovery or owner controller.
+Use the [attachment boundary](architecture/pinned-unix-ssh-attachment.md) and
+[procedure](testing/procedures/pinned-unix-ssh-attachment.md) for first/final actual
+LAN and tailnet SSH evidence. These component results do not complete M1.
 
 ## How it works
 
