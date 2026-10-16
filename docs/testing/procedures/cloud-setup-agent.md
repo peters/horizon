@@ -626,9 +626,45 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: Within one minute, `docker ps -a`, `docker images` and `docker volume ls` on
    the host no longer list the resources of the runs.
 
+### 6.24 S24 — Build on a rented builder
+
+This step rents a Hetzner server for some minutes and costs a few cents.
+
+1. Connect Hetzner in **Cloud settings**.
+
+   Result: **Build on** in **New cloud** shows **Rented builder**.
+
+2. Open **New cloud** for a copy of the fixture without `.horizon`, click **Rented
+   builder** and start the setup agent.
+
+   Result: The setup board shows **Renting a builder** under its header, then the
+   rented server type, its location and its price per hour. In the Hetzner console a
+   server named `horizon-cloud-setup-builder-<id>` runs.
+
+3. Wait until the proof ends.
+
+   Result: Build image, Run CI in image and Fast rerun pass. On this computer, `docker
+   images` does not list `horizon-setup-ci-app-<hash>-<run>:candidate`.
+
+4. Start a second setup with **Rented builder**.
+
+   Result: It uses the same server. The Hetzner console lists one builder.
+
+5. Click **Stop** on both runs and wait 10 minutes.
+
+   Result: The board says **Deleting the rented builder**, then shows no builder line.
+   The Hetzner console lists neither the server nor the SSH key
+   `horizon-cloud-setup-builder-<id>`, and the Cloud settings folder has no
+   `setup-builder.json`.
+
+6. Start a setup with **Rented builder**, wait until the builder line shows a price,
+   and end Horizon with `kill -9`. Start Horizon again.
+
+   Result: Within one minute of the start, the Hetzner console lists no builder.
+
 ## 7. Pass criteria
 
-- S01 to S23 give the results above.
+- S01 to S24 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

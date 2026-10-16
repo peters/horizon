@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod builder;
 pub mod catalog;
 pub mod cloud;
 #[cfg(feature = "exposure-firewall")]

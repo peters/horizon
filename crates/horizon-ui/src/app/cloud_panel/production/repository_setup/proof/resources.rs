@@ -1,4 +1,5 @@
 //! The names of one setup run's proof image and volume, and their removal.
+use horizon_core::cloud_runtime::docker_host::Access;
 use std::path::Path;
 use std::process::Command;
 
@@ -231,14 +232,13 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
     repository: &Path,
     run: &str,
     after: Option<std::thread::JoinHandle<()>>,
-    (pinned, build_on): (Option<Pinned>, Option<horizon_core::cloud_runtime::docker_host::Host>),
+    (pinned, build_on): (Option<Pinned>, Option<super::super::build_on::Target>),
     wait: bool,
 ) {
     // A pinned daemon says where they are: on a Docker host by its name and engine, or on
     // this computer by its socket, with no host name. Without one, as when a replacement
-    // proof failed before it reached a daemon, the run's own Docker host on another
-    // machine does.
-    let build_on = build_on.filter(|host| host.access != horizon_core::cloud_runtime::docker_host::Access::ThisPc);
+    // proof failed before it reached a daemon, the run's own place on another machine
+    // does: a saved Docker host or the rented builder.
     let known = pinned.as_ref().and_then(|pinned| pinned.get());
     let on_host = known.and_then(Daemon::remote);
     let docker_host = docker_host_of(known, build_on.as_ref());
@@ -258,14 +258,23 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn remove_run_reso
         let pinned = pinned.as_ref().and_then(|pinned| pinned.get().cloned());
         let daemon = match (pinned, &build_on) {
             (Some(daemon), _) => Some(daemon),
-            (None, Some(host)) => {
+            // The rented builder is never reopened; its resources go with it.
+            (None, Some(super::super::build_on::Target::Rented)) => {
+                if rented_builder_left() {
+                    resources.set_waiting(None);
+                } else {
+                    drop(take_pending(&resources.volume));
+                }
+                return;
+            }
+            (None, Some(super::super::build_on::Target::Host(host))) if host.access != Access::ThisPc => {
                 let Some(engine_id) = engine_of(&resources.volume) else {
                     drop(take_pending(&resources.volume));
                     return;
                 };
                 reopen_host(host, Some(&engine_id))
             }
-            (None, None) => cleanup_daemon(),
+            (None, _) => cleanup_daemon(),
         };
         let Some(daemon) = daemon else {
             resources.set_waiting(None);
@@ -383,14 +392,25 @@ fn take_pending(volume: &str) -> Option<Pending> {
 /// one, none for this computer's; else the run's own Docker host on another machine.
 pub(in crate::app::cloud_panel::production::repository_setup) fn docker_host_of(
     pinned: Option<&Daemon>,
-    build_on: Option<&horizon_core::cloud_runtime::docker_host::Host>,
+    build_on: Option<&super::super::build_on::Target>,
 ) -> Option<String> {
-    match pinned {
-        Some(daemon) => daemon.remote().map(|remote| remote.name().to_owned()),
-        None => build_on
-            .filter(|host| host.access != horizon_core::cloud_runtime::docker_host::Access::ThisPc)
-            .map(|host| host.name.clone()),
+    match (pinned, build_on) {
+        (Some(daemon), _) => daemon.remote().map(|remote| remote.name().to_owned()),
+        (None, Some(super::super::build_on::Target::Host(host))) if host.access == Access::ThisPc => None,
+        (None, target) => target.map(|target| target.name().to_owned()),
     }
+}
+
+/// [`expect_removal`] where the daemon `pinned` holds says, else the run's own place.
+pub(in crate::app::cloud_panel::production::repository_setup) fn expect_removal_on(
+    repository: &Path,
+    run: &str,
+    (pinned, build_on): (Option<Pinned>, Option<&super::super::build_on::Target>),
+) {
+    let known = pinned.as_ref().and_then(|pinned| pinned.get());
+    let docker_host = docker_host_of(known, build_on);
+    let engine_id = known.and_then(Daemon::remote).map(|on| on.engine_id().to_owned());
+    expect_removal(repository, run, (docker_host.as_deref(), engine_id.as_deref()));
 }
 
 /// Notes that the resources of `run` in `repository` are to be removed, before any thread
@@ -551,6 +571,15 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
             let engine_id = engine_id.or_else(|| engine_of(&resources.volume));
             let daemon = match (daemon, docker_host, engine_id) {
                 (Some(daemon), _, _) => Some(daemon),
+                // The rented builder is never reopened: its resources go with it, and
+                // once it is gone they are gone.
+                (None, Some(name), _) if name == horizon_core::cloud_runtime::setup_builder::NAME => {
+                    if !rented_builder_left() {
+                        drop(take_pending(&resources.volume));
+                        return;
+                    }
+                    None
+                }
                 (None, Some(name), Some(engine_id)) => reopen(&name, Some(&engine_id)),
                 // On a Docker host whose engine no proof reached, nothing was made.
                 (None, Some(_), None) => {
@@ -565,6 +594,34 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn retry_unremoved
             }
         }));
     }
+}
+
+/// Forgets the resources kept on the Docker host `name`, which no longer exists, such as a
+/// rented builder that was deleted with everything on it.
+pub(in crate::app::cloud_panel::production::repository_setup) fn forget_on(name: &str) {
+    // What they hold goes after the lock is let go.
+    let gone: Vec<Pending> = {
+        let mut pending = pending();
+        let (gone, kept) = std::mem::take(&mut *pending)
+            .into_iter()
+            .partition(|known| known.docker_host.as_deref() == Some(name));
+        *pending = kept;
+        gone
+    };
+    drop(gone);
+}
+
+/// Whether a rented builder may still exist, as its journal in the cloud root says.
+#[cfg(not(test))]
+fn rented_builder_left() -> bool {
+    let root = horizon_core::HorizonHome::resolve().root().join("cloud");
+    horizon_core::cloud_runtime::setup_builder::left_behind(&root)
+}
+
+/// A test never reads the real cloud root.
+#[cfg(test)]
+fn rented_builder_left() -> bool {
+    false
 }
 
 /// Keeps every run whose resources are not shown gone, as Horizon exits, for its next
@@ -920,9 +977,11 @@ mod tests {
             access: Access::Ssh,
             address: Some("me@builder.invalid".into()),
             docker: None,
+            pinned: None,
         };
         let run = "abcdef12";
-        remove_run_resources(folder.path(), run, None, (None, Some(host)), true);
+        let target = super::super::super::build_on::Target::Host(host);
+        remove_run_resources(folder.path(), run, None, (None, Some(target)), true);
         let (_, volume) = run_names(folder.path(), run);
         assert!(
             !pending().iter().any(|known| known.resources.volume == volume),
@@ -932,21 +991,30 @@ mod tests {
 
     #[test]
     fn a_pinned_daemon_says_where_a_runs_resources_are_and_this_computer_has_no_host_name() {
+        use super::super::super::build_on::Target;
         use horizon_core::cloud_runtime::docker_host::{Access, Host};
         let host = |name: &str, access: Access| Host {
             name: name.into(),
             access,
             address: (access != Access::ThisPc).then(|| format!("me@{name}")),
             docker: None,
+            pinned: None,
         };
         let local = Daemon {
             host: Some("unix:///run/user/1000/docker.sock".into()),
             remote: None,
         };
-        let builder = host("builder", Access::Ssh);
+        let builder = Target::Host(host("builder", Access::Ssh));
         assert_eq!(docker_host_of(Some(&local), Some(&builder)), None, "the pin decides");
         assert_eq!(docker_host_of(None, Some(&builder)).as_deref(), Some("builder"));
-        assert_eq!(docker_host_of(None, Some(&host("local", Access::ThisPc))), None);
+        assert_eq!(
+            docker_host_of(None, Some(&Target::Host(host("local", Access::ThisPc)))),
+            None
+        );
+        assert_eq!(
+            docker_host_of(None, Some(&Target::Rented)).as_deref(),
+            Some(horizon_core::cloud_runtime::setup_builder::NAME)
+        );
         assert_eq!(docker_host_of(None, None), None);
     }
 

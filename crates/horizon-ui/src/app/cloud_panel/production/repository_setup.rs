@@ -16,6 +16,7 @@ mod agent;
 mod board;
 mod bounded;
 mod build_on;
+mod builder;
 mod cards;
 mod commit;
 mod pins;
@@ -28,6 +29,7 @@ mod session;
 mod snapshot;
 mod untrusted;
 pub(super) use build_on::{Deferred, State as BuildOn};
+pub(super) use builder::Builder;
 pub(super) use prompt::Mode;
 #[cfg(test)]
 use prompt::prompt;

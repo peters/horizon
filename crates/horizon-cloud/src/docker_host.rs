@@ -10,7 +10,10 @@ mod worker;
 
 use crate::{CloudError, SshHost};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 pub use command::{Docker, Engine, Failure, NOT_STARTED};
 pub use worker::{
@@ -19,6 +22,8 @@ pub use worker::{
 
 /// The profile's `provider` value.
 pub const PROVIDER: &str = "docker-host";
+/// The name of the builder Horizon rents for setups, which no saved host may take.
+pub const RENTED_BUILDER: &str = "rented-builder";
 /// The label on every container and volume a cloud creates on a host, with the cloud's ID.
 pub const OWNER_LABEL: &str = "io.horizon.cloud";
 /// The engine a remote docker CLI talks to. Docker Desktop links it to its own socket.
@@ -80,6 +85,36 @@ pub struct Host {
     /// docker is looked up on the host's `PATH` and where desktop installs keep it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docker: Option<String>,
+    /// For a machine Horizon rented, such as a setup's builder: the only key it logs in
+    /// with and the only host key it accepts. Never saved, so a hosts file cannot set it.
+    #[serde(skip)]
+    pub pinned: Option<Pinned>,
+}
+
+/// The login key and the known host key of a machine Horizon made, as files of this
+/// computer. SSH then reads neither the person's configuration nor their agent and keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pinned {
+    pub identity: PathBuf,
+    pub known_hosts: PathBuf,
+}
+
+impl Pinned {
+    fn options(&self) -> Vec<String> {
+        let option = |name: &str, value: &Path| ["-o".to_owned(), format!("{name}={}", value.display())];
+        let mut options = vec!["-F".to_owned(), "none".to_owned()];
+        options.extend(option("IdentityFile", &self.identity));
+        options.extend(option("UserKnownHostsFile", &self.known_hosts));
+        for fixed in [
+            "IdentitiesOnly=yes",
+            "IdentityAgent=none",
+            "StrictHostKeyChecking=yes",
+            "GlobalKnownHostsFile=/dev/null",
+        ] {
+            options.extend(["-o".to_owned(), fixed.to_owned()]);
+        }
+        options
+    }
 }
 
 impl Host {
@@ -90,6 +125,11 @@ impl Host {
         if !crate::valid_id(&self.name) || self.name.len() > 63 {
             return Err(CloudError::Invalid(
                 "Name the Docker host with letters, digits, - and _ (63 at most)",
+            ));
+        }
+        if self.name == RENTED_BUILDER && self.pinned.is_none() {
+            return Err(CloudError::Invalid(
+                "rented-builder is the name of Horizon's rented builder; choose another",
             ));
         }
         let address = self.address.as_deref();
@@ -103,6 +143,21 @@ impl Host {
                 ));
             }
             Access::ThisPc | Access::Ssh | Access::TailscaleSsh => {}
+        }
+        if let Some(pinned) = &self.pinned {
+            let plain = |path: &Path| {
+                path.is_absolute()
+                    && path.to_str().is_some_and(|text| {
+                        !text
+                            .bytes()
+                            .any(|byte| byte.is_ascii_whitespace() || b"\"'%".contains(&byte))
+                    })
+            };
+            if self.access != Access::Ssh || !plain(&pinned.identity) || !plain(&pinned.known_hosts) {
+                return Err(CloudError::Invalid(
+                    "A rented machine is reached over SSH with key files at plain absolute paths",
+                ));
+            }
         }
         if self.docker.as_deref().is_some_and(|path| {
             !path.starts_with('/')
@@ -169,7 +224,7 @@ impl Host {
             }
             Access::Ssh => {
                 let mut command = Command::new("ssh");
-                command.args(SSH_OPTIONS).arg("--").arg(address).arg(script());
+                command.args(self.ssh_options()).arg("--").arg(address).arg(script());
                 command
             }
             Access::TailscaleSsh => {
@@ -221,7 +276,7 @@ impl Host {
             Access::ThisPc => None,
             Access::Ssh => {
                 let mut command = Command::new("ssh");
-                command.args(SSH_OPTIONS).args(options).arg("--").arg(address);
+                command.args(self.ssh_options()).args(options).arg("--").arg(address);
                 Some(command)
             }
             Access::TailscaleSsh => {
@@ -230,6 +285,15 @@ impl Host {
                 Some(command)
             }
         })
+    }
+
+    /// The options of every OpenSSH connection to this host.
+    fn ssh_options(&self) -> Vec<String> {
+        let mut options: Vec<String> = SSH_OPTIONS.iter().map(|option| (*option).to_owned()).collect();
+        if let Some(pinned) = &self.pinned {
+            options.extend(pinned.options());
+        }
+        options
     }
 
     /// The SSH `ProxyCommand` that reaches a worker on this host's loopback, or None
@@ -241,9 +305,13 @@ impl Host {
         self.validate()?;
         let address = self.address.as_deref().map(quote);
         Ok(match (self.access, address) {
-            (Access::Ssh, Some(address)) => Some(format!(
-                "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -W 127.0.0.1:%p -- {address}"
-            )),
+            (Access::Ssh, Some(address)) => {
+                let pinned = self.pinned.as_ref().map(|pinned| pinned.options().join(" ") + " ");
+                Some(format!(
+                    "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none {}-W 127.0.0.1:%p -- {address}",
+                    pinned.unwrap_or_default()
+                ))
+            }
             (Access::TailscaleSsh, Some(address)) => Some(format!(
                 "tailscale ssh {address} -o BatchMode=yes -o ConnectTimeout=10 -o ControlMaster=no -o ControlPath=none -W 127.0.0.1:%p"
             )),

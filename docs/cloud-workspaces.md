@@ -893,6 +893,35 @@ own. A proof of a GPU profile fails on a Docker host, and a desktop preview that
 `/dev/kvm` is skipped there; choose **This computer** for them. The setup board names
 the host of each setup that builds on one.
 
+**Rented builder** shows in **Build on** when Hetzner is connected in Cloud settings.
+Horizon rents one Hetzner server with Docker for the setups that build on it, so a
+laptop runs only the agents. It picks the cheapest x86 server type with at least 8
+cores, 16 GB of memory and 160 GB of disk in the locations Cloud settings allows, and
+starts renting when the first such setup starts, so the builder is usually ready when
+the agent asks for its first proof. Until it is, the setup's **Build image** step says
+**Renting a builder**. The setups share the builder and its build slots, and it is
+reached as a Docker host is, through an SSH forward of its Docker socket.
+
+- Horizon makes a new login key and a new SSH host key for each builder, in a private
+  folder of the Cloud settings folder. The server takes only that login key, and Horizon
+  accepts only that host key, so the first connection already checks the server. Your
+  own SSH keys, agent and configuration are not used, and no secret of yours goes to
+  the builder.
+- The setup board shows the builder's server type, location, price per hour and how
+  long it runs. A builder that no setup has used for 10 minutes is deleted, and so is
+  the builder as Horizon exits. A setup still uses it while it is not ready, while a
+  proof runs and while its desktop preview runs.
+- A journal in the Cloud settings folder names the server from before the create
+  request until Horizon proved it gone. A deletion that fails is tried again every 2
+  minutes, and the setup board says so. If Horizon ends before it could delete the
+  builder, the next start deletes it. Until then the server is billed by Hetzner.
+- One Horizon at a time has a builder for a Cloud settings folder, and only while it
+  has one. A setup of another Horizon that uses the same folder waits, and says so,
+  until that builder is deleted.
+- A renting that failed is tried again every 2 minutes, at most 3 times. After that a
+  new setup with **Rented builder** tries again.
+- The containers, images and volumes of the setups go with the builder.
+
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions
 they use and where those versions come from. Horizon proves GitHub Actions jobs

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
-mod board;
+pub(super) mod board;
 mod crates;
 mod view;
 pub(super) use view::{readable_rows, render};
@@ -245,7 +245,9 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// Why the last thing asked of this run did not happen, shown with its progress.
     pub(super) notice: Option<String>,
     /// The Docker host its proof builds on; none for this computer.
-    pub(super) build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
+    pub(super) build_on: Option<super::build_on::Target>,
+    /// Why the asked proof waits for the rented builder, and whether that is a failure.
+    pub(super) builder_wait: Option<(String, bool)>,
 }
 
 /// What the person did in the progress view.
@@ -352,6 +354,7 @@ impl Run {
             fixer: None,
             notice: None,
             build_on: None,
+            builder_wait: None,
         }
     }
 
@@ -776,17 +779,8 @@ impl Run {
     /// the same repository waits for that, so two setups never work in one folder.
     pub(super) fn discard(self) {
         // Noted first, so an exit keeps them: on the pinned host and engine, else the run's.
-        let pinned = self.proof.as_ref().map(Proof::daemon);
-        let known = pinned.as_ref().and_then(|pinned| pinned.get());
-        let docker_host = proof::docker_host_of(known, self.build_on.as_ref());
-        let engine_id = known
-            .and_then(proof::Daemon::remote)
-            .map(|on| on.engine_id().to_owned());
-        proof::expect_removal(
-            &self.repository,
-            &proof::run_id(&self.status_path),
-            (docker_host.as_deref(), engine_id.as_deref()),
-        );
+        let route = (self.proof.as_ref().map(Proof::daemon), self.build_on.as_ref());
+        proof::expect_removal_on(&self.repository, &proof::run_id(&self.status_path), route);
         let repository = self.repository.clone();
         keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }
@@ -861,6 +855,16 @@ impl Run {
                 title: step.title.clone(),
                 state,
                 detail,
+            });
+        }
+        // The proof the agent asked for waits until the rented builder answers.
+        if step.title == proof::BUILD
+            && let Some((text, _)) = &self.builder_wait
+        {
+            return Some(Step {
+                title: step.title.clone(),
+                state: State::Pending,
+                detail: text.clone(),
             });
         }
         let phase = self.proof_phase(&step.title)?;

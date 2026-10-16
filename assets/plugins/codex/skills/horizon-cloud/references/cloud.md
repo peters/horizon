@@ -669,7 +669,10 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   when Cloud settings has a Docker host on another machine) runs a setup's proof on
   that host's Docker over the person's SSH; the agent still runs on this computer. A
   GPU proof and a `/dev/kvm` preview do not run on a host: they fail or are skipped
-  there, and the person picks **This computer** for them.
+  there, and the person picks **This computer** for them. **Rented builder** (shown
+  when Hetzner is connected) rents one shared Hetzner server with Docker for those
+  proofs, with its own login and host keys; the board shows its price per hour, and
+  Horizon deletes it 10 minutes after the last setup used it and as Horizon exits.
   The first proof of a setup run sends the commit and its history; a later proof of
   the run sends only the commits and tags its git cache (a volume of the run that only
   Horizon's base image mounts) does not hold, and nothing for the same commit. A cache
