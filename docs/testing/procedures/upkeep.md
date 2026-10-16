@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-15 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-16 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -57,7 +57,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-15: the
+- For tasks UPK-08 to UPK-16: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -658,9 +658,61 @@ panel. `<uuid>` is a new UUID each time (`python3 -c 'import uuid; print(uuid.uu
    Result: `companions-status.json` has no answer for these files, and the exchange
    does not fail.
 
+### 6.16 UPK-16 — The default instructions and Upkeep's own pull requests
+
+Do this task before UPK-12, on the cloud of UPK-10, with the default instructions.
+
+> **CAUTION:** THE AGENT MERGES A REAL BOT PULL REQUEST IN STEP 2 AND CAN MERGE THE
+> PULL REQUESTS OF STEPS 3, 4 AND 5. Use changes that you accept in `<repo>`.
+
+1. In the shell panel of UPK-10, type `cat /workspace/home/upkeep/prompt.md`.
+
+   Result: The file starts with `Keep the bot pull requests of the selected
+   repositories moving.` and has the steps under `For each pull request:`. No line
+   says that CI covers a smoke test that the worker cannot run.
+
+2. Find a green bot pull request in `<repo>` that is not a UI change by its rules.
+   Wait until the agent merges it. Read the log of that agent in
+   `/workspace/home/upkeep/logs`.
+
+   Result: The agent merged the pull request after it read the checks, the review
+   and the mergeability. The log shows no clone, build, local CI or UI smoke for
+   that pull request, and no review request.
+
+3. Sign in to GitHub as the account that the worker uses. Push a branch
+   `upkeep/procedure-check` with a small change to `<repo>`. Open a pull request
+   from that branch with the label `upkeep`. Wait for 3 minutes.
+
+   Result: The board shows the pull request with the author `Upkeep`. The agent of
+   `<repo>` reports it and carries it through the same gates as the bot pull
+   requests. The board shows it one time, although both marks apply.
+
+4. Push a branch `procedure-label` with a small change to `<repo>`. Open a pull
+   request from it with the label `upkeep`. Wait for 3 minutes.
+
+   Result: The board shows this pull request too. Only the label marks it.
+
+5. Find a bot pull request in `<repo>` that the agent left blocked with `Approve to
+   merge`. As the account that the worker uses, approve it on GitHub. Wait for 3
+   minutes.
+
+   Result: A run starts. The agent merges the pull request. The log of the agent
+   shows no approving review by the agent.
+
+6. Do this step only if you have a second GitHub account. With it, open a pull
+   request to `<repo>` from a fork. Give the branch a name that starts with
+   `upkeep/`. Wait for 3 minutes.
+
+   Result: The board does not show the pull request from the fork.
+
+7. Close the pull requests of steps 3, 4 and 6 that are still open, and delete their
+   branches.
+
+   Result: The next run does not show them.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-15 give the results above.
+- UPK-01 to UPK-16 give the results above.
 
 ## 8. Cleanup
 

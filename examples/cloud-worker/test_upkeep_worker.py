@@ -409,6 +409,11 @@ class LoopTests(unittest.TestCase):
         after = [{'number': 1, 'statusCheckRollup': [{'name': 'a', 'conclusion': 'FAILURE'},
                                                       {'name': 'b', 'conclusion': 'SUCCESS'}]}]
         self.assertNotEqual(RUN['fingerprint'](before, ''), RUN['fingerprint'](after, ''))
+        # The person's Approve is a change, also where the repository requires no review.
+        waiting = [dict(before[0], reviewDecision='', latestReviews=[])]
+        approved = [dict(waiting[0], latestReviews=[
+            {'author': {'login': 'person'}, 'state': 'APPROVED', 'submittedAt': '2026-10-15T10:00:00Z'}])]
+        self.assertNotEqual(RUN['fingerprint'](waiting, ''), RUN['fingerprint'](approved, ''))
         self.assertEqual(RUN['slug']('acme/b__c'), 'acme__b__c')
         self.assertFalse(RUN['REPOSITORY'].fullmatch('acme__b/c'))
 
@@ -499,6 +504,7 @@ if 'repo:acme/secret' in query[0].split():
     print('gh: Horizon: acme/secret has no GitHub grant on this worker. (HTTP 403)', file=sys.stderr)
     sys.exit(1)
 nodes = [{'repository': {'nameWithOwner': word[5:].upper()}, 'state': pr.get('state', 'OPEN'),
+          'isCrossRepository': pr.get('isCrossRepository'),
           'number': pr.get('number'), 'headRefOid': pr.get('headRefOid'),
           'reviewDecision': pr.get('reviewDecision') or None, 'mergeable': pr.get('mergeable'),
           'commits': {'nodes': [{'commit': {'statusCheckRollup': {'contexts': {'nodes': [
@@ -898,7 +904,7 @@ class SchedulerTests(unittest.TestCase):
         count = self.root / 'gh-count'
         (self.root / 'tools' / 'gh').write_text(
             f'#!/bin/sh\nn=$(($(cat {count} 2>/dev/null || echo 0) + 1)); echo $n > {count}\n'
-            f'if [ $n -le 2 ]; then cat {self.pulls}; else cat {self.root}/b.json; fi | {self.root}/tools/shape "$@"\n')
+            f'if [ $n -le {2 * (1 + len(RUN["MARKED"]))} ]; then cat {self.pulls}; else cat {self.root}/b.json; fi | {self.root}/tools/shape "$@"\n')
         events = self.root / 'events'
         (self.root / 'tools' / 'codex').write_text(
             f'#!/bin/sh\nrepository=$(cat | sed "s/Work on //")\necho "start $repository" >> {events}\n'
@@ -981,7 +987,7 @@ class SchedulerTests(unittest.TestCase):
         gh.write_text(f'#!/bin/sh\necho x >> {count}\ncat {self.pulls} | {self.root}/tools/shape "$@"\n')
         self.assertTrue(self.poll(RUN['Poller']({})))
         self.assertEqual(self.agents_started(), 5)
-        self.assertEqual(len(count.read_text().splitlines()), 1)
+        self.assertEqual(len(count.read_text().splitlines()), 1 + len(RUN['MARKED']), 'one look, no listing')
 
     def test_a_look_searches_twenty_repositories_at_once_as_a_run_lists_them(self):
         pulls = [{'number': 2, 'headRefOid': 'a', 'reviewDecision': '', 'mergeable': 'MERGEABLE',
@@ -995,7 +1001,8 @@ class SchedulerTests(unittest.TestCase):
             f'#!/bin/sh\necho x >> {calls}\ncat {self.pulls} | {self.root}/tools/shape "$@"\n')
         repositories = [f'acme/r{number}' for number in range(25)]
         found = RUN['searched'](repositories, ['app/dependabot', 'renovate[bot]'], set())
-        self.assertEqual(len(calls.read_text().splitlines()), 4, 'two searches for each bot')
+        self.assertEqual(len(calls.read_text().splitlines()), 2 * (2 + len(RUN['MARKED'])),
+                         'two searches for each bot and each marking')
         self.assertEqual(set(found), set(repositories))
         # The worker's GitHub access takes a query of at most 1024 characters.
         long = [f'acme/{"x" * 90}{number}' for number in range(20)]
@@ -1004,14 +1011,14 @@ class SchedulerTests(unittest.TestCase):
         self.assertGreater(len(split), 1)
         self.assertTrue(all(len(RUN['query'](group, 'app/dependabot')) <= 1024 for group in split))
         listed = RUN['open_pull_requests']('acme/r0', ['app/dependabot'])
-        self.assertEqual(RUN['fingerprint'](found['acme/r24'], 't'), RUN['fingerprint'](pulls + pulls, 't'))
+        self.assertEqual(RUN['fingerprint'](found['acme/r24'], 't'), RUN['fingerprint'](pulls, 't'), 'once each')
         self.assertEqual(RUN['fingerprint'](found['acme/r0'][:1], 't'), RUN['fingerprint'](listed, 't'))
         # A search that never ends, or does not answer, lists nothing.
         endless = types.SimpleNamespace(returncode=0, stderr='', stdout=json.dumps(
             {'data': {'search': {'pageInfo': {'hasNextPage': True, 'endCursor': 'x'}, 'nodes': []}}}))
         with mock.patch('subprocess.run', return_value=endless) as run:
             self.assertEqual(RUN['searched'](['acme/web'], ['app/dependabot'], set()), {'acme/web': None})
-        self.assertEqual(run.call_count, RUN['PAGES'])
+        self.assertEqual(run.call_count, RUN['PAGES'], 'the other queries leave it alone too')
         self.pulls.write_text('{"number": 1}')
         self.assertEqual(RUN['searched'](['acme/web'], ['app/dependabot'], set()), {'acme/web': None})
         # A pull request that merged a moment ago can still be found; it is not open.
@@ -1034,7 +1041,8 @@ class SchedulerTests(unittest.TestCase):
             (self.root / 'tools' / 'gh').write_text(
                 f'#!/bin/sh\necho x >> {calls}\ncat {self.pulls} | {self.root}/tools/shape "$@"\n')
             self.assertEqual(poller.changed(repositories, ['app/dependabot'], 't'), {})
-            self.assertEqual(len(calls.read_text().splitlines()), 2)
+            # One search for each query of the others, one refused search for it.
+            self.assertEqual(len(calls.read_text().splitlines()), 1 + len(RUN['MARKED']) + 1)
             self.assertNotIn('acme/secret', poller.started)
             # A second bot does not search a repository again whose search was refused.
             calls.write_text('')
@@ -1046,6 +1054,33 @@ class SchedulerTests(unittest.TestCase):
             poller = RUN['Poller']({})
             self.assertEqual(poller.changed(['acme/web', 'acme/api'], ['app/dependabot'], 't'), {})
             self.assertEqual(poller.apart, set())
+
+    def test_the_listing_adds_upkeeps_own_pull_requests_once(self):
+        calls = self.root / 'gh-calls'
+        gh = self.root / 'tools' / 'gh'
+        listing = (f'#!/bin/sh\necho "$@" >> {calls}\n'
+                   'case "$*" in *head:upkeep/*) echo \'[{"number": 7, "headRefOid": "u", "isCrossRepository": false},'
+                   ' {"number": 9, "headRefOid": "f", "isCrossRepository": true}, {"number": 10}]\' ;;\n'
+                   f'*) cat {self.pulls} ;; esac\n')
+        gh.write_text(listing)
+        found = RUN['open_pull_requests']('acme/web', ['app/dependabot'])
+        self.assertEqual(sorted(pr['number'] for pr in found), [1, 7], 'never a fork or an unknown origin')
+        self.assertIn('--search label:upkeep', calls.read_text())
+        # A look finds the same ones in its searches.
+        marked = self.root / 'marked.json'
+        marked.write_text('[{"number": 7, "headRefOid": "u", "isCrossRepository": false},'
+                          ' {"number": 9, "headRefOid": "f", "isCrossRepository": true}, {"number": 1}]')
+        shape = f'{self.root}/tools/shape "$@"'
+        gh.write_text(f'#!/bin/sh\ncase "$*" in *head:upkeep/*) cat {marked} | {shape} ;; *) cat {self.pulls} | {shape} ;; esac\n')
+        found = RUN['searched'](['acme/web'], ['app/dependabot'], set())['acme/web']
+        self.assertEqual(sorted(pr['number'] for pr in found), [1, 7])
+        gh.write_text(listing)
+        # A marked pull request that moves is a change for the skip rule.
+        self.assertTrue(self.run_once())
+        started = self.agents_started()
+        gh.write_text(gh.read_text().replace('"u"', '"v"'))
+        self.assertTrue(self.run_once())
+        self.assertEqual(self.agents_started(), started + 2, "both repositories list it")
 
     def test_a_listing_that_hangs_or_is_not_a_list_reads_as_unreadable(self):
         self.pulls.write_text('{"number": 1}')
