@@ -16,6 +16,7 @@ const GPU_REQUIREMENTS: &str = "This cloud's profile in .horizon/cloud.yml diffe
 const IMAGE: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in image. A rebuild pushes to the worker's image repository; create a new cloud to use another one.";
 const HOSTED_DEVICES: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in capabilities.browserstack. Hosted devices are fixed when the worker is created; create a new cloud to change them.";
 const CONTRACT: &str = "This cloud's profile in .horizon/cloud.yml differs from its worker in bootstrap.contract_version. A rebuild keeps the worker's bootstrap contract; create a new cloud to use another one.";
+const INGRESS: &str = "This cloud's profile changes bootstrap.exposure_ingress. A rebuild keeps the worker's host publication; create a new cloud to change it.";
 const NO_BUILD: &str = "This cloud's profile in .horizon/cloud.yml has no build section, so there is no recipe to rebuild this cloud's image from";
 const INVALID: &str = "This cloud's profile in .horizon/cloud.yml is not valid";
 pub(super) const IMAGE_TOO_LARGE: &str = "The rebuilt image is larger than this cloud's container disk (storage.container_gb), so its worker cannot hold it. A rebuild keeps the worker's container disk; make the image smaller, or create a new cloud with a larger container disk.";
@@ -82,10 +83,12 @@ fn refusal(bound: &Profile, committed: &Profile) -> Option<&'static str> {
             volume_gb: _,
             volume_tier: _,
         },
-        bootstrap: Bootstrap {
-            readiness_seconds: _,
-            contract_version,
-        },
+        bootstrap:
+            Bootstrap {
+                readiness_seconds: _,
+                contract_version,
+                exposure_ingress,
+            },
         capabilities:
             Capabilities {
                 agents: _,
@@ -113,6 +116,7 @@ fn refusal(bound: &Profile, committed: &Profile) -> Option<&'static str> {
         (*browserstack != bound.capabilities.browserstack, HOSTED_DEVICES),
         // Version 1 is the only contract a profile may name today.
         (*contract_version != bound.bootstrap.contract_version, CONTRACT),
+        (*exposure_ingress != bound.bootstrap.exposure_ingress, INGRESS),
         (build.is_none(), NO_BUILD),
     ]
     .into_iter()

@@ -185,3 +185,44 @@ fn bounded_json_refuses_unknown_duplicate_nested_fields_and_non_tcp() {
     exact.push(b' ');
     assert_eq!(Receipt::from_json(&exact), Err(Error::Encoding));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn actual_host_encoder_and_port_plan_match_the_canonical_receipt_contract() {
+    // Import definitions with __main__ disabled. No host preflight/start/create runs.
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../horizon-cloud/src/host/ingress.py"
+    ));
+    let program = format!(
+        "namespace={{'__name__':'pure_contract_fixture'}}\nexec({},namespace)\n{}",
+        serde_json::to_string(source).unwrap(),
+        r"
+owner=namespace['Original']('registry.example/worker@sha256:'+'a'*64,'allocation-original',2)
+owner.cid='b'*64
+ports={'22/tcp':[dict(HostIp='0.0.0.0',HostPort='22')]}
+for i in range(namespace['COUNT']):
+    ports[str(namespace['LISTENER_START']+i)+'/tcp']=[dict(HostIp='0.0.0.0',HostPort=str(namespace['EXTERNAL_START']+i))]
+data=owner.encode_receipt(dict(image_id='sha256:'+'c'*64),(123,4,456),1024,namespace['publications'](ports))
+namespace['sys'].stdout.buffer.write(data)
+"
+    );
+    let output = std::process::Command::new("timeout")
+        .args(["3s", "python3", "-I", "-c", &program])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let receipt = Receipt::from_json(&output.stdout).unwrap();
+    assert_eq!(receipt.facts().allocation, "allocation-original");
+    assert_eq!(receipt.facts().published.len(), 33);
+    for logical in 20000..=20031 {
+        let actual = receipt
+            .facts()
+            .published
+            .iter()
+            .find(|p| p.host_port == logical)
+            .unwrap();
+        assert_eq!(Some(actual.container_port), listener_port(logical));
+        assert_ne!(Some(actual.container_port), backend_port(logical));
+    }
+}

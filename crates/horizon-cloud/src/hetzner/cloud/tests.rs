@@ -210,6 +210,25 @@ fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
     assert!(!rendered.contains("HORIZON_IDLE_STOP_MINUTES"));
 }
 
+#[test]
+fn protected_publication_is_new_host_intent_and_never_a_fabricated_worker_mapping() {
+    let mut spec = spec();
+    assert!(
+        !plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+            .unwrap()
+            .exposure_ingress
+    );
+    spec.profile.bootstrap.exposure_ingress = true;
+    assert!(
+        plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+            .unwrap()
+            .exposure_ingress
+    );
+    let observed = worker(&server("running", Some("192.0.2.10")), &spec, &volume()).unwrap();
+    let json = serde_json::to_value(observed).unwrap();
+    assert_eq!(json["portMappings"], serde_json::json!({"22": 22}));
+}
+
 fn allowing(locations: &[&str], server_types: &[&str]) -> Policy {
     Policy {
         locations: locations.iter().map(|&name| name.into()).collect(),

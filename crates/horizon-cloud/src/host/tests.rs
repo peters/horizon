@@ -18,6 +18,7 @@ fn plan() -> Plan {
         }),
         workspace_device: "/dev/disk/by-id/scsi-0HC_Volume_101".into(),
         shm_gb: 2,
+        exposure_ingress: false,
     }
 }
 
@@ -25,6 +26,35 @@ fn parse(plan: &Plan) -> Value {
     let document = plan.cloud_config().unwrap();
     assert!(document.starts_with("#cloud-config\n"));
     serde_yaml::from_str(&document).unwrap()
+}
+
+#[test]
+fn protected_start_is_explicit_and_the_default_keeps_its_original_bootstrap_files() {
+    let mut candidate = plan();
+    let ordinary = parse(&candidate);
+    assert_eq!(content(&ordinary, START), start_script(2));
+    assert!(
+        ordinary["write_files"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .all(|f| f["path"] != INGRESS)
+    );
+    candidate.exposure_ingress = true;
+    let protected = parse(&candidate);
+    assert_eq!(
+        content(&protected, START),
+        format!("#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} 2\n")
+    );
+    assert_eq!(content(&protected, INGRESS), include_str!("ingress.py"));
+    assert_eq!(file(&protected, INGRESS)["permissions"], "0700");
+    for path in [ENVIRONMENT_FILE, IMAGE_FILE, SETUP, GUARD, UNIT, REGISTRY_FILE] {
+        assert_eq!(file(&protected, path), file(&ordinary, path));
+    }
+    assert_eq!(protected["mounts"], ordinary["mounts"]);
+    assert_eq!(protected["runcmd"], ordinary["runcmd"]);
+    candidate.environment.remove("HORIZON_CLOUD_OPERATION");
+    assert!(candidate.cloud_config().is_err());
 }
 
 fn file<'a>(config: &'a Value, path: &str) -> &'a Value {

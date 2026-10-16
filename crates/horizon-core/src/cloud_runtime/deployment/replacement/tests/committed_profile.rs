@@ -127,6 +127,10 @@ fn a_changed_or_missing_committed_profile_refuses_with_its_field_before_anything
             |profile| profile.bootstrap.contract_version = 2,
             "in bootstrap.contract_version.",
         ),
+        (
+            |profile| profile.bootstrap.exposure_ingress = true,
+            "bootstrap.exposure_ingress",
+        ),
         (|profile| profile.build = None, "has no build section"),
         // A rebuild setting is still checked as every profile is.
         (|profile| profile.bootstrap.readiness_seconds = 5, "readiness timeout"),
