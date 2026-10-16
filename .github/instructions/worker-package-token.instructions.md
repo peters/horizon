@@ -24,8 +24,10 @@ GitHub's package API and its NuGet registry accept only a token with the
   GitHub store, so the broker sees a rotated chain that only the renewal's memory holds.
 - A request with only `repositories` (`change_repositories`) saves the held chain with the
   new repositories as one state under the store lock (Store rules for copies and serials);
-  with no held chain that serves, or a malformed list, it fails and clears the store. Its
-  only race (a renewal that no storage took) must end with less access, never more.
+  with no held chain that serves, or a malformed list, it fails and clears the store. It
+  writes a new clear mark first, so a state that another process holds in memory only
+  (`Store.pending`) can never be written back with the old repositories; that may end the
+  access (less access, never more), never widen it.
 - `install` replaces the chain under the store lock; a replacement that fails for any
   reason (request, scope, GitHub unreachable, storage) clears the
   store, so no older chain is served. `packages.clear` writes a clear mark above every copy

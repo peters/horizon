@@ -1525,10 +1525,11 @@ horizon-worker-github packages < private-file   # {"version":1,"repositories":[.
 The last form changes the repositories of the chain that the worker holds, as
 when the person changes the Upkeep's list, without a new sign-in. The service
 saves the new repositories in one state with the same chain, so no reader sees a
-chain with other repositories. It fails, and removes the chain, when the worker
-holds none. If the serving process holds a renewed chain that no storage took,
-the change outranks it and the next renewal ends the access: less access, never
-more. `status`
+chain with other repositories. It first writes a clear mark, which ends a state
+that the serving process holds only in memory (a renewal or save that no storage
+took), so that state never comes back with the old repositories. It fails, and
+removes the chain, when the worker holds none. If that ended state held a
+renewed chain, the next renewal ends the access: less access, never more. `status`
 reports `"repositories_change": true` in `packages`, so Horizon sends this form
 only to an image that takes it.
 

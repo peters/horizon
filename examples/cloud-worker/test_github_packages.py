@@ -132,6 +132,21 @@ class StorageTests(ServiceTestCase):
         with self.assertRaises(ValueError):
             packages.install(self.store, json.dumps({'version': 1, 'repositories': ['a/b']}))
 
+    def test_a_change_ends_a_state_that_the_serving_process_holds_in_memory_only(self):
+        install(self.store, request(repositories=['acme/api']))
+        serving = packages.store_for(self.store)
+        # The serving process kept a newer state that no storage took (as after failed saves).
+        state = serving.load()[0]
+        serving.keep_pending(dict(state, serial=state['serial'] + 2, last_error='transport'))
+        # Horizon's change runs in another process, with its own view of the store.
+        other = service.Store(self.store.persistent, self.store.runtime)
+        packages.install(other, json.dumps({'version': 1, 'repositories': ['other-org/lib']}))
+        with serving.lock():
+            serving.retry_pending()
+        self.assertIsNone(serving.pending)
+        self.assertEqual(packages.token_for(self.store, 'other-org'), (TOKEN, None))
+        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
+
     def test_malformed_requests_and_other_scopes_are_refused_without_echoing_a_token(self):
         good = json.loads(request())
         cases = [dict(good, version=2), dict(good, version=True), dict(good, extra=1),

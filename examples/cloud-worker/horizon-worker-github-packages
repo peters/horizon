@@ -183,10 +183,14 @@ def change_repositories(store, chains, value, now):
     state, _ = chains.load()
     if state is None or state['state'] != 'ok' or state['chain']['refresh_expires_at'] <= now:
         raise ValueError('This worker holds no package read access to change')
-    # One state with the chain, so readers never see a chain with the other repositories.
-    # A renewal that no storage accepted stays in the serving process's memory only; this
-    # save then outranks it, and the next renewal ends the access (bad_refresh_token), so a
-    # failure leaves less access, never more.
+    # A state that the serving process holds in memory only (a renewal or a metadata save that
+    # no storage took) would be written again later and bring back the old repositories. A new
+    # clear mark ends it in every process first; then the change is saved as one state with the
+    # chain, so readers never see a chain with other repositories. If that pending state held a
+    # renewed chain, the stored chain is the cancelled one and the next renewal ends the
+    # access (bad_refresh_token): less access, never more.
+    common.write_private(common.private_directory(chains.runtime, create=True), common.CLEARED,
+                         json.dumps({'serial': chains.highest(), 'nonce': uuid.uuid4().hex}))
     chains.save(dict(state, repositories=repositories), retain=False)
     return summary(store)
 
