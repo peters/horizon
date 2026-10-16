@@ -36,11 +36,17 @@ impl Run {
     }
 
     /// The run builds on the rented builder and still needs it: its setup is not ready,
-    /// a proof runs, or its desktop preview does.
+    /// a proof runs, or its desktop preview starts or runs. A preview that failed or was
+    /// skipped, as one that needs `/dev/kvm`, does not keep the builder.
     pub(in crate::app::cloud_panel::production::repository_setup) fn wants_rented_builder(&self) -> bool {
         self.build_on == Some(super::super::build_on::Target::Rented)
             && !self.stopped
-            && (!self.finished() || self.proof.as_ref().is_some_and(proof::Proof::running) || self.preview.is_some())
+            && (!self.finished()
+                || self.proof.as_ref().is_some_and(proof::Proof::running)
+                || self
+                    .preview
+                    .as_ref()
+                    .is_some_and(super::super::preview::Preview::uses_engine))
     }
 
     /// The run as the setup board shows it: its steps, its state and what it does now.

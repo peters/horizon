@@ -12,6 +12,7 @@ use horizon_core::cloud_runtime::{
     settings::Settings,
     setup_builder::{self, Owner},
 };
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -20,8 +21,8 @@ use std::time::{Duration, Instant};
 const IDLE_RETURN: Duration = Duration::from_mins(10);
 /// How long a failed renting or deletion waits before it is tried again.
 const RETRY_AFTER: Duration = Duration::from_mins(2);
-/// A renting that failed this often is not tried again until a new setup wants a builder:
-/// each try can bill a server.
+/// A renting that failed this often is not tried again until another setup starts wanting
+/// a builder: each try can bill a server.
 const MAX_RENTINGS: u32 = 3;
 /// How long Horizon's exit waits for the builder's deletion; the journal keeps the rest
 /// for the next start.
@@ -67,6 +68,8 @@ pub(in crate::app::cloud_panel::production) struct Builder {
     unused_since: Option<Instant>,
     /// Rentings that failed since a setup last started wanting a builder.
     failures: u32,
+    /// The setups that want the builder, by their run's agent panel.
+    demand: BTreeSet<u64>,
 }
 
 impl Default for Builder {
@@ -78,17 +81,18 @@ impl Default for Builder {
             cancel: Cancellation::default(),
             unused_since: None,
             failures: 0,
+            demand: BTreeSet::new(),
         }
     }
 }
 
 impl Builder {
     /// Takes what the threads found, claims the builder and deletes one left from before,
-    /// rents one while `wanted` and none is there, deletes one no setup has wanted for a
-    /// while, and tries a failed renting or deletion again.
+    /// rents one while the setups of `wanting` want it and none is there, deletes one no
+    /// setup has wanted for a while, and tries a failed renting or deletion again.
     pub(in crate::app::cloud_panel::production) fn tick(
         &mut self,
-        wanted: bool,
+        wanting: &BTreeSet<u64>,
         root: Option<&Path>,
         ctx: &egui::Context,
     ) {
@@ -96,11 +100,16 @@ impl Builder {
         let Some(root) = root else {
             return;
         };
+        let wanted = !wanting.is_empty();
+        // A setup that starts wanting a builder may try renting again, also while others
+        // still wait for one.
+        if wanting.iter().any(|run| !self.demand.contains(run)) {
+            self.failures = 0;
+        }
+        self.demand.clone_from(wanting);
         self.unused_since = if wanted {
             None
         } else {
-            // A new setup that wants a builder may try renting again.
-            self.failures = 0;
             self.unused_since.or_else(|| Some(Instant::now()))
         };
         if self.job.is_some() {
@@ -114,9 +123,17 @@ impl Builder {
             Status::Idle if wanted && self.owner.is_none() => self.claim(root, ctx),
             Status::Idle if wanted && may_rent => self.rent(ctx),
             Status::Failed { at, left: true, .. } if retry(at) => self.give_back(ctx),
-            Status::Failed { at, left: false, .. } if wanted && may_rent && retry(at) => self.rent(ctx),
-            // Without a builder the claim goes, so another Horizon can rent one.
-            Status::Idle | Status::Failed { left: false, .. } if !wanted => self.owner = None,
+            Status::Failed { at, left: false, .. } if wanted && may_rent && retry(at) => match self.owner {
+                Some(_) => self.rent(ctx),
+                None => self.claim(root, ctx),
+            },
+            // Without a builder the claim goes, so another Horizon can rent one, and a
+            // later setup claims it again before it rents.
+            Status::Idle if !wanted => self.owner = None,
+            Status::Failed { left: false, .. } if !wanted => {
+                self.owner = None;
+                self.status = Status::Idle;
+            }
             Status::Ready { .. } if self.unused_since.is_some_and(|since| since.elapsed() >= IDLE_RETURN) => {
                 self.give_back(ctx);
             }
@@ -363,13 +380,18 @@ fn give_back(owner: &Owner, cancel: &Cancellation) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// The setups that want a builder: one when `wanted`, none otherwise.
+    fn want(wanted: bool) -> BTreeSet<u64> {
+        if wanted { BTreeSet::from([1]) } else { BTreeSet::new() }
+    }
+
     /// Ticks until no thread works, at most ten seconds.
     fn settle(builder: &mut Builder, wanted: bool, root: &Path, ctx: &egui::Context) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        builder.tick(wanted, Some(root), ctx);
+        builder.tick(&want(wanted), Some(root), ctx);
         while builder.job.is_some() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
-            builder.tick(wanted, Some(root), ctx);
+            builder.tick(&want(wanted), Some(root), ctx);
         }
     }
 
@@ -378,7 +400,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         let mut builder = Builder::default();
-        builder.tick(true, None, &ctx);
+        builder.tick(&want(true), None, &ctx);
         assert!(builder.job.is_none(), "no cloud root, no claim");
         settle(&mut builder, false, root.path(), &ctx);
         assert!(matches!(builder.status, Status::Idle));
@@ -397,7 +419,7 @@ mod tests {
         settle(&mut builder, true, root.path(), &ctx);
         let (text, alert) = builder.waiting().unwrap();
         assert!(alert && text.starts_with("The builder could not be rented"), "{text}");
-        builder.tick(true, Some(root.path()), &ctx);
+        builder.tick(&want(true), Some(root.path()), &ctx);
         assert!(builder.job.is_none(), "no second try before {RETRY_AFTER:?}");
         assert!(builder.host().is_none());
     }
@@ -412,7 +434,7 @@ mod tests {
         assert!(builder.owner.is_none());
         let (text, alert) = builder.waiting().unwrap();
         assert!(alert && text.starts_with("Another Horizon"), "{text}");
-        builder.tick(true, Some(root.path()), &ctx);
+        builder.tick(&want(true), Some(root.path()), &ctx);
         assert!(builder.job.is_none(), "it neither rents nor deletes");
         // Once the other lets go, a later try claims.
         drop(first);
@@ -428,6 +450,7 @@ mod tests {
     fn renting_stops_after_some_failures_until_a_new_setup_wants_a_builder() {
         let mut builder = Builder {
             failures: MAX_RENTINGS,
+            demand: want(true),
             ..Builder::default()
         };
         builder.failed("refused".to_owned(), false);
@@ -441,9 +464,30 @@ mod tests {
             left: false,
         };
         builder.owner = setup_builder::claim(root.path()).unwrap().map(Arc::new);
-        builder.tick(true, Some(root.path()), &ctx);
+        builder.tick(&want(true), Some(root.path()), &ctx);
         assert!(builder.job.is_none(), "no further renting");
-        builder.tick(false, Some(root.path()), &ctx);
+        // Another setup starts wanting one while the first still waits.
+        builder.tick(&BTreeSet::from([1, 2]), Some(root.path()), &ctx);
         assert_eq!(builder.failures, 0, "a new setup may try again");
+        assert!(builder.job.is_some(), "and it rents at once");
+        settle(&mut builder, true, root.path(), &ctx);
+    }
+
+    #[test]
+    fn a_setup_after_a_failed_renting_claims_again_before_it_rents() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut builder = Builder {
+            owner: setup_builder::claim(root.path()).unwrap().map(Arc::new),
+            ..Builder::default()
+        };
+        builder.failed("refused".to_owned(), false);
+        // The last setup stopped: the claim goes, and the failure with it.
+        builder.tick(&want(false), Some(root.path()), &ctx);
+        assert!(builder.owner.is_none());
+        assert!(matches!(builder.status, Status::Idle));
+        // A later setup claims first; without a claim a renting would do nothing.
+        settle(&mut builder, true, root.path(), &ctx);
+        assert!(builder.owner.is_some(), "the claim is taken again");
     }
 }

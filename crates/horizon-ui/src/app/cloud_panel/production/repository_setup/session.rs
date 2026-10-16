@@ -296,8 +296,13 @@ impl HorizonApp {
         self.poll_cloud_setup_start(ctx);
         let root = self.cloud_prototype.root.clone();
         let production = &mut self.cloud_prototype.production;
-        let wanted = production.setup_runs.iter().any(Run::wants_rented_builder);
-        production.setup_builder.tick(wanted, root.as_deref(), ctx);
+        let wanting = production
+            .setup_runs
+            .iter()
+            .filter(|run| run.wants_rented_builder())
+            .map(|run| run.panel.0)
+            .collect();
+        production.setup_builder.tick(&wanting, root.as_deref(), ctx);
         for run in self.cloud_prototype.production.setup_run_panels() {
             self.sync_cloud_setup_run(ctx, run);
         }
@@ -319,9 +324,12 @@ impl HorizonApp {
         run.poll(ctx);
         list_changed_files(run, ctx);
         // The agent asked for a (new) proof: Horizon builds and runs it itself, on the
-        // rented builder once it answers.
+        // rented builder once it answers. A run stopped meanwhile, as when its agent panel
+        // closed while it waited for the builder, starts none.
         let place = run.proof_place((rented_host, builder_wait));
-        if let (Some((request, spec)), run::board::ProofPlace::Ready(build_on)) = (run.proof_wanted(), place) {
+        if !run.stopped
+            && let (Some((request, spec)), run::board::ProofPlace::Ready(build_on)) = (run.proof_wanted(), place)
+        {
             run.proved_request = request;
             run.proof_stale_reported = false;
             run.forget_inputs();

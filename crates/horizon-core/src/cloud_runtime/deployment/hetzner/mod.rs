@@ -8,7 +8,7 @@ mod provision;
 mod readiness;
 pub(in crate::cloud_runtime) mod rebuild;
 #[cfg(test)]
-mod tests;
+pub(in crate::cloud_runtime) mod tests;
 
 pub(super) use provision::provision;
 

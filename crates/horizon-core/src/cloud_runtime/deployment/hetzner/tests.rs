@@ -176,16 +176,18 @@ fn unsupported_requests_fail_the_preflight_before_any_state() {
 /// A scripted Hetzner API. A response containing `@PUBLIC_KEY@` echoes the
 /// public key of the request it answers, as Hetzner does for a new SSH key.
 #[cfg(unix)]
-mod provider {
+pub(in crate::cloud_runtime) mod provider {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
-    pub(super) type Requests = Arc<Mutex<Vec<String>>>;
+    pub(in crate::cloud_runtime) type Requests = Arc<Mutex<Vec<String>>>;
 
-    pub(super) fn serve(responses: Vec<(u16, String)>) -> (SocketAddr, Requests, thread::JoinHandle<()>) {
+    pub(in crate::cloud_runtime) fn serve(
+        responses: Vec<(u16, String)>,
+    ) -> (SocketAddr, Requests, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
