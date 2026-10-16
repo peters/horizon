@@ -46,10 +46,11 @@ source review against the documented trust boundary first.
    cargo test --locked --offline -p horizon-cloud-protocol --features exposure-control exposure::control::tests
    ```
 
-   Result: Twelve tests pass. Commands round-trip with independent IDs. Invalid
+   Result: Fourteen tests pass. Commands round-trip with independent IDs. Invalid
    versions, nil IDs, unknown/duplicate fields, trailing JSON, oversized frames,
    invalid policy/routes, zero/overflowing lifetimes and duplicate or inconsistent
-   observations are refused. Every physical target 600–663 is refused.
+   observations are refused. Repeated tailnet endpoints and IPv4-mapped Worker
+   or recipient addresses are refused. Every physical target 600–663 is refused.
 
 2. Inspect member and Worker observation cases.
 

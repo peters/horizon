@@ -437,3 +437,89 @@ fn lost_daemon_retains_original_route_facts_without_positive_readiness() {
     reply.worker = WorkerObservation::Unavailable {};
     assert!(reply.validate().is_err());
 }
+
+#[test]
+fn raw_replies_refuse_shared_tailnet_endpoints_but_allow_repeated_absence() {
+    let mut value = reply();
+    let mut other = value.entries[0].clone();
+    other.service = OperationId::generate();
+    other.operation = OperationId::generate();
+    other.ingress = 20001;
+    other.policy.target_port = 18081;
+    value.entries.push(other);
+    assert_eq!(Reply::from_json(&serde_json::to_vec(&value).unwrap()).unwrap(), value);
+
+    value.worker = WorkerObservation::Running {
+        identity: WorkerIdentity {
+            self_id: "nOriginal".into(),
+            full_dns_name: "root.example.ts.net".into(),
+            magic_dns_suffix: "example.ts.net".into(),
+            addresses: vec!["100.64.0.1".parse().unwrap()],
+        },
+    };
+    for (entry, port) in value.entries.iter_mut().zip([20002, 20003]) {
+        entry.tailnet_ingress = Some(port);
+        entry.url = Some(format!("tcp://root.example.ts.net:{port}"));
+    }
+    assert_eq!(Reply::from_json(&serde_json::to_vec(&value).unwrap()).unwrap(), value);
+    value.entries[1].tailnet_ingress = Some(20002);
+    value.entries[1].url = Some("tcp://root.example.ts.net:20002".into());
+    assert_eq!(
+        Reply::from_json(&serde_json::to_vec(&value).unwrap()),
+        Err(Error::Entries)
+    );
+}
+
+#[test]
+fn raw_worker_and_recipient_facts_refuse_ipv4_mapped_addresses() {
+    let identity = WorkerIdentity {
+        self_id: "nOriginal".into(),
+        full_dns_name: "root.example.ts.net".into(),
+        magic_dns_suffix: "example.ts.net".into(),
+        addresses: vec!["100.64.0.1".parse().unwrap(), "fd7a:115c:a1e0::1".parse().unwrap()],
+    };
+    let mut response = reply();
+    response.worker = WorkerObservation::Running {
+        identity: identity.clone(),
+    };
+    assert_eq!(
+        Reply::from_json(&serde_json::to_vec(&response).unwrap()).unwrap(),
+        response
+    );
+    let mut request = open();
+    let Command::Open { policy, members, .. } = &mut request.command else {
+        unreachable!()
+    };
+    policy.mode = ExposureMode::TailnetOnly;
+    policy.sources.clear();
+    *members = Some(MemberFacts {
+        recipient: identity,
+        stable_ids: vec!["nOriginal".into()],
+    });
+    assert_eq!(
+        Request::from_json(&serde_json::to_vec(&request).unwrap()).unwrap(),
+        request
+    );
+    let response = serde_json::to_value(response).unwrap();
+    let request = serde_json::to_value(request).unwrap();
+    for addresses in [
+        json!(["::ffff:127.0.0.1"]),
+        json!(["::ffff:0.0.0.0"]),
+        json!(["::ffff:224.0.0.1"]),
+        json!(["::ffff:100.64.0.1"]),
+        json!(["100.64.0.1", "::ffff:100.64.0.1"]),
+    ] {
+        let mut invalid = response.clone();
+        invalid["worker"]["identity"]["addresses"] = addresses.clone();
+        assert_eq!(
+            Reply::from_json(&serde_json::to_vec(&invalid).unwrap()),
+            Err(Error::Worker)
+        );
+        let mut invalid = request.clone();
+        invalid["command"]["members"]["recipient"]["addresses"] = addresses;
+        assert_eq!(
+            Request::from_json(&serde_json::to_vec(&invalid).unwrap()),
+            Err(Error::Worker)
+        );
+    }
+}

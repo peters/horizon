@@ -1,3 +1,4 @@
+use super::super::canonical_ip;
 use super::Error;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -30,10 +31,12 @@ impl WorkerIdentity {
             || self.addresses.is_empty()
             || self.addresses.len() > 16
             || self.addresses.windows(2).any(|pair| pair[0] >= pair[1])
-            || self
-                .addresses
-                .iter()
-                .any(|address| address.is_unspecified() || address.is_loopback() || address.is_multicast())
+            || self.addresses.iter().any(|address| {
+                canonical_ip(*address) != *address
+                    || address.is_unspecified()
+                    || address.is_loopback()
+                    || address.is_multicast()
+            })
         {
             return Err(Error::Worker);
         }

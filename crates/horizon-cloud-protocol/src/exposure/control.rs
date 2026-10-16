@@ -234,7 +234,12 @@ impl Reply {
                 || !entry.route.accepts_ingress(entry.ingress)
                 || entry.url != expected_url
                 || self.entries[..index].iter().any(|old| {
-                    old.service == entry.service || old.operation == entry.operation || old.ingress == entry.ingress
+                    old.service == entry.service
+                        || old.operation == entry.operation
+                        || old.ingress == entry.ingress
+                        || entry
+                            .tailnet_ingress
+                            .is_some_and(|port| old.tailnet_ingress == Some(port))
                 })
                 || (entry.phase == Phase::Active) != (entry.remaining_millis > 0)
                 || entry.remaining_millis > MAX_LIFETIME_MILLIS
