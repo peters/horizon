@@ -310,21 +310,21 @@ fn session_create_copy_and_delete_never_wait_for_the_index_lock() {
     // Another Horizon process holds the index lock, so the writer cannot change the index.
     let held = std::fs::File::create(home.sessions_dir().join("index.lock")).unwrap();
     held.lock().unwrap();
-    let started = Instant::now();
+    // Only an index change waits for the index locks. The calls must start none here,
+    // however long their own session files take to write on a slow disk.
+    let changes = || super::index_file::CHANGES_STARTED.with(std::cell::Cell::get);
+    let before = changes();
     let second = store.create_session_from_runtime(RuntimeState::default()).unwrap();
     let copy = store.duplicate_session(&first.session_id).unwrap();
     store.delete_session(&doomed.session_id).unwrap();
-    let waited = started.elapsed();
+    let changed = changes() - before;
     let listed = store.list_profile_sessions().unwrap();
     // The exit wait for the writer keeps its bound while the change cannot be written.
     let started = Instant::now();
     let flushed = store.flush_runtime_states(Duration::from_millis(200));
     let exit_wait = started.elapsed();
     drop(held);
-    assert!(
-        waited < Duration::from_secs(2),
-        "create, copy and delete took {waited:?}"
-    );
+    assert_eq!(changed, 0, "create, copy and delete waited for the index lock");
     assert_eq!(listed[0].session_id, copy.session_id, "a read sees the queued changes");
     assert!(
         !flushed && exit_wait < Duration::from_secs(2),
