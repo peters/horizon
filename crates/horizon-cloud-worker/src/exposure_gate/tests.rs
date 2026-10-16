@@ -15,7 +15,7 @@ fn request(port: u16) -> ExposureRequest {
         limits: ConnectionLimits::default(),
     }
 }
-async fn backend() -> TcpListener {
+pub(super) async fn backend() -> TcpListener {
     for _ in 0..32 {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         if request(listener.local_addr().unwrap().port()).validate().is_ok() {

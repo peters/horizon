@@ -1,4 +1,5 @@
 use super::*;
+use crate::exposure_gate::tests::backend;
 
 #[tokio::test]
 async fn slow_reader_receives_final_budget_bytes_after_unread_request_and_flow_release() {
@@ -66,7 +67,7 @@ async fn slow_reader(join_completes: bool) {
 
 #[tokio::test]
 async fn full_relay_budget_drains_reverse_input_without_forwarding_it() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let listener = backend().await;
     let socket = TcpSocket::new_v4().unwrap();
     SockRef::from(&socket).set_recv_buffer_size(512).unwrap();
     let incoming = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
@@ -189,7 +190,7 @@ async fn discard_cap_cannot_extend_original_deadline_or_refund_budget() {
 
 #[tokio::test]
 async fn already_budgeted_flow_drains_client_without_dialling_backend() {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let listener = backend().await;
     let shared = state_for_target(
         Budgets {
             gate_bytes: 1,
