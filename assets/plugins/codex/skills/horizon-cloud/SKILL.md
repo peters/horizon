@@ -84,11 +84,16 @@ it. DNS/tag and TailnetOnly policies refuse before binding. Follow the worker
 CIDR gate section of the cloud reference for its limits and test procedure.
 
 Retained exposure records store bounded comparison data and service intent.
-The `cloud-exposure` feature enables pure record transitions only and stays off
-by default. Present exposure selects Deployment 7 and paired Allocation 5;
+The `cloud-exposure` feature enables record transitions and SDK availability for
+an ignored qualification test. It stays off by default and adds no public exposure operation. Present exposure selects Deployment 7 and paired Allocation 5;
 absent exposure keeps the earlier formats. A decoded record supplies no live
 approval, transport or cleanup proof. Read the retained exposure metadata
 section of the cloud reference.
+
+The default-off SDK `exposure-firewall` management controller retains its original
+client, sibling rules and foreign policies. It needs the actual owner's durable
+journal, pinned SSH management policy and physical Gate teardown; no public tool
+starts it. Read the exposure management section of the cloud reference.
 
 The Protocol `exposure-control` feature is off by default. Its bounded request,
 reply, member and Worker observations are passive comparison facts. They grant

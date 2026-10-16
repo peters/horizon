@@ -1,3 +1,6 @@
+#[cfg(all(unix, feature = "cloud-exposure"))]
+mod exposure_management;
+
 #[cfg(unix)]
 use super::worker;
 use super::{Journal, JournalFile as _};

@@ -28,8 +28,9 @@ between preflight and a mutation remain possible. The final controller must reta
 the original resource ownership, compare readbacks and physically close its worker
 gate on uncertainty. This SDK is not a physical-release proof or an approval grant.
 
-The final provider policy must inspect every currently attached firewall and
-preserve management access. Adding a firewall can restrict previously unrestricted
+The [management controller](exposure-management.md) inspects every currently
+attached firewall and retains complete original policy. Its caller must supply
+the actual approved management rules and verify that they cover pinned SSH access. Adding a firewall can restrict previously unrestricted
 inbound traffic. Multiple firewalls combine their allowed traffic, so an extra
 wide SSH rule can widen another firewall's policy. Rules do not filter private
 Hetzner networks or terminate established connections. Therefore worker admission

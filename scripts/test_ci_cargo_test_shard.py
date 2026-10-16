@@ -45,12 +45,21 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(
             libs.stdout.splitlines(),
             [
+                "cargo test --locked -p horizon-cloud --features exposure-firewall",
                 "cargo test --locked --workspace --exclude horizon-ui",
                 "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                 "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
                 "cargo test --locked -p horizon-chromecast --features encoder",
             ],
         )
+
+    def test_enabled_firewall_sdk_runs_once_on_each_platform(self):
+        command = "cargo test --locked -p horizon-cloud --features exposure-firewall"
+        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
+            with self.subTest(shard=shard, runner_os=runner_os):
+                result = shard_commands(shard, runner_os)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines().count(command), 1)
 
     def test_enabled_gateway_contract_runs_once_on_each_platform(self):
         command = "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::"
@@ -107,6 +116,7 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(
                     result.stdout.splitlines(),
                     [
+                        "cargo test --locked -p horizon-cloud --features exposure-firewall",
                         "cargo test --locked --workspace --exclude horizon-ui",
                         "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                         "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
@@ -117,6 +127,7 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_all_runs_every_shard_and_fails_when_one_fails(self):
         for failing_flag in [
+            "--features exposure-firewall",
             "--exclude horizon-ui",
             "--features one-service-gateway cloud_runtime::local_network::",
             "--features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
@@ -145,6 +156,7 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(
                     calls,
                     [
+                        "test --locked -p horizon-cloud --features exposure-firewall",
                         "test --locked --workspace --exclude horizon-ui",
                         "test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
                         "test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",

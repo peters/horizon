@@ -9,4 +9,5 @@ no attachment or only the original numeric server. Never accept selectors or
 foreign targets. Creation is unattached, one POST only; uncertain responses require
 reconciliation, not retries. IDs precede action waits. Successful actions are not
 proof of current state or physical gate closure. Do not assume the SDK implements
-owner approval, management-preserving policy or atomic preflight/mutation.
+owner approval or atomic preflight/mutation. The management subtree has its own
+boundary and review instructions; lower-level operations alone preserve no policy.
