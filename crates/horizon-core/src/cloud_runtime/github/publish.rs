@@ -155,7 +155,9 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
             let auth = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(plain.as_bytes()));
             Config(serde_json::json!({ "auths": { REGISTRY: { "auth": auth.as_str() } } }))
         }
-        None => Config(serde_json::json!({ "auths": {} })),
+        // Not empty: with no entry at all, Docker on Linux may pick a credential helper it
+        // finds, such as pass or secretservice, and send a login saved there.
+        None => Config(serde_json::json!({ "auths": { "horizon.invalid": {} } })),
     };
     if let Some(machine) = machine {
         let machine = std::path::absolute(machine)?;
