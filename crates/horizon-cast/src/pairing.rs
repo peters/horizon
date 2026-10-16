@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn cancellation_interrupts_control_setup_before_video_and_releases_receiver() {
         use std::{
-            io::{BufRead, ErrorKind, Read, Write},
+            io::{BufRead, Read, Write},
             net::TcpListener,
             sync::{atomic::AtomicBool, mpsc},
             time::Duration,
@@ -323,12 +323,8 @@ mod tests {
         // error, not elapsed time, shows that cancellation interrupted it.
         match worker.join().expect("worker") {
             Ok(_) => panic!("cancelled setup started video"),
-            Err(Error::Io(error)) => assert!(
-                !matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock),
-                "setup ended by its read timeout, not by cancellation: {error}"
-            ),
             Err(Error::Protocol("casting cancelled")) => {}
-            Err(error) => panic!("unexpected setup error: {error}"),
+            Err(error) => panic!("setup did not end by cancellation: {error}"),
         }
         assert!(Reservation::acquire(address.ip()).is_ok());
         server.join().expect("server");

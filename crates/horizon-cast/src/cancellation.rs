@@ -10,7 +10,8 @@ use std::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const CONNECT_POLL: Duration = Duration::from_millis(100);
+/// How long a blocked dial or read waits before it checks for cancellation again.
+pub(crate) const POLL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 struct Sockets {
@@ -58,7 +59,7 @@ impl Cancellation {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .ok_or_else(|| std::io::Error::new(ErrorKind::TimedOut, "receiver connection deadline exceeded"))?;
-            match TcpStream::connect_timeout(&address, remaining.min(CONNECT_POLL)) {
+            match TcpStream::connect_timeout(&address, remaining.min(POLL)) {
                 Ok(socket) => {
                     self.check()?;
                     return Ok(socket);

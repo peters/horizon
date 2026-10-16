@@ -1,4 +1,9 @@
-use crate::{Error, PairedReceiver, Result, VideoFormat, connection::Transport, crypto, video::VideoPackets};
+use crate::{
+    Error, PairedReceiver, Result, VideoFormat,
+    connection::{Closer, Transport},
+    crypto,
+    video::VideoPackets,
+};
 use plist::{Dictionary, Value};
 use std::{
     collections::BTreeMap,
@@ -22,13 +27,13 @@ pub struct MirrorSession {
     configured: bool,
 }
 struct EventWorker {
-    socket: TcpStream,
+    closer: Closer,
     worker: Option<JoinHandle<()>>,
     failures: mpsc::Receiver<Error>,
 }
 impl Drop for EventWorker {
     fn drop(&mut self) {
-        let _ = self.socket.shutdown(Shutdown::Both);
+        self.closer.close();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -162,8 +167,8 @@ impl PairedReceiver {
             self.transport.cancellation(),
         )?;
         event_transport.encrypt(&self.shared, true)?;
-        event_transport.wait_for_events()?;
-        let events = event_transport.shutdown_handle()?;
+        event_transport.wait_for_events();
+        let events = event_transport.closer()?;
         let (send, failures) = mpsc::channel();
         let timeline = clock.timeline;
         let worker = thread::spawn(move || {
@@ -176,7 +181,7 @@ impl PairedReceiver {
             format,
             clock,
             EventWorker {
-                socket: events,
+                closer: events,
                 worker: Some(worker),
                 failures,
             },
@@ -325,7 +330,7 @@ impl MirrorSession {
         }
         self.active = false;
         let _ = self.video.shutdown(Shutdown::Both);
-        let _ = self.events.socket.shutdown(Shutdown::Both);
+        self.events.closer.close();
         if let Some(worker) = self.events.worker.take() {
             let _ = worker.join();
         }
