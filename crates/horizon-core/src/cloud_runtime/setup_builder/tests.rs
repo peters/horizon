@@ -66,7 +66,7 @@ fn a_journal_names_the_builder_until_it_is_proven_gone_and_is_private() {
     let root = tempfile::tempdir().unwrap();
     write_journal(
         root.path(),
-        "setup-builder-0123456789ab",
+        ("setup-builder-0123456789ab", "0011223344556677"),
         &CreateState::Requested,
         Some(now()),
     )
@@ -93,6 +93,127 @@ fn a_journal_names_the_builder_until_it_is_proven_gone_and_is_private() {
         rent(&no_hetzner(), &owner, &Cancellation::default(), |_| {}),
         Err(Error::Invalid(_))
     ));
+}
+
+/// Settings with a Hetzner binding whose token file in `folder` holds `token`.
+#[cfg(unix)]
+fn with_hetzner(folder: &Path, token: &str) -> Settings {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let token_file = folder.join("hetzner-token");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&token_file)
+        .unwrap();
+    std::io::Write::write_all(&mut file, token.as_bytes()).unwrap();
+    let mut settings = no_hetzner();
+    settings.hetzner = Some(
+        serde_json::from_value(serde_json::json!({
+            "token_file": token_file, "server_types": ["cx43"], "locations": ["hel1"],
+        }))
+        .unwrap(),
+    );
+    settings
+}
+
+/// A journal of a builder rented with the token whose fingerprint is `binding`.
+fn journal_of(root: &Path, binding: &str) -> Journal {
+    write_journal(
+        root,
+        ("setup-builder-0123456789ab", binding),
+        &CreateState::Bound { worker_id: "42".into() },
+        Some(now()),
+    )
+    .unwrap();
+    serde_json::from_str(&std::fs::read_to_string(root.join(JOURNAL)).unwrap()).unwrap()
+}
+
+fn listing(key: &str, items: &serde_json::Value) -> String {
+    let mut page = serde_json::json!({"meta": {"pagination": {"next_page": null}}});
+    page[key] = items.clone();
+    page.to_string()
+}
+
+fn server(id: u64) -> serde_json::Value {
+    serde_json::json!({"id": id, "name": "horizon-setup-builder", "status": "running",
+        "public_net": {"ipv4": {"ip": "192.0.2.10"}, "ipv6": null},
+        "server_type": {"name": "cpx42", "cores": 8, "memory": 16.0, "disk": 320},
+        "location": {"name": "fsn1"},
+        "labels": {"horizon-operation": "setup-builder-0123456789ab"}, "volumes": []})
+}
+
+#[cfg(unix)]
+#[test]
+fn the_token_fingerprint_never_holds_the_token() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = with_hetzner(root.path(), "token-of-project-a");
+    let binding = settings.hetzner.as_ref().unwrap().token_fingerprint().unwrap();
+    assert_eq!(binding.len(), 16);
+    assert!(binding.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let other = with_hetzner(root.path(), "token-of-project-b");
+    assert_ne!(other.hetzner.as_ref().unwrap().token_fingerprint().unwrap(), binding);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_token_that_does_not_list_the_builder_keeps_the_journal() {
+    use crate::cloud_runtime::deployment::hetzner::tests::provider::serve;
+    let root = tempfile::tempdir().unwrap();
+    let journal = journal_of(root.path(), "0011223344556677");
+    // Another project's token lists neither the server nor its key: that is no proof
+    // that the builder is gone.
+    let (address, requests, task) = serve(vec![
+        (200, listing("servers", &serde_json::json!([]))),
+        (200, listing("ssh_keys", &serde_json::json!([]))),
+    ]);
+    let client = Hetzner::loopback(horizon_cloud::Credential::new("other".into()).unwrap(), address).unwrap();
+    let refused = return_with(
+        root.path(),
+        journal,
+        (&client, "8899aabbccddeeff"),
+        &Cancellation::default(),
+    );
+    task.join().unwrap();
+    assert!(
+        matches!(&refused, Err(Error::Invalid(reason)) if reason.contains("does not list")),
+        "{refused:?}"
+    );
+    assert_eq!(requests.lock().unwrap().len(), 2, "it only looked");
+    let kept: Journal = serde_json::from_str(&std::fs::read_to_string(root.path().join(JOURNAL)).unwrap()).unwrap();
+    assert_eq!(kept.binding, "0011223344556677", "the journal stays as it was");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rotated_token_that_lists_the_builder_deletes_it() {
+    use crate::cloud_runtime::deployment::hetzner::tests::provider::serve;
+    let root = tempfile::tempdir().unwrap();
+    let journal = journal_of(root.path(), "0011223344556677");
+    let (address, requests, task) = serve(vec![
+        (200, listing("servers", &serde_json::json!([server(42)]))),
+        (
+            404,
+            serde_json::json!({"error": {"code": "not_found", "message": "server not found", "details": {}}})
+                .to_string(),
+        ),
+        (200, listing("ssh_keys", &serde_json::json!([]))),
+        (200, listing("ssh_keys", &serde_json::json!([]))),
+    ]);
+    let client = Hetzner::loopback(horizon_cloud::Credential::new("rotated".into()).unwrap(), address).unwrap();
+    let returned = return_with(
+        root.path(),
+        journal,
+        (&client, "8899aabbccddeeff"),
+        &Cancellation::default(),
+    );
+    task.join().unwrap();
+    assert!(matches!(returned, Ok(true)), "{returned:?}");
+    assert!(!left_behind(root.path()), "the builder is proven gone");
+    let requests = requests.lock().unwrap();
+    assert!(requests[0].starts_with("GET /servers?label_selector="));
+    assert!(requests[1].starts_with("GET /servers/42 "));
 }
 
 #[cfg(unix)]

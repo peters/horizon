@@ -188,6 +188,12 @@ impl Preview {
         }
     }
 
+    /// Whether the preview starts or runs, and so uses its Docker; a failed or skipped one
+    /// does not.
+    pub(super) fn uses_engine(&self) -> bool {
+        matches!(self.outcome, Outcome::Starting | Outcome::Live { .. })
+    }
+
     /// The loopback port of the live desktop.
     pub(super) fn live_port(&self) -> Option<u16> {
         match self.outcome {

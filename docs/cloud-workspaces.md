@@ -910,16 +910,24 @@ reached as a Docker host is, through an SSH forward of its Docker socket.
 - The setup board shows the builder's server type, location, price per hour and how
   long it runs. A builder that no setup has used for 10 minutes is deleted, and so is
   the builder as Horizon exits. A setup still uses it while it is not ready, while a
-  proof runs and while its desktop preview runs.
+  proof runs and while its desktop preview starts or runs; a preview that failed or was
+  skipped does not keep it.
 - A journal in the Cloud settings folder names the server from before the create
   request until Horizon proved it gone. A deletion that fails is tried again every 2
   minutes, and the setup board says so. If Horizon ends before it could delete the
-  builder, the next start deletes it. Until then the server is billed by Hetzner.
+  builder, the next start deletes it. Until then the server is billed by Hetzner. The
+  journal keeps a fingerprint of the Hetzner token the builder was rented with, never
+  the token. With another token, such as a new token of the same project, Horizon
+  deletes the builder only if that token lists its server or its key. If it lists
+  neither, as a token of another project does, Horizon keeps the journal and asks you
+  to connect the project the builder was rented in; if you deleted the server and its
+  key yourself, delete `setup-builder.json` in the Cloud settings folder. The journal is
+  written to disk before the create request goes out.
 - One Horizon at a time has a builder for a Cloud settings folder, and only while it
   has one. A setup of another Horizon that uses the same folder waits, and says so,
   until that builder is deleted.
 - A renting that failed is tried again every 2 minutes, at most 3 times. After that a
-  new setup with **Rented builder** tries again.
+  new setup with **Rented builder** tries again, also while other setups still wait.
 - The containers, images and volumes of the setups go with the builder.
 
 The agent reads the CI of the repository first, the GitHub Actions workflows in

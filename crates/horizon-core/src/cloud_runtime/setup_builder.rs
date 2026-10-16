@@ -75,6 +75,9 @@ struct Journal {
     /// When the create request went out, in seconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     requested_at: Option<u64>,
+    /// The fingerprint of the Hetzner token the builder was rented with: a token of
+    /// another project finds no server, which must not count as one deleted.
+    binding: String,
 }
 
 /// This process's claim on the builder of one cloud root: only the process that holds it
@@ -164,6 +167,7 @@ pub fn rent(
     }
     stage(Stage::Choosing);
     let client = Hetzner::new(hetzner.credential()?);
+    let binding = hetzner.token_fingerprint()?;
     let (placements, hourly) = placements(&client.catalog(cancel)?, &hetzner.locations);
     if placements.is_empty() {
         return Err(Error::Invalid(
@@ -173,7 +177,7 @@ pub fn rent(
     let folder = root.join(FOLDER);
     let operation_id = format!("setup-builder-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
     let mut create_state = CreateState::Prepared;
-    write_journal(root, &operation_id, &create_state, None)?;
+    write_journal(root, (&operation_id, &binding), &create_state, None)?;
     let mut requested_at = None;
     let rented = (|| {
         let keys = Keys::make(&folder)?;
@@ -199,7 +203,7 @@ pub fn rent(
                 if *state == CreateState::Requested {
                     requested_at = requested_at.or_else(|| Some(now()));
                 }
-                write_journal(root, &operation_id, state, requested_at)
+                write_journal(root, (&operation_id, &binding), state, requested_at)
                     .map_err(|_| horizon_cloud::CloudError::Transport)
             },
         )?;
@@ -251,22 +255,55 @@ pub fn give_back(settings: &Settings, owner: &Owner, cancel: &Cancellation) -> R
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
-    let mut journal: Journal = serde_json::from_str(&text).map_err(|_| Error::Json)?;
+    let journal: Journal = serde_json::from_str(&text).map_err(|_| Error::Json)?;
     let hetzner = settings.hetzner.as_ref().ok_or(Error::Invalid(
         "Connect Hetzner in Cloud settings again to delete the rented builder",
     ))?;
     let client = Hetzner::new(hetzner.credential()?);
+    return_with(root, journal, (&client, &hetzner.token_fingerprint()?), cancel)
+}
+
+/// Deletes the builder `journal` names with `client`, whose token has the fingerprint
+/// `binding`, and removes its folder and the journal.
+fn return_with(
+    root: &Path,
+    mut journal: Journal,
+    (client, binding): (&Hetzner, &str),
+    cancel: &Cancellation,
+) -> Result<bool> {
+    // Before the create request no server can exist, so any token may clear the journal.
+    if binding != journal.binding && journal.state != CreateState::Prepared {
+        // Another token. One of the same project, as after a rotation, still lists the
+        // builder's server or its key; one of another project lists neither, and that
+        // proves nothing, so the journal stays.
+        let listed = !client.find_servers(&journal.operation_id, cancel)?.is_empty()
+            || !client.find_ssh_keys(&journal.operation_id, cancel)?.is_empty();
+        if !listed {
+            return Err(Error::Invalid(
+                "The Hetzner token in Cloud settings does not list the rented builder. Connect the project it was rented in; if you deleted its server and key yourself, delete setup-builder.json in the Cloud settings folder",
+            ));
+        }
+        binding.clone_into(&mut journal.binding);
+        write_journal(
+            root,
+            (&journal.operation_id, binding),
+            &journal.state,
+            journal.requested_at,
+        )?;
+    }
     let operation_id = journal.operation_id.clone();
+    let binding = journal.binding.clone();
     let requested_at = journal.requested_at;
     let settled = requested_at.is_some_and(|at| now().saturating_sub(at) >= UNRESOLVED_FOR.as_secs());
     client.return_builder(&operation_id, &mut journal.state, settled, cancel, |state| {
-        write_journal(root, &operation_id, state, requested_at).map_err(|_| horizon_cloud::CloudError::Transport)
+        write_journal(root, (&operation_id, &binding), state, requested_at)
+            .map_err(|_| horizon_cloud::CloudError::Transport)
     })?;
     match std::fs::remove_dir_all(root.join(FOLDER)) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
         _ => {}
     }
-    std::fs::remove_file(path)?;
+    std::fs::remove_file(root.join(JOURNAL))?;
     Ok(true)
 }
 
@@ -389,17 +426,24 @@ fn wait_ready(host: &Host, local_config: &Path, cancel: &Cancellation) -> Result
     }
 }
 
-fn write_journal(root: &Path, operation_id: &str, state: &CreateState, requested_at: Option<u64>) -> Result<()> {
+fn write_journal(
+    root: &Path,
+    (operation_id, binding): (&str, &str),
+    state: &CreateState,
+    requested_at: Option<u64>,
+) -> Result<()> {
     let journal = Journal {
         operation_id: operation_id.to_owned(),
         state: state.clone(),
         requested_at,
+        binding: binding.to_owned(),
     };
     let text = serde_json::to_string_pretty(&journal).map_err(|_| Error::Json)?;
     write_private(&root.join(JOURNAL), &text)
 }
 
-/// Writes `text` to `path` for this user alone, through a temporary file synced first.
+/// Writes `text` to `path` for this user alone, through a temporary file synced first,
+/// and syncs the folder after the rename, so a power loss keeps the new text.
 fn write_private(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
     let temporary = path.with_extension("tmp");
@@ -411,6 +455,10 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
     file.write_all(text.as_bytes())?;
     file.sync_all()?;
     std::fs::rename(&temporary, path)?;
+    #[cfg(unix)]
+    if let Some(folder) = path.parent() {
+        std::fs::File::open(folder)?.sync_all()?;
+    }
     Ok(())
 }
 
