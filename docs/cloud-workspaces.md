@@ -590,7 +590,8 @@ version exists and to read its age, unless the cloud has package read access.
 When a deployment of an Upkeep's cloud with Connect GitHub reaches the worker,
 Horizon asks the worker whether it has package read access. When it does not, the
 card shows a second code right after the cloud's GitHub access: **Let this cloud's
-agents read packages**. Other clouds are not asked and keep their flow.
+agents read packages**. Horizon asks only when the cloud's GitHub access works.
+Other clouds are not asked and keep their flow.
 
 1. Click **Open GitHub**. Horizon copies the code.
 2. Paste the code on GitHub and click **Authorize**. You authorize Horizon's own
@@ -601,7 +602,9 @@ broader grant: the worker then gets nothing. Horizon gives the token chain to th
 root GitHub service of the worker over SSH standard input, never in a command line,
 a log or the cloud board, and keeps no copy. The worker renews the chain with the
 OAuth app's client ID alone, also while this computer is off. No agent gets the
-token. With the chain, Horizon names the Upkeep's repositories. The service adds
+token. With the chain, Horizon names the Upkeep's repositories. When you change
+the Upkeep's list, the next deployment or reconnect gives the worker the new list
+without a new code; a worker image that cannot take it asks again. The service adds
 the token only to reads of the NuGet and npm packages of the owners of those
 repositories, never of a repository that an agent asked for, as
 [the trust boundary of the package token](upkeep.md#trust-boundary-of-the-package-token)

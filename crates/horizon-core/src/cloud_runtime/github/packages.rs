@@ -57,25 +57,37 @@ enum Held {
     Unsupported,
     /// No chain, or one that GitHub ended.
     Missing,
-    /// A chain the worker renews.
-    Current,
+    /// A chain the worker renews, for these repositories (lowercase).
+    Current(Vec<String>),
 }
 
-/// The worker's package read access, from its GitHub service's `status`.
-fn held(output: &str) -> Held {
+/// The worker's package read access, and whether its GitHub service serves GitHub access.
+fn held(output: &str) -> (Held, bool) {
     let Some(value) = output
         .lines()
         .rev()
         .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
     else {
-        return Held::Unsupported;
+        return (Held::Unsupported, false);
     };
-    match value.get("packages") {
+    let github = value.get("state").and_then(serde_json::Value::as_str) == Some("ok");
+    let held = match value.get("packages") {
         None => Held::Unsupported,
-        Some(serde_json::Value::Null) => Held::Missing,
-        Some(packages) if packages.get("state").and_then(serde_json::Value::as_str) == Some("ok") => Held::Current,
+        Some(packages) if packages.get("state").and_then(serde_json::Value::as_str) == Some("ok") => {
+            let mut repositories: Vec<String> = packages
+                .get("repositories")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .collect();
+            repositories.sort();
+            Held::Current(repositories)
+        }
         Some(_) => Held::Missing,
-    }
+    };
+    (held, github)
 }
 
 /// The Upkeep's own repositories, which alone open packages on the worker; never a
@@ -96,8 +108,10 @@ fn own_repositories(config: &crate::upkeep::worker::Config) -> Result<Vec<String
     Ok(names)
 }
 
-/// Gives the worker of an Upkeep package read access when it holds none: one device sign-in,
-/// unless the person skipped it and `renew` (Connect GitHub again) is false. Never fails the
+/// Gives the worker of an Upkeep package read access when it holds none and its GitHub access
+/// works: one device sign-in, unless the person skipped it and `renew` (Connect GitHub again)
+/// is false. When the worker holds access for other repositories than the Upkeep's list, it
+/// gets the new list without a sign-in; an image that cannot take it asks again. Never fails the
 /// deployment, except for a cancellation; every other outcome is said in its output.
 /// # Errors
 /// The deployment was cancelled.
@@ -123,7 +137,12 @@ pub fn configure(
         say("the worker's package read access could not be read, so Horizon did not ask for it.");
         return Ok(());
     };
-    if held(&output) != Held::Missing {
+    let (worker, github) = held(&output);
+    if worker == Held::Unsupported {
+        return Ok(());
+    }
+    if !github {
+        say("this cloud has no GitHub access, so Horizon does not ask for package read access.");
         return Ok(());
     }
     let repositories = match own_repositories(&config) {
@@ -135,6 +154,22 @@ pub fn configure(
             return Ok(());
         }
     };
+    if let Held::Current(held) = &worker
+        && !renew
+    {
+        let mut wanted = repositories.clone();
+        wanted.sort();
+        if *held == wanted {
+            return Ok(());
+        }
+        let changed = change(&repositories, connection, runner);
+        runner.cancel.check()?;
+        if changed.is_ok() {
+            say("the package read access now follows the Upkeep's repositories.");
+            return Ok(());
+        }
+        say("the worker could not change the repositories of its package read access, so Horizon asks again.");
+    }
     let cloud_id = &state.cloud_id;
     if renew {
         if let Err(error) = ask_again(cloud_id) {
@@ -146,9 +181,10 @@ pub fn configure(
     }
     let client = Client::new();
     let outcome = sign_in(&client, cloud_id, runner);
-    (runner.emit)(Event::GitHub(Prompt::PackagesEnded {
-        allowed: outcome.is_ok(),
-    }));
+    let ended = |allowed| (runner.emit)(Event::GitHub(Prompt::PackagesEnded { allowed }));
+    if outcome.is_err() {
+        ended(false);
+    }
     let chain = match outcome {
         Ok(chain) => chain,
         Err(Ended::Cancelled(error)) => return Err(error),
@@ -168,27 +204,10 @@ pub fn configure(
             return Ok(());
         }
     };
-    let owners: BTreeSet<&str> = repositories
-        .iter()
-        .filter_map(|name| name.split_once('/').map(|(owner, _)| owner))
-        .collect();
-    let mut closed = Vec::new();
-    for owner in owners {
-        match client.packages_restricted(&chain.access_token, owner) {
-            Ok(false) => {}
-            Ok(true) => {
-                closed.push(owner);
-                say(&format!(
-                    "the organization {owner} limits OAuth apps, so agents cannot read its packages until an owner \
-                     of {owner} grants Horizon at \
-                     https://github.com/organizations/{owner}/settings/oauth_application_policy (others can ask for \
-                     it at {APP_PAGE})."
-                ));
-            }
-            Err(error) => say(&format!("could not check whether {owner} limits OAuth apps: {error}")),
-        }
-    }
+    let closed = closed_owners(&client, &chain, &repositories, &say);
     let installed = install(&chain, &repositories, connection, runner);
+    // Only now does the card learn the outcome: the worker holds the access or not.
+    ended(installed.is_ok());
     runner.cancel.check()?;
     if installed.is_ok() && closed.is_empty() {
         say("the worker can now read the packages of this cloud's owners for its agents.");
@@ -202,6 +221,32 @@ pub fn configure(
         say(WITHOUT);
     }
     Ok(())
+}
+
+/// The owners of `repositories` whose organization limits OAuth apps, so `chain` reads none of
+/// their packages; each is named with its grant page. A check that fails is said too.
+fn closed_owners(client: &Client, chain: &Chain, repositories: &[String], say: &dyn Fn(&str)) -> Vec<String> {
+    let owners: BTreeSet<&str> = repositories
+        .iter()
+        .filter_map(|name| name.split_once('/').map(|(owner, _)| owner))
+        .collect();
+    let mut closed = Vec::new();
+    for owner in owners {
+        match client.packages_restricted(&chain.access_token, owner) {
+            Ok(false) => {}
+            Ok(true) => {
+                closed.push(owner.to_owned());
+                say(&format!(
+                    "the organization {owner} limits OAuth apps, so agents cannot read its packages until an owner \
+                     of {owner} grants Horizon at \
+                     https://github.com/organizations/{owner}/settings/oauth_application_policy (others can ask for \
+                     it at {APP_PAGE})."
+                ));
+            }
+            Err(error) => say(&format!("could not check whether {owner} limits OAuth apps: {error}")),
+        }
+    }
+    closed
 }
 
 /// Why no chain came back.
@@ -294,6 +339,27 @@ fn payload(chain: &Chain, repositories: &[String]) -> Result<tempfile::NamedTemp
     Ok(file)
 }
 
+#[derive(Serialize)]
+struct Change<'a> {
+    version: u8,
+    repositories: &'a [String],
+}
+
+/// Tells root on the worker the Upkeep's repositories for the chain it holds, without a token.
+fn change(repositories: &[String], connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    let mut file = tempfile::NamedTempFile::new()?;
+    serde_json::to_writer(
+        &mut file,
+        &Change {
+            version: 1,
+            repositories,
+        },
+    )
+    .map_err(|_| Error::Json)?;
+    file.flush()?;
+    runner.private_payload(&mut connection.command(INSTALL), file.path())
+}
+
 /// Gives the chain to root on the worker over SSH stdin; no token enters argv or output.
 fn install(chain: &Chain, repositories: &[String], connection: &Connection, runner: &Runner<'_>) -> Result<()> {
     let file = payload(chain, repositories)?;
@@ -316,13 +382,23 @@ mod tests {
     }
 
     #[test]
-    fn the_worker_status_says_what_it_holds() {
-        let line = |packages: &str| format!("{{\"state\":\"ok\",\"repositories\":[\"acme/api\"]{packages}}}");
-        assert_eq!(held(&line(",\"packages\":null")), Held::Missing);
-        assert_eq!(held(&line(",\"packages\":{\"state\":\"ok\"}")), Held::Current);
-        assert_eq!(held(&line(",\"packages\":{\"state\":\"revoked\"}")), Held::Missing);
-        assert_eq!(held(&line("")), Held::Unsupported);
-        assert_eq!(held("not json"), Held::Unsupported);
+    fn the_worker_status_says_what_it_holds_and_whether_github_works() {
+        let line = |state: &str, packages: &str| format!("{{\"state\":\"{state}\",\"repositories\":[]{packages}}}");
+        assert_eq!(held(&line("ok", ",\"packages\":null")), (Held::Missing, true));
+        assert_eq!(
+            held(&line(
+                "ok",
+                ",\"packages\":{\"state\":\"ok\",\"repositories\":[\"B/x\",\"a/y\"]}"
+            )),
+            (Held::Current(vec!["a/y".into(), "b/x".into()]), true)
+        );
+        assert_eq!(
+            held(&line("ok", ",\"packages\":{\"state\":\"revoked\"}")).0,
+            Held::Missing
+        );
+        assert_eq!(held(&line("absent", ",\"packages\":null")), (Held::Missing, false));
+        assert_eq!(held(&line("ok", "")).0, Held::Unsupported);
+        assert_eq!(held("not json"), (Held::Unsupported, false));
     }
 
     #[test]
