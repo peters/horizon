@@ -13,7 +13,7 @@ use horizon_core::cloud_runtime::{
     setup_builder::{self, Owner},
 };
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -73,6 +73,11 @@ pub(in crate::app::cloud_panel::production) struct Builder {
     last_failure: String,
     /// The setups that want the builder, by their run's agent panel.
     demand: BTreeSet<u64>,
+    /// The cloud root whose leftover builder [`Self::recover`] looks for, also before a
+    /// session is open.
+    recovery_root: Option<PathBuf>,
+    /// A session's tick ran: from then on it keeps the builder, not [`Self::recover`].
+    ticked: bool,
 }
 
 impl Default for Builder {
@@ -86,6 +91,8 @@ impl Default for Builder {
             failures: 0,
             last_failure: String::new(),
             demand: BTreeSet::new(),
+            recovery_root: None,
+            ticked: false,
         }
     }
 }
@@ -104,6 +111,7 @@ impl Builder {
         let Some(root) = root else {
             return;
         };
+        self.ticked = true;
         let wanted = !wanting.is_empty();
         // A setup that starts wanting a builder may try renting again, also while others
         // still wait for one.
@@ -147,6 +155,42 @@ impl Builder {
             _ => {}
         }
         if wanted || matches!(self.status, Status::Ready { .. } | Status::Failed { left: true, .. }) {
+            ctx.request_repaint_after(Duration::from_secs(5));
+        }
+    }
+
+    /// Whether [`Self::recover`] still has work before a session keeps the builder: the
+    /// claim was not tried yet, a deletion failed, or the claim is still held without a
+    /// builder.
+    pub(in crate::app::cloud_panel::production) fn needs_recovery(&self) -> bool {
+        !self.ticked
+            && (self.job.is_some()
+                || match self.status {
+                    Status::Claiming | Status::Failed { left: true, .. } => true,
+                    Status::Idle => self.owner.is_some(),
+                    _ => false,
+                })
+    }
+
+    /// Deletes a builder that an earlier Horizon left in `root`, from the first frame on,
+    /// also while the session chooser is open: claims the builder once, which deletes a
+    /// leftover on its thread, and tries a failed deletion again. Without a builder the
+    /// claim goes again at once.
+    pub(in crate::app::cloud_panel::production) fn recover(&mut self, root: &Path, ctx: &egui::Context) {
+        self.poll();
+        if self.recovery_root.is_none() {
+            self.recovery_root = Some(root.to_owned());
+        }
+        if self.job.is_some() {
+            return;
+        }
+        match &self.status {
+            Status::Claiming => self.claim(root, ctx),
+            Status::Failed { at, left: true, .. } if at.elapsed() >= RETRY_AFTER => self.give_back(ctx),
+            Status::Idle => self.owner = None,
+            _ => {}
+        }
+        if self.needs_recovery() {
             ctx.request_repaint_after(Duration::from_secs(5));
         }
     }
@@ -231,8 +275,19 @@ impl Builder {
                 }
             }
         }
-        let Some(owner) = self.owner.clone() else {
-            return;
+        // A builder that an earlier Horizon left and this one never claimed, as on an exit
+        // from the session chooser, goes too.
+        let owner = match self.owner.clone() {
+            Some(owner) => owner,
+            None => match self
+                .recovery_root
+                .as_deref()
+                .filter(|root| setup_builder::left_behind(root))
+                .and_then(|root| setup_builder::claim(root).ok().flatten())
+            {
+                Some(owner) => Arc::new(owner),
+                None => return,
+            },
         };
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -507,6 +562,47 @@ mod tests {
             alert && text.contains("start the setup again") && text.contains("no capacity"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_leftover_builder_is_deleted_before_any_session_opens() {
+        let root = tempfile::tempdir().unwrap();
+        // A journal an earlier Horizon left; no settings, so its deletion fails here.
+        std::fs::write(root.path().join("setup-builder.json"), "{}").unwrap();
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        // As the frame calls it: only while it says there is work.
+        let frames = |builder: &mut Builder, root: &Path| {
+            while builder.needs_recovery() && Instant::now() < deadline {
+                builder.recover(root, &ctx);
+                if matches!(builder.status, Status::Failed { left: true, .. }) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let mut builder = Builder::default();
+        assert!(builder.needs_recovery());
+        frames(&mut builder, root.path());
+        assert!(
+            matches!(builder.status, Status::Failed { left: true, .. }),
+            "the claim tried to delete it"
+        );
+        assert!(builder.needs_recovery(), "and tries again later");
+        // Without a leftover, the claim goes again at once.
+        let clean = tempfile::tempdir().unwrap();
+        let mut builder = Builder::default();
+        frames(&mut builder, clean.path());
+        assert!(!builder.needs_recovery());
+        assert!(builder.owner.is_none(), "no builder, no claim");
+        assert!(
+            setup_builder::claim(clean.path()).unwrap().is_some(),
+            "another Horizon may rent one"
+        );
+        // Once a session ticks, it keeps the builder.
+        let mut builder = Builder::default();
+        builder.tick(&want(false), Some(clean.path()), &ctx);
+        assert!(!builder.needs_recovery());
     }
 
     #[test]

@@ -289,6 +289,18 @@ impl HorizonApp {
             .collect();
     }
 
+    /// Deletes a rented builder an earlier Horizon left, from the first frame on, also
+    /// while the session chooser is open; the work runs on threads. Tests never call it:
+    /// it reads the real cloud root.
+    #[cfg(not(test))]
+    pub(in crate::app) fn recover_rented_builder(&mut self, ctx: &egui::Context) {
+        let builder = &mut self.cloud_prototype.production.setup_builder;
+        if builder.needs_recovery() {
+            let root = horizon_core::HorizonHome::resolve().root().join("cloud");
+            builder.recover(&root, ctx);
+        }
+    }
+
     /// Syncs every setup run, starts the setups whose repository was read, and closes
     /// setup panels that no run follows.
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
