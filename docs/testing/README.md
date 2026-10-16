@@ -95,6 +95,7 @@ documents that are not yet STE.
 
 | Report | Procedure | Date |
 |---|---|---|
+| [2026-10-16-pinned-unix-ssh-attachment](reports/2026-10-16-pinned-unix-ssh-attachment.md) | [pinned-unix-ssh-attachment](procedures/pinned-unix-ssh-attachment.md) | 2026-10-16 |
 | [2026-10-16-protected-host-reader](reports/2026-10-16-protected-host-reader.md) | [protected-ingress-reader](procedures/protected-ingress-reader.md) | 2026-10-16 |
 | [2026-10-16-worker-cidr-gate](reports/2026-10-16-worker-cidr-gate.md) | [worker-exposure-gate](procedures/worker-exposure-gate.md) | 2026-10-16 |
 | [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
