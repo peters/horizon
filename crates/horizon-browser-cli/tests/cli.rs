@@ -6,17 +6,14 @@ use horizon_browser_control::manifest::provider_usage::{ProviderUsageSummary, Us
 use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
+mod support;
+use support::JOB_PROGRESS_GUARD;
+
 // Process startup and manifest persistence must leave time for the blocking action.
 const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 6;
 // A starved job can reach its deadline before it queues the blocking action; it then
 // runs again with twice the deadline, up to this one.
 const MAX_DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 8 * DEADLINE_TEST_TIMEOUT_SECONDS;
-// Polls for job progress return as soon as the job reaches the awaited state; this bound
-// only turns a hung job into a failure, so it must exceed what a healthy job can take.
-// The first launch of a freshly linked binary can take seconds on Windows while it is
-// scanned, and after a deadline every durable write may retry a blocked replace for up to
-// two seconds before the job exits.
-const JOB_PROGRESS_GUARD: Duration = Duration::from_mins(1);
 const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
@@ -1414,7 +1411,7 @@ fn cli_plan_calls_the_public_usage_tool_and_preserves_multiple_provider_results(
     let queue = UsageQueue::new(root.path().join(".horizon"));
     let deadline = Instant::now() + JOB_PROGRESS_GUARD;
     loop {
-        let requests = queue.claim("usage-host").expect("host queue");
+        let requests = support::claim_host_requests(&queue, "usage-host");
         if let Some(request) = requests.first() {
             assert!(request.provider.is_none());
             let rows = ["account-a", "account-b"]
@@ -1490,7 +1487,7 @@ fn cli_plan_discovers_provider_devices_without_a_browser_or_configured_target() 
     let queue = UsageQueue::new(root.path().join(".horizon"));
     let deadline = Instant::now() + JOB_PROGRESS_GUARD;
     loop {
-        if let Some(request) = queue.claim("catalog-host").unwrap().first() {
+        if let Some(request) = support::claim_host_requests(&queue, "catalog-host").first() {
             let query = request.catalog.as_ref().unwrap();
             assert_eq!(query.provider, "account");
             assert_eq!(query.search, "phone");

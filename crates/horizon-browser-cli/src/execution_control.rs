@@ -203,10 +203,12 @@ impl ExecutionControl {
     /// Run blocking I/O on an owned thread while still observing stop signals.
     ///
     /// [`BlockingIoMode::Bound`] observes the deadline and cancellation. After a
-    /// stop, the writer is joined for one second; a stalled join exits 124/130
-    /// instead of racing a later finalizer. [`BlockingIoMode::Required`] starts
-    /// even when a stop is already pending, then observes the same deadline,
-    /// cancellation, and bounded drain.
+    /// cancellation, the writer is joined for one second; a stalled join exits
+    /// 130 instead of racing a later finalizer. After a deadline, the writer is
+    /// joined until it finishes, so slow storage cannot drop the timed-out state
+    /// and partial report; a later cancellation bounds that join the same way.
+    /// [`BlockingIoMode::Required`] starts even when a stop is already pending,
+    /// then observes the same deadline, cancellation, and drain.
     ///
     /// # Errors
     /// Returns when the worker cannot start or panics. A completed worker
@@ -231,39 +233,39 @@ impl ExecutionControl {
             }
         };
         let stopped = self.wait(finished).await;
-        match stopped {
-            Ok(()) => join_worker(handle, worker_name, None).await,
-            Err(reason) => join_worker(handle, worker_name, Some(reason)).await,
+        let join = tokio::task::spawn_blocking(move || handle.join());
+        let joined = match stopped {
+            Ok(()) => join.await,
+            // The deadline bounds browser work, not the durable record of it: like
+            // preparation, the writer stays owned until it finishes or an interrupt
+            // arrives.
+            Err(ExecutionStopReason::DeadlineExceeded) => {
+                tokio::pin!(join);
+                tokio::select! {
+                    biased;
+                    joined = &mut join => joined,
+                    () = cancellation_requested(&mut self.cancellation) => drain_after_interrupt(join).await,
+                }
+            }
+            Err(ExecutionStopReason::Cancelled) => drain_after_interrupt(join).await,
+        };
+        match joined {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) | Err(_) => Err(BlockingIoError::Failed(format!(
+                "{worker_name} stopped without a result"
+            ))),
         }
     }
 }
 
 const BLOCKING_IO_DRAIN: Duration = Duration::from_secs(1);
 
-async fn join_worker<T: Send + 'static>(
-    handle: std::thread::JoinHandle<T>,
-    worker_name: &'static str,
-    stop: Option<ExecutionStopReason>,
-) -> Result<T, BlockingIoError> {
-    let join = tokio::task::spawn_blocking(move || handle.join());
-    if stop.is_none() {
-        return match join.await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(_)) | Err(_) => Err(BlockingIoError::Failed(format!(
-                "{worker_name} stopped without a result"
-            ))),
-        };
-    }
-    match tokio::time::timeout(BLOCKING_IO_DRAIN, join).await {
-        Ok(Ok(Ok(value))) => Ok(value),
-        Ok(_) => Err(BlockingIoError::Failed(format!(
-            "{worker_name} stopped without a result"
-        ))),
-        Err(_) => std::process::exit(match stop {
-            Some(ExecutionStopReason::DeadlineExceeded) => 124,
-            Some(ExecutionStopReason::Cancelled) | None => 130,
-        }),
-    }
+/// Give an interrupted writer one second, then exit 130 instead of racing a later
+/// finalizer.
+async fn drain_after_interrupt<T>(join: impl Future<Output = T>) -> T {
+    tokio::time::timeout(BLOCKING_IO_DRAIN, join)
+        .await
+        .unwrap_or_else(|_| std::process::exit(130))
 }
 
 /// Failure from owned blocking I/O.
@@ -349,6 +351,20 @@ mod tests {
             .wait_owned_blocking("horizon-browser-test-required", BlockingIoMode::Required, || 7)
             .await
             .expect("required I/O");
+        assert_eq!(value, 7);
+    }
+
+    #[tokio::test]
+    async fn a_deadline_keeps_required_work_that_outlasts_the_interrupt_drain() {
+        let mut control = ExecutionControl::with_timeout(Duration::ZERO);
+        // Slow storage after a deadline must delay the record, not exit the process.
+        let value = control
+            .wait_owned_blocking("horizon-browser-test-slow-required", BlockingIoMode::Required, || {
+                std::thread::sleep(BLOCKING_IO_DRAIN + Duration::from_millis(250));
+                7
+            })
+            .await
+            .expect("slow required I/O after a deadline");
         assert_eq!(value, 7);
     }
 }
