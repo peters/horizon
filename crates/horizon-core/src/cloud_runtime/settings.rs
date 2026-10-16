@@ -4,6 +4,11 @@ use horizon_cloud::Credential;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+
+/// How many Docker hosts Cloud settings saves; each reading asks all of them at once.
+/// A file edited by hand with more still loads, and a reading then reads none of them.
+pub const MAX_DOCKER_HOSTS: usize = 16;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -18,6 +23,17 @@ pub struct Settings {
     pub registry_pull_auth_id: Option<String>,
     #[serde(default)]
     pub registries: Option<super::registry::Config>,
+    /// Local image destinations scoped to a canonical checkout and named profile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_publishing: Vec<super::publishing::Override>,
+    /// Legacy in-process switch. Saved staging values no longer disable the completed flow.
+    /// Kept for lower-level callers that explicitly construct a legacy request; never stored.
+    #[serde(
+        default = "Settings::portable_image_publishing_default",
+        deserialize_with = "completed_portable_publishing",
+        skip_serializing
+    )]
+    pub portable_image_publishing: bool,
     pub cpu_flavors: Vec<String>,
     pub gpu_types: Vec<String>,
     #[serde(default)]
@@ -29,6 +45,10 @@ pub struct Settings {
     pub openai_api_key_file: Option<PathBuf>,
     #[serde(default)]
     pub anthropic_workspace_id: Option<String>,
+    /// Claude's token from `claude setup-token`, given to the worker as
+    /// `CLAUDE_CODE_OAUTH_TOKEN`; never together with the API key. Omitted until one is saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_token: Option<super::claude_token::ClaudeToken>,
     /// Explicit opt-in per local repository; never loaded from repository YAML.
     #[serde(default)]
     pub git_credentials: Vec<super::git_auth::Binding>,
@@ -41,6 +61,10 @@ pub struct Settings {
     /// until one is saved, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub docker_hosts: Vec<horizon_cloud::docker_host::Host>,
+    /// New clouds are not offered the saved Docker hosts; clouds already on one keep
+    /// working. Omitted while false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub docker_hosts_off: bool,
     /// The GitHub App of Connect GitHub. Omitted until it is connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<super::github::Settings>,
@@ -84,7 +108,18 @@ pub struct RegistryPull {
 pub fn default_agents() -> Vec<horizon_cloud::Agent> {
     vec![horizon_cloud::Agent::Codex, horizon_cloud::Agent::Claude]
 }
+fn completed_portable_publishing<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(|_| Settings::portable_image_publishing_default())
+}
+
 impl Settings {
+    pub(in crate::cloud_runtime) const fn portable_image_publishing_default() -> bool {
+        true
+    }
+
     /// # Errors
     /// Rejects missing/malformed settings and relative binding paths.
     pub fn load(path: &Path) -> Result<Self> {
@@ -93,6 +128,12 @@ impl Settings {
         value.codex_home = path.parent().map(super::codex_login::home);
         super::github::remember(value.github.is_some());
         Ok(value)
+    }
+
+    /// Whether New cloud and `cloud_offers` offer the saved Docker hosts.
+    #[must_use]
+    pub fn docker_hosts_on(&self) -> bool {
+        !self.docker_hosts.is_empty() && !self.docker_hosts_off
     }
 
     /// The machine settings narrowed to one cloud's placement, so every attempt,
@@ -129,6 +170,16 @@ impl Settings {
                 "Agent credential bindings must use absolute machine-local paths",
             ));
         }
+        if let Some(token) = &self.claude_token {
+            if !token.file.is_absolute() {
+                return Err(Error::Invalid(
+                    "Agent credential bindings must use absolute machine-local paths",
+                ));
+            }
+            if self.anthropic_api_key_file.is_some() {
+                return Err(Error::Invalid("Give Claude an API key or a setup token, not both"));
+            }
+        }
         if self.anthropic_workspace_id.as_ref().is_some_and(|id| {
             !id.starts_with("wrkspc_") || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
         }) {
@@ -139,6 +190,13 @@ impl Settings {
         }
         for binding in &self.git_credentials {
             binding.validate()?;
+        }
+        let mut scopes = std::collections::BTreeSet::new();
+        for choice in &self.image_publishing {
+            choice.validate_scope()?;
+            if !scopes.insert((&choice.repository, &choice.profile)) {
+                return Err(Error::Invalid("Keep one image destination per checkout and profile"));
+            }
         }
         let mut names = std::collections::BTreeSet::new();
         for host in &self.docker_hosts {
@@ -546,5 +604,58 @@ mod tests {
             std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644)).unwrap();
             assert!(validate_ssh_identity(file.path()).is_err());
         }
+    }
+
+    #[test]
+    fn legacy_false_does_not_disable_completed_publishing_or_rewrite_bindings_on_read() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let token = serde_json::json!({"file":root.path().join("absent-agent-token"),"saved_at":0});
+        let mut raw = serde_json::json!({
+            "runpod_key_file":root.path().join("absent-compute"),
+            "ssh_identity_file":root.path().join("absent-identity"),
+            "docker_config":root.path().join("absent-docker"),
+            "cpu_flavors":[],"gpu_types":[],"claude_token":token
+        });
+        for legacy in [Some(false), Some(true), None] {
+            raw.as_object_mut().unwrap().remove("portable_image_publishing");
+            if let Some(value) = legacy {
+                raw["portable_image_publishing"] = value.into();
+            }
+            let before = serde_json::to_vec(&raw).unwrap();
+            std::fs::write(&path, &before).unwrap();
+            let loaded = Settings::load(&path).unwrap();
+            assert!(
+                loaded.portable_image_publishing,
+                "old staging state must not disable the completed flow"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "reading never migrates machine settings in place"
+            );
+            let saved = serde_json::to_value(loaded).unwrap();
+            assert!(saved.get("portable_image_publishing").is_none());
+            assert_eq!(saved["claude_token"], raw["claude_token"]);
+            assert!(!root.path().join("absent-agent-token").exists());
+        }
+        for invalid in [serde_json::Value::Null, "false".into(), 0.into()] {
+            raw["portable_image_publishing"] = invalid;
+            let before = serde_json::to_vec(&raw).unwrap();
+            std::fs::write(&path, &before).unwrap();
+            assert!(Settings::load(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+        assert!(
+            super::super::setup::load_settings(&root.path().join("fresh"))
+                .unwrap()
+                .portable_image_publishing
+        );
+        assert!(
+            super::super::setup::Draft::load(&root.path().join("fresh-draft"))
+                .unwrap()
+                .settings
+                .portable_image_publishing
+        );
     }
 }

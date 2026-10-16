@@ -288,23 +288,89 @@ pub fn describe(container: &Container, host: &Host, spec: &WorkerSpec) -> Result
     Ok(worker)
 }
 
-/// Refuses a worker that the host's free CPU or memory cannot hold, after the other
-/// Horizon workers that run there. Disk is not checked: a Docker volume has no size.
-fn check_capacity(docker: &impl Docker, spec: &WorkerSpec) -> Result<(), CloudError> {
+/// What a host's engine gives Horizon workers now: its CPUs and memory, and what the
+/// running Horizon workers there leave free. Nothing is reserved, and disk is not
+/// measured: a Docker volume has no size of its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Capacity {
+    pub cpus: u64,
+    pub memory_bytes: u64,
+    /// In billionths of a CPU, as Docker limits containers.
+    pub free_nano_cpus: u64,
+    pub free_memory_bytes: u64,
+    /// As the engine reports it, such as `x86_64` or `aarch64`.
+    pub architecture: String,
+    pub version: String,
+}
+
+impl Capacity {
+    /// Whether a worker of `cpu` CPUs and `memory_gb` GB fits in what is free.
+    #[must_use]
+    pub fn fits(&self, cpu: u16, memory_gb: u16) -> bool {
+        u64::from(cpu) * NANO_CPUS <= self.free_nano_cpus && u64::from(memory_gb) * GIB <= self.free_memory_bytes
+    }
+
+    /// The largest worker that fits, in whole CPUs and GB.
+    #[must_use]
+    pub fn largest(&self) -> (u16, u16) {
+        let whole = |value: u64, unit: u64| u16::try_from(value / unit).unwrap_or(u16::MAX);
+        (
+            whole(self.free_nano_cpus, NANO_CPUS),
+            whole(self.free_memory_bytes, GIB),
+        )
+    }
+
+    /// What is free, such as `12.0 of 16 CPUs and 56.0 of 64.0 GB free`.
+    #[must_use]
+    pub fn free(&self) -> String {
+        format!(
+            "{} of {} CPUs and {} of {} GB free",
+            tenths(self.free_nano_cpus, NANO_CPUS),
+            self.cpus,
+            tenths(self.free_memory_bytes, GIB),
+            tenths(self.memory_bytes, GIB),
+        )
+    }
+
+    /// Whether the public worker image has a build for this architecture.
+    #[must_use]
+    pub fn native(&self) -> bool {
+        matches!(self.architecture.as_str(), "x86_64" | "amd64" | "aarch64" | "arm64")
+    }
+}
+
+/// The engine's CPUs and memory and what the running Horizon workers leave free.
+/// # Errors
+/// Refuses an engine that does not run Linux containers or is older than Docker 28,
+/// and reports Docker failures.
+pub fn capacity(docker: &impl Docker) -> Result<Capacity, CloudError> {
     let info = engine(docker)?;
     let (Some(cpus), Some(memory)) = (info["NCPU"].as_u64(), info["MemTotal"].as_u64()) else {
         return Err(CloudError::InvalidResponse);
     };
     let mut running = containers(docker, OWNER_LABEL)?;
     running.retain(|container| container.running);
-    let free_cpus = (cpus * NANO_CPUS).saturating_sub(running.iter().map(|container| container.nano_cpus).sum());
-    let free_memory = memory.saturating_sub(running.iter().map(|container| container.memory).sum());
+    let text = |key: &str| info[key].as_str().unwrap_or_default().to_owned();
+    Ok(Capacity {
+        cpus,
+        memory_bytes: memory,
+        free_nano_cpus: (cpus * NANO_CPUS).saturating_sub(running.iter().map(|container| container.nano_cpus).sum()),
+        free_memory_bytes: memory.saturating_sub(running.iter().map(|container| container.memory).sum()),
+        architecture: text("Architecture"),
+        version: text("ServerVersion"),
+    })
+}
+
+/// Refuses a worker that the host's free CPU or memory cannot hold, after the other
+/// Horizon workers that run there.
+fn check_capacity(docker: &impl Docker, spec: &WorkerSpec) -> Result<(), CloudError> {
+    let capacity = capacity(docker)?;
     let (cpu, memory_gb) = (spec.profile.cpu, spec.profile.memory_gb);
-    if u64::from(cpu) * NANO_CPUS > free_cpus || u64::from(memory_gb) * GIB > free_memory {
+    if !capacity.fits(cpu, memory_gb) {
         let text = format!(
             "the host has {} CPUs and {} GB of memory free; this cloud needs {cpu} CPUs and {memory_gb} GB",
-            tenths(free_cpus, NANO_CPUS),
-            tenths(free_memory, GIB),
+            tenths(capacity.free_nano_cpus, NANO_CPUS),
+            tenths(capacity.free_memory_bytes, GIB),
         );
         return Err(CloudError::Capacity(Reason::from_text(&text, "")));
     }
@@ -332,7 +398,8 @@ fn engine(docker: &impl Docker) -> Result<Value, CloudError> {
 
 /// Whether `version` is a stable Docker Engine 28 or later, such as `28.5.1`,
 /// `29.0.0-ce` or a distribution build such as `28.1.2+dfsg1`.
-fn private_ports(version: &str) -> bool {
+#[must_use]
+pub fn private_ports(version: &str) -> bool {
     let version = version.split_once('+').map_or(version, |(version, _build)| version);
     let (release, suffix) = version.split_once('-').unwrap_or((version, ""));
     let parts: Vec<&str> = release.split('.').collect();
@@ -623,7 +690,7 @@ pub fn delete(
     if !journal.deleting {
         record(journal, records, |next| next.deleting = true)?;
     }
-    if let Some(container) = find(docker, operation_id)? {
+    if let Some(container) = find_for_delete(docker, operation_id, operation, records)? {
         call(
             docker,
             &format!("container rm --force --volumes {}", container.id),
@@ -633,7 +700,7 @@ pub fn delete(
     if volume(docker, operation_id)? {
         call(docker, &format!("volume rm {}", volume_name(operation_id)), QUICK)?;
     }
-    if find(docker, operation_id)?.is_some() || volume(docker, operation_id)? {
+    if find_for_delete(docker, operation_id, operation, records)?.is_some() || volume(docker, operation_id)? {
         return Err(CloudError::Invalid(
             "The Docker host did not remove the worker and its volume",
         ));
@@ -644,4 +711,19 @@ pub fn delete(
     };
     save(operation, CreateState::Terminated { worker_id }, records)?;
     record(journal, records, |next| *next = Journal::default())
+}
+
+fn find_for_delete(
+    docker: &impl Docker,
+    operation_id: &str,
+    operation: &mut CreateState,
+    records: &mut impl Records,
+) -> Result<Option<Container>, CloudError> {
+    let found = find(docker, operation_id)?;
+    // Every positive observation, including final verification, retains worker
+    // uncertainty before removal or an error can leave the next retry with absence.
+    if found.is_some() && *operation == CreateState::Prepared {
+        save(operation, CreateState::Requested, records)?;
+    }
+    Ok(found)
 }

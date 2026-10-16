@@ -172,3 +172,22 @@ impl ApiCredential {
             .map_err(|_| Error::InvalidApiCredential)
     }
 }
+
+pub(super) enum HttpMaterial<'a> {
+    Personal(&'a str),
+    OAuth { client_id: &'a str, client_secret: &'a str },
+}
+impl ApiCredential {
+    pub(super) fn http_material(&self) -> HttpMaterial<'_> {
+        match &self.0 {
+            Secret::PersonalToken { token } => HttpMaterial::Personal(token),
+            Secret::OAuth {
+                client_id,
+                client_secret,
+            } => HttpMaterial::OAuth {
+                client_id,
+                client_secret,
+            },
+        }
+    }
+}

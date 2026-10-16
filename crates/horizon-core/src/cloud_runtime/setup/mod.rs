@@ -1,7 +1,10 @@
 //! First-use machine settings. Secret values never enter repository configuration.
 mod credentials;
 mod hetzner;
+mod publishing;
 mod storage;
+pub(in crate::cloud_runtime) use publishing::save_enabled_image_destination;
+pub use publishing::save_image_destination;
 #[cfg(test)]
 mod tests;
 
@@ -19,6 +22,9 @@ use zeroize::Zeroizing;
 pub enum Authentication {
     ApiKey,
     Subscription,
+    /// Claude only: a token from `claude setup-token`, which lasts a year and needs no
+    /// sign-in on the worker.
+    Token,
 }
 
 /// Editable credentials are deliberately neither serializable nor debug-printable.
@@ -32,6 +38,8 @@ pub struct Draft {
     pub runpod_key: Zeroizing<String>,
     pub openai_key: Zeroizing<String>,
     pub anthropic_key: Zeroizing<String>,
+    /// A new Claude setup token, typed while `anthropic_auth` is `Token`.
+    pub claude_token: Zeroizing<String>,
     /// `Subscription` signs Codex in with this computer's `ChatGPT` login, Claude in its own
     /// terminal on the worker.
     pub openai_auth: Authentication,
@@ -41,6 +49,34 @@ pub struct Draft {
     pub registries: Vec<super::registry::draft::Draft>,
     /// Optional: Hetzner as a second provider for CPU clouds.
     pub hetzner: HetznerDraft,
+}
+
+struct LocalSettings {
+    original: Option<Vec<u8>>,
+    settings: Settings,
+}
+
+/// Reads machine-local settings, or the standard defaults before first save.
+/// Unlike the editing draft, this reads no account or credential store.
+/// # Errors
+/// Invalid existing settings or a local file read failure.
+pub fn load_settings(root: &Path) -> Result<Settings> {
+    read_settings(root).map(|local| local.settings)
+}
+
+fn read_settings(root: &Path) -> Result<LocalSettings> {
+    let path = root.join("settings.json");
+    let original = match std::fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let settings = original.as_ref().map_or_else(
+        || Ok(defaults(root)),
+        |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
+    )?;
+    settings.validate()?;
+    Ok(LocalSettings { original, settings })
 }
 
 impl Draft {
@@ -58,23 +94,17 @@ impl Draft {
     /// # Errors
     /// Existing malformed settings must be repaired, never silently replaced.
     pub fn load(root: &Path) -> Result<Self> {
-        let path = root.join("settings.json");
-        let original = match std::fs::read(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
-        let settings = original.as_ref().map_or_else(
-            || Ok(defaults(root)),
-            |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
-        )?;
-        settings.validate()?;
+        let LocalSettings { original, settings } = read_settings(root)?;
         Ok(Self {
             root: root.into(),
             original,
             profile_agents: None,
             openai_auth: authentication(settings.openai_api_key_file.as_ref()),
-            anthropic_auth: authentication(settings.anthropic_api_key_file.as_ref()),
+            anthropic_auth: if settings.claude_token.is_some() {
+                Authentication::Token
+            } else {
+                authentication(settings.anthropic_api_key_file.as_ref())
+            },
             chatgpt: super::codex_login::account(&super::codex_login::home(root)).unwrap_or_else(|error| {
                 tracing::warn!(%error, "could not read the ChatGPT login for Codex");
                 None
@@ -92,6 +122,7 @@ impl Draft {
             runpod_key: Zeroizing::new(String::new()),
             openai_key: Zeroizing::new(String::new()),
             anthropic_key: Zeroizing::new(String::new()),
+            claude_token: Zeroizing::new(String::new()),
         })
     }
 
@@ -114,17 +145,21 @@ impl Draft {
     }
 
     /// # Errors
-    /// Requires one compute provider, `RunPod` or Hetzner, and credentials only for
-    /// selected API-authenticated agents.
+    /// Requires one compute provider, `RunPod`, Hetzner or a Docker host, and credentials
+    /// only for selected API-authenticated agents.
     pub fn validate(&self) -> Result<()> {
         self.settings.validate()?;
         for registry in &self.registries {
             registry.validate()?;
         }
+        if self.settings.docker_hosts.len() > super::settings::MAX_DOCKER_HOSTS {
+            return Err(Error::Invalid("Save at most 16 Docker hosts"));
+        }
         let runpod = !self.runpod_key.is_empty() || self.settings.runpod_configured();
-        if !runpod && !self.hetzner.enabled {
+        // Saved hosts count while they are switched off, so the switch itself can be saved.
+        if !runpod && !self.hetzner.enabled && self.settings.docker_hosts.is_empty() {
             return Err(Error::Invalid(
-                "Enter your RunPod API key, or turn on Hetzner and enter its token",
+                "Enter your RunPod API key, turn on Hetzner and enter its token, or add a Docker host",
             ));
         }
         if runpod {
@@ -154,9 +189,20 @@ impl Draft {
                 self.settings.anthropic_api_key_file.as_ref(),
             ),
         ] {
-            if !value.is_empty() || (self.selected_agents().contains(&agent) && mode == Authentication::ApiKey) {
+            // A key typed under another choice is not saved, so it is not checked either.
+            if mode == Authentication::ApiKey && (!value.is_empty() || self.selected_agents().contains(&agent)) {
                 validate_input(value, saved)?;
             }
+        }
+        // A token typed under another choice is not saved, so it is not checked either.
+        if self.anthropic_auth == Authentication::Token
+            && (!self.claude_token.is_empty() || self.selected_agents().contains(&Agent::Claude))
+        {
+            let saved = self.settings.claude_token.as_ref().map(|token| &token.file);
+            validate_input(&self.claude_token, saved).map_err(|error| match error {
+                Error::Invalid(_) => Error::Invalid("Paste the token that claude setup-token printed, on one line"),
+                error => error,
+            })?;
         }
         Ok(())
     }
@@ -185,11 +231,19 @@ impl Draft {
                 "anthropic",
             ),
         ] {
-            if mode == Authentication::Subscription {
+            if mode != Authentication::ApiKey {
                 *binding = None;
             } else if !value.trim().is_empty() {
                 *binding = Some(write.secret(name, value)?);
             }
+        }
+        if self.anthropic_auth != Authentication::Token {
+            self.settings.claude_token = None;
+        } else if !self.claude_token.trim().is_empty() {
+            self.settings.claude_token = Some(super::claude_token::ClaudeToken {
+                file: write.secret("claude-token", &self.claude_token)?,
+                saved_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+            });
         }
         self.settings.hetzner = self.hetzner.save(self.settings.hetzner.as_ref(), &mut write)?;
         if !self.settings.ssh_identity_file.exists() && self.settings.ssh_identity_file == default_identity(&self.root)
@@ -335,14 +389,18 @@ fn defaults(root: &Path) -> Settings {
         docker_config: root.join("docker"),
         docker_host: None,
         docker_hosts: Vec::new(),
+        docker_hosts_off: false,
         registry_pull_auth_id: None,
         registries: None,
+        image_publishing: Vec::new(),
+        portable_image_publishing: Settings::portable_image_publishing_default(),
         cpu_flavors: vec!["cpu3c".into()],
         gpu_types: vec!["NVIDIA RTX A6000".into()],
         data_centers: Vec::new(),
         anthropic_api_key_file: None,
         openai_api_key_file: None,
         anthropic_workspace_id: None,
+        claude_token: None,
         git_credentials: Vec::new(),
         browserstack_credentials: Vec::new(),
         hetzner: None,

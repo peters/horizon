@@ -27,7 +27,9 @@ the decision.
   `horizon-worker-github-git`, `horizon-worker-github-http`,
   `horizon-worker-github-api`, `horizon-worker-github-api-rest`,
   `horizon-worker-github-graphql`, `horizon-worker-github-graphql-policy`,
-  `horizon-worker-github-tasks`, `horizon-worker-github-mcp` and
+  `horizon-worker-github-tasks`, `horizon-worker-github-mcp`,
+  `horizon-worker-github-upkeep`, `horizon-worker-github-upkeep-loop`,
+  `horizon-worker-github-api-upkeep`, `horizon-worker-github-git-upkeep` and
   `horizon-worker-gh-repository`,
   `horizon-worker-git-auth`, `horizon-worker-supervise` or the token chain part
   of `horizon-worker-check`.
@@ -843,7 +845,125 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
    Result: The output shows a line that starts with `remote: Horizon:
    example/secret has no GitHub grant on this worker` and a nonzero exit. The task grant ended with its session.
 
-### 6.13 C8: Clear
+### 6.13 R5: The Upkeep of the worker
+
+1. Give the worker an Upkeep for `example/secret`, with the loop session
+   `upkeep-smoke`:
+
+   ```bash
+   printf '%s' '{"version":1,"session":"upkeep-smoke","repositories":["example/secret"],"bots":[],"workflows":[]}' \
+       | docker exec -i <c> horizon-worker-github upkeep
+   docker exec <c> horizon-worker-github requests
+   ```
+
+   Result: `upkeep` shows
+   `{"session":"upkeep-smoke","repositories":["example/secret"],"bots":[],"workflows":[]}`.
+   The requests JSON shows the same value as `"upkeep"`.
+
+2. Try to read the policy as the agent user. Then examine its owner and mode:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent cat /workspace/.horizon-root/github/upkeep.json; echo "exit=$?"
+   docker exec <c> stat -c '%U %a %n' /workspace/.horizon-root/github/upkeep.json
+   ```
+
+   Result: The first command shows `Permission denied` and a nonzero exit. The
+   second shows `root 600`.
+
+3. Mark the loop session, and write its tool inputs. The first asks for the
+   repository of the Upkeep, the second for a repository that is not in it:
+
+   ```bash
+   docker exec <c> mkdir -p /workspace/sessions/upkeep-smoke
+   docker exec <c> sh -c 'echo codex > /workspace/sessions/upkeep-smoke/agent'
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_access","arguments":{"repository":"example/secret","access":"read","reason":"Read the update"}}}' \
+       | docker exec -i <c> tee /workspace/home/loop-in.jsonl
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_access","arguments":{"repository":"example/public","access":"push","reason":"Push the fix"}}}' \
+       | docker exec -i <c> tee /workspace/home/loop-other.jsonl
+   docker exec <c> chown 10001:10001 /workspace/home/loop-in.jsonl /workspace/home/loop-other.jsonl
+   ```
+
+   Result: The commands exit with status 0.
+
+4. Start the session. It asks for `example/secret` and reads it with Git. Nobody
+   decides the request. Then the same process waits for the file
+   `/workspace/home/loop-again`, and reads the repository again:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-session -d -s upkeep-smoke \
+       'horizon-worker-github mcp < /workspace/home/loop-in.jsonl > /workspace/home/loop-out.jsonl; git ls-remote https://github.com/example/secret.git > /workspace/home/loop-git.txt 2>&1; echo "exit=$?" >> /workspace/home/loop-git.txt; while [ ! -e /workspace/home/loop-again ]; do sleep 1; done; git ls-remote https://github.com/example/secret.git > /workspace/home/loop-after.txt 2>&1; echo "exit=$?" >> /workspace/home/loop-after.txt; sleep 600'
+   ```
+
+   Result: The command exits with status 0.
+
+5. Wait 30 seconds. Then examine the outputs of the session and the requests:
+
+   ```bash
+   docker exec <c> cat /workspace/home/loop-out.jsonl /workspace/home/loop-git.txt
+   docker exec <c> horizon-worker-github requests
+   ```
+
+   Result: The tool output shows `Allowed for this task`. The Git output shows
+   `exit=0` and no `Horizon:` line. The requests JSON shows no request for
+   `example/secret`. The worker allowed it by itself.
+
+6. Ask for the repository that is not in the Upkeep, from a new window of the
+   session. The tool waits for a decision, so stop it after 5 seconds:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud new-window -t upkeep-smoke \
+       'timeout 5 horizon-worker-github mcp < /workspace/home/loop-other.jsonl; sleep 60'
+   docker exec <c> sh -c 'sleep 10; horizon-worker-github requests'
+   ```
+
+   Result: The requests JSON shows one request for `example/public` with
+   `"session":"upkeep-smoke"`. It stays pending and waits for the person.
+
+7. Give the worker a new list without `example/secret`. Then let the process of
+   step 4 read the repository again. A task grant reaches only the processes of
+   the tmux pane that asked, so a new window cannot show this:
+
+   ```bash
+   printf '%s' '{"version":1,"session":"upkeep-smoke","repositories":["example/project"],"bots":[],"workflows":[]}' \
+       | docker exec -i <c> horizon-worker-github upkeep
+   docker exec <c> horizon-worker-tailnet agent touch /workspace/home/loop-again
+   docker exec <c> sh -c 'sleep 5; cat /workspace/home/loop-after.txt'
+   ```
+
+   Result: The output shows a line that starts with `remote: Horizon:
+   example/secret has no GitHub grant on this worker` and a nonzero exit. The new
+   list ended the grant of the loop.
+
+8. Write a synthetic loop that records its start. Then end the session:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent mkdir -p /workspace/home/upkeep
+   printf '%s\n' '#!/bin/bash' 'echo "started $1 as $(id -u)" > /workspace/home/upkeep/started.txt' 'sleep 3600' \
+       | docker exec -i <c> horizon-worker-tailnet agent tee /workspace/home/upkeep/run.sh
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud kill-session -t upkeep-smoke
+   ```
+
+   Result: The commands exit with status 0.
+
+9. Do the steps 2 and 3 of task C6 again. Then wait 10 seconds, and examine the
+   loop:
+
+   ```bash
+   docker exec <c> horizon-worker-tailnet agent tmux -L horizon-cloud has-session -t upkeep-smoke; echo "exit=$?"
+   docker exec <c> cat /workspace/home/upkeep/started.txt
+   docker exec <c> stat -c '%U %a' /run/horizon-worker/github-upkeep-policy
+   ```
+
+   Result: The first command shows `exit=0`. The file shows
+   `started upkeep-smoke as 10001`. The marker shows `root 644`. The worker wrote
+   the marker again and started the loop after the container restart, as the
+   agent user.
+
+10. Do step 2 of task C2 again, because the new container has no fake GitHub.
+
+    Result: The commands exit with status 0.
+
+### 6.14 C8: Clear
 
 1. Remove the chain:
 
@@ -862,7 +982,18 @@ is the volume name `chain-smoke-<nonce>`. `<nonce>` is a random value of this ru
 
    Result: `services.json` still contains `github`. The worker did not stop.
 
-### 6.14 G1: Real GitHub refresh
+3. Examine the policy of task R5:
+
+   ```bash
+   docker exec <c> sh -c 'ls /workspace/.horizon-root/github/upkeep.json /run/horizon-github/upkeep.json; cat /run/horizon-worker/github-upkeep-policy'
+   docker exec <c> horizon-worker-github requests
+   ```
+
+   Result: `ls` shows `No such file or directory` for both copies. The marker
+   shows `removed`: it names no policy, so the strictest one holds. The requests
+   JSON shows `"upkeep":null`. `clear` also removed the Upkeep policy of the worker.
+
+### 6.15 G1: Real GitHub refresh
 
 Do this lane in a new container without `HORIZON_WORKER_GITHUB_TEST_URL`. Do
 the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
@@ -1012,6 +1143,12 @@ the steps 1 and 2 of task C1 without that variable, and step 1 of task C2.
   only the session that asked, with Git and `gh`, and ends with that session.
 - A decision fails, and the request stays pending, when GitHub does not show the
   repository.
+- With an Upkeep, the worker allows the loop's request for a repository of the
+  Upkeep by itself, for that session only. A request for another repository waits
+  for the person. A new list ends the loop's access to a repository that it does
+  not have. The agent user cannot read the policy. After the container is made
+  again, the worker writes the marker again and starts the loop as the agent
+  user. `clear` removes the policy, and the strictest policy then holds.
 - In lane G, the real refresh works and GitHub refuses the old refresh token.
 
 ## 8. Cleanup

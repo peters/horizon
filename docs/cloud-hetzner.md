@@ -144,28 +144,18 @@ Hetzner off requires a RunPod key again.
 
 ## Idle stop
 
-A Hetzner worker cannot stop its own billing: a powered-off server is still
-billed, and deleting it needs the project-wide token, which never leaves this
-computer. So with `idle_stop_minutes` (10 to 1440) set, Horizon stops the cloud
-instead. The worker's idle watcher counts activity as it does on RunPod (agent
-terminal output, or the container averaging half a CPU core) and records how
-long the worker has been idle; while the cloud is ready, Horizon reads that
-record over SSH every two minutes and, once the worker has been idle for the
-whole period, stops the cloud exactly as **Stop** does: the server is released
-and the volume kept. The card then shows **Stopped after 30 idle minutes** (for
-a 30-minute period), and **Resume worker** creates a new server on the same
-volume. Nothing resumes it automatically.
-Choosing **Reconnect cloud** during the few seconds the stop takes waits for it
-to finish and then shows the cloud stopped, or offers **Reconcile stop** when the
-stop did not finish, rather than reporting that another operation holds the cloud.
+Horizon does not stop an idle Hetzner cloud, and `idle_stop_minutes` has no
+effect. A Hetzner worker cannot stop its own billing: a powered-off
+server is still billed, and deleting it needs the project-wide token, which never
+leaves this computer. Stop a cloud you no longer use with **Stop** on its card.
 
-This works only while Horizon is running and the cloud's card is connected. A
-cloud left running while this computer is off or asleep keeps its server and is
-billed until Horizon runs again or someone stops it. `cloud_deploy idle-check
-SETTINGS STATE_ROOT` runs one check from a script. Agents on a Hetzner worker
-cannot stop it with `horizon-worker-stop`. The worker image must report
-`horizon-idle-report-contract=1`; rebuild older images from the current worker
-bootstrap.
+An agent on the worker can still stop the cloud when its task is done, with
+`stop_this_worker` or `horizon-worker-stop --reason`. The worker records the
+request, and Horizon reads it every 30 seconds while the cloud is ready and stops
+the cloud as **Stop** does: the server is released and the volume kept, and the card
+shows **Stopped by** the agent with its reason. This works only while Horizon runs;
+a request that Horizon does not take within ten minutes lapses. See
+[the agent stop](cloud-workspaces.md) in the cloud workspaces guide.
 
 ## Rebuilding the image
 
@@ -181,7 +171,7 @@ so Horizon does not switch the server in place:
    reconnects. The reconnect creates a new server on the rebuilt image, attaches
    the same volume and relaunches the sessions. The server gets a new address.
    When the rebuild changes the cloud's settings, the same save records the new
-   profile, and the new server gets the new capabilities and idle stop.
+   profile, and the new server gets the new capabilities.
 
 Every step is recorded first, so after an interruption **Continue rebuild**
 finishes the release and starts the new server. **Cancel rebuild** leaves the

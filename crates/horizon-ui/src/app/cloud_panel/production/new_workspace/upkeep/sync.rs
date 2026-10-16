@@ -17,11 +17,11 @@ use horizon_core::cloud_runtime::{
     settings::Settings,
     ssh::Connection,
 };
-use horizon_core::upkeep::worker::{self, Config, Signals};
+use horizon_core::upkeep::worker::{self, CompanionAsk, Config, Signals};
 use horizon_core::{PanelKind, PanelOptions};
 
-use super::super::super::{HorizonApp, Stage};
-use crate::app::upkeep::{Answer, Exchanged, Saved};
+use super::super::super::{HorizonApp, Stage, companions::Seen};
+use crate::app::upkeep::{Answer, Exchanged, Saved, Sync};
 
 /// How often a ready Upkeep cloud's worker is asked for its state.
 const POLL: Duration = Duration::from_secs(30);
@@ -39,6 +39,7 @@ impl HorizonApp {
         }
         let Some(saved) = self.saved_upkeeps(ctx) else { return };
         let now = Instant::now();
+        let mut companions = Vec::new();
         for (cloud_id, config) in saved.iter() {
             let Some(index) = self
                 .cloud_prototype
@@ -49,45 +50,25 @@ impl HorizonApp {
             else {
                 continue;
             };
+            let answers = self.upkeep_companion_answers(cloud_id);
             let sync = match self.upkeep.syncs.get_mut(cloud_id) {
                 Some(sync) => sync,
                 None => self.upkeep.syncs.entry(cloud_id.clone()).or_default(),
             };
-            let mut answered = false;
-            if let Some(rx) = &sync.inflight {
-                match rx.try_recv() {
-                    Ok((allowed, answer)) => {
-                        sync.inflight = None;
-                        answered = true;
-                        sync.allowed.extend(allowed);
-                        let excess = sync.allowed.len().saturating_sub(ALLOWED_KEPT);
-                        sync.allowed.drain(..excess);
-                        match answer {
-                            Ok(answer) => {
-                                sync.marker_left = answer.marker_left;
-                                sync.last = answer;
-                            }
-                            Err(error) => {
-                                tracing::warn!(cloud = %cloud_id, %error, "the Upkeep exchange failed");
-                                requeue(&mut sync.signals, sync.sent);
-                                sync.last = Answer::default();
-                            }
-                        }
-                        // A run that just started is polled at its own pace from now on.
-                        if sync.last.running {
-                            let soon = now + POLL_RUNNING;
-                            sync.next = Some(sync.next.map_or(soon, |next| next.min(soon)));
-                        }
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        sync.inflight = None;
-                        requeue(&mut sync.signals, sync.sent);
-                    }
-                    Err(TryRecvError::Empty) => continue,
+            let answered = match receive(sync, cloud_id, now) {
+                Received::Waiting => continue,
+                Received::Nothing => false,
+                Received::Failed => true,
+                Received::Answer(asks) => {
+                    let running = sync.last.running;
+                    companions.push((cloud_id.clone(), Seen::Answer { asks, running }));
+                    true
                 }
-            }
+            };
             let group = &self.cloud_prototype.groups.0[index];
+            // An Upkeep cloud that stays not ready runs nothing: what its runs started stops.
             let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&group.issue) else {
+                companions.push((cloud_id.clone(), Seen::NotReady));
                 continue;
             };
             // The card never offers a request that this Upkeep allowed, also when the card's
@@ -105,8 +86,10 @@ impl HorizonApp {
                 .as_ref()
                 .filter(|state| runtime.stage == Some(Stage::Ready) && state.worker.is_some())
             else {
+                companions.push((cloud_id.clone(), Seen::NotReady));
                 continue;
             };
+            companions.push((cloud_id.clone(), Seen::Ready));
             // Tried once per exchange, and not while a preparation holds the cloud record, so
             // a refused attach is tried again with a later exchange.
             let show = answered && sync.last.settled && !sync.agent_shown && runtime.preparation.is_none();
@@ -124,7 +107,7 @@ impl HorizonApp {
                 let (cloud_id, state) = (cloud_id.clone(), state.clone());
                 let marker_left = sync.marker_left;
                 std::thread::spawn(move || {
-                    let exchanged = exchange(&root, &cloud_id, &revision, &state, signals, marker_left);
+                    let exchanged = exchange(&root, &cloud_id, &revision, &state, (signals, &answers), marker_left);
                     let _ = tx.send(exchanged);
                     repaint.request_repaint();
                 });
@@ -136,6 +119,9 @@ impl HorizonApp {
                     sync.agent_shown = shown;
                 }
             }
+        }
+        for (cloud_id, seen) in companions {
+            self.run_upkeep_companions(&cloud_id, seen, ctx);
         }
     }
 
@@ -248,6 +234,61 @@ impl HorizonApp {
     }
 }
 
+/// What [`receive`] found for one Upkeep.
+enum Received {
+    /// Its exchange still runs.
+    Waiting,
+    /// No exchange answered: none ran, or its thread ended without an answer.
+    Nothing,
+    /// An exchange answered, with the companion requests it read.
+    Answer(Vec<CompanionAsk>),
+    /// An exchange ended with an error.
+    Failed,
+}
+
+/// Takes the answer of the exchange under way of one Upkeep.
+fn receive(sync: &mut Sync, cloud_id: &str, now: Instant) -> Received {
+    let Some(rx) = &sync.inflight else {
+        return Received::Nothing;
+    };
+    match rx.try_recv() {
+        Ok((allowed, answer)) => {
+            sync.inflight = None;
+            sync.allowed.extend(allowed);
+            let excess = sync.allowed.len().saturating_sub(ALLOWED_KEPT);
+            sync.allowed.drain(..excess);
+            // A failed exchange tells nothing about the run, so it never stops a companion.
+            let received = match answer {
+                Ok((answer, asks)) => {
+                    // A Run now that the exchange held back waits for the next one.
+                    requeue(&mut sync.signals, held_back(sync.sent, answer.run_held));
+                    sync.marker_left = answer.marker_left;
+                    sync.last = answer;
+                    Received::Answer(asks)
+                }
+                Err(error) => {
+                    tracing::warn!(cloud = %cloud_id, %error, "the Upkeep exchange failed");
+                    requeue(&mut sync.signals, sync.sent);
+                    sync.last = Answer::default();
+                    Received::Failed
+                }
+            };
+            // A run that just started is polled at its own pace from now on.
+            if sync.last.running {
+                let soon = now + POLL_RUNNING;
+                sync.next = Some(sync.next.map_or(soon, |next| next.min(soon)));
+            }
+            received
+        }
+        Err(TryRecvError::Disconnected) => {
+            sync.inflight = None;
+            requeue(&mut sync.signals, sync.sent);
+            Received::Nothing
+        }
+        Err(TryRecvError::Empty) => Received::Waiting,
+    }
+}
+
 /// One exchange: allows the loop's own GitHub access requests first, since its tool call
 /// waits for them only about a minute, then installs or repairs the loop, applies the
 /// board's signals, and writes the board's status document.
@@ -260,7 +301,7 @@ fn exchange(
     cloud_id: &str,
     revision: &str,
     state: &cloud_runtime::state::Deployment,
-    signals: Signals,
+    (signals, companions): (Signals, &serde_json::Map<String, serde_json::Value>),
     marker_left: bool,
 ) -> Exchanged {
     let connection = (|| -> Result<Connection, String> {
@@ -298,9 +339,38 @@ fn exchange(
         emit: &|_| {},
         secrets: Vec::new(),
     };
+    // The policy goes first: the loop that the exchange keeps running starts no agent on a
+    // worker without it. When the worker does not take it, the exchange still goes, so the
+    // worker gets the loop that checks for it, but a Run now waits for an exchange that sets
+    // it: it is not spent on a run that starts no agent.
+    let held = match worker::policy::send(&connection, &runner, cloud_id, &config) {
+        Ok(()) => None,
+        Err(error) => {
+            tracing::warn!(cloud = %cloud_id, %error, "the worker did not take the Upkeep policy of its GitHub access");
+            signals.run_now.then_some(())
+        }
+    };
+    let delivered = if held.is_some() {
+        Signals {
+            run_now: false,
+            run_token: None,
+            ..signals
+        }
+    } else {
+        signals
+    };
     let allowed = allow_chosen(&connection, &runner, cloud_id, &config);
-    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, signals)
-        .map(|answer| learned(cloud_id, &config, signals, marker_left, &answer))
+    let answer = worker::exchange(&connection, &runner, cloud_id, revision, &config, delivered, companions)
+        .map(|answer| {
+            let waits = still_held(held.is_some(), answer.paused);
+            // A spent Run now counts as delivered, so its first-run marker goes too.
+            let counted = if held.is_some() && !waits { signals } else { delivered };
+            let learned = Answer {
+                run_held: waits,
+                ..learned(cloud_id, &config, counted, marker_left, &answer)
+            };
+            (learned, answer.companions)
+        })
         .map_err(|error| error.to_string());
     (allowed, answer)
 }
@@ -327,6 +397,7 @@ fn learned(cloud_id: &str, config: &Config, signals: Signals, marker_left: bool,
         settled: answer.loop_running && answer.settled,
         running: answer.running(),
         marker_left,
+        run_held: false,
     }
 }
 
@@ -362,6 +433,21 @@ fn allow_chosen(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, co
         }
     }
     applied
+}
+
+/// Whether a Run now that the policy held back still waits. A paused worker drops a Run
+/// now, as it would have dropped this one, so a Resume never starts it later.
+fn still_held(held: bool, paused: bool) -> bool {
+    held && !paused
+}
+
+/// The Run now of `sent` when an exchange held it back, else nothing.
+fn held_back(sent: Signals, held: bool) -> Signals {
+    if held {
+        Signals { paused: None, ..sent }
+    } else {
+        Signals::default()
+    }
 }
 
 /// Puts back the signals of a failed exchange: the worker may not have them. One the board
@@ -436,6 +522,61 @@ mod tests {
             },
         );
         assert_eq!(pending.paused, Some(false), "the later choice of the board wins");
+    }
+
+    #[test]
+    fn a_run_now_held_back_goes_again_and_a_delivered_pause_does_not() {
+        let sent = Signals {
+            run_now: true,
+            paused: Some(true),
+            ..Signals::default()
+        }
+        .with_run_token();
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, true));
+        assert_eq!(
+            (pending.run_now, pending.run_token, pending.paused),
+            (true, sent.run_token, None)
+        );
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, false));
+        assert_eq!(pending, Signals::default());
+    }
+
+    #[test]
+    fn a_paused_worker_spends_a_held_run_now_so_a_resume_does_not_start_it() {
+        let sent = Signals {
+            run_now: true,
+            paused: Some(true),
+            ..Signals::default()
+        }
+        .with_run_token();
+        // The policy failed and the worker reports the pause: nothing waits for a Resume.
+        let mut pending = Signals::default();
+        requeue(&mut pending, held_back(sent, still_held(true, true)));
+        pending.paused = Some(false);
+        assert!(!pending.run_now && pending.run_token.is_none());
+        assert!(still_held(true, false) && !still_held(false, false));
+    }
+
+    #[test]
+    fn a_failed_exchange_never_reads_as_a_finished_run() {
+        let mut sync = Sync::default();
+        assert!(matches!(receive(&mut sync, "c1", Instant::now()), Received::Nothing));
+        let (tx, rx) = channel();
+        sync.inflight = Some(rx);
+        assert!(matches!(receive(&mut sync, "c1", Instant::now()), Received::Waiting));
+        tx.send((Vec::new(), Err("unreachable".into()))).unwrap();
+        assert!(matches!(receive(&mut sync, "c1", Instant::now()), Received::Failed));
+        let (tx, rx) = channel();
+        sync.inflight = Some(rx);
+        let answer = Answer {
+            running: true,
+            ..Answer::default()
+        };
+        tx.send((Vec::new(), Ok((answer, Vec::new())))).unwrap();
+        assert!(matches!(receive(&mut sync, "c1", Instant::now()), Received::Answer(_)));
+        assert!(sync.last.running && sync.next.is_some());
     }
 
     #[test]

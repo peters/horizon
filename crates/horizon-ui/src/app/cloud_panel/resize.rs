@@ -287,6 +287,7 @@ mod tests {
         .unwrap();
         group.environment.id = "slot-ui-fixture".into();
         group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+            publishing_selection: None,
             deployment_started: true,
             id: "slot-ui-fixture".into(),
             revision: "a".repeat(40),
@@ -350,6 +351,7 @@ mod tests {
             .unwrap();
             group.environment.id = "slot-drag-fixture".into();
             group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+                publishing_selection: None,
                 deployment_started: true,
                 id: "slot-drag-fixture".into(),
                 revision: "a".repeat(40),

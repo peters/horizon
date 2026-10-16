@@ -11,13 +11,15 @@ import subprocess
 
 WORKER_SCRIPTS = (
     'horizon-worker-tailnet', 'horizon-worker-start', 'horizon-worker-check', 'horizon-worker-configure', 'horizon-worker-supervise',
-    'horizon-worker-idle', 'horizon-worker-stop',
+    'horizon-worker-stopd', 'horizon-worker-stop',
     'horizon-worker-run', 'horizon-worker-session', 'horizon-worker-attach', 'horizon-worker-source',
     'horizon-worker-import', 'horizon-worker-siblings', 'horizon-worker-session-env', 'horizon-worker-gpu-lock',
     'horizon-worker-git-auth', 'horizon-worker-github', 'horizon-worker-github-common', 'horizon-worker-github-agents',
     'horizon-worker-github-git', 'horizon-worker-github-http', 'horizon-worker-github-api',
     'horizon-worker-github-api-rest', 'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy',
-    'horizon-worker-github-tasks', 'horizon-worker-github-mcp', 'horizon-worker-gh-repository',
+    'horizon-worker-github-tasks', 'horizon-worker-github-mcp', 'horizon-worker-github-upkeep',
+    'horizon-worker-github-api-upkeep', 'horizon-worker-github-git-upkeep', 'horizon-worker-github-upkeep-loop',
+    'horizon-worker-gh-repository',
     'horizon-worker-browserstack',
 )
 CONTEXT_FILES = ('Dockerfile', '.dockerignore', *WORKER_SCRIPTS)

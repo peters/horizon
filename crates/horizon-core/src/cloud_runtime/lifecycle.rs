@@ -8,14 +8,16 @@ use super::{
 use horizon_cloud::WorkerStatus;
 use std::path::Path;
 
+mod agent_stop;
 mod outside;
 mod power;
-pub use outside::{IdleSample, StopCause, check_lost_worker, may_stop_outside, worker_stopped};
+pub use agent_stop::{
+    AgentStop, Requested, give_back_stop_request, read_stop_request, stop_for_agent, takes_stop_requests,
+};
+pub use outside::{check_lost_worker, may_stop_outside};
 #[cfg(all(test, unix))]
 use power::Announce;
 pub(in crate::cloud_runtime) use power::{request_resume, request_stop};
-
-pub use super::deployment::hetzner::idle::IdleCheck;
 
 #[derive(Debug)]
 pub struct ReconciledDeployment {
@@ -57,7 +59,12 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
     if !matches!(state.operation, CreateState::Prepared | CreateState::Terminated { .. }) {
         return Ok(false);
     }
-    Ok(!super::providers::retained(store, state)?)
+    if super::providers::retained(store, state)? {
+        return Ok(false);
+    }
+    #[cfg(feature = "tailnet-node-cleanup")]
+    super::tailnet::cleanup::require_complete(store, state)?;
+    Ok(true)
 }
 
 /// Whether a cloud whose record holds no deployment may be removed. A provider journal
@@ -195,18 +202,6 @@ pub(in crate::cloud_runtime) fn stop_locked(
 }
 
 /// # Errors
-/// Reads a Hetzner cloud's idle record and stops the cloud, as Stop does, once it
-/// has been idle for its whole period. A `RunPod` worker stops itself, so its record
-/// is only read: it reports `Active` even when the worker is about to stop. Any
-/// other cloud, and a worker that keeps no record, reports `NotWatched`.
-pub fn idle_check(root: &Path, settings: &Settings, cancel: &Cancellation) -> Result<IdleCheck> {
-    match outside::sample(root, settings, cancel)? {
-        IdleCheck::NotWatched => super::deployment::hetzner::idle::check(root, settings, cancel),
-        sampled => Ok(sampled),
-    }
-}
-
-/// # Errors
 /// Resumes a stopped cloud as its provider stops it (see `provider::StoppedCost`):
 /// `RunPod` resumes the existing worker only, while a Hetzner stop released its
 /// server, so the next reconnect creates a new one on the same workspace volume.
@@ -227,6 +222,8 @@ pub(in crate::cloud_runtime) fn resume_locked(
     if state.stage == Stage::Stopping {
         return Err(Error::Invalid("Reconcile the pending stop before resuming"));
     }
+    // Before the provider starts paid capacity: the reconnect after it would refuse anyway.
+    super::deployment::validate_agent_auth(settings, &state.profile.capabilities, false)?;
     super::providers::lifecycle(&state, settings).resume(store, &mut state, cancel, observe)
 }
 
@@ -247,6 +244,51 @@ mod mutation_tests;
 mod tests {
     use super::*;
     use crate::cloud_runtime::state::{OperationId, REPLACEMENT_PENDING, ReplacementImage};
+
+    #[cfg(not(feature = "tailnet-node-cleanup"))]
+    #[test]
+    fn disabled_node_cleanup_preserves_deleted_retry_and_removal_behavior() {
+        use crate::cloud_runtime::tailnet::receipt::{
+            AllocationRequestId, CaptureAttempt, DeviceId, EnrollmentProvider, TailnetId, WorkerId,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("cloud");
+        let store = Store::lock(&root).unwrap();
+        let mut state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"cloud","repository":"/synthetic","revision":"a",
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "stage":"Deleted","operation":{"state":"terminated","worker_id":"worker"},
+            "worker":null,"spec":null,"sessions":[]
+        }))
+        .unwrap();
+        let attempt = CaptureAttempt {
+            attempt_id: horizon_cloud_protocol::OperationId::generate(),
+            tailnet_id: TailnetId::new("work").unwrap(),
+            provider: EnrollmentProvider::new(horizon_cloud::provider::Kind::RunPod),
+            worker_id: WorkerId::new("worker").unwrap(),
+            allocation_request_id: AllocationRequestId::new("cloud").unwrap(),
+        };
+        state.tailnet_enrollment.arm(attempt.clone()).unwrap();
+        state
+            .tailnet_enrollment
+            .record(attempt.attempt_id, DeviceId::new("n-exact").unwrap())
+            .unwrap();
+        store.save(&state).unwrap();
+        assert!(can_remove(&store, &state).unwrap());
+        let saved = std::fs::read(root.join("deployment.json")).unwrap();
+        drop(store);
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"/synthetic/missing","ssh_identity_file":"/synthetic/missing",
+            "docker_config":"/synthetic/missing","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+        }))
+        .unwrap();
+        // Disabled cleanup preserves the original missing-spec refusal, not an API retry.
+        assert!(matches!(
+            super::super::deployment::terminate(&root, &settings, &Cancellation::default(), &|_| {}),
+            Err(Error::Invalid("No worker was requested"))
+        ));
+        assert_eq!(std::fs::read(root.join("deployment.json")).unwrap(), saved);
+    }
 
     #[test]
     fn a_hetzner_stop_is_confirmed_by_its_released_server_being_gone_without_a_worker() {
@@ -527,5 +569,41 @@ mod tests {
         drop(store);
         let error = reconcile(&root, &settings, None, &cancel).unwrap_err().to_string();
         assert!(error.contains("identities differ"), "{error}");
+    }
+
+    #[test]
+    fn resume_refuses_a_missing_setup_token_before_the_provider_starts_the_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"runpod-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8,
+                "capabilities":{"agents":["claude"]}},
+            "stage":"Stopped","operation":{"state":"bound","worker_id":"worker1"},
+            "spec":null,"worker":null,"sessions":[],"stop_requested":true
+        }))
+        .unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        store.save(&state).unwrap();
+        drop(store);
+        let before = std::fs::read(root.path().join("deployment.json")).unwrap();
+        // The RunPod key is missing too: a resume that reached the provider would fail on it.
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":root.path().join("missing-runpod"),"ssh_identity_file":"/missing",
+            "docker_config":"/missing","cpu_flavors":[],"gpu_types":[],
+            "claude_token":{"file":root.path().join("missing-token"),"saved_at":0}
+        }))
+        .unwrap();
+        let error = resume(root.path(), &settings, &Cancellation::default()).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::AgentCredential {
+                    kind: "setup-token file",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(root.path().join("deployment.json")).unwrap(), before);
     }
 }

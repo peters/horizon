@@ -23,6 +23,7 @@ mod primary_selection;
 mod remote_hosts_overlay;
 mod screenshot;
 mod search_overlay;
+mod setup_board_widget;
 mod terminal_widget;
 #[cfg(test)]
 mod test_egui;

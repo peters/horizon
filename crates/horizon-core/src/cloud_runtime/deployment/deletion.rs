@@ -13,11 +13,29 @@ pub fn terminate(
 ) -> Result<()> {
     let store = Store::lock(root)?;
     let mut state = store.load()?.ok_or(Error::Invalid("No cloud deployment"))?;
+    #[cfg(feature = "tailnet-node-cleanup")]
+    if state.stage == Stage::Deleted
+        && (state.operation != CreateState::Prepared || !state.tailnet_enrollment.is_empty())
+    {
+        if state.tailnet_enrollment.cleanup_pending() {
+            cancel.check()?;
+        }
+        return super::super::tailnet::cleanup::retry(&store, &mut state, emit);
+    }
     if state.spec.is_none() {
         return Err(Error::Invalid("No worker was requested"));
     }
     crate::cloud_runtime::providers::lifecycle(&state, settings).delete(&store, &mut state, cancel, emit)?;
-    finish_deletion(state, &store)
+    finish_deletion(state, &store)?;
+    #[cfg(feature = "tailnet-node-cleanup")]
+    {
+        let mut state = store
+            .load()?
+            .ok_or(Error::Invalid("Deleted cloud record is unavailable"))?;
+        super::super::tailnet::cleanup::retry(&store, &mut state, emit)
+    }
+    #[cfg(not(feature = "tailnet-node-cleanup"))]
+    Ok(())
 }
 
 /// Deletes a Hetzner cloud's server, workspace volume and SSH key, each proven absent.

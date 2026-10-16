@@ -27,12 +27,14 @@ IDS = {'111': 'example/project', '222': 'example/secret'}
 
 class FakeAPI(http.server.ThreadingHTTPServer):
     """GitHub's API, uploads and content hosts on one port, told apart by the Host field.
-    Every request is recorded with its Authorization; `graphql` answers GraphQL bodies."""
+    Every request is recorded with its Authorization; `graphql` answers GraphQL bodies, and
+    `answers` the GET paths that it names."""
 
     def __init__(self):
         super().__init__(('127.0.0.1', 0), APIHandler)
         self.seen = []
         self.graphql = lambda body: {'data': {}}
+        self.answers = {}
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     @property
@@ -50,6 +52,9 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
     def do_PATCH(self):
         self.answer()
 
+    def do_PUT(self):
+        self.answer()
+
     def do_DELETE(self):
         self.answer()
 
@@ -57,6 +62,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         data = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         host, path = self.headers.get('Host'), self.path
         self.server.seen.append((self.command, host, path, self.headers.get('Authorization'), data))
+        if self.command == 'GET' and path in self.server.answers:
+            return self.reply(200, json.dumps(self.server.answers[path]).encode())
         if host == 'codeload.github.com':
             return self.reply(200, b'archive', 'application/x-gzip')
         if path == '/graphql':
@@ -237,6 +244,14 @@ class RestTests(BrokerTestCase):
                                    '+type%3Apr')[0], 200)
         self.assertEqual(self.send('GET', '/rate_limit')[0], 200)
         self.assertEqual(self.api.seen[-1][3], 'token ' + ACCESS)
+        # The global security advisories are public, in no repository, and read only.
+        for target in ('/advisories?ecosystem=pip&affects=requests%402.31.0&per_page=100',
+                       '/advisories/GHSA-9wx4-h78v-vm56'):
+            status, _, payload = self.send('GET', target)
+            self.assertEqual((status, json.loads(payload)['path']), (200, target))
+        for method, target in [('POST', '/advisories'), ('GET', '/advisories/CVE-2024-1'),
+                               ('GET', '/advisories/GHSA-9wx4-h78v-vm56/x'), ('PATCH', '/advisories/GHSA-9wx4-h78v-vm56')]:
+            self.assertEqual(self.send(method, target)[0], 403, target)
         status, _, _ = self.send('POST', '/repos/example/project/releases/7/assets?name=a.zip',
                                  host='uploads.github.com', body=b'zip')
         self.assertEqual(status, 200)

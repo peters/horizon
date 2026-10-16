@@ -34,6 +34,11 @@ pub(super) fn arm(form: &mut Production) {
     let Ok((selection, quote)) = armable(form) else {
         return;
     };
+    let Ok(confirmation) = super::publishing::start_confirmation(form) else {
+        return;
+    };
+    form.publishing.acknowledge();
+    form.launch.publishing = confirmation;
     form.launch.watch_quote = Some(quote);
     form.launch.price_rose = None;
     form.launch.watch = Some(selection);
@@ -54,6 +59,12 @@ pub(super) fn poll(form: &mut Production) {
         form.launch.price_rose = None;
         return;
     }
+    if !super::publishing::watch_ready(form) {
+        return;
+    }
+    let Some(watch) = &form.launch.watch else {
+        return;
+    };
     // Old or failed catalogs make the watch wait; only a fresh one can end it.
     let Some(fetched) = form.prices.fresh_list() else {
         return;

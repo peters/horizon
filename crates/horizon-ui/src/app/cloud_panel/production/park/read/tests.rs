@@ -50,18 +50,16 @@ fn every_parked_panel_gets_a_status_and_an_unreported_one_is_missing() {
 }
 
 #[test]
-fn a_read_that_misses_a_newly_parked_panel_does_not_count_as_new() {
+fn a_read_that_misses_a_newly_parked_panel_reads_again_at_once() {
     let mut parking = Parking::default();
-    let (started, now) = (Instant::now(), Instant::now() + Duration::from_secs(2));
-    parking.read_started = Some(started);
+    let now = Instant::now() + Duration::from_secs(2);
     let read = vec![("one".to_owned(), status("tmux-1", SessionActivity::Idle))];
     let parked = ["one".to_owned(), "new".to_owned()];
 
     parking.apply_read(Ok(read.clone()), &parked, now);
-    assert!(!parking.read_since(started), "the new panel has no status yet");
-    assert_eq!(parking.next_read, Some(now), "the next read is due at once");
+    assert_eq!(parking.next_read, Some(now), "the new panel has no status yet");
     assert_eq!(parking.statuses["one"].activity, SessionActivity::Idle);
 
     parking.apply_read(Ok(read), &parked[..1], now);
-    assert!(parking.read_since(started));
+    assert!(parking.next_read.is_some_and(|next| next > now));
 }

@@ -1,5 +1,5 @@
 use super::super::super::park::tests::{member, ready_cloud};
-use super::super::super::{Runtime, Stage, lifecycle::Action};
+use super::super::super::{Runtime, Stage};
 use super::*;
 use horizon_core::{PanelKind, PanelOptions, browser_actor};
 
@@ -52,7 +52,7 @@ fn an_agent_lists_only_the_clouds_of_its_workspace() {
     assert_eq!(clouds[0]["cloud"], "fixture");
     assert_eq!(clouds[0]["name"], "Cloud");
     assert_eq!(clouds[0]["group"], "cloud");
-    assert_eq!(clouds[0]["idle"], true);
+    assert!(clouds[0].get("idle").is_none(), "nothing offers a bulk stop: {answer}");
 
     let error = app
         .answer_cloud_list(&request("horizon:nobody", "list", None), &ctx)
@@ -75,7 +75,7 @@ fn an_agent_lists_only_the_clouds_of_its_workspace() {
     let answer = app.answer_cloud_list(&request(&stranger, "list", None), &ctx).unwrap();
     assert_eq!(answer["clouds"], json!([]));
     let error = app
-        .answer_cloud_list(&request(&stranger, "stop", Some("fixture")), &ctx)
+        .answer_cloud_list(&request(&stranger, "park", Some("fixture")), &ctx)
         .unwrap_err();
     assert!(error.starts_with("cloud_list_unknown_cloud"), "{error}");
 }
@@ -173,27 +173,26 @@ fn park_parks_an_attached_cloud_only_while_it_is_out_of_view() {
 }
 
 #[test]
-fn stop_stops_only_an_idle_cloud() {
+fn a_stop_from_an_older_agent_tool_is_refused() {
     let (_temp, mut app, actor) = cloud_with_agent();
     let ctx = egui::Context::default();
-    let stop = request(&actor, "stop", Some("fixture"));
-    runtime(&mut app).stage = Some(Stage::Provision);
-    let error = app.answer_cloud_list(&stop, &ctx).unwrap_err();
-    assert!(error.starts_with("cloud_list_not_idle"), "{error}");
+    let error = app
+        .answer_cloud_list(&request(&actor, "stop", Some("fixture")), &ctx)
+        .unwrap_err();
+    assert!(
+        error.starts_with("cloud_list_invalid_request: stop was removed"),
+        "{error}"
+    );
     assert_eq!(runtime(&mut app).operation, None);
-
-    runtime(&mut app).stage = Some(Stage::Ready);
-    assert_eq!(app.answer_cloud_list(&stop, &ctx).unwrap()["stop"], "stopping");
-    assert_eq!(runtime(&mut app).operation, Some(Action::Stop));
 }
 
 #[test]
 fn an_expired_request_or_an_ambiguous_cloud_changes_nothing() {
     let (_temp, mut app, actor) = cloud_with_agent();
     let ctx = egui::Context::default();
-    let mut stop = request(&actor, "stop", Some("fixture"));
-    stop.deadline_at_millis = manifest::now_millis() - 1;
-    let error = app.answer_cloud_list(&stop, &ctx).unwrap_err();
+    let mut park = request(&actor, "park", Some("fixture"));
+    park.deadline_at_millis = manifest::now_millis() - 1;
+    let error = app.answer_cloud_list(&park, &ctx).unwrap_err();
     assert!(error.starts_with("cloud_list_expired"), "{error}");
     let mut list = request(&actor, "list", None);
     list.deadline_at_millis = manifest::now_millis() - 1;
@@ -204,8 +203,90 @@ fn an_expired_request_or_an_ambiguous_cloud_changes_nothing() {
     copy.workspace = "elsewhere".into();
     app.cloud_prototype.groups.0.push(copy);
     let error = app
-        .answer_cloud_list(&request(&actor, "stop", Some("fixture")), &ctx)
+        .answer_cloud_list(&request(&actor, "park", Some("fixture")), &ctx)
         .unwrap_err();
     assert!(error.starts_with("cloud_list_ambiguous_cloud"), "{error}");
-    assert_eq!(runtime(&mut app).operation, None);
+    assert!(!runtime(&mut app).parking.is_parked());
+}
+
+#[test]
+fn publication_status_uses_only_the_clouds_retained_runtime_metadata() {
+    use horizon_core::cloud_runtime::{github::publish::publication::Account, publishing::Publication};
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    let publication = Publication {
+        profile: "cpu".into(),
+        requested_image: String::new(),
+        destination: serde_json::from_value(json!({
+            "repository":"ghcr.io/synthetic-user/fixture",
+            "publisher":{"kind":"git_hub","login":"synthetic-user"}
+        }))
+        .unwrap(),
+        account: Some(Account {
+            id: 17,
+            login: "synthetic-user".into(),
+        }),
+    };
+    let expected = serde_json::to_value(&publication).unwrap();
+    let destination = publication.destination.clone();
+    state.profile.image.clone_from(&destination.repository);
+    state.profile.build = Some(serde_json::from_value(json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
+    state.version = 5;
+    if let Some(spec) = &mut state.spec {
+        spec.profile = state.profile.clone();
+    }
+    state.publication = Some(Box::new(publication));
+    let ctx = egui::Context::default();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(listed["clouds"][0]["worker_image"], destination.repository);
+    assert_eq!(listed["clouds"][0]["image_publication"], expected);
+    assert_eq!(
+        listed["clouds"][0]["image_publication"]["destination"]["repository"],
+        destination.repository
+    );
+    let encoded = serde_json::to_string(&listed).unwrap();
+    assert!(!encoded.contains("secret_file"));
+    assert!(!encoded.contains("access_token"));
+    runtime(&mut app).state.as_mut().unwrap().cloud_id = "different-cloud".into();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert!(listed["clouds"][0]["worker_image"].is_null());
+    assert!(listed["clouds"][0]["image_publication"].is_null());
+    runtime(&mut app).state = None;
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert!(listed["clouds"][0]["image_publication"].is_null());
+}
+
+#[test]
+fn an_unresolved_automatic_image_is_null_and_a_retained_registry_grant_stays_opaque() {
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.profile.image.clear();
+    state.profile.build = Some(serde_json::from_value(json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
+    if let Some(spec) = &mut state.spec {
+        spec.profile = state.profile.clone();
+    }
+    let ctx = egui::Context::default();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert!(listed["clouds"][0]["worker_image"].is_null());
+    assert!(listed["clouds"][0]["image_publication"].is_null());
+
+    let binding = "a".repeat(64);
+    let expected = json!({
+        "profile":"cpu", "requested_image":"",
+        "destination":{"repository":"registry.example/team/worker",
+            "publisher":{"kind":"registry","binding":binding}}
+    });
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.version = 5;
+    state.profile.image = "registry.example/team/worker".into();
+    if let Some(spec) = &mut state.spec {
+        spec.profile = state.profile.clone();
+    }
+    state.publication = Some(Box::new(serde_json::from_value(expected.clone()).unwrap()));
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(listed["clouds"][0]["worker_image"], "registry.example/team/worker");
+    assert_eq!(listed["clouds"][0]["image_publication"], expected);
+    let encoded = serde_json::to_string(&listed).unwrap();
+    assert!(!encoded.contains("secret_file"));
+    assert!(!encoded.contains("access_token"));
 }

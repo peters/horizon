@@ -39,6 +39,7 @@ pub(super) struct State {
     /// Reads the settings again when the checkout changes.
     reread: reread::State,
     pub submitted: bool,
+    pub publishing: Option<super::creation::publishing::Confirmation>,
     pub watch: Option<cloud_runtime::prices::watch::Selection>,
     /// The hourly compute price shown when the watch started.
     pub watch_quote: Option<f64>,
@@ -47,11 +48,19 @@ pub(super) struct State {
     /// How the worker catalog is being browsed.
     pub selector: super::creation::selector::State,
     pub accounts_checked: bool,
+    accounts_edited: bool,
     ready_profiles: Vec<String>,
     /// Same-worker siblings chosen for this launch.
     pub siblings: super::creation::siblings::State,
 }
 impl State {
+    pub(super) fn invalidate_account_readiness(&mut self) {
+        self.accounts_checked = false;
+        self.ready_profiles.clear();
+        // A profile read already in flight can still return the earlier settings' readiness.
+        self.accounts_edited = true;
+    }
+
     /// Whether the person waits for settings: a read they started, not a quiet reread.
     pub fn loading(&self) -> bool {
         self.receiver.is_some() && !self.reread.quiet
@@ -111,8 +120,7 @@ impl HorizonApp {
         form.size = None;
         form.placement = Placement::default();
         form.provider = None;
-        form.creating = true;
-        form.focus_title_on_open = true;
+        form.open_creation();
         // Only New workspace marks a workspace it made; any other opening has none.
         form.new_workspace = None;
         // With no repository yet, the dialog asks where the code is instead of reading nothing.
@@ -284,9 +292,23 @@ impl HorizonApp {
             }
         }
         self.reread_cloud_profiles_on_change(ctx);
+        self.dispatch_cloud_launch(ctx);
+    }
+
+    fn dispatch_cloud_launch(&mut self, ctx: &Context) {
         let form = &mut self.cloud_prototype.production;
         if form.launch.submitted && form.pending_creation.is_none() && form.profiles.is_some() {
-            if !form.launch.accounts_checked && !form.launch.ready_profiles.contains(&form.selected_profile) {
+            if super::creation::publishing::waiting(form) {
+                return;
+            }
+            if let Some(reason) = super::creation::publishing::queued_refusal(form) {
+                form.launch.submitted = false;
+                self.cloud_prototype.error = Some(reason.into());
+                return;
+            }
+            if !form.launch.accounts_checked
+                && (form.launch.accounts_edited || !form.launch.ready_profiles.contains(&form.selected_profile))
+            {
                 form.launch.submitted = false;
                 self.open_cloud_accounts(ctx, true);
                 self.cloud_prototype.production.launch.submitted = true;
@@ -296,12 +318,14 @@ impl HorizonApp {
                 match super::creation::checks::verdict(form) {
                     super::creation::checks::Verdict::Waiting => {}
                     super::creation::checks::Verdict::Failed => form.launch.submitted = false,
-                    super::creation::checks::Verdict::Ready => {
-                        form.launch.submitted = false;
-                        if let Err(error) = self.create_production_cloud(ctx) {
+                    super::creation::checks::Verdict::Ready => match self.create_production_cloud(ctx) {
+                        Ok(()) => self.cloud_prototype.production.launch.submitted = false,
+                        Err(_) if super::creation::publishing::waiting(&self.cloud_prototype.production) => {}
+                        Err(error) => {
+                            self.cloud_prototype.production.launch.submitted = false;
                             self.cloud_prototype.error = Some(error.to_string());
                         }
-                    }
+                    },
                 }
             }
         }
@@ -386,6 +410,8 @@ fn workspace_repository(cwd: Option<&Path>) -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
+    mod publishing;
+
     use super::*;
     use crate::app::test_support::test_app;
     use horizon_core::{RuntimeState, cloud_panel::CloudConfig};
@@ -420,6 +446,7 @@ mod tests {
         );
         let cloud_id = cloud_runtime::new_id();
         group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: cloud_id.clone(),
             revision: "a".repeat(40),

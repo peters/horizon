@@ -1,4 +1,6 @@
 //! Read-only admission checks for existing Docker engines.
+mod check;
+pub mod hosts;
 mod probe;
 mod tailscale;
 #[cfg(test)]
@@ -6,6 +8,8 @@ mod tests;
 mod transport;
 
 use super::{Error, Result};
+pub use check::check;
+pub use horizon_cloud::docker_host::{Access, Capacity, Host, private_ports};
 pub use probe::{Check, CheckState, Probe, probe};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -1,4 +1,5 @@
-//! A proof built for tests, without a worker: one whose build already failed.
+//! Proofs built for tests, without a worker: one whose build already failed, and one
+//! that waits for a build slot.
 use super::{Cancellation, Phase, PhaseState, Pinned, Proof};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -37,6 +38,18 @@ impl Proof {
             worker: None,
             pinned: Pinned::default(),
             fix: Some(fix),
+            waiting: Vec::new(),
         }
+    }
+
+    /// A proof that waits for a build slot that the setups of `holders` hold.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn waiting_on(holders: &[&str]) -> Self {
+        let mut proof = Self::failed_on(super::super::access::Fix::GrantOrganization {
+            organization: String::new(),
+        });
+        proof.phases[0].1 = PhaseState::default();
+        proof.fix = None;
+        proof.waiting = holders.iter().map(|holder| (*holder).to_owned()).collect();
+        proof
     }
 }

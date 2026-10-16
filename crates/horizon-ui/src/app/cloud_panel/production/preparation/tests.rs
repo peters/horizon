@@ -37,6 +37,7 @@ fn stopped_cloud() -> (tempfile::TempDir, crate::app::HorizonApp, serde_json::Va
         "spec":null,"sessions":[],"worker":null
     });
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -55,14 +56,6 @@ fn a_record_that_does_not_answer_never_stalls_the_frame_that_deploys() {
     let ctx = egui::Context::default();
     let pipe = stalled_record(&temp.path().join("fixture"));
 
-    // The idle watch of the deployment before listens on this channel.
-    let idle = app
-        .cloud_prototype
-        .production
-        .runtimes
-        .entry(1)
-        .or_default()
-        .listen_idle();
     let started = Instant::now();
     app.start_production_deployment(1, &ctx);
     app.poll_cloud_preparations(&ctx);
@@ -82,10 +75,6 @@ fn a_record_that_does_not_answer_never_stalls_the_frame_that_deploys() {
     assert!(
         runtime.receiver.is_none(),
         "nothing deploys before the record is prepared"
-    );
-    assert!(
-        idle.send(super::super::idle::Report::Checked).is_err(),
-        "the earlier idle watch ends before it can stop the worker"
     );
 
     writer.join().unwrap();
@@ -177,6 +166,7 @@ fn a_cloud_is_not_removed_while_its_deployment_prepares() {
         },
     );
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -185,6 +175,7 @@ fn a_cloud_is_not_removed_while_its_deployment_prepares() {
 
     app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().preparation = None;
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert!(
         app.cloud_prototype.groups.0.is_empty(),
         "without it the cloud is removed"

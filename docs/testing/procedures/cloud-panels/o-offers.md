@@ -93,7 +93,7 @@ a worker below the profile minimum cannot be selected.
    Result: The command waits 25 minutes before the call.
 
    > **CAUTION:** START THE WATCHDOG BEFORE YOU PAUSE THE CANDIDATE. A paused
-   > candidate does not stop idle clouds and cannot delete clouds.
+   > candidate cannot stop or delete clouds.
 
 4. On the host, start a watchdog that continues the candidate child after 27 minutes.
 

@@ -5,7 +5,8 @@ applyTo: "crates/horizon-ui/src/app/cloud_panel/production/repository_setup.rs,c
 # Trust boundary of the setup agent
 
 This code runs **Set up from CI**. A local setup agent, Claude or Codex, writes
-`.horizon`. Horizon proves the setup with Docker on this computer, and
+`.horizon`. Horizon proves the setup with Docker on this computer, or with the
+Docker of a Docker host that the person chose under **Build on**, and
 **Use this setup** commits it. The design is in the module comments and in the
 section "Repository setup and deployment" of `docs/cloud-workspaces.md`.
 
@@ -53,6 +54,18 @@ Horizon's exit past its time limit.
   Rust git clones, are off by default. The docs state their risk. Do not report
   that risk again.
 
+## A Docker host under Build on
+
+- A Docker host is a machine that the person saved in Cloud settings. Horizon
+  reaches it with the person's own SSH configuration and keys, and keeps no
+  secret for it. The host is trusted as much as this computer's Docker.
+- The proof copies files into its containers and mounts nothing of this
+  computer (`proof/launch.rs`). On a host it sends the same copies: the bundle,
+  the committed tree, Horizon's localci, and the NuGet packages and Rust git
+  clones that the person allowed. Do not report that the host gets them.
+- The SSH forwards (`proof/remote.rs`) end with the daemon value that holds
+  them. A forwarded socket is in a private folder of this computer.
+
 ## Report
 
 - An agent-written file that makes Horizon run code, block, follow a link out
@@ -63,6 +76,10 @@ Horizon's exit past its time limit.
 - A path where **Use this setup** commits a setup that the proof did not test.
 - A proof container or an image that gets this computer's git folder, or a
   credential of the person, such as a Git or feed login.
+- A bind mount of a folder of this computer into a proof container, or a copy
+  that follows a link out of the folder it copies (`proof/launch.rs`).
+- A docker command of a proof or its cleanup that goes to another daemon than
+  the one the proof pinned, such as this computer's for a run on a Docker host.
 - Code from the repository that Horizon runs on this computer outside Docker,
   for example a build file, a Cargo step or a hook. The only exception is the
   private NuGet restore when its box is checked.

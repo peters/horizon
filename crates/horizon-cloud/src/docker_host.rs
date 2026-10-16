@@ -12,8 +12,10 @@ use crate::{CloudError, SshHost};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command};
 
-pub use command::{Docker, Engine, Failure};
-pub use worker::{Container, Journal, Records, Route, delete, describe, find, power, provision};
+pub use command::{Docker, Engine, Failure, NOT_STARTED};
+pub use worker::{
+    Capacity, Container, Journal, Records, Route, capacity, delete, describe, find, power, private_ports, provision,
+};
 
 /// The profile's `provider` value.
 pub const PROVIDER: &str = "docker-host";
@@ -179,6 +181,57 @@ impl Host {
         })
     }
 
+    /// The SSH command that forwards this host's engine socket to `local`, a socket path
+    /// of this computer in a private folder, until the command ends: Docker commands
+    /// then reach the host's engine at `unix://<local>`, as a setup proof does when it
+    /// builds on this host. None for this computer.
+    /// # Errors
+    /// As [`Host::validate`].
+    pub fn socket_forward(&self, local: &Path) -> Result<Option<Command>, CloudError> {
+        let remote = REMOTE_SOCKET.trim_start_matches("unix://");
+        self.forward(&format!("{}:{remote}", local.display()))
+    }
+
+    /// The SSH command that forwards `local`, a socket path of this computer in a private
+    /// folder, to `remote_port` on this host's loopback until the command ends, as for a
+    /// desktop that a container on the host publishes there. Only who can open that
+    /// folder reaches it, unlike a port of this computer's loopback, which another
+    /// program could take first. None for this computer.
+    /// # Errors
+    /// As [`Host::validate`].
+    pub fn port_forward(&self, local: &Path, remote_port: u16) -> Result<Option<Command>, CloudError> {
+        self.forward(&format!("{}:127.0.0.1:{remote_port}", local.display()))
+    }
+
+    /// An SSH session that runs nothing and keeps the local forward `spec` open. It ends
+    /// at once when the forward cannot be made, and replaces a socket left at its path.
+    fn forward(&self, spec: &str) -> Result<Option<Command>, CloudError> {
+        self.validate()?;
+        let address = self.address.as_deref().unwrap_or_default();
+        let options = [
+            "-N",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "StreamLocalBindUnlink=yes",
+            "-L",
+            spec,
+        ];
+        Ok(match self.access {
+            Access::ThisPc => None,
+            Access::Ssh => {
+                let mut command = Command::new("ssh");
+                command.args(SSH_OPTIONS).args(options).arg("--").arg(address);
+                Some(command)
+            }
+            Access::TailscaleSsh => {
+                let mut command = Command::new("tailscale");
+                command.args(["ssh", address]).args(SSH_OPTIONS).args(options);
+                Some(command)
+            }
+        })
+    }
+
     /// The SSH `ProxyCommand` that reaches a worker on this host's loopback, or None
     /// for this computer, whose loopback is the worker's own. OpenSSH runs it in a
     /// POSIX shell, so a Windows controller cannot use it.
@@ -197,6 +250,49 @@ impl Host {
             _ => None,
         })
     }
+}
+
+/// The saved host `name` as a `cloud_offers` offer: at no rent, the largest worker its
+/// free CPU and memory hold now. None for GPU requirements and for a host below the
+/// requested minimums or in no region; nothing is reserved.
+#[must_use]
+pub fn offer(
+    name: &str,
+    capacity: &Capacity,
+    requirements: &crate::offers::Requirements,
+) -> Option<crate::offers::Offer> {
+    let (vcpu, memory_gb) = capacity.largest();
+    if requirements.gpu
+        || requirements.region.is_some()
+        || !capacity.native()
+        || requirements.min_vcpu.is_some_and(|min| vcpu < min)
+        || requirements.min_memory_gb.is_some_and(|min| memory_gb < min)
+        || vcpu == 0
+        || memory_gb == 0
+    {
+        return None;
+    }
+    Some(crate::offers::Offer {
+        provider: PROVIDER,
+        currency: crate::provider::DOCKER_HOST.currency,
+        kind: "cpu",
+        id: name.to_owned(),
+        name: format!("Docker host {name}: {}", capacity.free()),
+        vcpu: Some(vcpu),
+        memory_gb: Some(memory_gb),
+        gpu_memory_gb: None,
+        hourly: 0.0,
+        flavors: Vec::new(),
+        estimated_total: 0.0,
+        monthly: None,
+        stopped_monthly: 0.0,
+        location: None,
+        availability: "host_capacity",
+        regions_in_stock: Vec::new(),
+        host: "own",
+        interruptible: false,
+        rentable: true,
+    })
 }
 
 /// This computer's docker: the one on `PATH`, else where Docker Desktop and Homebrew

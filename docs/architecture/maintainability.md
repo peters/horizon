@@ -594,6 +594,9 @@ need no storage: the `Journal` a caller persists for a cloud (volume, location,
 SSH key, released server, delete intent), the placement `Policy` and its fitting
 rules, the host plan, the pull-login check, the worker view of a server and the
 checks that a server and its volume hold each other where the policy allows.
+`hetzner::servers::deletion` keeps exact recorded-server deletion separate from
+server creation and power operations. It preserves the existing ownership checks,
+action waits, announcements and termination persistence.
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
 caller's `Records` before the provider request that record guards.
@@ -677,6 +680,10 @@ CPU storage is allocated. Provider wire changes never rewrite saved allocation
 identities or manufacture direct-create receipts.
 `state` defines and persists the deployment aggregate; `state::replacement` owns its
 journaled image-replacement state machine and the transition checks.
+`state::service_admission` validates retained one-device metadata without runtime
+authority. `state` and `allocation::legacy` preserve its version and original
+scope through shared reads and paired conversion. Snapshot delegation and current
+publishing preparation remain in their existing modules.
 `deployment::replacement` rebuilds a dedicated cloud's image from its recipe in the
 checkout, the latest commit with the confirmed uncommitted files, drives the journaled switch of its bound worker, settles an interrupted switch
 on reconnect and relaunches sessions afterwards. Its Git, Docker, registry, provider and
@@ -702,6 +709,26 @@ owns nonsecret sidecar/journal validation. Mutations use fresh OS-store slots an
 the shared tailnet lock. Public status returns only missing or stored kind.
 The core tailnet adapter reexports these types for later host adapters; worker
 enrollment still uses its separate private auth-key path.
+`app::tailnets::api_credentials` owns nonsecret background status snapshots from
+shared API credential storage. `app::tailnets` republishes changed Settings
+observations to the production cache before agent requests, and retains closed
+operation barriers before a fresh read. The `companions/agent/tailnets` leaf reads
+that root-scoped cache without filesystem or OS-store IO. CLI status lives in the
+focused `cloud_deploy/tailnets` leaf and uses the same nonsecret observation DTO.
+Tailnet API owner removal uses the focused `tailnets/api_credentials/removal.rs`
+exact target check and `tailnets/requests.rs` volatile owner-decision registry.
+The protocol and MCP controller leaves carry metadata only; the existing CLI
+plan runner invokes the same MCP operation. Background workers use the existing
+Store transaction lock instead of adding a second credential mutation engine.
+Credential request replies use the existing `HostIo` worker; the UI thread keeps
+request validation and volatile decision state.
+Tailnet API native entry uses `api_credentials/editor.rs` for zeroizing masked
+drafts and existing bounded credential constructors. The status parent owns the
+read/write job kind, independent errors and close barriers. Entry and removal
+reuse the exact-target check and existing Store lock; metadata requests use the
+same volatile owner-decision registry. Root-scope suspension discards an unsaved
+entry draft before the renderer runs while retaining owned operations and errors.
+No CLI/MCP secret channel was added.
 `image` prepares the worker image and checks its contract before allocation;
 `source` validates and packs the committed source before allocation and transfers
 it to the ready worker; `git_credentials` and `agent_credentials` install or clear
@@ -737,9 +764,22 @@ Cloud grouping and immutable membership live in `cloud_panel`, sharing workspace
 layout calculations. `cloud_panel/group.rs` owns one group’s geometry, membership
 and reconciliation; the parent module owns persisted types and group collection
 placement. Corner resizing of a cloud frame lives in `cloud_panel/resize.rs`.
+Saved cloud membership and recorded-worker reconnects live in
+`cloud_panel/production/restore.rs`. The parent calls this module when the active
+session changes. Restore also resets the session-local close intent.
 Cloud close confirmation and session-local close intent live in
 `cloud_panel/production/close.rs`; deletion uses the existing lifecycle and progress
-channels, and removal rechecks durable resource ownership before discarding panels.
+channels. `production/removal.rs` reads removal eligibility outside the UI thread.
+`close/decisions.rs` applies only the current root, session, workspace, launch and
+request generation. A display result permits no removal. A final check holds the
+Core Store lock on its worker until the UI discards the cloud or rejects the result.
+The UI holds only a channel sender; it never drops a Store or joins the worker.
+Cancellation retains each blocked job until its channel disconnects. Session reset
+also retains these slots, so reopening cannot start another read of the same record.
+A blocked filesystem call has no hard cancellation deadline. Its original lock
+stays with its worker until the call returns or the process ends. Remove anyway
+preserves the original record and still refuses a busy operation. These changes
+add no provider calls, credential reads or new CLI/MCP lifecycle authority.
 The New cloud dialog asks where the code is before anything else.
 `cloud_runtime::repository::source` reads links, probes whether a repository can be read without a token,
 and clones with system Git without ever prompting. `repository::source::transport` runs the
@@ -1050,3 +1090,30 @@ check, pinned port, owner labels, provision, power and delete. It hands its
 that each guards. `cloud_runtime::providers::docker_host` keeps that journal in
 `docker-host.json`, implements `Lifecycle` and `Compute` for `Kind::DockerHost`,
 and waits for readiness through the host's `ProxyCommand`.
+
+The saved hosts' UI and agent surfaces read the host through the same
+`Engine`. `cloud_runtime::docker_host::check` sends the rows of the Cloud
+settings Check one by one, and `docker_host::hosts` reads each saved host's
+free capacity and builds its `cloud_offers` section. In `horizon-ui`,
+`prices::hosts` keeps the last reading for New cloud, Cloud settings and
+`cloud_offers`; `setup::docker_hosts` is the settings card and its editor;
+`creation::selector::hosts` draws the **YOUR HOST** cards and the host summary.
+
+Image destination policy lives in `cloud_runtime::publishing::management`;
+`publishing::operations` owns bounded asynchronous receipts and sign-in prompts.
+Host adapters supply ownership and render results, while shared setup helpers read
+metadata without opening the credential editor and retain the preference write fence.
+
+Host pull-history UI regressions are grouped under
+`app/cloud_panel/production/setup/tests/host_pull.rs`; the parent settings tests
+retain shared fixtures and unrelated layout and account checks.
+
+Public image-destination operations keep their wire schema in browser-control
+and normal CLI/MCP routing in browser-mcp. The UI image_destinations leaf binds
+only the live panel scope. Shared publishing operations resolve a typed launch
+directory on a worker and retain bounded receipts. Live preference transactions
+compare the exact shown override and retain the current credential references.
+
+The cloud-launch wire adapter preserves publisher intent in core. UI preparation
+forwards that metadata to the shared engine; UI rebuild preview passes the entire
+record so the core profile/publisher fences also govern its confirmation.

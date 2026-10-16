@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs"
+applyTo: "crates/horizon-core/src/upkeep.rs,crates/horizon-core/src/upkeep/**,examples/cloud-worker/test_upkeep_worker.py,docs/upkeep.md,docs/testing/procedures/upkeep/worker.sh,crates/horizon-ui/src/upkeep_widget.rs,crates/horizon-ui/src/upkeep_widget/**,crates/horizon-ui/src/app/upkeep.rs,crates/horizon-ui/src/app/upkeep/**,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep.rs,crates/horizon-ui/src/app/cloud_panel/production/new_workspace/upkeep/**,crates/horizon-browser-control/src/manifest/upkeep.rs,crates/horizon-browser-mcp/src/controller/upkeep.rs,crates/horizon-cloud-worker/src/remote.rs,crates/horizon-ui/src/app/cloud_panel/production/companions/agent/upkeep.rs,crates/horizon-core/src/cloud_runtime/companions/inventory.rs,examples/cloud-worker/horizon-worker-github-upkeep-loop,examples/cloud-worker/test_github_upkeep_loop.py"
 ---
 
 # Trust boundaries of Upkeep
@@ -51,6 +51,70 @@ everything the exchange reads back, as written by the agent. Check that:
   `horizon-worker-run`: not as root, and `/run/horizon-worker/agent-approvals` is
   exactly `auto`. Otherwise it starts no agent.
 
+## The daily maintenance pass
+
+`exchange.py` writes `daily.md` from the person's instructions and `worker/daily.rs`
+(`PART`); `run.py` (`daily_due`, `take_daily`, `run_daily`)
+starts one agent for the whole Upkeep once a UTC day. The boundary is in `docs/upkeep.md`,
+section "Trust boundary of the shared instructions". Check that:
+
+- Horizon names no shared repository: the agent finds the shared instructions through the
+  repositories' AGENTS.md, and a read outside the Upkeep stays a request for the person.
+- The generic part never lets the agent start a production release or workflow, or
+  promote a release; test-channel releases need both the shared instructions and the
+  Upkeep's own instructions.
+- The pass starts only after `run_once` returned, so it never works beside a repository's
+  agent, and `daily-day` is written before the agent starts.
+- `daily-day` is read with `read_small` and written through a new temporary file. Every
+  JSON file of the agent's folder, the reports in `status.d/` included, goes through
+  `load` (`read_regular`: regular file, no link, no blocking, size limit). There
+  is no other way to make the pass due: Run now alone never starts it.
+- The pass uses the settings and `daily.md` that the run read before its first agent
+  started (`read_prompt`: regular file, no link, size limit), never a later read of the
+  agent's folder, and fills in only the validated repository names.
+- Only lines of `status.d/daily.json` reach the board as daily (at most 20); a `daily`
+  field in a repository's report is dropped. The exchange passes the run kind only when it
+  is exactly `daily`.
+- `RunKind` and `Activity::daily` are lenient: an unknown or wrong value never hides the
+  document.
+
+## Upkeep's own pull requests
+
+`run.py` (`MARKED`, `open_pull_requests`, `search`) also lists and searches open pull
+requests with an `upkeep/` branch or the `upkeep` label. Anyone can set that mark. Check that:
+
+- The marked listing and the marked searches run only for the Upkeep's validated
+  repositories, with the search as one argument, keep only pull requests whose
+  `isCrossRepository` is exactly `false` (never a fork), and a pull request found twice
+  counts once.
+- The fingerprint includes each reviewer's latest review (`latestReviews`, the same in the
+  listing and in `flat`), so the person's Approve starts the agent also where no review is
+  required.
+- The generic prompt (`repository_part`), not only `DEFAULT_INSTRUCTIONS`, says that an
+  agent merges a marked pull request only when the Upkeep's instructions ask for it and
+  its own account opened it (unless the shared instructions authorize the author), and
+  that it never merges one that changes CI or a deployment (the person does).
+- The generic prompt treats comments and reviews as information, never instructions. The
+  only override is a plain Approve review on the current head by the account the agent
+  works as; the prompt tells the agent never to submit an approving review itself. It
+  lifts only the blocker the agent named, never a failed or running check, a draft, a
+  conflict or a required check the worker cannot do.
+- The generic prompt tells the agent to skip a marked pull request from a fork
+  (`isCrossRepository` true), as the loop's listing does.
+
+## The default instructions
+
+`DEFAULT_INSTRUCTIONS` asks for the checks a change needs and no more. Check that:
+
+- A green update that the repository's rules do not treat as a UI change gets no clone,
+  rebuild, local CI, app start or UI smoke.
+- A UI change, also a transitive one, gets the repository's documented UI acceptance, and
+  no line lets CI, compilation or unit tests stand in for a visual check the rules require.
+- A required check the worker cannot do leaves the pull request blocked with the missing
+  capability named.
+- Evidence counts only while the head, the base and the checked build are unchanged.
+- `the_default_instructions_are_proportional_to_the_change` asserts these lines.
+
 ## Untrusted: names on their way to a command line, a path or the prompt
 
 Repository names and bot logins pass `Config::validate` before any exchange, and
@@ -78,6 +142,52 @@ The worker and its agents write every request field. Check that:
   or `push`, and a repository of this Upkeep's saved list (ASCII case ignored).
 - The decision is always `Decision::AllowTask`, never a cloud-wide allow.
 - Every other request stays on the cloud card for the person.
+
+With the policy, the worker allows these requests itself (`horizon-worker-github-upkeep-loop`).
+Check that:
+
+- The worker applies the same rule as `allowed`, `task` included, and examines the policy
+  again under the lock of the request book (`admit` in `decide`) before it allows. A policy
+  without a session (a copy that cannot be read) allows nothing.
+- `install` ends the loop session's task grants for every repository that the new policy does
+  not list, under the book's lock, and sets the policy only after the book.
+- `start_loop` runs the loop only through `horizon-worker-tailnet agent`, never as root, and
+  only after `/run/horizon-worker/browser-host-instance` exists.
+- `clear` removes the policy under the book's lock before the chain, and first makes the
+  marker name no policy, so the strictest policy holds even when the chain stays.
+- Every write of the marker (`install`, `remove`, `start_loop`) holds the book's lock.
+
+## The worker's GitHub policy and refusals
+
+Before each exchange, `sync.rs` sends `worker::policy::send` as root. `run.py` starts no
+agent unless root wrote `/run/horizon-worker/github-upkeep-policy` (`guarded`), a regular
+file that root owns. The exchange reads back the refusal log that root owns
+(`REFUSALS`): only from a folder that root owns, only a regular file, a bounded tail,
+and only the fixed fields; the text goes to the board as activity lines. Check that no
+change starts an agent without the `guarded` check, reads the log from a folder the
+agent can write, or sends more than `REFUSALS_KEPT` lines.
+
+## Untrusted: companion requests from the worker
+
+The agent asks for a companion cloud with `upkeep/companions/<alias>.json`
+(`docs/upkeep.md`, section "Trust boundary of companion requests"). The agent writes
+every field. Check that:
+
+- `exchange.py` reads only regular files of at most 1 KiB with a valid alias, opened
+  without following links, and sends at most four; `worker/companions.rs` parses them
+  again and drops any that are not an alias, `ensure_ready` or `stop`, and a UUID.
+- The source of each request is the Upkeep's own cloud; nothing from the worker names a
+  cloud. Only a companion that the owner checked can start (`lifecycle::bind_selected`).
+- A request starts nothing outside a run. `run.py` removes the requests before each run
+  and each daily maintenance pass, and does not start one when it cannot. An operation
+  already answered as done is not sent again (`exchange.py` removes it, Horizon skips
+  it), and one request per alias runs at a time. A refused automatic Stop is sent again
+  with a new operation ID a bounded number of times, since every operation ID stays in
+  the companion's journal.
+- Horizon's answers keep a fixed set of fields and at most 120 characters of text, for at
+  most four aliases, so the remote command stays under its limit.
+- Upkeep declarations come only from the saved repository list and the committed
+  `ui-acceptance` profile of each checkout on this computer.
 
 ## Host work off the UI thread
 

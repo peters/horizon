@@ -227,6 +227,7 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
                 && instructions.contains("browser_visibility")
                 && instructions.contains("browser_close")
                 && instructions.contains("allow_additional=true")
+                && instructions.contains("one panel per engine")
                 && instructions.contains("original panel")),
         "server instructions must teach creation and network capture workflows"
     );
@@ -365,6 +366,11 @@ fn assert_companion_tools_contract(tools: &Value) {
     );
     let list = &listed_tool(tools, "cloud_list")["inputSchema"]["properties"];
     assert!(list.get("operation").is_some() && list.get("cloud").is_some());
+    let schema = listed_tool(tools, "cloud_list")["inputSchema"].to_string();
+    assert!(
+        schema.contains("\"park\"") && !schema.contains("\"stop\""),
+        "the removed stop is not offered: {schema}"
+    );
     assert!(
         list.get("workspace").is_none(),
         "the caller's workspace is the only scope"
@@ -411,11 +417,35 @@ fn assert_resize_contract(tools: &Value) {
         );
     }
     assert!(resize["description"].as_str().unwrap().contains("CSS pixels"));
+    let zoom = listed_tool(tools, "browser_zoom");
+    for field in ["panel_id", "percent", "reset", "timeout_millis"] {
+        assert!(
+            zoom["inputSchema"]["properties"].get(field).is_some(),
+            "zoom schema lacks {field}"
+        );
+    }
+    let description = zoom["description"].as_str().unwrap();
+    assert!(description.contains("25-500") && description.contains("unsupported_backend"));
+}
+
+fn assert_credential_request_contract(tools: &Value) {
+    let credential = listed_tool(tools, "tailnet_api_credential");
+    let arguments = credential["inputSchema"]["properties"]
+        .as_object()
+        .expect("metadata arguments");
+    assert_eq!(arguments.len(), 3);
+    assert!(credential["inputSchema"].to_string().contains("set_personal_token"));
+    assert!(credential["inputSchema"].to_string().contains("set_oauth"));
+    for name in ["operation", "request_id", "tailnet_id"] {
+        assert!(arguments.contains_key(name));
+    }
+    assert_eq!(credential["inputSchema"]["additionalProperties"], false);
 }
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(34));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(37));
+    assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
@@ -443,7 +473,8 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .as_str()
             .is_some_and(|description| description.contains("browser_list is empty")
                 && description.contains("never create a helper panel")
-                && description.contains("allow_additional=true"))
+                && description.contains("allow_additional=true")
+                && description.contains("one panel per browser engine"))
     );
     assert!(create["inputSchema"].to_string().contains("allow_additional"));
     let network = listed_tool(tools, "browser_network");
@@ -615,6 +646,7 @@ fn resize_result_fixture(
                         horizon_browser::BrowserControlValue::Viewport {
                             requested: Some([390, 844]),
                             applied: [390, 844],
+                            zoom_percent: 100,
                         },
                     ),
                 };
@@ -660,5 +692,122 @@ fn screenshot_refuses_standalone_without_claiming_browser() {
     assert_eq!(result["result"]["isError"], true);
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert!(manifest::read_at(&path).unwrap().owner.is_none());
+    process.close();
+}
+
+#[test]
+fn image_destination_routes_only_nonsecret_host_scoped_receipts() {
+    use horizon_browser_control::manifest::provider_usage::UsageQueue;
+    use std::time::{Duration, Instant};
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start_as(home.path(), "horizon:destination-client");
+    process.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"destination-fixture","version":"1"}}}));
+    process.notify(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let tools = process.send(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    let tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "cloud_image_destination")
+        .expect("public destination tool");
+    assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    let queue = UsageQueue::new(home.path().join(".horizon"));
+    let host = std::thread::spawn(move || {
+        for expected in ["list", "status", "cancel"] {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let claimed = queue.claim("test-host").expect("claim host request");
+                if let Some(request) = claimed.first() {
+                    assert_eq!(request.actor, "horizon:destination-client");
+                    let input = request.image_destination.as_ref().expect("typed destination intent");
+                    assert!(input.valid());
+                    assert_eq!(input.operation_id, "27d497e2-1f54-4bc4-b746-ab2a3d9efad5");
+                    assert_eq!(serde_json::to_value(&input.action).unwrap()["operation"], expected);
+                    assert_eq!(input.profile.as_deref(), (expected == "list").then_some("cpu"));
+                    let mut answer = request.result(Vec::new(), None);
+                    answer.image_destination = Some(json!({
+                        "operation_id":input.operation_id,"done":false,
+                        "cancel_requested":expected=="cancel","sign_in":null,"result":null,"error":null
+                    }));
+                    queue.complete(&answer).expect("return host receipt");
+                    break;
+                }
+                assert!(Instant::now() < deadline, "no destination request reached the host");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+    for (index, operation) in ["list", "status", "cancel"].into_iter().enumerate() {
+        let arguments = json!({
+            "operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5",
+            "profile":(operation=="list").then_some("cpu"),"action":{"operation":operation}
+        });
+        let response=process.send(&json!({"jsonrpc":"2.0","id":3+index,"method":"tools/call","params":{"name":"cloud_image_destination","arguments":arguments}}));
+        assert_ne!(response["result"]["isError"], true, "{response}");
+        assert!(response.to_string().contains("27d497e2-1f54-4bc4-b746-ab2a3d9efad5"));
+        let answer: Value = serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(answer["cancel_requested"], operation == "cancel");
+    }
+    host.join().expect("host receipt");
+    let rejected=process.send(&json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"cloud_image_destination","arguments":{"operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5","profile":"cpu","root":"/untrusted","action":{"operation":"list"}}}}));
+    assert!(
+        rejected.get("error").is_some() || rejected["result"]["isError"] == true,
+        "{rejected}"
+    );
+    assert!(
+        UsageQueue::new(home.path().join(".horizon"))
+            .claim("test-host")
+            .unwrap()
+            .is_empty()
+    );
+    process.close();
+}
+
+#[test]
+fn authentication_start_returns_the_first_prompt_through_public_stdio() {
+    use horizon_browser_control::manifest::provider_usage::{ImageDestinationAction, UsageQueue};
+    use std::time::{Duration, Instant};
+    let home = tempfile::tempdir().unwrap();
+    let mut process = McpProcess::start_as(home.path(), "horizon:prompt-client");
+    process.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"prompt-fixture","version":"1"}}}));
+    process.notify(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let queue = UsageQueue::new(home.path().join(".horizon"));
+    let host = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        loop {
+            for request in queue.claim("test-host").unwrap() {
+                let input = request.image_destination.as_ref().unwrap();
+                let mut result = request.result(Vec::new(), None);
+                match input.action {
+                    ImageDestinationAction::Authenticate { .. } => {
+                        assert!(!started);
+                        started = true;
+                        result.image_destination =
+                            Some(json!({"operation_id":input.operation_id,"done":false,"sign_in":null}));
+                    }
+                    ImageDestinationAction::Status {} => {
+                        assert!(started);
+                        assert!(input.profile.is_none());
+                        result.image_destination = Some(
+                            json!({"operation_id":input.operation_id,"done":false,"sign_in":{"user_code":"SYNTHETIC-CODE","verification_uri":"https://github.com/login/device","expires_at_unix":123}}),
+                        );
+                    }
+                    _ => panic!("unexpected prompt operation"),
+                }
+                let delivered = result.image_destination.as_ref().unwrap()["sign_in"].is_object();
+                queue.complete(&result).unwrap();
+                if delivered {
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let response=process.send(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"cloud_image_destination","arguments":{"operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5","profile":"cpu","action":{"operation":"authenticate","shown":null,"switch":false}}}}));
+    host.join().unwrap();
+    assert_ne!(response["result"]["isError"], true, "{response}");
+    assert!(response.to_string().contains("SYNTHETIC-CODE"));
     process.close();
 }

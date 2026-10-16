@@ -68,9 +68,9 @@ impl DriverState {
                 "orientation_unsupported",
                 "local browsers use browser_resize instead of device orientation",
             )),
-            BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
+            BrowserControlAction::Resize { .. } | BrowserControlAction::Zoom { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
-                "resize is observed from the driver loop",
+                "resize and zoom are observed from the driver loop",
             )),
             BrowserControlAction::Snapshot { max_nodes } => {
                 self.semantic_snapshot(link, event_tx, frame_slot, *max_nodes)
@@ -87,6 +87,9 @@ impl DriverState {
             }
             BrowserControlAction::Fill { target, value } => {
                 self.semantic_fill(link, event_tx, frame_slot, target, value)
+            }
+            BrowserControlAction::Press { key, modifiers, count } => {
+                self.semantic_press(link, event_tx, frame_slot, *key, *modifiers, *count)
             }
             BrowserControlAction::Scroll {
                 target,
@@ -276,6 +279,29 @@ impl DriverState {
                 text: value.to_string(),
             },
         )?;
+        Ok(BrowserControlValue::Accepted)
+    }
+
+    /// Dispatch trusted `Input.dispatchKeyEvent` presses to the focused element.
+    fn semantic_press(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        key: crate::BrowserKey,
+        modifiers: BrowserModifiers,
+        count: u32,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
+        for _ in 0..count {
+            let [down, up] = crate::semantic_keys::press_inputs(key, modifiers);
+            // A key-down that failed or timed out may still have reached the
+            // page, so the key-up is always attempted and the first failure
+            // is the one reported.
+            let pressed = self.send_semantic_input(link, event_tx, frame_slot, down);
+            let released = self.send_semantic_input(link, event_tx, frame_slot, up);
+            pressed.and(released)?;
+        }
         Ok(BrowserControlValue::Accepted)
     }
 
@@ -558,3 +584,6 @@ fn pointer_release(x: f64, y: f64, click_count: u32) -> BrowserInput {
         modifiers: BrowserModifiers::none(),
     }
 }
+
+#[cfg(test)]
+mod tests;

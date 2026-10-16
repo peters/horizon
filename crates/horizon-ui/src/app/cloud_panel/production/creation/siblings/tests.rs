@@ -320,6 +320,89 @@ fn browsing_fills_the_checkout_of_the_sibling_being_browsed() {
     assert!(!fixture.state.choose_checkout(Path::new("/synthetic/late")));
 }
 
+fn load_publication_fixture(app: &mut crate::app::HorizonApp, fixture: &Fixture, ctx: &egui::Context) {
+    let form = &mut app.cloud_prototype.production;
+    let cloud = fixture.root.path().join("cloud");
+    std::fs::create_dir_all(&cloud).unwrap();
+    let settings: horizon_core::cloud_runtime::settings::Settings = serde_json::from_value(serde_json::json!({
+        "runpod_key_file":cloud.join("absent-compute"),"ssh_identity_file":cloud.join("absent-identity"),
+        "docker_config":cloud.join("absent-docker"),"cpu_flavors":[],"gpu_types":[],"portable_image_publishing":true,
+        "registries":{"root":cloud.join("registry"),"bindings":[{
+            "repository":"registry.example/team/reviewed","generation":"fixture-siblings","read_only_confirmed":true,
+            "pull":{"username":"fixture-reader","secret_file":cloud.join("absent-reader"),"expires_at":null},
+            "publish":{"username":"fixture-writer","secret_file":cloud.join("absent-writer"),"expires_at":null}
+        }]}
+    }))
+    .unwrap();
+    std::fs::write(cloud.join("settings.json"), serde_json::to_vec(&settings).unwrap()).unwrap();
+    let choices = horizon_core::cloud_runtime::publishing::choices(&settings).unwrap();
+    horizon_core::cloud_runtime::setup::save_image_destination(
+        &cloud,
+        Path::new(&form.repository),
+        &form.selected_profile,
+        None,
+        Some(&choices[0]),
+        &horizon_core::cloud_runtime::Cancellation::default(),
+    )
+    .unwrap();
+    form.publishing.sync(
+        Some(super::super::publishing::Key {
+            root: fixture.root.path().join("cloud"),
+            repository: Path::new(&form.repository).into(),
+            raw_repository: form.repository.clone(),
+            profile_name: form.selected_profile.clone(),
+            profile: fixture.config.profiles["dev"].clone(),
+        }),
+        ctx,
+    );
+    for _ in 0..200 {
+        form.publishing.poll(ctx);
+        if form.publishing.ready() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("fixture publication metadata did not settle");
+}
+
+fn create_reviewed_cloud(app: &mut crate::app::HorizonApp, ctx: &egui::Context) {
+    let form = &mut app.cloud_prototype.production;
+    form.publishing.reload(ctx);
+    for _ in 0..200 {
+        form.publishing.poll(ctx);
+        if form.publishing.ready() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let choice = super::super::publishing::launch_choice(form).unwrap();
+    assert!(matches!(
+        choice,
+        Some(horizon_core::cloud_runtime::publishing::Selection::Registry { .. })
+    ));
+    app.create_production_cloud(ctx).unwrap();
+    assert_eq!(
+        app.cloud_prototype
+            .production
+            .pending_creation
+            .as_ref()
+            .unwrap()
+            .publishing_selection(),
+        choice.as_ref()
+    );
+    for _ in 0..500 {
+        app.poll_cloud_creation(ctx);
+        if app.cloud_prototype.production.pending_creation.is_none() {
+            if let Some(group) = app.cloud_prototype.groups.0.first() {
+                assert_eq!(group.remote.as_ref().unwrap().publishing_selection, choice);
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("creation did not finish");
+}
+
 #[test]
 fn launch_waits_for_the_review_and_the_cloud_keeps_the_chosen_siblings() {
     use crate::test_egui::DiscardTextures;
@@ -333,6 +416,7 @@ fn launch_waits_for_the_review_and_the_cloud_keeps_the_chosen_siblings() {
     form.profiles = Some(fixture.config.clone());
     form.selected_profile = "dev".into();
     form.launch.revision = Some(fixture.revision.clone());
+    load_publication_fixture(&mut app, &fixture, &ctx);
     let input = || egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 900.0))),
         ..Default::default()
@@ -370,21 +454,10 @@ fn launch_waits_for_the_review_and_the_cloud_keeps_the_chosen_siblings() {
             .to_string()
             .contains("chosen siblings")
     );
-    let create = |app: &mut crate::app::HorizonApp| {
-        app.create_production_cloud(&ctx).unwrap();
-        for _ in 0..500 {
-            app.poll_cloud_creation(&ctx);
-            if app.cloud_prototype.production.pending_creation.is_none() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        panic!("creation did not finish");
-    };
     settle(&mut app);
     assert!(super::super::can_submit(&app.cloud_prototype.production));
     let head = fixture.advance("consumer");
-    create(&mut app);
+    create_reviewed_cloud(&mut app, &ctx);
     assert!(
         app.cloud_prototype
             .error
@@ -402,7 +475,7 @@ fn launch_waits_for_the_review_and_the_cloud_keeps_the_chosen_siblings() {
     let siblings = &app.cloud_prototype.production.launch.siblings;
     let row = siblings.rows.iter().find(|row| row.alias == "consumer").unwrap();
     assert!(matches!(siblings.status(row), Status::Ready(shown) if head.starts_with(&shown)));
-    create(&mut app);
+    create_reviewed_cloud(&mut app, &ctx);
     assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
     assert!(
         app.cloud_prototype.production.launch.siblings.rows.is_empty(),

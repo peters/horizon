@@ -79,9 +79,10 @@ impl Using {
 }
 
 impl HorizonApp {
-    /// Starts Use: closes the agent's panel and leaves the rest to a thread.
-    pub(super) fn use_cloud_repository_setup(&mut self, ctx: &egui::Context) {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+    /// Starts Use for the run of `key`: closes the agent's panel and leaves the rest to a
+    /// thread.
+    pub(super) fn use_cloud_repository_setup(&mut self, ctx: &egui::Context, key: horizon_core::PanelId) {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         if run.ending() {
@@ -90,14 +91,14 @@ impl HorizonApp {
         // A desktop preview that stopped since the dialog drew is not committed as live,
         // and its agent keeps running, so it hears why and can start it again.
         if !run.preview_live_or_none() {
-            self.cloud_prototype.error = Some(PREVIEW_NOT_LIVE.into());
+            run.notice = Some(PREVIEW_NOT_LIVE.into());
             return;
         }
         let panel = run.panel;
         if self.board.panel(panel).is_some() {
             self.close_panel(panel);
         }
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         let agent = run.agent_process.take();
@@ -131,13 +132,13 @@ impl HorizonApp {
             report: receiver,
             thread,
         });
-        self.cloud_prototype.error = None;
+        run.notice = None;
     }
 
-    /// Applies what the thread of Use reported. Returns whether Use finished or refused
-    /// this frame, so nothing else of the run is synced after it.
-    pub(super) fn poll_cloud_setup_use(&mut self, ctx: &egui::Context) -> bool {
-        let Some(run) = self.cloud_prototype.production.setup_run.as_mut() else {
+    /// Applies what the thread of Use reported for the run of `key`. Returns whether Use
+    /// finished or refused this frame, so nothing else of the run is synced after it.
+    pub(super) fn poll_cloud_setup_use(&mut self, ctx: &egui::Context, key: horizon_core::PanelId) -> bool {
+        let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return false;
         };
         let Some(ending) = &run.ending else {
@@ -151,7 +152,7 @@ impl HorizonApp {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 run.ending = None;
-                self.cloud_prototype.error = Some("Use this setup stopped before it finished. Press it again.".into());
+                run.notice = Some("Use this setup stopped before it finished. Press it again.".into());
                 return false;
             }
         };
@@ -159,8 +160,7 @@ impl HorizonApp {
         match outcome {
             Outcome::StillEnding(agent) => {
                 run.agent_process = agent;
-                self.cloud_prototype.error =
-                    Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
+                run.notice = Some("The setup agent is still ending. Press Use this setup again in a moment.".into());
                 false
             }
             Outcome::Refused {
@@ -174,11 +174,14 @@ impl HorizonApp {
                     run.outside = baseline;
                 }
                 run.ignored_partial_told |= told;
-                self.cloud_prototype.error = Some(message);
+                run.notice = Some(message);
                 true
             }
             Outcome::Committed(committed) => {
-                if let Some(mut run) = self.cloud_prototype.production.setup_run.take() {
+                let (mut here, mut repository) = (false, String::new());
+                if let Some(mut run) = self.cloud_prototype.production.take_setup_run(key) {
+                    here = super::same_folder(&run, &self.cloud_prototype.production.repository);
+                    repository = run.repository.display().to_string();
                     // The live desktop and the GitHub access panel go with the run.
                     for helper in [run.preview_panel.take(), run.fix_panel.take()].into_iter().flatten() {
                         if self.board.panel(helper).is_some() {
@@ -187,13 +190,16 @@ impl HorizonApp {
                     }
                     run.discard();
                 }
-                // The setup was made and committed on HEAD, so the dialog reads HEAD again.
-                self.cloud_prototype.production.revision.clear();
-                set_configuration(&mut self.cloud_prototype.production, Configuration::WorkingCopy);
-                self.read_cloud_profiles(ctx);
+                // The setup was made and committed on HEAD, so a dialog that shows this
+                // repository reads HEAD again; one that shows another reads it when chosen.
+                if here {
+                    self.cloud_prototype.production.revision.clear();
+                    set_configuration(&mut self.cloud_prototype.production, Configuration::WorkingCopy);
+                    self.read_cloud_profiles(ctx);
+                }
                 if let commit::Committed::IndexBehind(error) = committed {
                     self.cloud_prototype.error = Some(format!(
-                        "Committed .horizon, but your git index was not updated ({error}). Run `git reset -q -- .horizon` in the repository to refresh it."
+                        "Committed .horizon in {repository}, but your git index was not updated ({error}). Run `git reset -q -- .horizon` in the repository to refresh it."
                     ));
                 }
                 true
@@ -377,7 +383,7 @@ mod blocking_tests {
             status.path().join("status.json"),
             Mode::New,
         );
-        app.cloud_prototype.production.setup_run = Some(run);
+        app.cloud_prototype.production.setup_runs.push(run);
         let (signal, signalled) = std::sync::mpsc::channel::<()>();
         let opener = std::thread::spawn(move || {
             let _ = signalled.recv_timeout(std::time::Duration::from_secs(10));
@@ -399,8 +405,8 @@ mod blocking_tests {
             }
         });
         let started = Instant::now();
-        app.use_cloud_repository_setup(&ctx);
-        let finished = app.poll_cloud_setup_use(&ctx);
+        app.use_cloud_repository_setup(&ctx, horizon_core::PanelId(1));
+        let finished = app.poll_cloud_setup_use(&ctx, horizon_core::PanelId(1));
         let took = started.elapsed();
         let _ = signal.send(());
         assert!(took < std::time::Duration::from_secs(2), "the frame waited {took:?}");
@@ -408,29 +414,30 @@ mod blocking_tests {
         assert!(
             app.cloud_prototype
                 .production
-                .setup_run
-                .as_ref()
+                .setup_run(horizon_core::PanelId(1))
                 .is_some_and(Run::ending),
             "the dialog shows Use at work"
         );
         // Stop cannot cancel Use once it started, so it does nothing until Use reported.
-        app.cloud_repository_setup_action(&ctx, super::super::run::Action::Stop);
+        app.cloud_repository_setup_action(&ctx, horizon_core::PanelId(1), super::super::run::Action::Stop);
         assert!(
-            app.cloud_prototype.production.setup_run.is_some(),
+            app.cloud_prototype
+                .production
+                .setup_run(horizon_core::PanelId(1))
+                .is_some(),
             "Stop leaves the run to Use"
         );
         opener.join().unwrap();
         // Then it reports: this run has no proof that passed, so nothing is committed.
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
-        while !app.poll_cloud_setup_use(&ctx) {
+        while !app.poll_cloud_setup_use(&ctx, horizon_core::PanelId(1)) {
             assert!(Instant::now() < deadline, "Use reported in time");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        let notice = app.cloud_prototype.production.setup_runs[0].notice.as_deref();
         assert!(
-            app.cloud_prototype
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("not committed"))
+            notice.is_some_and(|notice| notice.contains("not committed")),
+            "{notice:?}"
         );
     }
 
@@ -453,7 +460,7 @@ mod blocking_tests {
             Mode::New,
         );
         run.show_live_preview(port);
-        app.cloud_prototype.production.setup_run = Some(run);
+        app.cloud_prototype.production.setup_runs.push(run);
         let (signal, signalled) = std::sync::mpsc::channel::<()>();
         let closer = std::thread::spawn(move || {
             let _ = signalled.recv_timeout(std::time::Duration::from_secs(10));
@@ -461,8 +468,8 @@ mod blocking_tests {
             drop(desktop);
         });
         let started = Instant::now();
-        app.use_cloud_repository_setup(&ctx);
-        let finished = app.poll_cloud_setup_use(&ctx);
+        app.use_cloud_repository_setup(&ctx, horizon_core::PanelId(1));
+        let finished = app.poll_cloud_setup_use(&ctx, horizon_core::PanelId(1));
         let took = started.elapsed();
         let _ = signal.send(());
         assert!(took < std::time::Duration::from_secs(2), "the frame waited {took:?}");
@@ -470,18 +477,21 @@ mod blocking_tests {
         assert!(
             app.cloud_prototype
                 .production
-                .setup_run
-                .as_ref()
+                .setup_run(horizon_core::PanelId(1))
                 .is_some_and(Run::ending),
             "the dialog shows Use at work"
         );
         closer.join().unwrap();
         // Then it reports: the desktop did not answer, so nothing is committed.
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
-        while !app.poll_cloud_setup_use(&ctx) {
+        while !app.poll_cloud_setup_use(&ctx, horizon_core::PanelId(1)) {
             assert!(Instant::now() < deadline, "Use reported in time");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert_eq!(app.cloud_prototype.error.as_deref(), Some(super::PREVIEW_STOPPED));
+        assert_eq!(
+            app.cloud_prototype.production.setup_runs[0].notice.as_deref(),
+            Some(super::PREVIEW_STOPPED),
+            "the run says why, beside its progress"
+        );
     }
 }

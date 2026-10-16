@@ -22,6 +22,7 @@ fn pending_in(
         workspace: app.board.workspace(workspace).unwrap().local_id.clone(),
         title: "Captured title".into(),
         launch: CloudLaunch {
+            publishing_selection: None,
             deployment_started: false,
             id: cloud_runtime::new_id(),
             revision: String::new(),
@@ -322,6 +323,7 @@ fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Pat
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let mut group = CloudGroup::new(1, "Removed".into(), local, temp.into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: false,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -332,6 +334,7 @@ fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Pat
     app.cloud_prototype.groups.0.push(group);
     app.cloud_prototype.root = Some(temp.into());
     app.remove_deleted_cloud(1, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     workspace
 }

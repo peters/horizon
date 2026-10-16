@@ -82,7 +82,7 @@ impl State {
                 // Not a key a rented provider asks for, so no key form either.
                 vec![problem(
                     "Docker host",
-                    "No Docker host is saved on this computer yet. Add it to docker_hosts in the cloud settings file."
+                    "No Docker host is saved on this computer yet. Add one in the Docker host card of Cloud settings."
                         .into(),
                 )]
             } else {
@@ -316,6 +316,7 @@ pub(super) fn with_summary(ui: &mut Ui, form: &mut Production, root: Option<&Pat
         ui.add_space(14.0);
     }
     selector::summary::show(ui, form);
+    super::publishing::show(ui, form);
     if !failing && !cfg!(test) {
         ui.add_space(14.0);
         show(ui, form, root);

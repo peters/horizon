@@ -165,7 +165,7 @@ Do steps 8 to 15 for each cloud in the resource ledger that has an active resour
     > **CAUTION:** REVOKE ONLY THE REGISTRY CREDENTIALS THAT THE LEDGER RECORDS. A
     > worker that needs another credential cannot pull its image after a restart.
 
-20. For each listed credential, click **Revoke pull binding** on its entry in **Cloud settings**.
+20. For each listed credential, click **Revoke provider access** in its **Provider registry access** section in **Cloud settings**.
 
     Result: Each entry shows that the provider pull credential is revoked.
 

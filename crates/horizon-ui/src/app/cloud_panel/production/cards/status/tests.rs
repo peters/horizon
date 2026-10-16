@@ -5,6 +5,7 @@ use horizon_core::cloud_runtime::progress::{Progress, Unit};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
+mod diagnosis_scope;
 mod skipped;
 
 fn deployment(
@@ -198,33 +199,23 @@ fn a_ready_cloud_counts_terminals_uptime_and_offers_stop() {
 }
 
 #[test]
-fn a_stop_horizon_did_not_make_names_its_cause_and_offers_resume() {
-    use horizon_core::cloud_runtime::lifecycle::StopCause;
-    let stopped = |cause| Runtime {
+fn a_stop_horizon_did_not_make_says_so_and_offers_resume() {
+    let runtime = Runtime {
         stage: Some(Stage::Stopped),
         state: Some(deployment("Stopped", &bound(), &serde_json::Value::Null)),
-        stop_cause: Some(cause),
+        stopped_outside: true,
         ..Runtime::default()
     };
-    let idle = of(
-        &stopped(StopCause::Idle {
-            limit: Duration::from_mins(30),
-        }),
-        Occupancy::default(),
-        now(),
+    let outside = of(&runtime, Occupancy::default(), now());
+    assert_eq!(
+        (outside.verb.as_str(), outside.numbers.as_str(), outside.tail.as_str()),
+        ("Stopped", "Storage kept · billable", "Stopped outside Horizon")
     );
     assert_eq!(
-        (idle.verb.as_str(), idle.numbers.as_str(), idle.tail.as_str()),
-        ("Stopped after 30 idle minutes", "Storage kept · billable", "")
+        (outside.tone, outside.primary),
+        (Tone::Attention, Some(Primary::Resume))
     );
-    assert_eq!((idle.tone, idle.primary), (Tone::Attention, Some(Primary::Resume)));
-    assert!(idle.failure.is_none());
-    let unknown = of(&stopped(StopCause::Unknown), Occupancy::default(), now());
-    assert_eq!(
-        (unknown.verb.as_str(), unknown.tail.as_str()),
-        ("Stopped", "Stopped outside Horizon")
-    );
-    assert_eq!(unknown.primary, Some(Primary::Resume));
+    assert!(outside.failure.is_none());
 }
 
 #[test]
@@ -739,8 +730,8 @@ fn a_finished_deletion_reads_as_deleted_not_as_a_failed_redeploy() {
     assert_ne!(status.tone, Tone::Failed);
 }
 
-/// A ready `RunPod` cloud with a 30-minute idle stop whose connection just failed, as
-/// the card holds it while the provider check runs, and the check's sender.
+/// A ready `RunPod` cloud whose connection just failed, as the card holds it while the
+/// provider check runs, and the check's sender.
 fn lost_connection() -> (
     Runtime,
     Sender<cloud_runtime::Result<cloud_runtime::lifecycle::ReconciledDeployment>>,
@@ -750,12 +741,7 @@ fn lost_connection() -> (
         stage: Some(Stage::Ready),
         receiver: Some(deploy),
         cancel: Some(cloud_runtime::Cancellation::default()),
-        state: Some(idle_cloud("Ready", "RUNNING")),
-        last_idle: Some(cloud_runtime::lifecycle::IdleSample {
-            idle: Duration::from_mins(29),
-            limit: Duration::from_mins(30),
-            read_at: Instant::now(),
-        }),
+        state: Some(runpod_cloud("Ready", "RUNNING")),
         error: Some("Local operation timed out".into()),
         ..Runtime::default()
     };
@@ -767,13 +753,12 @@ fn lost_connection() -> (
     (runtime, tx)
 }
 
-fn idle_cloud(stage: &str, status: &str) -> cloud_runtime::state::Deployment {
+fn runpod_cloud(stage: &str, status: &str) -> cloud_runtime::state::Deployment {
     serde_json::from_value(serde_json::json!({
-        "version": 1, "cloud_id": "idle-fixture", "repository": "/synthetic", "revision": "a",
-        "profile": {"provider": "runpod", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4,
-            "idle_stop_minutes": 30},
+        "version": 1, "cloud_id": "lost-fixture", "repository": "/synthetic", "revision": "a",
+        "profile": {"provider": "runpod", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4},
         "stage": stage, "operation": bound(), "spec": null, "sessions": [],
-        "worker": {"id": "k3x9", "name": "idle-fixture", "imageName": "registry.example/worker",
+        "worker": {"id": "k3x9", "name": "lost-fixture", "imageName": "registry.example/worker",
             "desiredStatus": status},
         "stop_requested": stage == "Stopped"
     }))
@@ -783,7 +768,7 @@ fn idle_cloud(stage: &str, status: &str) -> cloud_runtime::state::Deployment {
 fn checked(state: cloud_runtime::state::Deployment, outcome: &str) -> cloud_runtime::lifecycle::ReconciledDeployment {
     let mut reconciled = cloud_runtime::lifecycle::ReconciledDeployment {
         report: serde_json::from_value(serde_json::json!({
-            "operation_id": "idle-fixture", "outcome": {"status": outcome, "worker_id": "k3x9"}
+            "operation_id": "lost-fixture", "outcome": {"status": outcome, "worker_id": "k3x9"}
         }))
         .unwrap(),
         state,
@@ -808,9 +793,10 @@ fn header_texts(status: &Status) -> Vec<String> {
             };
             let spend = super::super::strip::Spend {
                 line: String::new(),
+                outlook: None,
                 explanation: String::new(),
             };
-            super::super::strip::show(ui, header, status, &indicators, &spend, false, None);
+            super::super::strip::show(ui, header.into(), status, &indicators, &spend, false, None);
         })
         .discard_textures();
     output
@@ -824,16 +810,17 @@ fn header_texts(status: &Status) -> Vec<String> {
 }
 
 #[test]
-fn a_worker_that_stopped_itself_shows_stopped_after_its_idle_minutes_not_a_failure() {
+fn a_worker_that_stopped_itself_shows_stopped_outside_horizon_not_a_failure() {
     let (mut runtime, check) = lost_connection();
     let checking = of(&runtime, Occupancy::default(), now());
     assert_eq!(checking.verb, "Checking provider");
     check
-        .send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")))
+        .send(Ok(checked(runpod_cloud("Stopped", "EXITED"), "inactive")))
         .unwrap();
     runtime.poll_recovery();
     let stopped = of(&runtime, Occupancy::default(), now());
-    assert_eq!(stopped.verb, "Stopped after 30 idle minutes");
+    assert_eq!(stopped.verb, "Stopped");
+    assert_eq!(stopped.tail, "Stopped outside Horizon");
     assert_eq!(stopped.numbers, "Storage kept · billable");
     assert_eq!(stopped.primary, Some(Primary::Resume));
     assert!(stopped.failure.is_none() && runtime.error.is_none());
@@ -841,15 +828,11 @@ fn a_worker_that_stopped_itself_shows_stopped_after_its_idle_minutes_not_a_failu
         runtime
             .logs
             .back()
-            .is_some_and(|line| line.text.contains("so this worker stopped itself"))
+            .is_some_and(|line| line.text.contains("Horizon did not stop it"))
     );
     // What the header draws: the stop and Resume worker, never a failed operation.
     let texts = header_texts(&stopped);
-    for expected in [
-        "Stopped after 30 idle minutes",
-        "Storage kept · billable",
-        "Resume worker",
-    ] {
+    for expected in ["Stopped outside Horizon", "Storage kept · billable", "Resume worker"] {
         assert!(texts.iter().any(|text| text == expected), "{expected}: {texts:?}");
     }
     assert!(!texts.iter().any(|text| text.contains("failed")), "{texts:?}");
@@ -859,13 +842,13 @@ fn a_worker_that_stopped_itself_shows_stopped_after_its_idle_minutes_not_a_failu
 fn a_lost_connection_to_a_running_worker_still_shows_its_failure() {
     let (mut runtime, check) = lost_connection();
     check
-        .send(Ok(checked(idle_cloud("Ready", "RUNNING"), "found")))
+        .send(Ok(checked(runpod_cloud("Ready", "RUNNING"), "found")))
         .unwrap();
     runtime.poll_recovery();
     let status = of(&runtime, Occupancy::default(), now());
     assert_eq!(status.verb, "Operation failed");
     assert_eq!(status.numbers, "Local operation timed out");
-    assert_eq!(runtime.stop_cause, None);
+    assert!(!runtime.stopped_outside);
     // A check that cannot reach the provider shows the failure as it was too.
     let (mut runtime, check) = lost_connection();
     check.send(Err(cloud_runtime::Error::Busy)).unwrap();
@@ -914,42 +897,29 @@ fn only_a_failure_that_can_be_a_stop_outside_horizon_is_checked() {
     hetzner.error = hetzner.unexplained_failure.take();
     hetzner.recovery_receiver = None;
     hetzner.state.as_mut().unwrap().profile.provider = "hetzner".into();
-    assert!(
-        !hetzner.failure_may_be_a_stop(),
-        "only Horizon stops a Hetzner cloud; its idle watch keeps running"
-    );
+    assert!(!hetzner.failure_may_be_a_stop(), "only Horizon stops a Hetzner cloud");
 }
 
 #[test]
 fn the_failure_check_alone_decides_and_a_known_stop_keeps_its_own_words() {
-    // The idle watch of the lost worker ends when the check starts, so it can neither
-    // report the stop a second time nor hold the cloud once the card shows the result.
-    let (sender, received) = channel();
+    // The watch of the lost worker ends when the check starts, so it cannot hold the
+    // cloud once the card shows the result.
     let watch = cloud_runtime::Cancellation::default();
     let (_events, deploy) = channel();
     let mut runtime = Runtime {
         stage: Some(Stage::Ready),
         receiver: Some(deploy),
         cancel: Some(watch.clone()),
-        idle_reports: Some(received),
-        state: Some(idle_cloud("Ready", "RUNNING")),
+        state: Some(runpod_cloud("Ready", "RUNNING")),
         error: Some("Local operation timed out".into()),
         ..Runtime::default()
     };
     runtime.receiver = None;
     let check = runtime.hold_failure_for_check();
     assert!(watch.is_cancelled() && runtime.cancel.is_none());
-    assert!(
-        sender
-            .send(super::super::super::idle::Report::StoppedOutside(Box::new(idle_cloud(
-                "Stopped", "EXITED"
-            ))))
-            .is_err(),
-        "a late report of the ended watch finds nobody listening"
-    );
     assert!(runtime.busy(), "lifecycle actions wait for the check");
     check
-        .send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")))
+        .send(Ok(checked(runpod_cloud("Stopped", "EXITED"), "inactive")))
         .unwrap();
     runtime.poll_recovery();
     assert!(!runtime.busy() && runtime.error.is_none());
@@ -964,12 +934,12 @@ fn the_failure_check_alone_decides_and_a_known_stop_keeps_its_own_words() {
     );
     // A record that Horizon already stopped is not a stop outside Horizon.
     let (mut runtime, check) = lost_connection();
-    runtime.state = Some(idle_cloud("Stopped", "EXITED"));
+    runtime.state = Some(runpod_cloud("Stopped", "EXITED"));
     check
-        .send(Ok(checked(idle_cloud("Stopped", "EXITED"), "inactive")))
+        .send(Ok(checked(runpod_cloud("Stopped", "EXITED"), "inactive")))
         .unwrap();
     runtime.poll_recovery();
-    assert_eq!(runtime.stop_cause, None);
+    assert!(!runtime.stopped_outside);
     let status = of(&runtime, Occupancy::default(), now());
     assert_eq!(
         (status.verb.as_str(), status.primary),
@@ -980,7 +950,7 @@ fn the_failure_check_alone_decides_and_a_known_stop_keeps_its_own_words() {
 #[test]
 fn a_check_that_finds_the_worker_gone_says_so_beside_the_failure() {
     let (mut runtime, check) = lost_connection();
-    let mut missing = checked(idle_cloud("Ready", "RUNNING"), "missing");
+    let mut missing = checked(runpod_cloud("Ready", "RUNNING"), "missing");
     missing.report.worker = None;
     check.send(Ok(missing)).unwrap();
     runtime.poll_recovery();

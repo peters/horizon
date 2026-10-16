@@ -13,7 +13,9 @@ use std::path::Path;
 mod accept;
 mod access;
 mod agent;
+mod board;
 mod bounded;
+mod build_on;
 mod cards;
 mod commit;
 mod pins;
@@ -21,9 +23,11 @@ mod preview;
 mod prompt;
 mod proof;
 mod run;
+mod runs;
 mod session;
 mod snapshot;
 mod untrusted;
+pub(super) use build_on::{Deferred, State as BuildOn};
 pub(super) use prompt::Mode;
 #[cfg(test)]
 use prompt::prompt;
@@ -47,8 +51,7 @@ pub(super) fn render(ui: &mut egui::Ui, form: &mut Production, output_beside: bo
     if !output_beside {
         ui.add_space(12.0);
     }
-    let repository = form.repository.clone();
-    if let Some(run) = form.setup_run.as_mut().filter(|run| same_folder(run, &repository)) {
+    if let Some(run) = form.run_here_mut() {
         let name = run.repository.file_name().map_or_else(
             || "the repository".to_owned(),
             |name| name.to_string_lossy().into_owned(),
@@ -101,8 +104,7 @@ pub(super) fn heading(ui: &mut egui::Ui, form: &Production) {
         |name| name.to_string_lossy().into_owned(),
     );
     let title = form
-        .setup_run
-        .as_ref()
+        .run_here()
         .map_or_else(|| Mode::New.heading(&name), |run| run.mode.heading(&name));
     ui.label(RichText::new(title).size(26.0).strong().color(theme::FG()));
     ui.label(
@@ -121,8 +123,8 @@ pub(super) enum Footer {
 
 /// Close keeps the agent working; Use this setup appears once it reports a summary.
 pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
-    let finished = form.setup_run.as_ref().is_some_and(Run::finished);
-    let ending = form.setup_run.as_ref().is_some_and(Run::ending);
+    let finished = form.run_here().is_some_and(Run::finished);
+    let ending = form.run_here().is_some_and(Run::ending);
     let mut footer = Footer::None;
     ui.horizontal(|ui| {
         let hint = if ending {
@@ -130,7 +132,7 @@ pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
         } else if finished {
             "Use this setup commits the files in .horizon and reads them as this repository's profile."
         } else {
-            "Close keeps the agent working. Open New cloud again to come back."
+            "Close keeps the agent working. The setup board shows it with every other setup."
         };
         ui.label(RichText::new(hint).size(13.0).color(theme::FG_SOFT()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -152,44 +154,14 @@ pub(super) fn footer(ui: &mut egui::Ui, form: &Production) -> Footer {
     footer
 }
 
-/// Whether a setup agent is working for the repository the dialog shows.
-/// The folder of a setup still working for another repository: one setup runs at a time.
-fn working_elsewhere(form: &Production) -> Option<String> {
-    form.setup_run
-        .as_ref()
-        .filter(|run| !run.finished() && !run.stopped && !running_here(form))
-        .map(|run| run.repository.display().to_string())
-}
-
-/// Says so, and offers nothing to start, while a setup still works for another
-/// repository: one setup runs at a time.
-fn busy_elsewhere(ui: &mut egui::Ui, form: &Production) -> bool {
-    let Some(other) = working_elsewhere(form) else {
-        return false;
-    };
-    ui.label(
-        RichText::new(format!(
-            "The setup of {other} is still working. Open New cloud for it to finish or stop it first."
-        ))
-        .size(12.5)
-        .color(theme::PALETTE_YELLOW()),
-    );
-    true
-}
-
 /// A setup agent for this repository is still working, so its terminal may take keys.
 pub(super) fn working_here(form: &Production) -> bool {
-    running_here(form)
-        && form
-            .setup_run
-            .as_ref()
-            .is_some_and(|run| !run.finished() && !run.stopped)
+    form.run_here().is_some_and(|run| !run.finished() && !run.stopped)
 }
 
+/// The repository the dialog shows has a setup run, working or done.
 pub(super) fn running_here(form: &Production) -> bool {
-    form.setup_run
-        .as_ref()
-        .is_some_and(|run| same_folder(run, &form.repository))
+    form.run_here().is_some()
 }
 
 fn option_card(ui: &mut egui::Ui, tint: Color32, add: impl FnOnce(&mut egui::Ui)) {
@@ -228,10 +200,7 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
         ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
         return Choice::None;
     }
-    if busy_elsewhere(ui, form) {
-        return Choice::None;
-    }
-    if form.setup_starting.is_some() {
+    if form.starting_here() {
         ui.label(
             RichText::new("Reading the repository before the setup agent starts…")
                 .size(12.5)
@@ -296,6 +265,7 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
             }
         }
     });
+    form.setup_build_on.show(ui);
     if open { Choice::SetupAgent } else { Choice::None }
 }
 
@@ -371,9 +341,6 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> Note
     // The setup agent runs on Linux only, so elsewhere its note stands where the action would.
     if !cfg!(target_os = "linux") {
         ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
-        return Note::None;
-    }
-    if busy_elsewhere(ui, form) {
         return Note::None;
     }
     let update = ui
@@ -555,13 +522,13 @@ mod tests {
         // Only Linux offers the setup agent: elsewhere it says why and starts nothing.
         if !cfg!(target_os = "linux") {
             assert_eq!(app.cloud_prototype.error.as_deref(), Some(PLATFORM_NOTE));
-            assert!(app.cloud_prototype.production.setup_starting.is_none());
+            assert!(app.cloud_prototype.production.setup_starting.is_empty());
             return;
         }
         assert!(app.cloud_prototype.error.is_none());
         // The agent starts once its run's baseline was read on a thread.
         let started = std::time::Instant::now();
-        while app.cloud_prototype.production.setup_starting.is_some() {
+        while !app.cloud_prototype.production.setup_starting.is_empty() {
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(20),
                 "the baseline was read"
@@ -578,7 +545,7 @@ mod tests {
         assert_ne!(panel.workspace_id, cloud);
         assert!(!panel.visible, "the dialog shows the agent's progress instead");
         assert!(panel.remote_workspace().is_none());
-        let run = app.cloud_prototype.production.setup_run.as_ref().unwrap();
+        let run = app.cloud_prototype.production.setup_runs.first().unwrap();
         assert_eq!(run.panel, panel.id);
         assert!(!app.board.cloud_groups.contains_panel(&app.board, panel.id));
         let workspace = panel.workspace_id;
@@ -608,7 +575,7 @@ mod tests {
         app.start_cloud_repository_setup(&ctx);
         // The agent starts once its run's baseline was read on a thread.
         let started = std::time::Instant::now();
-        while app.cloud_prototype.production.setup_starting.is_some() {
+        while !app.cloud_prototype.production.setup_starting.is_empty() {
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(20),
                 "the baseline was read"
@@ -619,7 +586,7 @@ mod tests {
         let fix = access::Fix::GrantOrganization {
             organization: "fintermobilityas".into(),
         };
-        let run = app.cloud_prototype.production.setup_run.as_mut().unwrap();
+        let run = app.cloud_prototype.production.setup_runs.first_mut().unwrap();
         run.proof = Some(proof::Proof::failed_on(fix.clone()));
         let agent = run.panel;
         let browsers = |app: &crate::app::HorizonApp| {
@@ -630,12 +597,12 @@ mod tests {
                 .map(|panel| (panel.id, panel.workspace_id))
                 .collect::<Vec<_>>()
         };
-        app.cloud_repository_setup_action(&ctx, run::Action::Fix(access::Fixer::Agent));
+        app.cloud_repository_setup_action(&ctx, agent, run::Action::Fix(access::Fixer::Agent));
         let opened = browsers(&app);
         assert_eq!(opened.len(), 1);
         let workspace = app.board.panel(agent).unwrap().workspace_id;
         assert_eq!(opened[0].1, workspace, "the agent's browser tools reach it");
-        let run = app.cloud_prototype.production.setup_run.as_ref().unwrap();
+        let run = app.cloud_prototype.production.setup_runs.first().unwrap();
         assert_eq!(run.fix_panel, Some(opened[0].0));
         assert!(
             app.board.panel(opened[0].0).unwrap().transient,
@@ -643,15 +610,15 @@ mod tests {
         );
         assert_eq!(run.fixer, Some(access::Fixer::Agent));
         assert!(run.submit_at.is_some(), "the task went to the agent");
-        app.cloud_repository_setup_action(&ctx, run::Action::Fix(access::Fixer::Person));
+        app.cloud_repository_setup_action(&ctx, agent, run::Action::Fix(access::Fixer::Person));
         assert_eq!(browsers(&app), opened, "a second try keeps the panel and its sign-in");
         app.close_panel(opened[0].0);
-        app.cloud_repository_setup_action(&ctx, run::Action::ShowFix);
+        app.cloud_repository_setup_action(&ctx, agent, run::Action::ShowFix);
         let reopened = browsers(&app);
         assert_eq!(reopened.len(), 1, "a closed panel opens again");
         assert_ne!(reopened[0].0, opened[0].0);
         assert_eq!(
-            app.cloud_prototype.production.setup_run.as_ref().unwrap().fix_panel,
+            app.cloud_prototype.production.setup_runs.first().unwrap().fix_panel,
             Some(reopened[0].0)
         );
         app.close_panel(agent);
@@ -661,10 +628,10 @@ mod tests {
             "the panel goes when the agent's panel closes"
         );
         assert_eq!(
-            app.cloud_prototype.production.setup_run.as_ref().unwrap().fix_panel,
+            app.cloud_prototype.production.setup_runs.first().unwrap().fix_panel,
             None
         );
-        app.cloud_repository_setup_action(&ctx, run::Action::Stop);
+        app.cloud_repository_setup_action(&ctx, agent, run::Action::Stop);
         assert!(browsers(&app).is_empty(), "the panel goes with the run");
         assert_eq!(fix.url(), horizon_core::cloud_runtime::github::publish::APP_PAGE);
     }

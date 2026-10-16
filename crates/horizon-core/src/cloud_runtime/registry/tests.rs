@@ -1,4 +1,6 @@
 use super::*;
+mod direct_host;
+mod host_login;
 #[cfg(unix)]
 use base64::Engine as _;
 
@@ -566,3 +568,6 @@ fn registry_work_without_a_runpod_key_says_so_and_creates_nothing() {
     );
     assert!(!root.path().join("registry").exists(), "no registry state is created");
 }
+
+#[cfg(unix)]
+mod docker_context;

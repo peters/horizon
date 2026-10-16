@@ -373,10 +373,13 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
     *app.cloud_prototype.production.setup.draft.as_mut().unwrap().runpod_key = "unsaved-compute".into();
     app.manage_cloud_registry(
         &ctx,
-        registry::Action::Revoke {
-            repository: original.repository.clone(),
-            generation: original.generation.clone(),
-        },
+        super::registry::Request::for_binding(
+            &original,
+            registry::Action::Revoke {
+                repository: original.repository.clone(),
+                generation: original.generation.clone(),
+            },
+        ),
     );
     assert!(app.cloud_prototype.production.setup.receiver.is_none());
     assert!(
@@ -399,10 +402,13 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
         .clear();
     app.manage_cloud_registry(
         &ctx,
-        registry::Action::Status {
-            repository: original.repository.clone(),
-            generation: original.generation.clone(),
-        },
+        super::registry::Request::for_binding(
+            &original,
+            registry::Action::Status {
+                repository: original.repository.clone(),
+                generation: original.generation.clone(),
+            },
+        ),
     );
     wait(&mut app, &ctx);
     assert!(
@@ -412,7 +418,7 @@ fn registry_setup_rotation_and_status_share_the_machine_policy() {
             .registry_status
             .as_ref()
             .unwrap()
-            .starts_with("Not prepared")
+            .starts_with("Provider registry access: Not prepared")
     );
     let draft = app.cloud_prototype.production.setup.draft.as_mut().unwrap();
     assert!(draft.registries[0].pull_secret.is_empty());
@@ -517,6 +523,7 @@ fn a_registry_result_keeps_or_drops_the_proof_for_the_current_grant_only() {
         repository: binding.repository.clone(),
         generation: generation.into(),
         verified,
+        fresh: false,
     };
     state.record_registry(outcome("an-older-generation", Some(validation())));
     assert!(state.verified.is_empty());
@@ -592,6 +599,70 @@ fn codex_on_chatgpt_sign_in_holds_the_banner_until_this_computer_signs_in() {
         Tone::Ready
     );
     assert_eq!(agents_status(&signed_in, false), (Tone::Ready, "Ready"));
+}
+
+#[test]
+fn a_claude_setup_token_is_kept_like_a_key_and_shows_when_it_runs_out() {
+    use super::dashboard::{Readiness, Tone, Verified, agents_status};
+    use crate::app::test_support::raw_input;
+    use horizon_core::cloud_runtime::setup::{Agent, Authentication};
+    let temp = tempfile::tempdir().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    *draft.runpod_key = "synthetic-compute".into();
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::Token;
+    let verified = Verified::new();
+    assert!(
+        Readiness::of(&draft, Some(true), &verified, false)
+            .cause
+            .contains("Claude setup token")
+    );
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Needs a key"));
+    *draft.claude_token = "synthetic-setup-token".into();
+    assert_eq!(agents_status(&draft, false), (Tone::Attention, "Unsaved key"));
+    let render = |draft: &mut Draft| {
+        let ctx = Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(raw_input([1280.0, 900.0], None), |ui| {
+                fields::agents(
+                    ui,
+                    draft,
+                    &mut fields::Edits::default(),
+                    &mut super::chatgpt::Card::default(),
+                    false,
+                );
+            });
+            output.textures_delta.clear();
+            texts = output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+        }
+        assert!(texts.iter().all(|text| !text.contains("synthetic-setup-token")));
+        texts
+    };
+    let typed = render(&mut draft);
+    for choice in ["API key", "Setup token", "Sign in on the worker"] {
+        assert!(typed.iter().any(|text| text == choice), "{choice} in {typed:?}");
+    }
+    draft.save().unwrap();
+    let mut draft = Draft::load(temp.path()).unwrap();
+    assert!(draft.anthropic_auth == Authentication::Token);
+    assert_eq!(agents_status(&draft, false), (Tone::Ready, "Ready"));
+    let token = draft.settings.claude_token.clone().unwrap();
+    let expiry = format!(
+        "Saved {}. Runs out about {}.",
+        token.saved_on().unwrap(),
+        token.expires_on().unwrap()
+    );
+    let saved = render(&mut draft);
+    assert!(saved.contains(&expiry), "{expiry} in {saved:?}");
+    assert!(saved.iter().any(|text| text == "Saved on this computer"));
 }
 
 #[test]
@@ -745,5 +816,52 @@ fn settings_open_at_their_final_size_and_position() {
             "{size:?}: dialog {dialog:?} exceeds {viewport:?}"
         );
         app.cancel_cloud_accounts();
+    }
+}
+
+mod host_pull;
+mod registry_edit;
+
+#[test]
+fn registry_edit_stays_open_when_settings_are_configured_and_returns_for_review() {
+    for save in [false, true] {
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        let root = temp.path().join("cloud");
+        app.cloud_prototype.root = Some(root.clone());
+        app.edit_creation_registry(&ctx, Some("registry.example/team/worker".into()));
+        let (sender, receiver) = channel();
+        app.cloud_prototype.production.setup.receiver = Some(receiver);
+        sender
+            .send(Completion::Loaded(Box::new(Loaded {
+                draft: Draft::load(&root).unwrap(),
+                configured: true,
+                ssh_ready: true,
+                verified: dashboard::Verified::default(),
+                needed: Some(("registry.example/team/worker".into(), None)),
+            })))
+            .unwrap();
+        app.poll_cloud_accounts(&ctx);
+        assert!(
+            app.cloud_prototype.production.setup.open,
+            "registry settings must remain editable"
+        );
+        assert!(app.cloud_prototype.production.setup.resumes_creation());
+        assert!(!app.cloud_prototype.production.creating);
+        if save {
+            let (sender, receiver) = channel();
+            app.cloud_prototype.production.setup.receiver = Some(receiver);
+            sender.send(Completion::Saved(Vec::new())).unwrap();
+            app.poll_cloud_accounts(&ctx);
+        } else {
+            app.cancel_cloud_accounts();
+        }
+        assert!(!app.cloud_prototype.production.setup.open);
+        assert!(app.cloud_prototype.production.creating);
+        assert!(!app.cloud_prototype.production.launch.submitted);
+        assert!(!app.cloud_prototype.production.launch.accounts_checked);
+        assert!(app.cloud_prototype.production.pending_creation.is_none());
+        assert!(!root.exists(), "synthetic completion must not write settings");
     }
 }

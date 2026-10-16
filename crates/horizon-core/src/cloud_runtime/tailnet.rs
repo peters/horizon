@@ -1,11 +1,24 @@
 //! Thin deployment adapter for cloud-only tailnet enrollment.
+mod capture;
+#[cfg(feature = "tailnet-node-cleanup")]
+pub mod cleanup;
 mod keychain;
+pub mod receipt;
 use super::{Error, Result, WorkerContract, command::Runner, ssh::Connection, state};
 pub use horizon_cloud::tailnet::{
     ApiCredential, ApiCredentialKind, ApiCredentialStatus, Catalog, Selection, Store, Tailnet, valid_key,
 };
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
+
+/// A nonsecret observation shared by Settings, CLI status and MCP inventory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "status", content = "credential", rename_all = "snake_case")]
+pub enum ApiCredentialObservation {
+    Pending,
+    Unavailable,
+    Ready(ApiCredentialStatus),
+}
 
 #[must_use]
 pub fn store(root: &Path) -> Store {
@@ -246,10 +259,10 @@ while time.monotonic() < deadline:
 sys.exit(1)
 "#;
 
-/// Read only the public device snapshot, without copying its peers into logs or state.
-/// The read follows enrollment; every deployment/reconnection refreshes the observation.
+/// Persist the enrolled device identity before reading its separate public display name.
+/// Every selected deployment/reconnection captures Self.ID before later readiness work.
 /// # Errors
-/// Propagates selection corruption or cancellation; an unavailable snapshot is optional.
+/// Refuses unrecorded enrollment or cancellation; only the display-name snapshot is optional.
 pub(super) fn configure_and_record(
     connection: &Connection,
     store: &state::Store,
@@ -257,7 +270,9 @@ pub(super) fn configure_and_record(
     contract: &super::worker_contract::WorkerContract,
     runner: &Runner<'_>,
 ) -> Result<()> {
-    configure(connection, store.root(), runner, contract)?;
+    capture::configure_and_record(connection, store, state, contract, runner, || {
+        configure(connection, store.root(), runner, contract)
+    })?;
     state.tailnet_device = device_name(connection, store.root(), &state.cloud_id, contract, runner)?;
     store.save(state)
 }
@@ -307,6 +322,32 @@ fn observe_device_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_observations_distinguish_pending_unavailable_and_stored_source_without_values() {
+        for observation in [
+            ApiCredentialObservation::Pending,
+            ApiCredentialObservation::Unavailable,
+            ApiCredentialObservation::Ready(ApiCredentialStatus::Missing),
+            ApiCredentialObservation::Ready(ApiCredentialStatus::Stored(ApiCredentialKind::PersonalToken)),
+            ApiCredentialObservation::Ready(ApiCredentialStatus::Stored(ApiCredentialKind::OAuth)),
+        ] {
+            let json = serde_json::to_value(observation).unwrap();
+            assert_eq!(
+                serde_json::from_value::<ApiCredentialObservation>(json.clone()).unwrap(),
+                observation
+            );
+            assert!(!json.to_string().contains("token\":"));
+        }
+        assert_eq!(
+            serde_json::to_value(ApiCredentialObservation::Pending).unwrap(),
+            serde_json::json!({"status":"pending"})
+        );
+        assert_eq!(
+            serde_json::to_value(ApiCredentialObservation::Unavailable).unwrap(),
+            serde_json::json!({"status":"unavailable"})
+        );
+    }
 
     #[test]
     fn tagged_enrollment_is_required_only_when_a_tailnet_is_selected() {

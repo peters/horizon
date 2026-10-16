@@ -12,6 +12,7 @@ fn cloud(issue: u32, id: &str, workspace: &str) -> CloudGroup {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n").unwrap();
     let mut group = CloudGroup::new(issue, id.into(), workspace.into(), "/synthetic".into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: id.into(),
         revision: "a".repeat(40),
@@ -31,6 +32,32 @@ fn operation(action: intent::Action, state: intent::State, phase: Phase) -> Oper
             state,
         },
         phase,
+    }
+}
+
+/// An operation of Upkeep `source` that has settled at `phase`, as its job reports it.
+pub(super) fn settled(source: &str, alias: &str, action: intent::Action, phase: Phase) -> Submitted {
+    let state = if phase == Phase::Refused {
+        intent::State::Failed
+    } else {
+        intent::State::Succeeded
+    };
+    Submitted {
+        operation: operation(action, state, phase),
+        context: Context {
+            source: Target {
+                scope: Scope {
+                    session_id: "session".into(),
+                    workspace_id: "workspace".into(),
+                },
+                cloud_id: source.into(),
+                declaration: Declaration::new("example/source", "dev"),
+            },
+            declarations: std::collections::BTreeMap::new(),
+            inventory: Vec::new(),
+        },
+        alias: alias.into(),
+        settings: Err("not read".into()),
     }
 }
 
@@ -69,6 +96,38 @@ fn snapshot() -> Snapshot {
         publication_error: None,
         notice: None,
     }
+}
+
+#[test]
+fn companion_request_poll_loads_tailnet_metadata_with_settings_closed() {
+    let (temp, mut app) = crate::app::test_support::test_app();
+    let root = temp.path().join("cloud");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("tailnets.json"), br#"{"tailnets":[]}"#).unwrap();
+    app.cloud_prototype.root = Some(root.clone());
+    app.cloud_prototype.production.tailnets = crate::app::tailnets::State::for_root_fixture(root.clone());
+    assert!(app.settings.is_none());
+    assert!(app.companion_listing("workspace")["tailnets"].is_null());
+    let ctx = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app
+        .cloud_prototype
+        .production
+        .tailnets
+        .cached_catalog_at(&root)
+        .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "background catalog load must settle without Settings"
+        );
+        app.poll_cloud_companion_requests(&ctx);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let listing = app.companion_listing("workspace");
+    assert_eq!(listing["tailnets"], json!([]));
+    assert_eq!(listing["tailnet_api_credentials"], json!({}));
+    assert!(app.settings.is_none());
 }
 
 /// An app with an agent panel in workspace `agents`, whose cloud `source` declares the
@@ -276,6 +335,7 @@ fn settled_and_confirmation_answers_start_nothing() {
                 operation,
                 context: context.clone(),
                 alias: "consumer".into(),
+                settings: Err("not read".into()),
             },
             &ctx,
         );
@@ -329,8 +389,9 @@ fn a_status_poll_never_starts_a_recorded_operation() {
         operation: operation(intent::Action::EnsureReady, intent::State::Submitted, Phase::Submitted),
         context: context.clone(),
         alias: "consumer".into(),
+        settings: Err("not read".into()),
     };
-    let (answer, started) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    let (answer, started) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert!(!started);
     assert_eq!(answer["phase"], "submitted");
     // Nothing runs it, so polling alone would wait forever: the agent must resend.
@@ -341,13 +402,14 @@ fn a_status_poll_never_starts_a_recorded_operation() {
     // While it runs on its card, polling is enough.
     let agent = &mut app.cloud_prototype.production.companions.agent;
     agent.executing.insert("target".into());
-    let (answer, _) = app.answer_submitted(&request("status"), "source", submitted(), &ctx);
+    let (answer, _) = app.answer_submitted(reads_only(&request("status")), false, "source", submitted(), &ctx);
     assert_eq!(answer["resend"], false);
     assert_eq!(answer["message"], hint(Phase::Submitted));
     app.cloud_prototype.production.companions.agent.executing.clear();
     // The same operation sent again as Ensure Ready tries to continue it on its card,
     // which is not open here.
-    let (answer, started) = app.answer_submitted(&request("ensure_ready"), "source", submitted(), &ctx);
+    let (answer, started) =
+        app.answer_submitted(reads_only(&request("ensure_ready")), false, "source", submitted(), &ctx);
     assert!(!started);
     assert_ne!(answer["message"], hint(Phase::Submitted));
     assert_eq!(answer["resend"], true);

@@ -98,6 +98,7 @@ impl HorizonApp {
         self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
+        #[cfg(feature = "cloud-workspaces")]
         self.end_cloud_repository_setup_for_exit();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
             tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
@@ -193,6 +194,7 @@ impl HorizonApp {
         self.git_watchers.clear();
         self.release_active_session_lease();
         // After the terminals shut down, so a setup agent has had its hang-up.
+        #[cfg(feature = "cloud-workspaces")]
         self.end_cloud_repository_setup_for_exit();
     }
 

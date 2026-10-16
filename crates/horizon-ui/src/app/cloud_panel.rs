@@ -1,5 +1,7 @@
 mod codex_login_sync;
 mod fullscreen;
+#[cfg(feature = "cloud-workspaces")]
+mod image_destinations;
 mod new_cloud_view;
 mod ownership;
 mod production;
@@ -43,6 +45,10 @@ pub(super) struct CloudPrototype {
 
 #[cfg(feature = "cloud-workspaces")]
 impl CloudPrototype {
+    pub(super) fn reopen_tailnets(&mut self, editor: &mut super::tailnets::State) {
+        self.production.tailnets.reopen_settings(editor);
+    }
+
     pub(super) fn reload_tailnets(&mut self, editor: super::tailnets::State) {
         self.production.tailnets.reload_after(editor);
     }
@@ -404,8 +410,7 @@ impl HorizonApp {
 
     pub(super) fn add_mock_cloud(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
-            self.cloud_prototype.production.creating = true;
-            self.cloud_prototype.production.focus_title_on_open = true;
+            self.cloud_prototype.production.open_creation();
             return;
         }
         let workspace = self.board.ensure_workspace();
@@ -1036,6 +1041,7 @@ mod tests {
         let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [0.0, 0.0]);
         let mut config = cloud_panel::CloudConfig::parse("version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: runpod\n    image: registry.example/fixture\n    cpu: 8\n    memory_gb: 32\n").unwrap();
         group.remote = Some(cloud_panel::CloudLaunch {
+            publishing_selection: None,
             id: "fixture".into(),
             revision: "a".repeat(40),
             deployment_started: false,

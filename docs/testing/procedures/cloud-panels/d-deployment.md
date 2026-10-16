@@ -536,8 +536,8 @@ before Horizon requests a worker. It uses the changed settings of D06.
 6. Click **Open Container registry**.
 
    Result: **Cloud settings** opens. The banner says
-   `Add credentials for docker.io/<unowned>/d07-worker, which this cloud's
-   .horizon/cloud.yml names.` The **Container registry** card is in view.
+   `Add credentials for docker.io/<unowned>/d07-worker, the image repository this
+   cloud uses.` The **Container registry** card is in view.
 
 7. Examine the **Container registry** card.
 

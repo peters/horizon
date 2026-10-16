@@ -187,10 +187,10 @@ fn a_preflight_refusal_returns_the_healthy_cloud_to_its_watch_loop() {
 
 #[test]
 #[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
-fn a_resize_that_met_an_idle_stop_reports_the_stopped_cloud_as_readable() {
+fn a_resize_that_met_another_stop_reports_the_stopped_cloud_as_readable() {
     let root = tempfile::tempdir().unwrap();
     let mut stopped = ready().state.unwrap();
-    // The idle stop holds the record while the resize fails on it.
+    // Another stop holds the record while the resize fails on it.
     let stop = Store::lock(root.path()).unwrap();
     let cancel = cloud_runtime::Cancellation::default();
     let (sender, receiver) = std::sync::mpsc::channel();

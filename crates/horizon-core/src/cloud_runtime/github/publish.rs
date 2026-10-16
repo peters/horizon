@@ -15,6 +15,8 @@ use horizon_cloud::github::{Client, Secret};
 use std::path::Path;
 use zeroize::{Zeroize as _, Zeroizing};
 
+pub mod publication;
+
 /// Horizon's own OAuth app "Horizon": public, with device sign-in on. Its tokens carry
 /// scopes, which the package registry requires.
 const CLIENT_ID: &str = "Ov23liPNCPgWraJDo6XM";
@@ -38,6 +40,7 @@ const REFUSED: &str = "GitHub did not let Horizon publish images; the output say
 pub struct Publisher<'a> {
     pub docker_config: &'a Path,
     pub cloud_id: &'a str,
+    pub prepared: Option<&'a publication::Prepared>,
 }
 
 impl Publisher<'_> {
@@ -45,7 +48,10 @@ impl Publisher<'_> {
     /// # Errors
     /// As [`login`].
     pub fn login(&self, image: &str, runner: &Runner<'_>) -> Result<()> {
-        login(self.docker_config, image, self.cloud_id, runner)
+        match self.prepared {
+            Some(prepared) => prepared.renew(self.docker_config, self.cloud_id, runner),
+            None => login(self.docker_config, image, self.cloud_id, runner),
+        }
     }
 }
 
@@ -108,9 +114,17 @@ pub fn login(docker_config: &Path, image: &str, cloud_id: &str, runner: &Runner<
 /// The directory or its file cannot be written.
 pub fn build_config(docker_config: &Path) -> Result<(tempfile::TempDir, bool)> {
     let machine = std::env::var_os("DOCKER_CONFIG")
+        .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".docker")));
     build_config_with(docker_config, machine.as_deref())
+}
+
+/// A private Docker configuration retaining only the machine's daemon context and plugins.
+/// It never reads a stored publication chain or copies registry logins and helpers.
+pub(in crate::cloud_runtime) fn empty_build_config() -> Result<tempfile::TempDir> {
+    let empty = private_tempdir("horizon-empty-docker-")?;
+    build_config(empty.path()).map(|(config, _)| config)
 }
 
 /// The settings of the machine's Docker configuration that hold no credentials; proxy
@@ -122,7 +136,7 @@ const MACHINE_SETTINGS: &[&str] = &["currentContext", "cliPluginsExtraDirs"];
 const MACHINE_SETTINGS: &[&str] = &["cliPluginsExtraDirs"];
 
 fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(tempfile::TempDir, bool)> {
-    let directory = tempfile::Builder::new().prefix("horizon-build-docker-").tempdir()?;
+    let directory = private_tempdir("horizon-build-docker-")?;
     let login = if docker_config.join(STORE).is_file() {
         // The lock is held while the login renews; a renewal that fails says so instead of
         // turning into an anonymous pull that a private base then refuses.
@@ -142,6 +156,7 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
         None => Config(serde_json::json!({ "auths": {} })),
     };
     if let Some(machine) = machine {
+        let machine = std::path::absolute(machine)?;
         // Contexts (with any TLS files a remote context keeps) and plugins: what Docker
         // needs to reach its daemon. Never registry logins or credential helpers.
         let settings = std::fs::read(machine.join("config.json"))
@@ -164,6 +179,17 @@ fn build_config_with(docker_config: &Path, machine: Option<&Path>) -> Result<(te
     let bytes = stored::serialized(|writer| serde_json::to_writer(writer, &config.0))?;
     write_private(directory.path(), "config.json", &bytes)?;
     Ok((directory, signed_in))
+}
+
+fn private_tempdir(prefix: &str) -> Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(builder.tempdir()?)
 }
 
 /// The organization that keeps Horizon's own login from pulling a `ghcr.io` image named
@@ -256,8 +282,41 @@ fn current(docker_config: &Path, client: &Client) -> Result<Option<(String, Secr
 }
 
 fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runner<'_>) -> Result<(String, Secret)> {
+    sign_in_user(docker_config, client, cloud_id, runner).map(|(user, token)| (user.login, token))
+}
+
+fn sign_in_user(
+    docker_config: &Path,
+    client: &Client,
+    cloud_id: &str,
+    runner: &Runner<'_>,
+) -> Result<(horizon_cloud::github::User, Secret)> {
+    sign_in_as(docker_config, client, cloud_id, None, runner)
+}
+
+fn sign_in_as(
+    docker_config: &Path,
+    client: &Client,
+    cloud_id: &str,
+    expected: Option<&publication::Account>,
+    runner: &Runner<'_>,
+) -> Result<(horizon_cloud::github::User, Secret)> {
+    let result = sign_in_as_inner(docker_config, client, cloud_id, expected, runner);
+    (runner.emit)(Event::GitHub(Prompt::Published {
+        allowed: result.is_ok(),
+    }));
+    result
+}
+
+fn sign_in_as_inner(
+    docker_config: &Path,
+    client: &Client,
+    cloud_id: &str,
+    expected: Option<&publication::Account>,
+    runner: &Runner<'_>,
+) -> Result<(horizon_cloud::github::User, Secret)> {
+    runner.cancel.check()?;
     let say = |text: String| (runner.emit)(Event::Output(format!("GitHub: {text}")));
-    let ended = || (runner.emit)(Event::GitHub(Prompt::Published { allowed: false }));
     // A Skip from an earlier attempt does not end this one.
     signin::skipped(cloud_id);
     say("this cloud's image goes to ghcr.io; asking GitHub to let Horizon publish images for you.".into());
@@ -269,31 +328,34 @@ fn sign_in(docker_config: &Path, client: &Client, cloud_id: &str, runner: &Runne
     let chain = match signin::device_chain(client, CLIENT_ID, Some(SCOPE), cloud_id, runner, prompt) {
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => {
-            ended();
             return Err(error);
         }
         Err(signin::Ended::Skipped) => {
-            ended();
             return Err(Error::Invalid(SKIPPED));
         }
         Err(signin::Ended::Reason(reason)) => {
             say(reason);
-            ended();
             return Err(Error::Invalid(REFUSED));
         }
     };
+    runner.cancel.check()?;
     let user = match client.user(&chain.access_token) {
         Ok(user) => user,
         Err(error) => {
             say(error.to_string());
-            ended();
             return Err(Error::Invalid(REFUSED));
         }
     };
+    runner.cancel.check()?;
+    if let Some(expected) = expected {
+        expected.check(&publication::Account {
+            id: user.id,
+            login: user.login.clone(),
+        })?;
+    }
     stored::save(&docker_config.join(STORE), &user.login, &chain, false)?;
     say(format!("Horizon may now publish images as {}.", user.login));
-    (runner.emit)(Event::GitHub(Prompt::Published { allowed: true }));
-    Ok((user.login, chain.access_token))
+    Ok((user, chain.access_token))
 }
 
 /// Sets `ghcr.io` in `docker_config/config.json` to `login` and `token`, keeping every

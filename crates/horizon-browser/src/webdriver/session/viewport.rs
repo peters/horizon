@@ -55,7 +55,7 @@ impl Driver {
         match result {
             Ok(pending) => {
                 self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
-                self.finish_pending_resize("viewport_superseded", "a newer resize replaced this request");
+                self.finish_pending_resize("viewport_superseded", "a newer viewport change replaced this request");
                 self.pending_resize = Some(pending);
             }
             Err(error) => {
@@ -69,6 +69,14 @@ impl Driver {
         &self,
         request: &AgentAction,
     ) -> Result<crate::session::viewport::PendingResize, BrowserControlFailure> {
+        if matches!(request.action, crate::BrowserControlAction::Zoom { .. })
+            && (self.host.is_remote() || !self.firefox_bidi())
+        {
+            return Err(BrowserControlFailure::new(
+                "unsupported_backend",
+                "page zoom requires local Chromium or local Firefox; Safari and remote sessions cannot zoom",
+            ));
+        }
         if self.host.is_remote() {
             return Err(BrowserControlFailure::new(
                 "remote_viewport_fixed",
@@ -119,6 +127,26 @@ impl Driver {
         }
     }
 
+    /// Follow a panel resize. A zoomed page gets the panel size divided by
+    /// the zoom. The frame override that the host letterboxes and maps input
+    /// onto is published only after Firefox applied that viewport; a failed
+    /// update is retried by the restoration tick.
+    pub(super) fn follow_host_viewport(&mut self, events: &BrowserEventSender) {
+        let Some(target) = self.viewport_policy.frame_override() else {
+            let [width, height] = self.viewport_policy.applied();
+            self.set_viewport(width, height, events);
+            return;
+        };
+        match self.apply_explicit_viewport(target, Duration::from_secs(1), events) {
+            Ok(()) => self.panel_slot.set_viewport_override(Some(target)),
+            Err(error) => {
+                self.viewport_context = None;
+                self.viewport_retry.failed();
+                tracing::debug!("zoomed viewport update pending: {}", error.message);
+            }
+        }
+    }
+
     fn restore_viewport_binding(&mut self, events: &BrowserEventSender) {
         let Some(target) = self
             .viewport_policy
@@ -129,9 +157,12 @@ impl Driver {
         if !self.viewport_retry.due(self.context_id.as_deref()) {
             return;
         }
-        if let Err(error) = self.apply_explicit_viewport(target, Duration::from_millis(100), events) {
-            self.viewport_retry.failed();
-            tracing::debug!("viewport restoration pending: {}", error.message);
+        match self.apply_explicit_viewport(target, Duration::from_millis(100), events) {
+            Ok(()) => self.panel_slot.set_viewport_override(Some(target)),
+            Err(error) => {
+                self.viewport_retry.failed();
+                tracing::debug!("viewport restoration pending: {}", error.message);
+            }
         }
     }
 
@@ -185,7 +216,7 @@ impl Driver {
         if !pending.poll_due() || self.context_id.is_none() {
             return Ok(None);
         }
-        let target = self.viewport_policy.target(pending.requested);
+        let target = self.viewport_policy.with(pending.change).applied();
         if pending.target != target {
             pending.bound_session = None;
             pending.target = target;
@@ -197,8 +228,9 @@ impl Driver {
                 return Ok(None);
             }
             result?;
-            self.viewport_policy.commit(pending.requested);
-            self.panel_slot.set_viewport_override(pending.requested);
+            self.viewport_policy.commit(pending.change);
+            self.panel_slot
+                .set_viewport_override(self.viewport_policy.frame_override());
             pending.bound_session = context;
             return Ok(None);
         }
@@ -460,6 +492,7 @@ pub(in crate::webdriver::session) mod tests {
             Some(BrowserControlValue::Viewport {
                 requested: viewport,
                 applied: viewport.unwrap_or([900, 600]),
+                zoom_percent: 100,
             })
         );
     }
@@ -623,6 +656,43 @@ pub(in crate::webdriver::session) mod tests {
             4,
             "acknowledgement measures classic WebDriver dimensions"
         );
+    }
+
+    #[test]
+    fn a_zoomed_firefox_panel_publishes_its_override_only_after_the_viewport_applies() {
+        for refuse in [true, false] {
+            let classic = Server::start(vec![]);
+            let (link, worker) = bidi_fixture(refuse, false);
+            let mut state = fixture_driver(&classic, link);
+            state
+                .viewport_policy
+                .commit(crate::session::viewport::ViewportChange::Zoom(Some(200)));
+            state.viewport_context = Some("first".into());
+            state.panel_slot.set_viewport_override(Some([450, 300]));
+            assert!(state.viewport_policy.follow_host([1000, 700]));
+
+            state.follow_host_viewport(&events());
+
+            if refuse {
+                assert_eq!(
+                    state.panel_slot.viewport_override(),
+                    Some([450, 300]),
+                    "a refused update keeps the old override"
+                );
+                assert_eq!(state.viewport_context, None, "the restoration tick retries it");
+                assert_eq!(
+                    state.viewport_policy.rebind_target(None, Some("first")),
+                    Some([500, 350])
+                );
+            } else {
+                assert_eq!(state.panel_slot.viewport_override(), Some([500, 350]));
+                assert_eq!(state.viewport_context.as_deref(), Some("first"));
+            }
+            drop(state);
+            let commands = worker.join().unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0]["params"]["viewport"], json!({"width":500,"height":350}));
+        }
     }
 
     #[test]

@@ -2,10 +2,14 @@
 #![forbid(unsafe_code)]
 #[path = "cloud_deploy/choice.rs"]
 mod choice;
+#[path = "cloud_deploy/publishing.rs"]
+mod publishing;
 #[path = "cloud_deploy/registry.rs"]
 mod registry;
 #[path = "cloud_deploy/registry_mcp.rs"]
 mod registry_mcp;
+#[path = "cloud_deploy/tailnets.rs"]
+mod tailnets;
 use horizon_core::cloud_runtime::{
     self, Cancellation, Event,
     deployment::{self, replacement},
@@ -15,6 +19,8 @@ use horizon_core::cloud_runtime::{
     state::Store,
 };
 use std::{path::PathBuf, process::ExitCode};
+const USAGE: &str = "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID] | offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|take-stop|resume|reconnect|endpoint|delete|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. take-stop reads an agent's stop request of a Hetzner or Docker host cloud once and stops the cloud for it, as the card does every 30 s. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.";
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -26,24 +32,29 @@ fn main() -> ExitCode {
 }
 fn run() -> cloud_runtime::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    run_args(&args)
+}
+
+fn run_args(args: &[String]) -> cloud_runtime::Result<()> {
     if args.first().is_some_and(|command| command == "registry-mcp") && args.len() == 2 {
         return registry_mcp::serve(PathBuf::from(&args[1]));
     }
     if args.first().is_some_and(|command| command.starts_with("registry")) {
-        return registry::run(&args);
+        return registry::run(args);
     }
     if args.first().is_some_and(|command| command == "offers") && (2..=3).contains(&args.len()) {
         return offers(&PathBuf::from(&args[1]), args.get(2).map(String::as_str));
     }
-    if args.len() < 3 {
-        return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy offers SETTINGS [REQUIREMENTS_JSON] | plan-deploy|deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] [--quick-start] [--worker-choice OFFER_JSON_FILE] [--plan-token PLAN_TOKEN] (deploy and prepare-image) [--sibling ALIAS=PATH[@REVISION]]... (deploy only) | stop|resume|reconnect|endpoint|delete|idle-check|revoke-browserstack|continue-rebuild|cancel-rebuild SETTINGS STATE_ROOT | plan-rebuild|rebuild SETTINGS STATE_ROOT PROFILE [PLAN_TOKEN] (rebuild only) | reconcile SETTINGS STATE_ROOT [WORKER_ID]. reconnect never creates a first worker; after a Hetzner resume it creates the new server on the same workspace volume. --quick-start uses the built-in quick-start profile on the public base image for a commit without .horizon/cloud.yml. On the checked-out commit the image builds from the working copy, as in New cloud: plan-deploy lists its uncommitted files and prints the token that deploy and prepare-image then need.",
-        ));
+    if args.first().is_some_and(|command| command == "tailnets") {
+        return tailnets::run_args(args);
     }
-    let mut settings = Settings::load(&PathBuf::from(&args[1]))?;
+    if args.len() < 3 {
+        return Err(cloud_runtime::Error::Invalid(USAGE));
+    }
+    let settings = recorded_host(Settings::load(&PathBuf::from(&args[1]))?, args);
     let cancel = Cancellation::default();
     if args[0] == "reconcile" && (3..=4).contains(&args.len()) {
-        return reconcile(&args, &settings, &cancel);
+        return reconcile(args, &settings, &cancel);
     }
     if args[0] == "delete" && args.len() == 3 {
         return deployment::terminate(&PathBuf::from(&args[2]), &settings, &cancel, &print_event);
@@ -52,8 +63,8 @@ fn run() -> cloud_runtime::Result<()> {
         cloud_runtime::lifecycle::stop(&PathBuf::from(&args[2]), &settings, &cancel)?;
         return Ok(());
     }
-    if args[0] == "idle-check" && args.len() == 3 {
-        return idle_check(&PathBuf::from(&args[2]), &settings, &cancel);
+    if args[0] == "take-stop" && args.len() == 3 {
+        return take_stop(&PathBuf::from(&args[2]), &settings, &cancel);
     }
     if args[0] == "revoke-browserstack" && args.len() == 3 {
         cloud_runtime::lifecycle::revoke_browserstack(&PathBuf::from(&args[2]), &settings, &cancel)?;
@@ -79,9 +90,13 @@ fn run() -> cloud_runtime::Result<()> {
         args[0].as_str(),
         "plan-rebuild" | "rebuild" | "continue-rebuild" | "cancel-rebuild"
     ) {
-        return rebuild(&args, settings, &cancel);
+        return rebuild(args, settings, &cancel);
     }
-    let (args, worker_choice) = choice::arguments(&args)?;
+    launch(args, settings, &cancel)
+}
+
+fn launch(args: &[String], mut settings: Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    let (args, worker_choice) = choice::arguments(args)?;
     let (args, siblings) = sibling_bindings(&args)?;
     let (args, token) = plan_token(&args)?;
     let quick_start = args.iter().any(|arg| arg == "--quick-start");
@@ -93,7 +108,7 @@ fn run() -> cloud_runtime::Result<()> {
     {
         return Err(cloud_runtime::Error::Invalid("Invalid deployment arguments"));
     }
-    let prepared = launch_config(&args[2], args.get(6), quick_start, &cancel)?;
+    let prepared = launch_config(&args[2], args.get(6), quick_start, cancel)?;
     let profile = prepared
         .config
         .profiles
@@ -102,16 +117,42 @@ fn run() -> cloud_runtime::Result<()> {
         .ok_or(cloud_runtime::Error::Invalid("Profile does not exist"))?;
     // The plan token covers the profile as it is deployed, with the worker choice.
     let profile = if let Some(path) = worker_choice {
-        choice::apply(&profile, &mut settings, &path, &cancel)?
+        choice::apply(&profile, &mut settings, &path, cancel)?
     } else {
         profile
     };
     let files = uncommitted_files(&prepared, &profile)?;
+    let image_selection = publishing::selection(
+        &prepared.repository,
+        &args[3],
+        &profile,
+        &settings,
+        &PathBuf::from(&args[4]),
+        &args[5],
+        cancel,
+    )?;
     if args[0] == "plan-deploy" {
-        print_plan(&prepared.notes, &profile, &settings, files.as_ref());
+        print_plan(&prepared, &profile, &settings, &image_selection, files.as_ref());
         return Ok(());
     }
-    let working_copy = confirm(&profile, &settings, files, token.as_deref())?;
+    let working_copy = confirm(&profile, &settings, &image_selection, files, token.as_deref())?;
+    let request = deployment_request(prepared, profile, settings, &args, working_copy, image_selection);
+    if args[0] == "prepare-image" {
+        prepare_image(&request, cancel, &print_event)?;
+    } else {
+        deployment::deploy_with_siblings(&request, &siblings, cancel, &print_event)?;
+    }
+    Ok(())
+}
+
+fn deployment_request(
+    prepared: repository::launch::Prepared,
+    profile: horizon_core::cloud_panel::Profile,
+    settings: Settings,
+    args: &[String],
+    working_copy: Option<repository::uncommitted::Confirmed>,
+    image_selection: cloud_runtime::publishing::Selection,
+) -> deployment::Request {
     let mut request = deployment::Request::new(
         args[5].clone(),
         prepared.repository,
@@ -121,12 +162,9 @@ fn run() -> cloud_runtime::Result<()> {
         settings,
     );
     request.working_copy = working_copy;
-    if args[0] == "prepare-image" {
-        prepare_image(&request, &cancel, &print_event)?;
-    } else {
-        deployment::deploy_with_siblings(&request, &siblings, &cancel, &print_event)?;
-    }
-    Ok(())
+    request.profile_name = Some(args[3].clone());
+    request.publishing_selection = Some(image_selection);
+    request
 }
 
 /// The repository, revision and configuration a `deploy` or `prepare-image` launches, read
@@ -179,6 +217,7 @@ fn deploy_token(
     profile: &horizon_core::cloud_panel::Profile,
     settings: &Settings,
     files: Option<&Uncommitted>,
+    image_selection: &cloud_runtime::publishing::Selection,
 ) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
@@ -186,6 +225,7 @@ fn deploy_token(
         "placement": settings.placement,
         "data_centers": settings.data_centers,
         "gpu_types": settings.gpu_types,
+        "image_destination": image_selection,
     });
     let mut hasher = sha2::Sha256::new();
     hasher.update(repository::uncommitted::token(
@@ -202,12 +242,14 @@ fn deploy_token(
 
 /// What `plan-deploy` prints: the notes, each uncommitted file and the plan token.
 fn print_plan(
-    notes: &[String],
+    prepared: &repository::launch::Prepared,
     profile: &horizon_core::cloud_panel::Profile,
     settings: &Settings,
+    image_selection: &cloud_runtime::publishing::Selection,
     files: Option<&Uncommitted>,
 ) {
-    for note in notes {
+    publishing::show(image_selection);
+    for note in &prepared.notes {
         println!("{note}");
     }
     // An image can be pushed to a public registry, so each file is listed before a
@@ -215,7 +257,7 @@ fn print_plan(
     for file in files.map(Uncommitted::files).unwrap_or_default() {
         println!("Uncommitted file: {} {}", file.change.label(), file.path);
     }
-    let plan = deploy_token(profile, settings, files);
+    let plan = deploy_token(profile, settings, files, image_selection);
     println!("To deploy with exactly these settings and files, pass --plan-token {plan}");
 }
 
@@ -224,10 +266,11 @@ fn print_plan(
 fn confirm(
     profile: &horizon_core::cloud_panel::Profile,
     settings: &Settings,
+    image_selection: &cloud_runtime::publishing::Selection,
     files: Option<Uncommitted>,
     token: Option<&str>,
 ) -> cloud_runtime::Result<Option<repository::uncommitted::Confirmed>> {
-    let plan = deploy_token(profile, settings, files.as_ref());
+    let plan = deploy_token(profile, settings, files.as_ref(), image_selection);
     let confirmed = token.map_or_else(
         || files.as_ref().is_none_or(Uncommitted::is_empty),
         |token| token == plan,
@@ -403,7 +446,10 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
         .load()?
         .ok_or(cloud_runtime::Error::Invalid("No cloud deployment"))?;
     if let ("plan-rebuild", Some(profile), 4) = (args[0].as_str(), args.get(3), args.len()) {
-        let plan = replacement::plan(&state.repository, &state.profile, profile, cancel)?;
+        let plan = replacement::plan_for_cloud(&state, profile, cancel)?;
+        if let Some(publication) = &plan.publication {
+            publishing::show(&publishing::retained(publication)?);
+        }
         for note in &plan.notes {
             println!("{note}");
         }
@@ -419,30 +465,32 @@ fn rebuild(args: &[String], settings: Settings, cancel: &Cancellation) -> cloud_
             println!("Uncommitted file: {} {}", file.change.label(), file.path);
         }
         println!(
-            "To rebuild with exactly these settings and files, pass {} to rebuild",
+            "To rebuild with exactly these settings, publishing identity and files, pass {} to rebuild",
             plan.token()
         );
         return Ok(());
     }
     let request = deployment::Request::new(
-        state.cloud_id,
-        state.repository,
-        state.revision,
-        state.profile,
+        state.cloud_id.clone(),
+        state.repository.clone(),
+        state.revision.clone(),
+        state.profile.clone(),
         root,
         settings,
     );
     match (args[0].as_str(), args.get(3)) {
         ("rebuild", Some(profile)) if matches!(args.len(), 4 | 5) => {
-            // The token confirms what plan-rebuild printed: the settings and the uncommitted
-            // files. Without one, only a plan without uncommitted files may run.
-            let plan = replacement::plan(&request.repository, &request.profile, profile, cancel)?;
+            // The token confirms the retained publisher as well as settings and files.
+            // Legacy clean rebuilds without publication metadata keep their existing shortcut.
+            let plan = replacement::plan_for_cloud(&state, profile, cancel)?;
             let confirmed = args
                 .get(4)
-                .map_or(plan.uncommitted.is_empty(), |token| *token == plan.token());
+                .map_or(plan.publication.is_none() && plan.uncommitted.is_empty(), |token| {
+                    *token == plan.token()
+                });
             if !confirmed {
                 return Err(cloud_runtime::Error::Invalid(
-                    "The checkout differs from the printed plan, or has uncommitted files and no token was given. Run plan-rebuild, check what it prints, and pass the token it prints",
+                    "The rebuild settings, publishing identity or files differ from the printed plan, or a required confirmation token is missing. Run plan-rebuild, check what it prints, and pass the token it prints",
                 ));
             }
             replacement::rebuild(&request, profile, Some(&plan), cancel, &print_event)
@@ -459,11 +507,18 @@ fn prepare_image(
     cancel: &Cancellation,
     emit: &dyn Fn(Event),
 ) -> cloud_runtime::Result<()> {
-    let mut registry = cloud_runtime::registry::Prepared::for_image(
+    let preparation = publishing::prepare_image(request, cancel, emit)?;
+    let mut resolved = request.clone();
+    resolved.profile = preparation.profile.clone();
+    resolved.working_copy.clone_from(&preparation.working_copy);
+    let request = &resolved;
+    let publication = preparation.publication.as_ref();
+    let mut registry = cloud_runtime::registry::Prepared::for_image_for_provider(
         &request.settings,
         &request.profile.image,
         Some(&request.repository),
-        request.profile.build.is_some(),
+        request.profile.build.is_some() && publication.is_none(),
+        horizon_cloud::provider::Description::of(&request.profile).kind,
     )?;
     let git_auth =
         cloud_runtime::git_auth::Prepared::for_repository(&request.settings.git_credentials, &request.repository)?;
@@ -510,16 +565,22 @@ fn prepare_image(
     }
     let images = cloud_runtime::image::Images {
         docker_host: request.settings.docker_host.as_deref(),
-        isolated_registry: registry.is_some(),
-        docker_config: registry
-            .as_ref()
-            .map_or(request.settings.docker_config.as_path(), |registry| {
-                registry.docker_config(request.profile.build.is_some())
-            }),
+        isolated_registry: registry.is_some() || publication.is_some(),
+        docker_config: publication.map_or_else(
+            || {
+                registry
+                    .as_ref()
+                    .map_or(request.settings.docker_config.as_path(), |registry| {
+                        registry.docker_config(request.profile.build.is_some())
+                    })
+            },
+            |publication| publication.docker_config(),
+        ),
         runner: &runner,
-        publisher: registry.is_none().then_some(cloud_runtime::github::publish::Publisher {
+        publisher: (registry.is_none() || publication.is_some()).then_some(cloud_runtime::github::publish::Publisher {
             docker_config: &request.settings.docker_config,
             cloud_id: &request.cloud_id,
+            prepared: publication,
         }),
     };
     let context = cloud_runtime::image::Context {
@@ -541,12 +602,12 @@ fn prepare_image(
 /// Ranks offers the way agents' `cloud_offers` does, from prices fetched now: `RunPod`'s
 /// in `offers`, and each other configured provider in `other_providers`, in its own
 /// currency.
-fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
+fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
     use horizon_cloud::offers::{Requirements, hetzner_section, offers};
     let requirements: Requirements = serde_json::from_str(requirements.unwrap_or("{}"))
         .map_err(|_| cloud_runtime::Error::Invalid("Invalid offer requirements"))?;
     requirements.validate().map_err(cloud_runtime::Error::Invalid)?;
-    let settings = Settings::load(settings)?;
+    let settings = Settings::load(path)?;
     let cancel = Cancellation::default();
     // A machine set up for Hetzner alone has no RunPod offers, and says why.
     let runpod = settings
@@ -564,6 +625,16 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
             .collect(),
         Err(error) => vec![serde_json::json!({"provider": "Hetzner", "error": error.to_string()})],
     };
+    let root = path.parent().unwrap_or(std::path::Path::new("."));
+    let hosts = if cloud_runtime::docker_host::hosts::wanted(&requirements) {
+        cloud_runtime::docker_host::hosts::readings(&settings, root, &cancel)
+    } else {
+        Vec::new()
+    };
+    let other_providers: Vec<_> = other_providers
+        .into_iter()
+        .chain(cloud_runtime::docker_host::hosts::section(&hosts, &requirements))
+        .collect();
     let mut answer = match &runpod {
         Some(Ok((list, preferences))) => serde_json::json!({
             "provider": list.provider,
@@ -588,6 +659,35 @@ fn offers(settings: &std::path::Path, requirements: Option<&str>) -> cloud_runti
     Ok(())
 }
 
+/// Narrows `settings` to the Docker host that the cloud recorded under its state root
+/// runs on, as a cloud card's placement does, so a machine with several saved hosts
+/// reaches it. A command that creates a cloud names no state root. The record is only
+/// read: the command takes the lock itself.
+fn recorded_host(mut settings: Settings, args: &[String]) -> Settings {
+    if matches!(args[0].as_str(), "plan-deploy" | "deploy" | "prepare-image") {
+        return settings;
+    }
+    let Ok(bytes) = std::fs::read(PathBuf::from(&args[2]).join("deployment.json")) else {
+        return settings;
+    };
+    // A record that cannot be read is left to the command itself to report.
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return settings;
+    };
+    let spec = &record["spec"];
+    if spec["profile"]["provider"] != horizon_cloud::docker_host::PROVIDER {
+        return settings;
+    }
+    let data_centers: Vec<String> = serde_json::from_value(spec["data_centers"].clone()).unwrap_or_default();
+    if !data_centers.is_empty() {
+        settings.placement = Some(horizon_core::cloud_panel::Placement {
+            data_centers,
+            ..Default::default()
+        });
+    }
+    settings
+}
+
 /// Prints the running worker's SSH endpoint as the provider reports it now, with the
 /// host key Horizon pinned, so external tools connect exactly as Horizon does.
 fn endpoint(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
@@ -608,19 +708,40 @@ fn endpoint(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) 
     Ok(())
 }
 
-/// Checks a Hetzner cloud's idle record once, stopping it after its whole idle period.
-fn idle_check(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
-    use cloud_runtime::lifecycle::IdleCheck;
-    println!(
-        "{}",
-        match cloud_runtime::lifecycle::idle_check(root, settings, cancel)? {
-            IdleCheck::NotWatched => "Not watched: no idle period, or not a running Hetzner cloud".to_owned(),
-            IdleCheck::Active { idle, limit } => format!("Active: idle {}s of {}s", idle.as_secs(), limit.as_secs()),
-            IdleCheck::Stopped { idle } => format!(
-                "Stopped after {}s idle. Resume creates a new server that attaches the same workspace volume.",
-                idle.as_secs()
-            ),
+/// Reads the agent's stop request of the cloud at `root` once, as the card does, and
+/// stops the cloud for a request the worker took.
+fn take_stop(root: &std::path::Path, settings: &Settings, cancel: &Cancellation) -> cloud_runtime::Result<()> {
+    use cloud_runtime::lifecycle::Requested;
+    match cloud_runtime::lifecycle::read_stop_request(root, settings, cancel)? {
+        Requested::Nothing => println!("No stop request"),
+        Requested::Waiting(words) => println!("Waiting: {words}"),
+        Requested::Refused(words) => println!("Dropped: {words}"),
+        Requested::Stop(stop) => {
+            println!("{} asked to stop this cloud: {}", stop.agent, stop.reason);
+            let state = cloud_runtime::lifecycle::stop_for_agent(root, settings, cancel, &stop)?;
+            println!("Stopped: {:?}", state.stage);
         }
-    );
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_tailnets_arguments_never_enter_deployment_settings_loading() {
+        for values in [
+            vec!["tailnets"],
+            vec!["tailnets", "not-a-settings-file", "id", "extra"],
+            vec!["tailnets", "not-a-settings-file", "id", "extra", "another"],
+        ] {
+            assert!(matches!(
+                run_args(&values.into_iter().map(String::from).collect::<Vec<_>>()),
+                Err(cloud_runtime::Error::Invalid(
+                    "Usage: cloud_deploy tailnets STATE_ROOT [TAILNET_ID]"
+                ))
+            ));
+        }
+    }
 }

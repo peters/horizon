@@ -227,7 +227,7 @@ impl BrowserCreateHostState {
 }
 
 impl HorizonApp {
-    pub(super) fn poll_browser_create_requests(&mut self) -> bool {
+    pub(super) fn poll_browser_create_requests(&mut self, ctx: &egui::Context) -> bool {
         let mut changed = self.apply_browser_host_io();
         changed |= self.finish_pending_browser_creates();
         let now = Instant::now();
@@ -241,7 +241,7 @@ impl HorizonApp {
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.close_ended_browser_panels();
-            changed |= self.poll_host_requests();
+            changed |= self.poll_host_requests(ctx);
             self.browser_create_host.forget_stamped_placement();
         }
         changed
@@ -343,11 +343,11 @@ impl HorizonApp {
         self.session_store.home().root()
     }
 
-    fn poll_host_requests(&mut self) -> bool {
+    fn poll_host_requests(&mut self, ctx: &egui::Context) -> bool {
         self.claim_host_requests();
         self.poll_browser_close_requests()
             | self.poll_remote_recovery()
-            | self.poll_provider_usage()
+            | self.poll_provider_usage(ctx)
             | self.poll_provider_catalog()
     }
 
@@ -1385,7 +1385,7 @@ mod tests {
         let beta = app.board.create_workspace("beta");
         let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
 
-        app.poll_browser_create_requests();
+        app.poll_browser_create_requests(&egui::Context::default());
         assert!(
             app.browser_create_host.last_request_poll.is_some(),
             "the first tick polls"
@@ -1408,7 +1408,7 @@ mod tests {
         // is not due during the checks below.
         let first_poll = Instant::now();
         app.browser_create_host.last_request_poll = Some(first_poll);
-        app.poll_browser_create_requests();
+        app.poll_browser_create_requests(&egui::Context::default());
         assert_eq!(
             app.browser_create_host.last_request_poll,
             Some(first_poll),
@@ -1432,7 +1432,7 @@ mod tests {
 
         let first_poll = Instant::now();
         app.browser_create_host.last_request_poll = Some(first_poll);
-        app.poll_browser_create_requests();
+        app.poll_browser_create_requests(&egui::Context::default());
         assert_eq!(
             app.browser_create_host.stamped_placement, after_move,
             "the next frame's poll leaves the placement to the end-of-frame check"

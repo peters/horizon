@@ -2,8 +2,8 @@
 //! finds first, as the agents on the worker do, so every image the setup builds must have
 //! one, with mode 755. Horizon's own localci checks the plan before the CI: the plan must
 //! keep a step that runs in every job. Horizon fetches its pinned release, checks it
-//! against the checksum this Horizon was built with and mounts it read-only into the
-//! proof's container; the release is a static binary, so nothing the image preloads runs
+//! against the checksum this Horizon was built with and copies it into the proof's
+//! container, owned by root so the CI's user cannot change it; the release is a static binary, so nothing the image preloads runs
 //! inside it. Horizon's localci runs the CI only for a published image without a localci
 //! of its own.
 use sha2::{Digest as _, Sha256};
@@ -30,8 +30,8 @@ const RELEASES: [(&str, &str, &str); 2] = [
 /// The largest release archive Horizon reads.
 const ARCHIVE_LIMIT: u64 = 64 * 1024 * 1024;
 
-/// Where the trusted localci is in the proof's container.
-pub(super) const MOUNTED: &str = "/opt/horizon-proof/localci";
+/// Where the trusted localci is in the proof's container, copied in before it starts.
+pub(super) const IN_CONTAINER: &str = "/opt/horizon-proof/localci";
 
 /// Where the setup agent is told to install localci for the agents on the worker.
 const IN_IMAGE: &str = "/usr/local/bin/localci";

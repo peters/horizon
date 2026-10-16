@@ -40,13 +40,14 @@ fn frame(
             |ui| {
                 let spend = strip::Spend {
                     line: String::new(),
+                    outlook: None,
                     explanation: String::new(),
                 };
                 let layout = strip::LayoutControls {
                     selected: None,
                     color: egui::Color32::LIGHT_BLUE,
                 };
-                action = strip::show(ui, header, status, indicators, &spend, false, Some(layout)).action;
+                action = strip::show(ui, header.into(), status, indicators, &spend, false, Some(layout)).action;
             },
         )
         .discard_textures();

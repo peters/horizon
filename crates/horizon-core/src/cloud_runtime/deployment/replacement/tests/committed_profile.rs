@@ -25,6 +25,86 @@ pub(super) fn changed(bound: &Profile, change: impl FnOnce(&mut Profile)) -> Clo
 }
 
 #[test]
+fn an_overridden_recipe_rebuilds_and_opens_with_its_recorded_destination() {
+    use crate::cloud_runtime::publishing::Publication;
+    let fixture = Fixture::new();
+    fixture.edit(|state| {
+        state.publication = Some(Box::new(Publication {
+            profile: "dev".into(),
+            requested_image: "ghcr.io/recipe-owner/worker".into(),
+            destination: horizon_cloud::image_publishing::Destination::bound(
+                state.profile.image.clone(),
+                "synthetic-grant".into(),
+            )
+            .unwrap(),
+            account: None,
+        }));
+    });
+    let state = fixture.state();
+    let mut recipe = state.profile.clone();
+    recipe.image = state.publication.as_deref().unwrap().requested_image.clone();
+    let configuration = config(&recipe);
+    let next = compatibility::next_profile(
+        &state.profile,
+        Some(&configuration),
+        "dev",
+        state.publication.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(next.image, state.profile.image);
+    let settings = serde_json::from_value(json!({
+        "runpod_key_file":fixture.root.join("unused"), "ssh_identity_file":fixture.root.join("unused-ssh"),
+        "docker_config":fixture.root.join("docker"), "registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]
+    }))
+    .unwrap();
+    let request = Request::new(
+        state.cloud_id,
+        state.repository,
+        state.revision,
+        recipe,
+        fixture.root.clone(),
+        settings,
+    );
+    let (_store, reopened) = open(&request).unwrap();
+    assert_eq!(reopened.profile.image, next.image);
+    assert_eq!(reopened.publication, state.publication);
+}
+
+#[test]
+fn a_published_cloud_refuses_another_rebuild_profile_even_when_its_image_matches_or_is_omitted() {
+    use crate::cloud_runtime::publishing::Publication;
+    let fixture = Fixture::new();
+    let mut state = fixture.state();
+    state.publication = Some(Box::new(Publication {
+        profile: "dev".into(),
+        requested_image: state.profile.image.clone(),
+        destination: horizon_cloud::image_publishing::Destination::bound(
+            state.profile.image.clone(),
+            "synthetic-grant".into(),
+        )
+        .unwrap(),
+        account: None,
+    }));
+    for automatic in [false, true] {
+        let mut recipe = state.profile.clone();
+        if automatic {
+            recipe.image.clear();
+        }
+        recipe.build.as_mut().unwrap().dockerfile = "Other.Dockerfile".into();
+        let mut configuration = config(&recipe);
+        configuration.profiles = [("other".into(), recipe)].into();
+        let error = compatibility::next_profile(
+            &state.profile,
+            Some(&configuration),
+            "other",
+            state.publication.as_deref(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("recorded build profile"), "{error}");
+    }
+}
+
+#[test]
 fn a_changed_or_missing_committed_profile_refuses_with_its_field_before_anything_is_journaled() {
     let fixture = Fixture::new();
     let bound = fixture.state().profile;
@@ -49,10 +129,7 @@ fn a_changed_or_missing_committed_profile_refuses_with_its_field_before_anything
         ),
         (|profile| profile.build = None, "has no build section"),
         // A rebuild setting is still checked as every profile is.
-        (
-            |profile| profile.idle_stop_minutes = Some(5),
-            "idle_stop_minutes must be between 10 and 1440",
-        ),
+        (|profile| profile.bootstrap.readiness_seconds = 5, "readiness timeout"),
         (
             |profile| profile.build.as_mut().unwrap().platform = "linux/arm64".into(),
             "platform must be linux/amd64",
@@ -111,4 +188,67 @@ fn a_workspace_grown_after_creation_is_not_a_change() {
     let mut script = Script::new(&fixture);
     script.head.config = Some(config(&committed));
     assert_eq!(rebuild_with(&fixture, &script).unwrap(), Driven::Committed);
+}
+
+#[test]
+fn a_rebuilt_explicit_recipe_can_omit_its_image_when_reconnecting_to_the_retained_publisher() {
+    use crate::cloud_runtime::publishing::Publication;
+    let fixture = Fixture::new();
+    let original_image = "ghcr.io/recipe-owner/worker";
+    fixture.edit(|state| {
+        state.publication = Some(Box::new(Publication {
+            profile: "dev".into(),
+            requested_image: original_image.into(),
+            destination: horizon_cloud::image_publishing::Destination::bound(
+                state.profile.image.clone(),
+                "synthetic-grant".into(),
+            )
+            .unwrap(),
+            account: None,
+        }));
+    });
+    let mut recipe = fixture.state().profile;
+    recipe.image.clear();
+    recipe.build.as_mut().unwrap().dockerfile = "Dockerfile.rebuilt".into();
+    let mut script = Script::new(&fixture);
+    script.head.config = Some(config(&recipe));
+    assert_eq!(rebuild_with(&fixture, &script).unwrap(), Driven::Committed);
+    let rebuilt = fixture.state();
+    assert_eq!(rebuilt.profile.build, recipe.build);
+    assert!(!rebuilt.profile.image.is_empty());
+    let settings = serde_json::from_value(json!({
+        "runpod_key_file":fixture.root.join("missing-key"),"ssh_identity_file":fixture.root.join("missing-identity"),
+        "docker_config":fixture.root.join("absent-docker"),"cpu_flavors":[],"gpu_types":[]
+    }))
+    .unwrap();
+    let mut request = Request::new(
+        rebuilt.cloud_id.clone(),
+        rebuilt.repository.clone(),
+        rebuilt.revision.clone(),
+        recipe,
+        fixture.root.clone(),
+        settings,
+    );
+    request.profile_name = Some("dev".into());
+    let before = std::fs::read(fixture.root.join("deployment.json")).unwrap();
+    for image in ["", original_image, rebuilt.profile.image.as_str()] {
+        request.profile.image = image.into();
+        super::super::super::prepare(&request).unwrap();
+        let mut unchanged = rebuilt.clone();
+        assert!(!super::super::super::sizing::assign_requested_size(&request, &mut unchanged).unwrap());
+        assert_eq!(unchanged.profile, rebuilt.profile);
+        let (_guard, reopened) = open(&request).unwrap();
+        assert_eq!(reopened.profile, rebuilt.profile);
+        assert_eq!(reopened.publication, rebuilt.publication);
+        assert_eq!(reopened.spec, rebuilt.spec);
+    }
+    request.profile.image = "registry.example/another/worker".into();
+    assert!(super::super::super::prepare(&request).is_err());
+    assert!(open(&request).is_err());
+    assert!(super::super::super::sizing::assign_requested_size(&request, &mut rebuilt.clone()).is_err());
+    request.profile.image.clear();
+    request.profile_name = Some("another-profile".into());
+    assert!(super::super::super::prepare(&request).is_err());
+    assert_eq!(std::fs::read(fixture.root.join("deployment.json")).unwrap(), before);
+    assert!(!request.settings.docker_config.exists());
 }

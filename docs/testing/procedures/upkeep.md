@@ -2,7 +2,7 @@
 procedure: upkeep
 feature: Upkeep board, worker loop and New Upkeep (the dependency pull request agent)
 platforms: [linux]
-cost: rents compute (UPK-10 and UPK-13)
+cost: rents compute (UPK-10, UPK-13 and UPK-15)
 destructive: yes (UPK-12 deletes the cloud that UPK-10 made)
 secrets: [GitHub sign-in, Hetzner API token, ChatGPT login of Codex]
 owner: peters
@@ -13,8 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that the Upkeep board shows the status that an Upkeep agent
-writes: the next run, the runs of the last 24 hours, the pull requests by state and
-the latest run. It also proves that a pull request row opens its page beside the
+writes: the next run, the runs of the last 24 hours, the pull requests by state,
+the latest run and the daily maintenance pass. It also proves that a pull request row opens its page beside the
 board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 
 ## 2. Applicability
@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-13 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-16 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -43,6 +43,9 @@ made-up repositories and one public pull request.
 > Upkeep shows every repository that the GitHub App can reach. Blur or crop them in
 > a recording that you publish.
 
+> **CAUTION:** TASK UPK-15 RENTS A SECOND CLOUD, THE COMPANION. The provider bills its
+> volume until you delete it, and its server while it runs.
+
 > **CAUTION:** TASK UPK-13 USES A RUNNING UPKEEP CLOUD AND CHANGES ITS REPOSITORIES,
 > ITS PAUSE STATE AND ITS RUNS. A run can merge real bot pull requests. Use an Upkeep
 > whose repositories you are permitted to change.
@@ -54,7 +57,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-13: the
+- For tasks UPK-08 to UPK-16: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -63,6 +66,10 @@ made-up repositories and one public pull request.
 - For task UPK-10: two repositories, `<repo>` and `<second>`, each with at least
   one open Dependabot pull request, both where you are permitted to merge
   Dependabot pull requests.
+- For task UPK-15: a repository `<ui>` of the Upkeep, checked out on this computer
+  as `~/github/<owner>/<ui>`, whose committed `.horizon/cloud.yml` has a profile
+  `ui-acceptance` with `desktop: true`. Use a commit that is only on this computer
+  if the repository has no such profile.
 - A browser that is signed in to the GitHub account of Cloud settings. Each new
   cloud asks for one GitHub authorization.
 
@@ -100,17 +107,32 @@ made-up repositories and one public pull request.
 
    Result: It shows one bar for each hour. A failed run is red, a skipped run has an
    outline, and a green mark shows a run that merged. The total shows **12 merged**.
+   A cyan mark is under the bar of the hour after 00:00 UTC, or under no bar when
+   the time is before 00:46 UTC.
 
-4. Look at the list.
+4. When the time is 00:46 UTC or later, put the pointer on the bar with the cyan
+   mark.
+
+   Result: The tooltip starts with the hour and
+   **2 runs with the daily maintenance pass**.
+
+5. Look at the list.
 
    Result: The list shows 5 open pull requests in groups **Blocked**, **Fixing**,
    **Needs review**, **Checks running** and **Ready to merge**. Each row shows the
    repository, the number and title, the check state, the time and the note.
 
-5. Look at **Latest run**.
+6. Look at **Latest run**.
 
    Result: It shows 5 lines with their UTC times. The last line is
-   **Run finished: 1 merged, 1 fixing, 1 waiting on checks**.
+   **Run finished: 1 merged, 1 fixing, 1 waiting on checks**. No line starts with
+   **Runtime patch releases**.
+
+7. Look at **Daily maintenance** under **Latest run**.
+
+   Result: The section has a cyan mark and the pill **Done 00:12 UTC, 34 min**. It
+   shows 3 lines. The last line starts with **Runtime patch releases: acme/mobile
+   left alone**.
 
 ### 6.2 UPK-02 — The chips filter the list
 
@@ -413,6 +435,14 @@ Do this task before UPK-12, on the cloud of UPK-10.
 
    Result: That board shows no buttons.
 
+10. Wait until no run continues. On GitHub, write the comment
+    `@dependabot rebase` on an open Dependabot pull request of `<repo>`.
+
+    Result: Within 3 minutes after Dependabot pushed the rebased branch, the board
+    shows **Running**. `/workspace/home/upkeep/runs.jsonl` has a new line with
+    `"kind": "change"`. Only the log of `<repo>` in `/workspace/home/upkeep/logs`
+    has a new agent. **Next run** shows the same planned time as before.
+
 ### 6.12 UPK-12 — Remove the Upkeep cloud
 
 > **CAUTION:** THE NEXT STEP DELETES THE SERVER, THE VOLUME AND THE SSH KEY OF THE
@@ -518,14 +548,177 @@ script first in `PATH` that writes `HORIZON_BROWSER_ACTOR` and
 
     Result: The answer starts with `upkeep_unavailable`.
 
+### 6.14 UPK-14 — The daily maintenance pass
+
+Do this task before UPK-12, on the cloud of UPK-10.
+
+> **CAUTION:** THE DAILY MAINTENANCE PASS DOES THE TASKS OF THE SHARED INSTRUCTIONS
+> THAT THE REPOSITORIES LINK. It can open pull requests in `<repo>` and `<second>`
+> and start the test-channel releases that those instructions authorize.
+
+1. Read the `AGENTS.md` of `<repo>` and the shared instructions that it links. Find
+   the section **Daily maintenance**.
+
+   Result: You know the tasks that the pass must report. When there is no such
+   section, the pass must report that and stop.
+
+2. In the shell panel of UPK-10, type
+   `cat /workspace/home/upkeep/daily.md`.
+
+   Result: The file starts with the instructions of the Upkeep and has the heading
+   **This run: daily maintenance**. It names no shared repository.
+
+3. Type `echo 2000-01-01 > /workspace/home/upkeep/daily-day`. Then wait for the
+   next planned run.
+
+   Result: The board shows **Running**. After the agents of the repositories end,
+   the line under **Running** starts with **Daily maintenance**, and
+   `/workspace/home/upkeep/runs.jsonl` has a line with `"kind": "daily"`.
+
+4. When the agent asks for read access to the repository of the shared
+   instructions, allow it on the cloud card.
+
+   Result: The agent continues. Horizon allowed no request for that repository
+   without you.
+
+5. Wait until the pass ends.
+
+   Result: **Daily maintenance** on the board shows **Done** or **Failed** with the
+   start time. It shows one line for each task of step 1, or one line that no
+   repository links daily tasks. A cyan mark is under the bar of the hour of the
+   pass. `/workspace/home/upkeep/daily-day` holds the UTC date of today.
+
+6. Make sure that the pass started no production release or production workflow,
+   and that it left alone work that it did not start. Each pull request that it
+   opened has one comment that starts with `<!-- upkeep-daily -->`.
+
+   Result: The release pages and the workflow runs of `<repo>` and `<second>` show
+   no production release from the pass.
+
+7. Click **Run now** again and wait until the run ends.
+
+   Result: `runs.jsonl` has no new line with `"kind": "daily"`.
+
+### 6.15 UPK-15 — UI acceptance on a companion cloud
+
+> **CAUTION:** THIS TASK RENTS THE COMPANION CLOUD AND USES A RUNNING UPKEEP CLOUD. A run
+> can merge real bot pull requests in the repositories of the Upkeep.
+
+Use the Upkeep cloud of UPK-10 before UPK-12, with `<ui>` in its repositories. Write
+each request on the worker as the agent account, for example in the **Upkeep agent**
+panel. `<uuid>` is a new UUID each time (`python3 -c 'import uuid; print(uuid.uuid4())'`).
+
+1. Look at the companions of the Upkeep card.
+
+   Result: The card shows the companion `<ui>` (the repository name in lower case)
+   with **Matching cloud is missing**. No other repository of the Upkeep shows.
+
+2. In the workspace of the Upkeep, start **New cloud** from `~/github/<owner>/<ui>`
+   with the profile `ui-acceptance`. When it is ready, stop it. On the Upkeep card,
+   check `<ui>`.
+
+   Result: The companion shows as checked and stopped.
+
+3. Outside a run, write `/workspace/home/upkeep/companions/<ui>.json` with
+   `{"action": "ensure_ready", "operation_id": "<uuid>"}`. Wait two minutes.
+
+   Result: The companion stays stopped. `companions-status.json` has no answer for
+   that operation.
+
+4. Click **Run now**. While the run is active, write the same file with a new UUID.
+
+   Result: Within a minute, `/workspace/home/upkeep/companions-status.json` shows that
+   operation ID under `<ui>`. The companion card starts. Later the answer shows phase
+   `ready` and `done` true.
+
+5. Run `horizon-cloud-worker companions inspect <ui>` on the Upkeep worker. Run
+   `ssh <alias> true` with the SSH alias that it shows.
+
+   Result: The command shows the SSH alias and the worktree. SSH connects.
+
+6. While the run is active, write the file with `{"action": "stop", "operation_id":
+   "<uuid>"}`.
+
+   Result: The answer shows phase `stopped` and `done` true. The companion card shows
+   the cloud stopped.
+
+7. Click **Run now**. While the run is active, ask for `ensure_ready` again. Wait until
+   it is ready, do not ask for `stop`, and let the run end.
+
+   Result: After the run, Horizon stops the companion. The answer for `<ui>` shows a
+   `stop` operation with phase `stopped`.
+
+8. Uncheck `<ui>` on the Upkeep card. During a run, ask for `ensure_ready`.
+
+   Result: The answer shows `done` true and an error. The companion stays stopped.
+
+9. In `/workspace/home/upkeep/companions`, write `Bad.json` and `big.json` (more than
+   1 KiB), each with a valid request, and a link `link.json` to another file.
+
+   Result: `companions-status.json` has no answer for these files, and the exchange
+   does not fail.
+
+### 6.16 UPK-16 — The default instructions and Upkeep's own pull requests
+
+Do this task before UPK-12, on the cloud of UPK-10, with the default instructions.
+
+> **CAUTION:** THE AGENT MERGES A REAL BOT PULL REQUEST IN STEP 2 AND CAN MERGE THE
+> PULL REQUESTS OF STEPS 3, 4 AND 5. Use changes that you accept in `<repo>`.
+
+1. In the shell panel of UPK-10, type `cat /workspace/home/upkeep/prompt.md`.
+
+   Result: The file starts with `Keep the bot pull requests of the selected
+   repositories moving.` and has the steps under `For each pull request:`. No line
+   says that CI covers a smoke test that the worker cannot run.
+
+2. Find a green bot pull request in `<repo>` that is not a UI change by its rules.
+   Wait until the agent merges it. Read the log of that agent in
+   `/workspace/home/upkeep/logs`.
+
+   Result: The agent merged the pull request after it read the checks, the review
+   and the mergeability. The log shows no clone, build, local CI or UI smoke for
+   that pull request, and no review request.
+
+3. Sign in to GitHub as the account that the worker uses. Push a branch
+   `upkeep/procedure-check` with a small change to `<repo>`. Open a pull request
+   from that branch with the label `upkeep`. Wait for 3 minutes.
+
+   Result: The board shows the pull request with the author `Upkeep`. The agent of
+   `<repo>` reports it and carries it through the same gates as the bot pull
+   requests. The board shows it one time, although both marks apply.
+
+4. Push a branch `procedure-label` with a small change to `<repo>`. Open a pull
+   request from it with the label `upkeep`. Wait for 3 minutes.
+
+   Result: The board shows this pull request too. Only the label marks it.
+
+5. Find a bot pull request in `<repo>` that the agent left blocked with `Approve to
+   merge`. As the account that the worker uses, approve it on GitHub. Wait for 3
+   minutes.
+
+   Result: A run starts. The agent merges the pull request. The log of the agent
+   shows no approving review by the agent.
+
+6. Do this step only if you have a second GitHub account. With it, open a pull
+   request to `<repo>` from a fork. Give the branch a name that starts with
+   `upkeep/`. Wait for 3 minutes.
+
+   Result: The board does not show the pull request from the fork.
+
+7. Close the pull requests of steps 3, 4 and 6 that are still open, and delete their
+   branches.
+
+   Result: The next run does not show them.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-13 give the results above.
+- UPK-01 to UPK-16 give the results above.
 
 ## 8. Cleanup
 
 1. Close Horizon and delete `<folder>`.
 2. After UPK-12, delete `~/.horizon/upkeep/<cloud>` in the fixture home.
+3. After UPK-15, delete the companion cloud on its card.
 
 ## 9. Record of results
 

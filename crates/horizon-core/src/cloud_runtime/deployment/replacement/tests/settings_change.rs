@@ -6,8 +6,8 @@ use horizon_cloud::{Agent, BrowserEngine};
 use std::process::Command;
 
 /// A ready cloud with agent `claude` and Chromium, and a committed profile that adds
-/// `codex`, swaps Chromium for Firefox, adds the desktop, a longer readiness timeout, an
-/// idle stop and another Dockerfile.
+/// `codex`, swaps Chromium for Firefox, adds the desktop, a longer readiness timeout and
+/// another Dockerfile.
 fn settings_change() -> (Fixture, Profile, Profile) {
     let fixture = Fixture::with(&json!({"agents":["claude"],"browsers":["chromium"]}));
     let bound = fixture.state().profile;
@@ -16,18 +16,16 @@ fn settings_change() -> (Fixture, Profile, Profile) {
     committed.capabilities.browsers = [BrowserEngine::Firefox].into();
     committed.capabilities.desktop = true;
     committed.bootstrap.readiness_seconds = 1800;
-    committed.idle_stop_minutes = Some(30);
     committed.build.as_mut().unwrap().dockerfile = "Dockerfile.agents".into();
     (fixture, bound, committed)
 }
 
-const CHANGES: [&str; 7] = [
+const CHANGES: [&str; 6] = [
     "Adds agent codex",
     "Adds browser firefox",
     "Removes browser chromium",
     "Adds the desktop",
     "Readiness timeout 600 s → 1800 s",
-    "Idle stop off → 30 min",
     "Build dockerfile Dockerfile → Dockerfile.agents",
 ];
 
@@ -58,6 +56,7 @@ fn each_change_is_listed_in_a_plain_sentence() {
     removed.capabilities.agents.clear();
     removed.capabilities.desktop = false;
     removed.capabilities.agent_approvals = horizon_cloud::AgentApprovals::Ask;
+    // An idle period has no effect, so it is no change.
     removed.idle_stop_minutes = Some(60);
     assert_eq!(
         compatibility::changes(&committed, &removed),
@@ -66,7 +65,6 @@ fn each_change_is_listed_in_a_plain_sentence() {
             "Removes agent claude",
             "Removes the desktop",
             "Agent approvals auto → ask",
-            "Idle stop 30 min → 60 min",
         ]
     );
     assert_eq!(compatibility::changes(&bound, &bound), Vec::<String>::new());
@@ -155,12 +153,43 @@ fn an_unconfirmed_profile_or_an_unusable_credential_of_an_added_agent_is_refused
     .unwrap();
     // Codex's key file is checked only once a rebuild adds Codex.
     assert!(accept(&bound, None, &settings).is_ok());
-    assert!(accept(&committed, None, &settings).is_err());
+    let error = accept(&committed, None, &settings).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Agent codex cannot use its API-key file {}: the file is missing. A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild",
+            key.display()
+        )
+    );
     std::fs::write(&key, "synthetic-openai-key").unwrap();
     std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     accept(&committed, Some(&committed), &settings).unwrap();
     let error = accept(&committed, Some(&bound), &settings).unwrap_err();
     assert_eq!(error.to_string(), CONFIRMED_OTHER);
+}
+
+#[test]
+fn a_rebuild_that_adds_an_agent_names_the_unusable_file_of_an_agent_the_cloud_already_has() {
+    let (fixture, bound, committed) = settings_change();
+    let (claude, codex) = (fixture.root.join("anthropic-key"), fixture.root.join("openai-key"));
+    std::fs::write(&codex, "synthetic-openai-key").unwrap();
+    std::fs::set_permissions(&codex, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file": "/absent", "ssh_identity_file": "/absent", "docker_config": "/absent",
+        "cpu_flavors": [], "gpu_types": [], "anthropic_api_key_file": claude, "openai_api_key_file": codex
+    }))
+    .unwrap();
+    // Claude's file is missing although the cloud already has Claude: the refusal says so.
+    for profile in [&bound, &committed] {
+        let error = accept(profile, None, &settings).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            format!(
+                "Agent claude cannot use its API-key file {}: the file is missing. A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild",
+                claude.display()
+            )
+        );
+    }
 }
 
 #[test]
@@ -174,6 +203,7 @@ fn sessions_of_an_agent_the_rebuild_removed_end_and_the_rest_relaunch() {
                 tmux: id.into(),
                 branch: format!("agent/{id}"),
                 worktree: format!("/workspace/agents/{id}"),
+                removed_agent_reported: false,
             });
         }
     });
@@ -219,6 +249,106 @@ fn sessions_of_an_agent_the_rebuild_removed_end_and_the_rest_relaunch() {
     }
 }
 
+/// The report of the fixture's Codex session once the profile no longer has Codex.
+const ENDED: &str =
+    "Session agent1 (codex): this cloud's profile no longer has agent codex, so its process was not relaunched";
+
+/// Relaunches the sessions of `state` as a reconnect does, with each relaunch reporting
+/// `status`; returns the output lines and the panels it tried to relaunch. A status that
+/// is not a number fails the relaunch.
+fn reconnect(store: &Store, state: &mut Deployment, status: &str) -> (Vec<String>, Vec<String>) {
+    state.session_restart = Some(OperationId::generate());
+    let contract = WorkerContract {
+        session_restart: true,
+        capabilities: true,
+        ..WorkerContract::default()
+    };
+    let output = RefCell::new(Vec::new());
+    let mut commands = Vec::new();
+    let relaunched = relaunch_sessions(
+        store,
+        state,
+        &contract,
+        &|event| {
+            if let Event::Output(line) = event {
+                output.borrow_mut().push(line);
+            }
+        },
+        |command| {
+            commands.push(command.split(' ').nth(3).unwrap().to_owned());
+            Ok(format!("{RELAUNCH_STATUS}{status}\n"))
+        },
+    );
+    assert_eq!(relaunched.is_ok(), status.parse::<i32>().is_ok(), "{relaunched:?}");
+    (output.into_inner(), commands)
+}
+
+#[test]
+fn a_removed_agents_session_is_reported_once_and_relaunches_when_the_agent_returns() {
+    const LOST: &str = "Session agent1 (codex) lost its process in the container reset and was not relaunched";
+    let fixture = Fixture::with(&json!({"agents":["claude"]}));
+    // The mark as the record on disk holds it.
+    let mark = || {
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture.root.join("deployment.json")).unwrap()).unwrap();
+        record["sessions"][0].get("removed_agent_reported").cloned()
+    };
+    // A record from before the mark existed loads unmarked and saves without the field.
+    assert!(!fixture.state().sessions[0].removed_agent_reported);
+    assert_eq!(mark(), None);
+    {
+        let store = fixture.store();
+        let mut state = store.load().unwrap().unwrap();
+        assert_eq!(reconnect(&store, &mut state, "0"), (vec![ENDED.to_owned()], vec![]));
+        assert_eq!(mark(), Some(json!(true)));
+        // A second reconnect stays quiet.
+        assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec![]));
+    }
+    // So does a reconnect after Horizon restarts and reads the record again.
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    assert!(state.sessions[0].removed_agent_reported);
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec![]));
+    // A rebuild that adds the agent again relaunches the session and clears the mark.
+    state.profile.capabilities.agents.insert(Agent::Codex);
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec!["agent1".to_owned()]));
+    assert_eq!(mark(), None);
+    // The mark never hides a session that ends for another reason.
+    assert_eq!(
+        reconnect(&store, &mut state, "3"),
+        (vec![LOST.to_owned()], vec!["agent1".to_owned()])
+    );
+    // Removed again, the session is reported again, once.
+    state.profile.capabilities.agents.remove(&Agent::Codex);
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![ENDED.to_owned()], vec![]));
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec![]));
+}
+
+#[test]
+fn a_relaunch_that_fails_keeps_the_report_of_a_removed_agents_session() {
+    let fixture = Fixture::with(&json!({"agents":["claude"]}));
+    fixture.edit(|state| {
+        state.sessions.push(Session {
+            panel_id: "agent2".into(),
+            agent: "claude".into(),
+            tmux: "agent2".into(),
+            branch: "agent/agent2".into(),
+            worktree: "/workspace/agents/agent2".into(),
+            removed_agent_reported: false,
+        });
+    });
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    assert_eq!(
+        reconnect(&store, &mut state, "unconfirmed"),
+        (vec![ENDED.to_owned()], vec!["agent2".to_owned()])
+    );
+    // The retry relaunches the other session and does not report the removed one again.
+    let mut state = store.load().unwrap().unwrap();
+    assert!(state.session_restart.is_some() && state.sessions[0].removed_agent_reported);
+    assert_eq!(reconnect(&store, &mut state, "0"), (vec![], vec!["agent2".to_owned()]));
+}
+
 fn git(path: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
@@ -228,6 +358,31 @@ fn git(path: &Path, args: &[&str]) {
         .status()
         .unwrap();
     assert!(status.success(), "git {args:?}");
+}
+
+#[test]
+fn an_idle_period_in_the_settings_is_no_change_and_the_plan_notes_it() {
+    let (_fixture, bound, _committed) = settings_change();
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "--quiet"]);
+    let mut idle = bound.clone();
+    idle.idle_stop_minutes = Some(30);
+    std::fs::create_dir_all(repository.path().join(".horizon")).unwrap();
+    std::fs::write(
+        repository.path().join(".horizon/cloud.yml"),
+        serde_json::to_string(&config(&idle)).unwrap(),
+    )
+    .unwrap();
+    git(repository.path(), &["add", "."]);
+    git(repository.path(), &["commit", "--quiet", "-m", "Idle period"]);
+    let planned = plan(repository.path(), &bound, "dev", &Cancellation::default()).unwrap();
+    // The cloud keeps its own idle period, so the rebuild changes nothing.
+    assert_eq!(planned.profile, bound);
+    assert!(planned.changes.is_empty());
+    assert_eq!(
+        planned.notes,
+        [crate::cloud_runtime::repository::launch::idle_period_note("dev", &idle).unwrap()]
+    );
 }
 
 #[test]
@@ -257,14 +412,18 @@ fn a_plan_reads_the_working_copy_and_lists_its_changes_and_uncommitted_files() {
     // reads the latest commit with the working copy, and lists the file, which is in the
     // build context.
     let mut later = committed.clone();
-    later.idle_stop_minutes = Some(45);
+    later.bootstrap.readiness_seconds = 900;
     commit(&later);
     let mut working = later.clone();
     working.capabilities.desktop = false;
     save(&working);
     let uncommitted = plan(repository.path(), &bound, "dev", &cancel).unwrap();
     assert_eq!(uncommitted.profile, working);
-    assert!(uncommitted.changes.contains(&"Idle stop off → 45 min".to_owned()));
+    assert!(
+        uncommitted
+            .changes
+            .contains(&"Readiness timeout 600 s → 900 s".to_owned())
+    );
     assert!(!uncommitted.changes.contains(&"Adds the desktop".to_owned()));
     let files: Vec<_> = uncommitted
         .uncommitted
@@ -355,7 +514,13 @@ fn continuing_an_unsent_settings_change_checks_the_added_agent_credential_again(
         settings,
     );
     let error = continue_replacement(&request, &Cancellation::default(), &|_| {}).unwrap_err();
-    assert_eq!(error.to_string(), "API-key file must be private (0600)");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Agent codex cannot use its API-key file {}: API-key file must be private (0600). A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild",
+            key.display()
+        )
+    );
     assert!(fixture.state().image_replacement.is_some(), "the journal stays");
 }
 

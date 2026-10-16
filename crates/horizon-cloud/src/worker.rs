@@ -69,23 +69,18 @@ pub struct WorkerSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_metadata: Option<crate::StartupMetadata>,
 }
+/// Worker environment variable that has a dedicated worker without a stop credential
+/// record an agent's stop request for Horizon (`horizon-worker-stopd --take`).
+pub const STOP_ENVIRONMENT_KEY: &str = "HORIZON_WORKER_STOP";
 impl WorkerSpec {
     #[must_use]
     pub fn name(&self) -> String {
         format!("horizon-cloud-{}", self.operation_id)
     }
-    /// The idle period a dedicated worker carries in its environment. Workers
-    /// started through initialization never run the watcher.
-    #[must_use]
-    pub fn idle_stop_environment(&self) -> Option<String> {
-        self.startup_metadata
-            .is_none()
-            .then_some(self.profile.idle_stop_minutes)
-            .flatten()
-            .map(|minutes| minutes.to_string())
-    }
     /// The environment a provider that runs the worker image itself gives its
-    /// container. Nothing in it is secret.
+    /// container. Nothing in it is secret. Such a worker holds no credential that can
+    /// stop it, so a dedicated one records an agent's stop request for Horizon to take
+    /// (`HORIZON_WORKER_STOP=horizon`).
     /// # Errors
     /// Fails only if the capabilities cannot be serialized.
     pub fn container_environment(&self) -> Result<BTreeMap<String, String>, CloudError> {
@@ -98,8 +93,8 @@ impl WorkerSpec {
                     .map_err(|_| CloudError::Invalid("Worker capabilities cannot be described"))?,
             ),
         ]);
-        if let Some(minutes) = self.idle_stop_environment() {
-            environment.insert(crate::IDLE_STOP_ENVIRONMENT_KEY.to_owned(), minutes);
+        if self.startup_metadata.is_none() {
+            environment.insert(STOP_ENVIRONMENT_KEY.to_owned(), "horizon".to_owned());
         }
         Ok(environment)
     }
@@ -387,10 +382,8 @@ impl Worker {
         {
             return Err(CloudError::IdentityMismatch);
         }
-        // A worker without its recorded idle period would never stop, or stop at the wrong time.
-        if self.env.get(crate::IDLE_STOP_ENVIRONMENT_KEY).cloned() != spec.idle_stop_environment() {
-            return Err(CloudError::IdentityMismatch);
-        }
+        // A worker created before the agent stop may carry its idle period as
+        // HORIZON_IDLE_STOP_MINUTES; the variable names no identity, so it is not compared.
         Ok(())
     }
     /// As `verify`, while the worker's image is being replaced: it may report

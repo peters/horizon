@@ -1,6 +1,7 @@
 //! Semantic DOM actions for Firefox and Safari `WebDriver` sessions.
 
 mod frames;
+mod press;
 
 use serde_json::{Value, json};
 
@@ -225,9 +226,9 @@ impl Driver {
                 "invalid_action_state",
                 "orientation is observed from the driver loop",
             )),
-            BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
+            BrowserControlAction::Resize { .. } | BrowserControlAction::Zoom { .. } => Err(BrowserControlFailure::new(
                 "invalid_action_state",
-                "resize is observed from the driver loop",
+                "resize and zoom are observed from the driver loop",
             )),
             BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes, event_tx),
             BrowserControlAction::Query { selector, max_results } => {
@@ -239,6 +240,9 @@ impl Driver {
             )),
             BrowserControlAction::Click { target, count } => self.semantic_click(target, *count, event_tx),
             BrowserControlAction::Fill { target, value } => self.semantic_fill(target, value, event_tx),
+            BrowserControlAction::Press { key, modifiers, count } => {
+                self.semantic_press(*key, *modifiers, *count, event_tx)
+            }
             BrowserControlAction::Scroll {
                 target,
                 delta_x,
@@ -717,6 +721,7 @@ mod tests {
     }
 
     mod fill;
+    mod press;
     mod set_files;
 
     #[test]

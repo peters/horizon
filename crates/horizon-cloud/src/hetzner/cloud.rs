@@ -15,7 +15,9 @@ mod provision;
 #[cfg(test)]
 mod tests;
 
-pub use lifecycle::{Check, Cloud, Stop, StopRecords, UNRESOLVED_GRACE, check, delete, released, resumable, stop};
+pub use lifecycle::{
+    Check, Cloud, Stop, StopRecords, UNRESOLVED_GRACE, check, delete, delete_observed, released, resumable, stop,
+};
 pub use provision::{Records, Request, provision};
 
 /// The Hetzner app image with Docker preinstalled that the host plan expects.
@@ -253,7 +255,6 @@ pub fn supported(spec: &WorkerSpec) -> Result<(), CloudError> {
 /// # Errors
 /// Fails only if the capabilities cannot be serialized.
 pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogin>) -> Result<host::Plan, CloudError> {
-    // The watcher only records idle time here; Horizon stops the server from that record.
     Ok(host::Plan {
         image: spec.image_digest.clone(),
         environment: spec.container_environment()?,
@@ -327,10 +328,7 @@ pub fn worker(server: &Server, spec: &WorkerSpec, volume: &Volume) -> Result<Wor
         _ => "RUNNING",
     };
     // The host plan gave the container exactly this environment from the same spec.
-    let mut env = serde_json::json!({"HORIZON_CLOUD_OPERATION": spec.operation_id});
-    if let Some(minutes) = spec.idle_stop_environment() {
-        env[crate::IDLE_STOP_ENVIRONMENT_KEY] = serde_json::json!(minutes);
-    }
+    let env = serde_json::json!({"HORIZON_CLOUD_OPERATION": spec.operation_id});
     serde_json::from_value(serde_json::json!({
         "id": server.id.to_string(),
         "name": server.name,

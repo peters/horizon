@@ -2,7 +2,12 @@
 use super::super::{Cancellation, command::Runner, repository};
 use super::{Context, Declaration, Error, Owner, Result, Target};
 use crate::cloud_panel::CloudGroups;
-use std::{collections::BTreeSet, path::Path, process::Command, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    process::Command,
+    time::Duration,
+};
 
 /// # Errors
 /// The source must remain in the current owning workspace. A source commit without
@@ -36,7 +41,14 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
             declaration: Declaration::new(repository, launch.profile_name.clone()),
         };
         if launch.id == owner.cloud_id {
-            let declarations =
+            let declarations = if let Ok(upkeep) = crate::upkeep::worker::load(&launch.id) {
+                let home = crate::dir_search::expand_tilde("~");
+                upkeep_declarations(
+                    &upkeep.repositories,
+                    &repository::source::default_parent(&home),
+                    &runner,
+                )?
+            } else {
                 match repository::launch::prepare(&group.cwd.to_string_lossy(), &launch.revision, &runner) {
                     Ok(prepared) => prepared
                         .config
@@ -44,9 +56,10 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
                         .map(|(alias, declaration)| (alias.to_owned(), declaration.clone()))
                         .collect(),
                     // A commit without settings, as a quick start runs, declares no companions.
-                    Err(error) if repository::launch::is_missing_config(&error) => std::collections::BTreeMap::new(),
+                    Err(error) if repository::launch::is_missing_config(&error) => BTreeMap::new(),
                     Err(error) => return Err(error),
-                };
+                }
+            };
             source = Some((target.clone(), declarations));
         }
         inventory.push(target);
@@ -58,6 +71,55 @@ pub fn prepare(owner: &Owner, groups: &CloudGroups, cancel: &Cancellation) -> Re
         declarations,
         inventory,
     })
+}
+
+/// The profile that a repository's committed `.horizon/cloud.yml` names for Upkeep's UI
+/// acceptance.
+pub const UI_ACCEPTANCE_PROFILE: &str = "ui-acceptance";
+
+/// An Upkeep cloud's companions: each of its repositories whose checkout under `parent` commits
+/// a [`UI_ACCEPTANCE_PROFILE`] profile, under an alias made from the repository's name. A
+/// repository without a checkout here, without that profile or without a usable alias declares
+/// nothing; the first of two that make one alias keeps it.
+/// # Errors
+/// Only cancellation.
+fn upkeep_declarations(
+    repositories: &[String],
+    parent: &Path,
+    runner: &Runner<'_>,
+) -> Result<BTreeMap<String, Declaration>> {
+    let mut declarations = BTreeMap::new();
+    for name in repositories {
+        runner.cancel.check()?;
+        let alias = upkeep_alias(name);
+        let Some(remote) = repository::source::parse(name).filter(|_| !declarations.contains_key(&alias)) else {
+            continue;
+        };
+        let Some(checkout) = repository::source::existing(parent, &remote) else {
+            continue;
+        };
+        let declared = repository::launch::prepare(&checkout.to_string_lossy(), "HEAD", runner)
+            .is_ok_and(|prepared| prepared.config.profiles.contains_key(UI_ACCEPTANCE_PROFILE));
+        let declaration = Declaration::new(name, UI_ACCEPTANCE_PROFILE);
+        if declared && horizon_cloud::companions::valid_alias(&alias) && declaration.validate().is_ok() {
+            declarations.insert(alias, declaration);
+        }
+    }
+    Ok(declarations)
+}
+
+/// `youpark` for `owner/youpark`, `youpark-no` for `owner/YouPark.no`.
+fn upkeep_alias(repository: &str) -> String {
+    let name = repository.rsplit('/').next().unwrap_or(repository);
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 /// A local checkout of a declared companion repository, read to create its cloud.
@@ -271,6 +333,68 @@ mod tests {
         ] {
             assert!(checkout(temp.path(), &declaration, &cancel).is_err());
         }
+    }
+
+    #[test]
+    fn an_upkeep_declares_each_checkout_that_commits_a_ui_acceptance_profile() {
+        let parent = tempfile::tempdir().unwrap();
+        let checkout = |name: &str, profile: &str| {
+            let path = parent.path().join("acme").join(name);
+            std::fs::create_dir_all(path.join(".horizon")).unwrap();
+            let git = |args: &[&str]| {
+                assert!(
+                    Command::new("git")
+                        .arg("-C")
+                        .arg(&path)
+                        .args(args)
+                        .output()
+                        .unwrap()
+                        .status
+                        .success()
+                );
+            };
+            git(&["init", "--quiet"]);
+            git(&[
+                "remote",
+                "add",
+                "origin",
+                &format!("https://github.com/acme/{name}.git"),
+            ]);
+            std::fs::write(
+                path.join(".horizon/cloud.yml"),
+                format!("version: 1\ndefault: {profile}\nprofiles:\n  {profile}:\n    provider: hetzner\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 8\n"),
+            )
+            .unwrap();
+            git(&["add", "."]);
+            git(&[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                "Fixture",
+            ]);
+        };
+        checkout("YouPark.App", UI_ACCEPTANCE_PROFILE);
+        checkout("web", "cpu");
+        let cancel = Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: Vec::new(),
+        };
+        let repositories = ["acme/YouPark.App", "acme/web", "acme/missing"].map(String::from);
+        let declared = upkeep_declarations(&repositories, parent.path(), &runner).unwrap();
+        assert_eq!(
+            declared,
+            BTreeMap::from([(
+                "youpark-app".to_owned(),
+                Declaration::new("acme/YouPark.App", UI_ACCEPTANCE_PROFILE)
+            )])
+        );
+        cancel.cancel();
+        assert!(upkeep_declarations(&repositories, parent.path(), &runner).is_err());
     }
 
     #[test]

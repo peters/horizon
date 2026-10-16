@@ -140,6 +140,7 @@ fn restore_fixture() -> (tempfile::TempDir, HorizonApp) {
     let profile = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker\n    cpu: 4\n    memory_gb: 8\n    capabilities:\n      browsers: [chromium, firefox]\n").unwrap().profiles["dev"].clone();
     let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), [0.0, 0.0]);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -214,6 +215,7 @@ fn new_panels_share_a_checkout_while_recorded_sessions_keep_their_paths() {
             tmux: "legacy".into(),
             branch: "agent/legacy".into(),
             worktree: "/workspace/agents/legacy".into(),
+            removed_agent_reported: false,
         });
         store.save(&saved).unwrap();
     }
@@ -565,6 +567,7 @@ fn missing_durable_session_retries_after_store_lock_is_released() {
             tmux: "missing-shell".into(),
             branch: "agent/missing-shell".into(),
             worktree: "/workspace/agents/missing-shell".into(),
+            removed_agent_reported: false,
         });
     let lock = cloud_runtime::state::Store::lock(&temp.path().join("fixture")).unwrap();
     // In view: missing sessions attach live, so they need the store.
@@ -639,6 +642,7 @@ fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
         tmux: id.into(),
         branch: format!("agent/{id}"),
         worktree: format!("/workspace/agents/{id}"),
+        removed_agent_reported: false,
     });
     app.cloud_prototype
         .production
@@ -781,7 +785,7 @@ fn browser_cleanup_preserves_cloud_restore_and_failed_presentations() {
     panel.local_id = "firefox".into();
     app.fullscreen_panel = Some(id);
     let groups = std::mem::take(&mut app.cloud_prototype.groups);
-    app.poll_browser_create_requests();
+    app.poll_browser_create_requests(&egui::Context::default());
     assert!(
         app.board.panel(id).is_some(),
         "saved membership must protect early restore"
@@ -892,4 +896,48 @@ fn show_member(app: &mut HorizonApp, local: &str) {
     let id = app.board.panel_id_by_local_id(local).unwrap();
     app.panel_screen_rects
         .insert(id, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0)));
+}
+
+#[test]
+fn a_worker_nothing_else_reads_fails_the_card_only_after_failed_checks_in_a_row() {
+    use std::cell::Cell;
+    // Answers: fails once, answers, then fails for good.
+    let answers = [false, true, false, false, false];
+    let checks = Cell::new(0);
+    let check = || {
+        let answered = answers[checks.get()];
+        checks.set(checks.get() + 1);
+        if answered {
+            Ok(())
+        } else {
+            Err(cloud_runtime::Error::Invalid("worker gone"))
+        }
+    };
+    let failed = keep_checking(
+        &cloud_runtime::Cancellation::default(),
+        Duration::ZERO,
+        3,
+        || true,
+        check,
+    );
+    assert!(failed.is_err(), "the failure reaches the card");
+    assert_eq!(checks.get(), 5, "one lost answer is not a stop");
+    let cancel = cloud_runtime::Cancellation::default();
+    cancel.cancel();
+    let unchecked = || panic!("an ended watch checks nothing");
+    assert!(keep_checking(&cancel, Duration::ZERO, 3, || true, unchecked).is_ok());
+    // A card that is gone, as after a session switch, ends the watch.
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(rx);
+    let listening = || tx.send(Event::Watching).is_ok();
+    assert!(
+        keep_checking(
+            &cloud_runtime::Cancellation::default(),
+            Duration::ZERO,
+            3,
+            listening,
+            unchecked
+        )
+        .is_ok()
+    );
 }

@@ -64,6 +64,84 @@ fn credentials_are_required_only_for_selected_api_agents() {
 }
 
 #[test]
+fn a_claude_setup_token_is_saved_privately_with_its_date_and_replaces_the_api_key() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::ApiKey;
+    *draft.anthropic_key = "synthetic-anthropic-key".into();
+    draft.save().unwrap();
+    let mut draft = Draft::load(root.path()).unwrap();
+    draft.anthropic_auth = Authentication::Token;
+    let error = draft.validate().unwrap_err().to_string();
+    assert!(error.contains("claude setup-token"), "{error}");
+    *draft.claude_token = "synthetic setup token".into();
+    assert!(draft.validate().is_err(), "a token is one line without spaces");
+    *draft.claude_token = " synthetic-setup-token\n".into();
+    let before = time::OffsetDateTime::now_utc().unix_timestamp();
+    let saved = draft.save().unwrap();
+    let token = saved.claude_token.clone().unwrap();
+    assert!(saved.anthropic_api_key_file.is_none());
+    assert!((before..=before + 60).contains(&token.saved_at));
+    assert_eq!(token.expires_at() - token.saved_at, 365 * 24 * 60 * 60);
+    assert_eq!(std::fs::read_to_string(&token.file).unwrap(), "synthetic-setup-token");
+    let raw = std::fs::read_to_string(root.path().join("settings.json")).unwrap();
+    assert!(!raw.contains("synthetic"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&token.file).unwrap().permissions().mode() & 0o077, 0);
+    }
+    // Reopened, the saved token is kept with its date until another one is pasted.
+    let reopened = Draft::load(root.path()).unwrap();
+    assert!(reopened.anthropic_auth == Authentication::Token && reopened.claude_token.is_empty());
+    assert_eq!(reopened.save().unwrap().claude_token, Some(token));
+    let mut other = Draft::load(root.path()).unwrap();
+    other.anthropic_auth = Authentication::Subscription;
+    assert!(other.save().unwrap().claude_token.is_none());
+}
+
+#[test]
+fn input_typed_before_another_sign_in_was_chosen_neither_blocks_nor_is_saved() {
+    let root = tempfile::tempdir().unwrap();
+    let mut draft = prepared(root.path());
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::Token;
+    *draft.claude_token = "synthetic setup token".into();
+    assert!(draft.validate().is_err());
+    draft.anthropic_auth = Authentication::Subscription;
+    let saved = draft.save().unwrap();
+    assert!(saved.claude_token.is_none() && saved.anthropic_api_key_file.is_none());
+    let raw = std::fs::read_to_string(root.path().join("settings.json")).unwrap();
+    assert!(!raw.contains("synthetic"));
+    // The other way: a key typed under API key does not block a setup token.
+    let mut draft = Draft::load(root.path()).unwrap();
+    draft.anthropic_auth = Authentication::ApiKey;
+    *draft.anthropic_key = "synthetic key".into();
+    assert!(draft.validate().is_err());
+    draft.anthropic_auth = Authentication::Token;
+    *draft.claude_token = "synthetic-setup-token".into();
+    let saved = draft.save().unwrap();
+    assert!(saved.claude_token.is_some() && saved.anthropic_api_key_file.is_none());
+}
+
+#[test]
+fn settings_refuse_a_claude_api_key_together_with_a_setup_token() {
+    let root = tempfile::tempdir().unwrap();
+    let mut settings = defaults(root.path());
+    settings.claude_token = Some(super::super::claude_token::ClaudeToken {
+        file: root.path().join("claude-token"),
+        saved_at: 0,
+    });
+    assert!(settings.validate().is_ok());
+    settings.anthropic_api_key_file = Some(root.path().join("anthropic"));
+    assert!(settings.validate().is_err());
+    settings.anthropic_api_key_file = None;
+    settings.claude_token.as_mut().unwrap().file = "relative".into();
+    assert!(settings.validate().is_err());
+}
+
+#[test]
 fn failed_or_stale_save_preserves_previous_settings_and_new_secrets_are_removed() {
     let root = tempfile::tempdir().unwrap();
     let saved = prepared(root.path()).save().unwrap();
@@ -437,4 +515,22 @@ fn a_github_save_applies_only_while_the_settings_name_the_shown_app() {
         save_github(root.path(), Some(43), None, &cancel).is_err(),
         "a second Disconnect finds nothing to change"
     );
+}
+
+#[test]
+fn metadata_loading_uses_defaults_without_creating_settings_or_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("not-created");
+    let settings = load_settings(&path).unwrap();
+    assert_eq!(settings.docker_config, path.join("docker"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn metadata_loading_refuses_malformed_existing_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("settings.json");
+    std::fs::write(&path, b"{broken").unwrap();
+    assert!(load_settings(root.path()).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"{broken");
 }

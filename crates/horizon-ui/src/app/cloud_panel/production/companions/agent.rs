@@ -2,8 +2,11 @@
 //! the lifecycle service; loading, checking a box and restoring Horizon never start
 //! a companion. A request's operation runs on the target cloud's card, as its own
 //! buttons would, and the agent polls its status by operation ID.
+mod tailnets;
+mod upkeep;
 use super::{CloudGroups, HorizonApp, Owner};
 use crate::app::browser_requests::actor_panel;
+use horizon_core::upkeep::worker::CompanionAction as Ask;
 use horizon_core::{
     browser::manifest::{
         self,
@@ -26,6 +29,7 @@ use std::{
     sync::mpsc::{Receiver, Sender, channel},
     time::{Duration, Instant},
 };
+pub(in crate::app) use upkeep::Seen;
 
 /// How long a job waits for a companion journal another job holds.
 const BUSY_WAIT: Duration = Duration::from_secs(8);
@@ -41,6 +45,8 @@ pub(super) struct State {
     executing: BTreeSet<String>,
     /// Source clouds with an uncheck whose deselection is being saved.
     unchecking: BTreeSet<String>,
+    /// Upkeep loops' requests, which come through their clouds' exchanges.
+    upkeep: upkeep::State,
 }
 
 enum Message {
@@ -52,6 +58,13 @@ enum Message {
     Executed {
         source: String,
         target: String,
+    },
+    /// An Upkeep loop's Ensure Ready or Stop was recorded, or why not.
+    Upkeep {
+        source: String,
+        alias: String,
+        ask: (Ask, String),
+        outcome: Result<Box<Submitted>, String>,
     },
     /// An uncheck's deselection was saved in the source's journal, or why not.
     Unchecked {
@@ -67,6 +80,9 @@ struct Submitted {
     operation: Operation,
     context: Context,
     alias: String,
+    /// The settings of the target cloud's card, read with the request so that running it
+    /// on the card reads no file on the UI thread.
+    settings: Result<Settings, String>,
 }
 
 impl State {
@@ -105,6 +121,15 @@ impl HorizonApp {
 
     /// Starts queued agent requests and finishes the ones whose jobs answered.
     pub(in crate::app::cloud_panel) fn poll_cloud_companion_requests(&mut self, ctx: &egui::Context) {
+        if self.cloud_prototype.root.is_some() {
+            self.cloud_prototype.production.tailnets.poll(ctx);
+            if let Some(settings) = self.settings.as_mut() {
+                self.cloud_prototype
+                    .production
+                    .tailnets
+                    .observe_settings(settings.tailnet_status_state(), ctx);
+            }
+        }
         for request in std::mem::take(&mut self.cloud_prototype.production.companions.agent.queued) {
             if let Err(error) = self.start_companion_request(&request, ctx) {
                 complete(&request, Err(error));
@@ -119,7 +144,9 @@ impl HorizonApp {
                 } => {
                     let (answer, started) = match outcome {
                         Ok(submitted) => {
-                            let (answer, started) = self.answer_submitted(&request, &source, *submitted, ctx);
+                            let tailnet = request.cloud_companion.as_ref().is_some_and(|r| r.tailnet.is_some());
+                            let (answer, started) =
+                                self.answer_submitted(reads_only(&request), tailnet, &source, *submitted, ctx);
                             (Ok(answer), started)
                         }
                         Err(error) => (Err(error), false),
@@ -151,6 +178,14 @@ impl HorizonApp {
                     self.release_companion_source(&source);
                     complete(&request, uncheck::answer(&source, &alias, saved));
                 }
+                Message::Upkeep {
+                    source,
+                    alias,
+                    ask,
+                    outcome,
+                } => {
+                    self.finish_upkeep_companion(&source, &alias, &ask, outcome, ctx);
+                }
                 Message::Executed { source, target } => {
                     self.cloud_prototype
                         .production
@@ -171,18 +206,19 @@ impl HorizonApp {
     /// status poll, which only reads. Returns whether an execution started.
     fn answer_submitted(
         &mut self,
-        request: &UsageRequest,
+        reads_only: bool,
+        tailnet: bool,
         source: &str,
         submitted: Submitted,
         ctx: &egui::Context,
     ) -> (Value, bool) {
-        if request.cloud_companion.as_ref().is_some_and(|r| r.tailnet.is_some()) {
+        if tailnet {
             self.cloud_prototype
                 .production
                 .tailnets
                 .invalidate(&submitted.operation.intent.target_cloud_id);
         }
-        if reads_only(request) {
+        if reads_only {
             let mut answer = describe(source, &submitted.alias, &submitted.operation);
             let operation = &submitted.operation;
             if answer["done"] == false
@@ -344,14 +380,11 @@ impl HorizonApp {
                 }))
             })
             .collect::<Vec<_>>();
-        let tailnets = self
-            .cloud_prototype
-            .root
-            .as_deref()
-            .map(cloud_runtime::tailnet::store)
-            .and_then(|store| store.load().ok())
-            .map(|catalog| catalog.tailnets);
-        json!({ "clouds": clouds, "tailnets": tailnets })
+        let tailnets = tailnets::inventory(
+            &self.cloud_prototype.production.tailnets,
+            self.cloud_prototype.root.as_deref(),
+        );
+        json!({ "clouds": clouds, "tailnets": tailnets.tailnets, "tailnet_api_credentials": tailnets.api_credentials })
     }
 
     /// Runs a submitted operation on the target cloud's card when nothing else is
@@ -361,6 +394,7 @@ impl HorizonApp {
             operation,
             context,
             alias,
+            settings,
         } = submitted;
         let target = operation.intent.target_cloud_id.clone();
         let mut answer = describe(source, &alias, &operation);
@@ -384,7 +418,7 @@ impl HorizonApp {
             &target,
             (&alias, stop),
             operation.intent.operation_id,
-            context,
+            (context, settings),
             ctx,
         ) {
             Ok(()) => {
@@ -404,7 +438,7 @@ impl HorizonApp {
         target: &str,
         (alias, stop): (&str, bool),
         id: OperationId,
-        context: Context,
+        (context, settings): (Context, Result<Settings, String>),
         ctx: &egui::Context,
     ) -> Result<(), String> {
         let group = self
@@ -420,12 +454,7 @@ impl HorizonApp {
             .root
             .clone()
             .ok_or("Horizon has no cloud state directory")?;
-        let settings = group
-            .remote
-            .as_ref()
-            .map(|launch| Settings::for_cloud(&root.join("settings.json"), &launch.placement))
-            .ok_or("The companion cloud has no deployment")?
-            .map_err(|error| error.to_string())?;
+        let settings = settings?;
         let owner = self
             .cloud_prototype
             .production
@@ -446,7 +475,6 @@ impl HorizonApp {
                 if let Some(cancel) = runtime.cancel.take() {
                     cancel.cancel();
                 }
-                runtime.idle_reports = None;
                 runtime.desktop = None;
                 runtime.confirmation = super::super::Confirmation::None;
                 runtime.rebuild = None;
@@ -576,10 +604,25 @@ fn submit(
         }
         error => error.to_string(),
     })?;
+    // Read here, off the UI thread, for the card that may run the operation.
+    let settings = groups
+        .0
+        .iter()
+        .find_map(|group| {
+            group
+                .remote
+                .as_ref()
+                .filter(|launch| launch.id == operation.intent.target_cloud_id)
+        })
+        .ok_or_else(|| "The companion cloud has no deployment".to_owned())
+        .and_then(|launch| {
+            Settings::for_cloud(&root.join("settings.json"), &launch.placement).map_err(|error| error.to_string())
+        });
     Ok(Submitted {
         operation,
         context,
         alias,
+        settings,
     })
 }
 

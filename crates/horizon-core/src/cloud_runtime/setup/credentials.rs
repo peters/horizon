@@ -15,7 +15,8 @@ impl SavedCredentials {
         let agents = settings
             .openai_api_key_file
             .iter()
-            .chain(settings.anthropic_api_key_file.iter());
+            .chain(settings.anthropic_api_key_file.iter())
+            .chain(settings.claude_token.iter().map(|token| &token.file));
         let registries = settings
             .registries
             .iter()

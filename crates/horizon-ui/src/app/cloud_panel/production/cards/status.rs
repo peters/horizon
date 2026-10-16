@@ -2,7 +2,7 @@
 //! header, the steps in its body and the drawer's Overview all read this.
 use super::super::{Runtime, Stage};
 use super::{deleted_or_redeploying, deleting, rebuild};
-use horizon_core::cloud_runtime::{CreateState, diagnosis, lifecycle::StopCause, progress};
+use horizon_core::cloud_runtime::{CreateState, diagnosis, progress};
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +86,7 @@ pub(in crate::app::cloud_panel::production) struct Failure {
 impl Failure {
     /// Read from the output once per change: every frame asks, the output rarely moves.
     fn of(runtime: &Runtime, summary: &str) -> Self {
+        let stage = failure_stage(runtime);
         let key = DiagnosisKey {
             summary: summary.to_owned(),
             lines: runtime.logs.len(),
@@ -97,21 +98,23 @@ impl Failure {
                 .map_or(0, |line| line.text.len()),
             generation: runtime.log_generation,
             attempt: runtime.progress.attempt(),
+            stage,
+            visit: stage.map_or(0, |stage| runtime.progress.visit(stage)),
         };
         if let Some((cached, failure)) = runtime.diagnosis.borrow().as_ref()
             && *cached == key
         {
             return failure.clone();
         }
-        // Lines held aside while a reader is scrolled up are output too; an earlier
-        // attempt's lines are not this failure's.
+        // A completed step's warnings cannot explain a later step's failure.
+        // Include held output, but only from this visit of the failed step.
         let attempt = runtime.progress.attempt();
         let lines = runtime
             .logs
             .iter()
             .chain(&runtime.pending_logs)
             // Notes (idle reports, provider checks) are not an operation's output.
-            .filter(|line| line.attempt == attempt && !line.note);
+            .filter(|line| line.attempt == attempt && !line.note && line.stage == key.stage && line.visit == key.visit);
         let found = diagnosis::diagnose(lines.map(|line| line.text.as_str()), summary);
         let failure = Self {
             summary: summary.to_owned(),
@@ -155,6 +158,8 @@ pub(in crate::app::cloud_panel::production) struct DiagnosisKey {
     /// Output replaced or added through `push_log`.
     generation: u64,
     attempt: u64,
+    stage: Option<Stage>,
+    visit: usize,
 }
 
 /// The stage track along the header's bottom edge.
@@ -376,7 +381,7 @@ pub(super) fn keep(runtime: &mut Runtime, status: Status, frame: u64) {
 pub(super) fn of(runtime: &Runtime, occupancy: Occupancy, now: SystemTime) -> Status {
     let mut status = unmarked(runtime, occupancy, now);
     // A new panel's session is still being saved in the record: every lifecycle action
-    // waits for it, so the card, and the cloud list that counts what it can stop, offer none.
+    // waits for it, so the card offers none.
     if runtime.sessions.saving() {
         status.primary = None;
     }
@@ -539,17 +544,13 @@ fn held(runtime: &Runtime) -> Option<Status> {
 /// the owner made, or one from before this Horizon started, names an agent's
 /// request when the worker reported one.
 fn stopped(runtime: &Runtime) -> (String, String) {
-    match runtime.stop_cause {
-        Some(StopCause::Idle { limit }) => (
-            format!("Stopped after {} idle minutes", limit.as_secs() / 60),
-            String::new(),
-        ),
-        Some(StopCause::Unknown) => ("Stopped".into(), "Stopped outside Horizon".into()),
-        None => (
-            "Stopped".into(),
-            super::self_stop::line(runtime.state.as_ref()).unwrap_or_default(),
-        ),
+    if runtime.stopped_outside {
+        return ("Stopped".into(), "Stopped outside Horizon".into());
     }
+    (
+        "Stopped".into(),
+        super::self_stop::line(runtime.state.as_ref()).unwrap_or_default(),
+    )
 }
 
 fn panels(count: usize) -> String {
@@ -570,10 +571,21 @@ fn stages(runtime: &Runtime) -> &'static [Stage] {
 }
 
 fn track(runtime: &Runtime) -> Track {
+    track_at(runtime, runtime.stage)
+}
+
+fn track_at(runtime: &Runtime, stage: Option<Stage>) -> Track {
     let stages = stages(runtime);
-    let stage = runtime
-        .stage
+    let stage = stage
         .or_else(|| runtime.state.as_ref().map(|state| state.stage))
+        // Creating a replacement server is part of Replace image on the rebuild track.
+        .map(|stage| {
+            if stage == Stage::Provision && stages.contains(&Stage::Replace) {
+                Stage::Replace
+            } else {
+                stage
+            }
+        })
         .filter(|stage| stages.contains(stage))
         // A deletion that failed returns the saved deployment stage; its own last step
         // (or its first, when it failed before reporting one) is where it stopped.
@@ -747,8 +759,19 @@ fn stop_failed(runtime: &Runtime) -> bool {
     runtime.stage == Some(Stage::Stopping) || runtime.operation == Some(super::Action::Stop)
 }
 
+/// A failed attempt keeps its last step across saved-record snapshots. A successful
+/// outcome keeps later connection output apart from the completed deployment steps.
+fn failure_stage(runtime: &Runtime) -> Option<Stage> {
+    runtime
+        .stage
+        .filter(|stage| runtime.progress.ended_in(*stage).is_some())
+        .or_else(|| runtime.progress.last_stage())
+        .or(runtime.stage)
+}
+
 fn failed(runtime: &Runtime, error: &str) -> Status {
-    let mut track = track(runtime);
+    let stage = failure_stage(runtime);
+    let mut track = track_at(runtime, stage);
     if stop_failed(runtime) {
         // The worker got as far as Ready; the stop is not a deployment step.
         track = Track::complete(&Stage::ALL, true);
@@ -798,7 +821,7 @@ fn failed(runtime: &Runtime, error: &str) -> Status {
         } else if stop_failed(runtime) {
             "Stop failed".into()
         } else {
-            failed_verb(runtime.stage)
+            failed_verb(stage)
         },
         numbers: failure.headline().to_owned(),
         tail: runtime

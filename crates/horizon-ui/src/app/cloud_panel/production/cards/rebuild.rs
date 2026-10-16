@@ -25,7 +25,7 @@ const STAGES: [Stage; 7] = [
     Stage::Ready,
 ];
 
-const CONFIRMATION: &str = "Rebuild the image from the .horizon recipe in this checkout, uncommitted changes included, with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. The cloud takes the agents, browsers, desktop, readiness timeout, idle stop and build settings of .horizon/cloud.yml in the working copy; its size, storage, GPU and image repository stay.";
+const CONFIRMATION: &str = "Rebuild the image from the .horizon recipe in this checkout, uncommitted changes included, with the newest agent CLIs, then restart the worker on it? Running agent processes restart. Files under /workspace, including worktrees and agent logins, are kept. The cloud takes the agents, browsers, desktop, readiness timeout and build settings of .horizon/cloud.yml in the working copy; its size, storage, GPU and image repository stay.";
 const READING: &str = "Reading .horizon/cloud.yml and the uncommitted changes…";
 const CHANGES: &str = "This rebuild changes the cloud's settings:";
 const SAME_SETTINGS: &str = "The cloud's settings stay as they are.";
@@ -223,8 +223,25 @@ fn confirm_switch_back(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Actio
     None
 }
 
+/// Why Manage offers no rebuild for a cloud on a Docker host.
+const DOCKER_HOST: &str =
+    "Rebuild is not supported on a Docker host yet. Delete the cloud and create it again for a new image.";
+
 /// The Ready block's rebuild offer with its confirmation.
 pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> {
+    let on_docker_host = runtime.state.as_ref().is_some_and(|state| {
+        state.profile.provider == cloud_runtime::provider::DOCKER_HOST.id && state.stage == Stage::Ready
+    });
+    if on_docker_host {
+        super::section::row(ui, "Image", DOCKER_HOST, |ui| {
+            ui.add_enabled(
+                false,
+                super::section::row_button(ui, danger_button("Rebuild image & restart…")),
+            )
+            .on_disabled_hover_text(DOCKER_HOST);
+        });
+        return None;
+    }
     if !can_rebuild(runtime) {
         return None;
     }

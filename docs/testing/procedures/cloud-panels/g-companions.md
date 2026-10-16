@@ -492,7 +492,7 @@ also makes sure that agents can start and stop a companion cloud through MCP.
    Result: The command waits 70 seconds on the worker. It runs while the candidate is paused.
 
    > **CAUTION:** START THE WATCHDOG BEFORE YOU PAUSE THE CANDIDATE. A paused
-   > candidate does not stop idle clouds and cannot delete clouds.
+   > candidate cannot stop or delete clouds.
 
 6. On the host, start a watchdog that continues the candidate child after 90 seconds.
 

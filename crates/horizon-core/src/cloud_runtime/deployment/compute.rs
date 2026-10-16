@@ -104,6 +104,30 @@ impl Compute for RunPod {
 }
 
 impl Compute for hetzner::Compute {
+    fn verify_registry(
+        &self,
+        _store: &Store,
+        state: &mut Deployment,
+        registry: &mut crate::cloud_runtime::registry::Prepared,
+        cancel: &Cancellation,
+        _observe: mutation::Observer<'_>,
+    ) -> Result<()> {
+        self.verified_pull.replace(None);
+        verify_image(state, registry, cancel)?;
+        let image = state
+            .spec
+            .as_ref()
+            .ok_or(Error::Invalid("Deployment has no image to validate"))?
+            .image_digest
+            .clone();
+        self.verified_pull.replace(Some(hetzner::VerifiedPull {
+            image,
+            login: registry.host_login()?,
+            expires_at: registry.pull_expires_at()?,
+        }));
+        Ok(())
+    }
+
     /// Hetzner cannot report a server's image, so a rebuild whose release may have
     /// begun is finished or cancelled only through the rebuild; a reconnect must not
     /// place a server around it.

@@ -6,7 +6,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use horizon_core::WorkspaceId;
-use horizon_core::upkeep::worker::{Config, Signals};
+use horizon_core::upkeep::worker::{CompanionAsk, Config, Signals};
 
 use super::form::Form;
 
@@ -67,11 +67,13 @@ pub(in crate::app) struct Answer {
     pub(in crate::app) running: bool,
     /// The first-run marker could not be removed after the worker got the first run.
     pub(in crate::app) marker_left: bool,
+    /// The worker did not take the Upkeep policy, so the exchange held Run now back.
+    pub(in crate::app) run_held: bool,
 }
 
 /// What an exchange hands back: the GitHub access requests it allowed, also when the rest
-/// of it failed, and what it learned.
-pub(in crate::app) type Exchanged = (Vec<String>, Result<Answer, String>);
+/// of it failed, and what it learned, with the agent's companion requests.
+pub(in crate::app) type Exchanged = (Vec<String>, Result<(Answer, Vec<CompanionAsk>), String>);
 
 /// One Upkeep cloud's exchange with its worker.
 #[derive(Default)]

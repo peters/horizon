@@ -4,99 +4,6 @@ use crate::test_egui::DiscardTextures;
 use egui::{Id, Order, Pos2};
 use horizon_core::{cloud_panel::CloudLaunch, cloud_runtime::state::Deployment};
 
-/// Every text and control the header strip draws for `status`, at `width`.
-fn strip_frame(width: f32, status: &status::Status) -> (strip::Strip, Vec<(String, egui::Rect)>, egui::Rect) {
-    let ctx = egui::Context::default();
-    let mut result = None;
-    let header = egui::Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(width, 118.0));
-    let output = ctx
-        .run_ui(egui::RawInput::default(), |ui| {
-            let indicators = strip::Indicators {
-                running: 2,
-                terminals: 3,
-                desktop: Some(true),
-                sharing: strip::Sharing::Open(3),
-                companions: 2,
-            };
-            let spend = strip::Spend {
-                line: "$0.320/h · $1.02 run · $8.86 total".into(),
-                explanation: String::new(),
-            };
-            result = Some(strip::show(ui, header, status, &indicators, &spend, false, None));
-        })
-        .discard_textures();
-    let texts = output
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text) => Some((
-                text.galley.text().to_owned(),
-                text.visual_bounding_rect().intersect(clipped.clip_rect),
-            )),
-            _ => None,
-        })
-        .collect();
-    (result.unwrap(), texts, header)
-}
-
-#[test]
-fn the_header_strip_fits_the_narrowest_cloud_with_long_errors() {
-    let long = "Detailed retryable failure ".repeat(40);
-    let runtime = super::super::Runtime {
-        stage: Some(Stage::Push),
-        error: Some(long.clone()),
-        ..Default::default()
-    };
-    let failed = status::of(&runtime, status::Occupancy::default(), std::time::SystemTime::now());
-    let ready = status::of(
-        &super::super::Runtime::default(),
-        status::Occupancy {
-            panels: 3,
-            running: 2,
-            terminals: 3,
-        },
-        std::time::SystemTime::now(),
-    );
-    for status in [&failed, &ready] {
-        for width in [548.0, 1100.0, 1760.0] {
-            let (strip, texts, header) = strip_frame(width, status);
-            let close_left = header.right() - 42.0;
-            assert!(
-                strip.reserved <= width - 64.0 - 170.0 + 0.5,
-                "the title keeps its room at {width}"
-            );
-            for (text, rect) in &texts {
-                if rect.is_negative() || rect.width() <= 0.0 {
-                    continue;
-                }
-                assert!(
-                    header.contains_rect(rect.shrink(0.5)),
-                    "{text:?} stays in the header at {width}: {rect:?}"
-                );
-                if rect.top() < 60.0 {
-                    assert!(
-                        rect.right() <= close_left + 0.5,
-                        "{text:?} clears the close button at {width}"
-                    );
-                }
-            }
-            let has = |label: &str| texts.iter().any(|(text, _)| text == label);
-            assert!(has(status.primary.unwrap().label()), "the main action survives {width}");
-            assert_eq!(
-                has("$0.320/h · $1.02 run · $8.86 total"),
-                width >= 1100.0,
-                "spend is the first thing a narrow header drops ({width})"
-            );
-            if has("$0.320/h · $1.02 run · $8.86 total") {
-                assert!(
-                    has("2/3"),
-                    "spend never shows without the connection indicators ({width})"
-                );
-            }
-        }
-    }
-}
-
 mod access;
 mod closing;
 mod deletion;
@@ -105,6 +12,7 @@ mod hover;
 mod layout;
 mod overlap;
 mod scrolling;
+mod strip_spend;
 
 #[test]
 #[cfg(unix)]
@@ -121,6 +29,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
     let config = super::super::CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 8\n    memory_gb: 32\n").unwrap();
     let profile = config.profiles["dev"].clone();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -139,6 +48,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
     let root = temp.path().join("fixture");
     let store = super::super::Store::lock(&root).unwrap();
     let mut state = horizon_core::cloud_runtime::state::Deployment {
+        service_admission: None,
         version: 1,
         cloud_id: "fixture".into(),
         repository: temp.path().into(),
@@ -148,6 +58,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         operation: horizon_core::cloud_runtime::CreateState::Requested,
         spec: None,
         registry_generation: None,
+        publication: None,
         worker: None,
         sessions: Vec::new(),
         source_ready: false,
@@ -161,6 +72,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         timeline: None,
         last_self_stop: None,
         tailnet_device: None,
+        tailnet_enrollment: horizon_core::cloud_runtime::tailnet::receipt::EnrollmentLedger::default(),
         siblings: None,
         uncommitted_image: None,
         working_copy: None,
@@ -192,6 +104,7 @@ fn size_launch() -> CloudLaunch {
     )
     .unwrap();
     CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "resize".into(),
         revision: "a".repeat(40),
@@ -648,14 +561,16 @@ fn only_a_ready_running_worker_schedules_the_one_second_refresh() {
     // egui subtracts the expected frame time from the requested delay.
     let refresh = delay(&mut running);
     assert!(refresh <= super::super::RUN_COST_REFRESH && refresh > super::super::RUN_COST_REFRESH / 2);
-    for mut idle in [
+    for mut idle in vec![
         cost_runtime(Stage::Stopped, &cost_worker("EXITED", &serde_json::json!({}))),
         cost_runtime(
             Stage::Ready,
             &cost_worker("RUNNING", &serde_json::json!({"lastStartedAt": null})),
         ),
         super::super::Runtime::default(),
-    ] {
+    ]
+    .into_boxed_slice()
+    {
         assert!(delay(&mut idle) > std::time::Duration::from_secs(60));
     }
 }

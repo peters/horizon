@@ -120,7 +120,8 @@ impl Docker for Fake {
             ["info", "--format", "{{.ID}}"] => return Ok(format!("{}\n", self.engine.unwrap_or("ENGINE-ONE"))),
             ["info", ..] => {
                 let version = self.version.unwrap_or("29.0.1");
-                let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30, "ServerVersion": version});
+                let info = json!({"OSType": "linux", "NCPU": self.cpus, "MemTotal": self.memory_gb << 30,
+                    "ServerVersion": version, "Architecture": "aarch64"});
                 return Ok(info.to_string());
             }
             ["container", "ls", .., "--filter", filter, "--format", _] => {
@@ -280,6 +281,8 @@ fn clouds_on_one_host_get_their_own_names_volumes_and_ports() {
         (WorkerStatus::Running, &Some(Box::new(host())))
     );
     assert_eq!(one.env["HORIZON_CLOUD_OPERATION"], "first");
+    // A container cannot stop itself: an agent's stop is Horizon's to take.
+    assert_eq!(one.env["HORIZON_WORKER_STOP"], "horizon");
     let volumes: Vec<String> = docker.volumes.borrow().keys().cloned().collect();
     assert_eq!(
         volumes,
@@ -346,6 +349,39 @@ fn a_port_another_program_holds_is_skipped_and_a_created_worker_is_adopted() {
     worker::create(&docker, retry.spec.as_ref().unwrap(), 31_999).unwrap();
     assert_eq!(port(&retry.provision(&docker).unwrap()), 31_999);
     assert_eq!(docker.containers.borrow().len(), 2);
+}
+
+#[test]
+fn capacity_is_what_running_horizon_workers_leave_and_offers_it_at_no_rent() {
+    let docker = Fake::host(16, 64);
+    docker.add("busy", "horizon-cloud-busy", Some("busy"), 31_500, true);
+    docker.add("idle", "horizon-cloud-idle", Some("idle"), 31_501, false);
+    let capacity = capacity(&docker).unwrap();
+    assert_eq!(capacity.free(), "14.0 of 16 CPUs and 60.0 of 64.0 GB free");
+    assert!(capacity.fits(14, 60) && !capacity.fits(15, 1) && capacity.native());
+    let requirements = |value: Value| serde_json::from_value::<crate::offers::Requirements>(value).unwrap();
+    let offered = offer("build-box", &capacity, &requirements(json!({"min_vcpu": 4}))).unwrap();
+    assert_eq!(
+        (
+            offered.provider,
+            offered.id.as_str(),
+            offered.vcpu,
+            offered.memory_gb,
+            offered.estimated_total
+        ),
+        ("docker-host", "build-box", Some(14), Some(60), 0.0)
+    );
+    for refused in [
+        json!({"min_vcpu": 15}),
+        json!({"min_memory_gb": 61}),
+        json!({"gpu": true}),
+        json!({"region": "EUROPE"}),
+    ] {
+        assert!(
+            offer("build-box", &capacity, &requirements(refused.clone())).is_none(),
+            "{refused}"
+        );
+    }
 }
 
 #[test]
@@ -675,4 +711,62 @@ fn a_command_that_outlives_its_time_is_stopped() {
     cancel.cancel();
     let error = engine.docker(&["0".into()], Duration::from_secs(5)).unwrap_err();
     assert!(matches!(error, Failure::Error(CloudError::Cancelled)), "{error:?}");
+}
+
+#[test]
+fn a_host_forwards_its_engine_socket_and_a_loopback_port_over_its_own_ssh() {
+    let args = |command: Command| -> Vec<String> {
+        std::iter::once(command.get_program().to_string_lossy().into_owned())
+            .chain(command.get_args().map(|arg| arg.to_string_lossy().into_owned()))
+            .collect()
+    };
+    let mut ssh = Host {
+        name: "builder".into(),
+        access: Access::Ssh,
+        address: Some("me@builder".into()),
+        docker: None,
+    };
+    let socket = args(
+        ssh.socket_forward(Path::new("/private/run/docker.sock"))
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(socket.first().map(String::as_str), Some("ssh"));
+    assert!(
+        socket
+            .windows(2)
+            .any(|pair| pair == ["-L", "/private/run/docker.sock:/var/run/docker.sock"])
+    );
+    assert!(socket.contains(&"ExitOnForwardFailure=yes".to_owned()));
+    assert_eq!(
+        socket.last().map(String::as_str),
+        Some("me@builder"),
+        "the address comes after --"
+    );
+    let port = args(
+        ssh.port_forward(Path::new("/private/run/desktop.sock"), 32768)
+            .unwrap()
+            .unwrap(),
+    );
+    assert!(
+        port.windows(2)
+            .any(|pair| pair == ["-L", "/private/run/desktop.sock:127.0.0.1:32768"])
+    );
+    ssh.access = Access::TailscaleSsh;
+    let tailscale = args(
+        ssh.port_forward(Path::new("/private/run/desktop.sock"), 32768)
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(&tailscale[..3], ["tailscale", "ssh", "me@builder"]);
+    let this_pc = Host {
+        name: "local".into(),
+        access: Access::ThisPc,
+        address: None,
+        docker: None,
+    };
+    assert!(
+        this_pc.socket_forward(Path::new("/x.sock")).unwrap().is_none(),
+        "this computer needs no forward"
+    );
 }

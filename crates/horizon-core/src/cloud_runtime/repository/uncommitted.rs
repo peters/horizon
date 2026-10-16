@@ -405,7 +405,7 @@ fn secret_name(path: &str) -> bool {
     environment || key_store || ssh_key || credentials || tool_logins
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(in crate::cloud_runtime) fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()
         .fold(String::with_capacity(bytes.len() * 2), |mut text, byte| {

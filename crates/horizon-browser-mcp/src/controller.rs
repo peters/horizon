@@ -15,12 +15,15 @@ use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
 
+mod admission;
 pub(crate) mod cloud_list;
 pub(crate) mod companion;
 mod device;
 mod handoff;
+mod image_destination;
 pub(crate) mod provider_usage;
 mod recovery;
+mod tailnet_credential;
 pub(crate) mod upkeep;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
@@ -151,9 +154,13 @@ pub(crate) enum ControlError {
     )]
     HostInstanceUnavailable,
     #[error(
-        "browser panel {panel_id} is already owned by this agent; reuse it, or set allow_additional=true only when the user explicitly requested an independent browser session"
+        "browser panel {panel_id} ({backend}) is already owned by this agent; reuse it, or name another engine in backend (one panel per engine: chromium, firefox, safari), or set allow_additional=true only when the user explicitly requested an independent browser session"
     )]
-    AdditionalPanelRequiresOptIn { panel_id: String },
+    AdditionalPanelRequiresOptIn { panel_id: String, backend: &'static str },
+    #[error(
+        "another browser_create of this agent ({backend}) is still pending; wait for its panel and reuse it, or name another engine in backend, or set allow_additional=true only when the user explicitly requested an independent browser session"
+    )]
+    AdditionalCreatePending { backend: &'static str },
     #[error("browser visibility can be changed only by an agent panel launched inside Horizon")]
     VisibilityUnavailable,
     #[error("browser_close is available only to an agent panel launched inside Horizon")]
@@ -306,13 +313,33 @@ impl BrowserController {
             return Err(ControlError::CreateUnavailable);
         }
         self.require_host_instance()?;
-        if !allow_additional && let Some(panel_id) = self.existing_actor_panel_id() {
-            return Err(ControlError::AdditionalPanelRequiresOptIn { panel_id });
+        // Held until the request is queued, so a concurrent create of this
+        // agent, from this server or another one, sees it as pending.
+        let admission = manifest::admit_create(self.identity())
+            .map_err(|source| ControlError::internal_io("could not check pending browser panel creations", source))?;
+        if !allow_additional
+            && let Some(conflict) = admission::conflict(
+                self.workspace_manifests()
+                    .filter(|panel| panel_belongs_to_actor(panel, &self.actor)),
+                admission.pending(),
+                &parameters,
+            )
+        {
+            return Err(match conflict {
+                admission::Conflict::Panel { panel_id, backend } => ControlError::AdditionalPanelRequiresOptIn {
+                    panel_id,
+                    backend: crate::model::backend_name(backend),
+                },
+                admission::Conflict::Pending(engine) => ControlError::AdditionalCreatePending {
+                    backend: engine.map_or("engine not named", crate::model::backend_name),
+                },
+            });
         }
         let timeout_millis = bounded_create_timeout(timeout_millis);
         let action_id =
             manifest::enqueue_create_oriented(self.identity(), parameters, Duration::from_millis(timeout_millis))
                 .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
+        drop(admission);
         self.wait_for_create(action_id, timeout_millis).await
     }
 
@@ -384,12 +411,6 @@ impl BrowserController {
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
         }
-    }
-
-    fn existing_actor_panel_id(&self) -> Option<String> {
-        self.workspace_manifests()
-            .find(|panel| panel_belongs_to_actor(panel, &self.actor))
-            .map(|panel| panel.panel_local_id)
     }
 
     pub(crate) async fn set_visibility(
@@ -996,6 +1017,22 @@ fn panel_belongs_to_actor(panel: &BrowserManifest, actor: &str) -> bool {
     panel.owner.as_ref().is_some_and(|owner| owner.name == actor)
 }
 
+/// The owned panel that makes a new panel an additional session. An agent
+/// may hold one panel per browser engine, so a create that names its
+/// `backend` conflicts only with an owned panel of that engine. Without a
+/// backend Horizon picks its configured browser, which this server cannot
+/// see, and a remote target allocates paid capacity: both conflict with any
+/// owned panel.
+fn conflicting_panel(
+    mut owned: impl Iterator<Item = BrowserManifest>,
+    parameters: &manifest::RemoteCreateParameters,
+) -> Option<BrowserManifest> {
+    match parameters.backend {
+        Some(backend) if parameters.target.is_none() => owned.find(|panel| panel.backend == backend),
+        _ => owned.next(),
+    }
+}
+
 pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) -> ProtocolKind {
     match backend {
         BackendKind::ChromiumCdp => ProtocolKind::Cdp,
@@ -1024,6 +1061,71 @@ mod tests {
             ..remote
         })
         .expect("supported remote upload");
+    }
+
+    #[test]
+    fn an_agent_may_hold_one_panel_per_named_engine() {
+        let panel = |id: &str, backend: BackendKind, remote: bool| BrowserManifest {
+            panel_local_id: id.to_string(),
+            backend,
+            remote_target: remote.then(|| "phone".to_string()),
+            ..BrowserManifest::default()
+        };
+        let create = |backend: Option<BackendKind>, target: Option<&str>| manifest::RemoteCreateParameters {
+            url: None,
+            backend,
+            target: target.map(str::to_string),
+            orientation: None,
+            visible: true,
+        };
+        let conflict = |owned: Vec<BrowserManifest>, parameters| {
+            conflicting_panel(owned.into_iter(), &parameters).map(|panel| panel.panel_local_id)
+        };
+        let chromium = || vec![panel("chromium-1", BackendKind::ChromiumCdp, false)];
+
+        assert_eq!(conflict(chromium(), create(Some(BackendKind::FirefoxBidi), None)), None);
+        assert_eq!(
+            conflict(chromium(), create(Some(BackendKind::SafariWebDriver), None)),
+            None
+        );
+        assert_eq!(
+            conflict(chromium(), create(Some(BackendKind::ChromiumCdp), None)).as_deref(),
+            Some("chromium-1"),
+            "a second panel of the same engine still needs allow_additional"
+        );
+        assert_eq!(
+            conflict(chromium(), create(None, None)).as_deref(),
+            Some("chromium-1"),
+            "the configured browser is unknown here, so an omitted backend conflicts"
+        );
+        assert_eq!(
+            conflict(chromium(), create(None, Some("phone"))).as_deref(),
+            Some("chromium-1"),
+            "remote capacity stays one session unless allowed"
+        );
+        let both = vec![
+            panel("chromium-1", BackendKind::ChromiumCdp, false),
+            panel("firefox-1", BackendKind::FirefoxBidi, false),
+        ];
+        assert_eq!(
+            conflict(both, create(Some(BackendKind::FirefoxBidi), None)).as_deref(),
+            Some("firefox-1")
+        );
+        assert_eq!(
+            conflict(
+                vec![panel("remote-1", BackendKind::ChromiumCdp, true)],
+                create(Some(BackendKind::ChromiumCdp), None)
+            )
+            .as_deref(),
+            Some("remote-1"),
+            "a remote panel holds its engine too"
+        );
+        assert_eq!(conflict(Vec::new(), create(None, None)), None);
+        let error = ControlError::AdditionalPanelRequiresOptIn {
+            panel_id: "chromium-1".to_string(),
+            backend: crate::model::backend_name(BackendKind::ChromiumCdp),
+        };
+        assert!(error.to_string().contains("(chromium)") && error.to_string().contains("allow_additional=true"));
     }
 
     #[test]

@@ -334,7 +334,7 @@ A first cloud needs these items today:
 | Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
 | `.horizon/cloud.yml` in the selected commit | Required, except for quick start or an image-only profile in the working copy | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
 | Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
-| Agent API key, ChatGPT sign-in for Codex or subscription login for Claude | One for each agent | **Cloud settings** |
+| Agent API key, ChatGPT sign-in for Codex, or a setup token or sign-in on the worker for Claude | One for each agent | **Cloud settings** |
 | Tailscale auth key | Optional | **Settings > Tailnets** |
 | Git push credential for the worker | Optional | `~/.horizon/cloud/settings.json` |
 
@@ -352,8 +352,15 @@ from `origin` before deploy. Commit and update the branch before you start.
    Result: The **Where is your code?** step opens.
 
 4. If the code is on a Git server, paste the repository link.
-5. If the code is on this computer, click **Browse…**.
-6. If you clicked **Browse…**, select the folder.
+5. If the code is on this computer, type its name or its path.
+
+   Result: The results list the checkouts on this computer and, with GitHub
+   connected, your GitHub repositories.
+
+6. If you typed a name or a path, press **Enter** on the result.
+
+   Result: The results go away and the dialog reads the repository.
+
 7. If the dialog shows **No cloud setup yet**, click **Start on the base image**
    in the **Quick start** card.
 

@@ -1,16 +1,46 @@
 //! Cloud-only named networks. Settings never reads a saved key back into the form.
+mod api_credentials;
+pub(in crate::app) mod requests;
+pub(in crate::app) use api_credentials::Observation as ApiCredentialObservation;
+
 use crate::theme;
 use horizon_core::cloud_runtime::tailnet::{self, Catalog, Selection};
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, channel},
 };
 use zeroize::{Zeroize, Zeroizing};
 
+#[derive(PartialEq, Eq)]
+struct DiscoveryVersion {
+    catalog: u64,
+    api: u64,
+    pending: bool,
+    failed: bool,
+}
+
+struct SettingsDiscovery {
+    root: PathBuf,
+    version: DiscoveryVersion,
+    catalog: Option<Catalog>,
+    observations: BTreeMap<String, ApiCredentialObservation>,
+    fallback: ApiCredentialObservation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsScope {
+    Current,
+    Changed,
+}
+
 pub(super) struct State {
     root: PathBuf,
     catalog: Catalog,
+    catalog_loaded: bool,
+    catalog_revision: u64,
+    settings_discovery: Option<SettingsDiscovery>,
+    settings_scope: SettingsScope,
     selections: BTreeMap<String, Option<String>>,
     receiver: Option<Receiver<Result<Catalog, String>>>,
     initialized: bool,
@@ -21,12 +51,17 @@ pub(super) struct State {
     message: Option<String>,
     settings_error: Option<String>,
     failed: bool,
+    api_credentials: api_credentials::State,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
             root: horizon_core::HorizonHome::resolve().root().join("cloud"),
             catalog: Catalog::default(),
+            catalog_loaded: false,
+            catalog_revision: 0,
+            settings_discovery: None,
+            settings_scope: SettingsScope::Current,
             selections: BTreeMap::new(),
             receiver: None,
             initialized: false,
@@ -37,10 +72,128 @@ impl Default for State {
             message: None,
             settings_error: None,
             failed: false,
+            api_credentials: api_credentials::State::default(),
         }
     }
 }
 impl State {
+    fn settings_scope_changed(&self) -> bool {
+        self.settings_scope == SettingsScope::Changed
+    }
+
+    pub(in crate::app) fn discard_cancelled_api_draft(&mut self, requests: &requests::Requests) {
+        self.api_credentials.discard_cancelled_draft(requests);
+    }
+
+    pub(in crate::app) fn api_credential_observation(&self, id: &str) -> ApiCredentialObservation {
+        if self.settings_scope_changed() {
+            return ApiCredentialObservation::Unavailable;
+        }
+        if let Some(discovery) = &self.settings_discovery {
+            if discovery.root != self.root {
+                return ApiCredentialObservation::Unavailable;
+            }
+            return discovery.observations.get(id).copied().unwrap_or(discovery.fallback);
+        }
+        if self.api_credentials.row_error(id).is_some() {
+            return ApiCredentialObservation::Unavailable;
+        }
+        if !self.initialized || self.receiver.is_some() || !self.reload_barriers.is_empty() {
+            ApiCredentialObservation::Pending
+        } else {
+            self.api_credentials.observation(id)
+        }
+    }
+
+    pub(in crate::app) fn cached_catalog_at(&self, root: &Path) -> Option<&Catalog> {
+        if self.root != root || self.settings_scope_changed() {
+            return None;
+        }
+        if let Some(discovery) = &self.settings_discovery {
+            return if discovery.root == self.root {
+                discovery.catalog.as_ref()
+            } else {
+                None
+            };
+        }
+        self.catalog_loaded.then_some(&self.catalog)
+    }
+
+    pub(super) fn reopen_settings(&mut self, editor: &mut Self) {
+        if self.root != editor.root {
+            return;
+        }
+        // Move the single IO owner, not a snapshot of its pending writers or errors.
+        std::mem::swap(self, editor);
+        std::mem::swap(&mut self.selections, &mut editor.selections);
+        editor.settings_discovery = None;
+        self.observe_settings_cached(editor);
+    }
+
+    pub(in crate::app) fn observe_settings(&mut self, editor: &mut Self, ctx: &egui::Context) {
+        if self.root != editor.root || editor.settings_scope_changed() {
+            editor.settings_scope = SettingsScope::Changed;
+            editor.api_credentials.suspend_refresh();
+            editor.poll(ctx);
+            self.observe_settings_cached(editor);
+            return;
+        }
+        editor.poll(ctx);
+        self.observe_settings_cached(editor);
+    }
+
+    fn observe_settings_cached(&mut self, editor: &Self) {
+        let pending = !editor.initialized
+            || editor.receiver.is_some()
+            || !editor.reload_barriers.is_empty()
+            || editor.api_credentials.busy();
+        let version = DiscoveryVersion {
+            catalog: editor.catalog_revision,
+            api: editor.api_credentials.revision(),
+            pending,
+            failed: editor.failed || editor.settings_scope_changed(),
+        };
+        if self
+            .settings_discovery
+            .as_ref()
+            .is_some_and(|discovery| discovery.root == editor.root && discovery.version == version)
+        {
+            return;
+        }
+        let catalog = editor.cached_catalog_at(&editor.root).cloned();
+        // Selection rendering reads this passive catalog; all IO stays with Settings.
+        if self.root != editor.root || editor.settings_scope_changed() {
+            self.catalog = Catalog::default();
+            self.catalog_loaded = false;
+        } else if let Some(catalog) = &catalog {
+            self.catalog.clone_from(catalog);
+            self.catalog_loaded = true;
+        }
+        self.catalog_revision = editor.catalog_revision;
+        self.initialized = editor.initialized && !editor.settings_scope_changed() && self.root == editor.root;
+        self.failed = version.failed;
+        self.message.clone_from(&editor.message);
+        self.settings_error.clone_from(&editor.settings_error);
+        let observations = catalog.as_ref().map_or_else(BTreeMap::new, |catalog| {
+            catalog
+                .tailnets
+                .iter()
+                .map(|network| (network.id.clone(), editor.api_credential_observation(&network.id)))
+                .collect()
+        });
+        self.settings_discovery = Some(SettingsDiscovery {
+            root: editor.root.clone(),
+            version,
+            catalog,
+            observations,
+            fallback: if pending && !editor.settings_scope_changed() {
+                ApiCredentialObservation::Pending
+            } else {
+                ApiCredentialObservation::Unavailable
+            },
+        });
+    }
+
     fn start(&mut self, ctx: &egui::Context, task: impl FnOnce() -> Result<Catalog, String> + Send + 'static) {
         let (sender, receiver) = channel();
         self.receiver = Some(receiver);
@@ -53,6 +206,10 @@ impl State {
         });
     }
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
+        if self.settings_discovery.is_some() {
+            return;
+        }
+        self.api_credentials.poll(ctx);
         if let Some(receiver) = &self.receiver {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -60,6 +217,11 @@ impl State {
                     match result {
                         Ok(catalog) => {
                             self.catalog = catalog;
+                            self.catalog_loaded = true;
+                            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+                            if !self.settings_scope_changed() {
+                                self.api_credentials.refresh(ctx, &self.root, &self.catalog);
+                            }
                             if self
                                 .edit
                                 .as_ref()
@@ -102,12 +264,20 @@ impl State {
         if !self.reload_barriers.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        if !self.initialized && self.receiver.is_none() && self.reload_barriers.is_empty() {
+        if !self.initialized
+            && !self.settings_scope_changed()
+            && self.receiver.is_none()
+            && self.reload_barriers.is_empty()
+            && !self.api_credentials.busy()
+        {
             self.initialized = true;
             self.refresh(ctx);
         }
     }
     pub(super) fn refresh(&mut self, ctx: &egui::Context) {
+        if self.settings_discovery.is_some() || self.settings_scope_changed() {
+            return;
+        }
         if self.receiver.is_some() || !self.reload_barriers.is_empty() {
             self.initialized = false;
             return;
@@ -118,13 +288,24 @@ impl State {
             store.recover().and_then(|()| store.load()).map_err(|e| e.to_string())
         });
     }
-    pub(super) fn settings(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn settings(&mut self, ui: &mut egui::Ui, requests: &mut requests::Requests) {
         self.poll(ui.ctx());
         ui.label(egui::RichText::new("Tailnets").size(24.0).strong().color(theme::FG()));
         ui.label(egui::RichText::new("Private networks for your clouds").color(theme::FG_SOFT()));
         ui.add_space(20.0);
-        let networks = self.catalog.tailnets.clone();
-        ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+        if self.settings_scope_changed() {
+            ui.colored_label(
+                theme::PALETTE_RED(),
+                "Tailnet storage changed. Close Settings and open it again.",
+            );
+            self.status(ui);
+            self.api_credentials.status(ui);
+            return;
+        }
+        let networks = self
+            .cached_catalog_at(&self.root)
+            .map_or_else(Vec::new, |catalog| catalog.tailnets.clone());
+        ui.add_enabled_ui(self.receiver.is_none() && !self.api_credentials.busy(), |ui| {
             for network in networks {
                 egui::Frame::new()
                     .fill(theme::PANEL_BG())
@@ -168,6 +349,17 @@ impl State {
                                 .size(12.0)
                                 .color(theme::FG_SOFT()),
                         );
+                        let observation = self.api_credential_observation(&network.id);
+                        self.api_credentials.row(ui, &network.id, observation);
+                        self.api_credentials.manage(
+                            ui,
+                            &requests::Target {
+                                root: self.root.clone(),
+                                id: network.id.clone(),
+                                name: network.name.clone(),
+                            },
+                            requests,
+                        );
                     });
                 ui.add_space(8.0);
             }
@@ -184,6 +376,7 @@ impl State {
             });
         });
         self.status(ui);
+        self.api_credentials.status(ui);
     }
     fn form(&mut self, ui: &mut egui::Ui) {
         ui.separator();
@@ -272,16 +465,56 @@ impl State {
         });
     }
     pub(super) fn ready(&self) -> bool {
-        self.initialized && self.receiver.is_none() && self.reload_barriers.is_empty() && !self.failed
+        if let Some(discovery) = &self.settings_discovery {
+            return discovery.root == self.root
+                && discovery.catalog.is_some()
+                && !discovery.version.pending
+                && !discovery.version.failed;
+        }
+        !self.settings_scope_changed()
+            && self.initialized
+            && self.receiver.is_none()
+            && self.reload_barriers.is_empty()
+            && !self.failed
+    }
+    #[cfg(test)]
+    pub(in crate::app) fn for_root_fixture(root: PathBuf) -> Self {
+        Self {
+            root,
+            ..Self::default()
+        }
+    }
+    #[cfg(test)]
+    pub(in crate::app) fn api_reply_fixture(
+        root: PathBuf,
+        catalog: Catalog,
+        receiver: Receiver<api_credentials::Reply>,
+    ) -> Self {
+        let ids = catalog.tailnets.iter().map(|network| network.id.clone()).collect();
+        Self {
+            root,
+            catalog,
+            initialized: true,
+            catalog_loaded: true,
+            api_credentials: api_credentials::State::reply_fixture(ids, receiver),
+            ..Self::default()
+        }
     }
     #[cfg(all(test, unix))]
     pub(super) fn loaded_fixture() -> Self {
         Self {
             initialized: true,
+            catalog_loaded: true,
             ..Self::default()
         }
     }
     fn status(&self, ui: &mut egui::Ui) {
+        if let Some(error) = self.api_credentials.write_error() {
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
+        if let Some(error) = self.api_credentials.read_error() {
+            ui.colored_label(theme::PALETTE_RED(), error);
+        }
         if let Some(error) = &self.settings_error {
             ui.colored_label(theme::PALETTE_RED(), error);
         }
@@ -348,11 +581,30 @@ impl State {
         self.selections.clear();
     }
     pub(super) fn reload_after(&mut self, mut editor: Self) {
+        self.settings_discovery = None;
+        if self.root != editor.root {
+            return;
+        }
+        let catalog = editor
+            .cached_catalog_at(&self.root)
+            .cloned()
+            .or_else(|| self.catalog_loaded.then(|| self.catalog.clone()));
+        self.catalog_loaded = catalog.is_some();
+        self.catalog = catalog.unwrap_or_default();
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
         self.reload();
         self.settings_error = if editor.failed { editor.message.take() } else { None };
+        // Every pre-close reader is a barrier, never a current catalog answer.
+        // The latest same-root Settings catalog remains visible while they settle.
+        if let Some(receiver) = self.receiver.take() {
+            self.reload_barriers.push(receiver);
+        }
         if let Some(receiver) = editor.receiver.take() {
             self.reload_barriers.push(receiver);
         }
+        self.reload_barriers.append(&mut editor.reload_barriers);
+        self.api_credentials
+            .reload_after(editor.api_credentials, self.catalog_loaded.then_some(&self.catalog));
     }
     pub(super) fn invalidate(&mut self, id: &str) {
         self.selections.remove(id);
@@ -392,7 +644,10 @@ impl State {
             return;
         }
         let changed = ui
-            .add_enabled_ui(!busy && self.receiver.is_none(), |ui| self.choice(ui, &mut selected))
+            .add_enabled_ui(
+                !busy && self.receiver.is_none() && self.settings_discovery.is_none(),
+                |ui| self.choice(ui, &mut selected),
+            )
             .inner;
         if changed {
             let (root, id) = (root.to_path_buf(), id.to_owned());
@@ -408,6 +663,32 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_discovery_keeps_the_last_catalog_scoped_to_its_storage_root() {
+        let mut state = State::for_root_fixture(PathBuf::from("synthetic-cloud-root"));
+        assert!(state.cached_catalog_at(&state.root).is_none());
+        state.catalog_loaded = true;
+        assert!(state.cached_catalog_at(&state.root).is_some());
+        assert!(state.cached_catalog_at(Path::new("another-cloud-root")).is_none());
+        assert_eq!(
+            state.api_credential_observation("work"),
+            ApiCredentialObservation::Pending
+        );
+        state.initialized = true;
+        state.failed = true;
+        assert!(state.cached_catalog_at(&state.root).is_some());
+        assert_eq!(
+            state.api_credential_observation("work"),
+            ApiCredentialObservation::Unavailable
+        );
+        let (_sender, receiver) = channel();
+        state.receiver = Some(receiver);
+        assert_eq!(
+            state.api_credential_observation("work"),
+            ApiCredentialObservation::Pending
+        );
+    }
 
     #[test]
     fn reload_waits_for_the_current_operation_then_loads_fresh_metadata() {
@@ -430,7 +711,8 @@ mod tests {
             state.reload_after(editor);
             state.poll(&ctx);
             assert!(!state.initialized);
-            assert!(state.receiver.is_some());
+            assert!(state.receiver.is_none());
+            assert_eq!(state.reload_barriers.len(), 2);
             sender.send(result).unwrap();
             state.poll(&ctx);
             assert!(!state.initialized);
@@ -441,12 +723,16 @@ mod tests {
             )
             .unwrap();
             saved.send(Ok(Catalog::default())).unwrap();
-            state.poll(&ctx);
-            assert!(state.initialized);
-            assert!(state.receiver.is_some());
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while state.receiver.is_some() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            while !state.initialized {
+                assert!(std::time::Instant::now() < deadline);
+                state.poll(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(state.receiver.is_some());
+            while state.receiver.is_some() || state.api_credentials.busy() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
                 state.poll(&ctx);
             }
             assert!(state.receiver.is_none());
@@ -475,6 +761,7 @@ mod tests {
                 ..State::default()
             };
             state.reload_after(State {
+                root: root.path().into(),
                 receiver: Some(receiver),
                 ..State::default()
             });
@@ -494,6 +781,152 @@ mod tests {
             assert!(state.ready());
             assert!(state.settings_error.is_some());
         }
+    }
+
+    #[test]
+    fn a_closed_api_reader_recovers_without_overwriting_save_or_catalog_errors() {
+        for unrelated in [None, Some("Synthetic save failure"), Some("Synthetic catalog failure")] {
+            for disconnected in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                std::fs::write(root.path().join("tailnets.json"), r#"{"tailnets":[]}"#).unwrap();
+                let (sender, receiver) = channel();
+                let mut editor = State::api_reply_fixture(root.path().into(), Catalog::default(), receiver);
+                editor.failed = unrelated.is_some();
+                editor.message = unrelated.map(String::from);
+                let mut state = State::for_root_fixture(root.path().into());
+                state.reload_after(editor);
+                if !disconnected {
+                    sender.send(Err("Synthetic API read failure".into())).unwrap();
+                }
+                drop(sender);
+                let ctx = egui::Context::default();
+                state.poll(&ctx);
+                assert!(state.api_credentials.read_error().is_some());
+                assert_eq!(state.settings_error.as_deref(), unrelated);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while (state.receiver.is_some() || state.api_credentials.busy()) && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    state.poll(&ctx);
+                }
+                assert!(state.ready());
+                assert!(!state.api_credentials.busy());
+                assert!(state.api_credentials.read_error().is_none());
+                assert_eq!(state.settings_error.as_deref(), unrelated);
+            }
+        }
+    }
+
+    #[test]
+    fn a_known_row_failure_stays_unavailable_during_close_and_catalog_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = Catalog {
+            tailnets: ["locked", "healthy"]
+                .into_iter()
+                .map(|id| tailnet::Tailnet {
+                    id: id.into(),
+                    name: format!("Synthetic {id}"),
+                })
+                .collect(),
+        };
+        let (sender, receiver) = channel();
+        let mut editor = State::api_reply_fixture(root.path().into(), catalog, receiver);
+        sender
+            .send(Ok(vec![
+                ("locked".into(), Err("Synthetic unavailable store".into())),
+                ("healthy".into(), Ok(tailnet::ApiCredentialStatus::Missing)),
+            ]))
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut production = State::for_root_fixture(root.path().into());
+        production.observe_settings(&mut editor, &ctx);
+        assert_eq!(
+            production.api_credential_observation("locked"),
+            ApiCredentialObservation::Unavailable
+        );
+        production.reload_after(editor);
+        assert_eq!(production.cached_catalog_at(root.path()).unwrap().tailnets.len(), 2);
+        assert_eq!(
+            production.api_credential_observation("locked"),
+            ApiCredentialObservation::Unavailable
+        );
+        assert_eq!(
+            production.api_credential_observation("healthy"),
+            ApiCredentialObservation::Pending
+        );
+        assert_eq!(
+            production.api_credentials.row_error("locked"),
+            Some("Synthetic unavailable store")
+        );
+    }
+
+    #[test]
+    fn an_auth_key_or_catalog_failure_does_not_replace_a_successful_api_observation() {
+        for message in ["Synthetic auth-key save failure", "Synthetic catalog refresh failure"] {
+            let root = tempfile::tempdir().unwrap();
+            let catalog = Catalog {
+                tailnets: vec![tailnet::Tailnet {
+                    id: "saved".into(),
+                    name: "Synthetic saved network".into(),
+                }],
+            };
+            let (sender, receiver) = channel();
+            let mut editor = State::api_reply_fixture(root.path().into(), catalog, receiver);
+            sender
+                .send(Ok(vec![(
+                    "saved".into(),
+                    Ok(tailnet::ApiCredentialStatus::Stored(tailnet::ApiCredentialKind::OAuth)),
+                )]))
+                .unwrap();
+            let ctx = egui::Context::default();
+            editor.poll(&ctx);
+            editor.failed = true;
+            editor.message = Some(message.into());
+            let expected = ApiCredentialObservation::Ready(tailnet::ApiCredentialStatus::Stored(
+                tailnet::ApiCredentialKind::OAuth,
+            ));
+            assert_eq!(editor.api_credential_observation("saved"), expected);
+            let mut production = State::for_root_fixture(root.path().into());
+            production.observe_settings(&mut editor, &ctx);
+            assert_eq!(production.api_credential_observation("saved"), expected);
+            assert_eq!(editor.message.as_deref(), Some(message));
+            let (_pending, receiver) = channel();
+            editor.receiver = Some(receiver);
+            assert_eq!(
+                editor.api_credential_observation("saved"),
+                ApiCredentialObservation::Pending
+            );
+        }
+    }
+
+    #[test]
+    fn closing_before_settings_catalog_load_preserves_known_catalog_and_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = Catalog {
+            tailnets: vec![tailnet::Tailnet {
+                id: "locked".into(),
+                name: "Synthetic locked network".into(),
+            }],
+        };
+        let (sender, receiver) = channel();
+        let mut production = State::api_reply_fixture(root.path().into(), catalog, receiver);
+        sender
+            .send(Ok(vec![("locked".into(), Err("Known unavailable storage".into()))]))
+            .unwrap();
+        production.poll(&egui::Context::default());
+        production.reload_after(State::for_root_fixture(root.path().into()));
+        assert_eq!(production.cached_catalog_at(root.path()).unwrap().tailnets.len(), 1);
+        assert_eq!(
+            production.api_credential_observation("locked"),
+            ApiCredentialObservation::Unavailable
+        );
+        let (sender, receiver) = channel();
+        let mut empty_editor = State::api_reply_fixture(root.path().into(), Catalog::default(), receiver);
+        sender.send(Ok(vec![])).unwrap();
+        empty_editor.poll(&egui::Context::default());
+        production.reload_after(empty_editor);
+        assert!(production.cached_catalog_at(root.path()).unwrap().tailnets.is_empty());
+        assert!(production.api_credentials.row_error("locked").is_none());
     }
 
     #[test]
@@ -519,6 +952,163 @@ mod tests {
             assert_eq!(state.edit.is_none(), success);
             assert_eq!(state.name.is_empty(), success);
             assert_eq!(state.key.is_empty(), success);
+        }
+    }
+
+    #[test]
+    fn removed_catalog_rows_never_return_on_close_or_from_a_pre_close_reader() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        std::fs::write(root.join("tailnets.json"), br#"{"tailnets":[]}"#).unwrap();
+        let previous = Catalog {
+            tailnets: vec![tailnet::Tailnet {
+                id: "removed".into(),
+                name: "Removed".into(),
+            }],
+        };
+        let (api_sender, api_receiver) = channel();
+        let mut editor = State::api_reply_fixture(root.clone(), previous.clone(), api_receiver);
+        let (saved, saved_receiver) = channel();
+        editor.receiver = Some(saved_receiver);
+        let (stale, stale_receiver) = channel();
+        let mut production = State {
+            root: root.clone(),
+            catalog: previous.clone(),
+            catalog_loaded: true,
+            initialized: true,
+            receiver: Some(stale_receiver),
+            ..State::default()
+        };
+        let ctx = egui::Context::default();
+        saved.send(Ok(Catalog::default())).unwrap();
+        production.observe_settings(&mut editor, &ctx);
+        assert!(production.cached_catalog_at(&root).unwrap().tailnets.is_empty());
+        production.reload_after(editor);
+        assert!(production.cached_catalog_at(&root).unwrap().tailnets.is_empty());
+        assert!(production.cached_catalog_at(Path::new("another-root")).is_none());
+        stale.send(Ok(previous)).unwrap();
+        production.poll(&ctx);
+        assert!(
+            production.receiver.is_none(),
+            "Fresh reads wait for the closed API reader"
+        );
+        assert!(production.cached_catalog_at(&root).unwrap().tailnets.is_empty());
+        api_sender
+            .send(Ok(vec![("removed".into(), Ok(tailnet::ApiCredentialStatus::Missing))]))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !production.ready() || production.api_credentials.busy() {
+            assert!(std::time::Instant::now() < deadline);
+            production.poll(&ctx);
+            assert!(production.cached_catalog_at(&root).unwrap().tailnets.is_empty());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            production.api_credential_observation("removed"),
+            ApiCredentialObservation::Unavailable
+        );
+    }
+
+    #[test]
+    fn closing_another_roots_editor_cannot_adopt_its_catalog_or_barriers() {
+        let original = PathBuf::from("original-root");
+        let foreign = PathBuf::from("foreign-root");
+        let current = Catalog {
+            tailnets: vec![tailnet::Tailnet {
+                id: "original".into(),
+                name: "Original".into(),
+            }],
+        };
+        let (_sender, receiver) = channel();
+        let mut production = State {
+            root: original.clone(),
+            catalog: current,
+            catalog_loaded: true,
+            initialized: true,
+            receiver: Some(receiver),
+            ..State::default()
+        };
+        let (_foreign_sender, foreign_receiver) = channel();
+        production.reload_after(State {
+            root: foreign.clone(),
+            catalog: Catalog::default(),
+            catalog_loaded: true,
+            receiver: Some(foreign_receiver),
+            ..State::default()
+        });
+        assert_eq!(
+            production.cached_catalog_at(&original).unwrap().tailnets[0].id,
+            "original"
+        );
+        assert!(production.cached_catalog_at(&foreign).is_none());
+        assert!(production.receiver.is_some());
+        assert!(production.reload_barriers.is_empty());
+        assert!(production.initialized);
+    }
+
+    #[test]
+    fn settings_close_transfers_api_barriers_before_fresh_catalog_read() {
+        for failed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().to_path_buf();
+            std::fs::write(root.join("tailnets.json"), br#"{"tailnets":[]}"#).unwrap();
+            let (sender, receiver) = channel();
+            let catalog = Catalog {
+                tailnets: vec![tailnet::Tailnet {
+                    id: "synthetic".into(),
+                    name: "Synthetic".into(),
+                }],
+            };
+            let mut editor = State::api_reply_fixture(root.clone(), catalog, receiver);
+            let mut production = State::for_root_fixture(root);
+            let ctx = egui::Context::default();
+            production.observe_settings(&mut editor, &ctx);
+            assert!(production.settings_discovery.is_some());
+            production.reload_after(editor);
+            assert!(production.settings_discovery.is_none());
+            production.poll(&ctx);
+            assert!(
+                production.receiver.is_none(),
+                "fresh catalog read waits for the API operation"
+            );
+            assert_eq!(
+                production.api_credential_observation("synthetic"),
+                ApiCredentialObservation::Pending
+            );
+            if failed {
+                sender.send(Err("Synthetic API read failed".into())).unwrap();
+            } else {
+                sender.send(Ok(vec![])).unwrap();
+            }
+            production.poll(&ctx);
+            assert!(production.receiver.is_some());
+            assert!(production.settings_error.is_none());
+            if failed {
+                assert_eq!(
+                    production.api_credentials.read_error(),
+                    Some("Synthetic API read failed")
+                );
+            } else {
+                assert!(production.api_credentials.read_error().is_none());
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while production.receiver.is_some() || production.api_credentials.busy() {
+                assert!(std::time::Instant::now() < deadline);
+                production.poll(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(
+                production
+                    .cached_catalog_at(&production.root)
+                    .unwrap()
+                    .tailnets
+                    .is_empty()
+            );
+            assert_eq!(
+                production.api_credential_observation("synthetic"),
+                ApiCredentialObservation::Unavailable
+            );
+            assert!(production.api_credentials.read_error().is_none());
         }
     }
 }

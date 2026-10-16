@@ -5,7 +5,7 @@ use super::{State, fields, registry};
 use crate::{app::util::chrome_button, theme};
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use horizon_core::cloud_runtime::{
-    registry::{Action, Validation},
+    registry::Validation,
     setup::{Agent, Authentication, Draft},
 };
 use std::collections::BTreeMap;
@@ -70,14 +70,19 @@ pub(super) fn hetzner_key(draft: &Draft) -> Key {
     }
 }
 
-/// The key a selected agent needs, or `None` when it signs in instead: Codex with this
-/// computer's `ChatGPT` login, Claude with its own subscription on the worker.
+/// The key or setup token a selected agent needs, or `None` when it signs in instead: Codex
+/// with this computer's `ChatGPT` login, Claude with its own subscription on the worker.
 pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
     let (mode, typed, file) = match agent {
         Agent::Codex => (
             draft.openai_auth,
             !draft.openai_key.is_empty(),
             draft.settings.openai_api_key_file.as_ref(),
+        ),
+        Agent::Claude if draft.anthropic_auth == Authentication::Token => (
+            Authentication::Token,
+            !draft.claude_token.is_empty(),
+            draft.settings.claude_token.as_ref().map(|token| &token.file),
         ),
         Agent::Claude => (
             draft.anthropic_auth,
@@ -86,7 +91,7 @@ pub(super) fn agent_key(draft: &Draft, agent: Agent) -> Option<Key> {
         ),
         Agent::Grok => return None,
     };
-    (mode == Authentication::ApiKey).then(|| {
+    (mode != Authentication::Subscription).then(|| {
         if typed {
             Key::Unsaved
         } else if file.is_some_and(|path| draft.saved_credentials.contains(path)) {
@@ -152,8 +157,12 @@ impl Readiness {
             cause,
         };
         let (runpod, hetzner) = (runpod_key(draft), hetzner_key(draft));
-        if runpod == Key::Missing && hetzner == Key::Missing {
-            return attention("Paste a RunPod or Hetzner key so clouds have somewhere to run.".into());
+        if runpod == Key::Missing && hetzner == Key::Missing && !draft.settings.docker_hosts_on() {
+            return attention(if draft.settings.docker_hosts.is_empty() {
+                "Paste a RunPod or Hetzner key, or add a Docker host, so clouds have somewhere to run.".into()
+            } else {
+                "Your Docker hosts are switched off, so new clouds have nowhere to run.".into()
+            });
         }
         if hetzner == Key::Missing && draft.hetzner.enabled {
             return attention("Paste the Hetzner token, or switch Hetzner off.".into());
@@ -163,15 +172,16 @@ impl Readiness {
         }
         let agents = agent_keys(draft);
         if let Some((agent, _)) = agents.iter().find(|(_, key)| *key == Key::Missing) {
-            return attention(format!(
-                "Paste the {} API key, or choose {}.",
-                agent_name(*agent),
-                if *agent == Agent::Codex {
-                    "ChatGPT sign-in"
-                } else {
-                    "subscription login"
-                },
-            ));
+            return attention(
+                match agent {
+                    Agent::Codex => "Paste the Codex API key, or choose ChatGPT sign-in.",
+                    _ if draft.anthropic_auth == Authentication::Token => {
+                        "Paste the Claude setup token, or choose another sign-in."
+                    }
+                    _ => "Paste the Claude API key, or choose another sign-in.",
+                }
+                .into(),
+            );
         }
         if draft.needs_chatgpt() {
             return attention("Sign in with ChatGPT so each cloud starts Codex signed in.".into());
@@ -351,7 +361,11 @@ pub(super) fn readiness_banner(ui: &mut Ui, state: &State) {
 }
 
 /// Every card, in two columns when there is room. Returns a registry action a button asked for.
-pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
+pub(super) fn page(
+    ui: &mut Ui,
+    state: &mut State,
+    hosts: &mut super::super::prices::hosts::State,
+) -> Option<registry::Request> {
     let State {
         draft,
         edits,
@@ -360,6 +374,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
         required_agents,
         github,
         chatgpt,
+        docker_hosts,
         needed,
         ..
     } = state;
@@ -370,6 +385,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     if ui.available_width() < STACKED_BELOW {
         fields::providers(ui, draft, edits);
+        super::docker_hosts::card(ui, draft, docker_hosts, hosts);
         fields::agents(ui, draft, edits, chatgpt, fixed_agents);
         super::github::card(ui, draft, github);
         action = registry::card(ui, draft, verified, needed);
@@ -379,6 +395,7 @@ pub(super) fn page(ui: &mut Ui, state: &mut State) -> Option<Action> {
             columns[0].spacing_mut().item_spacing.y = GAP;
             columns[1].spacing_mut().item_spacing.y = GAP;
             fields::providers(&mut columns[0], draft, edits);
+            super::docker_hosts::card(&mut columns[0], draft, docker_hosts, hosts);
             fields::agents(&mut columns[0], draft, edits, chatgpt, fixed_agents);
             super::github::card(&mut columns[1], draft, github);
             action = registry::card(&mut columns[1], draft, verified, needed);

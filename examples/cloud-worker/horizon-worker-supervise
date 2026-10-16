@@ -20,14 +20,15 @@ RUNTIME = Path('/run/horizon-worker')
 WORKSPACE = Path('/workspace')
 DESKTOP = {'xvfb', 'openbox', 'vnc'}
 SERVICES = {'control', 'sshd'}
-# Started only when the worker was created with an idle period, or when the image has the
+# Started only on a dedicated worker with an agent stop service, or when the image has the
 # GitHub token chain service.
-OPTIONAL = {'idle', 'github'}
+OPTIONAL = {'stop', 'github'}
 # Root services: every other service runs as the agent under agent isolation.
-PRIVILEGED = {'sshd', 'idle', 'github'}
+PRIVILEGED = {'sshd', 'stop', 'github'}
 # A service whose exit ends only that service: the worker stays up and drops it from its
-# published services. Without the GitHub service, Git falls back to the static token file.
-DISPENSABLE = {'github'}
+# published services. Without the GitHub service, Git falls back to the static token file;
+# without the stop service, agents are told the worker cannot stop.
+DISPENSABLE = {'github', 'stop'}
 # Seconds between attempts to remove the Git proxy route; None ends the attempts.
 UNROUTE_WAITS = (0.5, 1, 2, 4, None)
 GITHUB_CHAIN_CONTRACT = 'horizon-github-chain-contract=1'
@@ -354,11 +355,19 @@ class Supervisor:
         self.start_github()
         self.start_control()
         self.await_control()
+        # A stop request from before this start was made on a worker that has stopped since;
+        # dropped before Horizon can reach the worker and take it.
+        (self.runtime / 'stop-request.json').unlink(missing_ok=True)
         self.start('sshd', ['/usr/sbin/sshd', '-D', '-e'])
-        if os.environ.get('HORIZON_IDLE_STOP_MINUTES'):
-            self.start('idle', ['horizon-worker-idle'])
+        self.start_stop()
         self.publish(desktop)
         self.monitor(desktop)
+
+    def start_stop(self):
+        """Starts the service that stops this worker at an agent's request. A shared worker
+        runs other clouds' sessions, so no agent may stop it."""
+        if 'HORIZON_WORKER_STARTUP' not in os.environ and shutil.which('horizon-worker-stopd'):
+            self.start('stop', ['horizon-worker-stopd'])
 
     def monitor(self, desktop):
         next_desktop_check = 0
@@ -400,13 +409,13 @@ class Supervisor:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true')
-    parser.add_argument('--idle-stop-contract', action='store_true',
-                        help='report that this supervisor starts horizon-worker-idle for an idle period')
+    parser.add_argument('--agent-stop-contract', action='store_true',
+                        help='report that this supervisor starts horizon-worker-stopd on dedicated workers')
     parser.add_argument('--github-chain-contract', action='store_true',
                         help='report that this supervisor starts horizon-worker-github')
     args = parser.parse_args()
-    if args.idle_stop_contract:
-        print('horizon-idle-stop-contract=1')
+    if args.agent_stop_contract:
+        print('horizon-agent-stop-contract=1')
         return 0
     if args.github_chain_contract:
         print(GITHUB_CHAIN_CONTRACT)

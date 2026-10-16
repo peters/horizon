@@ -16,6 +16,11 @@ pub(super) fn row(
     asked: bool,
     chosen: &mut bool,
 ) -> Option<WorkspacePlacement> {
+    // Until the kept choices are read, none is in force and none can be kept: the row
+    // shows once they are, a moment later.
+    if !intent.settle() {
+        return None;
+    }
     let mut kept = match &intent.looked_up {
         Some((looked, kept)) if looked == repository => *kept,
         _ => {

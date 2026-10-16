@@ -35,7 +35,7 @@ use horizon_cloud::{
 use std::time::{Duration, Instant};
 
 use recipes::{Head, Recipe, Recipes, latest_recipes, report_changes};
-pub use recipes::{PROFILE_CHANGE, Plan, plan};
+pub use recipes::{PROFILE_CHANGE, Plan, plan, plan_for_cloud};
 pub(super) use sessions::relaunch_sessions;
 
 const NOTHING_PENDING: &str = "No image replacement is pending";
@@ -45,6 +45,8 @@ const UNSETTLED: &str =
     "The provider has not reported the switched image yet; the replacement stays pending. Continue or cancel it.";
 const ADDS_CREDENTIAL: &str = "The rebuilt image needs a registry credential that this worker was created without, and a switch that adds one cannot be undone. Create a new cloud to use it.";
 const CONFIRMED_OTHER: &str = "The checkout changes this cloud's settings differently from what was confirmed; review the changes and rebuild again";
+const UNCONFIRMED_PUBLISHER: &str =
+    "The cloud's publishing identity changed or was not confirmed; review its rebuild plan again";
 const UNCONFIRMED_FILES: &str = "The uncommitted files in the image's build context are not the ones that were confirmed; review them and rebuild again";
 const SAME_IMAGE: &str = "The rebuilt image is the worker's current image, so the changed settings cannot reach the worker. Nothing changed on the worker and nothing is pending; rebuild again";
 
@@ -137,8 +139,8 @@ enum Driven {
 /// # Errors
 /// Refuses unless the cloud is ready with nothing pending and the committed profile named
 /// `profile_name` matches the bound one apart from its rebuild settings and the choices
-/// bound at creation, such as the provider and the storage, and an added agent whose
-/// configured credential is unusable. Refuses a built image that the worker's container
+/// bound at creation, such as the provider and the storage, and any agent of that profile
+/// whose configured credential is unusable. Refuses a built image that the worker's container
 /// disk cannot hold before anything changes on the worker, and drops its unsent journal,
 /// so nothing stays pending. After any other failure once the replacement is journaled,
 /// the journal stays, so the replacement can be continued or cancelled.
@@ -152,6 +154,7 @@ pub fn rebuild(
     emit(Event::stage(Stage::Validate));
     let (store, mut state) = open(request)?;
     ready(&state)?;
+    confirm_publication(&state, confirmed)?;
     // Checked before credentials load, so a changed profile is refused with its reason.
     let checkout = Runner {
         cancel,
@@ -282,7 +285,7 @@ fn open(request: &Request) -> Result<(Store, Deployment)> {
     if state.cloud_id != request.cloud_id
         || state.repository != request.repository
         || state.revision != request.revision
-        || state.profile != request.profile
+        || state.profile != crate::cloud_runtime::publishing::requested_profile(&state, &request.profile)
     {
         return Err(Error::Invalid(
             "Cloud is permanently bound to its repository, revision and profile",
@@ -333,13 +336,23 @@ fn ready(state: &Deployment) -> Result<()> {
     Ok(())
 }
 
-/// Refuses to bind `next` when a person `confirmed` another profile, or when an agent it
-/// adds has a configured credential that is unusable, as a new cloud's would be.
+/// Refuses to bind `next` when a person `confirmed` another profile, or when any of its
+/// agents, not only an added one, has a configured credential that is unusable: a
+/// reconnect needs each one, so the refusal comes before a long build.
 fn accept(next: &Profile, confirmed: Option<&Profile>, settings: &Settings) -> Result<()> {
     if confirmed.is_some_and(|confirmed| confirmed != next) {
         return Err(Error::Invalid(CONFIRMED_OTHER));
     }
-    super::validate_agent_auth(settings, &next.capabilities)
+    super::validate_agent_auth(settings, &next.capabilities, true)
+}
+
+fn confirm_publication(state: &Deployment, confirmed: Option<&Plan>) -> Result<()> {
+    if confirmed.map_or(state.publication.is_some(), |plan| {
+        plan.publication.as_ref() != state.publication.as_deref()
+    }) {
+        return Err(Error::Invalid(UNCONFIRMED_PUBLISHER));
+    }
+    Ok(())
 }
 
 /// Refuses uncommitted files that are not exactly the ones a person `confirmed`: an image

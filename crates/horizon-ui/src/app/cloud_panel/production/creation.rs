@@ -15,6 +15,7 @@ mod placement;
 mod pricing;
 mod profiles;
 pub(super) mod provider;
+pub(super) mod publishing;
 pub(super) mod selector;
 pub(super) mod siblings;
 pub(super) mod source;
@@ -61,7 +62,6 @@ struct Actions {
 enum RepositoryAction {
     #[default]
     None,
-    Choose,
     Load,
     Setup,
     /// Something in the running setup agent's progress view.
@@ -75,13 +75,23 @@ enum RepositoryAction {
 }
 
 impl HorizonApp {
+    /// Closes the dialog. A setup of its repository goes on after it, so the setup
+    /// board shows it with the others.
+    fn close_cloud_creation_to_board(&mut self, ctx: &Context) {
+        let setup = super::repository_setup::running_here(&self.cloud_prototype.production);
+        self.close_cloud_creation();
+        if setup {
+            self.open_setup_board(ctx, true);
+        }
+    }
+
     pub(in crate::app::cloud_panel) fn render_cloud_creation(&mut self, ctx: &Context) {
         if !self.cloud_prototype.production.creating {
             return;
         }
         let viewport = ctx.content_rect();
-        // A running setup agent shows its output; large windows give it room.
-        let widest = if self.cloud_prototype.production.setup_run.is_some() {
+        // A setup agent of this repository shows its output; large windows give it room.
+        let widest = if super::repository_setup::running_here(&self.cloud_prototype.production) {
             1480.0
         } else {
             1180.0
@@ -92,14 +102,7 @@ impl HorizonApp {
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
         let refocus_repository = self.prepare_cloud_creation(ctx, picking);
-        let form = &mut self.cloud_prototype.production;
-        form.launch.siblings.sync(
-            ctx,
-            &form.repository,
-            form.launch.revision.as_deref(),
-            form.profiles.as_ref(),
-            &form.selected_profile,
-        );
+        self.sync_cloud_creation_choices(ctx);
         let id = Id::new("cloud-creation");
         let sizing_pass = measure_on_open(ctx, id);
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
@@ -151,7 +154,11 @@ impl HorizonApp {
             width >= TWO_COLUMNS && super::repository_setup::working_here(&self.cloud_prototype.production);
         let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape && !terminal_live);
         if dismissed || actions.cancel {
-            self.close_cloud_creation();
+            self.close_cloud_creation_to_board(ctx);
+            return;
+        }
+        if let Some(target) = self.cloud_prototype.production.publishing.take_setup() {
+            self.edit_creation_registry(ctx, (!target.is_empty()).then_some(target));
             return;
         }
         if actions.this_pc {
@@ -159,10 +166,14 @@ impl HorizonApp {
             return;
         }
         match actions.repository {
-            RepositoryAction::Choose => self.choose_cloud_repository(ctx),
             RepositoryAction::Load => self.read_cloud_profiles(ctx),
             RepositoryAction::Setup => self.start_cloud_repository_setup(ctx),
-            RepositoryAction::SetupRun(action) => self.cloud_repository_setup_action(ctx, action),
+            RepositoryAction::SetupRun(action) => {
+                // The dialog acts on the run of the repository it shows.
+                if let Some(run) = self.cloud_prototype.production.run_here_key() {
+                    self.cloud_repository_setup_action(ctx, run, action);
+                }
+            }
             RepositoryAction::ChooseSibling(alias) => self.choose_cloud_sibling(ctx, alias),
             RepositoryAction::Adopt(path) => self.adopt_cloud_source(ctx, &path),
             RepositoryAction::CloneFolder => self.choose_clone_folder(ctx),
@@ -179,6 +190,18 @@ impl HorizonApp {
         watch::poll(&mut self.cloud_prototype.production);
         self.poll_cloud_launch(ctx);
         self.poll_cloud_creation(ctx);
+    }
+
+    fn sync_cloud_creation_choices(&mut self, ctx: &Context) {
+        let form = &mut self.cloud_prototype.production;
+        publishing::update(form, self.cloud_prototype.root.as_deref(), ctx);
+        form.launch.siblings.sync(
+            ctx,
+            &form.repository,
+            form.launch.revision.as_deref(),
+            form.profiles.as_ref(),
+            &form.selected_profile,
+        );
     }
 
     /// The worker fields and the summary: side by side when the dialog is wide enough, else
@@ -258,28 +281,38 @@ impl HorizonApp {
         form.launch = super::launch::State::default();
         form.source = source::State::default();
         form.checks = checks::State::default();
+        form.publishing = publishing::State::default();
+        // A Start that waits for the Docker hosts' read goes with the dialog.
+        form.setup_build_on.read_again();
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the
     /// checks it keeps current, and a clone that finished. True when focus returns to the field.
     fn prepare_cloud_creation(&mut self, ctx: &Context, picking: bool) -> bool {
         // Focus returns to the field when its picker closes, whether or not a directory was chosen.
-        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.choosing_repository);
+        let refocus_repository = !picking && std::mem::take(&mut self.cloud_prototype.production.picking_for_source);
         if !picking {
             self.cloud_prototype.production.launch.siblings.stop_browsing();
             self.cloud_prototype.production.source.take_choosing_parent();
-        }
-        // A picker closed without a repository has nothing to read.
-        if refocus_repository
-            && self.cloud_prototype.production.profiles.is_none()
-            && !self.cloud_prototype.production.repository.trim().is_empty()
-        {
-            self.read_cloud_profiles(ctx);
         }
         self.request_cloud_prices(ctx);
         // Start needs the tailnet settings, and their picker now waits in More options.
         self.cloud_prototype.production.tailnets.poll(ctx);
         self.offer_setup_presets();
+        let root = self.cloud_prototype.root.clone();
+        self.cloud_prototype
+            .production
+            .setup_build_on
+            .refresh(root.as_deref(), ctx);
+        match self.cloud_prototype.production.setup_build_on.deferred() {
+            super::repository_setup::Deferred::Waiting => {}
+            super::repository_setup::Deferred::Start(submitted) => {
+                self.start_submitted_setup(ctx, *submitted);
+                // Another waiting Start goes on in the next frame.
+                ctx.request_repaint();
+            }
+            super::repository_setup::Deferred::Gone(reason) => self.cloud_prototype.error = Some(reason),
+        }
         checks::update(
             &mut self.cloud_prototype.production,
             self.cloud_prototype.root.as_deref(),
@@ -399,14 +432,6 @@ impl HorizonApp {
         false
     }
 
-    fn choose_cloud_repository(&mut self, ctx: &Context) {
-        self.consume_picker_activation(ctx);
-        let form = &mut self.cloud_prototype.production;
-        form.choosing_repository = true;
-        let current = (!form.repository.trim().is_empty()).then(|| Path::new(&form.repository));
-        self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, current));
-    }
-
     /// Makes `path` the repository and reads its profiles: a folder that was typed, or a fresh clone.
     fn adopt_cloud_source(&mut self, ctx: &Context, path: &Path) {
         self.set_cloud_repository(path);
@@ -416,6 +441,7 @@ impl HorizonApp {
     /// Lets the person pick the folder clones go into, starting from the nearest one that exists.
     fn choose_clone_folder(&mut self, ctx: &Context) {
         self.consume_picker_activation(ctx);
+        self.cloud_prototype.production.picking_for_source = true;
         let mut parent = self.cloud_prototype.production.source.clone_parent();
         while !parent.is_dir() && parent.pop() {}
         self.dir_picker = Some(DirPicker::with_seed(DirPickerPurpose::CloudRepository, Some(&parent)));
@@ -573,7 +599,6 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
     let step = source::step(ui, form, refocus_repository);
     let mut action = match step {
         source::Step { adopt: Some(path), .. } => RepositoryAction::Adopt(path),
-        source::Step { browse: true, .. } => RepositoryAction::Choose,
         source::Step {
             choose_folder: true, ..
         } => RepositoryAction::CloneFolder,
@@ -655,10 +680,13 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
 fn machine(ui: &mut Ui, form: &mut Production) -> bool {
     if let Some(profile) = selector::profile(form) {
         let gpu = profile.gpu;
-        if form
-            .provider
-            .is_some_and(|chosen| !provider::choices(&form.prices, profile).contains(&chosen))
-        {
+        // A chosen Docker host stays chosen while no reading offers it, also when the
+        // hosts were removed or switched off: Start then refuses it, and the person picks
+        // another worker. Resetting would let New cloud fall back to a rented worker.
+        if form.provider.is_some_and(|chosen| {
+            chosen.kind != horizon_core::cloud_runtime::provider::Kind::DockerHost
+                && !provider::choices(&form.prices, profile).contains(&chosen)
+        }) {
             form.provider = None;
             form.placement = Placement::default();
             form.size = None;

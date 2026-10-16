@@ -118,7 +118,7 @@ pub(super) fn environment(capabilities: &Capabilities) -> Result<String> {
         .map_err(|_| Error::Json)
 }
 
-pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool, idle_stop: bool) -> Result<()> {
+pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool) -> Result<()> {
     let contains = |marker| reports(output, marker);
     if !contains("horizon-source-contract=1") {
         return Err(Error::Invalid(
@@ -143,24 +143,6 @@ pub(super) fn validate(output: &str, capabilities: &Capabilities, git_auth: bool
     }
     if git_auth && !contains("horizon-git-auth-contract=1") {
         return Err(Error::Invalid("Worker image does not support Git credential transfer"));
-    }
-    // An older supervisor ignores the idle period, so the worker would never stop.
-    if idle_stop && !contains("horizon-idle-stop-contract=1") {
-        return Err(Error::Invalid(
-            "Worker image does not support idle_stop_minutes; rebuild with the current worker bootstrap",
-        ));
-    }
-    Ok(())
-}
-
-/// Where Horizon stops an idle worker (see `provider::IdleStop::Horizon`), it reads
-/// the idle record, which older watchers do not keep. `required` says whether the
-/// profile sets an idle period on such a provider.
-pub(super) fn validate_idle_report(output: &str, required: bool) -> Result<()> {
-    if required && !reports(output, "horizon-idle-report-contract=1") {
-        return Err(Error::Invalid(
-            "Worker image does not record idle time for Horizon to stop it; rebuild with the current worker bootstrap",
-        ));
     }
     Ok(())
 }

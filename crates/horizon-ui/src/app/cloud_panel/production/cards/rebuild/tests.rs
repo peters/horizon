@@ -30,6 +30,7 @@ fn ready(build: bool, phase: Phase) -> Runtime {
 /// The confirmation once the latest commit was read: a plan with `changes`, or `refused`.
 fn read(runtime: &Runtime, changes: &[&str], refused: Option<&str>) -> Confirmation {
     let plan = Plan {
+        publication: None,
         profile: runtime.state.as_ref().unwrap().profile.clone(),
         changes: changes.iter().map(|change| (*change).to_owned()).collect(),
         notes: Vec::new(),
@@ -184,7 +185,11 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
     assert!(!has(&reading, "Rebuild and restart"));
     assert!(has(&reading, "Keep current image"));
 
-    runtime.confirmation = read(&runtime, &["Adds agent codex", "Idle stop off → 30 min"], None);
+    runtime.confirmation = read(
+        &runtime,
+        &["Adds agent codex", "Readiness timeout 600 s → 1800 s"],
+        None,
+    );
     let confirming = texts(&ctx, &mut runtime);
     let text = confirming
         .iter()
@@ -196,7 +201,7 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
         "restart the worker",
         "Running agent processes restart",
         "Files under /workspace, including worktrees and agent logins, are kept",
-        "takes the agents, browsers, desktop, readiness timeout, idle stop and build settings of .horizon/cloud.yml in the working copy",
+        "takes the agents, browsers, desktop, readiness timeout and build settings of .horizon/cloud.yml in the working copy",
         "its size, storage, GPU and image repository stay",
     ] {
         assert!(text.contains(consequence), "{consequence}");
@@ -204,7 +209,7 @@ fn rebuild_confirmation_names_its_consequences_before_starting() {
     for line in [
         CHANGES,
         "• Adds agent codex",
-        "• Idle stop off → 30 min",
+        "• Readiness timeout 600 s → 1800 s",
         NO_UNCOMMITTED,
     ] {
         assert!(has(&confirming, line), "{line}: {confirming:?}");
@@ -280,6 +285,7 @@ fn the_confirmation_lists_every_uncommitted_file_before_a_rebuild_can_start() {
     let (_repository, files) = uncommitted_recipe();
     let note = "Uncommitted changes to companions are not used until you commit them.";
     runtime.confirmation = Confirmation::Rebuild(Preview::of(Ok(Plan {
+        publication: None,
         profile: runtime.state.as_ref().unwrap().profile.clone(),
         changes: Vec::new(),
         notes: vec![note.into()],

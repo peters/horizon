@@ -76,7 +76,10 @@ impl DriverState {
                 continue;
             }
             self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
-            if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
+            if matches!(
+                request.action,
+                crate::BrowserControlAction::Resize { .. } | crate::BrowserControlAction::Zoom { .. }
+            ) {
                 self.begin_resize(&request, frame_slot);
                 continue;
             }
@@ -504,7 +507,12 @@ impl DriverState {
         width: u32,
         height: u32,
     ) {
-        if !self.viewport_policy.follow_host([width, height]) || !self.queue_viewport(width, height) {
+        if !self.viewport_policy.follow_host([width, height]) {
+            return;
+        }
+        // Under a zoom the page follows the panel divided by the zoom.
+        let [width, height] = self.viewport_policy.applied();
+        if !self.queue_viewport(width, height) {
             return;
         }
         self.apply_pending_viewport(link, event_tx, frame_slot);
@@ -549,6 +557,7 @@ impl DriverState {
         let Some((width, height)) = self.pending_viewport else {
             return;
         };
+        let bound_session = self.session_id.clone();
         match self.send_page_command(
             link,
             event_tx,
@@ -556,8 +565,12 @@ impl DriverState {
             "Emulation.setDeviceMetricsOverride",
             &Self::viewport_override_params(width, height),
         ) {
+            // A reattachment drained by the command gave the new session the
+            // old size; keep the update pending so the next tick applies it there.
+            Ok(_) if self.session_id != bound_session => self.viewport_retry_at = None,
             Ok(_) => {
                 self.commit_viewport(width, height, event_tx);
+                frame_slot.set_viewport_override(self.viewport_policy.frame_override());
                 self.pending_viewport_capture_at = Some(Instant::now() + VIEWPORT_CAPTURE_DELAY);
             }
             Err(error) => {
@@ -777,6 +790,101 @@ mod tests {
 
         assert_eq!((state.viewport_w, state.viewport_h), (900, 600));
         assert_eq!(state.pending_viewport, None);
+    }
+
+    /// A CDP endpoint that acknowledges every command. With `detach_page`,
+    /// the bound page session detaches before the first metrics override is
+    /// acknowledged, as a reattachment drained by that command does.
+    fn metrics_server(detach_page: bool) -> (String, std::thread::JoinHandle<Vec<serde_json::Value>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let mut commands = Vec::new();
+            let mut detach = detach_page;
+            while let Ok(tungstenite::Message::Text(text)) = socket.read() {
+                let command: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if detach && command["method"] == "Emulation.setDeviceMetricsOverride" {
+                    detach = false;
+                    let event = serde_json::json!({
+                        "method": "Target.detachedFromTarget",
+                        "params": {"sessionId": "page"},
+                    });
+                    socket
+                        .send(tungstenite::Message::Text(event.to_string().into()))
+                        .unwrap();
+                }
+                let response = serde_json::json!({"id": command["id"], "result": {}});
+                commands.push(command);
+                socket
+                    .send(tungstenite::Message::Text(response.to_string().into()))
+                    .unwrap();
+            }
+            commands
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn a_zoomed_page_keeps_its_update_pending_when_the_session_reattaches_during_it() {
+        let (url, server) = metrics_server(true);
+        let mut state = driver_state();
+        state.session_id = Some("page".into());
+        let slot = Arc::clone(&state.config.frame_slot);
+        let events = test_events();
+        let mut link = crate::cdp::CdpLink::connect(&url).unwrap();
+        state
+            .viewport_policy
+            .commit(super::super::viewport::ViewportChange::Zoom(Some(200)));
+
+        state.set_viewport(&mut link, &events, &slot, 1000, 700);
+
+        assert_eq!(state.session_id, None);
+        assert_eq!((state.viewport_w, state.viewport_h), (1280, 800));
+        assert_eq!(state.pending_viewport, Some((500, 350)), "the next tick applies it");
+        assert_eq!(slot.viewport_override(), None, "no override for a size the page lacks");
+        drop(link);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_zoomed_page_follows_the_panel_divided_by_the_zoom() {
+        let (url, server) = metrics_server(false);
+        let mut state = driver_state();
+        state.session_id = Some("page".into());
+        let slot = Arc::clone(&state.config.frame_slot);
+        let events = test_events();
+        let mut link = crate::cdp::CdpLink::connect(&url).unwrap();
+        state
+            .viewport_policy
+            .commit(super::super::viewport::ViewportChange::Zoom(Some(200)));
+
+        state.set_viewport(&mut link, &events, &slot, 1000, 700);
+
+        assert_eq!((state.viewport_w, state.viewport_h), (500, 350));
+        assert_eq!(
+            slot.viewport_override(),
+            Some([500, 350]),
+            "the host letterboxes the zoomed page"
+        );
+        drop(link);
+        let applied = server
+            .join()
+            .unwrap()
+            .into_iter()
+            .find(|command| command["method"] == "Emulation.setDeviceMetricsOverride")
+            .expect("metrics override");
+        assert_eq!(
+            (
+                applied["params"]["width"].as_u64(),
+                applied["params"]["height"].as_u64()
+            ),
+            (Some(500), Some(350))
+        );
     }
 
     #[test]

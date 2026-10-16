@@ -417,6 +417,7 @@ fn decide(
                 .and_then(Checkouts::from_name)
                 .unwrap_or_default(),
             order: Vec::new(),
+            workflows: Vec::new(),
         };
         config.validate().map_err(|error| invalid(&error))?;
         return Ok(Next::ProposeNew(config));

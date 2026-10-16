@@ -190,6 +190,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let profile = config.profiles["dev"].clone();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -202,6 +203,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     let root = temp.path().join("fixture");
 
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -209,6 +211,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     );
     std::fs::write(root.join("deployment.json"), b"{broken").unwrap();
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -216,6 +219,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     );
     let store = Store::lock(&root).unwrap();
     let mut state = cloud_runtime::state::Deployment {
+        service_admission: None,
         version: 1,
         cloud_id: "fixture".into(),
         repository: temp.path().into(),
@@ -225,6 +229,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         operation: cloud_runtime::CreateState::Requested,
         spec: None,
         registry_generation: None,
+        publication: None,
         worker: None,
         sessions: Vec::new(),
         source_ready: false,
@@ -238,12 +243,14 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         timeline: None,
         last_self_stop: None,
         tailnet_device: None,
+        tailnet_enrollment: cloud_runtime::tailnet::receipt::EnrollmentLedger::default(),
         siblings: None,
         uncommitted_image: None,
         working_copy: None,
     };
     store.save(&state).unwrap();
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -251,6 +258,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     );
     drop(store);
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -261,6 +269,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     store.save(&state).unwrap();
     drop(store);
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert!(
         app.cloud_prototype.groups.0.is_empty(),
         "unallocated cloud can be removed"
@@ -282,6 +291,7 @@ fn restoring_an_absolute_cloud_identity_never_touches_its_target() {
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let outside = temp.path().join("must-not-be-created");
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: outside.to_str().unwrap().into(),
         revision: "a".repeat(40),
@@ -298,6 +308,7 @@ fn restoring_an_absolute_cloud_identity_never_touches_its_target() {
     assert!(!outside.exists());
     app.start_production_deployment(1, &ctx);
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert!(!outside.exists());
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
 }
@@ -327,6 +338,7 @@ fn add_unallocated_cloud(app: &mut HorizonApp, issue: u32, workspace: WorkspaceI
         [0.0, 0.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: false,
         id: format!("fixture{issue}"),
         revision: "a".repeat(40),
@@ -361,6 +373,7 @@ fn removing_a_cloud_drops_only_its_row_height_cache() {
     super::super::cards::remember_log_height_cache(&ctx, 2);
 
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals_at(&ctx);
 
     assert!(app.cloud_prototype.groups.0.iter().all(|group| group.issue != 1));
     assert!(!super::super::cards::log_height_cache_present(&ctx, 1));
@@ -427,6 +440,7 @@ fn removing_the_only_cloud_removes_its_workspace_on_the_next_frame() {
             );
 
             app.remove_deleted_cloud(1, &ctx);
+            app.settle_cloud_removals();
             assert!(app.cloud_prototype.groups.0.is_empty());
             assert!(member.is_none_or(|member| app.board.panel(member).is_none()));
             run_app_frame(&ctx, &mut app);
@@ -459,6 +473,7 @@ fn removing_a_cloud_keeps_a_workspace_that_is_still_in_use() {
         run_app_frame(&ctx, &mut app);
 
         app.remove_deleted_cloud(1, &ctx);
+        app.settle_cloud_removals();
         assert!(app.cloud_prototype.groups.0.iter().all(|group| group.issue != 1));
         for _ in 0..2 {
             run_app_frame(&ctx, &mut app);
@@ -500,6 +515,7 @@ fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
     frame(&mut app, false);
     app.open_workspace_cloud(&ctx, cloud);
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     for _ in 0..3 {
         frame(&mut app, false);
     }
@@ -537,6 +553,7 @@ fn seed_unallocated_cloud(
     let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
     let profile = config.profiles["dev"].clone();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -655,6 +672,7 @@ fn deletion_replaces_a_stale_attempt_and_reports_its_steps_and_total_time() {
         Stage::Deleted
     );
     app.remove_deleted_cloud(1, &ctx);
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
 }
 
@@ -830,6 +848,7 @@ fn a_record_that_reads_again_is_not_blamed_for_a_later_settings_failure() {
     .unwrap();
     Store::lock(&root.join("fixture")).unwrap().save(&state).unwrap();
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),

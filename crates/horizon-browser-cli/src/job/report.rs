@@ -523,6 +523,20 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
                 }
             }
             "url_patterns" => redact_url_patterns(value, replayable),
+            // A pressed character or Space can be typed text; named keys such as Tab stay.
+            "key" => {
+                let named = value
+                    .as_str()
+                    .and_then(|key| horizon_browser_protocol::BrowserKeyChord::parse(key).ok());
+                if !value.is_null()
+                    && named.is_none_or(|chord| {
+                        chord.key.printable_char().is_some() || chord.key == horizon_browser_protocol::BrowserKey::Space
+                    })
+                {
+                    *value = Value::String("<redacted>".to_string());
+                    *replayable = false;
+                }
+            }
             "body" | "data" | "expression" | "headers" | "password" | "pin" | "reason" | "script" | "selector"
             | "text" | "token" | "username" | "value" => {
                 if !value.is_null() {
@@ -732,6 +746,7 @@ mod tests {
             "url":"https://example.com/path?token=secret#fragment",
             "url_patterns":["token=secret", "https://example.com/public", null],
             "value":"private text",
+            "key":"Shift+q",
             "username":"smoke-user",
             "password":"smoke-pass-zephyr"
         })
@@ -743,8 +758,26 @@ mod tests {
         assert_eq!(arguments["url"], "https://example.com/path?<redacted>#<redacted>");
         assert_eq!(arguments["url_patterns"], json!(["<redacted>", "<redacted>", null]));
         assert_eq!(arguments["value"], "<redacted>");
+        assert_eq!(arguments["key"], "<redacted>");
         assert_eq!(arguments["username"], "<redacted>");
         assert_eq!(arguments["password"], "<redacted>");
+    }
+
+    #[test]
+    fn named_key_presses_stay_replayable() {
+        let mut space = json!({"action":"press","key":"Space"})
+            .as_object()
+            .cloned()
+            .expect("object");
+        assert!(!redact_arguments(&mut space));
+        assert_eq!(space["key"], "<redacted>");
+        let mut arguments = json!({"action":"press","key":"Shift+Tab","count":3})
+            .as_object()
+            .cloned()
+            .expect("object");
+
+        assert!(redact_arguments(&mut arguments));
+        assert_eq!(arguments["key"], "Shift+Tab");
     }
 
     #[test]

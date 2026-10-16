@@ -74,6 +74,12 @@ if [ "$agent" = claude ] || [ "$agent" = shell ]; then
         ANTHROPIC_API_KEY="$(cat /workspace/credentials/anthropic-api-key)"
         export ANTHROPIC_API_KEY
     fi
+    # A setup token from Cloud settings signs Claude in on the person's subscription. Horizon
+    # never binds it together with an API key, which Claude would prefer.
+    if [ -f /workspace/credentials/claude-oauth-token ]; then
+        CLAUDE_CODE_OAUTH_TOKEN="$(cat /workspace/credentials/claude-oauth-token)"
+        export CLAUDE_CODE_OAUTH_TOKEN
+    fi
     if [ -f /workspace/credentials/anthropic-workspace ]; then
         ANTHROPIC_WORKSPACE_ID="$(cat /workspace/credentials/anthropic-workspace)"
         export ANTHROPIC_WORKSPACE_ID

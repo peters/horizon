@@ -3,6 +3,10 @@
 //! against its own records.
 use serde::{Deserialize, Serialize};
 
+/// The answer to a `stop`, which only an agent tool from before its removal sends.
+pub const STOP_REMOVED: &str =
+    "cloud_list_invalid_request: stop was removed; the person stops a worker with Stop on its card";
+
 /// What an agent asks of the cloud list. `list` only reads; the others act on one
 /// cloud as the sidebar and the cloud card do.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -14,7 +18,10 @@ pub enum CloudListOperation {
     Attach,
     /// Parks the terminals of a cloud that is out of view now.
     Park,
-    /// Stops the worker of an idle cloud.
+    /// The removed stop of an idle cloud. An agent tool from before its removal may
+    /// still queue it, so the host reads it to refuse it; it is never valid and not
+    /// offered.
+    #[schemars(skip)]
     Stop,
 }
 
@@ -41,7 +48,8 @@ impl CloudListRequest {
         });
         match self.operation {
             CloudListOperation::List => self.cloud.is_none(),
-            CloudListOperation::Attach | CloudListOperation::Park | CloudListOperation::Stop => cloud,
+            CloudListOperation::Attach | CloudListOperation::Park => cloud,
+            CloudListOperation::Stop => false,
         }
     }
 }
@@ -59,7 +67,7 @@ mod tests {
                 .unwrap()
                 .valid()
         );
-        for operation in ["attach", "park", "stop"] {
+        for operation in ["attach", "park"] {
             assert!(
                 request(serde_json::json!({"operation": operation, "cloud": "cloud-1"}))
                     .unwrap()
@@ -74,5 +82,11 @@ mod tests {
         }
         assert!(request(serde_json::json!({"operation": "list", "workspace": "w"})).is_err());
         assert!(request(serde_json::json!({"operation": "delete", "cloud": "a"})).is_err());
+        assert!(
+            !request(serde_json::json!({"operation": "stop", "cloud": "a"}))
+                .unwrap()
+                .valid(),
+            "the stop of idle clouds was removed"
+        );
     }
 }

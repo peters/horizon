@@ -28,6 +28,9 @@ pub(super) enum Action {
     },
 }
 
+mod power;
+use power::power_result;
+
 #[cfg(test)]
 mod tests;
 
@@ -100,7 +103,7 @@ impl Runtime {
     pub(super) fn start_failure_check(
         &mut self,
         state_root: std::path::PathBuf,
-        settings: Settings,
+        settings_path: std::path::PathBuf,
         ctx: &egui::Context,
     ) {
         let tx = self.hold_failure_for_check();
@@ -108,26 +111,28 @@ impl Runtime {
         let fence = super::session_record::fence(&state_root);
         std::thread::spawn(move || {
             fence.wait();
-            let result = cloud_runtime::lifecycle::check_lost_worker(
-                &state_root,
-                &settings,
-                &cloud_runtime::Cancellation::default(),
-            )
-            .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
+            // Read here, not on the UI thread: a failed read shows the failure as it was.
+            let result = Settings::load(&settings_path)
+                .and_then(|settings| {
+                    cloud_runtime::lifecycle::check_lost_worker(
+                        &state_root,
+                        &settings,
+                        &cloud_runtime::Cancellation::default(),
+                    )
+                })
+                .and_then(|checked| checked.ok_or(cloud_runtime::Error::Invalid("The worker was not checked")));
             let _ = tx.send(result);
             ctx.request_repaint();
         });
     }
 
     /// Holds the failure for the provider check whose result the returned sender
-    /// carries. That check alone decides: the idle watch of the lost worker ends now,
-    /// and a check of its own that already holds the cloud makes this one wait, so no
-    /// provider check holds the cloud once the card shows the result.
+    /// carries. That check alone decides: the watch of the lost worker ends now, so no
+    /// other check holds the cloud once the card shows the result.
     pub(super) fn hold_failure_for_check(&mut self) -> std::sync::mpsc::Sender<RecoveryResult> {
         if let Some(watch) = self.cancel.take() {
             watch.cancel();
         }
-        self.idle_reports = None;
         let (tx, rx) = channel();
         self.unexplained_failure = self.error.take();
         self.recovery_receiver = Some(rx);
@@ -187,7 +192,7 @@ impl Runtime {
         }
         match result {
             Ok(recovered) => {
-                // A stopped worker, including one that stopped itself when idle, only needs Resume.
+                // A stopped worker, including one an agent on it stopped, only needs Resume.
                 let stopped = recovered.confirmed_stopped();
                 let resume = match recovered.stopped() {
                     cloud_runtime::provider::StoppedCost::WorkerKept => "Resume starts the same worker again.",
@@ -227,10 +232,10 @@ impl Runtime {
             || (self.receiver.is_some() && self.stage != Some(Stage::Ready))
     }
 
-    /// A provider check holds, or may hold, the cloud: Check provider, the check of a
-    /// failure, or the idle watch's own check.
+    /// A provider check holds, or may hold, the cloud: Check provider or the check of a
+    /// failure.
     pub(super) fn checking_provider(&self) -> bool {
-        self.recovery_receiver.is_some() || self.idle_confirming()
+        self.recovery_receiver.is_some()
     }
 
     fn start_device_release(&mut self, state_root: std::path::PathBuf, settings: Settings, ctx: &egui::Context) {
@@ -343,8 +348,8 @@ fn first_deletion_step(state: Option<&cloud_runtime::state::Deployment>) -> Stag
 
 impl HorizonApp {
     /// Asks the provider, before the card shows the failure of cloud `id`, whether it
-    /// is a stop Horizon did not make. The check shows as Checking provider. Without
-    /// settings the failure shows at once.
+    /// is a stop Horizon did not make. The check shows as Checking provider; it reads
+    /// the settings off the UI thread, and without them the failure shows as it was.
     pub(super) fn check_failure_with_provider(&mut self, id: u32, ctx: &egui::Context) {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
@@ -359,14 +364,11 @@ impl HorizonApp {
         else {
             return;
         };
-        let (Ok(settings), Ok(state_root)) = (
-            Settings::load(&root.join("settings.json")),
-            cloud_runtime::state::cloud_directory(&root, &launch.id),
-        ) else {
+        let Ok(state_root) = cloud_runtime::state::cloud_directory(&root, &launch.id) else {
             return;
         };
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
-            runtime.start_failure_check(state_root, settings, ctx);
+            runtime.start_failure_check(state_root, root.join("settings.json"), ctx);
         }
     }
 
@@ -395,7 +397,18 @@ impl HorizonApp {
         if runtime.busy() {
             return;
         }
-        let settings = match Settings::load(&root.join("settings.json")) {
+        // An operation chosen now, as a person's Stop, ends the claim of an earlier agent
+        // Stop on its request, which a failed Stop keeps while its outcome may be
+        // uncertain; this holds even when the choice is refused below. The Stop for an
+        // agent's request sets the claim again once it started.
+        runtime.stopping_for = None;
+        // A Stop for an agent's request comes with the settings it was read with.
+        let preloaded = runtime
+            .agent_stop
+            .as_ref()
+            .filter(|_| action == Action::Stop)
+            .map(|order| order.settings.clone());
+        let settings = match preloaded.map_or_else(|| Settings::load(&root.join("settings.json")), Ok) {
             Ok(settings) => settings,
             Err(error) => {
                 fail_before_start(runtime, action, error.to_string());
@@ -410,9 +423,6 @@ impl HorizonApp {
                 return;
             }
         };
-        // A stop the idle watch reports late must not apply to this or any later
-        // operation, a provider check included.
-        runtime.idle_reports = None;
         if action == Action::Reconcile {
             runtime.start_reconciliation(state_root, settings, ctx);
             return;
@@ -431,6 +441,15 @@ impl HorizonApp {
         runtime.receiver = Some(rx);
         runtime.sender = Some(tx.clone());
         begin_operation(runtime, action);
+        // A Stop for an agent's request carries it out and names the agent.
+        let agent_stop = runtime
+            .agent_stop
+            .take()
+            .filter(|_| action == Action::Stop)
+            .map(|order| order.stop);
+        if let Some(stop) = &agent_stop {
+            runtime.push_log(format!("{} asked to stop this cloud: {}", stop.agent, stop.reason));
+        }
         let cancel = cloud_runtime::Cancellation::default();
         runtime.cancel = Some(cancel.clone());
         let ctx = ctx.clone();
@@ -440,25 +459,8 @@ impl HorizonApp {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             };
-            let result = match action {
-                Action::Stop => cloud_runtime::lifecycle::stop(&root, &settings, &cancel)
-                    .map(|state| Event::Stopped(Box::new(state))),
-                Action::Resume => cloud_runtime::lifecycle::resume(&root, &settings, &cancel).map(|()| Event::Resumed),
-                Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
-                    .map(|state| Event::Snapshot(Box::new(state))),
-                Action::Delete => deployment::terminate(&root, &settings, &cancel, &emit).map(|()| Event::deleted()),
-                Action::Resize(_)
-                | Action::Deploy
-                | Action::Desktop
-                | Action::Remove
-                | Action::Reconcile
-                | Action::PreviewRebuild
-                | Action::Rebuild
-                | Action::ContinueRebuild
-                | Action::CancelRebuild
-                | Action::ShareLocalNetwork
-                | Action::StopSharingLocalNetwork
-                | Action::ContainerRegistry { .. } => return,
+            let Some(result) = power_result(action, agent_stop.as_ref(), &root, &settings, &cancel, &emit) else {
+                return;
             };
             if let Ok(store) = Store::lock(&root)
                 && let Ok(Some(state)) = store.load()
@@ -470,130 +472,15 @@ impl HorizonApp {
         });
     }
 
-    /// Removes cloud `id` once its saved record holds no provider resources. Returns
-    /// whether it was removed; otherwise the card says why.
-    pub(super) fn remove_deleted_cloud(&mut self, id: u32, ctx: &egui::Context) -> bool {
-        let Some(index) = self.cloud_prototype.groups.0.iter().position(|group| group.issue == id) else {
-            return false;
-        };
-        if self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&id)
-            .is_some_and(|runtime| runtime.receiver.is_some() || runtime.busy())
-        {
-            return false;
-        }
-        let Some(launch) = self.cloud_prototype.groups.0[index].remote.as_ref() else {
-            return false;
-        };
-        let Some(root) = &self.cloud_prototype.root else {
-            if launch.deployment_started {
-                return false;
-            }
-            self.discard_cloud(index, ctx);
-            return true;
-        };
-        // A host without cloud records has no lock to take, and a cloud that never
-        // started a deployment and has no record holds nothing at its provider.
-        if !Store::supported() && !launch.deployment_started && !recorded(root, launch) {
-            self.discard_cloud(index, ctx);
-            return true;
-        }
-        // Held until the cloud is discarded, so no operation can start in between.
-        let _store = match removable(root, launch) {
-            Ok((store, true)) => store,
-            Ok((_, false)) => {
-                self.cloud_removal_error(
-                    id,
-                    "Delete the worker and workspace storage before removing this cloud".into(),
-                );
-                return false;
-            }
-            Err(error) => {
-                self.cloud_removal_error(id, error.to_string());
-                return false;
-            }
-        };
-        self.discard_cloud(index, ctx);
-        true
+    /// Starts a fresh background eligibility check; completion applies the removal.
+    pub(super) fn remove_deleted_cloud(&mut self, id: u32, ctx: &egui::Context) -> super::close::RemovalStart {
+        self.begin_cloud_removal(id, super::close::Origin::Direct, ctx)
     }
 
-    /// Whether the saved record of cloud `id` holds provider resources. `None` means
-    /// a deployed cloud's record is missing, so its resource state is unknown.
-    /// # Errors
-    /// The record cannot be read, or a running operation holds it.
-    pub(super) fn cloud_holds_resources(&self, id: u32) -> cloud_runtime::Result<Option<bool>> {
-        let Some(launch) = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .find(|group| group.issue == id)
-            .and_then(|group| group.remote.as_ref())
-        else {
-            return Ok(Some(false));
-        };
-        let Some(root) = &self.cloud_prototype.root else {
-            return Ok((!launch.deployment_started).then_some(false));
-        };
-        // Only asking must not leave a state directory behind for a cloud that never had one.
-        if !recorded(root, launch) {
-            return Ok((!launch.deployment_started).then_some(false));
-        }
-        let (store, allowed) = removable(root, launch)?;
-        Ok((!launch.deployment_started || store.load()?.is_some()).then_some(!allowed))
-    }
-
-    /// Locks the saved record of cloud `id`, so no other controller operates on it while
-    /// it is held. `None` when
-    /// Horizon keeps no cloud records, here or on this host.
-    /// # Errors
-    /// `Busy` while another controller owns it, or the lock cannot be taken.
-    pub(super) fn lock_cloud_record(&self, id: u32) -> cloud_runtime::Result<Option<Store>> {
-        let Some(launch) = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .find(|group| group.issue == id)
-            .and_then(|group| group.remote.as_ref())
-        else {
-            return Ok(None);
-        };
-        let Some(root) = self.cloud_prototype.root.as_ref().filter(|_| Store::supported()) else {
-            return Ok(None);
-        };
-        // An identity that cannot name a record directory has no record to operate on.
-        let Ok(path) = cloud_runtime::state::cloud_directory(root, &launch.id) else {
-            return Ok(None);
-        };
-        Store::lock(&path).map(Some)
-    }
-
-    fn cloud_removal_error(&mut self, id: u32, message: String) {
+    pub(super) fn cloud_removal_error(&mut self, id: u32, message: String) {
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
             runtime.error = Some(message.clone());
         }
         self.cloud_prototype.error = Some(message);
     }
-}
-
-/// Whether `launch` may have a record directory. An unreadable path counts as one.
-fn recorded(root: &std::path::Path, launch: &horizon_core::cloud_panel::CloudLaunch) -> bool {
-    cloud_runtime::state::cloud_directory(root, &launch.id).map_or(true, |path| path.try_exists().unwrap_or(true))
-}
-
-/// Locks the saved record of `launch` and reads whether it holds no provider resources.
-fn removable(
-    root: &std::path::Path,
-    launch: &horizon_core::cloud_panel::CloudLaunch,
-) -> cloud_runtime::Result<(Store, bool)> {
-    let store = cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path))?;
-    let allowed = match store.load()? {
-        Some(state) => cloud_runtime::lifecycle::can_remove(&store, &state)?,
-        None => !launch.deployment_started && cloud_runtime::lifecycle::can_remove_without_deployment(&store)?,
-    };
-    Ok((store, allowed))
 }

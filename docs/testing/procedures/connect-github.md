@@ -393,7 +393,7 @@ this task and G11 use.
    **Ask**. The app name obeys the rule of G01 step 6.
 
 2. Open **New cloud** while GitHub is connected. Under **Where is your code?**,
-   click **Pick from your GitHub repositories**.
+   click **Show your GitHub repositories**.
 
    Result: The first time, a box asks to sign in to GitHub on this computer, with a
    code in Ask mode. In Automatic mode the browser returns by itself.

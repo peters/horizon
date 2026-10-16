@@ -15,6 +15,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import zlib
 
 HOME = '/workspace/home'
 SESSIONS = '/workspace/sessions'
@@ -26,8 +27,25 @@ RUNS_LIMIT = 256 * 1024
 OUTPUT_LIMIT = 3 * 1024 * 1024
 # Horizon reads times as 64-bit integers.
 TIME_LIMIT = 2 ** 62
+# The log of the GitHub changes that root's GitHub service refused on the worker. The agent
+# cannot write it.
+REFUSALS = (('/workspace/.horizon-gate', 'refused.jsonl'),)
+REFUSALS_OWNER = 0
+REFUSED_KINDS = {'dispatch': 'a workflow start', 'merge': 'a merge'}
+# Enough for the last REFUSALS_KEPT lines at their longest: a reason of 300 characters that
+# JSON escapes to six bytes each, and the other fields.
+REFUSALS_LIMIT = 64 * 1024
+REFUSALS_KEPT = 20
 SESSION = re.compile(r'upkeep-[A-Za-z0-9_-]{1,90}')
 REVISION = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+# The agent asks for a companion cloud with companions/<alias>.json; Horizon answers in
+# companions-status.json. The alias rule is Horizon's own.
+COMPANION = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+OPERATION = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+COMPANION_ACTIONS = ('ensure_ready', 'stop')
+COMPANION_LIMIT = 4
+COMPANION_REQUEST_LIMIT = 1024
+COMPANION_STATUS_LIMIT = 64 * 1024
 
 
 class Refused(Exception):
@@ -128,7 +146,9 @@ def install(payload, upkeep):
     installed first, so an exchange that stops midway leaves the mark for the next one."""
     session = payload['session']
     write(upkeep, 'config.json', json.dumps(payload['config'], indent=1))
-    write(upkeep, 'prompt.md', payload['prompt'])
+    # The person's instructions lead both prompts; they travel once.
+    write(upkeep, 'prompt.md', payload['instructions'] + payload['prompt'])
+    write(upkeep, 'daily.md', payload['instructions'] + payload['daily_prompt'])
     if (read(upkeep, 'run.sh', len(payload['run'].encode()) + 1) != payload['run'].encode()
             or read(upkeep, 'run.py', len(payload['scheduler'].encode()) + 1) != payload['scheduler'].encode()):
         write(upkeep, 'installing', '')
@@ -236,13 +256,111 @@ def run_record(line):
         record['finished_at'] = run['finished_at']
     if type(run.get('merged')) is int and 0 <= run['merged'] < 2 ** 31:
         record['merged'] = run['merged']
+    if run.get('kind') == 'daily':
+        record['kind'] = 'daily'
     if isinstance(run.get('outcome'), str):
         # A lone surrogate from a \ud800 escape is not valid JSON for Horizon.
         record['outcome'] = run['outcome'][:40].encode('utf-8', 'replace').decode()
     return record
 
 
-def report(upkeep, loop, settled):
+def refusal_text(entry):
+    """The board's line for one refusal, from its fixed fields only, or None."""
+    if not isinstance(entry, dict) or type(entry.get('at')) is not int or not 0 < entry['at'] < TIME_LIMIT \
+            or not isinstance(entry.get('reason'), str):
+        return None
+    clean = lambda value: ''.join(c for c in str(value) if c.isprintable())[:200]
+    where = ' on ' + clean(entry['repository']) if isinstance(entry.get('repository'), str) else ''
+    kind = entry.get('kind')
+    what = REFUSED_KINDS.get(kind, 'a GitHub change') if isinstance(kind, str) else 'a GitHub change'
+    return 'The worker refused %s%s: %s' % (what, where, clean(entry['reason']))
+
+
+def refusals():
+    """The newest lines of the refusal log that root wrote, as {at, text}, oldest first."""
+    found = []
+    for path, name in REFUSALS:
+        try:
+            parent = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            if os.fstat(parent).st_uid != REFUSALS_OWNER:
+                continue
+            data = read(parent, name, REFUSALS_LIMIT, tail=True) or b''
+        finally:
+            os.close(parent)
+        for line in data.decode('utf-8', 'replace').splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            text = refusal_text(entry)
+            if text is not None:
+                found.append({'at': entry['at'], 'text': text})
+    found.sort(key=lambda entry: entry['at'])
+    return found[-REFUSALS_KEPT:]
+
+
+def companion_requests(upkeep, answers):
+    """The agent's companion requests, at most four: companions/<alias>.json holding an action
+    and an operation ID. Anything else in that folder is left out. A request that Horizon's
+    `answers` show as done is removed, so that it never holds back a later one, also once
+    Horizon no longer keeps that answer."""
+    try:
+        fd = os.open('companions', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=upkeep)
+    except OSError:
+        return []
+    try:
+        if os.fstat(fd).st_uid != os.geteuid():
+            return []
+        requests = []
+        for name in sorted(os.listdir(fd)):
+            alias = name[:-len('.json')] if name.endswith('.json') else ''
+            if not COMPANION.fullmatch(alias):
+                continue
+            try:
+                seen = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except OSError:
+                continue
+            # One byte more than allowed tells a file that is too long from one that fits.
+            data = read(fd, name, COMPANION_REQUEST_LIMIT + 1) or b''
+            if len(data) > COMPANION_REQUEST_LIMIT:
+                continue
+            try:
+                request = json.loads(data)
+            except (ValueError, RecursionError):
+                continue
+            if not (isinstance(request, dict) and request.get('action') in COMPANION_ACTIONS
+                    and isinstance(request.get('operation_id'), str)
+                    and OPERATION.fullmatch(request['operation_id'])):
+                continue
+            answer = answers.get(alias)
+            if (isinstance(answer, dict) and answer.get('done') is True
+                    and answer.get('operation_id') == request['operation_id']):
+                retire(fd, name, seen)
+            else:
+                requests.append({'alias': alias, 'action': request['action'],
+                                 'operation_id': request['operation_id']})
+                if len(requests) == COMPANION_LIMIT:
+                    break
+        return requests
+    finally:
+        os.close(fd)
+
+
+def retire(parent, name, seen):
+    """Removes the request `name` that Horizon answered, unless the agent changed it since it
+    was read."""
+    try:
+        now = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (now.st_ino, now.st_size, now.st_mtime_ns) == (seen.st_ino, seen.st_size, seen.st_mtime_ns):
+            os.unlink(name, dir_fd=parent)
+    except OSError:
+        pass
+
+
+def report(upkeep, loop, settled, answers):
     """What the board shows. Everything here comes from files that the agent can write, so
     only the fields and types that Horizon reads are sent back."""
     status = read(upkeep, 'status.json', STATUS_LIMIT)
@@ -253,7 +371,8 @@ def report(upkeep, loop, settled):
     except (ValueError, IndexError):
         next_run = None
     answer = {'loop': loop, 'settled': settled, 'runs': runs, 'next_run': next_run,
-              'paused': read(upkeep, 'paused', 0) is not None,
+              'paused': read(upkeep, 'paused', 0) is not None, 'refused': refusals(),
+              'companions': companion_requests(upkeep, answers),
               'status': status.decode('utf-8', 'replace') if status is not None else None}
     text = json.dumps(answer, allow_nan=False)
     if len(text) > OUTPUT_LIMIT:
@@ -272,13 +391,20 @@ def exchange(payload):
         try:
             install(payload, upkeep)
             signal(payload, upkeep)
+            companions = payload.get('companions')
+            if not isinstance(companions, dict):
+                companions = {}
+            else:
+                text = json.dumps(companions, indent=1)
+                if len(text) <= COMPANION_STATUS_LIMIT:
+                    write(upkeep, 'companions-status.json', text)
             # Last, after every file is in place: a running loop starts the new one between two
             # runs, and only ever sees a complete install.
             if read(upkeep, 'installing', 0) is not None:
                 write(upkeep, 'restart', '')
                 remove(upkeep, 'installing')
             loop, settled = keep_loop(session, HOME + '/' + FOLDER)
-            return report(upkeep, loop, settled)
+            return report(upkeep, loop, settled, companions)
         finally:
             os.close(upkeep)
     finally:
@@ -286,7 +412,7 @@ def exchange(payload):
 
 
 def main():
-    payload = json.loads(base64.b64decode(sys.argv[1]))
+    payload = json.loads(zlib.decompress(base64.b64decode(sys.argv[1])))
     try:
         print(exchange(payload))
     except Refused as error:

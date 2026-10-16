@@ -459,9 +459,9 @@ The result of step 2 depends on whether the host has `/dev/kvm`.
 
    Result: Before Run CI in image, Horizon clones the named repository. The CI job
    builds with the git dependency and does not ask for a credential. `docker
-   inspect` of the CI container shows one read-only mount below
-   `/opt/host-cargo-git` for each named repository, and no other mount of a Git or
-   Cargo folder of this computer. After the proof ends,
+   inspect` of the CI container shows no bind mount of a folder of this computer,
+   and `docker exec <container> ls -l /opt/host-cargo-git/<owner>` lists one clone
+   for each named repository, owned by `root`. After the proof ends,
    `~/.horizon/cloud/setup-fetch` has no `crates-*` folder.
 
 3. Add a second git dependency to `Cargo.toml`, commit `Cargo.toml` and
@@ -502,9 +502,133 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: The answer has `"changed": false`. No tool checks a companion: only the
    owner can check the box again, on the card.
 
+### 6.20 S20 — Two repositories at once
+
+1. Start the setup agent on a copy of the fixture without `.horizon`, then click
+   **Close** while it works.
+
+   Result: The dialog closes. The agent keeps working.
+
+2. Click **+ New cloud** and enter a second copy of the fixture without `.horizon`.
+
+   Result: The dialog offers the setup choices for the second copy. It does not say
+   that another setup is still working.
+
+3. Start the setup agent for the second copy.
+
+   Result: The dialog shows the steps of the second setup. The first agent keeps
+   working.
+
+4. Click **Close**. Click **+ New cloud** and enter the first copy.
+
+   Result: The dialog shows the steps of the first setup, with its elapsed times.
+
+5. Click **Stop**, then **Close**. Click **+ New cloud** and enter the second copy.
+
+   Result: The first agent stopped. The dialog shows the steps of the second setup,
+   which still works.
+
+6. Make a symbolic link to the second copy. Click **Close**, click **+ New cloud**,
+   enter the link and start the setup agent.
+
+   Result: No second agent starts. The dialog says that a setup of the folder already
+   runs. The second setup still works.
+
+### 6.21 S21 — The build queue
+
+1. Close Horizon. Start it again with `HORIZON_SETUP_BUILD_SLOTS=1` in its
+   environment.
+
+   Result: Horizon starts.
+
+2. Start the setup agent on two copies of the fixture without `.horizon`, as in S20.
+
+   Result: Both agents work.
+
+3. Wait until both agents ask for a proof.
+
+   Result: One setup shows **Build image** as running. The other setup shows
+   **Build image** as pending, with **Waiting for a build slot** and the name of the
+   first copy.
+
+4. Wait until the proof of the first setup ends.
+
+   Result: The second setup starts **Build image**.
+
+5. Close Horizon and start it again without `HORIZON_SETUP_BUILD_SLOTS`.
+
+   Result: Horizon starts.
+
+### 6.22 S22 — The setup board
+
+1. Start the setup agent on two copies of the fixture without `.horizon`, as in S20.
+
+   Result: The **Setup board** panel opens in the workspace of the setup agents. It has
+   one row for each copy, with the name, the path, a segment for each step and the
+   running step.
+
+2. Wait until a proof of one copy waits for a build slot, as in S21.
+
+   Result: Its row says **Waiting for a build slot** and names the other copy. Its
+   **Build image** segment is yellow.
+
+3. On the row of the first copy, click **Open in New cloud**.
+
+   Result: **New cloud** opens and shows the steps of the first copy.
+
+4. Click **Close**.
+
+   Result: The dialog closes and the canvas shows the setup board.
+
+5. On the row of the second copy, click **Open agent**.
+
+   Result: The agent panel of the second copy shows.
+
+6. On the row of the second copy, click **Stop**.
+
+   Result: The agent of the second copy stops and its row goes. The first copy keeps
+   its row.
+
+7. Close the setup board. Open **Menu** and click **Setup board**.
+
+   Result: The setup board opens again with the row of the first copy.
+
+### 6.23 S23 — Build on a Docker host
+
+1. In **Cloud settings**, save a Docker host with SSH access to a Linux machine that
+   runs Docker and that your SSH key reaches without a password prompt. Turn Docker
+   hosts on.
+
+   Result: The Docker host card lists the host.
+
+2. Open **New cloud** for a copy of the fixture without `.horizon`.
+
+   Result: Under the agent chips, **Build on** shows **This computer** and the name of
+   the host.
+
+3. Click the name of the host, then start the setup agent.
+
+   Result: The agent starts on this computer. The setup board row says **builds on**
+   and the name of the host.
+
+4. Wait until the proof ends.
+
+   Result: Build image, Run CI in image and Fast rerun pass. On the host, `docker
+   images` lists `horizon-setup-ci-app-<hash>-<run>:candidate` while the run lives.
+   On this computer, `docker images` does not list it.
+
+5. Repeat steps 2 to 4 with the GUI fixture `<home>/smoke/gui-app`.
+
+   Result: The live preview opens in a Device panel on this computer and shows the app.
+
+6. Click **Stop** on both runs.
+
+   Result: Within one minute, `docker ps -a`, `docker images` and `docker volume ls` on
+   the host no longer list the resources of the runs.
+
 ## 7. Pass criteria
 
-- S01 to S19 give the results above.
+- S01 to S23 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

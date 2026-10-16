@@ -20,7 +20,9 @@ WORKER = os.environ.get("HORIZON_TEST_CLOUD_WORKER")
 
 
 # The credential a provider gives a worker to stop itself with, as RunPod does.
-STOPS_ITSELF = {'RUNPOD_POD_ID': 'pod123', 'RUNPOD_API_KEY': 'pod-scoped'}
+STOPS_ITSELF = {'RUNPOD_POD_ID': 'pod123', 'RUNPOD_API_KEY': 'pod-scoped',
+                'HORIZON_WORKER_CAPABILITIES': '{"agents":["claude"]}'}
+STOPD = runpy.run_path(str(ROOT / 'horizon-worker-stopd'))
 
 
 class CapabilitiesTests(unittest.TestCase):
@@ -72,26 +74,21 @@ class CapabilitiesTests(unittest.TestCase):
                 status = error.code
         return status, output.getvalue(), commands.call_args_list
 
-    def test_idle_stop_is_reported_only_when_the_supervisor_declares_it(self):
-        declared = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n'}
+    def test_the_agent_stop_is_reported_only_when_the_stop_service_declares_it(self):
+        declared = {'horizon-worker-stopd': b'horizon-agent-stop-contract=1\n',
+                    'horizon-worker-supervise': b'horizon-agent-stop-contract=1\n'}
         for reported, missing, expected in [(declared, (), True),
-                                            ({'horizon-worker-supervise': b''}, (), False),
-                                            ({'horizon-worker-supervise': b'horizon-idle-stop-contract=1 extra\n'}, (), False),
-                                            (declared, ('horizon-worker-idle',), False)]:
-            status, output, _ = self.run_check(missing=missing, reported=reported)
-            self.assertEqual(status, 0, output)
-            self.assertEqual('horizon-idle-stop-contract=1' in output.splitlines(), expected, (reported, missing))
-
-    def test_the_idle_record_is_reported_only_with_idle_stop_and_a_watcher_that_keeps_one(self):
-        declared = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n',
-                    'horizon-worker-idle': b'horizon-idle-report-contract=1\n'}
-        older = {'horizon-worker-supervise': b'horizon-idle-stop-contract=1\n', 'horizon-worker-idle': b''}
-        for reported, missing, expected in [(declared, (), True), (older, (), False),
+                                            ({**declared, 'horizon-worker-stopd': b''}, (), False),
+                                            ({**declared, 'horizon-worker-stopd': b'horizon-agent-stop-contract=1 extra\n'}, (), False),
+                                            # An older supervisor would not start the service.
                                             ({**declared, 'horizon-worker-supervise': b''}, (), False),
-                                            (declared, ('horizon-worker-idle',), False)]:
+                                            (declared, ('horizon-worker-stopd',), False)]:
             status, output, _ = self.run_check(missing=missing, reported=reported)
             self.assertEqual(status, 0, output)
-            self.assertEqual('horizon-idle-report-contract=1' in output.splitlines(), expected, (reported, missing))
+            self.assertEqual('horizon-agent-stop-contract=1' in output.splitlines(), expected, (reported, missing))
+            # An image without the idle watcher reports no idle stop to older Horizon versions.
+            self.assertNotIn('horizon-idle-stop-contract=1', output.splitlines())
+            self.assertNotIn('horizon-idle-report-contract=1', output.splitlines())
 
     def test_github_chain_is_reported_only_with_the_service_and_a_supervisor_that_starts_it(self):
         marker = 'horizon-github-chain-contract=1'
@@ -105,7 +102,11 @@ class CapabilitiesTests(unittest.TestCase):
         helpers = ('horizon-worker-github-common', 'horizon-worker-github-agents', 'horizon-worker-github-git',
                    'horizon-worker-github-http', 'horizon-worker-github-api', 'horizon-worker-github-api-rest',
                    'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy', 'horizon-worker-github-tasks',
-                   'horizon-worker-github-mcp', 'horizon-worker-gh-repository', 'horizon-worker-git-auth')
+                   'horizon-worker-github-mcp', 'horizon-worker-github-upkeep',
+                   'horizon-worker-github-api-upkeep', 'horizon-worker-github-git-upkeep',
+                   'horizon-worker-github-upkeep-loop',
+                   'horizon-worker-gh-repository',
+                   'horizon-worker-git-auth')
         for helper in helpers:
             (elsewhere / helper).touch()
         for reported, missing, args, beside, expected in [
@@ -246,7 +247,7 @@ class CapabilitiesTests(unittest.TestCase):
                          [['horizon-worker-session-env', 'check'],
                           ['/bin/bash', '-c', '(( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404 ))'],
                           ['git', 'lfs', 'version'],
-                          ['horizon-worker-supervise', '--idle-stop-contract'],
+                          ['horizon-worker-stopd', '--contract'],
                           ['horizon-worker-source', '--shallow-contract'],
                           ['horizon-worker-source', '--lfs-selection-contract'],
                           ['/usr/bin/setpriv', '--help'],
@@ -529,23 +530,33 @@ assert policy.read_text() == 'ask\n'
             self.assertNotIn('horizon-last-self-stop=', output)
             self.assertEqual('horizon-self-stop-contract=1' in output.splitlines(), supported)
 
-    def test_agents_get_the_stop_tool_only_where_the_profile_opts_in(self):
+    def test_agents_get_the_stop_tool_on_every_dedicated_worker_that_can_stop(self):
         self.write('/workspace/capabilities.json', {'agents': ['claude']})
-        for environment, expected in [(dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), True), ({}, False),
-                                      # Horizon stops a worker without a credential, as on Hetzner.
-                                      ({'HORIZON_IDLE_STOP_MINUTES': '30'}, False),
-                                      # A period the watcher refuses leaves it passive.
-                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='5'), False),
-                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='1441'), False),
-                                      ({'HORIZON_WORKER_SELF_STOP_AVAILABLE': '1', 'HORIZON_IDLE_STOP_MINUTES': '30'}, True)]:
+        devices = json.dumps({'agents': ['claude'], 'browserstack': {'account': 'synthetic'}})
+        for environment, expected in [(STOPS_ITSELF, True), ({}, False),
+                                      # Without an idle period too: the opt-in is gone.
+                                      (dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), True),
+                                      # Horizon carries the stop out where the worker has no credential.
+                                      ({'HORIZON_WORKER_STOP': 'horizon',
+                                        'HORIZON_WORKER_CAPABILITIES': STOPS_ITSELF['HORIZON_WORKER_CAPABILITIES']}, True),
+                                      ({'HORIZON_WORKER_SELF_STOP_AVAILABLE': '1',
+                                        'HORIZON_WORKER_CAPABILITIES': STOPS_ITSELF['HORIZON_WORKER_CAPABILITIES']}, True),
+                                      # A shared worker runs other clouds' sessions.
+                                      (dict(STOPS_ITSELF, HORIZON_WORKER_STARTUP='shared'), False),
+                                      # A stopped worker could not release its hosted devices.
+                                      (dict(STOPS_ITSELF, HORIZON_WORKER_CAPABILITIES=devices), False)]:
             with mock.patch.dict(os.environ, environment, clear=True):
                 self.configure()
             servers = json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']
             self.assertEqual('horizon-worker' in servers, expected, environment)
-        with mock.patch.dict(os.environ, dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), clear=True):
+        with mock.patch.dict(os.environ, STOPS_ITSELF, clear=True):
             self.configure()
         self.assertEqual(json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers']['horizon-worker'],
                          {'command': '/usr/local/bin/horizon-worker-stop', 'args': ['mcp']})
+        # A stop service that cannot answer offers no tool.
+        with mock.patch.dict(os.environ, STOPS_ITSELF, clear=True):
+            self.configure(stop_mode=None)
+        self.assertNotIn('horizon-worker', json.loads(self.path('/workspace/agent-mcp.json').read_text())['mcpServers'])
 
     def test_the_device_target_lives_in_a_folder_that_the_agent_owns(self):
         # horizon-device creates its lock, controller record and resize markers next to the
@@ -574,7 +585,7 @@ assert policy.read_text() == 'ask\n'
     @unittest.skipUnless(WORKER, "set HORIZON_TEST_CLOUD_WORKER to the matching built helper")
     def test_codex_and_grok_accept_the_stop_tool_and_drop_it_when_opted_out(self):
         self.write('/workspace/capabilities.json', {'agents': ['codex', 'grok']})
-        with mock.patch.dict(os.environ, dict(STOPS_ITSELF, HORIZON_IDLE_STOP_MINUTES='30'), clear=True):
+        with mock.patch.dict(os.environ, STOPS_ITSELF, clear=True):
             self.configure()
         for agent in ['codex', 'grok']:
             servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
@@ -585,10 +596,15 @@ assert policy.read_text() == 'ask\n'
             servers = tomllib.loads(self.path(f'/workspace/home/.{agent}/config.toml').read_text())['mcp_servers']
             self.assertNotIn('horizon-worker', servers)
 
-    def configure(self):
+    def configure(self, stop_mode=True):
         def run(command, **kwargs):
             if command[0] == 'horizon-cloud-worker':
                 return RUN([WORKER, *command[1:]], **kwargs)
+            if command == ['/usr/local/bin/horizon-worker-stopd', '--mode']:
+                if stop_mode is None:
+                    raise subprocess.CalledProcessError(1, command)
+                # The stop service decides from the same environment the agent sees.
+                return subprocess.CompletedProcess(command, 0, stdout=(STOPD['mode']() or 'none') + '\n')
             return subprocess.CompletedProcess(command, 0)
         with mock.patch('pathlib.Path', side_effect=self.path), mock.patch('subprocess.run', side_effect=run):
             runpy.run_path(str(ROOT / 'horizon-worker-configure'), run_name='__main__')

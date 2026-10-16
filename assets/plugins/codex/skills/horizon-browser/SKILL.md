@@ -24,9 +24,14 @@ failed to load (`navigation_error` says why) and you must navigate again or
 fix the URL; `navigation: superseded` means the user navigated the panel
 first, so read `panel.url` before acting. If `browser_list` returns a usable panel, reuse
 that panel for iframe, popup, dialog, and consent interactions. Never create or
-reveal a helper panel as a workaround. Only when the user explicitly requests
-another independent browser session may you call `browser_create` with
-`allow_additional: true`. Omit `backend` to use Horizon's
+reveal a helper panel as a workaround. You may hold one panel per browser
+engine: to run the same check in another engine, call `browser_create` with an
+explicit `backend` (`chromium`, `firefox` or `safari`) beside your open panel.
+Only when the user explicitly requests another independent browser session may
+you call `browser_create` with `allow_additional: true`; a second panel of the
+same engine, a create without `backend` while you own a panel, and a remote
+`target` while you own a panel need it. A create that is still pending counts
+as a panel of its engine. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Read `automation_disclosure` on `browser_list` and
 `browser_panel`. In the UI, hover the local backend picker or the remote identity
@@ -272,6 +277,22 @@ clears the pin. A timeout/failure may follow a backend mutation: inspect the
 page or retry rather than assuming no change. `browser_video` max_width and
 codec alignment affect encoding only. Reacquire semantic refs after resizing.
 
+For a zoom or reflow check (for example "zoom to 200 percent, nothing
+clipped"), inspect the panel's `zoom` capability, then call `browser_zoom` with
+`panel_id` and `percent` (25-500), or `reset: true` for 100. Local Chromium and
+Firefox support it; Safari and remote sessions return `unsupported_backend`.
+The page lays out in a CSS viewport of the panel size, or the `browser_resize`
+pin, divided by the zoom, and the panel magnifies the frame, as a browser zoom
+level does; `devicePixelRatio` does not change, so resolution media queries and
+`srcset` do not follow the zoom. The result gives `requested_percent`,
+`applied_percent` and the measured `css_viewport`. Resize and zoom combine: pin
+1280x800 and zoom 400 for a 320 CSS pixel reflow check; `browser_resize` then
+reports `zoom_percent`. A zoom whose CSS viewport would exceed 8000 pixels per
+axis is refused with `invalid_input`; if the panel grows later, the zoomed
+viewport stops at 8000 pixels on that axis. The zoom survives navigation until reset
+or session replacement. Judge clipping from `browser_screenshot` and from
+`document.documentElement.scrollWidth` against its `clientWidth`.
+
 `browser_remote_allocations` operations are `list` and `reconcile`.
 For capacity retained after a remote panel disappears, use
 `browser_remote_allocations` with `operation: list`, then `operation: reconcile`
@@ -295,9 +316,25 @@ or raw provider capabilities.
 
 ## Actions, attachments, and screenshots
 
-`browser_act` operations are `click`, `fill`, `scroll`, `reload`, `back`, `forward`,
-`set_files`, and `drop_files`. A click accepts `count: 1..3`, including a trusted
-double-click with 2. Use a fresh ref or selector and examine the visible result.
+`browser_act` operations are `click`, `fill`, `press`, `scroll`, `reload`, `back`,
+`forward`, `set_files`, and `drop_files`. A click accepts `count: 1..3`, including
+a trusted double-click with 2. Use a fresh ref or selector and examine the visible
+result.
+
+For keyboard checks, `press` sends trusted key presses to the element that has
+focus: `key` is a named key (`Tab`, `Enter`, `Escape`, `Space`, `Backspace`,
+`Delete`, `Home`, `End`, `PageUp`, `PageDown`, arrows such as `ArrowDown`,
+`F1`..`F12`) or one printable US-layout character, optionally with `Shift`,
+`Control`, `Alt` or `Meta` (`Shift+Tab`, `Control+a`), and `count: 1..100`
+repeats it. It takes no ref or selector: click or fill a field first to move
+focus there. Local Chromium uses CDP key events, local Firefox WebDriver BiDi
+actions, and Safari and remote targets classic WebDriver actions; a real mobile
+device may ignore focus keys such as `Tab`. Audit records name non-printable
+keys and record printable ones and `Space` only as `printable`; use `fill` for
+text. After
+the presses, read `document.activeElement` (and `:focus-visible`) with
+`browser_evaluate` or take a `browser_screenshot` to judge focus order and the
+focus ring.
 
 For `set_files`, target the actual `input[type=file]`, even when hidden.
 Use its `file_input` metadata for accept and multiple-file policy.

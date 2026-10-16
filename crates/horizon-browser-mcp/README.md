@@ -50,9 +50,16 @@ shell commands, files, or other MCP servers.
   is returned with `navigation: superseded` at the user's page. `startup_millis` reports the latency from the host accepting the
   request until the panel was reported. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
-  background panel. If the same agent already owns a panel, creation is rejected
-  unless the user explicitly requested another independent session and the call
-  sets `allow_additional: true`. Reuse the original panel for iframe, popup,
+  background panel. An agent may hold one panel per browser engine: with a
+  Chromium panel open, `backend: firefox` or `backend: safari` opens a panel of
+  that engine. A second panel of the same engine, a create without `backend`
+  while the agent owns a panel (Horizon's configured browser is unknown to this
+  server), or a remote `target` while it owns a panel is rejected unless the
+  user explicitly requested another independent session and the call sets
+  `allow_additional: true`. A create that is still queued or in progress
+  counts as a panel of its engine, also when another MCP server process of
+  the same agent queued it, so of two concurrent creates of one engine one is
+  refused. Reuse the original panel for iframe, popup,
   dialog, and consent flows instead of creating a helper panel.
 - `browser_create` with `target: <name>` runs the session at a configured
   remote target (`browser.remote.targets` in Horizon's configuration) instead
@@ -149,8 +156,26 @@ shell commands, files, or other MCP servers.
   the top-level document. Child refs return `unsupported_frame_action` for
   `scroll` and `set_files`. Safari and remote sessions scan only the top-level
   document.
-- `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
-  `count: 2` on a click for a backend-native trusted double-click.
+- `browser_zoom` sets a page zoom of 25-500 percent (`reset: true` returns to
+  100) on local Chromium and Firefox. The page lays out in a CSS viewport of the
+  panel size, or the `browser_resize` pin, divided by the zoom, so media
+  queries and reflow behave as at that browser zoom level, and the panel
+  magnifies the frame. `devicePixelRatio` does not change. The result reports
+  `requested_percent`, `applied_percent` and the measured `css_viewport`. The
+  zoom survives navigation and panel layout until reset or session
+  replacement. A zoom whose CSS viewport would exceed 8000 pixels per axis is
+  refused with `invalid_input`; if the panel grows later, the zoomed viewport
+  stops at 8000 pixels on that axis. Safari and remote sessions return
+  `unsupported_backend`.
+- `browser_act` clicks, fills, presses keys, scrolls, reloads, or traverses
+  history. Set `count: 2` on a click for a backend-native trusted double-click.
+  `press` takes a `key` such as `Tab`, `Shift+Tab`, `Enter`, `Escape`,
+  `ArrowDown` or `Control+a` and an optional `count` (1-100), and sends trusted
+  key events to the focused element: CDP `Input.dispatchKeyEvent` on local
+  Chromium, and one key-action sequence per call through `input.performActions`
+  on local Firefox or classic Perform Actions on Safari and remote targets. A
+  failed WebDriver call releases the held keys. It takes no target. Printable
+  keys and `Space` are audited as `printable`, never as text.
   Remote `fill` uses native Element Clear/Send Keys and reads the live field
   back before reporting completion. An empty, reverted, missing, or otherwise
   unequal value returns `input_failed`, even when the driver accepted the

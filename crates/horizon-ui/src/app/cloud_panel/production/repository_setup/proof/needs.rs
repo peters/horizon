@@ -293,11 +293,17 @@ impl super::Job {
         let mut copy = self.docker();
         copy.args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:/host-nuget:ro", host.display()))
             .args(["--entrypoint", "sh", super::TOOLS, "-c", COPY_PACKAGES, "sh"])
             .args(packages);
-        self.stream(copy, log)
+        // Only the packages the restore used go into the container, never the whole cache.
+        let mut copy = super::launch::Launch::new(copy);
+        // Each name is a plain `id/version`, checked when the restore output was read.
+        copy.copies = packages
+            .iter()
+            .filter(|package| in_cache(&host, package))
+            .map(|package| super::launch::Copy::within(&host, host.join(package), format!("/host-nuget/{package}")))
+            .collect();
+        self.stream_launch(copy, log, Some(super::STEP_TIMEOUT), false)
             .map_err(|error| format!("cannot copy the restored packages into the proof's volume: {error}"))?;
         self.packages_copied.set(true);
         Ok(())
@@ -322,22 +328,58 @@ impl super::Job {
         if targets.is_empty() {
             return Ok(());
         }
-        let mut command = self.ci_container()?;
-        command
+        let mut launch = self.ci_container()?;
+        launch
+            .command
             .args(session)
             .args(["--entrypoint", "sh", &self.image, "-c"])
             .arg("for target; do dotnet restore \"$target\" --nologo -v quiet || exit 1; done")
             .arg("sh")
             .args(&targets);
-        self.stream(command, log).map_err(|error| {
-            format!("dotnet restore in the container failed after the restore on this computer ({error})")
-        })
+        self.stream_launch(launch, log, Some(super::STEP_TIMEOUT), false)
+            .map(|_| ())
+            .map_err(|error| {
+                format!("dotnet restore in the container failed after the restore on this computer ({error})")
+            })
     }
+}
+
+/// Whether the package folder `package`, a plain `id/version`, is a real folder of the
+/// cache `host`: neither its id nor its version folder is a link, and it resolves inside
+/// the cache. A link in the cache would otherwise copy a folder of this computer from
+/// outside it into the proof.
+fn in_cache(host: &Path, package: &str) -> bool {
+    let Some((id, _)) = package.split_once('/') else {
+        return false;
+    };
+    let real_folder = |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir());
+    real_folder(&host.join(id))
+        && real_folder(&host.join(package))
+        && std::fs::canonicalize(host)
+            .and_then(|cache| Ok(std::fs::canonicalize(host.join(package))?.starts_with(cache)))
+            .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_reached_through_a_link_is_not_copied() {
+        let cache = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("1.0.0")).unwrap();
+        std::fs::write(outside.path().join("1.0.0/private.txt"), "not a package").unwrap();
+        std::os::unix::fs::symlink(outside.path(), cache.path().join("example")).unwrap();
+        std::fs::create_dir_all(cache.path().join("real/2.0.0")).unwrap();
+        std::fs::create_dir_all(cache.path().join("linked")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("1.0.0"), cache.path().join("linked/1.0.0")).unwrap();
+        assert!(!in_cache(cache.path(), "example/1.0.0"), "a linked package id");
+        assert!(!in_cache(cache.path(), "linked/1.0.0"), "a linked version");
+        assert!(in_cache(cache.path(), "real/2.0.0"));
+        assert!(!in_cache(cache.path(), "missing/1.0.0"));
+    }
 
     #[test]
     fn the_copy_takes_the_package_folders_the_restores_used_and_nothing_outside() {

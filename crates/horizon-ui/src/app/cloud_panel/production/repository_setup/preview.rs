@@ -3,7 +3,7 @@
 //! reused, with a virtual desktop and a VNC server on this computer's loopback. Once a
 //! window appears it takes one screenshot when the image can, and the dialog opens a
 //! native Device panel on the live desktop.
-use super::proof::{LocalDocker, Pinned};
+use super::proof::{Daemon, Pinned};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -128,6 +128,7 @@ impl Preview {
             ctx,
             pinned: pinned.clone(),
             config: std::sync::OnceLock::new(),
+            forward: std::sync::Mutex::new(None),
         };
         let worker = std::thread::spawn(move || {
             if let Some(after) = after {
@@ -171,7 +172,7 @@ impl Preview {
     fn remove_container(&self) {
         let container = self.container.clone();
         let pinned = self.pinned.clone();
-        // Registered, so Horizon's exit and the next setup wait for it.
+        // Registered, so Horizon's exit waits for it.
         super::run::keep_ending(std::thread::spawn(move || {
             if let Some(daemon) = pinned.get() {
                 let _ = super::proof::remove_now(daemon, &["rm", "--force", &container]);
@@ -293,6 +294,9 @@ struct Job {
     pinned: Pinned,
     /// The preview's own empty Docker configuration, made on first use.
     config: std::sync::OnceLock<tempfile::TempDir>,
+    /// On a Docker host, the SSH session that brings the desktop's port to this computer;
+    /// it ends with the preview.
+    forward: std::sync::Mutex<Option<super::proof::PortForward>>,
 }
 
 impl Job {
@@ -302,7 +306,7 @@ impl Job {
         let daemon = if let Some(daemon) = self.pinned.get() {
             daemon.clone()
         } else {
-            let daemon = LocalDocker::resolve()?;
+            let daemon = Daemon::resolve()?;
             self.pinned.get_or_init(|| daemon).clone()
         };
         let config = if let Some(config) = self.config.get() {
@@ -318,6 +322,24 @@ impl Job {
             daemon,
             config: config.path().to_path_buf(),
         })
+    }
+
+    /// The port of this computer's loopback the desktop answers on: the published one on
+    /// this computer's Docker, else a port that an SSH forward brings from the Docker
+    /// host's loopback, kept open while the preview lives.
+    fn local_port(&self, published: u16) -> Result<u16, String> {
+        let daemon = self.daemon()?;
+        let Some(remote) = daemon.daemon.remote() else {
+            return Ok(published);
+        };
+        let (port, forward) = remote.forward_port(published).map_err(|error| {
+            format!(
+                "cannot bring the desktop from the Docker host {}: {error}",
+                remote.name()
+            )
+        })?;
+        *self.forward.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(forward);
+        Ok(port)
     }
 
     /// One docker command against the pinned daemon.
@@ -510,11 +532,12 @@ impl Job {
             .and_then(|_| self.copy_screenshot())
             .ok()
             .map(|()| self.screenshot.clone());
-        let port = self
+        let published = self
             .docker(&["port", &self.container, "5900/tcp"])?
             .lines()
             .find_map(|line| line.rsplit_once(':').and_then(|(_, port)| port.trim().parse().ok()))
             .ok_or("the VNC port was not published")?;
+        let port = self.local_port(published)?;
         vnc_answers(port)?;
         Ok(Outcome::Live {
             port,
@@ -570,6 +593,23 @@ impl Job {
     /// images and caches; what it writes there and in the checkout goes back to the worker
     /// account when the next proof prepares the volume.
     fn identity(&self, daemon: &Docker) -> Result<Hardware, String> {
+        // The device and its group are this computer's; a Docker host's are unknown here.
+        if self.spec.kvm
+            && let Some(remote) = daemon.daemon.remote()
+        {
+            return Ok(Hardware::Missing(format!(
+                "a desktop that needs /dev/kvm runs on this computer's Docker only, not on the Docker host {}",
+                remote.name()
+            )));
+        }
+        // The desktop has no password: an engine that lets the network reach its loopback
+        // ports does not publish it.
+        if let Some(remote) = daemon.daemon.remote().filter(|remote| !remote.loopback_private()) {
+            return Ok(Hardware::Missing(format!(
+                "the Docker host {} runs Docker older than stable 28, which lets other machines on its network reach the preview's desktop; update it to show the preview",
+                remote.name()
+            )));
+        }
         let root = self.spec.kvm && rootless(daemon);
         let user = if root { "0:0" } else { "10001:10001" };
         let devices = devices(self.gpu, self.spec.kvm.then_some(Path::new(KVM)), root);
@@ -702,7 +742,7 @@ fn devices(gpu: bool, kvm: Option<&Path>, root: bool) -> Vec<String> {
 /// The preview's docker commands: the proof's pinned daemon and a private, empty Docker
 /// configuration, so no command reads or uses this computer's registry credentials.
 struct Docker {
-    daemon: LocalDocker,
+    daemon: Daemon,
     config: PathBuf,
 }
 

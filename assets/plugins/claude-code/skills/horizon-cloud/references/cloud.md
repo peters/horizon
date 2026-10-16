@@ -1,10 +1,33 @@
 # Cloud MCP reference
 
+The publication helper can recover a retained account even when another
+account is cached: it requests device sign-in for the recorded immutable identity
+and checks it before saving a new credential chain. A wrong account preserves
+the previous chain and private operation login. A renamed matching account is
+refused before a futile prompt because its recorded namespace cannot change.
+Explicit account selection starts
+a new device sign-in. Launch preparation uses retained-account recovery; a visible
+selector and public destination controls use explicit account selection;
+existing-cloud recovery still requires its recorded identity.
+
+### Retained publication records
+
+Cloud persistence can retain a recipe, resolved destination and nonsecret publisher
+identity. Records contain no credentials and
+prove no current registry permission. Deployment format 5 and paired allocation
+format 3 prevent older readers from erasing that identity; migration retains the
+original enrollment and worker ownership evidence. Invalid or downgraded records
+are refused. New launches retain their choice before image work.
+A retry or rebuild must authorize that same account or publication grant. Reusing
+an existing image, including reconnect and resize, needs no publishing login.
+See docs/testing/procedures/publication-records.md.
+
+
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
 `cloud_list`, `cloud_upkeep`, `cloud_companions`, `cloud_companion_ensure_ready`,
-`cloud_companion_stop`, `cloud_companion_uncheck`, and `cloud_companion_operation`. Host operations require the owning Horizon to run.
+`cloud_companion_stop`, `cloud_companion_uncheck`, `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
 `cloud_companions_list`, `cloud_companion_inspect`, and `cloud_offers`.
@@ -83,6 +106,26 @@ and the renewal comes back to this computer at the next sync or connect. Never r
 `codex login` or `codex logout` on a worker: both revoke the login that every cloud
 shares. Without a sign-in, Codex asks for a sign-in in its own terminal on the worker.
 
+## Claude setup token on workers
+
+The person can save a Claude setup token from `claude setup-token` in **Cloud settings >
+Coding agents > Claude > Setup token**. Only the person pastes it; agents never type,
+read or ask for it. Horizon keeps it in a private file (`claude_token` in
+`~/.horizon/cloud/settings.json` holds the path and the save time) and shows the save
+day and "Runs out about" one year later: an estimate from the save day, because Horizon
+cannot read the real expiry from the token.
+Every deployment, reconnect, resume and rebuild of a cloud that runs Claude writes it
+over SSH standard input to `/workspace/credentials/claude-oauth-token`, never in a
+command line or a log.
+On a worker image with this support, each Claude Code panel and each Shell panel gets it
+as `CLAUDE_CODE_OAUTH_TOKEN`, so Claude starts signed in; other agent panels do not get
+it, an image layer cannot set it in `session-env.d`, and an older image ignores the
+file. Settings never keep the token together with a Claude API key, which Claude would
+prefer. When the person chooses another sign-in, the next reconnect removes the file.
+A resume, like a deployment, refuses a missing or unusable setup-token or API-key file of
+the cloud's agents before the provider starts the worker; report the named file to the
+person. Never print, copy or log the token or its file.
+
 ## Source transfer errors
 
 Use relative source paths without redundant separators or `.` components in a
@@ -143,7 +186,8 @@ Stored presence reports only missing or stored credential kind. It does not prov
 validity, expiry, scopes, tags or API access. Locked or malformed storage returns
 an error. Saving does not contact Tailscale, record an enrollment receipt or remove
 nodes. The foundation supplies shared storage APIs for host credential adapters.
-No API credential editor or new public CLI/MCP credential operation ships here.
+The native owner can enter, replace or remove the exact API binding.
+Credential drafts start empty and masked. Status returns kind only.
 Worker enrollment still needs marker 4; storing an API credential does not enable
 a selected tailnet on an older quick-start pin.
 
@@ -159,6 +203,32 @@ For an OAuth client, select `devices:core` and `tag:horizon-worker` at Tailscale
 Do not assume the tag restricts which devices the credential can delete.
 Personal API tokens can have broad API authority and an expiry date.
 No automatic node cleanup exists in this storage milestone.
+
+### Credential status parity
+
+Settings > Tailnets displays Not stored, Personal API token stored, OAuth client
+stored, Reading… or Status unavailable. Owner setup buttons never reveal saved values.
+Enrollment auth-key editing remains independent.
+
+The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`.
+CLI and `cloud_companions` return `tailnet_api_credentials` keyed by saved local
+ID: ready with credential.state missing/stored, and credential.kind personal_token
+or oauth when stored. CLI also reports unavailable. MCP uses background snapshots
+and also reports pending. Pending/unavailable never mean missing. Settings need
+not be open. While Settings is open, pending and completed observations update
+MCP before request handling; closing Settings is not required for a status update.
+Neither a null catalog nor an empty map proves credential absence.
+Cached status is not continuous OS-store monitoring. Use Tailnets Refresh for an
+explicit fresh read after a service change; unavailable remains distinct from missing.
+The native status procedure requires frozen production UI/CLI artifacts and
+normal host-launched AGENT public MCP observations through the existing Device
+viewer and native-input interfaces. Baseline legacy id/name proof is insufficient.
+A saved ID reused across profiles intentionally shares its API binding.
+Status can finish prior recorded local recovery and retire exact obsolete slots;
+it submits no new credential mutation, imports no secret and starts no node cleanup.
+Completed saved-tailnet deletion prunes only its exact disabled API record. A stale
+status reply must not restore a removed ID. Metadata cleanup failure retains the
+recorded deletion intent; it does not authorize another binding.
 
 ## Tagged tailnet enrollment
 
@@ -267,36 +337,55 @@ sessions continue on the worker. **Parked** holds a cloud
 with parked terminals or a stopped worker. **This PC** holds workspaces without a
 cloud. Each row shows a status dot and one status line, for example the last line
 of a parked agent. A **Parked** row is compact: its status line is the hover and
-accessibility text of its dot. A group header shows the hourly cost of its running
-workers, with one sum per currency: RunPod bills in US dollars and Hetzner in euros
-net of VAT. A click on a row goes to its workspace, and a parked cloud then attaches.
-A group with idle clouds shows **Stop idle…**: the person selects idle clouds and
-sees the hourly saving before their workers stop. To find a cloud for the person,
-name its workspace and its group.
+accessibility text of its dot. A group header shows what its running workers cost
+a day, with one sum per currency, for example `€0.58/day + $16.56/day`: RunPod
+bills in US dollars and Hetzner in euros net of VAT. The header of a billing cloud
+card shows its run and its cost a day, and when there is room the cost a week and a
+month and what it adds by the end of the month (UTC) if it keeps running. A day is
+24 hours and a month 730. A click on a row goes to its workspace, and a parked cloud
+then attaches.
+To find a cloud for the person, name its workspace and its group.
 
 `cloud_list` reads and acts on the clouds in your own workspace only.
-`cloud_list` operations are `list`, `attach`, `park` and `stop`. `list` (the
+`cloud_list` operations are `list`, `attach` and `park`. `list` (the
 default) returns each cloud's `cloud` ID, name, group (`needs_you`, `cloud` or
 `parked`), status line, `hourly_rate` with its ISO 4217 `currency` (both `null`
-when the worker reports no rate), `working` and `idle`. Never add rates in
-different currencies. The others take the `cloud` ID from `list`:
+when the worker reports no rate) and `working`. Never add rates in
+different currencies. `worker_image` is the recorded image reference and
+`image_publication` is the retained destination and publisher identity. They come
+only from that cloud's matching loaded runtime and are `null` when unavailable;
+an unresolved automatic image is also `null`. A registry publication retains its
+opaque nonsecret `destination.publisher.binding` ID, not the credential value or
+path. Legacy records have no publication. Account-setting changes do not replace this
+identity. These fields open no credentials and prove no current registry access.
+The others take the `cloud` ID from `list`:
 
 - `attach` moves the person's view to the cloud, as a click on its row does.
 - `park` parks the terminals of a cloud that is out of view now. Horizon refuses
   a cloud in view, because it attaches again.
-- `stop` stops the worker of an idle cloud, as **Stop idle…** does. Horizon
-  refuses a busy cloud, a cloud on which an agent works and a cloud that waits for
-  the person. For a parked cloud, the stop waits for a new status read and does
-  not occur when an agent works. Get explicit authorization from the person first.
 
-From a Horizon agent panel, `horizon-browser cloud list|attach|park|stop [CLOUD-ID]`
+The cloud list does not stop workers; the person stops a worker with **Stop** on
+its card.
+
+Horizon never stops an idle cloud, and `idle_stop_minutes` has no effect on any
+provider: Horizon gives no worker an idle period, and New cloud and Rebuild say
+so. An agent on a dedicated worker stops it with `stop_this_worker` when its task
+is done. A RunPod worker stops itself at once. A Hetzner or Docker host worker
+records the request, and Horizon, while it runs, takes it within 30 seconds and
+stops the cloud as **Stop** does; the card then shows **Stopped by** the agent with
+its reason. Otherwise the person chooses **Stop**, which on Hetzner releases the
+server and keeps the volume. A RunPod cloud created before the agent stop may still
+stop itself after its old idle period until a rebuild; the card then shows
+**Stopped outside Horizon** with **Resume worker**.
+
+From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
 calls the same tool.
 
 ## Upkeep
 
 Upkeep is one Codex agent on a cloud worker that reviews, fixes and squash-merges the
-pull requests that bots such as Dependabot open, on a schedule. It follows each
-repository's AGENTS.md. The person sees it in an Upkeep workspace: the cloud card, an
+pull requests that bots such as Dependabot open, on a schedule and within about a
+minute of a change of those pull requests. It follows each repository's AGENTS.md. The person sees it in an Upkeep workspace: the cloud card, an
 **Upkeep agent** panel attached to the running loop, browser panels the agent opens,
 and the Upkeep board with the next run, the runs of the last day and every pull
 request by state.
@@ -329,10 +418,35 @@ get `upkeep_unavailable`.
   elsewhere, such as a maintenance document, is a good source for the names.
 - `remove` removes repositories; the next run uses the list. An Upkeep keeps at least
   one repository.
-- `run_now` starts a run now. `pause` stops the scheduled runs; a run in progress
-  finishes. `resume` starts them again. Each answers `requested`: the worker gets it
+- `run_now` starts a run now, or after a run in progress ends. `pause` stops the
+  scheduled runs and the runs that changes start; a run in progress finishes. `resume` starts them again. Each answers `requested`: the worker gets it
   with the next exchange of Horizon, and `status` shows when it applied. Get explicit
   authorization from the person before `remove`, `pause` and `resume`.
+
+On the worker of an Upkeep, a root service limits what every agent of the cloud can
+change on GitHub, also when the agent follows instructions in pull request text. It
+refuses, among others, workflow file changes through the API, releases, commit
+statuses, an agent's approval of a pull request, auto-merge, a push or other change
+of the default branch without a pull request, a tag push, and a workflow dispatch
+that the person did not list in `workflows` of `~/.horizon/upkeep/<cloud>/upkeep.json`
+(no dialog yet). Its reason starts with `Horizon: this Upkeep`: report it as a
+blocker for the person, never as missing access, and do not ask for more access to go
+around it. A merge passes only a gate in that service: the exact head, the default branch as
+the base, every check passed, a bot or the account's own `upkeep/` branch as the author, and a workflow change
+only in a bot's own commits; otherwise the person's **Approve** of that head (with the line
+`upkeep-allow: workflows` for a workflow change). The board shows the refusals among the activity lines. A worker image
+without this service starts no Upkeep agent; the person rebuilds the cloud on a
+current image. `docs/upkeep.md` lists every refusal and what it does not stop.
+
+A worker image with `horizon-worker-github-upkeep-loop` also allows the Upkeep agent's
+own access requests by itself, also while no Horizon runs: only for that task, only
+`read` or `push`, and only for a repository in the list that Horizon last set on the
+worker. Requests of other agent sessions, and for other repositories, still wait for the
+person. After a container restart, the worker starts the loop again as the agent account.
+An older image does neither: the loop then waits for Horizon. A repository that the
+person removes reaches the worker only with the next successful exchange; that exchange
+ends the Upkeep agent's task grants for each repository outside the new list, also a
+grant that the person gave on the card.
 
 ## GitHub access
 
@@ -340,9 +454,11 @@ With Connect GitHub (Horizon **Cloud settings › GitHub**), each cloud's worker
 its own GitHub access, as the person, and renews it itself. The person connects
 GitHub and chooses its repositories; agents cannot set it up.
 
-**New cloud** on the person's computer shows the GitHub App's repositories as soon as
-it opens, from a list kept privately beside that computer's own GitHub sign-in, and
-refreshes it in the background without asking to sign in. A list that could not be
+**New cloud** on the person's computer has one search field for the code: it finds
+Git checkouts on that computer and the GitHub App's repositories by fuzzy search,
+lists the folders of a typed path, and clones a pasted link. The repositories show
+as soon as it opens, from a list kept privately beside that computer's own GitHub
+sign-in, and refresh in the background without asking to sign in. A list that could not be
 refreshed says it may be out of date, offers **Refresh from GitHub** and is tried
 again every 30 seconds; a shown list goes when another window signs in as another
 account or disconnects; Disconnect forgets it. The list is the person's choice of repository in the UI: no MCP tool
@@ -365,7 +481,9 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   access to requests for the cloud's repositories: a repository's own REST paths,
   searches with a `repo:` qualifier for each repository, and GraphQL that reads
   or changes only those repositories. Pass `-R owner/name` or work in a checkout.
-  It refuses account-wide and organization-wide requests, such as `gh api
+  It also reads the public global security advisories (`gh api /advisories`, with
+  filters such as `?ecosystem=npm&affects=name`, and `gh api /advisories/GHSA-...`)
+  without a repository grant. It refuses account-wide and organization-wide requests, such as `gh api
   user/repos`, and changes to repository settings. A refusal shows as
   `Horizon: ...` (`GraphQL: Horizon: ...` for GraphQL); for a repository the
   task needs, ask with `github_access`.
@@ -406,6 +524,21 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   build files give), shows a desktop app live in a Device panel when the agent names
   one, and **Use this setup** commits it. No MCP tool starts a setup: ask the person
   to open **New cloud** for the repository.
+- Several repositories can be set up at the same time, each with its own setup agent.
+  The person clicks **Close** while a setup works, opens **New cloud** again for
+  another repository and starts its setup; **New cloud** opened for the first
+  repository shows that setup again. One folder has one setup at a time: a second
+  setup of the same folder, also through a symbolic link, is refused until the first
+  one stops. The image build, the CI in the image and the fast rerun run for a few
+  setups at a time on one Docker (one for each 16 processors, one to four, or
+  `HORIZON_SETUP_BUILD_SLOTS`); a setup that waits shows **Waiting for a build slot**
+  and who builds. The **Setup board** panel lists every setup with its steps and what it
+  does now, with **Open agent**, **Open in New cloud** and **Stop** for each; **Menu** >
+  **Setup board** opens it. No MCP tool reads or drives the board. **Build on** (shown
+  when Cloud settings has a Docker host on another machine) runs a setup's proof on
+  that host's Docker over the person's SSH; the agent still runs on this computer. A
+  GPU proof and a `/dev/kvm` preview do not run on a host: they fail or are skipped
+  there, and the person picks **This computer** for them.
 - When that proof's build fails because an organization limits OAuth apps, Horizon names
   the organization and offers the fix on GitHub; the Dockerfile is not the cause. If the
   person lets the setup agent make the fix, the agent gets one **GitHub access** browser
@@ -427,12 +560,14 @@ an agent to construct or change a private registry through it as a lifecycle fal
 
 ## Docker host provider
 
-A profile with `provider: docker-host` runs its cloud on a Docker engine that
-the person already has: this computer's engine, or a host that Horizon reaches
-with `ssh` or `tailscale ssh`. The person adds each host to `docker_hosts` in
-the cloud settings file with a unique `name`, an `access` (`this-pc`, `ssh` or
-`tailscale-ssh`), an SSH `address` and an optional absolute `docker` path. No
-secret is stored. A cloud placement names the host when more than one is saved.
+A Docker host runs clouds on a Docker engine that the person already has:
+this computer's engine, or a host that Horizon reaches with `ssh` or
+`tailscale ssh`. The person adds each host in **Cloud settings > Docker host**
+with a unique name, an access (This PC, SSH or Tailscale SSH), an SSH address
+and an optional absolute docker path, and checks it read-only there. No
+secret is stored. New cloud offers each saved host as a **YOUR HOST** card
+for CPU profiles without a build; a profile with `provider: docker-host`
+runs on a host only. A cloud placement names the host.
 
 The worker publishes its SSH only on the host's loopback, on a port that stays
 the same after a stop. Horizon reaches it through the host. Stop, resume and
@@ -442,7 +577,17 @@ private registry login is refused. There is no rent, GPU, hosted device, idle st
 public worker image has amd64 and arm64 builds, and Docker takes the host's own,
 so an ARM host such as an Apple silicon Mac runs it natively.
 
-There is no Cloud settings card or MCP operation for Docker hosts yet.
+`cloud_offers` lists the saved hosts in `other_providers` under
+`provider: docker-host`, at an `estimated_total` of 0. An offer's `id` is the
+host name; `vcpu` and `memory_gb` are the largest worker that is free now,
+which nothing reserves. Unread hosts are in `host_errors`, and they set
+`comparison_incomplete`, as a no-rent host may be the cheapest. Only the
+person's Horizon lists hosts: `cloud_offers` on a cloud worker has none. A cloud on a
+Docker host cannot be a companion yet: the companion tools refuse it with
+`cloud_companion_unsupported`, because other workers cannot reach its
+loopback SSH. Requirements: Docker 28 or later, Docker access for the SSH
+user, Tailscale SSH in accept mode, and no desktop credential store; see
+`docs/cloud-docker-host.md`.
 
 ## Existing Docker engine probe
 
@@ -474,3 +619,296 @@ Horizon does not override those trust options. See the verified
 The probe requires a complete engine release version. It accepts build metadata and the Community or Enterprise suffix. Development and release-candidate versions do not pass admission. CPU, memory and free storage must be positive even when no profile is selected.
 
 The worker image runs natively on x86 hosts. ARM64 can use an explicit emulation policy, which produces a warning and requires deployment validation. Empty and unsupported architecture values block admission even when emulation is selected. The live test is excluded when the cloud-workspaces feature is disabled.
+
+Enrollment receipts are allocation metadata, separate from the displayed device name. The bounded ledger preserves exact IDs and uncertain capture attempts through worker replacement. It adds no new MCP operation or cleanup authority; the node-cleanup activation is a separate outcome. See docs/architecture/tailnet-enrollment-receipts.md and docs/testing/procedures/tailnet-enrollment-ledger.md.
+
+## Retained one-device admission metadata
+
+One-device admission records retain original owner scope, worker, attempt, checked endpoint and phase as metadata. Nonempty admission selects deployment v6 and allocation v4. An absent field keeps the earlier encodings. Decoding a record or reading `Store::snapshot` grants no owner approval or runtime authority. Preserve Armed and Attached uncertainty. No record constructor recreates a gateway. This storage prerequisite adds no UI, CLI or MCP sharing operation. See docs/architecture/one-device-admission-records.md and docs/testing/procedures/one-device-admission-records.md.
+
+The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
+
+The desktop NodeApi SDK sends only the encoded ID supplied by a trusted controller. It grants no owner authority itself. Its Core integration is behind default-off `tailnet-node-cleanup` and requires cloud-workspaces. Default UI/CLI behavior stays unchanged. An explicitly enabled controller requires original provider absence, saves exact-group confirmation before another request and refuses normal removal while its locked record remains pending. Unknown attempts stay manual and receive no API request. Different saved-tailnet bindings stay independent. Redeploy uses the same locked completion check before key validation, journal release or history reset; unresolved or selected legacy missing-ID state must finish cleanup first. Confirmed receipts remain recorded and genuinely fresh or None/no-evidence clouds can reopen. With cleanup enabled, an initial Docker capacity failure keeps never-requested Prepared through deletion and retries; volume-only preparation is not enrollment. Any observed container must persist Requested, including final verification after two earlier absences. Both SDK lookups use the same observation path. Final-only discovery followed by absence on retry, lost replies and legacy stop/resume/readiness or port history stay manual.
+
+Missing managed slots and disabled bindings never select staged fallback. All404 remains unconfirmed. API values stay on the desktop. Dedicated pending/retry UI, precise automatic-close reasons, an explicit owner discard warning and default activation are a separate final outcome. See docs/architecture/tailnet-node-cleanup.md and docs/testing/procedures/tailnet-node-cleanup.md.
+
+## Owner API credential management
+
+`tailnet_api_credential` operations are `set_personal_token`, `set_oauth`, `remove`, `status`, and `cancel`.
+The tool takes only `operation`, `tailnet_id` and `request_id`. Use an exact saved
+ID from `cloud_companions` and generate the UUID before submission. Set and remove
+return pending_owner. They do not authorize a write or open Settings. For Set, the
+person selects Enter requested API credential on that exact row, enters an empty
+masked draft of the requested kind, and selects Save API credential. The request
+locks the kind; it accepts no token, client ID, client secret or stored reference.
+The owner can discard a draft or decline the request without saving. The person selects
+Approve API credential removal on that exact row in Settings > Tailnets, or
+Decline request. Direct native removal also needs an explicit owner click.
+
+Status and cancel require the original caller, saved ID and UUID. Requests are
+volatile, bounded to32entries, and pending approval expires after15minutes. Cancel
+refuses running writes. Applied means the local Store transaction completed;
+failed, interrupted or timed-out work does not prove rollback. Terminal results
+remain readable for15minutes after host receipt, also after catalog-row removal.
+The old approval deadline cannot discard a newly completed result. Read status
+and refresh nonsecret kind after uncertainty; do not submit a new request blindly.
+
+CLI parity uses `horizon-browser run PLAN.json` from a normal Horizon AGENT panel:
+
+```json
+{"version":1,"steps":[{"id":"remove","tool":"tailnet_api_credential","arguments":{"operation":"remove","tailnet_id":"SAVED-ID","request_id":"dff44c5a-d077-4eaf-8092-615849346347"}}]}
+```
+
+Removal preserves the saved network and enrollment auth key. It suppresses staged
+API fallback and removes only the exact registered API binding. The credential is
+desktop-global: a workspace actor cannot approve its own request. Sharing a saved
+ID intentionally shares its binding. Set and replacement preserve the enrollment
+auth key too. Direct native entry can choose Personal API token or OAuth client;
+changing that source clears every draft field. Cancel, expiry, changed targets and
+Settings close discard unsaved drafts. Storage-root changes clear drafts before
+rendering while retaining owned writes; draft discard does not cancel a request.
+Saved values never fill a draft. Secrets
+are zeroizing and masked, with no undo history. Secret import/getter, remote API
+validation and automatic node cleanup are not supplied. No provider action is needed.
+
+Reader failures and native write failures remain separate. A successful status
+read does not erase a failed save or removal, or prove rollback. Settings close retains
+each pending job's kind, result and failure. Use the bound request receipt for the
+Store outcome; observed kind alone does not prove the request applied.
+
+Close Settings before changing an unprovisioned cloud’s tailnet in Connections.
+While Settings owns store operations, cached selection stays visible and those
+selection controls are disabled.
+
+An entry CLI plan uses the same normal AGENT transport, with metadata only:
+
+```json
+{"version":1,"steps":[{"id":"entry","tool":"tailnet_api_credential","arguments":{"operation":"set_oauth","tailnet_id":"SAVED-ID","request_id":"dff44c5a-d077-4eaf-8092-615849346347"}}]}
+```
+
+The person supplies the values in the native host. Never add them to the plan,
+MCP arguments, agent conversation or worker configuration. Applied proves local
+Store completion, not remote validity, scope or node-removal authority.
+
+Saved cloud launch confirmations retain their image intent in a conditional wire
+format. Existing launches with no reviewed choice keep their flat encoding.
+An explicit recipe-image confirmation also stays flat and must match the exact
+profile image. Publisher choices use a version-2 envelope that older readers
+refuse. Compatible readers retain the full choice, and desktop preparation forwards
+that choice and its named profile to the shared engine. New cloud supplies the reviewed destination and publishing identity.
+Build profiles may omit the image; explicit images remain supported.
+An unstarted legacy launch with no publisher choice keeps its explicit recipe target.
+An image-omitting build keeps automatic intent.
+A durable cloud record keeps its own publishing identity. An omitted-image launch
+also keeps an explicit image already retained by a legacy record, even after a
+local destination override changes.
+Ordinary unknown legacy fields remain compatible, but mixed or downgraded
+publisher envelopes and reserved null keys are refused. Publisher choices require
+a build recipe; prebuilt launches keep their flat legacy or recipe confirmation.
+
+### Portable build engine
+
+The development `cloud_deploy` helper prints destination/account metadata in its
+plan and retains it in the confirmation token. Retry and rebuild keep the original
+publisher; a changed preference cannot redirect a cloud. Personal write credentials
+stay host-only and are renewed before push. A private image needs a separate verified
+read-only pull grant. Build profiles may omit image and use the reviewed
+machine-local destination. A prebuilt profile still requires an explicit image.
+See docs/testing/procedures/portable-build-engine.md.
+
+A retained publishing record also fixes the rebuild profile name. A request for
+another profile is refused even when that profile names the same destination or
+omits its image. Recipe edits within the recorded profile still rebuild to the
+recorded destination.
+
+A new desktop record requires its saved publisher choice to match current local
+intent, including when an override was removed. Existing records retain their own
+publication; automatic intent without an override remains valid. A legacy
+image-omitting launch refuses a later scoped override until it is reviewed.
+An automatic record that still has no publisher needs the same review on retry.
+Saved publisher choices must match current local intent before creating any
+record. Retiring an old staging value does not authorize another destination;
+explicit legacy recipe images remain compatible.
+
+Desktop preparation now preserves saved publisher choices, and rebuild previews
+use the cloud's retained publication and profile. Automatic desktop launches
+review the destination before Start. Metadata forwarding alone is not
+authorization to publish.
+
+A rebuild confirmation also snapshots the exact retained publication. Its token
+covers the publisher account or grant even when the resolved image and files are
+identical. The locked execution compares that identity before reading credentials;
+a changed or missing publisher confirmation requires a fresh plan. Legacy plans
+without a retained publication keep their existing token format. The development
+CLI displays the recorded destination and account with the rebuild plan. A retained
+publisher requires that printed token even when the working copy is clean.
+
+### Host-only pull preparation prerequisite
+
+The provider-aware registry helper can prepare a direct-host pull grant without a
+RunPod key. It stores host records separately from provider registry records and
+refuses provider registry creation from a host grant. Both journal paths must stay
+outside the source. New private directories sync locked pending intents and their directory entries
+before mkdir, with parent syncs before a
+child or pull identity is pinned. Interrupted creation is recovered first; existing
+roots with no pending intent do not require a readable parent. Both scopes pin the same
+read-only identity for each generation. Rotate the generation when that identity
+changes. Initial image and rebuild callers choose the helper for their provider.
+This helper does not prove a live registry pull or revoke an installed
+host credential. See docs/testing/procedures/host-pull-journal.md.
+
+On Unix, private registry credentials preserve the machine's Docker context and plugin
+locations. They copy no unrelated registry login, credential helper or proxy setting.
+Explicit host settings keep their existing precedence.
+
+Host-only registry checks use `verify_pull` with an immutable image and `pull_status`
+with an exact repository and generation. They require no compute account, create no
+provider binding and return `scope: host`. Status reads saved validation only; it
+reads no pull or compute credential and proves no current issuer permission.
+The Cloud settings card uses these checks directly. Its separate provider section
+keeps legacy verify/status/reconcile/revoke behavior and requires the compute account.
+Revocation there removes provider access, not issuer tokens or installed host access.
+The CLI is `cloud_deploy registry SETTINGS ACTION_JSON_FILE`; the optional stdio
+`cloud_registry` tool uses the same operations and machine-bound settings file.
+
+A refused worker pull or failed/cancelled validation keeps that repository
+unverified across settings reopenings and board-session switches in the current
+app session. Reading saved
+status does not clear this failure; a new successful verification is required.
+After an app restart, saved successful history is available again. A verification displays its
+own image result rather than substituting history from the other scope.
+The settings card retains its saved repository and grant identity separately
+from the editable image. Malformed or other-repository images invalidate that
+card's hint without validating another binding; stale grants leave current proof alone.
+Worker pull refusals are retained before settings load, including a failed or
+replaced load.
+
+Saved host pull history never opens the provider journal or reads its compute key,
+even when a newer provider validation exists. Provider controls keep their own scoped
+status message. A fresh verification displays its own result.
+
+An explicit provider action can retain its own active provider proof when host
+history was read successfully and is empty. A busy or unreadable host journal
+never permits that fallback. Reopening settings reads host history only; it does
+not load compute credentials to recover provider history.
+
+### Destination management policy
+
+The shared core destination manager reads metadata without opening the settings
+editor or loading provider credentials. It lists choices, selects an existing
+registry grant, resets a shown override or explicitly signs in to a derived
+personal destination. Every mutation compares the exact shown local override.
+Host-owned, bounded operation receipts retain the actor, host, repository and
+settings root through polling or cancellation. Cancellation is a request, not
+proof that a write did not commit; list saved state after an expired receipt.
+The public host adapter below uses this policy.
+See docs/testing/procedures/image-destination-management.md.
+
+Direct-root receipts require the exact canonical Git root. Public host adapters
+use the distinct launch-directory entry point: the shared worker normalizes the
+registered local directory, while receipt ownership retains that exact path.
+Cancellation during metadata selection is reported as cancellation, never as a
+successful listing with only an inline selection error.
+
+Saved pull metadata compares the registry repository without a tag or digest.
+It retains the registry port and exact path; it is not a live access check.
+
+### Image destination selector
+
+New cloud shows Publish images, the selected repository and publishing account.
+Automatic uses the image-publishing account, independently of the Git host or
+source author. Choose an authorized account or registry before starting. Change selects an existing
+authorized registry, uses the profile default or explicitly signs in to another
+account. The preference stays on this computer for the canonical checkout and
+named profile; repository YAML stays unchanged. UI reads and changes use the same
+management policy as host adapters. Cancel sign-in cancels only its owned attempt.
+Metadata is refreshed in the background every five seconds. Start can queue an
+already shown valid choice during refresh; dispatch waits for fresh matching
+metadata. A first read cannot queue an unknown choice. Refresh opens no sign-in.
+
+A personal image needs separate verified read-only worker access before Start.
+The setup action targets that exact repository. Settings describe the resolved
+repository without attributing a local choice to YAML. Cached sign-in metadata
+is not confirmation of the publishing account; worker pull access remains separate.
+Opening registry setup stays in settings even when compute and SSH are ready.
+Save and return or Cancel goes back to New Cloud for review without starting. Registry edits use the machine's agent defaults and preserve saved bindings; the next Start checks the selected profile's agent credentials again, even if an earlier profile read reported readiness.
+Destination metadata is historical,
+not proof of authentication; the engine confirms intent and access before a build.
+The normal CLI plan runner and public MCP tool use the same policy. Build
+profiles can omit image; prebuilt profiles still require it. Publishing choices
+stay on this computer rather than in repository YAML.
+See docs/testing/procedures/image-destination-selector.md.
+
+A queued Start or stock watch retains the full reviewed profile and publisher.
+Transient metadata refresh waits without consuming the request. Changed identity,
+profile or destination requires a fresh review; cached metadata never transfers to
+another profile or a prebuilt launch. Choice controls remain visible and disabled
+while metadata is loading.
+
+The loading indicator keeps the same space before, during and after a refresh.
+A stopped stock watch keeps its reason across background refreshes and shows
+metadata errors separately. Review the current choice before Start or a new watch.
+
+An interactive sign-in blocks Start until it ends. Its code, link and Cancel
+controls stay usable. Only an already shown choice can queue during metadata reads.
+
+Opening the sign-in page keeps the dialog responsive. If the browser cannot
+start, copy the code and retry the link; the metadata error stays separate.
+
+A destination save or sign-in blocks new Start and watch intent until fresh
+metadata returns after completion. Account changes stay disabled after a failed
+first metadata read; use Reload first. Ordinary
+metadata reloads can queue the already shown choice; saves cannot queue the old
+choice. Storage-only edits keep a pending destination read or sign-in alive,
+but a queued Start still requires its complete confirmed profile. An explicit image stays visible during refresh; automatic metadata does not
+replace its reviewed target.
+
+### Public image destination management
+
+Use `cloud_image_destination` from a live local agent panel. It uses the panel's
+registered launch directory and resolves its checkout in the shared background
+worker, including subdirectories. The host supplies the settings root and source;
+never pass a root, source path, token or credential value. Remote worker and SSH
+panels cannot change desktop publishing choices. Admission and retained-operation
+polling check both saved and live cloud membership, including session restoration.
+No Settings window is required.
+
+Supply a fresh lowercase UUID `operation_id` and a named build `profile` for a new
+action. Start with `action: {"operation":"list"}`. The result gives the selected
+account/destination, exact `shown_override` and existing registry choices. For
+`select`, pass a listed `destination` and the exact `shown` snapshot. For `reset`,
+pass that same `shown`. A stale snapshot refuses without replacing another choice.
+The preference stays machine-local; source YAML remains unchanged.
+
+Every action can return a pending receipt. Poll `status` with the same operation
+ID and no profile until `done` is true, then read its nested result or error.
+A receipt alone does not prove that listing or a mutation completed.
+
+Only `authenticate` starts personal publishing sign-in. Pass `shown` and set
+`switch: true` only after the person asks to change account. Show the device code
+and verification URI returned by the operation. Never collect a token yourself.
+Poll `status` with the same ID and no profile at least every ten seconds while
+sign-in runs. Thirty seconds without readback requests cancellation. `cancel`
+requests cancellation only for that owned operation. After a timeout, read status
+with the same ID; do not create another mutation. Receipts expire and disappear on
+host restart. List saved state and review it before retrying an expired operation.
+
+The normal CLI plan runner exposes the same tool and schema through
+`horizon-browser run PLAN.json`; its stdio MCP server exposes the same operation.
+Existing clouds keep their recorded publisher. cloud_list reports the retained
+worker image and publisher metadata when that cloud's matching runtime is loaded.
+See docs/testing/procedures/image-destination-public.md.
+
+`cloud_image_destination` operations are `list`, `select`, `reset`, `authenticate`,
+`status` and `cancel`.
+
+Management compares the exact shown override inside the save transaction.
+A cancelled or stale operation cannot silently replace another preference.
+Cancellation does not revoke authorization already completed at the issuer or
+prove that an in-flight write was rolled back. List saved state after uncertainty.
+
+Destination inspection, selection, reset and account sign-in use the same profile
+prepared by the trusted launch adapter. Selecting a historical revision must not
+reload today's profile for a mutation: that profile may be absent or prebuilt now.
+The public headless request still resolves its own working-copy context; callers
+cannot supply a trusted profile through the wire schema.

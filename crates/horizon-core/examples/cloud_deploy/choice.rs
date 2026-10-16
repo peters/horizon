@@ -40,6 +40,23 @@ pub(super) fn apply(profile: &Profile, settings: &mut Settings, path: &Path, can
         .into_iter()
         .find(|provider| provider.id == identity.provider || provider.label == identity.provider)
         .ok_or(Error::Invalid("Unknown worker provider"))?;
+    if provider.kind == provider::Kind::DockerHost {
+        // A host offer's size is what is free there; the cloud takes the profile's own.
+        if !settings.docker_hosts_on() || !settings.docker_hosts.iter().any(|host| host.name == identity.id) {
+            return Err(Error::Invalid("Worker choice names no saved Docker host that is on"));
+        }
+        let identity = WorkerChoice {
+            vcpu: Some(profile.cpu),
+            memory_gb: Some(profile.memory_gb),
+            ..identity
+        };
+        let chosen = identity.for_profile(profile)?;
+        settings.placement = Some(chosen.placement);
+        return Ok(Profile {
+            provider: chosen.provider.id.into(),
+            ..profile.clone()
+        });
+    }
     let runpod = if provider.kind == provider::Kind::RunPod {
         Some(prices::price_list(settings, cancel)?)
     } else {

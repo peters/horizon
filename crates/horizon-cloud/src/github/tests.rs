@@ -423,6 +423,7 @@ fn the_user_is_named_with_github_private_commit_address() {
     let token = Secret::new("ghu_synthetic".into());
     let user = client.user(&token).unwrap();
     assert_eq!(user.email, "7+octo-cat@users.noreply.github.com");
+    assert_eq!(user.id, 7);
     assert_eq!(user.name, "Octo Cat");
     assert_eq!(
         client.user(&token).unwrap().name,
@@ -432,6 +433,16 @@ fn the_user_is_named_with_github_private_commit_address() {
     assert_eq!(client.user(&token).unwrap_err(), Error::Revoked);
     task.join().unwrap();
     assert_eq!(requests.lock().unwrap()[0].0, "GET /user HTTP/1.1");
+}
+
+#[test]
+fn a_user_without_an_immutable_identity_is_refused() {
+    let (client, _, task) = github(vec![(200, json!({"id": 0, "login": "alice"}))]);
+    assert_eq!(
+        client.user(&Secret::new("synthetic".into())).unwrap_err(),
+        Error::InvalidResponse
+    );
+    task.join().unwrap();
 }
 
 #[test]

@@ -92,6 +92,7 @@ png = "0.18.1"
 # x86_64 video builds require NASM; encoding runs on a dedicated thread.
 rav1e = { version = "0.8.1", default-features = false, features = ["asm", "threading"] }
 base64 = "0.23.1"
+flate2 = "1.1.10"
 # Selenium remote file transfer uses a one-file ZIP envelope.
 zip = { version = "9.0.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

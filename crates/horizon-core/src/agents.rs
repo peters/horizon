@@ -254,7 +254,8 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         | PanelKind::Usage
         | PanelKind::Upkeep
         | PanelKind::Browser
-        | PanelKind::Device => None,
+        | PanelKind::Device
+        | PanelKind::SetupBoard => None,
     }
 }
 

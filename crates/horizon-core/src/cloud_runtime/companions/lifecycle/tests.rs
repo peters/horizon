@@ -515,6 +515,12 @@ fn a_checked_companion_binds_to_the_checkout_its_deployment_records() {
     // Without a deployment record, creation needs the owner's confirmation.
     std::fs::remove_file(fixture.root.path().join("target/deployment.json")).unwrap();
     assert!(bind_selected(&fixture.request()).is_err());
+    // A cloud on a Docker host is refused: no other cloud's worker reaches it.
+    let mut on_host = fixture.ready();
+    on_host.profile.provider = "docker-host".into();
+    fixture.save(&on_host);
+    let refused = bind_selected(&fixture.request()).unwrap_err().to_string();
+    assert!(refused.contains("cloud_companion_unsupported"), "{refused}");
     fixture.save(&fixture.ready());
     bind_selected(&fixture.request()).unwrap();
     let state = journal::Store::open(fixture.root.path(), &fixture.owner)
@@ -522,6 +528,11 @@ fn a_checked_companion_binds_to_the_checkout_its_deployment_records() {
         .load()
         .unwrap();
     assert_eq!(state.intents.binding("consumer"), Some(&fixture.binding));
+    // A binding that already exists is refused too once its cloud is on a Docker host.
+    fixture.save(&on_host);
+    let refused = bind_selected(&fixture.request()).unwrap_err().to_string();
+    assert!(refused.contains("cloud_companion_unsupported"), "{refused}");
+    fixture.save(&fixture.ready());
     // Binding again leaves the saved binding as it is.
     bind_selected(&fixture.request()).unwrap();
     assert_eq!(fixture.submit(Action::EnsureReady).phase, Phase::Submitted);

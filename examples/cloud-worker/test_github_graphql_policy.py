@@ -71,7 +71,11 @@ TYPES = [
         'createPullRequest(input: CreatePullRequestInput!): CreatePullRequestPayload',
         'createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload',
         'replaceActorsForAssignable(input: ReplaceActorsForAssignableInput!): ReplaceActorsForAssignablePayload',
-        'requestReviewsByLogin(input: RequestReviewsByLoginInput!): RequestReviewsByLoginPayload'),
+        'requestReviewsByLogin(input: RequestReviewsByLoginInput!): RequestReviewsByLoginPayload',
+        'enablePullRequestAutoMerge(input: EnablePullRequestAutoMergeInput!): EnablePullRequestAutoMergePayload',
+        'addPullRequestReview(input: AddPullRequestReviewInput!): AddPullRequestReviewPayload',
+        'mergePullRequest(input: MergePullRequestInput!): MergePullRequestPayload',
+        'updatePullRequest(input: UpdatePullRequestInput!): UpdatePullRequestPayload'),
     obj('Repository', 'id: ID!', 'name: String!', 'nameWithOwner: String!', 'isPrivate: Boolean!',
         'owner: RepositoryOwner!', 'parent: Repository', 'pullRequest(number: Int!): PullRequest',
         'issues(first: Int): IssueConnection!'),
@@ -97,6 +101,10 @@ TYPES = [
     obj('CreateRepositoryPayload', 'repository: Repository'),
     obj('ReplaceActorsForAssignablePayload', 'clientMutationId: String'),
     obj('RequestReviewsByLoginPayload', 'clientMutationId: String'),
+    obj('EnablePullRequestAutoMergePayload', 'clientMutationId: String'),
+    obj('AddPullRequestReviewPayload', 'clientMutationId: String'),
+    obj('MergePullRequestPayload', 'clientMutationId: String'),
+    obj('UpdatePullRequestPayload', 'clientMutationId: String'),
     kind('Node', 'INTERFACE', ['id: ID!'],
          ['Repository', 'PullRequest', 'Issue', 'IssueComment', 'User', 'Organization', 'Bot', 'Topic',
           'MarketplaceListing', 'ProjectV2']),
@@ -112,6 +120,11 @@ TYPES = [
     kind('RequestReviewsByLoginInput', 'INPUT_OBJECT',
          inputs=['pullRequestId: ID!', 'userLogins: [String!]', 'botLogins: [String!]', 'teamSlugs: [String!]',
                  'union: Boolean']),
+    kind('EnablePullRequestAutoMergeInput', 'INPUT_OBJECT', inputs=['pullRequestId: ID!']),
+    kind('AddPullRequestReviewInput', 'INPUT_OBJECT', inputs=['pullRequestId: ID!', 'event: String', 'body: String']),
+    kind('MergePullRequestInput', 'INPUT_OBJECT',
+         inputs=['pullRequestId: ID!', 'expectedHeadOid: String', 'mergeMethod: String']),
+    kind('UpdatePullRequestInput', 'INPUT_OBJECT', inputs=['pullRequestId: ID!', 'baseRefName: String', 'title: String']),
     obj('__Schema', 'types: [__Type!]!'),
     obj('__Type', 'name: String', 'kind: __TypeKind!', 'fields(includeDeprecated: Boolean): [__Field!]'),
     obj('__Field', 'name: String!'),
@@ -120,7 +133,8 @@ TYPES = [
 ]
 # The input object kinds above are written as OBJECT references; fix them by name.
 INPUTS = {'AddCommentInput', 'CreatePullRequestInput', 'CreateRepositoryInput', 'ReplaceActorsForAssignableInput',
-          'RequestReviewsByLoginInput'}
+          'RequestReviewsByLoginInput', 'EnablePullRequestAutoMergeInput', 'AddPullRequestReviewInput',
+          'MergePullRequestInput', 'UpdatePullRequestInput'}
 INTERFACES = {'Node': 'INTERFACE', 'RepositoryOwner': 'INTERFACE', 'Actor': 'INTERFACE', 'SearchResultItem': 'UNION'}
 
 

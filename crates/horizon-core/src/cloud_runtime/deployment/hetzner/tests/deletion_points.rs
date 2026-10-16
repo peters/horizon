@@ -38,8 +38,8 @@ pub(super) fn act_on(
     act: impl FnOnce(&Compute, &Store, &mut Deployment),
 ) -> (Deployment, bool, Vec<String>) {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::lock(root.path()).unwrap();
     let spec = spec();
+    let store = Store::lock(&root.path().join(&spec.operation_id)).unwrap();
     let mut state: Deployment = serde_json::from_value(json!({
         "version": 1, "cloud_id": spec.operation_id, "repository": "/fixture", "revision": "a".repeat(40),
         "profile": spec.profile, "stage": "Stopping", "operation": operation, "spec": spec,
@@ -47,7 +47,7 @@ pub(super) fn act_on(
     }))
     .unwrap();
     store.save(&state).unwrap();
-    journal.save(root.path()).unwrap();
+    journal.save(store.root()).unwrap();
     let (address, requests, task) = provider::serve(responses);
     let compute = Compute {
         client: Hetzner::loopback(Credential::new("secret-test-key".into()).unwrap(), address).unwrap(),
@@ -60,11 +60,16 @@ pub(super) fn act_on(
             server_types: vec!["cx33".into()],
         },
         registries: None,
+        verified_pull: std::cell::RefCell::default(),
     };
     act(&compute, &store, &mut state);
     task.join().unwrap();
     let requests = requests.lock().unwrap().clone();
-    (store.load().unwrap().unwrap(), retained(root.path()).unwrap(), requests)
+    (
+        store.load().unwrap().unwrap(),
+        retained(store.root()).unwrap(),
+        requests,
+    )
 }
 
 pub(super) fn journal(volume: CreateState) -> Journal {
@@ -76,6 +81,74 @@ pub(super) fn journal(volume: CreateState) -> Journal {
         deleting: false,
         unused: false,
     }
+}
+
+#[cfg(feature = "tailnet-node-cleanup")]
+#[test]
+fn legacy_stop_resume_then_delete_keeps_missing_node_identity_manual() {
+    use crate::cloud_runtime::{
+        deployment::{deletion::finish_deletion, hetzner::lifecycle},
+        providers::deletion_confirmed,
+        state::ReadyHistory,
+        tailnet::{Selection, cleanup},
+    };
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let mut volume = journal(CreateState::Bound { worker_id: "9".into() });
+    volume.key = None;
+    let off = (200, json!({"server": server("off", None)}).to_string());
+    let responses = vec![
+        off.clone(),
+        off.clone(),
+        off,
+        no_actions(),
+        (200, json!({"action": {"id": 3, "status": "success"}}).to_string()),
+        gone(),
+        gone(),
+    ];
+    let (saved, kept, requests) = act_on(&bound, &volume, responses, |compute, store, state| {
+        state.stage = Stage::Ready;
+        state.stop_requested = false;
+        assert_eq!(state.ready_history, ReadyHistory::Unobserved);
+        assert!(state.tailnet_enrollment.is_empty() && state.tailnet_device.is_none());
+        Selection {
+            tailnet: Some("work".into()),
+        }
+        .commit(store.root())
+        .unwrap();
+        stop_with(compute, store, state, &Cancellation::default()).unwrap();
+        assert_eq!(state.stage, Stage::Stopped);
+        lifecycle::resume(store, state).unwrap();
+        assert_eq!(state.operation, CreateState::Prepared);
+        assert!(state.worker.is_none() && !state.stop_requested && !state.source_ready);
+        assert_eq!(state.ready_history, ReadyHistory::Unobserved);
+        let timeline = state.timeline.as_ref().unwrap();
+        assert!(timeline.reconnected && timeline.resume_requested.is_some());
+        lifecycle::delete_with(compute, store, state, &Cancellation::default()).unwrap();
+        assert_eq!(state.operation, CreateState::Prepared);
+        finish_deletion(state.clone(), store).unwrap();
+        *state = store.load().unwrap().unwrap();
+        assert!(deletion_confirmed(store, state).unwrap());
+        let before = std::fs::read(store.root().join("deployment.json")).unwrap();
+        for error in [
+            cleanup::require_complete(store, state).unwrap_err(),
+            cleanup::retry(store, state, &|_| panic!("missing identity cannot dispatch Node API")).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("not recorded"));
+        }
+        assert_eq!(std::fs::read(store.root().join("deployment.json")).unwrap(), before);
+        assert!(state.tailnet_enrollment.is_empty() && state.tailnet_device.is_none());
+    });
+    assert!(!kept);
+    assert_eq!(saved.stage, Stage::Deleted);
+    assert_eq!(saved.operation, CreateState::Prepared);
+    assert_eq!(requests.len(), 7);
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("DELETE ") && request.contains("/servers/42 "))
+    );
+    let last = requests.last().unwrap();
+    assert!(last.starts_with("GET ") && last.contains("/volumes/9 "));
 }
 
 #[test]

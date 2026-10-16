@@ -1,9 +1,11 @@
 //! Bounded host-scoped requests for the live host: shared provider usage, catalogs and
-//! cloud offers only read; companion requests and the `attach`, `park` and `stop` of a
-//! cloud list request change clouds, and the host authorizes each one.
+//! cloud offers only read; companion requests and the `attach` and `park` of a cloud
+//! list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
-pub use super::cloud_list::{CloudListOperation, CloudListRequest};
+pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
+pub use super::image_destination::{Action as ImageDestinationAction, ImageDestinationRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
+pub use super::tailnet_credential::{CredentialOperation, CredentialRequest};
 pub use super::upkeep::{UpkeepOperation, UpkeepRequest};
 use super::{AgentIdentity, ManifestLock};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
@@ -43,6 +45,10 @@ pub struct UsageRequest {
     /// An Upkeep request, answered by the host for the caller's workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upkeep: Option<UpkeepRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet_credential: Option<CredentialRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_destination: Option<ImageDestinationRequest>,
     claimed: bool,
 }
 
@@ -66,6 +72,10 @@ pub struct UsageResult {
     /// The host's answer to an Upkeep request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upkeep: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet_credential: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_destination: Option<serde_json::Value>,
     pub error: Option<String>,
 }
 
@@ -82,6 +92,8 @@ impl UsageRequest {
             companion: None,
             cloud_list: None,
             upkeep: None,
+            tailnet_credential: None,
+            image_destination: None,
             error,
         }
     }
@@ -263,6 +275,48 @@ fn enqueue_upkeep_at(root: &Path, identity: AgentIdentity<'_>, request: UpkeepRe
         },
     )
 }
+/// Queue only a request for an owner decision; never accepts credential bytes.
+/// # Errors
+/// Invalid metadata, missing live host identity or unavailable bounded queue.
+pub fn enqueue_tailnet_credential(identity: AgentIdentity<'_>, request: CredentialRequest) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid credential request",
+        ));
+    }
+    enqueue_request_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        Ask {
+            tailnet_credential: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
+/// Queue a nonsecret operation within the live local agent's host-owned checkout.
+/// # Errors
+/// Invalid receipt or action metadata, missing host identity or unavailable queue.
+pub fn enqueue_image_destination(
+    identity: AgentIdentity<'_>,
+    request: ImageDestinationRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid image destination request",
+        ));
+    }
+    enqueue_request_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        Ask {
+            image_destination: Some(request),
+            ..Ask::default()
+        },
+    )
+}
 
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
     enqueue_query_at(root, identity, provider, None)
@@ -294,6 +348,8 @@ struct Ask {
     cloud_companion: Option<CompanionRequest>,
     cloud_list: Option<CloudListRequest>,
     upkeep: Option<UpkeepRequest>,
+    tailnet_credential: Option<CredentialRequest>,
+    image_destination: Option<ImageDestinationRequest>,
 }
 
 fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std::io::Result<String> {
@@ -304,6 +360,8 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_companion,
         cloud_list,
         upkeep,
+        tailnet_credential,
+        image_destination,
     } = ask;
     if catalog.as_ref().is_some_and(|q| !q.valid()) {
         return Err(std::io::Error::new(
@@ -350,6 +408,8 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_companion,
         cloud_list,
         upkeep,
+        tailnet_credential,
+        image_destination,
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)
@@ -587,11 +647,52 @@ mod tests {
     }
 
     #[test]
+    fn credential_requests_are_host_bound_metadata_and_results_belong_to_the_original_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let host = "00000000-0000-0000-0000-000000000001";
+        let identity = AgentIdentity::new("horizon:agent", Some(host));
+        let request = CredentialRequest {
+            operation: CredentialOperation::Remove,
+            tailnet_id: "work".into(),
+            request_id: new_operation_id(),
+        };
+        let id = enqueue_request_at(
+            root.path(),
+            identity,
+            Ask {
+                tailnet_credential: Some(request.clone()),
+                ..Ask::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            claim_at(root.path(), "00000000-0000-0000-0000-000000000002")
+                .unwrap()
+                .is_empty()
+        );
+        let claimed = claim_at(root.path(), host).unwrap().remove(0);
+        assert_eq!(claimed.tailnet_credential, Some(request));
+        let mut result = claimed.result(Vec::new(), None);
+        result.tailnet_credential = Some(serde_json::json!({"state":"pending_owner"}));
+        complete_at(root.path(), &result).unwrap();
+        let other = AgentIdentity::new("horizon:other", Some(host));
+        assert!(take_at(root.path(), other, &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id)
+                .unwrap()
+                .unwrap()
+                .tailnet_credential
+                .unwrap()["state"],
+            "pending_owner"
+        );
+    }
+
+    #[test]
     fn cloud_list_requests_reach_only_their_host_and_answer_only_their_actor() {
         let root = tempfile::tempdir().unwrap();
         let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
         let request = CloudListRequest {
-            operation: CloudListOperation::Stop,
+            operation: CloudListOperation::Park,
             cloud: Some("cloud-1".into()),
         };
         let id = enqueue_cloud_list_at(root.path(), identity, request.clone()).unwrap();
@@ -599,15 +700,15 @@ mod tests {
         let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
         assert_eq!(claimed.cloud_list.as_ref(), Some(&request));
         let mut result = claimed.result(Vec::new(), None);
-        result.cloud_list = Some(serde_json::json!({"stop": "requested"}));
+        result.cloud_list = Some(serde_json::json!({"park": "parking"}));
         complete_at(root.path(), &result).unwrap();
         assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
         assert_eq!(
             take_at(root.path(), identity, &id).unwrap().unwrap().cloud_list,
-            Some(serde_json::json!({"stop": "requested"}))
+            Some(serde_json::json!({"park": "parking"}))
         );
         let invalid = CloudListRequest {
-            operation: CloudListOperation::Stop,
+            operation: CloudListOperation::Park,
             cloud: None,
         };
         assert!(enqueue_cloud_list_at(root.path(), identity, invalid).is_err());

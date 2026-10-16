@@ -193,7 +193,7 @@ fn start_cloud_says_why_it_is_disabled() {
     };
     let nothing_chosen = painted(&ctx, &mut app);
     assert!(
-        nothing_chosen.contains("Paste a GitHub or GitLab link, or choose a folder."),
+        nothing_chosen.contains("Choose a repository, type a folder path, or paste a link."),
         "{nothing_chosen}"
     );
     assert!(nothing_chosen.contains("Continue"), "{nothing_chosen}");
@@ -323,18 +323,18 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
     frame(&ctx, &mut app, vec![Event::Text("Deployment".into())], Modifiers::NONE);
     let repository = temp.path().join("committed-repository");
-    std::fs::create_dir(&repository).unwrap();
+    std::fs::create_dir_all(repository.join(".git")).unwrap();
     ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-source")));
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-    key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
     frame(
         &ctx,
         &mut app,
         vec![Event::Text(repository.to_string_lossy().into())],
         Modifiers::NONE,
     );
-    key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
+    // A typed folder is taken once typing stops.
+    std::thread::sleep(Duration::from_millis(600));
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
     frame(&ctx, &mut app, vec![Event::Text(" HEAD".into())], Modifiers::NONE);
     assert_eq!(app.cloud_prototype.production.title, "Deployment HEAD");
@@ -342,11 +342,18 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
         std::path::Path::new(&app.cloud_prototype.production.repository),
         repository
     );
+    app.cloud_prototype
+        .production
+        .source
+        .edit_for_test("https://git.invalid/demo-org/demo-atlas");
     ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-source")));
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);
-    assert!(app.dir_picker.is_some(), "Browse… opens the picker from the keyboard");
+    assert!(
+        app.dir_picker.is_some(),
+        "Choose folder… opens the picker from the keyboard"
+    );
     key(&ctx, &mut app, Key::F11, Modifiers::NONE);
     assert!(app.fullscreen_panel.is_none());
     assert!(app.cloud_creation_open());

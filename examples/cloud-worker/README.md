@@ -34,32 +34,52 @@ omitted desktop support is disabled. `agent_approvals` is `auto` (the default) o
 `ask`; see [agent approvals](#agent-approvals).
 
 The base always includes SSH, Git/LFS, tmux, the source/worktree helpers and worker
-control service. When the worker is created with `HORIZON_IDLE_STOP_MINUTES`, the
-supervisor also owns `horizon-worker-idle`, which stops this worker through the
-provider after that period without agent terminal output and without the container
-averaging at least half a CPU core (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1
-hosts); lighter background work does not keep it running.
-`horizon-worker-check` reports `horizon-idle-stop-contract=1` for images that support
-this, and Horizon refuses to deploy a profile with `idle_stop_minutes` to other images.
-A provider that gives the worker no credential to stop itself, such as Hetzner, has
-Horizon stop it instead: the watcher then only rewrites `/run/horizon-worker/idle.json`
-every minute with how long the worker has been idle, and `horizon-worker-idle --report`
-prints that record, refusing one older than three minutes. Images whose watcher keeps
-this record also report `horizon-idle-report-contract=1`.
-The watcher also answers stop requests from agents on `/run/horizon-worker/stop.sock`:
-`horizon-worker-stop --reason TEXT`, or its `mcp` mode registered as the
-`stop_this_worker` tool on opted-in workers that hold a stop credential (not on Hetzner, where Horizon stops the worker), asks it to stop the worker when a task is
-done. The watcher is the only process that uses the provider credential, but agent
+control service. On a dedicated worker, the supervisor also owns `horizon-worker-stopd`,
+which stops this worker when an agent whose task is done asks: `horizon-worker-stop
+--reason TEXT`, or its `mcp` mode registered as the `stop_this_worker` tool. No
+profile setting is needed. The worker never stops itself after an idle period; an
+image from before this change did that only with `HORIZON_IDLE_STOP_MINUTES`.
+`horizon-worker-check` reports `horizon-agent-stop-contract=1` when both the service
+and the supervisor declare it. A shared worker (`HORIZON_WORKER_STARTUP`) offers no stop, because it runs
+other clouds' sessions, and a worker with hosted devices offers none, because a stopped
+worker could not release the devices it holds.
+
+Where the provider gives the worker a credential to stop itself (RunPod), the service
+checks the request and stops the worker at once. Where it does not (Hetzner, a Docker
+host), a worker started with `HORIZON_WORKER_STOP=horizon` has the service check the
+request and record it in the root-only `/run/horizon-worker/stop-request.json`, for
+Horizon to run `horizon-worker-stopd --take` when it next reads the worker, every 30
+seconds while the cloud is ready and no other operation runs. `--take`
+checks the request again, now counting the output of every agent session, the
+requester's too, adds the stop to the stop log and prints it. Later takes print the same
+stop until the worker stops, so an answer lost on the way to Horizon loses no stop. It
+prints `null` without a request, `{"waiting": ...}` while the worker works (the request
+stays for a later take), and `{"refused": ...}` when the request no longer counts: not
+taken within ten minutes, taken ten minutes ago without a stop (the stop then leaves the
+log again), malformed, or its agent
+session ended and its window holds another session. When Horizon cannot start the stop,
+`--untake AT` removes it from the log and drops the request. A request is dropped only
+once its stop is off the log, so a stop that did not happen never stays on record; until
+then it stays, and no new request replaces it. The supervisor drops a
+request left from before the worker started. This works only while Horizon runs. `horizon-worker-stopd --mode`
+prints `self`, `horizon` or `none`. The supervisor keeps the worker running when the stop
+service exits; agents are then told that the worker cannot stop.
+
+The service is the only process that uses the provider credential, but agent
 sessions in the stock image run as UID 10001 with no effective capabilities;
-older/custom images may still run as root. The root watcher retains provider credentials. It identifies the requesting session from the
+older/custom images may still run as root. The root service retains provider credentials. It identifies the requesting session from the
 connecting process through the kernel's peer credentials and its tmux pane, never from
 the request, and refuses callers outside a Claude, Codex or Grok session (a shell
 session or an ad-hoc tmux session is not one). It refuses while another
 agent window printed output in the last two minutes, checked after its CPU sample and
 right before the stop, while the container averages half a core, or when tmux or the
-container's CPU accounting cannot be read. Accepted stops are recorded with the requesting session and agent in
+container's CPU accounting (cgroup v2 `cpu.stat`, or `cpuacct.usage` on cgroup v1 hosts)
+cannot be read. Stops are recorded with the requesting session and agent in
 `/workspace/.horizon/self-stops.jsonl`; `--ready` reports `horizon-self-stop-contract=1`
-and the newest as `horizon-last-self-stop=`. Device control/ownership works without a browser executable or
+and the newest as `horizon-last-self-stop=`. The log is on the agents' volume, so an agent
+can change what it says, and with it what the cloud card shows of a stop; it cannot make
+the worker stop. Root opens it without following a link or waiting on a pipe, and looks
+for Horizon's stops only in its last 64 KB. Device control/ownership works without a browser executable or
 browser MCP registration. Agent configuration contains only enabled tool servers.
 Disabled agent requests are rejected before writing session or worktree state.
 
@@ -909,6 +929,12 @@ recorded. This is true if the Shell panel opens first or after a Claude panel. A
 without a bound key or workspace starts without these variables. Other agent panels do not
 receive them.
 
+A worker with a bound Claude setup token, `/workspace/credentials/claude-oauth-token`,
+gives it to each Claude panel and each Shell panel as `CLAUDE_CODE_OAUTH_TOKEN`. Claude then
+starts signed in to the subscription of the token, with no sign-in on the worker. Horizon
+never binds a setup token together with an API key. The token is not shown in the session
+output, and other agent panels do not receive it.
+
 ## Codex background server
 
 Codex 0.156 and later start a shared background server. This server refuses a control
@@ -1011,8 +1037,8 @@ data, never shell, with one entry per line:
 already on it, from that base or an earlier line, stays where it is. `KEY` is a letter or
 `_` followed by letters, digits or `_`, at most 128 characters. The variables the worker
 sets or clears for every session are refused: `PATH`, `HOME`, `DISPLAY`, `HORIZON`, every
-`HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
-and `ANTHROPIC_CUSTOM_HEADERS`. The directory holds at most 64 regular files
+`HORIZON_` variable, `DISABLE_AUTOUPDATER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`,
+`ANTHROPIC_CUSTOM_HEADERS` and `CLAUDE_CODE_OAUTH_TOKEN`. The directory holds at most 64 regular files
 of at most 16 KiB each, and a value is at most 4096 characters. A line that is not one of
 the entries above, contains a control character (including tab, on any line) or breaks a
 limit is refused with its file and line; invalid UTF-8, an oversized or misnamed file, another kind of
@@ -1416,7 +1442,8 @@ The broker does these steps for each connection:
     of its own, and each group must close. `gh` puts the keywords of a search in
     such a group, for example `( fix bug ) repo:owner/name type:pr`. A `-` goes
     directly before a word.
-  - `GET /`, `/rate_limit` and `/meta`.
+  - `GET /`, `/rate_limit` and `/meta`, and the global security advisories
+    (`/advisories` and `/advisories/GHSA-...`), which are public.
   - `POST /graphql`, checked by the GraphQL policy below.
 - On `uploads.github.com` it accepts only a release asset upload, with `push`.
 - On `codeload.github.com` and `*.githubusercontent.com` it accepts only `GET`
@@ -1601,6 +1628,58 @@ the request for `allow-task`; `task` in the list is `false` for such a request.
 outcomes print JSON and exit with status 0. `read` and `push` keep the meaning
 described above: `permissions.push` reports your account's access, and the
 GitHub App's own permissions still limit what the token can do.
+
+**The Upkeep policy.** On the cloud of an Upkeep, Horizon sets a policy as root
+before each exchange, over SSH stdin:
+
+```bash
+horizon-worker-github upkeep <<< '{"version":1,"session":"upkeep-<cloud>","repositories":["owner/name"],
+  "bots":["app/dependabot"],"workflows":[{"repository":"owner/name","workflow":"release.yml"}]}'
+# {"session":"upkeep-<cloud>","repositories":["owner/name"],"bots":["dependabot[bot]"],
+#  "workflows":[{"repository":"owner/name","workflow":"release.yml"}]}
+```
+
+- The session is `upkeep-` and up to 90 letters, digits, `-` and `_`. There are 1
+  to 50 repositories, each listed one time, ignoring case; at most 20 bots and 20
+  workflows, each workflow in a listed repository. Unknown fields are refused, and
+  so is a worker without agent isolation.
+- Root first writes `/run/horizon-worker/github-upkeep-policy`, which names the
+  SHA-256 of the new policy; the loop of Upkeep starts no agent without it. Then the
+  policy is stored root-only next to the chain, as `upkeep.json`, on the volume and
+  on tmpfs. A copy that cannot be read, or that the marker does not name (a write
+  failed), counts as the strictest policy, and so does a marker without a copy.
+- While the policy is set, the API broker and the Git proxy refuse what
+  [What the agent can do on GitHub](../../docs/upkeep.md#what-the-agent-can-do-on-github)
+  lists, and log each refusal in `/workspace/.horizon-gate/refused.jsonl`.
+- `requests` reports the policy as `upkeep` (`null` without one); an older image
+  has no such field.
+
+**The Upkeep of a worker.** With the policy, the worker also does the work of the
+loop that needs no person, so Upkeep keeps working while no Horizon runs (see
+[Upkeep](../../docs/upkeep.md)):
+
+- About every two seconds the service allows, for the task (`allow-task`), each
+  pending request of the loop's session for a listed repository, `read` or `push`,
+  while the session that asked runs. It checks the repository with GitHub as for
+  your decision, and examines the policy again under the lock of the requests.
+  After a refusal it asks GitHub about that repository and access again after a
+  minute; the request stays on the cloud card for you. Requests of other
+  sessions, of a session that ended, and for other repositories, wait for you. A
+  policy that cannot be read allows nothing.
+- A new policy ends every task grant of the loop's session, and of the session of
+  the policy it replaces, for a repository that it does not list. A grant does not
+  record who gave it, so this also ends a grant that you gave the loop on the cloud
+  card for another repository; allow it again when the loop asks. The service sets
+  the policy only after those grants ended.
+- `clear` removes the policy first, under the lock of the requests, and keeps the
+  chain when that fails. The marker then names no policy, so the strictest policy
+  holds and the worker allows nothing by itself until the next `upkeep`. No other
+  operation removes a policy: an Upkeep ends with its cloud.
+- When the service starts, as after a container restart, it writes the marker for
+  the policy on the volume again and starts the loop as the agent user in its tmux session,
+  `/workspace/home/upkeep/run.sh <session>`, as Horizon's exchange does. It waits
+  until the supervisor published the browser host instance, as every session does.
+  A session that runs is kept.
 
 **Status and removal.** Horizon runs these as root:
 

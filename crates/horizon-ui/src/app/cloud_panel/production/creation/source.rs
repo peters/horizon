@@ -1,5 +1,6 @@
 //! Where a new cloud's code comes from: a pasted link is cloned, a folder is used as it is.
 //! Git's own credentials do the signing in; a token is asked for only when Git has none.
+mod finder;
 mod github;
 mod progress;
 mod view;
@@ -23,6 +24,17 @@ struct Plan {
     url: String,
     parent: PathBuf,
     existing: Option<PathBuf>,
+    /// `existing` is a worktree found by the search: the repository's own checkout may still
+    /// turn up and comes first.
+    worktree: bool,
+    /// The checkout at the clone's own place, looked up on the disk once per link and folder.
+    at_destination: Option<PathBuf>,
+    /// `at_destination` is a linked worktree: the repository's own checkout found elsewhere
+    /// comes before it.
+    destination_worktree: bool,
+    /// What the search had found when `existing` was worked out: one found later
+    /// may be this repository.
+    found: Option<(usize, usize)>,
     /// A folder where an earlier try at this link stopped, and that a new try picks up from.
     resumable: Option<PathBuf>,
     destination: PathBuf,
@@ -30,6 +42,9 @@ struct Plan {
 
 /// How long a link must stand still before its access is looked up.
 const SETTLE: Duration = Duration::from_millis(500);
+
+/// How long Continue waits after a link was typed for the search to find a checkout of it.
+const SCAN_WAIT: Duration = Duration::from_secs(5);
 
 /// A finished clone: where it is, and what to tell about keeping the token, if that was asked.
 struct Cloned {
@@ -50,6 +65,9 @@ pub(in crate::app::cloud_panel::production) struct State {
     repository: String,
     mirrored: String,
     parsed_for: String,
+    /// Whether the text was a search of the account's list when it was read, and that list.
+    parsed_filtering: bool,
+    parsed_list: (usize, usize),
     remote: Option<Remote>,
     folder: Option<PathBuf>,
     parent: Option<PathBuf>,
@@ -84,6 +102,10 @@ pub(in crate::app::cloud_panel::production) struct State {
     /// The repository the connected account's token was asked for; a token that arrives
     /// once the field names another is dropped.
     account_for: Option<Remote>,
+    /// Finds checkouts, folders and the account's repositories as the field is typed in.
+    finder: finder::Finder,
+    /// A result put text in the field, which keeps the focus for more typing.
+    refocus: bool,
 }
 
 impl State {
@@ -128,18 +150,42 @@ impl State {
         self.mirrored.clone_from(&self.input);
     }
 
+    /// Which list of the account's repositories is held, by place and length: a list fetched
+    /// again is another one.
+    fn list_key(&self) -> (usize, usize) {
+        self.account
+            .as_ref()
+            .and_then(|account| account.repositories.as_ref())
+            .map_or((0, 0), |list| (list.as_ptr() as usize, list.len()))
+    }
+
     /// The repository a pasted link names, unless the text is a folder that exists.
     fn remote(&mut self) -> Option<&Remote> {
+        // The account's list may arrive, change or go after the text was read, and with it
+        // whether the text is a search of it. Only that is read again then, once per list:
+        // a token or an answer that came with the text stays.
+        let list = self.list_key();
+        if self.parsed_for == self.input && self.parsed_list != list {
+            self.parsed_list = list;
+            let filtering = self.filters_the_list();
+            if filtering != self.parsed_filtering {
+                self.parsed_filtering = filtering;
+                let path = typed_path(&self.input);
+                self.remote = source::parse(&self.input).filter(|_| !filtering && !holds_repository(&path));
+            }
+        }
         if self.parsed_for != self.input {
+            self.parsed_list = list;
             let mut pasted = self.take_credentials();
             self.parsed_for.clone_from(&self.input);
-            let path = horizon_core::dir_search::expand_tilde(self.input.trim());
+            let path = typed_path(&self.input);
             let before = self.remote.as_ref().map(|remote| origin(&remote.url).to_owned());
             let before_url = self.remote.as_ref().map(|remote| remote.url.clone());
             // Only a repository that is really there shadows a link: `owner/repo` may also be a plain
             // folder that happens to have that name. Text that narrows the connected account's
             // list is not looked up until it names a listed repository in full.
             let filtering = self.filters_the_list();
+            self.parsed_filtering = filtering;
             self.remote = source::parse(&self.input).filter(|_| !filtering && !holds_repository(&path));
             // A token was pasted for one origin (scheme, host and port) and goes to no other.
             if before.as_deref() != self.remote.as_ref().map(|remote| origin(&remote.url)) {
@@ -158,7 +204,10 @@ impl State {
                 self.token.push_str(&pasted);
                 pasted.zeroize();
             }
-            self.folder = (!self.input.trim().is_empty() && holds_repository(&path)).then_some(path);
+            // A path that ends in a separator is opened, not used: Tab into a repository
+            // browses its folders.
+            let opened = self.input.trim_end().ends_with(std::path::is_separator);
+            self.folder = (!self.input.trim().is_empty() && !opened && holds_repository(&path)).then_some(path);
             self.failure = None;
             self.public = false;
             self.token_instead = false;
@@ -198,10 +247,7 @@ impl State {
     /// Text that is neither a link nor a folder, once it is long enough to be judged.
     fn unrecognised(&mut self) -> bool {
         let text = self.input.trim();
-        text.len() > 3
-            && self.remote().is_none()
-            && self.folder.is_none()
-            && !horizon_core::dir_search::expand_tilde(self.input.trim()).is_dir()
+        text.len() > 3 && self.remote().is_none() && self.folder.is_none() && !typed_path(&self.input).is_dir()
     }
 
     fn parent(&mut self) -> &Path {
@@ -219,13 +265,40 @@ impl State {
         {
             self.plan = None;
         }
-        self.plan.get_or_insert_with(|| Plan {
-            url: remote.url.clone(),
-            existing: source::existing(&parent, remote),
-            resumable: source::resumable(&parent, remote),
-            destination: source::destination(&parent, remote),
-            parent,
-        })
+        let found = self.finder.found_version();
+        let finder = &self.finder;
+        let plan = self.plan.get_or_insert_with(|| {
+            let (at_destination, destination_worktree) =
+                source::existing_checkout(&parent, remote).map_or((None, false), |(path, linked)| (Some(path), linked));
+            Plan {
+                url: remote.url.clone(),
+                existing: at_destination.clone(),
+                worktree: destination_worktree,
+                at_destination,
+                destination_worktree,
+                found: None,
+                resumable: source::resumable(&parent, remote),
+                destination: source::destination(&parent, remote),
+                parent,
+            }
+        });
+        // Checkouts the search found since are looked at in memory only; the work on the disk
+        // above runs once per link and folder. One found anywhere is used rather than cloned,
+        // and the repository's own checkout comes before a worktree at the clone's place.
+        if plan.found != Some(found) {
+            plan.found = Some(found);
+            let found = finder.found_checkout(remote);
+            let own = found.filter(|checkout| !checkout.worktree);
+            (plan.existing, plan.worktree) = match &plan.at_destination {
+                Some(path) if !plan.destination_worktree => (Some(path.clone()), false),
+                Some(path) => own.map_or((Some(path.clone()), true), |own| (Some(own.path.clone()), false)),
+                None => (
+                    found.map(|checkout| checkout.path.clone()),
+                    found.is_some_and(|checkout| checkout.worktree),
+                ),
+            };
+        }
+        plan
     }
 
     pub fn set_parent(&mut self, path: &Path) {
@@ -255,7 +328,7 @@ impl State {
             return;
         };
         let parent = self.parent().to_owned();
-        if let Some(path) = source::existing(&parent, &remote) {
+        if let Some(path) = self.plan(&remote).existing.clone() {
             self.ready = Some(path);
             return;
         }
@@ -388,10 +461,18 @@ impl State {
             return Err("Cloning…");
         }
         let Some(remote) = self.remote().cloned() else {
-            return Err("Paste a GitHub or GitLab link, or choose a folder.");
+            return Err("Choose a repository, type a folder path, or paste a link.");
         };
         // Nothing is cloned before the link has been looked up, unless it is already on disk.
         let looked_up = self.probed.as_deref() == Some(remote.url.as_str()) && self.probe.is_none();
+        // While the search for checkouts runs, a checkout of it may still turn up; Continue
+        // waits for it a few seconds after the link was typed, not for the whole search.
+        let waiting = self.changed.is_some_and(|at| at.elapsed() < SCAN_WAIT);
+        let plan = self.plan(&remote);
+        let unsure = plan.existing.is_none() || plan.worktree;
+        if waiting && self.finder.scanning() && unsure {
+            return Err("Looking for this repository on this computer…");
+        }
         if !looked_up && self.plan(&remote).existing.is_none() {
             return Err("Checking access…");
         }
@@ -409,9 +490,34 @@ impl State {
     }
 }
 
-/// Whether `path` is a folder with a repository in it.
+/// The folder the typed text names, read as the finder lists it: `./x`, `../x` and `~/x`
+/// from the home folder, an absolute path as it is. Other text, such as `owner/name`, is
+/// read as before.
+fn typed_path(text: &str) -> PathBuf {
+    let text = text.trim();
+    let text = if matches!(text, "." | "..") {
+        format!("{text}/")
+    } else {
+        text.to_owned()
+    };
+    if finder::is_path(&text) {
+        horizon_core::dir_search::resolve_query_path(&text)
+            .unwrap_or_else(|| horizon_core::dir_search::expand_tilde(&text))
+    } else {
+        horizon_core::dir_search::expand_tilde(&text)
+    }
+}
+
+/// Whether `path` is a folder with a repository in it to use: a clone that stopped halfway is
+/// a plain folder, as it is among the search's results. On macOS a guarded folder, or a link
+/// into one, is not looked in, as the search does not look in it either.
 fn holds_repository(path: &Path) -> bool {
-    path.join(".git").exists()
+    let dot_git = path.join(".git");
+    // `.git` and the clone marker in it may be links, which are followed only when they stay
+    // out of guarded folders too.
+    horizon_core::dir_search::may_look_in(&[path, &dot_git, &dot_git.join(source::CLONE_MARKER)])
+        && dot_git.exists()
+        && !source::clone_stopped_in(path)
 }
 
 /// The address with any password removed, and that password, when one is written into it:
@@ -464,7 +570,7 @@ mod tests {
     fn continue_says_what_is_missing() {
         assert_eq!(
             typed("").next_step(),
-            Err("Paste a GitHub or GitLab link, or choose a folder.")
+            Err("Choose a repository, type a folder path, or paste a link.")
         );
         let mut link = typed("github.com/demo-org/demo-atlas");
         assert_eq!(
@@ -540,6 +646,54 @@ mod tests {
             temp.path().join("demo-org/demo-atlas"),
             "a fresh clone would go in its owner's folder"
         );
+    }
+
+    #[test]
+    fn the_repository_s_own_checkout_comes_before_a_worktree_at_the_clone_s_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let main = temp.path().join("elsewhere/atlas");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&main)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "{args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(&["remote", "add", "origin", &remote.url]);
+        let worktree = temp.path().join("demo-atlas");
+        git(&["worktree", "add", "-q", "-b", "fix", &worktree.to_string_lossy()]);
+        let mut state = State::default();
+        state.set_parent(temp.path());
+        state.finder.found_for_test(Vec::new(), false);
+        assert_eq!(state.plan(&remote).existing.as_deref(), Some(worktree.as_path()));
+        assert!(
+            state.plan(&remote).worktree,
+            "the repository's own checkout may still turn up"
+        );
+        let found = |path: &Path, worktree: bool| horizon_core::dir_search::Checkout {
+            path: path.to_owned(),
+            origin: Some(remote.url.clone()),
+            branch: Some("main".into()),
+            touched: None,
+            complete: true,
+            stopped: false,
+            worktree,
+        };
+        state
+            .finder
+            .found_for_test(vec![found(&worktree, true), found(&main, false)], true);
+        let plan = state.plan(&remote);
+        assert_eq!(plan.existing.as_deref(), Some(main.as_path()));
+        assert!(!plan.worktree);
     }
 
     #[test]
@@ -735,6 +889,51 @@ mod tests {
         )
         .unwrap();
         folder
+    }
+
+    #[test]
+    fn a_worktree_found_first_waits_for_the_repository_s_own_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        let found = |path: &str, worktree: bool| horizon_core::dir_search::Checkout {
+            path: PathBuf::from(path),
+            origin: Some("https://github.com/demo-org/demo-atlas".into()),
+            branch: Some("main".into()),
+            touched: None,
+            complete: true,
+            stopped: false,
+            worktree,
+        };
+        let mut state = typed("github.com/demo-org/demo-atlas");
+        state.set_parent(temp.path());
+        state.remote();
+        state
+            .finder
+            .found_for_test(vec![found("/x/trees/atlas-fix", true)], true);
+        assert_eq!(
+            state.next_step(),
+            Err("Looking for this repository on this computer…"),
+            "the repository's own checkout may still turn up"
+        );
+        state.finder.found_for_test(
+            vec![found("/x/trees/atlas-fix", true), found("/x/code/atlas", false)],
+            true,
+        );
+        assert!(state.next_step().is_ok());
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        assert_eq!(
+            state.plan(&remote).existing.as_deref(),
+            Some(Path::new("/x/code/atlas"))
+        );
+    }
+
+    #[test]
+    fn a_typed_stopped_clone_is_no_repository_to_use() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = source::parse("github.com/demo-org/demo-atlas").unwrap();
+        let folder = stopped_clone(temp.path(), &remote);
+        assert!(!holds_repository(&folder), "the halfway checkout is a plain folder");
+        std::fs::remove_file(folder.join(".git").join(source::CLONE_MARKER)).unwrap();
+        assert!(holds_repository(&folder));
     }
 
     #[test]

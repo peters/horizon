@@ -1,4 +1,5 @@
 use super::*;
+mod publishing_fence;
 #[test]
 #[cfg(unix)]
 fn private_registry_intent_survives_failed_preparation_and_missing_bindings() {
@@ -532,7 +533,7 @@ fn local_preparation_and_unsent_replacements_preserve_mutation_evidence() {
         )
         .unwrap_err();
         if failure == "auth" {
-            assert!(matches!(error, Error::Io(_)));
+            assert!(matches!(error, Error::AgentCredential { agent: "codex", .. }));
         } else {
             assert!(matches!(error, Error::Command(_)));
         }

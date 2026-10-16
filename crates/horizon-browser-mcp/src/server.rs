@@ -21,7 +21,7 @@ use crate::model::{
     CloseOutput, CreateInput, CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, HttpAuthInput,
     HttpAuthOutput, NavigateInput, NavigateOutput, NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput,
     NodeOutput, NodesOutput, PanelInput, QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput,
-    VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
+    VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, ZoomInput, ZoomOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -130,7 +130,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_offers",
-        description = "Rank cloud compute offers Horizon can rent for given requirements, cheapest estimated total first, without renting anything. Pass minimum vCPU and memory for CPU workers, or gpu=true with an optional minimum GPU memory or GPU type, plus an optional maximum hourly price, expected hours, workspace storage in GB and region. Each offer has its hourly price (for a CPU size, the highest among the flavors Horizon requests for it, since the provider picks one), an estimated total for the hours including workspace storage and, for RunPod, a profile's default 20 GB container disk, availability (CPU sizes are confirmed when a cloud is created), regions with GPU stock, and host trust. Prices come from the running Horizon, which fetches them when they are older than 15 minutes, or on a cloud worker from the prices that Horizon last sent it; the result says when they were observed. Without a running Horizon, cloud settings, or prices on the worker from the last 20 minutes, the tool returns an error rather than old prices. Every offer states its currency: native amounts stay in their billing currency, and other providers such as Hetzner (euros, net of VAT, capped per calendar month) come in `other_providers`. The additional `comparison` ranks all providers by estimated total in USD using dated ECB reference rates; check `complete` before treating its first offer as globally cheapest. Missing or stale exchange rates leave native offers intact with no converted total. Workers need read-only HTTPS access to the ECB data API for conversion; their availability is the provider's advisory flag. A maximum hourly price is read in each offer's own currency. Offers are informational, never a reservation."
+        description = "Rank cloud compute offers Horizon can rent for given requirements, cheapest estimated total first, without renting anything. Pass minimum vCPU and memory for CPU workers, or gpu=true with an optional minimum GPU memory or GPU type, plus an optional maximum hourly price, expected hours, workspace storage in GB and region. Each offer has its hourly price (for a CPU size, the highest among the flavors Horizon requests for it, since the provider picks one), an estimated total for the hours including workspace storage and, for RunPod, a profile's default 20 GB container disk, availability (CPU sizes are confirmed when a cloud is created), regions with GPU stock, and host trust. Prices come from the running Horizon, which fetches them when they are older than 15 minutes, or on a cloud worker from the prices that Horizon last sent it; the result says when they were observed. Without a running Horizon, cloud settings, or prices on the worker from the last 20 minutes, the tool returns an error rather than old prices. Every offer states its currency: native amounts stay in their billing currency, and other providers such as Hetzner (euros, net of VAT, capped per calendar month) come in `other_providers`, as do the person's saved Docker hosts (`provider: docker-host`: no rent, the largest size free on the host now, nothing reserved, hosts that could not be read in `host_errors`; a cloud worker lists no hosts). The additional `comparison` ranks all providers by estimated total in USD using dated ECB reference rates; check `complete` before treating its first offer as globally cheapest. Missing or stale exchange rates leave native offers intact with no converted total. Workers need read-only HTTPS access to the ECB data API for conversion; their availability is the provider's advisory flag. A maximum hourly price is read in each offer's own currency. Offers are informational, never a reservation."
     )]
     async fn cloud_offers(
         &self,
@@ -144,7 +144,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "cloud_companions",
-        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Use a cloud ID and alias from here with cloud_companion_ensure_ready, cloud_companion_stop and cloud_companion_uncheck. Reading starts nothing."
+        description = "List the clouds in your Horizon workspace with the companion clouds their repositories declare: alias, repository, profile, whether the owner checked it on the source cloud's card, its status and target cloud ID. Also returns saved tailnets as id/name items and cached tailnet_api_credentials keyed by saved tailnet ID: pending, unavailable, or ready with credential.state missing/stored and kind personal_token/oauth. Stored describes the credential source and does not validate remote API access. Credential values stay private. Use a cloud ID and alias from here with cloud_companion_ensure_ready, cloud_companion_stop and cloud_companion_uncheck. Reading starts nothing."
     )]
     async fn cloud_companions(&self) -> Result<Json<crate::model::HostJson>, String> {
         self.controller
@@ -216,8 +216,36 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_image_destination",
+        description = "Inspect or change this local agent panel checkout's machine-local image destination for a named build profile. No repository YAML is changed. List first; select a listed registry destination or reset using its exact shown_override snapshot. Only authenticate initiates personal publishing sign-in; switch requires the person's explicit account-change instruction. Existing clouds retain their original publisher. Supply a fresh lowercase UUID operation_id for a reviewed action; reuse it after a lost answer. Every action may return pending: poll status with that ID and no profile until done, then read the nested result or error. Cancel uses the same ID without a profile. Sign-in briefly waits for its device code and verification URI to show the person. Poll at least every 10 seconds: authentication requests cancellation after 30 seconds without an owner readback. Cancellation is a request, not proof settings stayed unchanged. Receipts expire and are lost at host restart: list saved state before retrying then. Requires the owning desktop and a local agent panel; remote worker panels cannot change desktop publishing choices. No tokens, secret references or settings-root arguments."
+    )]
+    async fn cloud_image_destination(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::ImageDestinationRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_image_destination(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
+        name = "tailnet_api_credential",
+        description = "Request native owner setup or removal of a desktop-global saved tailnet API credential. set_personal_token, set_oauth and remove create only a pending owner request. The person enters an empty masked draft and explicitly saves the requested kind, or approves removal of that exact request in Settings > Tailnets. No secret is accepted from the agent; replacing a binding requires the same native owner choice. Does not open Settings. Supply the exact saved tailnet_id from cloud_companions and a caller-chosen UUID request_id. Poll status with the same IDs; cancel stops only a pending request. Requests expire after 15 minutes, are volatile and are scoped to the original calling agent and host. Running writes cannot be cancelled. No credential values, paths, OS references, owner grants or automatic node deletion. Applied means the local store transaction finished, not that remote API access was tested."
+    )]
+    async fn tailnet_api_credential(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::CredentialRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .tailnet_api_credential(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "cloud_list",
-        description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate, whether an agent works on it and whether it is idle. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. stop stops the worker of an idle cloud, as Stop idle in the sidebar does; a busy cloud, a cloud on which an agent works and a cloud that waits for the person are refused. For a parked cloud the stop waits for a new status read of its sessions and is skipped when an agent works. Stop ends running processes and keeps the workspace storage; Resume on the card starts a worker again. Get explicit authorization from the person before stop. Requires the running Horizon."
+        description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. worker_image and image_publication describe that cloud's retained image and publisher metadata when its matching runtime is loaded, otherwise null. An unresolved image is null too. Registry publisher metadata includes its opaque nonsecret grant ID, never credential values or paths. They read no credentials and do not prove current registry access. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
     async fn cloud_list(
         &self,
@@ -268,7 +296,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_create",
-        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Set target to a reference returned by browser_provider_devices or a configured remote target name to run the session at that remote target instead of a local browser (Horizon resolves the provider, capabilities and credentials; the panel then reports remote_target and classic WebDriver without network capture; the allocated device is verified against the target's requirement from the provider's own evidence, a physical requirement the evidence does not confirm fails as remote_device_rejected after Horizon attempts to release the session, and a ready panel reports remote_device) and omit backend. Optional orientation=portrait or landscape requires target, overrides configured orientation for this session only, and requires matching orientation measured on the first committed document before readiness; a pending, failed or unverified first document is refused with a typed orientation error and exact-session release is attempted. Panels report remote_orientation and orientation_support. Bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty, or with an explicit backend to open a panel of another engine beside your panel. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. An agent may hold one panel per browser engine: with a Chromium panel open, backend=firefox or backend=safari opens a panel of that engine without allow_additional. A second panel of the same engine, a create without backend while the agent owns a panel, or a remote target while it owns one, needs allow_additional=true, which you set only when the user explicitly requests an independent session. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Set target to a reference returned by browser_provider_devices or a configured remote target name to run the session at that remote target instead of a local browser (Horizon resolves the provider, capabilities and credentials; the panel then reports remote_target and classic WebDriver without network capture; the allocated device is verified against the target's requirement from the provider's own evidence, a physical requirement the evidence does not confirm fails as remote_device_rejected after Horizon attempts to release the session, and a ready panel reports remote_device) and omit backend. Optional orientation=portrait or landscape requires target, overrides configured orientation for this session only, and requires matching orientation measured on the first committed document before readiness; a pending, failed or unverified first document is refused with a typed orientation error and exact-session release is attempted. Panels report remote_orientation and orientation_support. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
         // Matches the request normalization: a blank url is no navigation.
@@ -406,7 +434,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_resize",
-        description = "Set an existing local Chromium or Firefox panel's exact page content viewport in CSS pixels (320-8000 per axis). Supply both width and height, or reset=true without dimensions to resume host panel sizing. Waits for measured innerWidth/innerHeight and returns requested and applied sizes; host layout and navigation preserve the pin until reset or session replacement. The canvas panel is unchanged and letterboxes the page. Remote devices return remote_viewport_fixed; use browser_orientation to rotate a supported remote device; unsupported backends return viewport_unsupported. Preserves workspace ownership, user steering and handoff rules. Video encoding dimensions and max_width do not change this viewport."
+        description = "Set an existing local Chromium or Firefox panel's exact page content viewport in CSS pixels (320-8000 per axis). Supply both width and height, or reset=true without dimensions to resume host panel sizing. Waits for measured innerWidth/innerHeight and returns requested and applied sizes and zoom_percent (under a browser_zoom page zoom, applied is requested divided by zoom_percent/100); host layout and navigation preserve the pin until reset or session replacement. The canvas panel is unchanged and letterboxes the page. Remote devices return remote_viewport_fixed; use browser_orientation to rotate a supported remote device; unsupported backends return viewport_unsupported. Preserves workspace ownership, user steering and handoff rules. Video encoding dimensions and max_width do not change this viewport."
     )]
     async fn browser_resize(&self, Parameters(input): Parameters<ResizeInput>) -> Result<Json<ResizeOutput>, String> {
         let action = input.action()?;
@@ -417,6 +445,21 @@ impl HorizonBrowserMcp {
             .await
             .map_err(|error| error.to_string())?;
         ResizeOutput::from_result(input.panel_id, receipt.action_id, &receipt.value).map(Json)
+    }
+
+    #[tool(
+        name = "browser_zoom",
+        description = "Zoom an existing local Chromium or Firefox panel's page like the browser's zoom level, for reflow checks such as 200 percent: percent 25-500, or reset=true for 100. The page lays out in a CSS viewport of the panel size (or the browser_resize pin) divided by percent/100, media queries follow it, and the panel magnifies the frame; devicePixelRatio does not change. Waits for the measured innerWidth/innerHeight and returns requested_percent, applied_percent and css_viewport. The zoom survives navigation and host layout until reset or session replacement; browser_resize results report zoom_percent. A zoom whose CSS viewport would exceed 8000 pixels per axis is refused with invalid_input; if the panel grows later, the zoomed viewport stops at 8000 pixels on that axis. Safari and remote sessions return unsupported_backend. Preserves workspace ownership, user steering and handoff rules."
+    )]
+    async fn browser_zoom(&self, Parameters(input): Parameters<ZoomInput>) -> Result<Json<ZoomOutput>, String> {
+        let action = input.action()?;
+        let timeout = input.timeout_millis();
+        let receipt = self
+            .controller
+            .execute_engine_bounded(&input.panel_id, action, timeout)
+            .await
+            .map_err(|error| error.to_string())?;
+        ZoomOutput::from_result(input.panel_id, receipt.action_id, &receipt.value).map(Json)
     }
 
     #[tool(
@@ -480,7 +523,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_act",
-        description = "Click (including trusted double-click with count=2), fill, scroll, reload, go back, go forward, drop_files on a visible drop target (local Chromium and Firefox), or set_files to attach host files to an input[type=file] (target the input itself, even when hidden; files are absolute paths under your work root; the result lists the attached names and sizes). Prefer a fresh ref from browser_snapshot or browser_query over a selector."
+        description = "Click (including trusted double-click with count=2), fill, press a key or chord on the focused element (key such as Tab, Shift+Tab, Enter, Escape, ArrowDown or Control+a, optional count 1-100; read focus afterward with browser_evaluate or browser_screenshot), scroll, reload, go back, go forward, drop_files on a visible drop target (local Chromium and Firefox), or set_files to attach host files to an input[type=file] (target the input itself, even when hidden; files are absolute paths under your work root; the result lists the attached names and sizes). Prefer a fresh ref from browser_snapshot or browser_query over a selector."
     )]
     async fn browser_act(&self, Parameters(input): Parameters<ActInput>) -> Result<Json<ActionOutput>, String> {
         // Request shape errors are backend-independent: the builder and the
@@ -698,7 +741,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel only when its capabilities include handoff. Remote sessions do not support manual steering and return unsupported_backend; report that limitation instead of requesting a handoff. Use the default human-wait timeout on supported local sessions. Keep the turn active and await any yielded invocation until Done — hand back to agent; a final waiting message cannot resume on hand-back. On handoff timeout, inspect browser_panel: renew the blocking wait with resume_request_id from the timeout and the default timeout while handoff_pending is true; otherwise resume from a fresh snapshot if handoff completed, or report closure, lost ownership, cancellation, or connection failure. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use browser_provider_devices with a provider name and search words to discover any available device/OS/browser combination; pass its returned target to browser_create. Configured target names also remain supported; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Use browser_provider_usage to inspect shared usage for all configured provider profiles or one named provider, without allocating a session. Usage is informational and does not reserve capacity. If remote capacity remains held after a panel disappears, use browser_remote_allocations list and then reconcile its safe reference. Reconciliation checks only the exact retired allocation at the original provider; uncertain results retain the hold. Inspect each panel's advertised capabilities before requesting navigation, DOM actions, handoff, audit, network, or video capture. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. If you encounter HTTP Basic or Digest authentication, call browser_http_auth set with the username and password the user provided (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. To upload a file, call browser_act set_files on the input[type=file] element itself (browser_query finds it even when a styled button hides it) with absolute host paths under your work root; the result reports the attached names and sizes, BrowserStack desktop and Android sessions transfer them before selection; iOS uploads remain unsupported. For a local Chromium or Firefox drop zone, browser_act drop_files uses the same authorized files and staging, with the drop-zone ref or selector. Remote sessions and Safari do not support drop_files. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace, and to run a check in another engine beside your panel, call browser_create with that engine as backend. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel only when its capabilities include handoff. Remote sessions do not support manual steering and return unsupported_backend; report that limitation instead of requesting a handoff. Use the default human-wait timeout on supported local sessions. Keep the turn active and await any yielded invocation until Done — hand back to agent; a final waiting message cannot resume on hand-back. On handoff timeout, inspect browser_panel: renew the blocking wait with resume_request_id from the timeout and the default timeout while handoff_pending is true; otherwise resume from a fresh snapshot if handoff completed, or report closure, lost ownership, cancellation, or connection failure. To compare engines, browser_create with an explicit backend opens one panel per engine (chromium, firefox, safari) beside your existing panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session, which a second panel of the same engine, a create without backend, or another remote target needs. Use browser_provider_devices with a provider name and search words to discover any available device/OS/browser combination; pass its returned target to browser_create. Configured target names also remain supported; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Use browser_provider_usage to inspect shared usage for all configured provider profiles or one named provider, without allocating a session. Usage is informational and does not reserve capacity. If remote capacity remains held after a panel disappears, use browser_remote_allocations list and then reconcile its safe reference. Reconciliation checks only the exact retired allocation at the original provider; uncertain results retain the hold. Inspect each panel's advertised capabilities before requesting navigation, DOM actions, handoff, audit, network, or video capture. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. For page zoom checks (for example 200 percent reflow), call browser_zoom with percent 25-500 or reset=true on local Chromium or Firefox; its css_viewport is the panel or pinned size divided by the zoom, and Safari and remote sessions return unsupported_backend. If you encounter HTTP Basic or Digest authentication, call browser_http_auth set with the username and password the user provided (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. To upload a file, call browser_act set_files on the input[type=file] element itself (browser_query finds it even when a styled button hides it) with absolute host paths under your work root; the result reports the attached names and sizes, BrowserStack desktop and Android sessions transfer them before selection; iOS uploads remain unsupported. For a local Chromium or Firefox drop zone, browser_act drop_files uses the same authorized files and staging, with the drop-zone ref or selector. Remote sessions and Safari do not support drop_files. For keyboard checks, browser_act press sends trusted key presses (Tab, Shift+Tab, Enter, Escape, arrows, or a chord such as Control+a, with an optional count) to the focused element; then read document.activeElement with browser_evaluate or take a screenshot. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -871,16 +914,19 @@ mod tests {
                 "browser_video",
                 "browser_visibility",
                 "browser_wait",
+                "browser_zoom",
                 "cast",
                 "cloud_companion_ensure_ready",
                 "cloud_companion_operation",
                 "cloud_companion_stop",
                 "cloud_companion_uncheck",
                 "cloud_companions",
+                "cloud_image_destination",
                 "cloud_list",
                 "cloud_offers",
                 "cloud_upkeep",
                 "device_panel",
+                "tailnet_api_credential",
             ]
         );
         let schemas = serde_json::to_string(&server.tool_router.list_all()).unwrap_or_default();
@@ -896,6 +942,28 @@ mod tests {
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));
+    }
+
+    #[test]
+    fn credential_setup_schema_contains_only_owner_request_metadata() {
+        let server = HorizonBrowserMcp::new(BrowserController::with_actor("agent"));
+        let tools = server.tool_router.list_all();
+        let tool = tools.iter().find(|tool| tool.name == "tailnet_api_credential").unwrap();
+        let encoded_schema = serde_json::to_string(tool.input_schema.as_ref()).unwrap();
+        assert!(encoded_schema.contains("set_personal_token"));
+        assert!(encoded_schema.contains("set_oauth"));
+        let properties = tool.input_schema.get("properties").unwrap().as_object().unwrap();
+        assert_eq!(
+            properties
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["operation", "request_id", "tailnet_id"].into()
+        );
+        assert_eq!(
+            tool.input_schema.get("additionalProperties"),
+            Some(&serde_json::json!(false))
+        );
     }
 
     #[test]

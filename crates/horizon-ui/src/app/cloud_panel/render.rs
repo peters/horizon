@@ -112,7 +112,7 @@ impl HorizonApp {
                     ui.set_clip_rect(clip);
                     let (header, _) =
                         ui.allocate_exact_size(Vec2::new(rect.width(), group.header_chrome_height()), Sense::hover());
-                    paint_header_base(ui, header, accent);
+                    paint_header_base(ui, header, accent, group);
                     let drag_rect =
                         Rect::from_min_max(header.min, Pos2::new(close_rect(header).left(), header.bottom()));
                     // Production clouds register the drag first so the strip's controls sit above it.
@@ -232,7 +232,6 @@ impl HorizonApp {
         } else {
             self.render_production_runtimes(ctx);
             self.render_parked_strips(ctx);
-            self.finish_waiting_stops(ctx);
         }
         self.render_cloud_dialogs(ctx);
     }
@@ -243,7 +242,6 @@ impl HorizonApp {
         self.release_workspaces_after_creation(ctx);
         self.render_cloud_error(ctx);
         self.render_cloud_close_confirmation(ctx);
-        self.render_idle_stop_confirmation(ctx);
     }
 
     fn render_cloud_error(&mut self, ctx: &egui::Context) {
@@ -345,7 +343,7 @@ fn rename_field(
         header.min + Vec2::new(64.0, 16.0),
         Vec2::new((header.width() - 64.0 - reserved).max(120.0), 32.0),
     );
-    let edit = show_inline_rename_editor(ui, field, draft, FontId::proportional(21.0));
+    let edit = show_inline_rename_editor(ui, field, draft, FontId::proportional(TITLE_SIZE));
     let pressed_outside = ui.input(|input| {
         input.pointer.any_pressed()
             && input
@@ -362,6 +360,9 @@ fn rename_field(
 
 /// The hover text of the card itself.
 pub(super) const CARD_HINT: &str = "Click the title to rename. Drag to move this cloud.";
+/// Font sizes of a card's title and subtitle.
+pub(super) const TITLE_SIZE: f32 = 21.0;
+pub(super) const SUBTITLE_SIZE: f32 = 13.0;
 
 /// The title over the drag area: it takes the clicks, and drags fall through to the
 /// header so the card still moves from its title.
@@ -380,7 +381,7 @@ fn title_target(ui: &egui::Ui, group: &CloudGroup, header: Rect, reserved: f32) 
     let room = (header.width() - 64.0 - reserved).max(0.0);
     let width = ui
         .painter()
-        .layout_no_wrap(group.title.clone(), FontId::proportional(21.0), theme::FG())
+        .layout_no_wrap(group.title.clone(), FontId::proportional(TITLE_SIZE), theme::FG())
         .size()
         .x;
     let title = Rect::from_min_size(header.min + Vec2::new(64.0, 16.0), Vec2::new(width.min(room), 30.0));
@@ -455,8 +456,13 @@ fn close_rect(header: Rect) -> Rect {
     Rect::from_center_size(header.right_top() + Vec2::new(-24.0, 35.0), Vec2::splat(28.0))
 }
 
-/// The header's fill, bottom rule and cloud mark, under everything else in it.
-fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32) {
+/// The header's fill, bottom rule and mark, under everything else in it: the Docker
+/// whale for a cloud on a Docker host, else a cloud.
+fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32, group: &CloudGroup) {
+    let on_docker_host = group
+        .remote
+        .as_ref()
+        .is_some_and(|launch| launch.profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id);
     let painter = ui.painter();
     painter.rect_filled(
         rect,
@@ -478,7 +484,21 @@ fn paint_header_base(ui: &egui::Ui, rect: Rect, accent: Color32) {
         10,
         theme::blend(theme::PANEL_BG(), accent, 0.15),
     );
-    cloud_glyph(painter, mark, accent);
+    match on_docker_host
+        .then(|| super::production::cards::docker_mark(ui.ctx()))
+        .flatten()
+    {
+        Some(whale) => {
+            let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+            painter.image(
+                whale.id(),
+                Rect::from_center_size(mark, Vec2::splat(22.0)),
+                uv,
+                Color32::WHITE,
+            );
+        }
+        None => cloud_glyph(painter, mark, accent),
+    }
 }
 
 /// Title, subtitle and what sits right of them. Returns the width taken from the
@@ -510,7 +530,7 @@ fn paint_header(
             title_rect.left_center(),
             Align2::LEFT_CENTER,
             &group.title,
-            FontId::proportional(21.0),
+            FontId::proportional(TITLE_SIZE),
             theme::FG(),
         );
     }
@@ -535,7 +555,8 @@ fn paint_header(
         Pos2::new((rect.right() - reserved).max(rect.left() + 64.0), rect.top() + 70.0),
     );
     // Too long for the room left beside the strip: end it with an ellipsis, not a cut.
-    let mut job = egui::text::LayoutJob::simple_singleline(subtitle, FontId::proportional(13.0), theme::FG_SOFT());
+    let mut job =
+        egui::text::LayoutJob::simple_singleline(subtitle, FontId::proportional(SUBTITLE_SIZE), theme::FG_SOFT());
     job.wrap = egui::text::TextWrapping::truncate_at_width(subtitle_rect.width());
     let galley = painter.layout_job(job);
     painter.galley(

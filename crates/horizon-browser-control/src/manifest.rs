@@ -46,11 +46,13 @@ mod cloud_companion;
 mod cloud_list;
 mod create;
 pub mod device;
+mod image_destination;
 mod ownership;
 pub mod provider_usage;
 pub mod recovery;
 mod request_queue;
 mod result;
+mod tailnet_credential;
 mod upkeep;
 mod visibility;
 mod workspace;
@@ -65,9 +67,10 @@ pub use close::{
     complete_close_request, enqueue_close, list_close_requests, record_close_status, take_close_result,
 };
 pub use create::{
-    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
-    RemoteCreateParameters, claim_create_request, complete_create_request, enqueue_create, enqueue_create_oriented,
-    enqueue_duplicate, list_create_requests, record_create_status, take_create_result,
+    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateAdmission,
+    CreateNavigation, PendingCreate, RemoteCreateParameters, admit_create, claim_create_request,
+    complete_create_request, enqueue_create, enqueue_create_oriented, enqueue_duplicate, list_create_requests,
+    record_create_status, take_create_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{

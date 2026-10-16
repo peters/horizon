@@ -250,7 +250,6 @@ fn a_rebuild_that_changes_the_settings_sends_the_whole_new_environment() {
     let current = spec();
     let mut changed = next(&current);
     changed.profile.capabilities.desktop = !changed.profile.capabilities.desktop;
-    changed.profile.idle_stop_minutes = Some(30);
     changed.profile.bootstrap.readiness_seconds += 60;
     current.verify_replacement(&changed).unwrap();
     changed.verify_replacement(&current).unwrap();
@@ -262,7 +261,6 @@ fn a_rebuild_that_changes_the_settings_sends_the_whole_new_environment() {
     let sent = body(&requests.lock().unwrap()[1]);
     assert_eq!(sent["image"], json!(changed.image_digest));
     assert_eq!(sent["env"], super::super::create::create_body(&changed)["env"]);
-    assert_eq!(sent["env"]["HORIZON_IDLE_STOP_MINUTES"], json!("30"));
     // A readiness timeout never reaches the worker, so only the image is sent.
     let mut host_only = next(&current);
     host_only.profile.bootstrap.readiness_seconds += 60;
@@ -406,32 +404,18 @@ fn a_worker_on_the_new_image_with_the_previous_capabilities_is_not_settled() {
 }
 
 #[test]
-fn a_worker_on_one_image_with_the_other_idle_stop_is_not_settled() {
+fn a_pod_that_still_carries_an_idle_period_settles_on_either_image() {
     let current = spec();
-    let mut next = next(&current);
-    next.profile.idle_stop_minutes = Some(30);
-    let idle = |on: &WorkerSpec, minutes: Option<&str>| {
+    let next = next(&current);
+    let legacy = |on: &WorkerSpec| {
         let mut value = pod(&current, on);
-        if let Some(minutes) = minutes {
-            value["env"]["HORIZON_IDLE_STOP_MINUTES"] = json!(minutes);
-        }
+        value["env"]["HORIZON_IDLE_STOP_MINUTES"] = json!("30");
         value
     };
-    for (inspected, expected) in [
-        (idle(&next, None), Ok(Observed::Unsettled)),
-        (idle(&next, Some("30")), Ok(Observed::Next)),
-        (idle(&current, None), Ok(Observed::Previous)),
-        (idle(&current, Some("30")), Ok(Observed::Unsettled)),
-        // An idle stop of neither side is not this replacement's.
-        (idle(&next, Some("45")), Err(())),
-    ] {
+    for (inspected, expected) in [(legacy(&next), Observed::Next), (legacy(&current), Observed::Previous)] {
         let (provider, _requests, task) = server(vec![(200, inspected.to_string())]);
-        let observed = observe(&provider, &current, &next, None);
+        assert_eq!(observe(&provider, &current, &next, None).unwrap(), expected);
         task.join().unwrap();
-        match expected {
-            Ok(expected) => assert_eq!(observed.unwrap(), expected),
-            Err(()) => assert!(matches!(observed, Err(CloudError::IdentityMismatch)), "{observed:?}"),
-        }
     }
 }
 

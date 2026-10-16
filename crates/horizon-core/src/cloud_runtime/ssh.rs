@@ -122,7 +122,7 @@ impl Connection {
             &mut self.command(&worker_contract::readiness_command(capabilities)?),
             timeout.min(Duration::from_secs(40)),
         )?;
-        worker_contract::validate(&output, capabilities, false, false)?;
+        worker_contract::validate(&output, capabilities, false)?;
         Ok(WorkerContract::reported(&output))
     }
     /// # Errors
@@ -400,6 +400,7 @@ mod tests {
             tmux: "panel".into(),
             branch: String::new(),
             worktree: super::super::siblings::shared_worktree(None),
+            removed_agent_reported: false,
         };
         (root, connection, session)
     }

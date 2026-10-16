@@ -139,9 +139,6 @@ impl Mirrors {
             0o700,
         ));
         let folder = builder.tempdir_in(parent).map_err(|error| error.to_string())?;
-        if !mountable(folder.path()) {
-            return Err("Horizon's folder has a name Docker cannot mount".to_owned());
-        }
         let empty_config = folder.path().join("empty.gitconfig");
         std::fs::write(&empty_config, "").map_err(|error| error.to_string())?;
         // Settings that cannot be read in time clone nothing: a clone without them could
@@ -196,17 +193,21 @@ impl Mirrors {
         }))
     }
 
-    /// The `docker run` arguments: each clone mounted read-only, and Git in the
+    /// The `docker run` arguments and the copies of the container: each clone copied in,
+    /// owned by root so the CI's user can read but not change it, and Git in the
     /// container told to read it in place of its addresses. Git rewrites by the longest
     /// matching prefix, so each other address that starts with a cloned one maps to
     /// itself. Settings go in as environment, so nothing is written to the shared home
     /// and nothing passes through a shell.
-    pub(in crate::app::cloud_panel::production::repository_setup::proof) fn docker_args(&self) -> Vec<String> {
+    pub(in crate::app::cloud_panel::production::repository_setup::proof) fn container(
+        &self,
+    ) -> (Vec<String>, Vec<super::super::launch::Copy>) {
         let mut args = Vec::new();
+        let mut copies = Vec::new();
         let mut settings = Vec::new();
         for (folder, path, addresses) in &self.clones {
             let inside = format!("{MOUNT}/{folder}");
-            args.extend(["-v".to_owned(), format!("{}:{inside}:ro", path.display())]);
+            copies.push(super::super::launch::Copy::new(path, &inside));
             for address in addresses {
                 settings.push((format!("url.file://{inside}.insteadOf"), address.clone()));
             }
@@ -217,7 +218,7 @@ impl Mirrors {
         // starts to fetch from a local clone, which then refuses it as of dubious
         // ownership: the same trust goes in a system settings file, which reaches both.
         if let Some(trust) = &self.trust {
-            args.extend(["-v".to_owned(), format!("{}:{TRUST}:ro", trust.display())]);
+            copies.push(super::super::launch::Copy::new(trust, TRUST));
             args.extend(["-e".to_owned(), format!("GIT_CONFIG_SYSTEM={TRUST}")]);
         }
         for other in &self.others {
@@ -231,7 +232,7 @@ impl Mirrors {
             }
         }
         if settings.is_empty() {
-            return args;
+            return (args, copies);
         }
         args.extend(["-e".to_owned(), "CARGO_NET_GIT_FETCH_WITH_CLI=true".to_owned()]);
         args.extend(["-e".to_owned(), format!("GIT_CONFIG_COUNT={}", settings.len())]);
@@ -239,7 +240,7 @@ impl Mirrors {
             args.extend(["-e".to_owned(), format!("GIT_CONFIG_KEY_{index}={key}")]);
             args.extend(["-e".to_owned(), format!("GIT_CONFIG_VALUE_{index}={value}")]);
         }
-        args
+        (args, copies)
     }
 }
 
@@ -255,19 +256,6 @@ pub(super) fn trust(folder: &Path, clones: &[(String, PathBuf, Vec<String>)]) ->
     std::fs::write(&path, text)?;
     readable_to_all(&path)?;
     Ok(path)
-}
-
-/// Whether Docker's `-v SOURCE:TARGET:ro` reads `path` as one source: no colon after a
-/// Windows drive letter, since only colons part the fields.
-pub(super) fn mountable(path: &Path) -> bool {
-    let text = path.to_string_lossy();
-    let bytes = text.as_bytes();
-    let rest = if cfg!(windows) && bytes.len() > 1 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        &text[2..]
-    } else {
-        &text[..]
-    };
-    !rest.contains(':')
 }
 
 /// A `git` command in `folder`, Horizon's own folder that is no repository, that never

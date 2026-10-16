@@ -29,6 +29,7 @@ pub(in crate::app::cloud_panel::production) fn ready_cloud_in(
         .clone();
     let mut group = CloudGroup::new(1, "Cloud".into(), "workspace".into(), temp.path().into(), origin);
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         deployment_started: true,
         id: "fixture".into(),
         revision: "a".repeat(40),
@@ -318,6 +319,7 @@ fn a_status_read_asks_for_the_sessions_that_the_saved_record_holds() {
         tmux: tmux.into(),
         branch: String::new(),
         worktree: "/workspace/checkout".into(),
+        removed_agent_reported: false,
     };
     let sessions = vec![
         session("one", "tmux-1"),
@@ -416,6 +418,7 @@ fn a_session_recreated_while_its_cloud_is_hidden_parks_and_keeps_the_focus() {
         tmux: "three".into(),
         branch: String::new(),
         worktree: "/workspace/checkout".into(),
+        removed_agent_reported: false,
     });
     app.sync_cloud_presentations();
     let three = app
@@ -450,6 +453,7 @@ fn a_later_session_restore_in_a_parked_cloud_starts_parked_without_focus() {
         tmux: "late".into(),
         branch: String::new(),
         worktree: "/workspace/checkout".into(),
+        removed_agent_reported: false,
     });
     cloud.pending_session_attachments.insert("late".into());
     cloud.next_attachment_attempt = None;
@@ -486,6 +490,7 @@ fn a_cloud_in_view_at_a_later_ready_restores_missing_sessions_live() {
         tmux: "again".into(),
         branch: String::new(),
         worktree: "/workspace/checkout".into(),
+        removed_agent_reported: false,
     });
     app.sync_cloud_presentations();
     assert!(attached(&app, "again"), "a cloud in view attaches its restored session");
@@ -583,16 +588,6 @@ impl Parking {
     pub(in crate::app::cloud_panel::production) fn attach_for_test(&mut self) {
         self.tracker = Some(ParkTracker::attached());
         self.policy.park_grace = Duration::from_secs(3600);
-    }
-
-    /// As [`Parking::park_with`], from a read that started at `started`.
-    pub(in crate::app::cloud_panel::production) fn read_with(
-        &mut self,
-        statuses: Vec<SessionStatus>,
-        started: Instant,
-    ) {
-        self.park_with(statuses);
-        self.statuses_since = Some(started);
     }
 }
 

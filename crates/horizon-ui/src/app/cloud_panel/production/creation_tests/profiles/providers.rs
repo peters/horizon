@@ -363,28 +363,153 @@ fn unsupported_providers_do_not_block_gpu_comparisons() {
     assert!(shown.offers.iter().all(|offer| offer.provider == "RunPod"));
 }
 
+fn saved_host(app: &mut HorizonApp, free_cpus: u64) {
+    use horizon_core::cloud_runtime::docker_host::{Capacity, hosts::Reading};
+    app.cloud_prototype.production.prices.hosts.answered(vec![Reading {
+        host: serde_json::from_value(serde_json::json!({"name": "build-box", "access": "this-pc"})).unwrap(),
+        capacity: Ok(Capacity {
+            cpus: 16,
+            memory_bytes: 64 << 30,
+            free_nano_cpus: free_cpus * 1_000_000_000,
+            free_memory_bytes: 48 << 30,
+            architecture: "x86_64".into(),
+            version: "28.5.1".into(),
+        }),
+    }]);
+}
+
 #[test]
-fn a_docker_host_profile_is_shown_but_never_started_on_a_rented_worker() {
+fn a_saved_docker_host_is_a_starting_point_at_no_rent() {
+    use crate::app::cloud_panel::production::creation::can_submit;
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
     hetzner_binding(&mut app);
+    saved_host(&mut app, 12);
     tall_frame(&ctx, &mut app);
-    assert!(crate::app::cloud_panel::production::creation::can_submit(
-        &app.cloud_prototype.production
-    ));
-    let form = &mut app.cloud_prototype.production;
-    let profile = form.profiles.as_mut().unwrap().profiles.get_mut("development").unwrap();
-    profile.provider = "docker-host".into();
-    tall_frame(&ctx, &mut app);
-    tall_frame(&ctx, &mut app);
-    // Even with a rented provider's offer chosen, New cloud starts nothing yet.
-    assert!(!crate::app::cloud_panel::production::creation::can_submit(
-        &app.cloud_prototype.production
-    ));
     let output = tall_frame(&ctx, &mut app);
-    assert!(painted(&output).contains("Docker host"), "the provider chip names it");
+    let text = painted(&output);
+    assert!(
+        text.contains("YOUR HOST") && text.contains("No rent") && text.contains("Fits"),
+        "{text}"
+    );
+    // The cheapest rented worker stays the default; the host is one click away.
+    assert_eq!(selected(&app).provider, "Hetzner");
+    click(&ctx, &mut app, label_rect(&output, "Docker host · build-box").center());
+    let output = tall_frame(&ctx, &mut app);
+    let form = &app.cloud_prototype.production;
+    assert_eq!(form.provider.map(|provider| provider.id), Some("docker-host"));
+    assert_eq!(form.placement.data_centers, ["build-box"]);
+    assert!(can_submit(form));
+    let text = painted(&output);
+    assert!(
+        text.contains("Docker host build-box · profile") && !text.contains("Hetzner prices exclude VAT"),
+        "{text}"
+    );
+    // A profile written for a host offers only hosts, and the host that fits is chosen.
+    let form = &mut app.cloud_prototype.production;
+    form.provider = None;
+    form.placement = horizon_core::cloud_panel::Placement::default();
+    form.profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+        .provider = "docker-host".into();
+    let output = tall_frame(&ctx, &mut app);
+    assert!(!painted(&output).contains("CHEAPEST"));
+    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["build-box"]);
+    assert!(can_submit(&app.cloud_prototype.production));
+    // A host with too little free is shown but never chosen.
+    app.cloud_prototype.production.placement = horizon_core::cloud_panel::Placement::default();
+    saved_host(&mut app, 1);
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("Too little free now"));
+    assert!(app.cloud_prototype.production.placement.data_centers.is_empty());
+    assert!(!can_submit(&app.cloud_prototype.production));
+}
+
+fn development(app: &mut HorizonApp) -> &mut horizon_core::cloud_runtime::prices::Profile {
+    app.cloud_prototype
+        .production
+        .profiles
+        .as_mut()
+        .unwrap()
+        .profiles
+        .get_mut("development")
+        .unwrap()
+}
+
+#[test]
+fn a_chosen_docker_host_stays_chosen_and_start_waits_for_a_current_reading() {
+    use crate::app::cloud_panel::production::creation::can_submit;
+    use horizon_core::cloud_runtime::docker_host::{Capacity, hosts::Reading};
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    saved_host(&mut app, 12);
+    tall_frame(&ctx, &mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Docker host · build-box").center());
+    tall_frame(&ctx, &mut app);
+    assert!(can_submit(&app.cloud_prototype.production));
+    // A host keeps no size of its own: a profile read again with more than the host has
+    // free is checked at its new size.
+    assert_eq!(app.cloud_prototype.production.size, None);
+    let cpu = development(&mut app).cpu;
+    development(&mut app).cpu = 16;
+    tall_frame(&ctx, &mut app);
+    assert!(!can_submit(&app.cloud_prototype.production));
+    development(&mut app).cpu = cpu;
+    tall_frame(&ctx, &mut app);
+    assert!(can_submit(&app.cloud_prototype.production));
+    // A profile a host cannot run says what to change on the card.
+    development(&mut app).storage.volume_tier = horizon_core::cloud_runtime::prices::StorageTier::HighPerformance;
+    let output = tall_frame(&ctx, &mut app);
+    assert!(
+        painted(&output).contains("choose standard storage"),
+        "{}",
+        painted(&output)
+    );
+    assert!(!can_submit(&app.cloud_prototype.production));
+    development(&mut app).storage.volume_tier = horizon_core::cloud_runtime::prices::StorageTier::Standard;
+    tall_frame(&ctx, &mut app);
+    assert!(can_submit(&app.cloud_prototype.production));
+    // A reading past its freshness limit keeps the choice, but Start waits for the next one.
+    app.cloud_prototype.production.prices.hosts.outdated();
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("Reading again"), "{}", painted(&output));
+    assert!(!can_submit(&app.cloud_prototype.production));
+    // Hosts removed or switched off: the choice stays and Start refuses it, never renting
+    // a worker in its place.
+    app.cloud_prototype.production.prices.hosts.answered(Vec::new());
+    let output = tall_frame(&ctx, &mut app);
+    assert!(painted(&output).contains("turn it on"), "{}", painted(&output));
+    let form = &app.cloud_prototype.production;
+    assert_eq!(form.provider.map(|provider| provider.id), Some("docker-host"));
+    assert_eq!(form.placement.data_centers, ["build-box"]);
+    assert!(!can_submit(form));
+    // For a profile written for a host, another host does not replace the missing one.
+    development(&mut app).provider = "docker-host".into();
+    app.cloud_prototype.production.prices.hosts.answered(vec![Reading {
+        host: serde_json::from_value(serde_json::json!({"name": "spare-box", "access": "this-pc"})).unwrap(),
+        capacity: Ok(Capacity {
+            cpus: 16,
+            memory_bytes: 64 << 30,
+            free_nano_cpus: 12_000_000_000,
+            free_memory_bytes: 48 << 30,
+            architecture: "x86_64".into(),
+            version: "28.5.1".into(),
+        }),
+    }]);
+    let output = tall_frame(&ctx, &mut app);
+    assert_eq!(app.cloud_prototype.production.placement.data_centers, ["build-box"]);
+    assert!(!can_submit(&app.cloud_prototype.production));
+    assert!(painted(&output).contains("no longer saved"), "{}", painted(&output));
 }
 
 #[test]

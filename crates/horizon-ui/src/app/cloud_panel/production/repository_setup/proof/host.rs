@@ -22,11 +22,15 @@ impl Job {
         Ok(())
     }
 
-    /// The CI container reads the clones read-only in place of their GitHub addresses.
-    pub(super) fn mount_crates(&self, command: &mut Command) {
-        if let Some(mirrors) = self.mirrors.borrow().as_ref() {
-            command.args(mirrors.docker_args());
-        }
+    /// The CI container reads copies of the clones in place of their GitHub addresses:
+    /// the settings go on `command`, and the copies are returned.
+    pub(super) fn crate_copies(&self, command: &mut Command) -> Vec<super::launch::Copy> {
+        let Some(mirrors) = self.mirrors.borrow().as_ref().map(crates::Mirrors::container) else {
+            return Vec::new();
+        };
+        let (args, copies) = mirrors;
+        command.args(args);
+        copies
     }
 
     /// Checks the snapshot's toolchain pins first: a toolchain the repository moved fails

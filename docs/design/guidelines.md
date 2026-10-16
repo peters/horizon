@@ -463,7 +463,7 @@ Fixed metrics:
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Menu search field | 32 high, radius 8, text inset 28 left and 10 right |
-| Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: the primary ("Save settings", or "Save and start" while continuing a first cloud) 148 x 40, `Cancel` at least 80 x 40 |
+| Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: the primary ("Save settings", "Save and start" while continuing a first cloud, or "Save and return" for registry edits) 148 x 40, `Cancel` at least 80 x 40 |
 | Overlay text input | 44 high |
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
 | Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
@@ -549,8 +549,8 @@ Cloud accounts dialog specifics:
   something, `FG_DIM` off or optional). Color never stands alone.
 - A saved key is a masked well (`BG`, radius 8) with Replace; a key is never shown
   back. Fields are 36 high with a 12 `FG_SOFT` label above.
-- A separator sits above the footer. The primary ("Save settings", or
-  "Save and start" while continuing a first cloud) is 148 x 40 with a
+- A separator sits above the footer. The primary ("Save settings", "Save and start" while continuing a first cloud, or
+  "Save and return" for registry edits) is 148 x 40 with a
   `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label; `Cancel` is
   at least 80 x 40.
 - Dismissal is ignored while a save is running.
@@ -610,7 +610,7 @@ backdrop dimming:
 |---|---|---|---|---|---|
 | Primary (emphasized chrome) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | 1 px `blend(BORDER_STRONG, ACCENT, 0.72)` | `FG` 11.5 | 10 | Toolbar "update available" |
 | Primary (creation dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
-| Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | Accounts dialog save ("Save settings" / "Save and start"), 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
+| Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | Accounts dialog save ("Save settings" / "Save and start" / "Save and return"), 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
 | Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar and sidebar actions, 30 high |
 | Secondary (creation dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 (the accounts dialog's `Cancel` is min 80 x 40 with egui's default radius) |
 | Danger | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | 1 px `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `FG` 11 | 10 | Destructive actions in chrome |

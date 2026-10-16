@@ -3,7 +3,6 @@
 //! fenced by the deployment's `operation`; the volume, the chosen location and
 //! the SSH key live in this cloud's `hetzner.json` journal, so `RunPod` clouds and
 //! their records are untouched.
-pub(in crate::cloud_runtime) mod idle;
 pub(in crate::cloud_runtime) mod lifecycle;
 mod provision;
 mod readiness;
@@ -56,13 +55,12 @@ pub(in crate::cloud_runtime) fn pull_login(
 ) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
     // A private image the machine has a registry binding for needs a pull login
     // on the host; without one the host's pull would fail after allocation.
-    let private = registries
-        .map(|config| config.select(image))
-        .transpose()?
-        .flatten()
-        .is_some();
-    let login = hetzner.registry_login()?;
-    horizon_cloud::hetzner::cloud::check_login(login.as_ref(), private, image)?;
+    let binding = registries.map(|config| config.select(image)).transpose()?.flatten();
+    let login = match binding {
+        Some(binding) => Some(binding.host_login()?),
+        None => hetzner.registry_login()?,
+    };
+    horizon_cloud::hetzner::cloud::check_login(login.as_ref(), binding.is_some(), image)?;
     Ok(login)
 }
 
@@ -98,6 +96,13 @@ pub(in crate::cloud_runtime) struct Compute {
     pub(super) allowed: Allowed,
     /// The machine's private registry bindings, to tell whether an image needs a pull login.
     pub(super) registries: Option<crate::cloud_runtime::registry::Config>,
+    pub(super) verified_pull: std::cell::RefCell<Option<VerifiedPull>>,
+}
+
+pub(in crate::cloud_runtime::deployment) struct VerifiedPull {
+    pub image: String,
+    pub login: horizon_cloud::host::RegistryLogin,
+    pub expires_at: Option<i64>,
 }
 
 impl Compute {
@@ -112,6 +117,7 @@ impl Compute {
             settings: hetzner,
             allowed,
             registries: settings.registries.clone(),
+            verified_pull: std::cell::RefCell::default(),
         })
     }
 
@@ -140,6 +146,7 @@ impl Compute {
                 server_types: Vec::new(),
             },
             registries: None,
+            verified_pull: std::cell::RefCell::default(),
         })
     }
 }

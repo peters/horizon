@@ -16,6 +16,9 @@ use super::workspace::AgentIdentity;
 use super::{ManifestLock, actor_is_workspace_scoped};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
+mod admission;
+pub use admission::{CreateAdmission, PendingCreate, admit_create};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserCreateAuditStatus {
     Queued,

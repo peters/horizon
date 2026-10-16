@@ -22,16 +22,17 @@ pub use audit::{
 };
 pub use command::BrowserCommand;
 pub use control::{
-    AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
-    DEFAULT_WAIT_TIMEOUT_MILLIS, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS,
+    AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_PRESS_COUNT,
+    DEFAULT_WAIT_TIMEOUT_MILLIS, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_PRESS_COUNT,
     MAX_QUERY_RESULTS, MAX_REMOTE_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES, MAX_SNAPSHOT_NODES,
-    MAX_WAIT_TIMEOUT_MILLIS, NavigationWait, normalize_navigation_target,
+    MAX_WAIT_TIMEOUT_MILLIS, MAX_ZOOM_PERCENT, MIN_ZOOM_PERCENT, NavigationWait, normalize_navigation_target,
+    zoomed_viewport,
 };
 pub use http_auth::{
     BrowserHttpAuthOperation, MAX_HTTP_AUTH_ORIGIN_BYTES, MAX_HTTP_AUTH_PASSWORD_BYTES, MAX_HTTP_AUTH_USERNAME_BYTES,
     SecretString, parse_http_auth_origin, request_origin, validate_http_auth_password, validate_http_auth_username,
 };
-pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
+pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers};
 pub use network::{
     BrowserNetworkCapture, BrowserNetworkCaptureOptions, BrowserNetworkConnection, BrowserNetworkConnectionState,
     BrowserNetworkDirection, BrowserNetworkEventKind, BrowserNetworkFrameOptions, BrowserNetworkOperation,

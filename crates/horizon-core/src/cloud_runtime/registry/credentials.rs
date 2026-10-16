@@ -31,14 +31,13 @@ impl Material {
             base64::engine::general_purpose::STANDARD
                 .encode(Zeroizing::new(format!("{}:{}", auth.username, secret.as_str())).as_bytes()),
         );
-        let config = tempfile::Builder::new().prefix("horizon-registry-").tempdir()?;
+        let config = crate::cloud_runtime::github::publish::empty_build_config()?;
         let mut file = tempfile::NamedTempFile::new_in(config.path())?;
         let host = docker_auth_key(repository);
-        serde_json::to_writer(
-            &mut file,
-            &serde_json::json!({"auths": {host: {"auth": encoded.as_str()}}}),
-        )
-        .map_err(|_| Error::Json)?;
+        let mut settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(config.path().join("config.json"))?).map_err(|_| Error::Json)?;
+        settings["auths"] = serde_json::json!({host: {"auth": encoded.as_str()}});
+        serde_json::to_writer(&mut file, &settings).map_err(|_| Error::Json)?;
         file.flush()?;
         file.persist(config.path().join("config.json"))
             .map_err(|error| error.error)?;

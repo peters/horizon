@@ -26,7 +26,8 @@ MAX_KEY = 128
 CONTROL = re.compile('[\x00-\x1f\x7f-\x9f]')
 # horizon-worker-run sets or clears these for every session; a layer cannot replace them.
 WORKER_OWNED = frozenset({'PATH', 'HOME', 'DISPLAY', 'HORIZON', 'DISABLE_AUTOUPDATER',
-                          'ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS'})
+                          'ANTHROPIC_API_KEY', 'ANTHROPIC_WORKSPACE_ID', 'ANTHROPIC_CUSTOM_HEADERS',
+                          'CLAUDE_CODE_OAUTH_TOKEN'})
 PATH_DIRECTIVES = ('PATH_PREPEND', 'PATH_APPEND')
 MAX_FILES = 64
 MAX_FILE_BYTES = 16 * 1024

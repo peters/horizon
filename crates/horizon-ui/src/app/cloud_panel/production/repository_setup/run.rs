@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
+mod board;
 mod crates;
 mod view;
 pub(super) use view::{readable_rows, render};
@@ -241,6 +242,10 @@ pub(in crate::app::cloud_panel::production) struct Run {
     /// The browser panel for a fix on GitHub, and who works in it for the current proof.
     pub(super) fix_panel: Option<PanelId>,
     pub(super) fixer: Option<Fixer>,
+    /// Why the last thing asked of this run did not happen, shown with its progress.
+    pub(super) notice: Option<String>,
+    /// The Docker host its proof builds on; none for this computer.
+    pub(super) build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
 }
 
 /// What the person did in the progress view.
@@ -345,6 +350,8 @@ impl Run {
             agent_closed: false,
             fix_panel: None,
             fixer: None,
+            notice: None,
+            build_on: None,
         }
     }
 
@@ -760,16 +767,28 @@ impl Run {
         let pinned = self.proof.as_ref().map(Proof::daemon);
         let worker = self.stop_all();
         let after = joined(before, worker);
-        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, pinned, wait);
+        let route = (pinned, self.build_on.clone());
+        proof::remove_run_resources(&self.repository, &proof::run_id(&self.status_path), after, route, wait);
     }
 
     /// Ends the run in the background: its agent's processes end, its proof stops, then
-    /// the proof's containers, image and volume and the run's folder go. A new setup
-    /// waits for that, so two setups never run at once.
+    /// the proof's containers, image and volume and the run's folder go. A new setup of
+    /// the same repository waits for that, so two setups never work in one folder.
     pub(super) fn discard(self) {
-        // Noted before the thread starts, so an exit that comes first keeps them.
-        proof::expect_removal(&self.repository, &proof::run_id(&self.status_path));
-        keep_ending(std::thread::spawn(move || drop(self)));
+        // Noted first, so an exit keeps them: on the pinned host and engine, else the run's.
+        let pinned = self.proof.as_ref().map(Proof::daemon);
+        let known = pinned.as_ref().and_then(|pinned| pinned.get());
+        let docker_host = proof::docker_host_of(known, self.build_on.as_ref());
+        let engine_id = known
+            .and_then(proof::Daemon::remote)
+            .map(|on| on.engine_id().to_owned());
+        proof::expect_removal(
+            &self.repository,
+            &proof::run_id(&self.status_path),
+            (docker_host.as_deref(), engine_id.as_deref()),
+        );
+        let repository = self.repository.clone();
+        keep_ending_of(&repository, std::thread::spawn(move || drop(self)));
     }
 
     fn release(&mut self, wait: bool) {
@@ -845,6 +864,21 @@ impl Run {
             });
         }
         let phase = self.proof_phase(&step.title)?;
+        // The proof waits for a build slot that other setups hold.
+        if step.title == proof::BUILD
+            && phase.started.is_none()
+            && let Some(waiting) = self
+                .proof
+                .as_ref()
+                .map(|proof| &proof.waiting)
+                .filter(|waiting| !waiting.is_empty())
+        {
+            return Some(Step {
+                title: step.title.clone(),
+                state: State::Pending,
+                detail: format!("Waiting for a build slot; {} builds", waiting.join(", ")),
+            });
+        }
         let (state, detail) = match (phase.started, phase.ended, phase.failure.as_deref()) {
             (_, Some(_), Some(failure)) => (State::Failed, failure.to_owned()),
             (_, Some(_), None) => (State::Done, "proved by Horizon".to_owned()),
@@ -869,44 +903,8 @@ impl Step {
     }
 }
 
-/// Runs, agents and proof resources being ended in the background.
-static ENDING: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
-
-/// Keeps `ending`, a thread that ends a run, an agent or what a proof made, so a new
-/// setup and Horizon's exit wait for it.
-pub(in crate::app::cloud_panel::production::repository_setup) fn keep_ending(ending: std::thread::JoinHandle<()>) {
-    ENDING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(ending);
-}
-
-/// Waits until every run, agent and proof resource being ended in the background has
-/// ended, with what their ending started in turn: a new setup starts only then, and
-/// Horizon exits only then. No waiter takes a handle out before its thread has
-/// finished, so every waiter sees each running one: a thread leaves the list only once
-/// its work has returned, and any ending it started by then is in the list already.
-pub(super) fn wait_for_ended_runs() {
-    let _ = wait_for_ended_runs_within(None);
-}
-
-/// As [`wait_for_ended_runs`], for at most `limit`; whether every one ended in time.
-pub(super) fn wait_for_ended_runs_within(limit: Option<Duration>) -> bool {
-    let deadline = limit.map(|limit| Instant::now() + limit);
-    loop {
-        {
-            let mut ending = ENDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            ending.retain(|run| !run.is_finished());
-            if ending.is_empty() {
-                return true;
-            }
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
+pub(super) use super::runs::{endings_begun, wait_for_ended_runs_of, wait_for_ended_runs_within};
+pub(in crate::app::cloud_panel::production::repository_setup) use super::runs::{keep_ending, keep_ending_of};
 
 /// A run dropped without Stop or Use, as when Horizon exits, still leaves nothing
 /// behind: Horizon waits for its proof to stop and removes what it made.
@@ -917,7 +915,7 @@ impl Drop for Run {
 }
 
 /// Removes a finished run's folder, its status, proof logs and screenshots, on a thread
-/// that a new setup and Horizon's exit wait for.
+/// that Horizon's exit waits for.
 pub(super) fn remove_run_folder(status: &std::path::Path) {
     let status = status.to_path_buf();
     keep_ending(std::thread::spawn(move || remove_run_folder_now(&status)));
@@ -1015,7 +1013,7 @@ mod tests {
             .map(|_| {
                 let done = nested_done.clone();
                 std::thread::spawn(move || {
-                    wait_for_ended_runs();
+                    wait_for_ended_runs_within(None);
                     done.load(Ordering::SeqCst)
                 })
             })
@@ -1026,6 +1024,28 @@ mod tests {
                 "no waiter returns before the nested ending finished"
             );
         }
+    }
+
+    // The proof's test doubles are built where the setup agent is offered: on Linux.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_proof_that_waits_for_a_build_slot_says_who_builds() {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Usage,
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.proof = Some(Proof::waiting_on(&["web-api", "mobile-app"]));
+        let steps = run.steps();
+        let build = steps.iter().find(|step| step.title == proof::BUILD).unwrap();
+        assert_eq!(build.state, State::Pending);
+        assert_eq!(build.detail, "Waiting for a build slot; web-api, mobile-app builds");
+        run.proof = Some(Proof::waiting_on(&[]));
+        let steps = run.steps();
+        let build = steps.iter().find(|step| step.title == proof::BUILD).unwrap();
+        assert!(build.detail.is_empty(), "a proof with its slot waits for nothing");
     }
 
     #[test]

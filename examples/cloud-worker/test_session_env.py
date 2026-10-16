@@ -84,6 +84,7 @@ class SessionEnvironmentTests(unittest.TestCase):
             ('20-x.env', 'HORIZON=elsewhere\n', 'HORIZON cannot be set'),
             ('20-x.env', 'DISPLAY=:1\n', 'DISPLAY cannot be set'),
             ('20-x.env', 'ANTHROPIC_API_KEY=x\n', 'ANTHROPIC_API_KEY cannot be set'),
+            ('20-x.env', 'CLAUDE_CODE_OAUTH_TOKEN=x\n', 'CLAUDE_CODE_OAUTH_TOKEN cannot be set'),
             ('20-x.env', 'K' * 129 + '=1\n', 'at most 128'),
             ('20-x.env', 'PATH_PREPEND=opt/bin\n', 'PATH_PREPEND needs one absolute directory'),
             ('20-x.env', 'PATH_APPEND=/a:/b\n', 'PATH_APPEND needs one absolute directory'),

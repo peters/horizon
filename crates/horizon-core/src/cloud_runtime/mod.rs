@@ -5,6 +5,7 @@ pub mod billing;
 pub mod bootstrap_initialization;
 pub mod bootstrap_recovery;
 pub mod browser_auth;
+pub mod claude_token;
 pub mod codex_login;
 pub mod command;
 pub mod companions;
@@ -28,6 +29,7 @@ pub mod progress;
 pub mod project_reservations;
 pub mod project_setup;
 mod providers;
+pub mod publishing;
 pub mod registry;
 pub mod repository;
 pub mod repository_choice;
@@ -60,6 +62,14 @@ pub enum Error {
     DockerNotResponding(&'static str),
     #[error("Private worker request failed; its output is intentionally not logged")]
     PrivateTransport,
+    #[error(
+        "Tailnet node cleanup is unconfirmed for saved tailnet {tailnet_id}, device {device_id}: {reason}. Preserve the original cloud record, remove this exact node manually in its saved tailnet or retry node cleanup."
+    )]
+    TailnetNodeCleanup {
+        tailnet_id: String,
+        device_id: String,
+        reason: &'static str,
+    },
     #[error("Another controller owns this cloud operation")]
     Busy,
     #[error("{primary}; cleanup also failed: {cleanup}")]
@@ -68,6 +78,21 @@ pub enum Error {
     Sibling(#[from] siblings::SiblingError),
     #[error(transparent)]
     Uncommitted(#[from] repository::uncommitted::Refusal),
+    /// The configured API-key or setup-token file of an agent is unusable. A rebuild checks
+    /// every agent of the new profile, so its refusal says that a reconnect needs the file too.
+    #[error(
+        "Agent {agent} cannot use its {kind} {}: {problem}{}",
+        path.display(),
+        if *rebuild { ". A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild" } else { "" }
+    )]
+    AgentCredential {
+        agent: &'static str,
+        /// `API-key file` or `setup-token file`.
+        kind: &'static str,
+        path: std::path::PathBuf,
+        problem: String,
+        rebuild: bool,
+    },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
@@ -91,6 +116,9 @@ pub enum Event {
         active: Option<String>,
         last: Option<String>,
     },
+    /// A watch of a ready worker is about to check it. Sent only to learn whether the
+    /// card still listens, so a watch whose card is gone, as after a session switch, ends.
+    Watching,
 }
 impl Event {
     #[must_use]

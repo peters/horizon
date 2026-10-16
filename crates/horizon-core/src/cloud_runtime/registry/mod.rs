@@ -1,13 +1,15 @@
 //! Machine-local image grants. Publishing and worker pulling never share a binding.
 pub use horizon_cloud::runpod::registry::State;
 mod credentials;
+mod directory;
 mod management;
 mod needed;
 mod preflight;
-pub use management::{Action, Status, Validation, manage};
+pub use management::{Action, Scope, Status, Validation, manage};
 pub use needed::{Needed, Publishing, needed, repository_of};
 pub mod draft;
 mod store;
+pub(in crate::cloud_runtime) use store::ensure_outside_source;
 #[cfg(test)]
 mod tests;
 
@@ -120,6 +122,32 @@ impl Config {
 }
 
 impl Binding {
+    /// The exact read-only grant for a worker host. Publishing material stays local.
+    pub(in crate::cloud_runtime) fn host_login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        self.validate()?;
+        if !self.read_only_confirmed {
+            return Err(Error::Invalid(
+                "Confirm that the worker pull credential is repository-scoped and read-only",
+            ));
+        }
+        let material = Material::load(&self.pull, &self.repository, None)?;
+        self.host_login_with(&material.secret)
+    }
+
+    fn host_login_with(&self, secret: &str) -> Result<horizon_cloud::host::RegistryLogin> {
+        let server = self.repository.split('/').next().unwrap_or_default();
+        if !horizon_cloud::host::RegistryLogin::valid_identity(server, &self.pull.username) {
+            return Err(Error::Invalid(
+                "Use a lowercase registry hostname without a trailing dot for a CPU host login",
+            ));
+        }
+        Ok(horizon_cloud::host::RegistryLogin {
+            server: server.to_owned(),
+            username: self.pull.username.clone(),
+            password: horizon_cloud::Credential::new(secret.to_owned())?,
+        })
+    }
+
     fn validate(&self) -> Result<()> {
         if repository(&self.repository)? != self.repository || !self.repository.contains('/') {
             return Err(Error::Invalid(
@@ -194,13 +222,52 @@ pub struct Prepared {
     pull: Material,
     journal: Journal,
     verified: bool,
+    direct_host: bool,
     docker_host: Option<String>,
 }
 
 impl Prepared {
+    /// The read-only material verified for this exact immutable image, pinned in memory.
+    pub(in crate::cloud_runtime) fn host_login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        if !self.verified {
+            return Err(Error::Invalid(
+                "Verify the worker's exact image with its read-only grant before allocation",
+            ));
+        }
+        self.binding.host_login_with(&self.pull.secret)
+    }
+
+    /// Earliest declared or issuer-observed expiry of the current verified material.
+    pub(in crate::cloud_runtime) fn pull_expires_at(&self) -> Result<Option<i64>> {
+        if !self.verified {
+            return Err(Error::Invalid("Verify the pull grant before retaining its expiry"));
+        }
+        let validation = self
+            .journal
+            .validation()
+            .ok_or(Error::Invalid("Verified pull metadata is missing"))?;
+        let declared = self.binding.pull.expires_at.as_deref().map(parse_expiry).transpose()?;
+        let observed = validation.expires_at.as_deref().map(parse_expiry).transpose()?;
+        Ok(declared.into_iter().chain(observed).min())
+    }
+
     /// # Errors
     /// Validates explicit grants, expiry, secret separation and source isolation before a build.
     pub fn for_image(settings: &Settings, image: &str, source: Option<&Path>, building: bool) -> Result<Option<Self>> {
+        Self::for_image_for_provider(settings, image, source, building, horizon_cloud::provider::Kind::RunPod)
+    }
+
+    /// Private image preparation for the selected provider. Direct hosts use no compute API key.
+    /// # Errors
+    /// Invalid scopes, expiry, source isolation, secret separation or failed private persistence.
+    pub fn for_image_for_provider(
+        settings: &Settings,
+        image: &str,
+        source: Option<&Path>,
+        building: bool,
+        provider: horizon_cloud::provider::Kind,
+    ) -> Result<Option<Self>> {
+        let direct_host = provider != horizon_cloud::provider::Kind::RunPod;
         let Some(config) = &settings.registries else {
             return Ok(None);
         };
@@ -213,6 +280,12 @@ impl Prepared {
             ));
         }
         let source = source.map(Path::canonicalize).transpose()?;
+        if let Some(source) = &source {
+            store::ensure_outside_source(&config.root, source)?;
+            if direct_host {
+                store::ensure_outside_source(&config.root.join("hosts"), source)?;
+            }
+        }
         let pull = Material::load(&binding.pull, &binding.repository, source.as_deref())?;
         credentials::ensure_separate(&binding.pull, &pull, binding.publish.as_ref(), source.as_deref())?;
         let publish = binding
@@ -232,12 +305,13 @@ impl Prepared {
                 "Publishing and worker pulling must use different credentials",
             ));
         }
-        if let Some(source) = &source {
-            store::ensure_outside_source(&config.root, source)?;
-        }
         let login_identity =
             credentials::fingerprint(format!("{}\0{}", binding.pull.username, pull.fingerprint).as_bytes());
-        let journal = Journal::open(config, binding, settings, Some(&login_identity))?;
+        let journal = if direct_host {
+            Journal::open_host(config, binding, &login_identity)?
+        } else {
+            Journal::open(config, binding, settings, Some(&login_identity))?
+        };
         if matches!(journal.state(), State::Revoking(_) | State::Revoked) {
             return Err(Error::Invalid(
                 "Worker pull binding is revoked; rotate it before deploying",
@@ -249,6 +323,7 @@ impl Prepared {
             pull,
             journal,
             verified: false,
+            direct_host,
             docker_host: settings.docker_host.clone(),
         }))
     }
@@ -328,6 +403,11 @@ impl Prepared {
         observe: super::mutation::Observer<'_>,
     ) -> Result<String> {
         use super::mutation::State as Mutation;
+        if self.direct_host {
+            return Err(Error::Invalid(
+                "A direct host pull grant cannot create provider registry access",
+            ));
+        }
         self.observe_pending(observe)?;
         if !self.verified {
             return Err(Error::Invalid(

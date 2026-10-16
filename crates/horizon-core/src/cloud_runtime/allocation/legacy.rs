@@ -29,7 +29,7 @@ pub struct Records {
 }
 
 impl Records {
-    /// Convert the complete version-1 payload using IDs supplied by durable intent.
+    /// Convert a supported dedicated payload using IDs supplied by durable intent.
     ///
     /// # Errors
     /// Rejects unknown fields, unsupported versions and mismatched cloud membership.
@@ -40,7 +40,7 @@ impl Records {
         controller: ControllerId,
     ) -> Result<Self, Error> {
         let mut legacy: Deployment = decode_preserving(bytes)?;
-        if legacy.version != 1 {
+        if legacy.siblings.is_some() || !legacy.supported_version() {
             return Err(Error::Version);
         }
         if identity.cloud_id() != legacy.cloud_id {
@@ -98,8 +98,23 @@ impl Records {
     }
 
     fn validate(&self) -> Result<(), Error> {
-        if self.allocation.version != Allocation::VERSION || self.project.version != Project::VERSION {
+        if self.allocation.version != self.allocation.record_version() || self.project.version != Project::VERSION {
             return Err(Error::Version);
+        }
+        if let Some(publication) = &self.allocation.publication {
+            publication
+                .validate(&self.project.profile)
+                .map_err(|_| Error::Encoding)?;
+        }
+        if self.allocation.service_admission.as_ref().is_some_and(|record| {
+            !record.valid()
+                || !self.project.identity.belongs_to(
+                    &record.owner().session_id.to_string(),
+                    &record.owner().workspace_id,
+                    &record.owner().cloud_id,
+                )
+        }) {
+            return Err(Error::Ownership);
         }
         if self.allocation.id != self.project.allocation
             || self.allocation.member != self.project.identity
@@ -123,6 +138,12 @@ fn decode_preserving<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T,
 }
 
 fn normalize_supported_input(original: &mut Value, normalized: &Value) {
+    // Typed ledger decoding rejects unknown fields; only an empty ledger is omitted.
+    if normalized.get("tailnet_enrollment").is_none()
+        && let Some(object) = original.as_object_mut()
+    {
+        object.remove("tailnet_enrollment");
+    }
     // Profiles recursively deny unknown fields. Their defaults, optional omissions
     // and capability sets are therefore safely canonicalized by the existing schema.
     // The worker's custom address/rate parsers and project target set likewise own

@@ -34,6 +34,7 @@ pub mod remote_config;
 mod semantic;
 mod semantic_files;
 mod semantic_fingerprint;
+mod semantic_keys;
 pub mod session;
 #[cfg(feature = "video-capture")]
 mod video;
@@ -58,15 +59,16 @@ pub use horizon_browser_protocol::remote::{self, RemoteBrowserConfig};
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserHttpAuthOperation,
     BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation,
-    BrowserVideoState, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL,
-    DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery,
-    MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS,
-    MAX_REMOTE_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES, MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL,
-    MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS,
-    MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, NavigationWait, SecretString,
-    normalize_navigation_target,
+    BrowserVideoState, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_PRESS_COUNT,
+    DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY,
+    DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS,
+    MAX_PRESS_COUNT, MAX_QUERY_RESULTS, MAX_REMOTE_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES,
+    MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH,
+    MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS, MAX_ZOOM_PERCENT, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS,
+    MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, MIN_ZOOM_PERCENT, NavigationWait, SecretString,
+    normalize_navigation_target, zoomed_viewport,
 };
-pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
+pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers};
 pub use native_select::{NativeSelectOption, NativeSelectPopup};
 pub use network::{
     BrowserNetworkCapture, BrowserNetworkCaptureOptions, BrowserNetworkConnection, BrowserNetworkConnectionState,

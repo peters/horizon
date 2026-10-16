@@ -17,9 +17,9 @@ This procedure makes sure that the sidebar groups the workspaces in **Needs you*
 tile with a status badge, the name and a status line, that each group header shows its count
 and summary on one line, and that a click on a parked row attaches its cloud.
 It also makes sure that an agent in the cloud workspace can read the list and
-attach, park and stop its cloud with `cloud_list`, that **Stop idle…** stops the
-selected idle workers after it shows the hourly saving, and that a parked cloud
-whose session ends goes to **Needs you**.
+attach and park its cloud with `cloud_list` but cannot stop it, that the sidebar
+offers no bulk stop, and that a parked cloud whose session ends goes to
+**Needs you**.
 
 ## 2. Applicability
 
@@ -30,8 +30,8 @@ whose session ends goes to **Needs you**.
     [park and attach procedure](cloud-park-attach.md) tests them.
   - A cloud whose agent asks for GitHub access. The unit tests of the cloud
     list cover it.
-  - A `cloud_list` stop of a cloud that is not idle, and a request from an agent
-    in a different workspace. The unit tests of `cloud_list` cover them.
+  - A request from an agent in a different workspace. The unit tests of
+    `cloud_list` cover it.
 
 ## 3. Safety
 
@@ -92,8 +92,7 @@ whose session ends goes to **Needs you**.
    narrower with the window.
 
    Result: No header summary goes to a second line. A summary that does not fit
-   becomes shorter. If no part fits, for example next to **Stop idle…**, the
-   summary goes away.
+   becomes shorter. If no part fits, the summary goes away.
 
 ### 6.2 PARKED: A parked row
 
@@ -130,8 +129,8 @@ whose session ends goes to **Needs you**.
    ```
 
    Result: The JSON report shows one cloud with `"group": "cloud"`,
-   `"idle": true` and the status line `synthetic output <n>`. Write down the
-   value of `"cloud"`, for example `cloud-1`.
+   `"working": false` and the status line `synthetic output <n>`. The report has
+   no `"idle"` field. Write down the value of `"cloud"`, for example `cloud-1`.
 
 2. Make sure that a panel of the cloud is on the screen. Run
    `horizon-browser cloud park <cloud> -o -`.
@@ -151,33 +150,23 @@ whose session ends goes to **Needs you**.
    cloud, and in about 1 second the cloud attaches. The row moves back to
    **Cloud**.
 
-### 6.5 STOP: Stop idle workers
+### 6.5 STOP: Only the card stops the worker
 
 1. Make sure that no agent works in the cloud. Look at the header line of
    **Cloud**.
 
-   Result: The header shows **Stop idle…** after the count.
+   Result: The header shows the name, the count and the summary. It shows no
+   **Stop idle…**.
 
-2. Click **Stop idle…**.
+2. In the agent panel, run `horizon-browser cloud stop <cloud> -o -`.
 
-   Result: A dialog shows the cloud with a selected check box, its workspace and
-   its hourly rate, the line `Saves €<rate>/h`, and the buttons **Stop 1 worker**
-   and **Keep running**. When the provider reports no rate, the row shows
-   `no reported rate` and the line is `Saving unknown`.
+   Result: The command fails with `cloud requires list, attach or park`. The
+   worker continues to run.
 
-3. Clear the check box of the cloud.
+3. On the cloud card, click **Stop**.
 
-   Result: The saving line goes away. **Stop 0 workers** is not available.
-
-4. Click **Keep running**.
-
-   Result: The dialog closes. The worker continues to run.
-
-5. Click **Stop idle…** again, and then click **Stop 1 worker**.
-
-   Result: The dialog closes. The cloud card shows that the worker stops, and
-   then that it is stopped. The row moves to **Parked** with a ring badge. The
-   header of **Parked** shows no **Stop idle…**.
+   Result: The cloud card shows that the worker stops, and then that it is
+   stopped. The row moves to **Parked** with a ring badge.
 
 ### 6.6 NEEDS YOU: A parked session ends
 
@@ -213,8 +202,8 @@ whose session ends goes to **Needs you**.
 - 6.3 attaches the cloud from a click on its row.
 - 6.4 lists the cloud for the agent, refuses to park it in view, parks it out of
   view and attaches it again.
-- 6.5 shows the hourly saving before the confirmation and stops only the selected
-  worker.
+- 6.5 shows no bulk stop in the sidebar, refuses a stop from the agent, and stops
+  the worker from its card.
 - 6.6 moves the parked cloud whose session ended to **Needs you** with the line
   `Ended with status 3`.
 

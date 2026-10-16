@@ -4,8 +4,8 @@ A cloud is one remote development container. New shell and agent panels share it
 Git checkout; branches and additional worktrees are created manually. Browser and
 Device panels share that cloud's runtime.
 RunPod and Hetzner provision workers. An existing Docker host can also run them;
-see the `docker-host` provider in the horizon-cloud skill reference. Daytona and
-Fly.io appear in labelled design fixtures.
+see [Docker host clouds](cloud-docker-host.md). Daytona and Fly.io appear in
+labelled design fixtures.
 
 Cloud deployment and lifecycle control currently require a Unix host with supported
 file and directory synchronization. Windows cloud operations fail before state or
@@ -138,22 +138,57 @@ state on the cloud's persistent volume. The newer signed project-session runtime
 currently refuses a tailnet until its own unprivileged runtime is qualified;
 the ordinary cloud panel's shell/agent runtime uses the isolated launcher.
 
-## Tailnet API credential storage
+## Tailnet API credential status
 
-The host store supports a personal API token or OAuth client for each saved tailnet.
-API credentials use the desktop OS-store service `horizon-cloud-tailnet-api`.
-Enrollment auth keys remain independent in `horizon-cloud-tailnets`.
-This foundation supplies host storage APIs. The Settings editor and UI/CLI/MCP
-status adapters are separate milestones; no API credential editor or new public
-credential operation ships here. A staged entry at the exact saved local tailnet
-ID is recognized by the shared resolver without another paste. Profiles that
-reuse that saved ID intentionally share the binding; a profile name does not
-isolate API credentials. Worker image
-qualification still requires marker 4; API storage does not qualify an older pin.
-Stored presence reports kind only. Saving does not test remote scope, expiry or
-API access, and does not remove tailnet nodes.
-See [the storage boundary](architecture/tailnet-api-credentials.md) and
-[the foundation test procedure](testing/procedures/tailnet-api-credential-store.md).
+Settings > Tailnets displays **Not stored**, **Personal API token stored**,
+**OAuth client stored**, **Reading…** or **Status unavailable** for each saved
+network. All reads run on background workers. API entry and replacement use the
+masked native controls below; the enrollment auth-key editor remains separate.
+
+Set API credential and Replace API credential start an empty masked draft.
+Choose Personal API token or OAuth client, enter the values and select Save API
+credential. Changing the source clears all fields. Discard credential draft and
+Settings close discard unsaved values. Current stored values are never loaded.
+
+An agent requests set_personal_token or set_oauth with `tailnet_api_credential`,
+the exact saved ID and its request UUID. It sends no values. The person chooses
+Enter requested API credential on that row and explicitly saves the requested
+kind. Requests do not open Settings or grant write authority. CLI plans and MCP
+use the same native-owner route; no secret getter/import or node cleanup is added.
+
+Stored presence reports kind only, not expiry, scopes or remote API access.
+API credentials stay in this computer's OS-store service `horizon-cloud-tailnet-api`;
+enrollment auth keys use `horizon-cloud-tailnets`. An existing staged entry at
+its exact saved local tailnet ID is recognized without another paste.
+The same saved ID across profiles intentionally shares the API binding.
+A profile name does not isolate credentials.
+
+Read `cloud_companions.tailnet_api_credentials` for cached observations, even
+with Settings closed. While Settings is open, its pending and completed status
+also reaches this cache before MCP requests; close is not required for an update.
+Ready contains `credential.state: missing` or `stored`;
+stored entries include `credential.kind: personal_token` or `oauth`.
+Pending means a read is unfinished; unavailable means it could not be read.
+Neither means missing. Before a successful catalog read, `tailnets` can be null
+and the map empty; this is not proof that credentials are missing.
+
+The CLI is `cloud_deploy tailnets STATE_ROOT [TAILNET_ID]`:
+
+```sh
+cargo run -p horizon-core --example cloud_deploy -- tailnets STATE_ROOT
+```
+
+It returns saved ID/name items and the same map, with ready/unavailable status.
+Neither status interface imports a secret or requests node cleanup. Status can
+finish a prior recorded local binding recovery and retire exact obsolete slots;
+it submits no new credential mutation. Saving credentials through the shared
+host store does not validate remote access or remove nodes.
+Completed saved-tailnet deletion prunes only that removed ID's disabled API record.
+A failed cleanup keeps its recorded intent for retry; it does not authorize another ID.
+Worker image qualification still requires marker 4; API status does not update the pin.
+See [the boundary](architecture/tailnet-api-credentials.md),
+[the storage procedure](testing/procedures/tailnet-api-credential-store.md)
+and [the status procedure](testing/procedures/tailnet-api-status.md).
 
 ## Companion declarations
 
@@ -292,12 +327,17 @@ that are known only at the end.
 
 Missing account settings open a repair form without losing the title or target
 workspace. Enter the compute API key and choose how the profile's agents sign in:
-an API key, **ChatGPT sign-in** for Codex or subscription login for Claude.
-**Save and start** continues the submitted launch. A dedicated
+an API key, **ChatGPT sign-in** for Codex, or **Setup token** or **Sign in on the
+worker** for Claude.
+**Save and start** continues the submitted launch. Opening registry setup from
+New cloud uses **Save and return** instead: the form remains open even when compute
+and SSH are ready. Saving or cancelling returns to New cloud for a fresh publishing
+review without submitting a launch. A dedicated
 SSH identity is created when needed and keys stay in private machine-local files.
-Blank replacement fields preserve saved keys. Subscription login for Claude happens
+Blank replacement fields preserve saved keys. **Sign in on the worker** for Claude happens
 through the actual agent on the worker; worker readiness does not prove authentication.
-See [Sign in with ChatGPT for Codex](#sign-in-with-chatgpt-for-codex).
+See [Sign in with ChatGPT for Codex](#sign-in-with-chatgpt-for-codex) and
+[Claude with a setup token](#claude-with-a-setup-token).
 Open **Menu > Cloud settings** in the toolbar to change machine defaults without
 launching. **Menu > Fit all clouds** shows every cloud on the canvas.
 
@@ -409,6 +449,50 @@ current access ends.
 Without a sign-in, Codex on a new cloud asks you to sign in in its own terminal, as
 before. A bound OpenAI API key takes precedence over the ChatGPT login.
 
+### Claude with a setup token
+
+A setup token signs Claude in on your Claude subscription for one year. Claude on the
+worker then needs no sign-in of its own.
+
+1. On a computer where you use Claude Code, run `claude setup-token` and sign in.
+   The command shows the token.
+2. In **Cloud settings**, choose **Setup token** for Claude and paste the token.
+3. Click **Save settings**.
+
+**Cloud settings** then shows the day that you saved the token and the day that it runs
+out. Horizon keeps the token like the agent API keys: in a private file (0600) under
+`~/.horizon/cloud/credentials`, for all workspaces on this computer. `settings.json`
+keeps only the absolute path of the file and the time that the token was saved, in
+seconds since 1970:
+
+```json
+{
+  "claude_token": { "file": "/private/claude-token", "saved_at": 1792065600 }
+}
+```
+
+Horizon counts the expiry as one year after `saved_at`. Horizon cannot read the real
+expiry from the token. A token that was made before it was saved runs out earlier.
+
+Every deployment, reconnect, resume and rebuild of a cloud that runs Claude gives the
+token to the worker as `/workspace/credentials/claude-oauth-token`. The token goes over
+SSH standard input, never in a command line, a log or the cloud board. Each Claude panel
+and each shell on the worker gets the token as `CLAUDE_CODE_OAUTH_TOKEN`. This needs a
+worker image with this change; an older image ignores the file.
+
+Before **Resume worker** starts a stopped worker, Horizon checks the setup-token file and
+the API-key files of the agents of the cloud, as a deployment does. A missing or unusable
+file stops the resume before the provider starts paid capacity, and the refusal names
+the file.
+
+Settings never keep a setup token and a Claude API key together: Claude prefers the API
+key. When you choose another sign-in, the next reconnect removes the token file from the
+worker. Horizon does not revoke the token.
+
+Trust boundary: the token gives access to your Claude subscription. Each process on the
+worker that runs as the agent user can read it, as it can read an API key. Horizon does
+not check that the token is valid before it sends it.
+
 ### Connect GitHub
 
 **Cloud settings › GitHub › Connect GitHub** gives clouds GitHub access as you,
@@ -498,11 +582,30 @@ token at once.
 
 ### Your repositories in New cloud
 
-With GitHub connected, **New cloud** offers **Pick from your GitHub
-repositories** under **Where is your code?**. It lists the repositories your
-GitHub App is installed on, and typing narrows the list. A click puts the
-repository's link in the field, and Continue clones it on this computer as
-before. For a private repository on github.com, the token card becomes **Clone
+**Where is your code?** in **New cloud** is one search field:
+
+- Type words to search the Git checkouts on this computer and, with GitHub
+  connected, the repositories that your GitHub App is installed on. The letters
+  must only come in order: `acwb` finds `acme/web-board`. With nothing typed,
+  the checkouts that changed last come first.
+- A repository that is on GitHub and on this computer shows one time, with both
+  badges. If you choose it, Horizon uses the checkout.
+- Type a path that starts with `/`, `~`, `./` or `../` to see its folders. **Tab** opens
+  the highlighted folder, and **Enter** uses a repository.
+- Paste a link to clone a repository. Choosing a GitHub repository that is not
+  on this computer puts its link in the field. Continue clones it on this
+  computer as before.
+
+The arrow keys move through the results. Horizon looks for checkouts up to four
+folders below your home folder, on a background thread. It does not look in
+hidden folders, or inside build folders such as `vendor` or `node_modules`; a
+build folder that is itself a checkout is listed. On macOS it does not look in
+the folders that macOS guards with a privacy prompt, such as Documents. Before
+this computer signs in to your GitHub App, **Show your GitHub repositories**
+signs it in and lists them. What the search reads and its limits are in
+[the checkout search boundary](architecture/checkout-search.md).
+
+For a private repository on github.com, the token card becomes **Clone
 with GitHub**, which clones with your connected account; **Use a token instead**
 keeps the old way.
 
@@ -524,10 +627,54 @@ six months, and never writes it into a checkout. **Disconnect** forgets it. A
 repository the app does not reach shows **Add it on GitHub**, which opens the
 app's repository choice.
 
+### Choose where to publish images
+
+A profile with `build` can omit `image`. New cloud shows **Publish images** with
+the selected destination and publishing account before you start. **Automatic**
+uses your image-publishing account, independently of the source repository's
+author or Git host. If no authorized destination is available, choose an account
+or set up the exact registry before building.
+
+Use **Change** to select an existing authorized registry, use the profile default
+or explicitly sign in to another publishing account. Horizon remembers the choice
+on this computer for the canonical checkout and named profile. It keeps the exact
+saved grant reference; changing accounts cannot substitute another grant. The
+repository YAML stays unchanged. Opening worker pull setup returns to New cloud
+for a fresh review after **Save and return** or Cancel; it does not start a worker.
+
+For example, a build profile can contain:
+
+```yaml
+version: 1
+default: dev
+profiles:
+  dev:
+    provider: runpod
+    min_cpu: 2
+    min_memory_gb: 4
+    build:
+      context: .horizon
+      dockerfile: .horizon/Dockerfile
+```
+
+A prebuilt profile without `build` still requires `image`. An explicit image is
+supported too. Reconnect, retry and rebuild keep an existing cloud's recorded
+destination and publishing identity, even if the current account or local
+preference changes. An older cloud without publisher metadata keeps its explicit
+image; Horizon does not invent a former account binding.
+
+Local agent panels use `cloud_image_destination` through normal CLI plans or
+stdio MCP without a Settings window. List the named profile, retain its exact
+`shown_override`, and use the listed choice for select/reset. The host supplies
+the checkout and settings scope; callers cannot supply credentials or another
+source path. See [public destination operations](architecture/image-publishing.md#public-destination-operations).
+Git hosting and image hosting are independent. This adds no GitLab account
+connection or project discovery.
+
 ### Publishing images to ghcr.io
 
-A cloud whose image Horizon builds pushes it to the registry that its profile
-names. GitHub's package registry does not accept tokens of the GitHub App behind
+A cloud whose image Horizon builds pushes it to its reviewed destination, from
+the profile or the machine-local choice. GitHub's package registry does not accept tokens of the GitHub App behind
 Connect GitHub, so the first time an image goes to `ghcr.io`, the card shows
 **Allow Horizon to publish images for you** with a code. Open GitHub, paste the
 code and click **Authorize** once. The permission covers images only
@@ -584,11 +731,12 @@ CPU availability is queried for the requested vCPU count and Pod product; a posi
 catalog answer is not a reservation. Configured compute preferences are tried in
 order only after a definite rejection. Ambiguous creation responses remain fenced.
 
-The optional worker-local idle-stop watcher retains its separate GraphQL stop call.
-It uses the provider-injected Pod-scoped credential, which the live qualification
-for #966 found was refused by REST and accepted by GraphQL. This migration changes
-the shared account-credential adapter; it does not put account credentials inside
-workers or remove that independently qualified idle-stop path.
+The worker's stop service, which stops a worker at an agent's request, keeps its
+separate GraphQL stop call. It uses the provider-injected Pod-scoped credential,
+which the live qualification for #966 found was refused by REST and accepted by
+GraphQL. This migration changes the shared account-credential adapter; it does not
+put account credentials inside workers or remove that independently qualified stop
+path.
 
 CPU workspaces use network storage and require an account with no Serverless
 endpoints. Profiles select `storage.volume_tier: STANDARD` (the default) or
@@ -636,6 +784,49 @@ answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
 again for the same repository.
 
+Several repositories can be set up at the same time, each with its own agent. Click
+**Close** while a setup works, open **New cloud** again, choose another repository
+and start its setup. **New cloud** shows the setup of the repository that it opens
+for, so open it for the first repository to see that setup again.
+
+The **Setup board** panel shows every setup in one place. It opens with the first setup,
+beside the setup agents in a local workspace (the active one, else a workspace named
+**Cloud setup**), and **Close** in the setup view shows it.
+**Menu** > **Setup board** opens it too. Each row shows the repository, a segment for
+each step, and what the setup does now: the running step, **Waiting for a build
+slot** with the setups that build, a failed step, or **Ready** with the agent's
+summary. **Open agent** shows the agent's panel. **Open in New cloud** (**Use in New
+cloud** once the setup is ready) opens **New cloud** for that repository, with its
+steps, the agent's terminal and **Use this setup**. **Stop** stops the setup.
+**Set up a repository** opens **New cloud** to start another one. The rows are made
+again from the setups that run, so after a restart the board is empty until a new
+setup starts. One
+repository has one setup at a time: a second setup of the same folder, also through
+a link to it, is refused until the first one stops. A message about a setup, for
+example why **Use this setup** did not commit, shows under the steps of that setup.
+
+The image build, the CI in the image and the fast rerun are the heavy part of a setup.
+Horizon runs them for a limited number of setups at the same time on one Docker: one
+for each 16 processors of the computer, at least one and at most four. A setup that
+waits for a free build slot shows **Waiting for a build slot** and the repositories
+that build at that time on its **Build image** step. Slots go in the order that the
+setups asked for them. To change the number, start Horizon with
+`HORIZON_SETUP_BUILD_SLOTS` set to a number from 1 to 16.
+
+**Build on** chooses where the proof of the next setup runs. It shows under the agent
+chips when Cloud settings has a Docker host on another machine and Docker hosts are
+on. **This computer** uses this computer's Docker. A Docker host uses the Docker of that
+machine: Horizon opens an SSH session with your own SSH configuration and keys, which
+forwards the host's `/var/run/docker.sock` to a socket in a private folder of this
+computer, and every docker command of the proof and of its cleanup goes through it.
+The agent still runs on this computer and reads the repository here. The proof copies
+the bundle, the restored packages and the Rust git clones to the host, as it copies
+them into a container on this computer. A live preview is brought back to this
+computer through a second SSH forward of its port. A Docker host has build slots of its
+own. A proof of a GPU profile fails on a Docker host, and a desktop preview that needs
+`/dev/kvm` is skipped there; choose **This computer** for them. The setup board names
+the host of each setup that builds on one.
+
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions
 they use and where those versions come from. Horizon proves GitHub Actions jobs
@@ -675,7 +866,13 @@ setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and th
 CI uses that GPU when the default profile asks for one. The proof
 gets the tested commit and its history as a bundle, never this computer's git
 folder, checked out on its branch with the tags in its history, as
-`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. For a .NET repository
+`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. The proof
+mounts no folder of this computer into its containers. It copies what a container
+needs into it before the container starts: the bundle, the committed tree with its
+submodules and Git LFS files, Horizon's localci, the restored .NET packages and the
+cloned Rust git dependencies. The copies are owned by `root`, so the CI's user can
+read but not change Horizon's localci and the clones. Links in the copied folders
+stay links and are never followed. For a .NET repository
 with private feeds, check **Restore private NuGet packages on this computer for
 the proof**: Horizon then runs `dotnet restore` here, with this computer's feed
 logins, copies the packages that restore used into the proof's volume for the
@@ -686,8 +883,8 @@ build files on this computer. For a Rust repository whose committed `Cargo.lock`
 dependencies on GitHub, the dialog names those repositories under **Fetch private
 Rust git dependencies on this computer for the proof**. When you check it, Horizon
 clones each named repository with plain `git clone --mirror` and this computer's
-Git login into a private folder in its own home, and the container reads each clone
-read-only in place of its GitHub address. Horizon runs no Cargo, rustup or
+Git login into a private folder in its own home, and the container reads a copy of
+each clone, owned by `root`, in place of its GitHub address. Horizon runs no Cargo, rustup or
 repository configuration on this computer for this, and clones nothing that the box
 does not name. The clones of one proof may hold at most 4 GiB on this computer; past
 that the proof stops. It is off by default, because the proof's CI can read every
@@ -1288,14 +1485,14 @@ The sidebar groups the workspaces by what they need from you:
 | **This PC** | A workspace without a cloud. |
 
 Each group header shows how many workspaces it has. At the right of the header
-line, a summary in secondary text shows the hourly rate of the running workers of
-the group, **no local cost** for **Parked**, and **live** for **This PC**. The rate
-has one sum for each currency, for example `€0.0240/h + $0.690/h`: Hetzner bills in
-euros net of VAT and RunPod in US dollars. The
+line, a summary in secondary text shows what the running workers of the group
+cost a day, **no local cost** for **Parked**, and **live** for **This PC**. The
+cost has one sum for each currency, for example `€0.58/day + $16.56/day`: Hetzner
+bills in euros net of VAT and RunPod in US dollars. The
 summary never wraps. When the sidebar is narrow, it shows fewer parts, and then a
-shortened first part. Hover over it to see all of it. If no part fits, for example
-next to **Stop idle…** on the narrowest sidebar, the header does not show the
-summary. A screen reader still reads it after the group name and count.
+shortened first part. Hover over it to see all of it. If no part fits on the
+narrowest sidebar, the header does not show the summary. A screen reader still
+reads it after the group name and count.
 
 Each row shows a tile, the workspace name and one status line. The tile has the
 color of the workspace on the canvas and the first letters of the first two words
@@ -1316,41 +1513,29 @@ what the badge means.
 Click a row to go to its workspace. A parked cloud then attaches, as described in
 [Parked terminals](#parked-terminals).
 
-#### Stop idle workers
-
-When a group has idle clouds, its header shows **Stop idle…**. An idle cloud is
-ready, its card offers **Stop**, no agent works on it, and it does not wait for
-you. A cloud whose sessions still attach is not idle. A parked cloud is idle only
-after a status read shows each of its parked terminals: right after the park or
-after a failed read, it is not offered. Click **Stop idle…** to open a list of the idle clouds of the group. Each
-cloud has a check box, its workspace and its hourly rate. All clouds are selected
-at first. Clear the clouds that must continue to run. Before you confirm, the
-dialog shows what the stop saves each hour, for example `Saves $0.024/h`. When a
-worker does not report a rate, the saving is a lower bound. Click
-**Stop N workers** to stop the selected workers, or **Keep running** to close the
-dialog. A cloud that became busy or started to work after the list was read
-continues to run. The status of a parked cloud can be some seconds old, so
-Horizon reads the status of its sessions again before it stops the worker. When an
-agent works, when the read does not find a parked session, or when no status
-arrives in 30 seconds, the cloud continues to run. A session that is not found
-moves the cloud to **Needs you**.
-
-Stop ends the running processes. The workspace storage is kept and stays
-billable, and **Resume** on the card starts a worker again.
-
 #### The cloud list for agents
 
 A local agent panel in a workspace reads the clouds of that workspace with the
 `cloud_list` MCP tool, or with `horizon-browser cloud list` in its shell. The
 answer has the ID, the name, the group, the status line and the hourly rate of
-each cloud, and whether it is idle. The agent can act on one of these clouds as
-the sidebar does:
+each cloud, and whether an agent works on it. The agent can act on one of these
+clouds as the sidebar does:
 
 - **attach** moves your view to the cloud, as a click on its row does.
 - **park** parks the terminals of a cloud that is out of view now. Horizon
   refuses a cloud in view, because it attaches again.
-- **stop** stops the worker of an idle cloud, as **Stop idle…** does. Horizon
-  refuses a cloud that is not idle.
+
+Each entry also has `worker_image` and `image_publication`. They describe the
+image and publishing identity retained by that cloud, independently of current
+account settings. Either can be `null` while its matching runtime is unavailable;
+an unresolved image is also `null`, and legacy records have no publication. A
+registry publisher includes its opaque nonsecret binding ID, never a credential
+value or path. This reads metadata only, without opening
+credentials or checking current registry access. It never changes a cloud's
+destination.
+
+The cloud list does not stop workers. Only you stop a worker, with **Stop** on its
+card.
 
 An agent sees only the clouds of its own workspace. Clouds of other workspaces
 and requests from outside Horizon are not available.
@@ -1397,25 +1582,22 @@ attempts that reach readiness inspect fresh provider data; this does not change
 panel eligibility for a cached Ready record when an earlier preflight fails. This capacity check does not itself prove that files
 survive a provider restart; persistence still needs a live recovery test.
 
-Stop ends the processes on the worker. The storage can stay billable. Idle stop
-is off by default. To use it, set `idle_stop_minutes` (10 to 1440) in a profile.
-A dedicated worker then stops after that time without agent activity. The worker
-is active while an agent terminal prints output. The worker is also active while
-its container uses half a CPU core or more, so a quiet build keeps it on.
+Stop ends the processes on the worker. The storage can stay billable. No cloud
+stops when idle. `idle_stop_minutes` (10 to 1440) still parses, so an older
+`.horizon/cloud.yml` keeps working, but it has no effect: Horizon gives no worker
+an idle period, and **New cloud** and **Rebuild** show a note for a profile that
+sets one. Instead, an agent stops its worker when its task is done (see below). A
+RunPod cloud created before this change still carries its period in
+`HORIZON_IDLE_STOP_MINUTES`; it reconnects as before, and its image stops it when
+idle until a rebuild moves it to a current image, which has no idle stop. Such a
+worker is active while an agent terminal prints output, or while its container uses
+half a CPU core or more. It stops itself with a provider credential that applies
+only to that worker, also when this computer is offline, and never deletes
+anything.
 
-On RunPod, the worker stops itself. It uses a provider credential that applies
-only to that worker. The stop also occurs when this computer is offline. The
-worker never deletes anything. Hetzner gives a worker no credential that can stop
-it. Thus Horizon stops a Hetzner cloud, but only while Horizon runs. That stop
-releases the server and keeps the volume, as Stop does. Refer to
-[Hetzner idle stop](cloud-hetzner.md#idle-stop).
+For each RunPod cloud, Horizon asks the provider for the status of the worker in
+these conditions:
 
-While a RunPod cloud with an idle period is ready, Horizon reads the idle record
-of the worker every two minutes. Horizon does not stop a RunPod worker. Horizon
-uses the record only to find the cause of a stop. For each RunPod cloud, Horizon
-asks the provider for the status of the worker in these conditions:
-
-- Horizon cannot read a ready worker.
 - The connection to a ready worker fails.
 - A reconnect does not find the worker, or finds a record that says stopped.
 
@@ -1423,34 +1605,43 @@ Horizon does not do this check for a Hetzner cloud. Only Horizon stops a Hetzner
 cloud, so a failure there stays a failure.
 
 During this check, the card shows **Checking provider**. If the provider reports
-that the worker stopped, the card shows a stopped cloud with **Resume worker**.
-It does not show **Operation failed**. The card names the cause as follows:
-
-| Card | Log line | Cause |
-|---|---|---|
-| **Stopped after 30 idle minutes** · **Storage kept · billable** | `No agent activity for 30 minutes, so this worker stopped itself.` | The last idle record showed a complete, or almost complete, idle period. |
-| **Stopped** · **Storage kept · billable** · **Stopped outside Horizon** | `The provider reports that this worker is stopped. Horizon did not stop it; …` | Horizon cannot tell the cause. An agent or the provider account can stop a worker. |
+that the worker stopped, the card shows **Stopped** · **Storage kept · billable** ·
+**Stopped outside Horizon** with **Resume worker**, and logs `The provider reports
+that this worker is stopped. Horizon did not stop it; …`. It does not show
+**Operation failed**. Horizon cannot tell the cause: an agent, the idle stop of a
+worker created before this change, or the provider account can stop a worker.
 
 If the provider reports that the worker runs, the card shows the original
 failure. Horizon records a stop that the provider confirms as an ordinary stopped
-cloud. Nothing resumes it automatically. The card keeps the cause until Horizon
-closes. After a restart, Horizon has no idle record. If Horizon finds the stop
-after the restart, the card shows **Stopped outside Horizon**. If the record
-already showed the stop, the card shows **Stopped**. A worker image from before the idle record contract
-(`horizon-idle-report-contract=1`) keeps no idle record. Horizon still finds the
-stop of such a worker, but shows **Stopped outside Horizon**. Rebuild the image to
-show the idle cause. You can also choose **Check provider** at any time. A
-profile without `idle_stop_minutes` never stops by itself. Shared workers and
-profiles with hosted devices do not support idle stop.
+cloud. Nothing resumes it automatically. If the record already showed the stop,
+the card shows **Stopped**. You can also choose **Check provider** at any time.
+A worker created now stops only with **Stop** or at an agent's request.
 
-On RunPod, the same opt-in lets an agent stop its worker when its task is done, such as when
-its pull request is merged, without this computer. Agents get a
+An agent can stop its worker when its task is done, such as when its pull request
+is merged. A worker image built from the current worker bootstrap offers this on
+every dedicated RunPod worker, with no idle period, and has no idle stop of its
+own; it reports `horizon-agent-stop-contract=1`. Older images offer it only to a
+worker with an idle period. On RunPod the worker stops itself, without this computer.
+A worker on Hetzner or a Docker host has no credential that can stop it, so
+Horizon starts it with `HORIZON_WORKER_STOP=horizon`: the worker records the
+request, and while the cloud is ready and no other operation runs, Horizon reads it
+every 30 seconds (`horizon-worker-stopd --take`) and then stops the cloud as **Stop**
+does, after it asks the worker once more that the request still holds. The card shows `<agent> asked to stop this cloud: <reason>`, then **Stopped
+by <agent>** with the reason. While another operation of the cloud runs, or one
+of its dialogs is open, Horizon gives the request back to the worker, which drops
+it; the agent may ask again. This works only while Horizon runs: a request that
+Horizon does not take within ten minutes lapses, and the worker keeps running. A
+worker created before this change has no such setting and offers no agent stop: a
+Hetzner cloud gets it with its next server, after Stop and Resume or a rebuild, and
+a Docker host cloud only when it is created again. Shared workers and profiles
+with hosted devices offer no agent stop. Agents get a
 `stop_this_worker` MCP tool (or run `horizon-worker-stop --reason "..."`) with a
 one-line reason. The worker identifies the requesting agent session itself,
 refuses callers outside a Claude, Codex or Grok session (including shell sessions), and
 refuses while another agent session printed output in the last two minutes, while
 the container is busy, or when it cannot check its sessions or CPU use; the calling agent's own
-output does not count. The reason and the requesting agent are kept on the
+output does not count. When Horizon takes a recorded request, it checks again and
+then counts the output of every agent session, the caller's too. The reason and the requesting agent are kept on the
 workspace volume, and after a resume the cloud card shows them, for example
 "Stopped by claude 2 h ago: PR 12 merged". A redeployed cloud starts without the
 previous worker's reason. Resume
@@ -1588,7 +1779,6 @@ file:
 - `capabilities`: the agents, the browsers, the desktop and `agent_approvals`. For
   example, you can add the agent `codex` to a cloud that has only `claude`.
 - `bootstrap.readiness_seconds`, the readiness timeout.
-- `idle_stop_minutes`.
 - The `build` section: `context`, `dockerfile` and `platform`.
 
 Horizon refuses the rebuild when the profile is different from the profile of the
@@ -1605,11 +1795,17 @@ change these fields:
 - A missing `build` section. Then there is no recipe to rebuild.
 
 Horizon also refuses a profile with values that no profile can have, for example
-`idle_stop_minutes` together with hosted devices. For each change, the rebuild output
+`idle_stop_minutes` outside 10 to 1440. A changed `idle_stop_minutes` is no change:
+it has no effect, and Rebuild says so. For each change, the rebuild output
 shows a line that starts with `Profile change:`, for example `Profile change: Adds
 agent codex`. Before Horizon builds, it checks the API key file of each agent in the
-new profile, as each deployment does. Thus an added agent with an unusable key file
-stops the rebuild before the worker changes.
+new profile, not only of an added agent, as each deployment does. A reconnect of the
+cloud needs each of these files too. Thus an unusable key file stops the rebuild
+before the long build and before the worker changes. The refusal names the agent, the file
+and the problem, and says that a reconnect needs the file too, for example `Agent
+claude cannot use its API-key file /home/me/keys/anthropic: the file is missing`.
+Fix the file, or remove the agent from the profile, and rebuild again. **Continue
+rebuild** does the same check until Horizon requests the image switch.
 
 Some differences are not a change. When you create the cloud, you choose these
 values in **New cloud**:
@@ -1663,7 +1859,7 @@ cloud instead releases its server and starts a new one, with a new server ID and
 address, on the same workspace volume; see
 [Hetzner](cloud-hetzner.md#rebuilding-the-image). On either provider `/workspace`
 (worktrees, agent logins, SSH host keys) survives; the container disk is reset and
-running processes end. The worker gets the new capabilities and idle stop in its
+running processes end. The worker gets the new capabilities in its
 environment: the pod update sends them on RunPod, and the new server gets them on
 Hetzner. The cloud's profile changes only when the worker runs the new image. Until
 then, and after a cancelled rebuild, the cloud keeps its previous profile. After
@@ -1671,10 +1867,12 @@ readiness, Horizon gives the credentials of each added agent to the worker, as f
 new cloud, and relaunches each session's process in its existing worktree without
 resetting it. Images without the relaunch contract report those sessions lost, as
 Stop and Resume do. A session of an agent that the rebuild removed does not relaunch.
-The output reports it, for example `Session panel-1 (codex): this cloud's profile no
-longer has agent codex, so its process was not relaunched`. The cloud keeps the record
-of the session. If a later rebuild adds the agent again, the session relaunches in its
-worktree.
+The output reports it once, for example `Session panel-1 (codex): this cloud's profile
+no longer has agent codex, so its process was not relaunched`. The cloud keeps the
+record of the session, marked as reported, so later reconnects, also after a restart
+of Horizon, do not report it again. If a later rebuild adds the agent again, the
+session relaunches in its worktree and the mark is cleared. A session that ends for
+another reason is always reported.
 
 The replacement is journaled in the deployment record before each provider
 mutation, and older Horizon versions cannot read the record while the update may
@@ -1724,8 +1922,8 @@ working copy with libgit2. Thus no program that the repository's Git configurati
 names runs, for example a content filter or a file system monitor. Horizon refuses a
 configuration that names another working folder (`core.worktree`).
 
-> **WARNING:** THE IMAGE CAN GO TO A PUBLIC REGISTRY. For example, the package
-> `ghcr.io/peters/horizon-development` is public. Each uncommitted file in the build
+> **WARNING:** THE IMAGE CAN GO TO A PUBLIC REGISTRY. Review the selected
+> destination and its visibility. Each uncommitted file in the build
 > context can go into the image. Examine the list before you click **Start cloud**
 > in **New cloud** or **Rebuild and restart** in the rebuild confirmation.
 
@@ -1795,6 +1993,22 @@ the same arguments and `--plan-token <token>`. The token also covers the worker 
 `--worker-choice` selects, so a plan for one offer does not start another. Without
 uncommitted files you can give no token. A typed `REVISION` that is not the checked-out commit builds that commit
 only.
+
+### What a cloud costs
+
+While a worker bills, the header of its card shows the cost of the current run
+and the cost a day, for example `€0.06 run · €0.58/day`. When the header has room,
+a second line shows the cost a week and a month, and what the worker adds by the
+end of the month if it keeps running:
+`€4.03/wk · €17.52/mo · +€9.89 by Oct 31 if left running`. A narrow card keeps
+only the first line. Hover over the cost to see the hourly rate, the cost a year
+and what the worker adds by the end of the year.
+
+A day is 24 hours, a week 168, a month 730 and a year 8,760, as Hetzner counts
+them. The end of a month and of a year is midnight UTC. The amounts are compute
+only: storage, a primary IPv4 address, traffic and VAT are not in them. Hetzner
+caps a month at the monthly price of the server type, so a full month can cost
+less than 730 hours. A stopped or deleted worker shows no daily cost.
 
 ### Deployment progress
 

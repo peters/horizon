@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 mod bundle;
+mod launch;
 // Its only user, a UI test, runs where the setup agent is offered: on Linux.
 #[cfg(all(test, target_os = "linux"))]
 mod failed;
@@ -19,14 +20,17 @@ mod gate;
 mod localci;
 mod needs;
 mod preflight;
+mod remote;
 mod resources;
 mod session_env;
+mod slots;
 pub(super) use session_env::arguments as session_environment;
 mod stream;
 use needs::distinct_builds;
 pub(super) use needs::uses_nuget;
+pub(super) use remote::{PortForward, close_forwards};
 pub(super) use resources::{
-    LocalDocker, Pinned, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources,
+    Daemon, Pinned, docker_host_of, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources,
     retry_unremoved, run_id, run_names,
 };
 pub(super) use stream::end_group;
@@ -104,6 +108,9 @@ enum Event {
     /// The setup the worker read asks for a GPU; the preview of its image gets it too.
     Gpu(bool),
     Started(Phase),
+    /// Every build slot of the daemon is taken, by the setups of these repositories; an
+    /// empty list once the proof has its slot.
+    Waiting(Vec<String>),
     /// The failed build met an account problem; it comes before the build's `Finished`.
     Fix(super::access::Fix),
     Finished(Phase, Result<(), String>),
@@ -150,6 +157,8 @@ pub(super) struct Proof {
     pinned: Pinned,
     /// An account problem the build met that the person fixes on GitHub.
     pub(super) fix: Option<super::access::Fix>,
+    /// The repositories whose setups hold every build slot while this proof waits for one.
+    pub(super) waiting: Vec<String>,
 }
 
 impl Proof {
@@ -160,6 +169,7 @@ impl Proof {
     /// begins once `after`, the run of the proof it replaces, has ended.
     pub(super) fn start(
         (repository, run, identity): (&Path, &str, super::untrusted::Identity),
+        build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
         (request, spec): (u64, Spec),
         log_path: PathBuf,
         (host_restore, root_dirty, host_crates): (bool, std::sync::Arc<std::sync::atomic::AtomicBool>, crates::Access),
@@ -179,6 +189,7 @@ impl Proof {
         let job = Job {
             repository: repository.to_path_buf(),
             identity,
+            build_on,
             spec,
             image: image.clone(),
             volume: volume.clone(),
@@ -194,7 +205,7 @@ impl Proof {
             sender,
             logged: std::cell::Cell::new(0),
             localci: std::cell::RefCell::new(Vec::new()),
-            daemon: resources::LocalDocker::default(),
+            daemon: resources::Daemon::default(),
             pinned: pinned.clone(),
             planned: std::cell::RefCell::new(Vec::new()),
             ci_localci: std::cell::RefCell::new(None),
@@ -231,6 +242,7 @@ impl Proof {
             worker: Some(worker),
             pinned,
             fix: None,
+            waiting: Vec::new(),
         }
     }
 
@@ -279,6 +291,7 @@ impl Proof {
                 Event::Inputs(inputs) => self.inputs = Some(inputs),
                 Event::Gpu(gpu) => self.gpu = gpu,
                 Event::Started(phase) => self.phase_mut(phase).started = Some(Instant::now()),
+                Event::Waiting(holders) => self.waiting = holders,
                 Event::Fix(fix) => self.fix = Some(fix),
                 Event::Finished(phase, result) => {
                     let state = self.phase_mut(phase);
@@ -351,6 +364,8 @@ struct Job {
     repository: PathBuf,
     /// Which folder the repository was when the run started.
     identity: super::untrusted::Identity,
+    /// The Docker host the person chose to build on; none for this computer.
+    build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
     spec: Spec,
     image: String,
     volume: String,
@@ -375,7 +390,7 @@ struct Job {
     localci: std::cell::RefCell<Vec<(String, TrustedLocalci)>>,
     /// The daemon of this computer every docker command of the run goes to, checked
     /// before the first one, and shared with the proof for its Stop and cleanup.
-    daemon: resources::LocalDocker,
+    daemon: resources::Daemon,
     pinned: Pinned,
     /// The .NET solutions or projects the host restored, by their path in the checkout.
     restored: std::cell::RefCell<Vec<String>>,
@@ -442,7 +457,9 @@ impl Job {
         };
         // The daemon is checked before the first docker command, and every later one
         // goes to it.
-        match resources::LocalDocker::resolve() {
+        match resources::Daemon::on(self.build_on.as_ref())
+            .and_then(|daemon| resources::note_engine(&self.volume, &daemon).map(|()| daemon))
+        {
             Ok(daemon) => {
                 let _ = self.pinned.set(daemon.clone());
                 self.daemon = daemon;
@@ -462,6 +479,10 @@ impl Job {
             self.ctx.request_repaint();
             return;
         }
+        // The heavy part waits for a build slot of the daemon, held until the proof ends.
+        let Some(_slot) = self.take_slot() else {
+            return;
+        };
         for phase in [Phase::Build, Phase::Ci, Phase::Fast] {
             if self.cancel.is_cancelled() {
                 return;
@@ -497,13 +518,20 @@ impl Job {
         }
     }
 
-    fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        // The pins first: no Docker, so a moved toolchain fails before any pull.
-        self.check_pins(setup, log)?;
-        // Made before the mount check, the first command that can pull an image.
-        let (docker_config, signed_in) = self.docker_config()?;
-        self.check_mounts()?;
-        let config = setup.config()?;
+    /// One of the daemon's build slots, once one is free; `None` once the proof stopped.
+    /// While it waits, the dialog hears which setups hold them.
+    fn take_slot(&self) -> Option<slots::Slot> {
+        let tell = |holders: &[String]| {
+            let _ = self.sender.send(Event::Waiting(holders.to_vec()));
+            self.ctx.request_repaint();
+        };
+        slots::take_for(Some(&self.daemon.slot_key()), &self.repository, &self.cancel, tell)
+    }
+
+    /// Refuses a setup this proof cannot prove: same-worker companions, which deployment
+    /// layers on the image and checks there, and a GPU profile on a Docker host or on a
+    /// computer without an NVIDIA GPU.
+    fn refuse_unprovable(&self, config: &horizon_core::cloud_panel::CloudConfig) -> Result<(), String> {
         // Deployment layers each same-worker companion's recipe on the image and checks
         // the layered result; this proof builds only the profiles' own images, so it
         // does not call such a setup proved.
@@ -514,13 +542,29 @@ impl Job {
         }
         // A GPU profile is proved on a computer with an NVIDIA GPU or not at all; the CI
         // runs with it in the default profile's image.
-        if let Some((name, _)) = config.profiles.iter().find(|(_, profile)| profile.gpu)
-            && !Path::new("/dev/nvidiactl").exists()
-        {
-            return Err(format!(
-                "profile {name} needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove this setup here"
-            ));
+        if let Some((name, _)) = config.profiles.iter().find(|(_, profile)| profile.gpu) {
+            if let Some(remote) = self.daemon.remote() {
+                return Err(format!(
+                    "profile {name} needs a GPU, and Horizon proves a GPU setup only on this computer, not on the Docker host {}: build it on This computer",
+                    remote.name()
+                ));
+            }
+            if !Path::new("/dev/nvidiactl").exists() {
+                return Err(format!(
+                    "profile {name} needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove this setup here"
+                ));
+            }
         }
+        Ok(())
+    }
+
+    fn build(&self, setup: &super::snapshot::Setup, log: &mut Option<std::fs::File>) -> Result<(), String> {
+        // The pins first: no Docker, so a moved toolchain fails before any pull.
+        self.check_pins(setup, log)?;
+        // Made before the first command that can pull an image.
+        let (docker_config, signed_in) = self.docker_config()?;
+        let config = setup.config()?;
+        self.refuse_unprovable(&config)?;
         let default_builds = config
             .profiles
             .get(&config.default)
@@ -718,20 +762,21 @@ impl Job {
         if take_back {
             self.root_dirty.store(false, std::sync::atomic::Ordering::SeqCst);
         }
-        // As root, so the checkout can be handed to the worker's account after.
+        // As root, so the checkout can be handed to the worker's account after. The
+        // bundle goes into the container as a copy, so any daemon can run it.
         let mut clone = self.docker();
         clone
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:/src.bundle:ro", bundle.display()))
             .arg("-e")
             .arg(format!("HEAD_SHA={head}"))
             .arg("-e")
             .arg(format!("HEAD_BRANCH={}", branch.unwrap_or_default()))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg(CLONE);
-        let result = self.stream(clone, log);
+        let mut clone = launch::Launch::new(clone);
+        clone.copies.push(launch::Copy::new(bundle, "/src.bundle"));
+        let result = self.stream_launch(clone, log, Some(STEP_TIMEOUT), false);
         drop(folder);
         result?;
         self.hydrate(head, log)
@@ -775,52 +820,16 @@ impl Job {
         overlay
             .args(["run", "--rm", "--name", &self.container, "-v"])
             .arg(format!("{}:/workspace", self.volume))
-            .arg("-v")
-            .arg(format!("{}:/snapshot:ro", tree.display()))
             .args(["--entrypoint", "sh", TOOLS, "-c"])
             .arg("cp -a /snapshot/. /workspace/checkout/ && chown -R 10001:10001 /workspace/checkout");
-        self.stream(overlay, log)
+        let mut overlay = launch::Launch::new(overlay);
+        overlay.copies.push(launch::Copy::new(tree, "/snapshot"));
+        self.stream_launch(overlay, log, Some(STEP_TIMEOUT), false).map(|_| ())
     }
 
     /// Whether the default profile, whose image the CI runs in, asks for a GPU.
     fn wants_gpu(&self) -> bool {
         self.setup.as_ref().is_ok_and(default_wants_gpu)
-    }
-
-    /// A container of the image as the worker account on the proof's volume, with the
-    /// GPU, this computer's packages and Horizon's localci that the proof needs.
-    fn ci_container(&self) -> Result<Command, String> {
-        let mut command = self.docker();
-        command
-            .args(["run", "--rm", "--name", &self.container, "--user", "10001:10001", "-v"])
-            .arg(format!("{}:/workspace", self.volume))
-            .args(["-w", "/workspace/checkout", "-e", "HOME=/workspace/home"]);
-        // A proof with plain commands runs them with the image's shell and needs no localci.
-        if self.spec.commands.is_empty() {
-            let localci = self.trusted_localci()?;
-            command
-                .arg("-v")
-                .arg(format!("{}:{}:ro", localci.display(), localci::MOUNTED));
-        }
-        // A GPU profile is proved with a GPU or not at all: CI that passes without one
-        // says nothing about the worker that has one.
-        if self.wants_gpu() {
-            if !Path::new("/dev/nvidiactl").exists() {
-                return Err(
-                    "the default profile needs a GPU and this computer has no NVIDIA GPU, so Horizon cannot prove it here"
-                        .to_owned(),
-                );
-            }
-            command.args(["--gpus", "all"]);
-        }
-        // Packages this computer restored, private ones included, need no feed credential:
-        // NuGet reads the ones copied into the volume as a fallback folder before it asks
-        // a source.
-        if let Some(packages) = self.package_folder() {
-            command.args(["-e", &format!("RestoreAdditionalProjectFallbackFolders={packages}")]);
-        }
-        self.mount_crates(&mut command);
-        Ok(command)
     }
 
     /// Runs the CI jobs the way the agents on the worker do: the container starts the
@@ -840,34 +849,35 @@ impl Job {
             self.forget_older_records(&session, log)?;
             self.restore_in_container(&session, log)?;
         }
-        let mut command = self.ci_container()?;
-        command.args(&session);
+        let mut launch = self.ci_container()?;
+        launch.command.args(&session);
         if !self.spec.commands.is_empty() {
             // Without GitHub Actions the commands themselves are the proof, run with the
             // image's shell; a rerun on the warm volume shows what the caches save.
-            command.args([
+            launch.command.args([
                 "--entrypoint",
                 "bash",
                 &self.image,
                 "-c",
                 &commands_script(&self.spec.commands),
             ]);
-            return self.stream_within(command, log, Some(CI_TIMEOUT));
+            return self.stream_launch(launch, log, Some(CI_TIMEOUT), false).map(|_| ());
         }
-        command
+        launch
+            .command
             .arg("--entrypoint")
             .arg(
                 self.ci_localci
                     .borrow()
                     .clone()
-                    .unwrap_or_else(|| localci::MOUNTED.to_owned()),
+                    .unwrap_or_else(|| localci::IN_CONTAINER.to_owned()),
             )
             .arg(&self.image)
             .args(self.spec.localci_args(fast, head));
         if fast {
-            return self.stream_within(command, log, Some(CI_TIMEOUT));
+            return self.stream_launch(launch, log, Some(CI_TIMEOUT), false).map(|_| ());
         }
-        let report = self.stream_reporting(command, log, Some(CI_TIMEOUT))?;
+        let report = self.stream_launch(launch, log, Some(CI_TIMEOUT), true)?;
         localci::check_report(&report, &self.planned.borrow())
     }
 

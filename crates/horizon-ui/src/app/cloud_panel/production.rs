@@ -1,5 +1,5 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
-mod bulk_stop;
+mod agent_stops;
 mod capabilities;
 pub(super) mod cards;
 mod close;
@@ -12,7 +12,6 @@ mod creation_tests;
 mod failure_preview;
 mod first_panel;
 mod github_requests;
-mod idle;
 mod launch;
 mod lifecycle;
 mod list;
@@ -32,13 +31,16 @@ mod prices;
 mod progress;
 mod readiness;
 mod rebuild;
+mod removal;
 mod repository_setup;
 mod resize;
+mod restore;
 mod session_record;
 mod sessions;
 mod setup;
 #[cfg(debug_assertions)]
 mod stopped_preview;
+mod stops;
 use super::HorizonApp;
 use horizon_core::cloud_panel::CloudConfig;
 use horizon_core::{
@@ -69,7 +71,6 @@ const BILLING: cloud_runtime::billing::Fetch = |_, _, _, _| Err(cloud_runtime::b
 
 #[derive(Default)]
 pub(super) struct Production {
-    bulk_stop: bulk_stop::State,
     /// Cloud list requests of agents, answered in the next frame.
     list_requests: Vec<horizon_core::browser::manifest::provider_usage::UsageRequest>,
     close: close::State,
@@ -83,11 +84,12 @@ pub(super) struct Production {
     pub(super) focus_title_on_open: bool,
     title: String,
     repository: String,
-    choosing_repository: bool,
+    picking_for_source: bool,
     /// Where the new cloud's code comes from: a link to clone, or a folder.
     source: creation::source::State,
     /// What Start depends on, confirmed before it is offered.
     checks: creation::checks::State,
+    publishing: creation::publishing::State,
     revision: String,
     profiles: Option<CloudConfig>,
     selected_profile: String,
@@ -101,15 +103,18 @@ pub(super) struct Production {
     prices: prices::State,
     setup_agent: Option<PanelKind>,
     setup_agents: Vec<horizon_core::cloud_runtime::setup::Agent>,
-    /// The setup agent for a repository without settings (it outlives the dialog); one starting.
-    setup_run: Option<repository_setup::Run>,
-    setup_starting: Option<repository_setup::Starting>,
+    /// The setup agents for repositories without settings, at most one for each folder;
+    /// they outlive the dialog. And the setups about to start.
+    setup_runs: Vec<repository_setup::Run>,
+    setup_starting: Vec<repository_setup::Starting>,
     /// Where the next setup agent starts from: new, an update or a fix.
     setup_mode: repository_setup::Mode,
     /// The agent presets of the New Workspace menu, offered for the setup agent.
     setup_presets: Vec<horizon_core::PresetConfig>,
     /// The chosen setup preset, by name.
     setup_preset: Option<String>,
+    /// Where the next setup's proof builds: this computer or a saved Docker host.
+    setup_build_on: repository_setup::BuildOn,
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,
@@ -117,6 +122,16 @@ pub(super) struct Production {
     offer_publication: offer_publication::State,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
     new_workspace: Option<new_workspace::Intent>,
+}
+
+impl Production {
+    /// Opens New cloud. Each opening reads the Docker hosts again before a Start uses
+    /// one chosen earlier.
+    pub(super) fn open_creation(&mut self) {
+        self.creating = true;
+        self.focus_title_on_open = true;
+        self.setup_build_on.read_again();
+    }
 }
 #[derive(Default, PartialEq, Eq)]
 enum Confirmation {
@@ -132,7 +147,7 @@ enum Confirmation {
 pub(super) struct LogLine {
     pub text: String,
     pub stage: Option<Stage>,
-    /// Time into the attempt; `None` for lines outside one, such as idle reports.
+    /// Time into the attempt; `None` for lines outside one, such as provider checks.
     pub at: Option<std::time::Duration>,
     /// Classified once on arrival, so drawing the log does not re-scan each line.
     pub kind: LineKind,
@@ -293,13 +308,19 @@ pub(super) struct Runtime {
     billing: cloud_runtime::billing::BillingMonitor,
     rebuild: Option<rebuild::Attempt>,
     resize: resize::State,
-    idle_reports: Option<idle::Reports>,
-    /// The newest idle record the current operation's watch read.
-    last_idle: Option<cloud_runtime::lifecycle::IdleSample>,
-    /// That watch asks the provider; see [`Runtime::idle_confirming`].
-    idle_confirming: bool,
-    /// Why the worker stopped, when it stopped without an operation the owner started.
-    stop_cause: Option<cloud_runtime::lifecycle::StopCause>,
+    /// The worker stopped without an operation the owner started, as the provider
+    /// confirmed.
+    stopped_outside: bool,
+    /// The agent request that the Stop starting now carries out (`agent_stops`).
+    agent_stop: Option<agent_stops::Order>,
+    /// What the reading of agents' stop requests of this ready cloud found; dropping it
+    /// ends the reading.
+    agent_stops: Option<std::sync::mpsc::Receiver<agent_stops::Found>>,
+    /// The agent request this card gave back, by its time, so that it is never carried
+    /// out later.
+    given_back: Option<u64>,
+    /// The agent request, by its time, whose Stop this card started last.
+    stopping_for: Option<u64>,
     /// A failure of a ready or reconnecting cloud, held while the provider check that
     /// may explain it as a stop runs.
     unexplained_failure: Option<String>,
@@ -361,8 +382,7 @@ impl Runtime {
         self.receiver.is_some() && self.stage == Some(Stage::Ready)
     }
 
-    /// A line outside any operation's steps: an idle report, a provider check or a device
-    /// release. It has no step or time, so it is not filed under the last step's heading.
+    /// A line outside any operation's steps: a provider check or a device release. It has no step or time, so it is not filed under the last step's heading.
     fn push_note(&mut self, text: String) {
         let mut line = LogLine::new(text, None, None);
         line.attempt = self.progress.attempt();
@@ -472,18 +492,17 @@ impl Runtime {
         // failed no longer names this attempt's failure.
         self.operation = None;
         self.rebuild = None;
-        self.stop_cause = None;
+        self.stopped_outside = false;
         self.sharing.await_ready();
         let (tx, rx) = channel();
         let cancel = cloud_runtime::Cancellation::default();
         self.cancel = Some(cancel.clone());
         self.receiver = Some(rx);
         self.sender = Some(tx.clone());
-        let idle = self.listen_idle();
         self.error = None;
         self.state_unavailable = false;
         let ctx = ctx.clone();
-        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, idle, &ctx));
+        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, &ctx));
     }
 
     /// Only a Ready cloud shows its current run; other stages report their own progress.
@@ -510,9 +529,6 @@ impl Runtime {
 
     fn poll_release_and_repaint(&mut self, ctx: &egui::Context) {
         self.poll_remote_release();
-        // The idle watch's newest record, or its own report of the stop, comes before a
-        // provider check that classifies the stop with it.
-        self.poll_idle();
         self.poll_recovery();
         self.poll_resize();
         if self.needs_repaint() {
@@ -561,6 +577,8 @@ impl HorizonApp {
         let mut finished = Vec::new();
         let mut removed = Vec::new();
         let mut resumed = Vec::new();
+        let mut agent_stops = Vec::new();
+        let mut became_ready = Vec::new();
         for (&id, runtime) in &mut self.cloud_prototype.production.runtimes {
             runtime.repaint_context.get_or_insert_with(|| ctx.clone());
             let events: Vec<_> = runtime
@@ -571,18 +589,7 @@ impl HorizonApp {
                 runtime.observe(&event);
                 match event {
                     Event::Snapshot(state) => runtime.adopt_snapshot(*state),
-                    Event::Stopped(state) => {
-                        runtime.progress.stage(Stage::Stopped, std::time::Instant::now());
-                        runtime.stage = Some(Stage::Stopped);
-                        runtime.state = Some(*state);
-                        runtime.desktop = None;
-                        runtime.error = None;
-                        runtime.receiver = None;
-                        runtime.cancel = None;
-                        // A stop can end a rebuild that met it; its steps no longer apply.
-                        runtime.rebuild = None;
-                        runtime.stop_cause = None;
-                    }
+                    Event::Stopped(state) => runtime.show_finished_stop(*state),
                     Event::Resumed => {
                         runtime.receiver = None;
                         resumed.push(id);
@@ -598,6 +605,7 @@ impl HorizonApp {
                         runtime.desktop_controller = active;
                         runtime.desktop_last_input = last;
                     }
+                    Event::Watching => {}
                     Event::Desktop(tunnel) => {
                         runtime.desktop = Some(tunnel);
                         runtime.needs_desktop = true;
@@ -626,8 +634,12 @@ impl HorizonApp {
                         runtime.state = Some(*state);
                         runtime.stage = Some(Stage::Ready);
                         runtime.error = None;
-                        runtime.stop_cause = None;
+                        runtime.stopped_outside = false;
                         finished.push(id);
+                        // A stop the earlier reading found was the earlier worker's.
+                        runtime.agent_stops = None;
+                        runtime.stopping_for = None;
+                        became_ready.push(id);
                     }
                     Event::Failed(error, at) => {
                         runtime.show_failure(error, at);
@@ -635,6 +647,7 @@ impl HorizonApp {
                     }
                 }
             }
+            agent_stops.extend(runtime.poll_agent_stops().map(|stop| (id, stop)));
             runtime.poll_release_and_repaint(ctx);
         }
         self.report_failed_session_saves();
@@ -642,8 +655,11 @@ impl HorizonApp {
         self.follow_cloud_billing(ctx);
         self.finish_failed_cloud_operations(finished, ctx);
         self.reconcile_sharing(ctx);
+        self.poll_cloud_removals(ctx);
         self.finish_closing_clouds(ctx);
         self.reconnect_resumed(resumed, ctx);
+        self.watch_agent_stops(became_ready, ctx);
+        self.stop_clouds_for_agents(agent_stops, ctx);
         self.remove_closed_cloud_browsers(removed);
         self.sync_bound_profiles();
         self.sync_cloud_members();
@@ -706,106 +722,6 @@ impl HorizonApp {
                 self.board.close_panel(id);
                 self.panel_render_caches.browser_ui_state.remove(&id);
             }
-        }
-    }
-    pub(super) fn cloud_state_matches_session(&self) -> bool {
-        self.cloud_prototype.production.session_id == self.active_session.as_ref().map(|s| s.session_id.clone())
-    }
-
-    fn restore_cloud_state(&mut self, ctx: &egui::Context) {
-        let session = self.active_session.as_ref().map(|s| s.session_id.clone());
-        if !self.cloud_prototype.initialized || self.cloud_prototype.production.session_id != session {
-            // Clouds that do not survive this restore never paint again, so their
-            // row-height caches would otherwise stay in egui temp data.
-            let kept: Vec<u32> = self.board.cloud_groups.0.iter().map(|group| group.issue).collect();
-            let mut dropped: Vec<u32> = self
-                .cloud_prototype
-                .groups
-                .0
-                .iter()
-                .map(|group| group.issue)
-                .chain(self.cloud_prototype.production.runtimes.keys().copied())
-                .filter(|id| !kept.contains(id))
-                .collect();
-            dropped.sort_unstable();
-            dropped.dedup();
-            for id in dropped {
-                cards::forget_log_heights(ctx, id);
-            }
-            self.cloud_prototype.initialized = true;
-            self.cloud_prototype.production.pending_creation = None;
-            self.cloud_prototype.production.close = close::State::default();
-            self.cloud_prototype.production.session_id = session;
-            self.cloud_prototype.root = Some(horizon_core::HorizonHome::resolve().root().join("cloud"));
-            self.cloud_prototype.groups = self.board.cloud_groups.clone();
-            self.cloud_prototype.production.runtimes.clear();
-            self.cloud_prototype.ready = true;
-            let reconnect: Vec<_> = self
-                .cloud_prototype
-                .groups
-                .0
-                .iter()
-                .filter_map(|group| {
-                    let launch = group.remote.as_ref()?;
-                    let directory =
-                        cloud_runtime::state::cloud_directory(self.cloud_prototype.root.as_ref()?, &launch.id);
-                    // A save that outlived the runtimes of the previous session holds the
-                    // newest record and its lock; this runtime joins it.
-                    let sessions = directory
-                        .as_deref()
-                        .map_or_else(|_| session_record::Sessions::default(), session_record::Sessions::of);
-                    let result = directory.and_then(|root| match sessions.saving_record() {
-                        Some(record) => Ok(Some(record)),
-                        None => Store::lock(&root).and_then(|store| store.load()),
-                    });
-                    let state = match result {
-                        Ok(Some(state)) => state,
-                        Ok(None) if !launch.deployment_started => return None,
-                        other => {
-                            let message = other.err().map_or_else(
-                                || "Deployment record is missing; reconcile its worker before continuing".into(),
-                                |error| error.to_string(),
-                            );
-                            self.cloud_prototype.production.runtimes.insert(
-                                group.issue,
-                                Runtime {
-                                    error: Some(message),
-                                    state_unavailable: true,
-                                    resize: cloud_runtime::state::cloud_directory(
-                                        self.cloud_prototype.root.as_ref()?,
-                                        &launch.id,
-                                    )
-                                    .map_or_else(|_| resize::State::default(), |root| resize::restored(&root)),
-                                    sessions,
-                                    ..Runtime::default()
-                                },
-                            );
-                            return None;
-                        }
-                    };
-                    self.cloud_prototype.production.runtimes.insert(
-                        group.issue,
-                        Runtime {
-                            stage: Some(state.stage),
-                            state: Some(state.clone()),
-                            sessions,
-                            ..Runtime::default()
-                        },
-                    );
-                    Runtime::reconnects_on_restore(&state).then_some(group.issue)
-                })
-                .collect();
-            self.sync_bound_profiles();
-            for id in reconnect {
-                self.start_production_deployment(id, ctx);
-            }
-            // A debug build can show a synthetic deploy log. Release builds omit it.
-            #[cfg(debug_assertions)]
-            log_preview::seed(self, ctx);
-            #[cfg(debug_assertions)]
-            stopped_preview::seed(self, ctx);
-            #[cfg(debug_assertions)]
-            failure_preview::seed(self);
         }
     }
     /// Reconnects each resumed worker. The reconnect that finishes a resume is still that
@@ -914,13 +830,8 @@ impl HorizonApp {
                 if let Some(session) = saved.sessions.iter().find(|session| session.panel_id == id) {
                     return (session.clone(), false);
                 }
-                let session = Session {
-                    panel_id: id.clone(),
-                    agent: agent.into(),
-                    tmux: id.clone(),
-                    branch: String::new(),
-                    worktree: cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref()),
-                };
+                let worktree = cloud_runtime::siblings::shared_worktree(saved.siblings.as_ref());
+                let session = Session::new(&id, agent, worktree);
                 saved.sessions.push(session.clone());
                 (session, true)
             })?;
@@ -940,10 +851,9 @@ fn run_deployment(
     request: &Request,
     cancel: &cloud_runtime::Cancellation,
     tx: &std::sync::mpsc::Sender<Event>,
-    idle: std::sync::mpsc::Sender<idle::Report>,
     ctx: &egui::Context,
 ) {
-    run_deployment_with_siblings(request, &[], cancel, tx, idle, ctx);
+    run_deployment_with_siblings(request, &[], cancel, tx, ctx);
 }
 
 fn run_deployment_with_siblings(
@@ -951,7 +861,6 @@ fn run_deployment_with_siblings(
     siblings: &[cloud_runtime::siblings::Binding],
     cancel: &cloud_runtime::Cancellation,
     tx: &std::sync::mpsc::Sender<Event>,
-    idle: std::sync::mpsc::Sender<idle::Report>,
     ctx: &egui::Context,
 ) {
     let emit = |event| {
@@ -962,7 +871,6 @@ fn run_deployment_with_siblings(
     let root = request.state_root.clone();
     match deployment::deploy_with_siblings(request, siblings, cancel, &emit) {
         Ok(state) => {
-            idle::watch(&state, &settings, &root, cancel, idle, ctx);
             presentation::watch(&state, &settings, &root, cancel, tx, ctx);
         }
         Err(error) => {
@@ -972,13 +880,13 @@ fn run_deployment_with_siblings(
 }
 
 /// Reports the saved record with the failure, so the card shows what was kept. A
-/// record found busy is read once its lock is released, since that may be an idle
+/// record found busy is read once its lock is released, since that may be another
 /// stop finishing, which the card then shows instead of the failure. Returns
 /// whether the record could be read, after that wait.
 fn report_failure(root: &std::path::Path, error: &cloud_runtime::Error, emit: &dyn Fn(Event)) -> bool {
     let load = || Store::lock(root).and_then(|store| store.load());
     let (read, saved) = if matches!(error, cloud_runtime::Error::Busy) {
-        match idle::after_busy(load, std::time::Duration::from_secs(1)).map(idle::stopped_while_busy) {
+        match stops::after_busy(load, std::time::Duration::from_secs(1)).map(stops::stopped_while_busy) {
             Some(Ok(events)) => {
                 for event in events {
                     emit(event);

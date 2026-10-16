@@ -6,7 +6,13 @@ use horizon_core::cloud_runtime::state::Deployment;
 #[cfg(unix)]
 use horizon_core::cloud_runtime::{CreateState, state::Store};
 
+#[cfg(unix)]
+mod cancellation;
+#[cfg(unix)]
+mod refresh;
 mod refused;
+#[cfg(unix)]
+mod watch;
 
 fn deployment() -> Deployment {
     serde_json::from_value(serde_json::json!({
@@ -27,6 +33,7 @@ fn add_cloud(app: &mut HorizonApp, root: &std::path::Path, state: Option<Deploym
         [0.0, 0.0],
     );
     group.remote = Some(CloudLaunch {
+        publishing_selection: None,
         id: "fixture".into(),
         revision: "a".repeat(40),
         profile_name: "dev".into(),
@@ -66,9 +73,11 @@ fn failed_image_push_closes_without_worker_deletion_and_rechecks_storage() {
 
     std::fs::write(path.join("workspace-volume.required"), "").unwrap();
     app.remove_deleted_cloud(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1, "storage must remain tracked");
     std::fs::remove_file(path.join("workspace-volume.required")).unwrap();
     app.remove_deleted_cloud(101, &egui::Context::default());
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     assert!(!app.cloud_prototype.production.runtimes.contains_key(&101));
     assert!(
@@ -82,6 +91,7 @@ fn close_confirmation_is_modal_and_escape_preserves_cloud() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert!(app.host_dialog_open());
     let ctx = egui::Context::default();
     for _ in 0..2 {
@@ -156,12 +166,14 @@ fn close_waits_for_completion_and_rechecks_durable_cleanup() {
     app.cloud_prototype.production.runtimes.get_mut(&101).unwrap().receiver = Some(rx);
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
     drop(tx);
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.receiver = None;
     runtime.stage = Some(Stage::Deleted);
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -179,6 +191,7 @@ fn close_waits_for_completion_and_rechecks_durable_cleanup() {
         .unwrap();
     app.cloud_prototype.production.close.deleting.insert(101);
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty());
     assert!(!app.cloud_prototype.production.runtimes.contains_key(&101));
 }
@@ -192,6 +205,7 @@ fn failed_deletion_retains_cloud_and_error_for_retry() {
     runtime.error = Some("Storage cleanup failed".into());
     app.cloud_prototype.production.close.deleting.insert(101);
     app.finish_closing_clouds(&egui::Context::default());
+    app.settle_cloud_removals();
     assert_eq!(app.cloud_prototype.groups.0.len(), 1);
     assert_eq!(
         app.cloud_prototype.production.runtimes[&101].error.as_deref(),
@@ -234,6 +248,7 @@ fn a_closing_cloud_hides_its_panels_and_shows_them_again_if_its_deletion_fails()
     app.cloud_prototype.production.close.deleting.insert(101);
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.production.close.closing(101));
     assert!(
         !app.board.panel(panel).unwrap().visible,
@@ -248,6 +263,7 @@ fn a_closing_cloud_hides_its_panels_and_shows_them_again_if_its_deletion_fails()
     runtime.receiver = None;
     runtime.error = Some("Storage cleanup failed".into());
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.cloud_prototype.production.close.closing(101));
     assert!(
         app.board.panel(panel).unwrap().visible,
@@ -282,6 +298,7 @@ fn expanding_a_collapsed_cloud_while_it_closes_keeps_its_panels_hidden() {
     app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.board.panel(panel).unwrap().visible);
 
     app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, false);
@@ -300,6 +317,7 @@ fn expanding_a_collapsed_cloud_while_it_closes_keeps_its_panels_hidden() {
     runtime.receiver = None;
     runtime.error = Some("Storage cleanup failed".into());
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(
         app.board.panel(panel).unwrap().visible,
         "a failed deletion returns them"
@@ -312,6 +330,7 @@ fn a_cloud_collapsed_during_a_failed_close_shows_its_panels_when_it_expands() {
     let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.board.panel(panel).unwrap().visible);
     app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
 
@@ -319,6 +338,7 @@ fn a_cloud_collapsed_during_a_failed_close_shows_its_panels_when_it_expands() {
     runtime.receiver = None;
     runtime.error = Some("Storage cleanup failed".into());
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.board.panel(panel).unwrap().visible, "still collapsed");
     app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, false);
     assert!(
@@ -338,12 +358,14 @@ fn a_declined_removal_returns_the_panels_of_the_cloud() {
     let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.board.panel(panel).unwrap().visible);
 
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.receiver = None;
     runtime.stage = Some(Stage::Deleted);
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert_eq!(
         app.cloud_prototype.groups.0.len(),
         1,
@@ -369,12 +391,14 @@ fn a_finished_close_leaves_no_disposal_marker_behind() {
     let (panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(app.board.is_hidden_for_disposal(panel));
 
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.receiver = None;
     runtime.stage = Some(Stage::Deleted);
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty(), "the cloud closed");
     assert!(
         !app.board.is_hidden_for_disposal(panel),
@@ -388,9 +412,11 @@ fn a_deletion_that_cannot_start_asks_again_and_can_remove_anyway() {
     add_cloud(&mut app, temp.path(), Some(deployment()));
     let panel = add_member(&mut app);
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     let ctx = egui::Context::default();
     // No settings.json: the provider cannot be reached, so the deletion cannot start.
     app.delete_for_close(101, &ctx);
+    app.settle_cloud_removals();
     let close = &app.cloud_prototype.production.close;
     assert_eq!(close.confirming, Some(101), "the dialog stays open");
     assert!(!close.closing(101));
@@ -404,6 +430,7 @@ fn a_deletion_that_cannot_start_asks_again_and_can_remove_anyway() {
     assert!(offer.remove_anyway, "only now may the cloud leave without its deletion");
 
     app.remove_cloud_anyway(101, &ctx);
+    app.settle_cloud_removals();
     assert!(app.cloud_prototype.groups.0.is_empty(), "the cloud is gone");
     assert!(app.board.panel(panel).is_none(), "with its panels");
     assert!(!app.cloud_prototype.production.runtimes.contains_key(&101));
@@ -417,12 +444,14 @@ fn a_failed_close_deletion_reopens_the_dialog_with_its_failure() {
     let (_panel, _sender) = closing_cloud_with_panel(&mut app, temp.path());
     let ctx = egui::Context::default();
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     assert!(!app.cloud_close_confirmation_open(), "no dialog while deleting");
 
     let runtime = app.cloud_prototype.production.runtimes.get_mut(&101).unwrap();
     runtime.receiver = None;
     runtime.error = Some("provider timed out".into());
     app.finish_closing_clouds(&ctx);
+    app.settle_cloud_removals();
     let close = &app.cloud_prototype.production.close;
     assert_eq!(close.confirming, Some(101));
     assert_eq!(
@@ -433,6 +462,7 @@ fn a_failed_close_deletion_reopens_the_dialog_with_its_failure() {
 
     app.cloud_prototype.production.close.confirming = None;
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     assert!(
         app.cloud_prototype.production.close.failed.is_empty(),
         "the next × offers the deletion first again"
@@ -444,6 +474,7 @@ fn cancel_forgets_the_failure_so_the_next_close_deletes_first() {
     let (temp, mut app) = test_app();
     add_cloud(&mut app, temp.path(), Some(deployment()));
     app.request_cloud_close(101);
+    app.settle_cloud_removals();
     app.cloud_prototype
         .production
         .close

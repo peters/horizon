@@ -4,7 +4,7 @@ feature: Cloud panels smoke test, area L (stop, resume, reconnect, restart, reco
 platforms: [linux]
 cost: rents compute
 destructive: yes
-secrets: [RunPod API key in Cloud settings, Hetzner Cloud API token in Cloud settings, registry push and pull credentials]
+secrets: [RunPod API key in Cloud settings, Hetzner Cloud API token in Cloud settings, registry push and pull credentials, Anthropic API-key file in Cloud settings]
 owner: peters
 ---
 
@@ -342,7 +342,7 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
     Result: The size is the new size.
 
-### 6.7 L07 — Make sure that idle stop works
+### 6.7 L07 — Make sure that Horizon does not stop an idle cloud
 
 1. Open **Menu › Add cloud here**.
 
@@ -389,17 +389,22 @@ Use `smoke-r`. It is a RunPod CPU cloud.
 
 11. Wait 15 minutes.
 
+    Result: The card of `smoke-x` still shows **Ready**. The profile sets
+    `idle_stop_minutes: 10`, which has no effect.
+
+12. Click **Stop…** on the card of `smoke-x` and confirm.
+
     Result: The card of `smoke-x` shows **Stopped**.
 
-12. Mark the server of `smoke-x` as deleted in the resource ledger.
+13. Mark the server of `smoke-x` as deleted in the resource ledger.
 
     Result: The ledger shows the server as deleted and the volume as kept.
 
-13. Open the **Manage** tab.
+14. Open the **Manage** tab.
 
     Result: The tab shows **Check provider**.
 
-14. Click **Check provider**.
+15. Click **Check provider**.
 
     Result: The card shows **Stopped** and offers **Resume worker**. Nothing
     starts the worker.
@@ -766,12 +771,12 @@ must refuse the rebuild before it changes the worker
 
 ### 6.13 L13: Rebuild with changed settings
 
-Use `smoke-sib` on RunPod. Then do steps 1 to 12 again with `smoke-hb` on Hetzner
+Use `smoke-sib` on RunPod. Then do steps 1 to 13 again with `smoke-hb` on Hetzner
 and its profile `runpod-build`. The profile of the cloud must have `agents: [claude]`
 and no `idle_stop_minutes` at the start.
 
 1. In `<repo>`, add `codex` to `capabilities.agents` of the profile of the cloud.
-   Add `idle_stop_minutes: 30`. Do not commit the change.
+   Add `idle_stop_minutes: 30`, which has no effect. Do not commit the change.
 
    Result: `git -C <repo> status --short` shows `.horizon/cloud.yml` as modified.
 
@@ -782,8 +787,9 @@ and no `idle_stop_minutes` at the start.
 
 3. On the card, click **Rebuild image & restart…**.
 
-   Result: The confirmation lists `Adds agent codex` and `Idle stop off → 30 min`
-   under `This rebuild changes the cloud's settings:`. If the build context of the
+   Result: The confirmation lists `Adds agent codex` under `This rebuild changes
+   the cloud's settings:`, and no idle stop change. It shows the note that
+   `idle_stop_minutes` has no effect. If the build context of the
    profile holds the two files, the confirmation lists `modified .horizon/cloud.yml`
    and `new uncommitted.txt` under the warning about a public registry.
 
@@ -796,8 +802,7 @@ and no `idle_stop_minutes` at the start.
 
 5. Click **Rebuild and restart**. Wait until the card shows **Ready**.
 
-   Result: The card keeps the notes `Profile change: Adds agent codex` and
-   `Profile change: Idle stop off → 30 min`.
+   Result: The card keeps the note `Profile change: Adds agent codex`.
 
 6. Examine the **Machine** tab.
 
@@ -828,7 +833,7 @@ and no `idle_stop_minutes` at the start.
 
 10. On the card, click **Rebuild image & restart…**.
 
-    Result: The confirmation lists `Removes agent codex` and `Idle stop 30 min → off`.
+    Result: The confirmation lists `Removes agent codex`.
 
     > **CAUTION:** THIS STEP RESTARTS THE WORKER. The Codex session ends.
 
@@ -838,15 +843,89 @@ and no `idle_stop_minutes` at the start.
     longer has agent codex, so its process was not relaunched`. The Codex panel does
     not show a running Codex. The other sessions relaunch.
 
-12. Examine the **Machine** tab.
+12. On the card, click **Reconnect cloud**. Wait until the card shows **Ready**. Then
+    count the sessions that the record marks as reported. `<cloud-id>` is the folder
+    of the cloud below `<home>/.horizon/cloud`; find it as in E09 step 1.
+
+    ```sh
+    grep -c '"removed_agent_reported": true' <home>/.horizon/cloud/<cloud-id>/deployment.json
+    ```
+
+    Result: The command prints `1`: the reconnect did not report the Codex session
+    again. The Codex panel does not show a running Codex.
+
+13. Examine the **Machine** tab.
 
     Result: `Agents` shows `claude` only.
 
-13. Commit `gpu: true` in the profile of `smoke-sib`. On the card, click **Rebuild
+14. Commit `gpu: true` in the profile of `smoke-sib`. On the card, click **Rebuild
     image & restart…**.
 
     Result: The confirmation shows **Rebuild refused:** with the field `gpu`. Click
     **Keep current image**, then revert the commit.
+
+If Cloud settings has an Anthropic API-key file, do steps 15 to 21 with `smoke-sib`.
+`<anthropic-key>` is that file. At the start, the profile of the cloud has
+`agents: [claude]`.
+
+> **CAUTION:** MOVE THE FILE BACK IN STEP 19. Until then, no cloud of this computer
+> can deploy, reconnect or rebuild with the agent `claude`.
+
+15. Move `<anthropic-key>` to a backup.
+
+    ```sh
+    mv <anthropic-key> <anthropic-key>.l13-backup
+    ```
+
+    Result: `<anthropic-key>` does not exist.
+
+16. In `<repo>`, add `codex` to `capabilities.agents` of the profile of the cloud.
+    Do not commit the change.
+
+    Result: `git -C <repo> status --short` shows `.horizon/cloud.yml` as modified.
+
+17. On the card, click **Rebuild image & restart…**.
+
+    Result: The confirmation lists `Adds agent codex`.
+
+18. Click **Rebuild and restart**.
+
+    Result: The card shows this refusal:
+
+    ```text
+    Rebuild refused: Agent claude cannot use its API-key file <anthropic-key>: the file is missing. A reconnect of this cloud with this profile needs this file too, so fix it before the rebuild
+    ```
+
+    After the refusal, Horizon reconnects the cloud automatically. That reconnect
+    fails with this message:
+
+    ```text
+    Agent claude cannot use its API-key file <anthropic-key>: the file is missing
+    ```
+
+19. Move the file back.
+
+    ```sh
+    mv <anthropic-key>.l13-backup <anthropic-key>
+    ```
+
+    Result: `<anthropic-key>` exists.
+
+20. Discard the change of step 16.
+
+    ```sh
+    git -C <repo> checkout -- .horizon/cloud.yml
+    ```
+
+    Result: `git -C <repo> status --short` shows nothing.
+
+> **CAUTION:** THE NEXT STEP SENDS THE ANTHROPIC API KEY TO THE WORKER AGAIN. Do it
+> only on `smoke-sib`.
+
+21. On the card, click **Reconnect cloud**.
+
+    Result: The card shows **Ready**. The **Machine** tab shows `Agents` with
+    `claude` only.
 
 ### 6.14 L14: Rebuild from an uncommitted recipe
 
@@ -995,10 +1074,13 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
 - `smoke-hb` rebuilds on Hetzner at the same commit, although its profile names
   RunPod and other storage values. A changed `image` gives a refusal that names the
   field.
-- A rebuild adds and removes the agent `codex` and changes the idle stop on RunPod
-  and on Hetzner. The confirmation lists each change before the rebuild starts. An
-  added agent has its credential. A session of a removed agent is reported and does
-  not relaunch.
+- A rebuild adds and removes the agent `codex` on RunPod and on Hetzner, and an
+  idle period is no change. The confirmation lists each change before the rebuild starts. An
+  added agent has its credential. A session of a removed agent is reported once and
+  does not relaunch. A later reconnect does not report it again.
+- If Cloud settings has an Anthropic API-key file, a rebuild that adds `codex` while
+  that file is missing is refused before the build. The refusal names `claude`, the
+  file, and that a reconnect needs it too.
 - A rebuild takes uncommitted settings and uncommitted recipe files. The confirmation
   lists each uncommitted file and never an ignored file. A secret file name and a file
   changed after the confirmation refuse the rebuild. The harness rebuild refuses a
@@ -1006,7 +1088,7 @@ Use `smoke-sib` on RunPod. Its profile has a `build` section. In the steps,
   from uncommitted changes until a rebuild from the commit only.
 - The rebuild of `smoke-hd` is refused with `storage.container_gb`, and its
   server stays.
-- Idle stop stops `smoke-x` after the profile limit.
+- Horizon does not stop `smoke-x` after its idle period; Stop releases its server.
 - Deletion removes the resources, and redeploy makes new resources.
 - A Hetzner resume makes a new server. The host key from `/workspace` stays, and
   pinned SSH works.
@@ -1037,11 +1119,11 @@ to 12 revoke it while the fixture runs.
    > **CAUTION:** REVOKE ONLY THE `<build-repository>` ENTRY OF THIS RUN. A worker
    > that needs this credential cannot pull its image after a restart.
 
-5. On the `<build-repository>` entry, click **Revoke pull binding**.
+5. In **Provider registry access** on the `<build-repository>` entry, click **Revoke provider access**.
 
    Result: The entry shows that the provider pull credential is revoked.
 
-6. Write the status action for `<build-repository>` as in A08 step 13.
+6. Write the provider status action for `<build-repository>` as in A08 step 15.
 
    Result: `<data-home>/smoke/registry-status.json` names `<build-repository>` and its generation.
 
@@ -1079,6 +1161,14 @@ to 12 revoke it while the fixture runs.
 12. Delete `<data-home>/smoke/registry-status.json`.
 
     Result: No registry action file of this run stays in the private home.
+
+13. If `<anthropic-key>.l13-backup` from L13 exists, move it back.
+
+    ```sh
+    test ! -e <anthropic-key>.l13-backup || mv <anthropic-key>.l13-backup <anthropic-key>
+    ```
+
+    Result: `<anthropic-key>.l13-backup` does not exist.
 
 Area X deletes the other clouds.
 

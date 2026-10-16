@@ -5,6 +5,10 @@ use super::status::{Primary, Status, Tone, Track};
 use crate::theme;
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
+mod spend;
+
+pub(in crate::app::cloud_panel) use spend::Spend;
+
 /// Height of the stage track along the header's bottom edge.
 const TRACK_HEIGHT: f32 = 5.0;
 /// Vertical centre of the title-row controls, level with the close button.
@@ -12,6 +16,8 @@ const CONTROLS_Y: f32 = 35.0;
 /// Room the title keeps before optional controls are dropped.
 const TITLE_MIN: f32 = 170.0;
 const TITLE_LEFT: f32 = 64.0;
+/// Space between the end of the title and the spend's second row.
+const TITLE_GAP: f32 = 24.0;
 
 /// Which way the local network bridge is going, for its indicator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,12 +42,6 @@ pub(in crate::app::cloud_panel) struct Indicators {
     pub companions: usize,
 }
 
-pub(in crate::app::cloud_panel) struct Spend {
-    /// "$0.320/h · $1.02 run · $8.86 total", or what is known instead.
-    pub line: String,
-    pub explanation: String,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app::cloud_panel) enum StripAction {
     Primary(Primary),
@@ -64,6 +64,19 @@ const LAYOUT_MIN_HEADER: f32 = 700.0;
 /// Whether a header `width` wide has room for the layout buttons.
 pub(super) fn header_fits_layout(width: f32) -> bool {
     width >= LAYOUT_MIN_HEADER
+}
+
+/// The header's rectangle, and how wide its title and subtitle are untruncated.
+#[derive(Clone, Copy)]
+pub(in crate::app::cloud_panel) struct Header {
+    pub rect: Rect,
+    pub title_width: f32,
+}
+
+impl From<Rect> for Header {
+    fn from(rect: Rect) -> Self {
+        Self { rect, title_width: 0.0 }
+    }
 }
 
 pub(in crate::app::cloud_panel) struct Strip {
@@ -111,13 +124,17 @@ pub(super) fn stage_color(stage: Stage) -> Color32 {
 
 pub(super) fn show(
     ui: &mut egui::Ui,
-    header: Rect,
+    header: Header,
     status: &Status,
     indicators: &Indicators,
     spend: &Spend,
     drawer_open: bool,
     layout: Option<LayoutControls>,
 ) -> Strip {
+    let Header {
+        rect: header,
+        title_width,
+    } = header;
     let mut action = None;
     let y = header.top() + CONTROLS_Y;
     let close_left = header.right() - 42.0;
@@ -146,21 +163,13 @@ pub(super) fn show(
         paint_indicators(ui, pos2(left - width, y), placed);
         left -= width + 22.0;
     }
-    let spend_galley = ui
-        .painter()
-        .layout_no_wrap(spend.line.clone(), FontId::proportional(14.0), theme::FG_SOFT());
-    if indicators_fit && room(left, spend_galley.size().x) {
-        let rect = Rect::from_min_size(
-            pos2(left - spend_galley.size().x, y - spend_galley.size().y / 2.0),
-            spend_galley.size(),
-        );
-        ui.painter().galley(rect.min, spend_galley, theme::FG_SOFT());
-        let spoken = format!("{}. {}", spend.line, spend.explanation);
-        ui.interact(rect, ui.id().with("spend"), Sense::hover())
-            .on_hover_text(&spend.explanation)
-            .widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.trim_end_matches(['.', ' ']))
-            });
+    // The spend's second row never shortens the title or the subtitle; the first may.
+    let title_end = header.left() + TITLE_LEFT + title_width + TITLE_GAP;
+    let fits = |width: f32, rows: spend::Rows| match rows {
+        spend::Rows::One => room(left, width),
+        spend::Rows::Two => room(left, width) && left - width >= title_end,
+    };
+    if indicators_fit && let Some(rect) = spend::paint(ui, left, y, spend, fits) {
         left = rect.left() - 24.0;
     }
     let mut reserved_row = 0.0;

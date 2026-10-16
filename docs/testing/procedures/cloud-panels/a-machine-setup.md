@@ -212,7 +212,8 @@ setting must open a repair form.
 2. Select **Codex** and **Claude**.
 
    Result: The card shows a sign-in choice for each agent: **API key**, and
-   **ChatGPT sign-in** for Codex or **Subscription login** for Claude.
+   **ChatGPT sign-in** for Codex, or **Setup token** and **Sign in on the worker**
+   for Claude.
 
 3. For Claude, select **API key**.
 
@@ -392,17 +393,29 @@ Do this task after B02. It needs the synthetic repository.
 
    Result: The field shows `ghcr.io/<test-owner>/<image>@sha256:<digest>`.
 
-   > **CAUTION:** THIS STEP SENDS THE PULL TOKEN TO RUNPOD. Horizon makes a
-   > provider pull credential with it. Use only the dedicated read-only token.
+   > **CAUTION:** SEND ONLY THE TEST ACCOUNT'S READ-ONLY TOKEN TO ITS REGISTRY.
+   > This host check does not send the token to a compute provider.
 
 9. Click **Validate pull access**.
 
-   Result: The card shows **Pull access verified**, the image, the scope and the expiry.
+   Result: The card shows the saved host pull check, the image, the scope and the expiry.
+   No provider pull credential is created.
 
-   > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
-   > contains the key. Do not show the file or the request headers.
+10. Open **Provider registry access**.
 
-10. Find the new provider pull credential in the RunPod registry list.
+    Result: The provider controls are visible.
+
+    > **CAUTION:** THIS STEP SENDS THE PULL TOKEN TO RUNPOD. Use only the dedicated
+    > read-only token and the saved test compute account.
+
+11. Click **Prepare provider access**.
+
+    Result: The provider pull credential is prepared for this exact image and generation.
+
+    > **CAUTION:** SEND THE RUNPOD KEY ONLY TO THE RUNPOD API. The header file
+    > contains the key. Do not show the file or the request headers.
+
+12. Find the new provider pull credential in the RunPod registry list.
 
     ```sh
     bash <run>/runpod-list.sh registries
@@ -410,15 +423,15 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The list has one new line. Write its ID in the resource ledger as a RunPod registry credential.
 
-11. Click **Status**.
+13. Click **Provider status**.
 
     Result: The card shows the generation, the provider state and the last validated image.
 
-12. Record the generation that the card shows.
+14. Record the generation that the card shows.
 
     Result: You have the value for the next steps.
 
-13. Write the status action to `<data-home>/smoke/registry-status.json`.
+15. Write the status action to `<data-home>/smoke/registry-status.json`.
 
     ```json
     {"operation":"status","repository":"ghcr.io/<test-owner>/<image>","generation":"<generation>"}
@@ -426,7 +439,7 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The file contains no secret.
 
-14. In the fixture terminal, run the status action with the CLI.
+16. In the fixture terminal, run the status action with the CLI.
 
     ```sh
     <run>/bin/cloud_deploy registry <home>/.horizon/cloud/settings.json <home>/smoke/registry-status.json
@@ -434,7 +447,7 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The output shows the same generation, provider state and image as the card.
 
-15. Write a script that sends the same action to the MCP tool `cloud_registry`.
+17. Write a script that sends the same action to the MCP tool `cloud_registry`.
 
     ```sh
     cat > <data-home>/smoke/bin/registry-mcp.sh <<'EOF'
@@ -452,7 +465,7 @@ Do this task after B02. It needs the synthetic repository.
 
     Result: The script is in `<data-home>/smoke/bin/registry-mcp.sh`.
 
-16. In the fixture terminal, run the script.
+18. In the fixture terminal, run the script.
 
     ```sh
     bash ~/smoke/bin/registry-mcp.sh
@@ -464,51 +477,51 @@ Do this task after B02. It needs the synthetic repository.
     > credential that this run made. A worker that needs it cannot pull its image
     > after a restart.
 
-17. In Cloud settings, click **Revoke pull binding**.
+19. In **Provider registry access**, click **Revoke provider access**.
 
     Result: The card shows that the provider pull credential is revoked.
 
-18. Run the CLI status action again.
+20. Run the CLI status action again.
 
     Result: The output shows that the provider pull credential is revoked.
 
-19. Mark the RunPod registry credential of step 10 as deleted in the resource ledger.
+21. Mark the RunPod registry credential of step 12 as deleted in the resource ledger.
 
     Result: The ledger shows no active credential for the A08 repository.
 
     > **CAUTION:** REVOKE ONLY THE GHCR TOKEN THAT THIS RUN MADE. Other tokens of
     > the account can give access to other work.
 
-20. Ask the operator to revoke the GHCR token at GitHub.
+22. Ask the operator to revoke the GHCR token at GitHub.
 
     Result: The token cannot read the image. Horizon does not revoke the token at its issuer.
 
-21. Mark the GHCR pull token as revoked in the resource ledger.
+23. Mark the GHCR pull token as revoked in the resource ledger.
 
     Result: The ledger shows the token of A08 as revoked.
 
 The `runpod-build` profile needs a second entry with a push credential.
 G02, L05, L11 and L12 use this entry. Keep it until the end of area L.
 
-22. In the **Container registry** card, click **Add image repository**.
+24. In the **Container registry** card, click **Add image repository**.
 
     Result: The card shows **New image repository** and empty fields.
 
-23. Type `<build-repository>` in the **Image repository** field.
+25. Type `<build-repository>` in the **Image repository** field.
 
     Result: The field shows the repository of the build profile.
 
     > **CAUTION:** THE OPERATOR MUST ENTER THE CREDENTIALS. A device `type` action
     > can lose characters, and a recording can show a credential.
 
-24. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
+26. Let the operator fill the pull fields and the **Publishing credential** fields for `<build-repository>`.
 
     Result: The pull fields and the push fields are full. The credentials do not show.
 
     > **CAUTION:** SAVE ONLY CREDENTIALS FOR THE TEST REPOSITORY. Use a read-only
     > pull credential and a push credential for that repository only.
 
-25. Click **Save settings**.
+27. Click **Save settings**.
 
     Result: The card lists `<build-repository>`. The settings file contains only file references.
 
@@ -575,9 +588,9 @@ Do this task after D01. It uses the cloud `smoke-a`.
 
    Result: The command shows that the file does not exist.
 
-9. In Cloud settings, select **Subscription login** for Claude.
+9. In Cloud settings, select **Sign in on the worker** for Claude.
 
-   Result: The Claude section shows **Subscription login**.
+   Result: The Claude section shows **Sign in on the worker**.
 
 10. Click **Save settings**.
 
