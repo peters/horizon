@@ -80,11 +80,14 @@ class MarkerTests(unittest.TestCase):
 class HelperRecipeTests(unittest.TestCase):
     def test_every_base_is_pinned_and_the_artifact_holds_every_worker_script(self):
         recipe = Path(__file__).with_name('Dockerfile.helpers').read_text()
-        bases = re.findall(r'^FROM (\S+)', recipe, re.MULTILINE)
-        self.assertIn('scratch', bases)
-        for base in bases:
-            if base != 'scratch':
+        bases = re.findall(r'^FROM (\S+)(?: AS (\S+))?', recipe, re.MULTILINE)
+        self.assertIn('scratch', [base for base, _ in bases])
+        stages = set()
+        for base, stage in bases:
+            if base != 'scratch' and base not in stages:
                 self.assertRegex(base, r'@sha256:[0-9a-f]{64}$')
+            if stage:
+                stages.add(stage)
         self.assertIn('install -m 755 examples/cloud-worker/horizon-worker-* /output/usr/local/bin/', recipe)
         self.assertIn('ln -s /usr/local/bin/horizon-worker-git-auth /output/usr/local/bin/gh', recipe)
         # Dependency notices come from the collector the worker images use, over this build's cache.

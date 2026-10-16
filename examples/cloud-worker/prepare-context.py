@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a source/credential-free worker context containing only stripped helpers."""
+"""Create a credential-free context with stripped helpers and declared runtime build inputs."""
 import argparse
 import hashlib
 import json
@@ -22,6 +22,7 @@ WORKER_SCRIPTS = (
     'horizon-worker-github-packages', 'horizon-worker-gh-repository',
     'horizon-worker-browserstack',
 )
+TAILSCALE_INPUTS = ('build.sh', 'collect-notices.py', 'unix-proxy-v1.patch')
 CONTEXT_FILES = ('Dockerfile', '.dockerignore', *WORKER_SCRIPTS)
 HELPERS = ('horizon-cloud-worker', 'horizon-browser', 'horizon-device')
 
@@ -50,7 +51,9 @@ def gpu_recipe(recipe, base):
 
 def prepare_context(bin_dir, output, gpu_base=None):
     source = Path(__file__).resolve().parent
-    for path in [*(source / name for name in CONTEXT_FILES), *(bin_dir / name for name in HELPERS)]:
+    for path in [*(source / name for name in CONTEXT_FILES),
+                 *(source / 'tailscale' / name for name in TAILSCALE_INPUTS),
+                 *(bin_dir / name for name in HELPERS)]:
         require_regular(path)
     gpu = gpu_recipe((source / 'Dockerfile').read_text(), gpu_base) if gpu_base is not None else None
     if output.exists():
@@ -58,6 +61,9 @@ def prepare_context(bin_dir, output, gpu_base=None):
     output.mkdir(parents=True)
     for name in CONTEXT_FILES:
         copy_regular(source / name, output / name)
+    (output / 'tailscale').mkdir()
+    for name in TAILSCALE_INPUTS:
+        copy_regular(source / 'tailscale' / name, output / 'tailscale' / name)
     if gpu is not None:
         (output / 'Dockerfile.gpu').write_text(gpu)
     (output / 'bin').mkdir()

@@ -40,3 +40,9 @@ bin/**
 !bin/horizon-cloud-worker
 !bin/horizon-browser
 !bin/horizon-device
+
+!tailscale/
+tailscale/**
+!tailscale/build.sh
+!tailscale/collect-notices.py
+!tailscale/unix-proxy-v1.patch

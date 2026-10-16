@@ -11,7 +11,12 @@ ARG HORIZON_BROWSERSTACK=false
 # Only final stripped helpers belong in bin/. Unselected helpers stay in this stage.
 COPY bin/horizon-cloud-worker bin/horizon-browser bin/horizon-device /input/
 RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdirSync(out,{recursive:true}); const copy=n=>fs.copyFileSync("/input/"+n,out+"/"+n); copy("horizon-cloud-worker"); if(process.env.HORIZON_BROWSERS || process.env.HORIZON_BROWSERSTACK==="true")copy("horizon-browser"); if(process.env.HORIZON_DESKTOP==="true")copy("horizon-device"); fs.mkdirSync("/output/etc/horizon-worker",{recursive:true});fs.writeFileSync("/output/etc/horizon-worker/capabilities.json",JSON.stringify({agents:process.env.HORIZON_AGENTS.split(",").filter(Boolean),browsers:process.env.HORIZON_BROWSERS.split(",").filter(Boolean),desktop:process.env.HORIZON_DESKTOP==="true",...(process.env.HORIZON_BROWSERSTACK==="true"?{browserstack:{targets:[],local_ports:[]}}:{})}));'
-FROM tailscale/tailscale:v1.102.5@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065 AS tailscale-runtime
+# Source-patched Tailscale only; Go and its build dependencies stay in this stage.
+FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS tailscale-runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl patch python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY tailscale/ /runtime-build/
+RUN sh /runtime-build/build.sh
 FROM ${BASE_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
 # Package installation generates SSH host keys; remove them in the same layer so no
@@ -32,7 +37,7 @@ RUN arch=$(dpkg --print-architecture) && case "$arch" in \
     && mkdir -p /usr/local/share/licenses/gh \
     && curl -fsSL https://raw.githubusercontent.com/cli/cli/v2.102.0/LICENSE -o /usr/local/share/licenses/gh/LICENSE \
     && /usr/bin/gh --version | grep -q '^gh version 2\.102\.0 '
-COPY --from=tailscale-runtime /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
+COPY --from=tailscale-runtime /output/ /
 RUN groupadd --gid 10001 horizon-agent \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent
 COPY --from=agent-runtime /output/ /

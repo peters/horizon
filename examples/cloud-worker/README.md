@@ -120,9 +120,10 @@ release's `gh_<version>_checksums.txt`.
 
 Prepare a new context with `python3 examples/cloud-worker/prepare-context.py
 --bin-dir target/release --output <new-directory>` after building the matching
-release helpers. It copies only worker scripts and helpers, strips the final
-copies before Docker sees them, and records sizes/checksums. No source, settings,
-credentials or previous image directory is copied. Keep each agent install in a
+release helpers. It copies worker scripts, helpers and the declared Tailscale
+runtime build inputs, strips the final helpers before Docker sees them, and records
+sizes/checksums. No workspace or application source, settings, credentials or
+previous image directory is copied. Keep each agent install in a
 separate layer so the compressed manifest records its actual contribution.
 
 For a GPU context, add `--gpu-base <upstream-runtime>@sha256:<digest>` to that
@@ -299,7 +300,17 @@ The function does not give these conditions:
 
 ## Cloud tailnet contract
 
-The stock image includes pinned Tailscale v1.102.5 binaries. Startup isolates
+The source recipes build pinned Tailscale v1.102.5 with the
+[Unix PROXY v1 and explicit cancellation patch](tailscale/README.md).
+`--horizon-flow-cancel` / JSON `HorizonFlowCancel` defaults false and is restricted
+to Linux raw Unix PROXY1 without TLS. Use this contract only with the root
+controller's original private listener and daemon route. Runtime scope validation
+does not establish that custody; the identity consumer must check it. This is not
+an agent configuration or source-identity grant. Payload write EOF preserves reverse flow;
+control `DRAINED=0x01` plus EOF confirms daemon copying, not remote application
+delivery. Existing ordinary paths and published digests remain unchanged until
+actual qualification/publication. Producer/Gate actual consumer qualification
+is separate; this runtime enables no Horizon exposure feature. Startup isolates
 workspace services before they can execute user code. `horizon-worker-tailnet`
 is a root control helper; agents cannot enroll, retrieve credentials, or open the
 administrative socket. `configure` accepts bounded private JSON on stdin and
@@ -351,11 +362,12 @@ tag to it. The image is an index for `linux/amd64` and `linux/arm64`, and
 `COPY --from` takes the helpers of the architecture that the recipe builds for (see
 [Architectures](#architectures)). Runs are queued, not cancelled, but when several
 such commits land while one run is publishing, only the newest of them is built, so
-not every commit gets its own tag. The image holds only `horizon-cloud-worker`, `horizon-browser`,
-`horizon-device`, every `horizon-worker-*` script and the `gh` link to
-`horizon-worker-git-auth` under `/usr/local/bin`, plus under
-`/usr/local/share/licenses/` the Horizon license, a `SOURCE` file naming the commit
-and the notices and provenance of every Rust dependency the helpers are built from.
+not every commit gets its own tag. The image holds `horizon-cloud-worker`,
+`horizon-browser`, `horizon-device`, every `horizon-worker-*` script, the `gh` link
+to `horizon-worker-git-auth`, and the patched `tailscale` and `tailscaled` binaries
+under `/usr/local/bin`. Under `/usr/local/share/licenses/` it holds the Horizon
+license, a `SOURCE` file naming the commit, the notices and provenance of every
+consumed Rust dependency, and the Tailscale source, patch and dependency notices.
 Copy it pinned by digest:
 
 ```dockerfile
@@ -370,7 +382,8 @@ supplies the rest of the contract: Python 3.12 or newer, Bash 4.4 or newer at
 `/bin/bash` and glibc 2.36 or newer (Ubuntu 24.04 has all three), SSH, tmux, Git
 with LFS, `gh`, util-linux (`setpriv`), and the `horizon-agent` account with
 UID and primary GID 10001. Tailnet support additionally requires `tailscale` and
-`tailscaled`; the pinned stock image supplies them. Also supply
+`tailscaled`; the helper artifact supplies the same pinned patched binaries and
+notices as the source recipe. Also supply
 `/etc/horizon-worker/capabilities.json`, the worker entrypoint (the example runs
 `horizon-worker-start` under tini) and the selected agents, browsers and desktop
 packages. Run `horizon-worker-check --git-auth` after the copy so a missing
