@@ -252,6 +252,22 @@ class StorageTests(ServiceTestCase):
             with self.assertRaises(ValueError):
                 install(self.store, request(OTHER))
         self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        # A scope lookup that breaks with any error, such as a malformed status line, stops it too.
+        install(self.store)
+        for error in (packages.http.client.BadStatusLine('x'), packages.http.client.LineTooLong('header'),
+                      RuntimeError('unexpected')):
+            with self.subTest(error=type(error).__name__):
+                install(self.store)
+
+                def broken(token, error=error):
+                    raise error
+                with self.assertRaises(Exception):
+                    packages.install(self.store, request(OTHER), check=broken)
+                self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        with mock.patch.object(packages.common, 'opener') as opener:
+            opener.return_value.open.side_effect = packages.http.client.BadStatusLine('x')
+            with self.assertRaises(ValueError):
+                packages.scopes_of(TOKEN, {service.TEST_URL: 'http://127.0.0.1:9'})
         # A replacement refused before it is stored, for its scope or its request, stops the earlier chain too.
         for source, scopes in ((request(OTHER), ['read:packages', 'write:packages']), ('{"version":1}', READ)):
             install(self.store)
@@ -280,6 +296,10 @@ class StorageTests(ServiceTestCase):
                                    'own': 'https://github.com/example/project',
                                    'org': 'https://github.com/orgs/example/packages/nuget/package/e',
                                    'versions': [{'package_html_url': None}], 'metadata': {'nested': {'link': None}}})
+        # A reply whose root is a string is examined too.
+        self.assertEqual(packages.filtered(b'"https://github.com/example/secret"', own), b'null')
+        self.assertEqual(packages.filtered(b'"https://github.com/example/project"', own),
+                         b'"https://github.com/example/project"')
         with self.assertRaises(packages.Unchecked):
             packages.filtered(b'<html>', own)
         with self.assertRaises(packages.Unchecked):

@@ -131,7 +131,7 @@ def scopes_of(token, environ=os.environ, timeout=30):
     try:
         with common.opener(loopback).open(request, timeout=timeout) as response:
             named = response.headers.get('X-OAuth-Scopes')
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, http.client.HTTPException) as error:
         if isinstance(error, urllib.error.HTTPError):
             error.close()
         raise ValueError('GitHub did not confirm the scope of the package read access') from None
@@ -160,7 +160,7 @@ def install(store, source, now=time.time, check=None):
                 clear(chains)
             else:
                 chains.save(state, retain=False)
-        except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+        except Exception:
             # Whatever failed, the earlier chain and its owners stop too: Horizon meant to replace them.
             with contextlib.suppress(OSError, ValueError):
                 clear(chains)
@@ -278,15 +278,17 @@ def filtered(data, own, secrets=()):
                    for match in REPOSITORY_ADDRESS.finditer(text))
 
     def clean(node):
+        if isinstance(node, str):
+            return None if foreign(node) else node
         if isinstance(node, dict):
             repository = node.get('repository')
             if 'repository' in node and not (isinstance(repository, dict) and isinstance(
                     repository.get('full_name'), str) and repository['full_name'].casefold() in own):
                 node['repository'] = None
             for key, item in node.items():
-                node[key] = None if isinstance(item, str) and foreign(item) else clean(item)
+                node[key] = clean(item)
         elif isinstance(node, list):
-            return [None if isinstance(item, str) and foreign(item) else clean(item) for item in node]
+            return [clean(item) for item in node]
         return node
     try:
         value = clean(value)
