@@ -695,18 +695,20 @@ root-only binding, source preservation or readiness. Existing worker behavior
 is unchanged; opt-in provisioning and actual original runtime validation remain
 required. See docs/architecture/exposure-protected-ingress.md.
 
-### Exposure intent model
+### Retained exposure metadata
 
-Core defines bounded exposure comparison data and pure metadata transitions.
-The `cloud-exposure` feature stays off by default.
-This prerequisite is not connected to Deployment, Allocation or Store persistence;
-it adds no saved format version, listener, approval or public operation.
-Each service intent permits at most eight hours, with one to eight service entries.
-The current operation IDs are not a complete historical replay ledger.
+Core stores bounded original comparison facts and service intent in Deployment 7
+and paired Allocation 5. Absent exposure keeps the earlier formats. Publication,
+enrollment and one-device admission survive the same Store and paired conversion.
+The original session, workspace and cloud must match the paired project identity.
+Each service permits at most eight hours, with one to eight service entries.
+Currently retained operation IDs are not a complete historical replay ledger.
+Duplicate provider keys and noncanonical key aliases cannot erase evidence.
 Decoded Unknown or Closed data cannot restore a keeper or prove physical cleanup.
+The `cloud-exposure` feature stays off by default and adds no UI, CLI or MCP operation.
 M1 sharing has no expiry. See docs/architecture/exposure-records.md and
-docs/testing/procedures/exposure-records.md. Atomic persistence and runtime/public
-qualification remain separate required outcomes for the full epic.
+docs/testing/procedures/exposure-records.md. Runtime and public qualification
+remain separate required outcomes for the full epic.
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 

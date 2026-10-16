@@ -49,6 +49,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
     let store = super::super::Store::lock(&root).unwrap();
     let mut state = horizon_core::cloud_runtime::state::Deployment {
         service_admission: None,
+        exposure: None,
         version: 1,
         cloud_id: "fixture".into(),
         repository: temp.path().into(),

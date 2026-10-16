@@ -106,6 +106,16 @@ impl Records {
                 .validate(&self.project.profile)
                 .map_err(|_| Error::Encoding)?;
         }
+        if self.allocation.exposure.as_ref().is_some_and(|record| {
+            !record.valid()
+                || !self.project.identity.belongs_to(
+                    &record.binding().owner.session_id.to_string(),
+                    &record.binding().owner.workspace_id,
+                    &record.binding().owner.cloud_id,
+                )
+        }) {
+            return Err(Error::Ownership);
+        }
         if self.allocation.service_admission.as_ref().is_some_and(|record| {
             !record.valid()
                 || !self.project.identity.belongs_to(
