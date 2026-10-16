@@ -1,7 +1,7 @@
 ---
 procedure: worker-exposure-gate
-candidate_commit: bafeb16aeaf1f080b0ecdfd66013b90fc5c9b134
-candidate_sha256: f3ff90c2997a7b728687722e2b5d846e73939d2ce027136cc24ad00252899ce1
+candidate_commit: 0296a5fb601f8e1e3db3da3014d5f0ad0984b66f
+candidate_sha256: d7c58cf090a5b3146e4e746fb82d787087f4b9e1f9d1c957fafb68333c33df75
 date: 2026-10-16
 lanes: [linux-offline, linux-root-cidr-component]
 issue: https://github.com/peters/horizon/issues/1335
@@ -11,56 +11,66 @@ issue: https://github.com/peters/horizon/issues/1335
 
 ## 1. Summary
 
-The run passed G01–G05 for the default-off Linux component.
-The actual root worker used the original accepted peer for CIDR admission.
+The current run passed G01–G05 for the default-off Linux component.
+The candidate hash identifies the feature-enabled Worker test ELF, not a normal Worker executable.
+The actual root constructor used the original accepted peer for CIDR admission.
 The separate client completed PING, PONG and DONE on one connection.
 The run did not qualify provider source preservation, named/tag identity, TailnetOnly, public interfaces or complete M2.
+Exclusive ownership ends when the listener closes; separate root-only ingress and backend custody proof is required before provider/public activation.
 
 ## 2. Results
 
 | Task ID | Result | Note | Defect |
 |---|---|---|---|
-| G01 | pass | The enabled protocol passed 49 tests and one documentation test. | — |
-| G02 | pass | The enabled gate passed 13 socket, policy and resource-bound tests. | — |
-| G03 | pass | The close and drop tests ended the original flows and stopped admission. | — |
-| G04 | pass | The default workspace passed 7,003 tests; 55 tests stayed ignored. Speech passed 2,411 UI and five integration tests; three stayed ignored. Required lint, documentation and static checks passed. | — |
-| G05 | pass | The actual root constructor refused the wrong source. The separate admitted client exchanged bytes, reached EOF and observed refusal after close. | — |
+| G01 | pass, reused | The unchanged enabled protocol passed 49 tests. Its documentation test passed again on the current inputs. | — |
+| G02 | pass, new | The enabled Worker passed 228 tests, including 18 gate tests; four tests stayed explicitly ignored in the general lane. Five new regressions cover partial reservations, concurrent flows, opposite-direction partial/zero allowance, immediate cancellation/deadlines and multithreaded close ordering. | — |
+| G03 | pass, new | Accepted reservations drained before budget-only closure. Explicit cancellation and deadlines still closed immediately without refunds. Listener shutdown before watch notification completed as orderly cancellation. | — |
+| G04 | pass, new and reused | The current default Worker passed 210 tests; three stayed ignored. Enabled and default blocking/strict checks, formatting, maintainability and whitespace checks passed again. Unchanged non-Worker results from the prior full matrix were reused after input comparison. | — |
+| G05 | pass, new | The current enabled test ELF ran the exact ignored actual-worker case as root. The wrong source was refused; the admitted client exchanged bytes, reached EOF and observed refusal after the close marker and test exit. | — |
 
-The pedantic tier reported two unchanged Main structures with too many Boolean fields.
-The required blocking and strict tiers passed.
-The enabled component passed a separate pedantic check without dependency diagnostics.
-The default unit lane kept the explicit G05 case ignored; the separate root lane ran that exact case.
-One custom live WebAuthn harness was outside the offline matrix.
+The prior full default workspace result was 7,003 passes and 55 ignored tests.
+The prior speech result was 2,411 UI and five integration passes, with three ignored tests.
+The current candidate reuses the unchanged non-Worker source, dependency, feature, toolchain and embedded-guidance inputs of those results; it did not repeat that full matrix.
+The Worker is a binary with no reverse workspace package dependencies. All changed Rust is inside its default-off gate module.
+The private input comparison records the exact closure and distinguishes the fresh package graphs from the prior workspace graph.
+One custom live WebAuthn harness remained outside the offline matrix.
+
+The pedantic tier retained two unchanged dependency structures with too many Boolean fields.
+The current Worker passed a separate pedantic check without dependency diagnostics.
+No suppression was added.
+The general unit lane kept G05 ignored; the separate root lane ran that exact case once on the current test ELF.
 
 ## 3. Defects
 
-No product defect was found in this component run.
+Review found that budget exhaustion could truncate outstanding reservations and that listener shutdown could race the cancellation notification.
+Both defects are fixed in the candidate commit.
+The five added regression tests passed, with conservative byte charging and immediate failure cancellation retained.
 
 ## 4. Deviations from the procedure
 
-The first cleanup summary rejected Docker's network-not-found wording.
-The original removal receipts and a separate read-only inspection proved cleanup.
-The raw summary stayed in the private evidence.
-No product source changed, and the run did not repeat.
+The current G05 run had no cleanup deviation.
+Earlier pre-review evidence retained a cleanup-summary error caused by Docker's network-not-found wording.
+Its original removal receipts and independent read-only reconciliation proved that earlier cleanup; the raw summary remains historical evidence.
+The current changed Rust used a fresh G05 run and did not reuse that earlier runtime result.
 
 ## 5. Cleanup
 
-Both exact test containers and their internal network were deleted.
-Separate inspections and complete inventories showed that all three resources were absent.
-The original Docker daemon remained healthy.
+Both exact current test containers and their internal network were deleted.
+Healthy fixed-daemon exhaustive container and network inventories showed that all three original resource IDs were absent.
 The fixture used no host ports, provider resources, credentials or paid capacity.
 
 ## 6. Evidence
 
-The frozen candidate hash is in the report metadata.
-The feature commit contained the same Rust, dependency and embedded-asset inputs that the run used.
-The later report and index update changed prose only.
+The report metadata identifies the reviewed fix commit and the current enabled test ELF.
+The subsequent report-only commit changes prose; its executable-input comparison permits reuse of the recorded checks.
 
-Private evidence stayed under `.task-1335-work/worker-gate-delivery-qualification/`:
+Current private evidence stays under `.task-1335-work/worker-gate-round1-fixes/`:
 
-- `full-matrix-handoff.json` and `strict-parent-root-accounting.json` recorded the exact matrix coverage.
-- `G05-actual-final/command-effect-ledger.json` recorded the original commands and resource receipts.
-- `G05-actual-final/result.json` retained the raw cleanup-summary error.
-- `G05-actual-final/reconciled-result.json` recorded the successful result and positive cleanup proof.
-- `G05-actual-final/readonly-cleanup-reconciliation.json` recorded the independent final inspections.
-- `prose-result-reuse-proof.json` recorded the comparison of unchanged executable inputs.
+- `final-handoff.json` and `Root-final-proof.json` record the checked source, results and local review.
+- `input-closure-reuse.json` records the exact reuse comparison for the previous full matrix.
+- `enabled-tests/`, `default-tests/` and the required lint directories record fresh affected checks.
+- `products/enabled-manifest.json` binds the actual feature-enabled test ELF and compiler graph.
+- `G05-actual-final/command-effect-ledger.json`, `test-output.log` and `result.json` record the fresh actual component run and positive exact-resource cleanup.
+- `final-prose-reuse-proof.json` records the comparison after this report update.
+
+The earlier full-matrix and pre-review runtime evidence remains under `.task-1335-work/worker-gate-delivery-qualification/`.
