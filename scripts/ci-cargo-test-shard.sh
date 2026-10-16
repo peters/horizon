@@ -30,6 +30,8 @@ run_ui() {
 # off `set -e` inside them.
 run_libs() {
     local status=0
+    # The SDK manager is opt-in; cover its complete provider regression suite.
+    run_cargo test --locked -p horizon-cloud --features exposure-firewall || status=$?
     run_cargo test --locked --workspace --exclude horizon-ui || status=$?
     # The private gateway stays opt-in; compile and test its platform contract.
     run_cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network:: || status=$?

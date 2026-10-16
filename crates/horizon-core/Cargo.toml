@@ -12,7 +12,7 @@ repository.workspace = true
 default = ["cloud-workspaces"]
 cloud-workspaces = ["tailnet-node-cleanup", "dep:horizon-cloud", "dep:horizon-cloud-protocol", "dep:ring", "dep:ed25519-dalek", "dep:if-addrs", "dep:simple-dns", "dep:socket2", "dep:tar", "dep:semver", "dep:flate2"]
 tailnet-node-cleanup = []
-cloud-exposure = ["cloud-workspaces"]
+cloud-exposure = ["cloud-workspaces", "horizon-cloud/exposure-firewall"]
 cloud-panel-mock = ["cloud-workspaces"]
 # One-service engine, private attachment and trusted owner controller; public admission stays off.
 one-service-gateway = ["cloud-workspaces"]

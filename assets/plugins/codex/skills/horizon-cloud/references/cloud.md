@@ -943,6 +943,26 @@ firewall ownership checks refuse selectors and foreign targets. Management acces
 worker expiry, source attribution and RunPod mappings need the final owner
 controller and real qualification. See docs/testing/procedures/exposure-firewalls.md.
 
+### Original Hetzner exposure management
+
+The same default-off `exposure-firewall` feature includes a controller that consumes
+one actual Hetzner client. It retains the original allocation/server/SSH endpoint,
+all sibling contributions and every foreign firewall. Settled explicit attachment
+facts are mandatory; drift refuses instead of widening management or outbound
+policy. The owner must supply actual pinned SSH allowances for a first firewall
+and durably save each intent and returned ID before effects or waits. Failed saves
+or uncertain replies block reopening; original-only cleanup never adopts a successor.
+No saved metadata reconstructs this controller. The caller physically closes the
+original Gate on errors and before removal. There is no public UI/CLI/MCP activation
+or real-provider qualification claim from these SDK algorithms. Follow
+`docs/testing/procedures/exposure-management.md` and its trust boundary.
+An ignored Core test calls this Manager directly on an original normal SSH-only
+worker with Tailnet=None. The existing Core `cloud-exposure` flag forwards SDK
+availability for this test, without public activation. It requires a separately
+approved private binding, actual pinned SSH and exact owned-firewall cleanup.
+An unattached firewall can survive ordinary worker deletion; retain the original
+journal and supervisor cleanup capability after uncertainty.
+
 ### Staged RunPod exposure port observations
 
 The default-off SDK feature `exposure-ports` reads existing v2 runtime TCP port

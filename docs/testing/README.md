@@ -70,6 +70,7 @@ documents that are not yet STE.
 | [local-network-bridge-agent-access](procedures/local-network-bridge-agent-access.md) | Local Network Bridge, agent access on the worker | rents compute |
 | [one-device-admission-records](procedures/one-device-admission-records.md) | Validated durable metadata, version fences and lossless migration | none |
 | [exposure-firewalls](procedures/exposure-firewalls.md) | Exact owned Hetzner firewall transport and uncertain-response handling | none |
+| [exposure-management](procedures/exposure-management.md) | Original-client Hetzner management policy, sibling retention and journal sequencing | Offline free; separately capped owned provider qualification |
 | [new-cloud-catalog-refresh](procedures/new-cloud-catalog-refresh.md) | New cloud dialog, background price refresh and layout height | none |
 | [new-cloud-source-search](procedures/new-cloud-source-search.md) | New cloud source field: search over checkouts and GitHub repositories, folder paths and links | none |
 | [native-app-automate](procedures/native-app-automate.md) | Native app matrix, MCP, CLI and exact cleanup | paid device |
@@ -101,6 +102,7 @@ documents that are not yet STE.
 | [2026-10-16-worker-cidr-gate](reports/2026-10-16-worker-cidr-gate.md) | [worker-exposure-gate](procedures/worker-exposure-gate.md) | 2026-10-16 |
 | [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
 | [2026-10-16-protected-host-ingress](reports/2026-10-16-protected-host-ingress.md) | [protected-host-ingress](procedures/protected-host-ingress.md) | 2026-10-16 |
+| [2026-10-16-exposure-management-first](reports/2026-10-16-exposure-management-first.md) | [exposure-management](procedures/exposure-management.md) | 2026-10-16 |
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
 | [2026-10-14-tailnet-receipt-capture](reports/2026-10-14-tailnet-receipt-capture.md) | [ledger](procedures/tailnet-enrollment-ledger.md), [capture](procedures/tailnet-receipt-capture.md) | 2026-10-14 |
 | [2026-10-14-tailnet-api-removal](reports/2026-10-14-tailnet-api-removal.md) | [tailnet-api-removal](procedures/tailnet-api-removal.md) | 2026-10-14 |

@@ -69,6 +69,17 @@ pub struct PrivateNet {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct PublicNet {
     pub ipv4: Option<Ipv4>,
+    /// Missing in historical records; management requires an explicit fresh list.
+    #[cfg(feature = "exposure-firewall")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewalls: Option<Vec<FirewallAttachment>>,
+}
+#[cfg(feature = "exposure-firewall")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FirewallAttachment {
+    pub id: u64,
+    pub status: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Ipv4 {

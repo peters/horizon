@@ -2,6 +2,8 @@
 //! Persist each intent before a mutation. Reconcile uncertain responses by exact
 //! identity; never repeat a create because a response was lost. Provider rules
 //! combine with other firewalls and do not terminate established connections.
+pub mod management;
+
 use super::{Action, Hetzner, Method, OPERATION_LABEL, resource_name};
 use crate::{Cancellation, CloudError};
 use serde::{Deserialize, Serialize};
@@ -92,7 +94,7 @@ impl Rule {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Firewall {
     pub id: u64,
     pub name: String,
@@ -100,7 +102,7 @@ pub struct Firewall {
     pub rules: Vec<Rule>,
     pub applied_to: Vec<Resource>,
 }
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Resource {
     #[serde(rename = "type")]
@@ -109,7 +111,7 @@ pub struct Resource {
     pub label_selector: Option<serde_json::Value>,
     pub applied_to_resources: Option<serde_json::Value>,
 }
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Server {
     pub id: u64,

@@ -1166,3 +1166,26 @@ fn observed_server_delete_rejects_noncanonical_and_terminated_history_as_proof()
         assert_eq!(requests.lock().unwrap().len(), 4);
     }
 }
+
+#[test]
+fn firewall_attachment_fields_are_strict_only_when_management_is_enabled() {
+    for extra in [false, true] {
+        let mut value = server(42);
+        value["public_net"]["firewalls"] = json!([{"id":7,"status":"applied"}]);
+        if extra {
+            value["public_net"]["firewalls"][0]["future_field"] = true.into();
+        }
+        let (client, requests, task) = provider(vec![(200, json!({"server":value}))]);
+        let result = client.inspect_server(42, &Cancellation::default());
+        if extra && cfg!(feature = "exposure-firewall") {
+            assert!(matches!(result, Err(CloudError::InvalidResponse)));
+        } else {
+            let server = result.unwrap().unwrap();
+            assert_eq!(server.ssh_address().unwrap().port(), 22);
+            #[cfg(feature = "exposure-firewall")]
+            assert_eq!(server.public_net.firewalls.unwrap()[0].id, 7);
+        }
+        task.join().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+}

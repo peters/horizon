@@ -629,6 +629,16 @@ checks that a server and its volume hold each other where the policy allows.
 `hetzner::servers::deletion` keeps exact recorded-server deletion separate from
 server creation and power operations. It preserves the existing ownership checks,
 action waits, announcements and termination persistence.
+`hetzner::firewalls::management` retains the original SDK client, sibling rules
+and durable mutation sequencing. Its `snapshot` leaf checks settled original
+server/SSH/attachment facts and complete foreign policies. It issues no native
+approval or physical Gate proof; the original caller supplies both that custody
+and its durable journal. Colocated scripted-provider tests cover uncertainty,
+management preservation and exact cleanup without loading credentials.
+The Core Hetzner test tree contains a separate ignored original-provider consumer;
+it uses actual normal Store/settings/journal/pins and calls the SDK directly.
+It neither depends on the future exposure owner nor changes public dispatch.
+
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
 caller's `Records` before the provider request that record guards.
