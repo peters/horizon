@@ -81,6 +81,11 @@ absent exposure keeps the earlier formats. A decoded record supplies no live
 approval, transport or cleanup proof. Read the retained exposure metadata
 section of the cloud reference.
 
+The Protocol `exposure-control` feature is off by default. Its bounded request,
+reply, member and Worker observations are passive comparison facts. They grant
+no held stream, owner approval, live membership or runtime readiness. There is no
+public activation. See docs/architecture/exposure-control.md and its procedure.
+
 Machine-local destination preference helpers retain a checkout/profile scope and
 nonsecret account or exact registry grant metadata. The launch engine retains
 that choice before image work. A saved preference is not proof of authentication or registry

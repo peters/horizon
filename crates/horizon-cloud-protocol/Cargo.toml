@@ -13,6 +13,7 @@ workspace = true
 
 [features]
 exposure-gate = []
+exposure-control = ["exposure-gate"]
 
 [dependencies]
 ring.workspace = true

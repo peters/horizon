@@ -5,7 +5,9 @@ applyTo: "crates/horizon-cloud-protocol/src/exposure.rs,crates/horizon-cloud-pro
 # Exposure policy boundary
 
 Read `docs/architecture/exposure-policy.md`. This default-off component provides
-pure comparison facts. It adds no control frames or public dispatch.
+pure comparison facts. It adds no public dispatch. The separate default-off
+`exposure-control` comparison contract is documented in
+`docs/architecture/exposure-control.md`.
 For protected ingress geometry and receipt code, also read
 `docs/architecture/exposure-protected-ingress.md`.
 
@@ -15,7 +17,8 @@ Report these failures:
 - JSON accepts unknown fields, duplicate fields, more than 16 KiB, or unbounded source and connection counts.
 - CIDR parsing crosses address families or accepts malformed prefixes.
 - A short DNS name, partial name, wildcard or partial tag supplies an exact named match.
-- A management port or reserved ingress/backend port becomes an accepted target.
+- A management port, reserved logical ingress/backend port or protected physical
+  port 600–663 becomes an accepted target.
 - A named-rule comparison, saved URL or tailnet-range IP becomes authenticated membership, owner approval or runtime authority.
 - A refused HTTPS route falls back to raw TCP, accepts a non-Public policy, or accepts a port other than 443, 8443 or 10000.
 - A URL supplies readiness or TLS proof without the later original live controller.
@@ -27,6 +30,7 @@ Report these failures:
   source preservation, ownership or readiness without original runtime checks.
 - New port helpers silently change existing policy, backend or listener behavior.
 
-Keep the control DTO, worker, provider and public owner interfaces outside this
-prerequisite. The Core record outcome must preserve existing publication,
-enrollment and admission formats on current Main.
+Keep worker, provider and public owner runtime activation outside this
+prerequisite. Control DTOs remain separately feature-gated passive facts. The Core
+record outcome must preserve existing publication, enrollment and admission
+formats on current Main.
