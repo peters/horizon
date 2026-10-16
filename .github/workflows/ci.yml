@@ -373,7 +373,15 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/apple-mobile-target
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          # A component download can fail on a network error, so try three times.
+          for attempt in 1 2 3; do
+            rustup target add aarch64-apple-ios aarch64-apple-ios-sim && break
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::rustup target add failed three times"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           for target in aarch64-apple-ios aarch64-apple-ios-sim; do
             cargo build --locked -p horizon-media --all-features --target "$target"
             cargo build --locked -p horizon-chromecast --target "$target"
