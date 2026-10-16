@@ -7,6 +7,24 @@ use std::{
     net::TcpStream,
 };
 
+/// Only guards against a hang: waits for an event, not a time bound.
+#[cfg(unix)]
+const HANG_GUARD: Duration = Duration::from_secs(60);
+
+/// Accepts the connection that sends the first request. A cancellable dial can give
+/// up on an attempt that the listener still queues, and the session closes that
+/// attempt without sending anything.
+#[cfg(unix)]
+fn accept_request(listener: &TcpListener) -> TcpStream {
+    loop {
+        let (socket, _) = listener.accept().expect("accept");
+        socket.set_read_timeout(Some(HANG_GUARD)).expect("timeout");
+        if socket.peek(&mut [0]).is_ok_and(|count| count > 0) {
+            return socket;
+        }
+    }
+}
+
 #[cfg(unix)]
 fn request(socket: &mut TcpStream) -> String {
     let mut header = Vec::new();
@@ -44,8 +62,7 @@ fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges(
         let address = listener.local_addr().expect("address");
         let (send, receive) = mpsc::channel();
         let server = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().expect("accept");
-            socket.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+            let mut socket = accept_request(&listener);
             if !remembered {
                 assert!(request(&mut socket).starts_with("POST /pair-pin-start "));
                 socket
@@ -64,16 +81,14 @@ fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges(
         let mut session =
             CastSession::start_remembered(address, VideoFormat::default(), store.clone()).expect("session");
         if !remembered {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + HANG_GUARD;
             while session.status() != CastStatus::PinRequired {
                 assert!(Instant::now() < deadline);
                 thread::sleep(Duration::from_millis(5));
             }
             session.pair(Zeroizing::new("1234".into())).expect("PIN");
         }
-        receive
-            .recv_timeout(Duration::from_secs(2))
-            .expect("authentication in flight");
+        receive.recv_timeout(HANG_GUARD).expect("authentication in flight");
         let started = Instant::now();
         session.stop();
         while !session.finished() {
