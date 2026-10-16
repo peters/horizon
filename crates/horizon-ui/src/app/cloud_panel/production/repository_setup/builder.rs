@@ -68,6 +68,9 @@ pub(in crate::app::cloud_panel::production) struct Builder {
     unused_since: Option<Instant>,
     /// Rentings that failed since a setup last started wanting a builder.
     failures: u32,
+    /// Why the last renting failed, told again once its leftovers are deleted and no
+    /// renting is tried any more.
+    last_failure: String,
     /// The setups that want the builder, by their run's agent panel.
     demand: BTreeSet<u64>,
 }
@@ -81,6 +84,7 @@ impl Default for Builder {
             cancel: Cancellation::default(),
             unused_since: None,
             failures: 0,
+            last_failure: String::new(),
             demand: BTreeSet::new(),
         }
     }
@@ -293,7 +297,13 @@ impl Builder {
                 }
                 Outcome::Rented(Err((reason, left))) => {
                     self.failures += 1;
+                    reason.clone_into(&mut self.last_failure);
                     self.failed(reason, left);
+                }
+                // With the renting tries used up, the setups still learn why, and that a
+                // new start tries again.
+                Outcome::Returned(Ok(())) if self.failures >= MAX_RENTINGS => {
+                    self.failed(self.last_failure.clone(), false);
                 }
                 Outcome::Returned(Ok(())) => self.status = Status::Idle,
                 Outcome::Returned(Err(reason)) => self.failed(reason, true),
@@ -471,6 +481,29 @@ mod tests {
         assert_eq!(builder.failures, 0, "a new setup may try again");
         assert!(builder.job.is_some(), "and it rents at once");
         settle(&mut builder, true, root.path(), &ctx);
+    }
+
+    #[test]
+    fn a_used_up_renting_stays_told_after_its_leftovers_are_deleted() {
+        let mut builder = Builder {
+            failures: MAX_RENTINGS - 1,
+            ..Builder::default()
+        };
+        let outcome = |builder: &mut Builder, outcome| {
+            let (sender, receiver) = mpsc::channel();
+            sender.send(outcome).unwrap();
+            builder.job = Some(receiver);
+            builder.poll();
+        };
+        outcome(&mut builder, Outcome::Rented(Err(("no capacity".to_owned(), true))));
+        assert!(matches!(builder.status, Status::Failed { left: true, .. }));
+        // The deletion of what the last try left succeeds.
+        outcome(&mut builder, Outcome::Returned(Ok(())));
+        let (text, alert) = builder.waiting().unwrap();
+        assert!(
+            alert && text.contains("start the setup again") && text.contains("no capacity"),
+            "{text}"
+        );
     }
 
     #[test]

@@ -119,6 +119,7 @@ fn with_hetzner(folder: &Path, token: &str) -> Settings {
 }
 
 /// A journal of a builder rented with the token whose fingerprint is `binding`.
+#[cfg(unix)]
 fn journal_of(root: &Path, binding: &str) -> Journal {
     write_journal(
         root,
@@ -130,12 +131,14 @@ fn journal_of(root: &Path, binding: &str) -> Journal {
     serde_json::from_str(&std::fs::read_to_string(root.join(JOURNAL)).unwrap()).unwrap()
 }
 
+#[cfg(unix)]
 fn listing(key: &str, items: &serde_json::Value) -> String {
     let mut page = serde_json::json!({"meta": {"pagination": {"next_page": null}}});
     page[key] = items.clone();
     page.to_string()
 }
 
+#[cfg(unix)]
 fn server(id: u64) -> serde_json::Value {
     serde_json::json!({"id": id, "name": "horizon-setup-builder", "status": "running",
         "public_net": {"ipv4": {"ip": "192.0.2.10"}, "ipv6": null},
@@ -149,11 +152,20 @@ fn server(id: u64) -> serde_json::Value {
 fn the_token_fingerprint_never_holds_the_token() {
     let root = tempfile::tempdir().unwrap();
     let settings = with_hetzner(root.path(), "token-of-project-a");
-    let binding = settings.hetzner.as_ref().unwrap().token_fingerprint().unwrap();
+    let binding = settings
+        .hetzner
+        .as_ref()
+        .unwrap()
+        .credential_with_fingerprint()
+        .unwrap()
+        .1;
     assert_eq!(binding.len(), 16);
     assert!(binding.bytes().all(|byte| byte.is_ascii_hexdigit()));
     let other = with_hetzner(root.path(), "token-of-project-b");
-    assert_ne!(other.hetzner.as_ref().unwrap().token_fingerprint().unwrap(), binding);
+    assert_ne!(
+        other.hetzner.as_ref().unwrap().credential_with_fingerprint().unwrap().1,
+        binding
+    );
 }
 
 #[cfg(unix)]
