@@ -212,6 +212,24 @@ mod tests {
         terminate(&mut child).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_settling_proof_is_polled_until_it_holds_and_never_past_its_deadline() {
+        let mut polls = 0;
+        assert_eq!(
+            settled(|| {
+                polls += 1;
+                Ok(polls == 3)
+            }),
+            Ok(true)
+        );
+        assert_eq!(polls, 3);
+        assert_eq!(settled(|| Err(Error::CleanupUncertain)), Err(Error::CleanupUncertain));
+        let started = Instant::now();
+        assert_eq!(settled(|| Ok(false)), Ok(false));
+        assert!(started.elapsed() >= Duration::from_secs(2));
+    }
+
     #[test]
     fn a_leader_that_is_still_exiting_is_cleaned_once_its_exit_settles() {
         use std::io::Read;
