@@ -211,6 +211,12 @@ class StorageTests(ServiceTestCase):
             with self.assertRaises(ValueError):
                 install(self.store, request(OTHER))
         self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        # A replacement refused before it is stored, for its scope or its request, stops the earlier chain too.
+        for source, scopes in ((request(OTHER), ['read:packages', 'write:packages']), ('{"version":1}', READ)):
+            install(self.store)
+            with self.assertRaises(ValueError):
+                install(self.store, source, scopes=scopes)
+            self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
 
     def test_repository_objects_of_other_repositories_are_removed_from_replies(self):
         own = {'example/project'}
@@ -223,6 +229,16 @@ class StorageTests(ServiceTestCase):
         self.assertNotIn('private plans', json.dumps(kept))
         single = json.loads(packages.filtered(json.dumps(listing[1]).encode(), own))
         self.assertIsNone(single['repository'])
+        addresses = {'name': 'e', 'html_url': 'https://github.com/example/secret/pkgs/nuget/e',
+                     'url': 'https://api.github.com/repos/Example/Secret/packages', 'own': 'https://github.com/example/project',
+                     'org': 'https://github.com/orgs/example/packages/nuget/package/e',
+                     'versions': [{'package_html_url': 'https://github.com/example/secret.git'}],
+                     'metadata': {'nested': {'link': 'see https://github.com/other/repo/issues'}}}
+        cleaned = json.loads(packages.filtered(json.dumps(addresses).encode(), own))
+        self.assertEqual(cleaned, {'name': 'e', 'html_url': None, 'url': None,
+                                   'own': 'https://github.com/example/project',
+                                   'org': 'https://github.com/orgs/example/packages/nuget/package/e',
+                                   'versions': [{'package_html_url': None}], 'metadata': {'nested': {'link': None}}})
         with self.assertRaises(packages.Unchecked):
             packages.filtered(b'<html>', own)
         with self.assertRaises(packages.Unchecked):

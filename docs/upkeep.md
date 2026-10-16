@@ -902,12 +902,16 @@ The worker guarantees these items:
 - Root never follows a redirect: it returns it to `gh` without the token, and
   `gh` follows it through root again, so the token goes only to `api.github.com`.
 - Root passes a package reply on only after it read it as JSON: the repository
-  object of a package stays only for the cloud's own repositories. A reply that is
-  not JSON, is too large or holds the token is refused.
+  object of a package stays only for the cloud's own repositories, and each text
+  that names another repository by its GitHub address becomes empty. A reply that
+  is not JSON, is too large or holds the token is refused.
 - When the worker has no token, a package read gets a refusal that tells the
   agent that the cloud has no package read access.
 - Disconnecting GitHub (`horizon-worker-github clear`) and a request without a
-  chain remove every copy. When a copy cannot be removed, none is served.
+  chain remove every copy. A replacement that fails, for any reason, also stops
+  the earlier chain. When a copy cannot be removed, none is served while the
+  worker runs, and the removal reports the failure, so Horizon tries again; a
+  container restart before that can serve the copy on the volume again.
   Deleting the cloud deletes the worker and the chain with it.
 
 The worker does not guarantee these items:

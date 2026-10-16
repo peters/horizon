@@ -22,7 +22,8 @@ GitHub's package API and its NuGet registry accept only a token with the
 - Root keeps it in its own `common.Store` (`packages.store_for`), with the GitHub chain's
   rules for private copies, serials, pending writes and clear marks. One store object per
   GitHub store, so the broker sees a rotated chain that only the renewal's memory holds.
-- `install` replaces the chain under the store lock; a failed replacement clears the
+- `install` replaces the chain under the store lock; a replacement that fails for any
+  reason (request, scope, GitHub unreachable, storage) clears the
   store, so no older chain is served. `packages.clear` writes a clear mark above every copy
   when a copy cannot be removed. `horizon-worker-github clear` removes it inside the
   GitHub store lock.
@@ -43,7 +44,8 @@ owner. Check that:
   asked for, not a task grant, not the static binding.
 - The broker never follows a redirect; a 3xx goes back to gh without the token.
 - A package reply is read uncompressed (at most `MAX_REPLY`), parsed as JSON, and its
-  `repository` objects are kept only for the chain's own repositories (`filtered`). A
+  `repository` objects are kept only for the chain's own repositories, and every string
+  that names another repository by its GitHub address becomes null (`filtered`). A
   reply that is not JSON, larger or holding the token is refused, never relayed.
 - A package route never gets the chain's or the static binding's token, and a
   repository route never gets the package token.

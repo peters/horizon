@@ -1521,7 +1521,8 @@ horizon-worker-github packages < private-file   # {"version":1,"chain":null} rem
 
 Before it keeps a chain, root asks GitHub for the token's scopes
 (`X-OAuth-Scopes`); anything but exactly `read:packages` is refused. A new chain
-replaces the one that the worker holds; a replacement that fails leaves no chain
+replaces the one that the worker holds; a replacement that fails for any reason
+leaves no chain
 served. The service keeps it in a second chain store with the same rules as the
 GitHub chain's: `/workspace/.horizon-root/github-packages` on the volume, or
 `/run/horizon-github-packages` on tmpfs, root-only (directories `0700`, files
@@ -1531,14 +1532,16 @@ whose reply names another scope than exactly `read:packages` removes the chain.
 `bad_refresh_token` or an expired refresh token ends it. `status` reports
 `packages`: `null`, or the state, times and repositories of the chain, never a
 token. `horizon-worker-github clear` removes it, under the store lock, before the
-GitHub chain; a copy that cannot be removed is outranked by a clear mark, so none
-is served.
+GitHub chain; a copy that cannot be removed is outranked by a clear mark on
+tmpfs, so none is served while the worker runs, and the failure is reported.
 
 No agent gets the token: no variable, no file and no NuGet configuration holds
 it. The broker adds the access token only to the package reads above, and none
 that expires within a minute. It asks GitHub for an uncompressed reply, reads it
 (at most 8 MiB), and passes it on only as JSON, with the `repository` object of
-each package kept only for the cloud's own repositories and `null` otherwise; a
+each package kept only for the cloud's own repositories and `null` otherwise, and
+each text that names another repository by its address on `github.com` or
+`api.github.com/repos` replaced by `null`; a
 reply that is not JSON, is larger, or holds the token is refused. A redirect goes
 back to `gh` as it came, without the token; `gh` follows it through the broker
 again. Without a chain, package reads get

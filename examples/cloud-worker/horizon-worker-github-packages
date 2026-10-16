@@ -10,6 +10,7 @@ no NuGet.Config. The API broker adds the access token only to the package reads 
 policy allows (horizon-worker-github-api-rest), only for an owner of those repositories, and
 passes on a package reply only after it removed the repository objects of other repositories.
 A module that horizon-worker-github loads, not a command."""
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
@@ -58,6 +59,12 @@ REFUSED = ('GitHub refused the package read access of this worker. The person ca
            'access again in Horizon.')
 OTHER_OWNER = ('%s owns none of this cloud\'s repositories, so the package read access of the cloud does not read '
                'its packages.')
+
+
+# A repository's address on GitHub or its API, as package replies carry it; `orgs/` and
+# `users/` addresses name an owner, not a repository.
+REPOSITORY_ADDRESS = re.compile(r'https?://(?:www\.)?(?:github\.com/(?!orgs/|users/)|api\.github\.com/repos/)'
+                                r'(?P<name>[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})', re.IGNORECASE)
 
 
 class Unchecked(Exception):
@@ -131,19 +138,21 @@ def install(store, source, now=time.time, check=None):
     scope is read:packages, or removes it for a null chain. Returns what the worker holds now.
     A failed replacement leaves no chain served: neither the new one nor the earlier one. The
     chain store's own lock serializes this with the renewal."""
-    state = parse(json.loads(source), int(now()))
-    if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
-        raise ValueError('The package read access token has other scopes than read:packages')
     chains = store_for(store)
-    with chains.lock():
-        if state is None:
-            clear(chains)
-        else:
-            try:
-                chains.save(state, retain=False)
-            except (OSError, ValueError):
+    try:
+        state = parse(json.loads(source), int(now()))
+        if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
+            raise ValueError('The package read access token has other scopes than read:packages')
+        with chains.lock():
+            if state is None:
                 clear(chains)
-                raise
+            else:
+                chains.save(state, retain=False)
+    except (OSError, ValueError, RecursionError):
+        # Whatever failed, the earlier chain and its owners stop too: Horizon meant to replace them.
+        with contextlib.suppress(OSError, ValueError), chains.lock():
+            clear(chains)
+        raise
     return {'packages': summary(store)}
 
 
@@ -220,23 +229,35 @@ def token_for(store, owner, now=time.time):
 
 
 def filtered(data, own, secrets=()):
-    """A package reply with the repository object of each package kept only for the cloud's own
-    repositories (`own`, lowercase owner/name) and replaced by null otherwise: the package API
-    names private repositories outside the cloud. Raises Unchecked for a reply that is not JSON
-    or holds a secret."""
+    """A package reply without what it tells about repositories outside the cloud: the
+    repository object of each package is kept only for the cloud's own repositories (`own`,
+    lowercase owner/name), and any text that names another repository by its GitHub address,
+    such as an `html_url` under the repository, becomes null. Raises Unchecked for a reply
+    that is not JSON or holds a secret."""
     try:
         value = json.loads(data)
     except (ValueError, RecursionError):
         raise Unchecked('the package reply from GitHub is not JSON, so it was not passed on.') from None
 
-    def keep(item):
-        if isinstance(item, dict) and 'repository' in item:
-            repository = item['repository']
-            name = repository.get('full_name') if isinstance(repository, dict) else None
-            if not (isinstance(name, str) and name.casefold() in own):
-                item['repository'] = None
-    for item in value if isinstance(value, list) else [value]:
-        keep(item)
+    def foreign(text):
+        return any(match.group('name').removesuffix('.git').casefold() not in own
+                   for match in REPOSITORY_ADDRESS.finditer(text))
+
+    def clean(node):
+        if isinstance(node, dict):
+            repository = node.get('repository')
+            if 'repository' in node and not (isinstance(repository, dict) and isinstance(
+                    repository.get('full_name'), str) and repository['full_name'].casefold() in own):
+                node['repository'] = None
+            for key, item in node.items():
+                node[key] = None if isinstance(item, str) and foreign(item) else clean(item)
+        elif isinstance(node, list):
+            return [None if isinstance(item, str) and foreign(item) else clean(item) for item in node]
+        return node
+    try:
+        value = clean(value)
+    except RecursionError:
+        raise Unchecked('the package reply from GitHub is nested too deeply, so it was not passed on.') from None
     text = json.dumps(value, separators=(',', ':'))
     if any(secret in text for secret in secrets):
         raise Unchecked('the package reply from GitHub held the package read access; it was not passed on.')
