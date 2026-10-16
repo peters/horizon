@@ -1,0 +1,129 @@
+"""The package token of the worker's GitHub access. GitHub's package API and its NuGet
+registry take only a classic token with `read:packages`, which a GitHub App's user token
+never has. So the person saves such a token in Horizon's Cloud settings, and Horizon gives it
+to this root service (`horizon-worker-github packages`, JSON on stdin, never in argv or a
+log). It lives in root-only files next to the chain, and no agent gets it: no variable, no
+file, no NuGet.Config. The API broker adds it only to the package reads that the REST policy
+allows (horizon-worker-github-api-rest), and only for an owner of a repository that the
+cloud's GitHub access grants. A module that horizon-worker-github loads, not a command."""
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+
+def load_common():
+    name = 'horizon_worker_github_common'
+    if name not in sys.modules:
+        loader = importlib.machinery.SourceFileLoader(
+            name, str(Path(__file__).resolve().with_name('horizon-worker-github-common')))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+common = load_common()
+auth = common.auth
+
+TOKEN = 'packages.json'
+MAX_SOURCE = 4096
+FIELDS = {'version', 'token'}
+MISSING = ('this worker has no package token, so GitHub\'s package API and NuGet registry stay closed. Add one in '
+           'Cloud settings in Horizon: a classic token whose only scope is read:packages.')
+REFUSED = 'GitHub refused the package token of this worker. Save a new one in Cloud settings in Horizon.'
+
+
+def parse(value):
+    """The token of Horizon's request, or None to remove the one that the worker holds."""
+    if not isinstance(value, dict) or set(value) != FIELDS or type(value['version']) is not int \
+            or value['version'] != 1:
+        raise ValueError('Invalid package token request')
+    if value['token'] is not None and not auth.valid_token(value['token']):
+        raise ValueError('Invalid package token')
+    return value['token']
+
+
+def directories(store):
+    return (store.persistent, store.runtime)
+
+
+def remove(store):
+    """Removes every copy, durably, as when GitHub is disconnected. Raises OSError when a copy
+    stays."""
+    for directory in directories(store):
+        common.remove_durably(directory, TOKEN)
+
+
+def install(store, source):
+    """Saves Horizon's token in every private storage of the store, or removes it from each
+    with a null token. A storage that does not take a new token loses its older one, so no
+    copy of an earlier token stays to be served. Returns whether the worker holds a token."""
+    token = parse(json.loads(source))
+    if token is None:
+        remove(store)
+        return {'packages': False}
+    data = json.dumps({'version': 1, 'token': token}, separators=(',', ':'))
+    saved = False
+    for directory in directories(store):
+        try:
+            if directory == store.persistent:
+                common.private_directory(directory.parent, create=True)
+            common.write_private(common.private_directory(directory, create=True), TOKEN, data)
+            saved = True
+        except common.Unsynced:
+            saved = True
+        except (OSError, ValueError):
+            try:
+                common.remove_durably(directory, TOKEN)
+            except OSError:
+                raise ValueError('A storage kept an older package token') from None
+    if not saved:
+        raise ValueError('No private storage accepted the package token')
+    return {'packages': True}
+
+
+def load(store):
+    """The token that the worker holds, or None. A copy that cannot be read, or two copies
+    that differ, give none: root cannot tell which one Horizon gave last."""
+    found = set()
+    for directory in directories(store):
+        try:
+            value = common.read_json(directory / TOKEN, MAX_SOURCE)
+            token = None if value is None else parse(value)
+        except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+            return None
+        if token is not None:
+            found.add(token)
+    return found.pop() if len(found) == 1 else None
+
+
+def owners(store, static=None):
+    """The owners, in lowercase, of the repositories that the cloud's GitHub access grants:
+    the grants of a chain that may serve, for the checkouts and for the whole cloud, and the
+    static binding's. A revoked chain, or one that is not stored yet, opens no owner, and
+    neither does a task grant."""
+    state, _ = store.load(serving=True)
+    if state is not None and state['state'] != 'ok':
+        state = None
+    names = [grant['repository'] for grant in state['grants'] + state.get('cloud_grants', [])] if state else []
+    try:
+        loaded = (static or auth.read_grants)()
+    except (OSError, ValueError, RecursionError, UnicodeDecodeError):
+        loaded = None
+    names += [entry['repository'] for entry in loaded[1]] if loaded else []
+    return {name.split('/')[0].casefold() for name in names}
+
+
+def token_for(store, owner, static=None):
+    """The token for a package read of `owner`, or the reason why there is none."""
+    if owner.casefold() not in owners(store, static):
+        return None, ('%s owns no repository that this worker has a GitHub grant for, so its packages stay closed.'
+                      % owner)
+    token = load(store)
+    return (token, None) if token is not None else (None, MISSING)
+
+
+if __name__ == '__main__':
+    raise SystemExit('horizon-worker-github-packages is a module of horizon-worker-github, not a command.')

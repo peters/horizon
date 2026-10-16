@@ -633,6 +633,15 @@ Every agent of a worker, with or without an Upkeep, can read the global security
 advisories (`gh api /advisories`), which are public, for example for a safety
 review of an update.
 
+When you save a package token in Cloud settings, every agent of a worker can also
+read the NuGet and npm packages of the owners of its repositories, for example to
+make sure that a private package version exists and to read its age
+(`gh api /orgs/OWNER/packages/nuget/NAME/versions`). The agent does not get the
+token. See [Trust boundary of the package token](#trust-boundary-of-the-package-token).
+Without a token, the refusal tells the agent that a package token is missing in
+Cloud settings, and a pull request that needs this check stays blocked with that
+reason.
+
 The loop starts no agent on a worker where root did not set the policy, for example
 an older worker image. Rebuild such a cloud on a current image: **Rebuild image &
 restart** on the cloud card moves the cloud of an Upkeep to the base image that this
@@ -847,6 +856,53 @@ Horizon and the worker do not guarantee these items:
   of the loop and use its access. Use the Upkeep cloud only for the Upkeep.
 - An agent with push access can push to the branches of the repository. The
   repository rules on GitHub, such as branch protection, still apply.
+
+## Trust boundary of the package token
+
+GitHub's package API and its NuGet registry accept only a classic token with the
+`read:packages` scope. The token of the GitHub App never reads them. Thus you can
+save a separate package token in Cloud settings. The worker uses it for package
+reads only.
+
+Trusted input:
+
+- The package token that you save in Cloud settings on your computer. Horizon
+  never reads it from repository files, and an agent cannot set it.
+- The repositories that the cloud's GitHub access grants: those of the Upkeep, and
+  any other that you allowed for the whole cloud on the cloud card.
+
+Untrusted input:
+
+- Every request of an agent to the root GitHub service of the worker: its method,
+  its path, its query and its owner.
+
+The worker guarantees these items:
+
+- Horizon gives the token to root with JSON on stdin, never in argv or a log. Root
+  keeps it in files that only root can read. No agent gets the token: no
+  environment variable, no file and no NuGet configuration holds it. The rule
+  "the agent never holds a GitHub token" stays true.
+- Root adds the token only to `GET` and `HEAD` requests for the NuGet and npm
+  packages of an owner of a granted repository: the list of packages of one type,
+  a package, its versions and one version. A task grant of one session does not
+  open the packages of its owner.
+- Root refuses every other request with the token: a change or a delete of a
+  package, another owner, another package type, such as container images, and a
+  path with a dot segment or an encoded slash.
+- When the worker has no token, a package read gets a refusal that tells the
+  agent that a package token is missing in Cloud settings.
+- When GitHub revokes the access of the cloud, the repositories of that access
+  open no owner. Disconnecting GitHub (`horizon-worker-github clear`) also
+  removes the token from the worker.
+
+The worker does not guarantee these items:
+
+- The token reads every package of every owner that its account can read. The
+  worker limits the paths and the owners, but GitHub limits only the scope. Use a
+  dedicated token with a short expiry and only the `read:packages` scope. Do not
+  use the token of your own `gh` login.
+- An agent can read every NuGet and npm package of the owners of the granted
+  repositories, also one that the repositories do not use.
 
 ## Trust boundary of New Upkeep
 

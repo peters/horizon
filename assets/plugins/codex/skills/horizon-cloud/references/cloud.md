@@ -497,7 +497,12 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   or changes only those repositories. Pass `-R owner/name` or work in a checkout.
   It also reads the public global security advisories (`gh api /advisories`, with
   filters such as `?ecosystem=npm&affects=name`, and `gh api /advisories/GHSA-...`)
-  without a repository grant. It refuses account-wide and organization-wide requests, such as `gh api
+  without a repository grant. When the person saved a package token in Cloud settings,
+  it also reads the NuGet and npm packages of the owners of the cloud's repositories
+  (`gh api /orgs/OWNER/packages/nuget/NAME/versions`, `.../versions/ID`), for example
+  the `created_at` of a version. Without one, the refusal says that a package token is
+  missing in Cloud settings: report that reason, do not look for a way around it. It
+  refuses account-wide and organization-wide requests, such as `gh api
   user/repos`, and changes to repository settings. A refusal shows as
   `Horizon: ...` (`GraphQL: Horizon: ...` for GraphQL); for a repository the
   task needs, ask with `github_access`.

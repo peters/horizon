@@ -32,6 +32,7 @@
 !horizon-worker-github-api-upkeep
 !horizon-worker-github-git-upkeep
 !horizon-worker-github-upkeep-loop
+!horizon-worker-github-packages
 !horizon-worker-gh-repository
 !horizon-worker-browserstack
 !bin/

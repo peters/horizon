@@ -5,8 +5,8 @@ granted repositories, so Git never holds the token. Agents never hold the refres
 still gets an access token for a granted repository until the API broker replaces that. Never
 prints a token. Root
 operations: install (JSON on stdin), serve (started by horizon-worker-supervise), status,
-clear, requests, decide and upkeep (the Upkeep policy, JSON on stdin). Agents run `mcp` for the
-github_access tool."""
+clear, requests, decide, upkeep (the Upkeep policy, JSON on stdin) and packages (the package
+token, JSON on stdin). Agents run `mcp` for the github_access tool."""
 import contextlib
 import http.client
 import importlib.machinery
@@ -45,6 +45,7 @@ broker = common.load_sibling('horizon-worker-github-api', 'horizon_worker_github
 mcp = common.load_sibling('horizon-worker-github-mcp', 'horizon_worker_github_mcp')
 upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
 upkeep_loop = common.load_sibling('horizon-worker-github-upkeep-loop', 'horizon_worker_github_upkeep_loop')
+packages = common.load_sibling('horizon-worker-github-packages', 'horizon_worker_github_packages')
 auth = common.auth
 GIT_AUTH = common.GIT_AUTH
 Store = common.Store
@@ -466,7 +467,7 @@ def status(store, now=time.time):
     if state is None:
         return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
                 'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
-                'repositories': [], 'pending_requests': pending}
+                'repositories': [], 'pending_requests': pending, 'packages': packages.load(store) is not None}
     # A cloud grant routes credentials only; it has no target repository on the worker.
     repositories = [{key: grant[key] for key in ('repository', 'target', 'access')} for grant in state['grants']]
     repositories += [{'repository': grant['repository'], 'target': None, 'access': grant['access']}
@@ -475,7 +476,8 @@ def status(store, now=time.time):
             'login': state.get('login'), 'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
-            'repositories': repositories, 'pending_requests': pending}
+            'repositories': repositories, 'pending_requests': pending,
+            'packages': packages.load(store) is not None}
 
 
 def host_status(store, path=agents.SOCKET):
@@ -488,14 +490,16 @@ def host_status(store, path=agents.SOCKET):
 
 
 def clear(store, retire=None):
-    """Removes the static Git binding first, then the Upkeep policy, then the chain. When the
-    binding or the policy cannot be removed, the chain stays, so agents never keep access while
-    status reports none, and no policy of an earlier sign-in waits for the next one."""
+    """Removes the static Git binding first, then the Upkeep policy and the package token, then
+    the chain. When the binding, the policy or the token cannot be removed, the chain stays, so
+    agents never keep access while status reports none, and no policy or token of an earlier
+    sign-in waits for the next one."""
     (retire or run_retire)()
     book = agents.Book(store.runtime)
     # Under the book's lock, so an install under way ends before it.
     with book.lock():
         upkeep_loop.remove(store)
+    packages.remove(store)
     with store.lock():
         store.clear()
     book.clear()
@@ -511,9 +515,9 @@ def main(argv):
         # The agent's own process: it asks the root service over the socket.
         mcp.serve_mcp()
         return 0
-    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests', 'upkeep')
+    if not (len(argv) == 1 and operation in ('install', 'serve', 'status', 'clear', 'requests', 'upkeep', 'packages')
             or len(argv) == 3 and operation == 'decide' and argv[2] in agents.DECISIONS):
-        print('Usage: horizon-worker-github install|serve|status|clear|requests|upkeep|mcp\n'
+        print('Usage: horizon-worker-github install|serve|status|clear|requests|upkeep|packages|mcp\n'
               '       horizon-worker-github decide ID allow-cloud|allow-task|deny', file=sys.stderr)
         return 2
     if os.geteuid() != 0:
@@ -549,6 +553,15 @@ def main(argv):
         if len(source) > upkeep.MAX_POLICY:
             raise ValueError('Upkeep policy is too large')
         print_json(upkeep_loop.install(store, source.decode(), agents.Book(store.runtime)))
+    elif operation == 'packages':
+        # The package token from Cloud settings; see horizon-worker-github-packages. Only under
+        # agent isolation does the agent account stay out of its root-only files.
+        if not common.AGENT_ISOLATION.exists():
+            raise ValueError('A package token requires agent isolation')
+        source = sys.stdin.buffer.read(packages.MAX_SOURCE + 1)
+        if len(source) > packages.MAX_SOURCE:
+            raise ValueError('Package token request is too large')
+        print_json(packages.install(store, source.decode()))
     else:
         clear(store)
     return 0

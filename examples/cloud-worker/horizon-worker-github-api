@@ -3,7 +3,8 @@ request over plain HTTP to the Unix socket /run/horizon-worker/github-api.sock
 (`http_unix_socket`), and gh holds only a placeholder token. The broker reads the caller's user
 ID from the kernel (SO_PEERCRED), checks each request against the REST policy
 (horizon-worker-github-api-rest) or the GraphQL policy (horizon-worker-github-graphql-policy),
-and sends it to GitHub with the token of the grant that covers it. A refused request gets a
+and sends it to GitHub with the token of the grant that covers it, or a package read with the
+package token (horizon-worker-github-packages). A refused request gets a
 reason that gh prints, and never reaches GitHub with a token. Redirects to GitHub's content
 hosts come back through the socket and go out without a token. A module that
 horizon-worker-github loads, not a command."""
@@ -38,6 +39,7 @@ gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_gith
 rest = common.load_sibling('horizon-worker-github-api-rest', 'horizon_worker_github_api_rest')
 upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
 checks = common.load_sibling('horizon-worker-github-api-upkeep', 'horizon_worker_github_api_upkeep')
+packages = common.load_sibling('horizon-worker-github-packages', 'horizon_worker_github_packages')
 policy = rest.policy
 graphql = policy.graphql
 
@@ -159,6 +161,13 @@ class Broker:
             raise refusal(403, problem or 'this worker has no GitHub sign-in. Connect GitHub in Horizon.')
         return found
 
+    def package_candidate(self, owner):
+        """The package token for a read of the packages of `owner`, or a refusal."""
+        token, reason = packages.token_for(self.store, owner, self.static)
+        if token is None:
+            raise refusal(403, reason)
+        return Candidate(token, lambda repository, access: False, 'packages')
+
     def call(self, host, method, target, token, body=None, extra=(), sent=lambda: None):
         """(status, JSON reply) of a request that the broker makes itself, with the `extra`
         fields of the client's request that GitHub reads. `sent` runs once the request head
@@ -204,6 +213,8 @@ def choose(broker, route, pid=None, sent=lambda: None):
     repository ID."""
     if route.kind == 'content':
         return None, None
+    if route.kind == 'package':
+        return broker.package_candidate(route.owner), None
     found = broker.candidates(pid)
     if route.kind == 'plain':
         return next(candidate for candidate in found if candidate.usable), None
@@ -311,7 +322,7 @@ class Exchange(checks.Checks):
         try:
             # Checked again just before the token goes out: a task's session can end while the
             # request is read.
-            fresh = self.fresh(candidate) if candidate is not None else None
+            fresh = self.fresh(candidate, owner=route.owner) if candidate is not None else None
             if candidate is not None and fresh is None:
                 raise refusal(503, 'this worker\'s GitHub access changed while the request was read; try again.')
             if candidate is not None and not all(fresh.allowed(name, route.access) for name in names):
@@ -325,7 +336,8 @@ class Exchange(checks.Checks):
                 self.record['outcome'] = 'unreachable'
                 raise refusal(502, 'this worker could not reach GitHub; try again.') from None
             if response.status == 401 and candidate is not None:
-                raise refusal(403, 'GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
+                raise refusal(403, packages.REFUSED if candidate.source == 'packages' else
+                              'GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
             self.started = True
             relay.relay(self.output, response, REPLY_FIELDS, secrets, None, request.version == 'HTTP/1.1')
             self.record['outcome'] = 'relayed'
@@ -370,10 +382,17 @@ class Exchange(checks.Checks):
         self.record['outcome'] = 'refused'
         return graphql_refused(self.output, str(refused))
 
-    def fresh(self, candidate, refuse=False):
+    def fresh(self, candidate, refuse=False, owner=None):
         """The same token as `candidate`, with the grants of now: a task's session can end and
         the worker can change accounts while a request is read. None, or a GraphQL refusal with
-        `refuse`, when that token no longer serves."""
+        `refuse`, when that token no longer serves. The package token serves only while the
+        cloud still grants a repository of `owner` and Horizon did not replace it."""
+        if candidate.source == 'packages':
+            try:
+                again = self.broker.package_candidate(owner)
+            except relay.Refusal:
+                return None
+            return again if again.token == candidate.token else None
         try:
             found = self.broker.candidates(self.pid)
         except relay.Refusal:

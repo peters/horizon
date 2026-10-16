@@ -1444,6 +1444,14 @@ The broker does these steps for each connection:
     directly before a word.
   - `GET /`, `/rate_limit` and `/meta`, and the global security advisories
     (`/advisories` and `/advisories/GHSA-...`), which are public.
+  - `GET` and `HEAD` of an owner's NuGet and npm packages:
+    `/orgs/OWNER/packages?package_type=nuget` (or `npm`, also under `/users/`),
+    `/orgs/OWNER/packages/TYPE/NAME`, `.../versions` and `.../versions/ID`, where
+    TYPE is `nuget` or `npm`. OWNER must own a repository that is in the grants
+    of a chain that is not revoked (also the grants for the whole cloud) or in the
+    static token file. These reads
+    get the package token below, never the chain's. Other package types, such as
+    container images, and every change of a package are refused.
   - `POST /graphql`, checked by the GraphQL policy below.
 - On `uploads.github.com` it accepts only a release asset upload, with `push`.
 - On `codeload.github.com` and `*.githubusercontent.com` it accepts only `GET`
@@ -1490,10 +1498,33 @@ asks GitHub for once per start:
 
 The broker writes one line for each connection to the request log below, with
 `kind` set to `api`, the `host`, the `request` kind (`repository`, `search`,
-`plain`, `content`, `graphql` or `invalid`), `repository`, `uid`, `pid`,
+`plain`, `content`, `package`, `graphql` or `invalid`), `repository`, `uid`, `pid`,
 `granted` and `outcome` as for the Git proxy. `granted` is also true when the
 broker itself sent the token to GitHub for the request, to resolve a repository
 ID or to look up the IDs of a mutation, and then refused it.
+
+**Package token.** GitHub's package API and its NuGet registry accept only a
+classic token with `read:packages`; the GitHub App's user token never reads them.
+The person saves such a token in Cloud settings, and Horizon gives it to root on
+the worker with JSON on stdin, never in argv or a log:
+
+```sh
+horizon-worker-github packages < private-file   # {"version":1,"token":"..."}
+horizon-worker-github packages < private-file   # {"version":1,"token":null} removes it
+```
+
+The service keeps it in root-only `packages.json` copies beside the chain, on the
+volume and on tmpfs, and reports only whether it holds one (`packages` in
+`status`). Two copies that differ, or a copy that is not private, serve no token.
+`horizon-worker-github clear` removes it with the chain. A revoked chain opens
+no owner; the static token file still opens its own.
+No agent gets the token: no variable, no file and no NuGet configuration holds
+it. The broker adds it only to the package reads above. Without a token, those
+reads get `gh: Horizon: this worker has no package token, ...`, which names Cloud
+settings. When GitHub refuses the token, the broker asks for a new one. The token
+reads every NuGet and npm package that its account can read through these paths,
+for the owners of the granted repositories. Use a dedicated token with a short
+expiry, never the token of your own `gh` login.
 
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
