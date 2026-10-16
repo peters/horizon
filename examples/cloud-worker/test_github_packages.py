@@ -116,25 +116,12 @@ class StorageTests(ServiceTestCase):
         install(self.store, request(repositories=['acme/api']))
         packages.install(self.store, json.dumps({'version': 1, 'repositories': ['other-org/lib']}))
         self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
-        # A change never rewrites the chain: a renewal may hold a newer one in memory only.
+        # The repositories change with the chain in one state; the chain itself stays the same.
         chains = packages.store_for(self.store)
-        before = (chains.persistent / service.STATE).read_bytes()
+        before = chains.load()[0]['chain']
         packages.install(self.store, json.dumps({'version': 1, 'repositories': ['acme/api']}))
-        self.assertEqual((chains.persistent / service.STATE).read_bytes(), before)
-        # Copies of the record that differ, or one that is broken, open no owner.
-        (chains.runtime / packages.REPOSITORIES).write_text(json.dumps({'version': 1, 'repositories': ['acme/web']}))
-        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
-        (chains.runtime / packages.REPOSITORIES).write_text('{')
-        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
-        (chains.runtime / packages.REPOSITORIES).unlink()
+        self.assertEqual(chains.load()[0]['chain'], before)
         self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
-        # A chain from an earlier image keeps its repositories in the state, without a record.
-        (chains.persistent / packages.REPOSITORIES).unlink()
-        state = chains.load()[0]
-        chains.save(dict(state, repositories=['legacy/repo']), retain=False)
-        self.assertEqual(packages.token_for(self.store, 'legacy'), (TOKEN, None))
-        install(self.store, request(repositories=['acme/api']))
-        self.assertNotIn('repositories', chains.load()[0])
         # A change that fails, or that finds no chain, stops whatever was held.
         for bad in ({'version': 1, 'repositories': []}, {'version': 2, 'repositories': ['a/b']},
                     {'version': 1, 'repositories': ['not a repository']}):

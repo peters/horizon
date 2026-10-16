@@ -1524,9 +1524,11 @@ horizon-worker-github packages < private-file   # {"version":1,"repositories":[.
 
 The last form changes the repositories of the chain that the worker holds, as
 when the person changes the Upkeep's list, without a new sign-in. The service
-keeps the repositories in their own root-only record (`repositories.json` beside
-the chain), so a change never rewrites the chain; two copies that differ serve no
-owner. It fails, and removes the chain, when the worker holds none. `status`
+saves the new repositories in one state with the same chain, so no reader sees a
+chain with other repositories. It fails, and removes the chain, when the worker
+holds none. If the serving process holds a renewed chain that no storage took,
+the change outranks it and the next renewal ends the access: less access, never
+more. `status`
 reports `"repositories_change": true` in `packages`, so Horizon sends this form
 only to an image that takes it.
 

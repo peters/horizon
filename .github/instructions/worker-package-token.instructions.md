@@ -22,10 +22,10 @@ GitHub's package API and its NuGet registry accept only a token with the
 - Root keeps it in its own `common.Store` (`packages.store_for`), with the GitHub chain's
   rules for private copies, serials, pending writes and clear marks. One store object per
   GitHub store, so the broker sees a rotated chain that only the renewal's memory holds.
-- A request with only `repositories` (`change_repositories`) writes only the repositories
-  record (`repositories.json`, both copies, under the store lock), never the chain, which a
-  renewal may hold newer in memory; with no held chain, or a malformed list, it fails and
-  clears the store. Copies of the record that differ, or a broken one, open no owner.
+- A request with only `repositories` (`change_repositories`) saves the held chain with the
+  new repositories as one state under the store lock (Store rules for copies and serials);
+  with no held chain that serves, or a malformed list, it fails and clears the store. Its
+  only race (a renewal that no storage took) must end with less access, never more.
 - `install` replaces the chain under the store lock; a replacement that fails for any
   reason (request, scope, GitHub unreachable, storage) clears the
   store, so no older chain is served. `packages.clear` writes a clear mark above every copy
