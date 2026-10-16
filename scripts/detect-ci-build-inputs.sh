@@ -14,8 +14,10 @@
 # `macos_release_inputs` is the narrower set that also builds the two macOS
 # release assets at once instead of waiting for the nightly macOS release
 # builds: the files that define how a release asset is built and packaged.
-# A Rust source change alone waits for the nightly run. Every path in it is
-# also a release input, so main never builds macOS without Linux and Windows.
+# Source, manifest, lock file and toolchain changes wait for the nightly run:
+# Dependabot changes Cargo.lock on most days, and the macOS test job on every
+# push still compiles those changes on macOS. Every path in it is also a
+# release input, so main never builds macOS without Linux and Windows.
 #
 # `rust_inputs` is false only for a pull request whose every changed path is
 # on the short list below of files no Rust build or test reads. Any other
