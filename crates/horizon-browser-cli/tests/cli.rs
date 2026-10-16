@@ -7,18 +7,13 @@ use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
 mod support;
+use support::JOB_PROGRESS_GUARD;
 
 // Process startup and manifest persistence must leave time for the blocking action.
 const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 6;
 // A starved job can reach its deadline before it queues the blocking action; it then
 // runs again with twice the deadline, up to this one.
 const MAX_DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 8 * DEADLINE_TEST_TIMEOUT_SECONDS;
-// Polls for job progress return as soon as the job reaches the awaited state; this bound
-// only turns a hung job into a failure, so it must exceed what a healthy job can take.
-// The first launch of a freshly linked binary can take seconds on Windows while it is
-// scanned, and after a deadline every durable write may retry a blocked replace for up to
-// two seconds before the job exits.
-const JOB_PROGRESS_GUARD: Duration = Duration::from_mins(1);
 const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 

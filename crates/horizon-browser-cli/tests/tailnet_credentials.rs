@@ -51,7 +51,7 @@ fn pending_metadata(operation: CredentialOperation) {
     .unwrap();
     let mut process = OwnedChild(Some(command(root.path(), &plan).spawn().unwrap()));
     let queue = UsageQueue::new(root.path().join(".horizon"));
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let routing_deadline = Instant::now() + support::JOB_PROGRESS_GUARD;
     loop {
         let requests = support::claim_host_requests(&queue, "00000000-0000-0000-0000-000000000001");
         if let Some(request) = requests.first() {
@@ -69,11 +69,12 @@ fn pending_metadata(operation: CredentialOperation) {
             process.0.as_mut().unwrap().try_wait().unwrap().is_none(),
             "CLI exited before routing"
         );
-        assert!(Instant::now() < deadline, "CLI did not route the owner request");
+        assert!(Instant::now() < routing_deadline, "CLI did not route the owner request");
         std::thread::sleep(Duration::from_millis(10));
     }
+    let exit_deadline = Instant::now() + support::JOB_PROGRESS_GUARD;
     while process.0.as_mut().unwrap().try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline, "CLI did not consume the metadata reply");
+        assert!(Instant::now() < exit_deadline, "CLI did not consume the metadata reply");
         std::thread::sleep(Duration::from_millis(10));
     }
     let output = process.0.take().unwrap().wait_with_output().unwrap();
