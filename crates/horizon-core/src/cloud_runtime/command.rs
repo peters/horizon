@@ -384,9 +384,10 @@ fn stop(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
-/// A file for a private stdin that no path names. On Linux it lives in memory only, so the
-/// bytes never reach a disk; elsewhere, or where the kernel refuses a memfd, it is an unlinked
-/// temporary file. Unlike a pipe, it never blocks, also when a descendant of the command keeps
+/// A file for a private stdin. On Linux it lives in memory only and no path ever names it, so
+/// the bytes never reach a disk; elsewhere, or where the kernel refuses a memfd, it is a
+/// temporary file that is unlinked as soon as it is created, so its random name exists only
+/// for that moment. Unlike a pipe, it never blocks, also when a descendant of the command keeps
 /// its stdin open.
 fn private_memory(bytes: &[u8]) -> Result<std::fs::File> {
     #[cfg(target_os = "linux")]
