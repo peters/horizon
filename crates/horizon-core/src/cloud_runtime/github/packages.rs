@@ -183,7 +183,11 @@ pub fn configure(
             say(&format!("the earlier skip could not be forgotten: {error}"));
         }
     } else if skipped(cloud_id) {
-        say(WITHOUT);
+        say(if held_access {
+            "the earlier package read access of this Upkeep stays as it was."
+        } else {
+            WITHOUT
+        });
         return Ok(());
     }
     let client = Client::new();
@@ -226,7 +230,7 @@ fn without(ended: Ended, held_access: bool, cloud_id: &str, say: &dyn Fn(&str)) 
     match ended {
         Ended::Cancelled(error) => return Err(error),
         Ended::Reason(reason) => say(&reason),
-        Ended::Skipped if !held_access => {
+        Ended::Skipped => {
             let mark = crate::upkeep::worker::directory(cloud_id).join(SKIPPED);
             if let Err(error) = crate::upkeep::worker::write_atomically(&mark, "skipped\n") {
                 say(&format!(
@@ -234,7 +238,6 @@ fn without(ended: Ended, held_access: bool, cloud_id: &str, say: &dyn Fn(&str)) 
                 ));
             }
         }
-        Ended::Skipped => {}
     }
     say(if held_access {
         "the earlier package read access of this Upkeep stays as it was."
@@ -453,15 +456,19 @@ pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, conf
     ) else {
         return;
     };
-    match held(&output).0 {
-        Held::Current { repositories, .. } if repositories == wanted => remember(cloud_id, wanted),
-        Held::Current { change: true, .. }
-            if change(&wanted, &mut connection.pinned_command(INSTALL), runner).is_ok() =>
-        {
-            remember(cloud_id, wanted);
-        }
-        _ => {}
+    // Asked once per list: whatever the worker answers, the next exchange with the same list
+    // does not ask again. A worker without access, or whose image cannot take a change, gets
+    // the list at the next deployment.
+    if let Held::Current {
+        repositories,
+        change: true,
+    } = held(&output).0
+        && repositories != wanted
+        && change(&wanted, &mut connection.pinned_command(INSTALL), runner).is_err()
+    {
+        tracing::warn!(cloud = %cloud_id, "the worker did not take the Upkeep's repositories for its package read access");
     }
+    remember(cloud_id, wanted);
 }
 
 /// Gives the chain to root on the worker over SSH stdin; no token enters argv or output.
