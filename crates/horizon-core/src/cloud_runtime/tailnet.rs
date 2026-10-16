@@ -571,7 +571,7 @@ exec(sys.stdin.read())
     fn a_snapshot_replaced_between_open_and_stat_is_not_a_publication() {
         // The reader's first poll opens the old snapshot, and the in-flight one replaces it
         // before the fstat. That is one publication, so no fresh name is observed.
-        const REPLACE_IN_FIRST_POLL: &str = r#"import os, sys
+        const REPLACE_IN_FIRST_POLL: &str = r"import os, sys
 original = os.fstat
 calls = []
 def replace(fd):
@@ -581,7 +581,7 @@ def replace(fd):
     return original(fd)
 os.fstat = replace
 exec(sys.stdin.read())
-"#;
+";
         let temp = tempfile::tempdir().unwrap();
         let snapshot = temp.path().join("devices.json");
         publish_fixture(&snapshot, "old.example.ts.net");
