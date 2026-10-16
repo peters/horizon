@@ -226,12 +226,16 @@ fn valid_dns_name(name: &str) -> bool {
 
 // The worker publishes atomic snapshots in one sequential five-second loop. Its first
 // post-configure publication can finish a status read started before configure; the
-// second publication observes a status read that started afterward.
+// second publication observes a status read that started afterward. A snapshot replaced
+// between the open and the fstat is already unlinked, and the unlink changed its ctime:
+// that is no publication.
 const FRESH_SNAPSHOT: &str = r#"import os, sys, time
 path = sys.argv[1]
 deadline = time.monotonic() + float(sys.argv[2])
 def generation(file):
     info = os.fstat(file.fileno())
+    if info.st_nlink == 0:
+        return None
     return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
 try:
     with open(path, "rb") as file:
@@ -244,7 +248,7 @@ while time.monotonic() < deadline:
     try:
         with open(path, "rb") as file:
             current = generation(file)
-            if current == previous:
+            if current is None or current == previous:
                 continue
             previous = current
             remaining -= 1
@@ -560,6 +564,52 @@ exec(sys.stdin.read())
                 assert!(!identity.observed);
             }
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_snapshot_replaced_between_open_and_stat_is_not_a_publication() {
+        // The reader's first poll opens the old snapshot, and the in-flight one replaces it
+        // before the fstat. That is one publication, so no fresh name is observed.
+        const REPLACE_IN_FIRST_POLL: &str = r#"import os, sys
+original = os.fstat
+calls = []
+def replace(fd):
+    calls.append(fd)
+    if len(calls) == 2:
+        os.rename(sys.argv[3], sys.argv[1])
+    return original(fd)
+os.fstat = replace
+exec(sys.stdin.read())
+"#;
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp.path().join("devices.json");
+        publish_fixture(&snapshot, "old.example.ts.net");
+        let in_flight = temp.path().join("in-flight.json");
+        let devices = serde_json::json!({"devices": [{"name": "in-flight.example.ts.net"}]});
+        std::fs::write(&in_flight, devices.to_string()).unwrap();
+        let cancel = horizon_cloud::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| panic!("snapshot reads never emit peer data"),
+            secrets: vec![],
+        };
+        let identity = observe_device_name(true, "cloud1", true, &cancel, || {
+            runner.private_exchange(
+                std::process::Command::new("python3")
+                    .args(["-c", REPLACE_IN_FIRST_POLL])
+                    .arg(&snapshot)
+                    .arg("2")
+                    .arg(&in_flight),
+                FRESH_SNAPSHOT.as_bytes(),
+                Duration::from_secs(15),
+            )
+        })
+        .unwrap()
+        .unwrap();
+        assert!(!in_flight.exists(), "the first poll replaced the snapshot");
+        assert_eq!(identity.name, "horizon-cloud-cloud1");
+        assert!(!identity.observed);
     }
 
     #[cfg(unix)]
