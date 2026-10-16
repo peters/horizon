@@ -26,6 +26,7 @@ documents that are not yet STE.
 | Procedure | Feature | Cost |
 |---|---|---|
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |
+| [worker-exposure-gate](procedures/worker-exposure-gate.md) | Default-off actual-peer CIDR/Public worker Gate | no local cost; approved real-root component only |
 | [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through image preparation | none |
 | [portable-image-publishing](procedures/portable-image-publishing.md) | Ordinary defaults, portable setup and first/final local publishing proof | none |
 | [bound-worker-pull](procedures/bound-worker-pull.md) | Exact read-only registry material for CPU hosts | none |

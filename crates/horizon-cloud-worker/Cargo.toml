@@ -7,6 +7,8 @@ license.workspace = true
 publish = false
 [lints]
 workspace = true
+[features]
+exposure-gate = ["horizon-cloud-protocol/exposure-gate", "dep:socket2", "dep:thiserror", "tokio/net", "tokio/io-util", "tokio/sync"]
 [dependencies]
 horizon-cloud-protocol.workspace = true
 horizon-cloud = { path = "../horizon-cloud", features = ["schema"] }
@@ -24,9 +26,11 @@ tokio = { workspace = true, features = ["io-std", "rt-multi-thread"] }
 zeroize.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
+thiserror = { workspace = true, optional = true }
 [dev-dependencies]
 ring.workspace = true
 horizon-browser = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["net", "pty", "termios", "event"] }
+socket2 = { workspace = true, optional = true }

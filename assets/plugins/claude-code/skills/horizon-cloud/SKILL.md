@@ -62,6 +62,11 @@ Use the existing owner-enabled Local Network Bridge tools for current operations
 The engine is a prerequisite; #1335 M1-1 still needs owner controls, durable
 attempts, worker SSH, interface parity and actual LAN/tailnet qualification.
 
+The Linux worker `exposure-gate` feature is also off by default. It provides a
+bounded actual-peer CIDR/Public TCP component only; no public operation starts
+it. DNS/tag and TailnetOnly policies refuse before binding. Follow the worker
+CIDR gate section of the cloud reference for its limits and test procedure.
+
 Machine-local destination preference helpers retain a checkout/profile scope and
 nonsecret account or exact registry grant metadata. The launch engine retains
 that choice before image work. A saved preference is not proof of authentication or registry
