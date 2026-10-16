@@ -66,7 +66,10 @@ this procedure does not authorize resources or enrollments.
    last valid config. Test matching-port Funnel across config scopes, direct API
    updates and actual ingress; a raw opted-in transport must not accept it.
    Ordinary TCP v1/v2, Unix without PROXY and Unix PROXY1
-   remain unchanged. Text status distinguishes opted-in cancellation.
+   remain unchanged. Configuration responses and normal `serve status` node
+   and service trees show `Horizon flow cancellation` only for enabled handlers.
+   Disabled text remains identical, including ordinary TCP/TLS. Enabled Unix
+   targets have no TCP prefix.
 
 3. On a tagged fixture with no service configuration or advertisement, reject
    `serve --service=svc:new --tun --horizon-flow-cancel` and the other invalid

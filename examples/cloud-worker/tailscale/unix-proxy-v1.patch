@@ -1,4 +1,134 @@
 --- /dev/null
++++ b/cmd/tailscale/cli/serve_horizon_status_test.go
+@@ -0,0 +1,127 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve
++
++package cli
++
++import (
++	"bytes"
++	"io"
++	"testing"
++
++	"tailscale.com/ipn"
++	"tailscale.com/tailcfg"
++	"tailscale.com/tstest"
++)
++
++func TestHorizonFlowCancelStatusTrees(t *testing.T) {
++	for _, tt := range []struct {
++		name   string
++		config *ipn.ServeConfig
++		want   string
++	}{
++		{
++			name: "ordinary-node-tcp-unchanged",
++			config: &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{
++				20000: {TCPForward: "127.0.0.1:8080"},
++			}},
++			want: "|-- tcp://foo.test.ts.net:20000 (tailnet only)\n|--> tcp://127.0.0.1:8080\n\n",
++		},
++		{
++			name: "ordinary-node-tls-unchanged",
++			config: &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{
++				20000: {TCPForward: "127.0.0.1:8080", TerminateTLS: "foo.test.ts.net"},
++			}},
++			want: "|-- tcp://foo.test.ts.net:20000 (TLS-terminated TCP, tailnet only)\n|--> tcp://127.0.0.1:8080\n\n",
++		},
++		{
++			name: "node-unix-disabled",
++			config: &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{
++				20000: {TCPForward: "unix:/run/original.sock", ProxyProtocol: 1},
++			}},
++			want: "|-- tcp://foo.test.ts.net:20000 (tailnet only)\n|--> unix:/run/original.sock\n\n",
++		},
++		{
++			name: "node-unix-enabled",
++			config: &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{
++				20000: {TCPForward: "unix:/run/original.sock", ProxyProtocol: 1, HorizonFlowCancel: true},
++			}},
++			want: "|-- tcp://foo.test.ts.net:20000 (tailnet only, Horizon flow cancellation)\n|--> unix:/run/original.sock\n\n",
++		},
++		{
++			name: "ordinary-service-tcp-unchanged",
++			config: &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
++				"svc:backend": {TCP: map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "127.0.0.1:8080"}}},
++			}},
++			want: "tcp://backend.test.ts.net:20000 (tailnet only) (svc:backend)\n|--> tcp://127.0.0.1:8080\n\n",
++		},
++		{
++			name: "ordinary-service-tls-unchanged",
++			config: &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
++				"svc:backend": {TCP: map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "127.0.0.1:8080", TerminateTLS: "backend.test.ts.net"}}},
++			}},
++			want: "tcp://backend.test.ts.net:20000 (TLS-terminated TCP, tailnet only) (svc:backend)\n|--> tcp://127.0.0.1:8080\n\n",
++		},
++		{
++			name: "service-unix-disabled",
++			config: &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
++				"svc:backend": {TCP: map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "unix:/run/original.sock", ProxyProtocol: 1}}},
++			}},
++			want: "tcp://backend.test.ts.net:20000 (tailnet only) (svc:backend)\n|--> tcp://unix:/run/original.sock\n\n",
++		},
++		{
++			name: "service-unix-enabled",
++			config: &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
++				"svc:backend": {TCP: map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "unix:/run/original.sock", ProxyProtocol: 1, HorizonFlowCancel: true}}},
++			}},
++			want: "tcp://backend.test.ts.net:20000 (tailnet only, Horizon flow cancellation) (svc:backend)\n|--> unix:/run/original.sock\n\n",
++		},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			var stdout, stderr bytes.Buffer
++			tstest.Replace(t, &Stdout, io.Writer(&stdout))
++			tstest.Replace(t, &Stderr, io.Writer(&stderr))
++			if err := printServeStatusTrees(tt.config, statusTestStatus); err != nil {
++				t.Fatal(err)
++			}
++			if got := stdout.String(); got != tt.want {
++				t.Fatalf("status = %q; want %q", got, tt.want)
++			}
++			if stderr.Len() != 0 {
++				t.Fatalf("unexpected stderr: %q", stderr.String())
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelTCPStatusTreeSelectedForeground(t *testing.T) {
++	for _, tt := range []struct {
++		name    string
++		enabled bool
++		want    string
++	}{
++		{"disabled", false, "|-- tcp://foo.test.ts.net:20000 (tailnet only)\n|--> unix:/run/original.sock\n"},
++		{"enabled", true, "|-- tcp://foo.test.ts.net:20000 (tailnet only, Horizon flow cancellation)\n|--> unix:/run/original.sock\n"},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			parent := &ipn.ServeConfig{Foreground: map[string]*ipn.ServeConfig{
++				"original-session": {TCP: map[uint16]*ipn.TCPPortHandler{
++					20000: {TCPForward: "unix:/run/original.sock", ProxyProtocol: 1, HorizonFlowCancel: tt.enabled},
++				}},
++			}}
++			var stdout, stderr bytes.Buffer
++			tstest.Replace(t, &Stdout, io.Writer(&stdout))
++			tstest.Replace(t, &Stderr, io.Writer(&stderr))
++			if err := printTCPStatusTree(t.Context(), parent.Foreground["original-session"], statusTestStatus); err != nil {
++				t.Fatal(err)
++			}
++			if got := stdout.String(); got != tt.want {
++				t.Fatalf("foreground status = %q; want %q", got, tt.want)
++			}
++			if stderr.Len() != 0 {
++				t.Fatalf("unexpected stderr: %q", stderr.String())
++			}
++		})
++	}
++}
+--- /dev/null
 +++ b/cmd/tailscale/cli/serve_horizon_test.go
 @@ -0,0 +1,264 @@
 +// Copyright (c) Tailscale Inc & contributors
@@ -301,6 +431,50 @@
  
  	lc localServeClient // localClient interface, specific to serve
  	// optional stuff for tests:
+@@ -653,6 +654,9 @@
+ 		fStatus := "tailnet only"
+ 		if sc.AllowFunnel[hp] {
+ 			fStatus = "Funnel on"
++		}
++		if h.HorizonFlowCancel {
++			fStatus += ", Horizon flow cancellation"
+ 		}
+ 		if h.TerminateTLS != "" {
+ 			printf("|-- tcp://%s (TLS-terminated TCP, %s)\n", hp, fStatus)
+--- a/cmd/tailscale/cli/serve_status.go
++++ b/cmd/tailscale/cli/serve_status.go
+@@ -11,6 +11,7 @@
+ 	"net"
+ 	"slices"
+ 	"strconv"
++	"strings"
+ 
+ 	"tailscale.com/ipn"
+ 	"tailscale.com/ipn/ipnstate"
+@@ -94,12 +95,20 @@
+ 			continue
+ 		}
+ 		hp := ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(p))))
++		status := "tailnet only"
++		if h.HorizonFlowCancel {
++			status += ", Horizon flow cancellation"
++		}
+ 		if h.TerminateTLS != "" {
+-			printf("tcp://%s (TLS-terminated TCP, tailnet only) (%s)\n", hp, name)
++			printf("tcp://%s (TLS-terminated TCP, %s) (%s)\n", hp, status, name)
+ 		} else {
+-			printf("tcp://%s (tailnet only) (%s)\n", hp, name)
++			printf("tcp://%s (%s) (%s)\n", hp, status, name)
+ 		}
+-		printf("|--> tcp://%s\n\n", h.TCPForward)
++		if h.HorizonFlowCancel && strings.HasPrefix(h.TCPForward, "unix:") {
++			printf("|--> %s\n\n", h.TCPForward)
++		} else {
++			printf("|--> tcp://%s\n\n", h.TCPForward)
++		}
+ 	}
+ 
+ 	// Web entries (HTTP/HTTPS). Services have no Funnel concept.
 --- a/cmd/tailscale/cli/serve_v2.go
 +++ b/cmd/tailscale/cli/serve_v2.go
 @@ -248,6 +248,9 @@
