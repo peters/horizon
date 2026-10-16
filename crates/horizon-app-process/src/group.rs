@@ -52,7 +52,7 @@ fn terminate_with(
         // XNU no longer exposes a zombie's group through getpgid. A fresh positive
         // WNOWAIT result keeps this exact child PID reserved until group cleanup.
         #[cfg(target_os = "macos")]
-        Err(rustix::io::Errno::SRCH) if exited(child)? && mac_group::retained_leader(group)? => (),
+        Err(rustix::io::Errno::SRCH) if exit_settled(child)? && mac_group::retained_leader(group)? => (),
         _ => return Err(Error::CleanupUncertain),
     }
     child.stdin.take();
@@ -97,8 +97,25 @@ fn acknowledge_signal(child: &Child, _group: rustix::process::Pid, result: rusti
         // XNU skips zombies and returns EPERM when no live recipient remains. This is not
         // permission to ignore EPERM for a live child or any executing group member.
         #[cfg(target_os = "macos")]
-        Err(rustix::io::Errno::PERM) if exited(child)? && group_cannot_execute(_group)? => Ok(()),
+        Err(rustix::io::Errno::PERM) if exit_settled(child)? && group_cannot_execute(_group)? => Ok(()),
         Err(_) => Err(Error::CleanupUncertain),
+    }
+}
+
+// XNU refuses getpgid and group signals as soon as a process starts to exit, but
+// WNOWAIT reports the exit only after the teardown, so wait for that exit to settle.
+// A child that is not exiting stays unexited and the caller keeps the uncertainty.
+#[cfg(target_os = "macos")]
+fn exit_settled(child: &Child) -> Result<bool> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if exited(child)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -188,6 +205,24 @@ mod tests {
         }
         assert!(exited(&child).unwrap());
         terminate(&mut child).unwrap();
+    }
+
+    #[test]
+    fn a_leader_that_is_still_exiting_is_cleaned_once_its_exit_settles() {
+        use std::io::Read;
+        // Output EOF arrives during the leader's exit teardown. On XNU about one
+        // in a hundred of these lands before waitid can report the exit.
+        for _ in 0..200 {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "exit 1"])
+                .stdout(std::process::Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let mut output = Vec::new();
+            child.stdout.take().unwrap().read_to_end(&mut output).unwrap();
+            terminate(&mut child).unwrap();
+        }
     }
 
     #[test]
