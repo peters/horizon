@@ -1,6 +1,7 @@
 //! An exact TCP endpoint gate using the existing bridge relay. Host-controller code
 //! must authorize the recipient and human admission before starting this primitive.
 //! No worker, UI, CLI or MCP path starts it; the feature is off by default.
+pub mod attachment;
 mod source;
 mod tailnet;
 #[cfg(test)]
@@ -270,14 +271,36 @@ impl Gateway {
     /// # Errors
     /// Revalidates preflight before binding and fails without a usable relay on any error.
     pub fn start(prepared: Prepared) -> Result<Self, Error> {
+        Self::start_with(prepared, socks::Proxy::start)
+    }
+
+    /// Creates an exact private Unix ingress for an original pinned SSH attachment.
+    /// This primitive grants no owner authority.
+    /// # Errors
+    /// Refuses source drift, an unsupported private parent or listener startup failure.
+    #[cfg(unix)]
+    pub fn start_private(prepared: Prepared) -> Result<Self, Error> {
+        Self::start_with(prepared, socks::Proxy::start_private)
+    }
+
+    /// # Errors
+    /// Private SSH ingress is unsupported on non-Unix hosts.
+    #[cfg(not(unix))]
+    pub fn start_private(_prepared: Prepared) -> Result<Self, Error> {
+        Err(Error::UnsupportedSource)
+    }
+
+    fn start_with(
+        prepared: Prepared,
+        start: fn(Arc<dyn socks::Gate>) -> std::io::Result<socks::Proxy>,
+    ) -> Result<Self, Error> {
         let attempt = prepared.attempt;
         let gate = Arc::new(Gate {
             prepared,
             reason: Mutex::new(None),
         });
         gate.check()?;
-        let proxy =
-            Arc::new(socks::Proxy::start(Arc::clone(&gate) as Arc<dyn socks::Gate>).map_err(|_| Error::StartFailed)?);
+        let proxy = Arc::new(start(Arc::clone(&gate) as Arc<dyn socks::Gate>).map_err(|_| Error::StartFailed)?);
         let receipt = Receipt {
             operation_id: attempt.operation_id,
             generation: attempt.generation,

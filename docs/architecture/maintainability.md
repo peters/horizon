@@ -562,6 +562,13 @@ The parent owns exact-endpoint admission, gateway receipts and relay revocation.
 Its `one-service-gateway` feature is off by default. Owner, durable and worker
 controllers must use this engine before M1-1 can complete.
 
+`endpoint::attachment` joins the exact engine to the existing pinned SSH supervisor.
+`socks::private` owns its fresh Unix directory and socket; ordinary bridge TCP stays unchanged.
+The shared supervisor retains its legacy policy and adds explicit current-source and
+bounded-input hooks for this attachment. Non-Unix attachment is unsupported.
+The [attachment boundary](pinned-unix-ssh-attachment.md) separates this primitive
+from owner approval, retained admission and public activation.
+
 `cloud_runtime::companions` owns machine-local selection and grant reconciliation.
 `inventory` reads committed declarations and repository identity away from UI
 frames; `journal` durably pins ownership and grant identities; `transport` uses

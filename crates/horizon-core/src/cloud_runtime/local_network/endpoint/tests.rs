@@ -6,7 +6,7 @@ use std::{net::Ipv4Addr, sync::atomic::AtomicUsize};
 mod real_kernel;
 mod relay;
 
-fn binding(address: SocketAddr, peer: &str) -> Binding {
+pub(super) fn binding(address: SocketAddr, peer: &str) -> Binding {
     Binding::Tailnet {
         desktop: "desktop-fixture".into(),
         peer: peer.into(),
@@ -15,7 +15,7 @@ fn binding(address: SocketAddr, peer: &str) -> Binding {
     }
 }
 
-fn prepared(address: SocketAddr) -> Prepared {
+pub(super) fn prepared(address: SocketAddr) -> Prepared {
     Prepared {
         attempt: Attempt::new(),
         endpoint: Endpoint::new("fixture.example.ts.net", address.port()).unwrap(),

@@ -322,7 +322,8 @@ fn names_follow_dns_syntax() {
 fn a_trickled_handshake_is_closed_at_its_deadline() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut server, _) = listener.accept().unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let mut server: Socket = server.into();
     let trickle = thread::spawn(move || {
         for byte in [5, 1, 0, 5, 1] {
             if writer.write_all(&[byte]).is_err() {

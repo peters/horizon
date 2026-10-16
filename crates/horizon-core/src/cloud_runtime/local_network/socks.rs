@@ -2,6 +2,7 @@
 //! connections reach the local network. Every destination passes the [`Gate`] first.
 use super::Destination;
 use horizon_cloud_protocol::local_network::Reply;
+use socket2::Socket;
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
@@ -76,11 +77,23 @@ struct Shared {
 #[derive(Default)]
 struct Sockets {
     stopped: bool,
-    open: HashMap<u64, TcpStream>,
+    open: HashMap<u64, Socket>,
 }
 
 impl Shared {
-    fn register(&self, socket: &TcpStream) -> io::Result<u64> {
+    fn new(gate: Arc<dyn Gate>) -> Arc<Self> {
+        Arc::new(Self {
+            gate,
+            active: AtomicUsize::new(0),
+            bytes: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            sockets: Mutex::default(),
+            next: AtomicU64::new(0),
+            relays: relays::Relays::default(),
+        })
+    }
+
+    fn register(&self, socket: &Socket) -> io::Result<u64> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let clone = socket.try_clone()?;
         let mut sockets = self.sockets.lock().unwrap_or_else(PoisonError::into_inner);
@@ -151,7 +164,7 @@ struct Slot {
 }
 
 impl Slot {
-    fn register(&mut self, socket: &TcpStream) -> io::Result<()> {
+    fn register(&mut self, socket: &Socket) -> io::Result<()> {
         self.ids.push(self.shared.register(socket)?);
         Ok(())
     }
@@ -180,6 +193,9 @@ pub(super) struct Proxy {
     port: u16,
     shared: Arc<Shared>,
     accept: Option<JoinHandle<()>>,
+    reservation: Option<TcpListener>,
+    #[cfg(all(feature = "one-service-gateway", unix))]
+    private: Option<private::Endpoint>,
 }
 
 impl Proxy {
@@ -189,15 +205,7 @@ impl Proxy {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
         listener.set_nonblocking(true)?;
-        let shared = Arc::new(Shared {
-            gate,
-            active: AtomicUsize::new(0),
-            bytes: AtomicU64::new(0),
-            refused: AtomicU64::new(0),
-            sockets: Mutex::default(),
-            next: AtomicU64::new(0),
-            relays: relays::Relays::default(),
-        });
+        let shared = Shared::new(gate);
         let accept = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
@@ -208,6 +216,9 @@ impl Proxy {
             port,
             shared,
             accept: Some(accept),
+            reservation: None,
+            #[cfg(all(feature = "one-service-gateway", unix))]
+            private: None,
         })
     }
 
@@ -252,13 +263,24 @@ impl Drop for Proxy {
         if let Some(accept) = self.accept.take() {
             let _ = accept.join();
         }
+        drop(self.reservation.take());
     }
 }
 
-fn accept(listener: &TcpListener, shared: &Arc<Shared>) {
+trait Listener {
+    fn next_stream(&self) -> io::Result<Socket>;
+}
+
+impl Listener for TcpListener {
+    fn next_stream(&self) -> io::Result<Socket> {
+        self.accept().map(|(stream, _)| stream.into())
+    }
+}
+
+fn accept(listener: &impl Listener, shared: &Arc<Shared>) {
     while !shared.stopped() {
-        match listener.accept() {
-            Ok((socket, _)) => {
+        match listener.next_stream() {
+            Ok(socket) => {
                 if shared
                     .active
                     .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
@@ -300,13 +322,13 @@ enum Refusal {
     Reply(Reply),
 }
 
-fn serve(mut client: TcpStream, mut slot: Slot) {
+fn serve(mut client: Socket, mut slot: Slot) {
     // Accepted sockets inherit the listener's nonblocking mode on Windows.
     if client.set_nonblocking(false).is_err() || slot.register(&client).is_err() {
         slot.shared.refuse();
         return;
     }
-    let _ = client.set_nodelay(true);
+    let _ = client.set_tcp_nodelay(true);
     let shared = Arc::clone(&slot.shared);
     let opened = negotiate(&mut client, Instant::now() + HANDSHAKE_TIMEOUT).and_then(|destination| {
         let upstream = adopt(&mut slot, open(&shared, &destination)?)?;
@@ -336,14 +358,14 @@ fn serve(mut client: TcpStream, mut slot: Slot) {
     if !shared.gate.keeps(address) {
         return;
     }
-    relay(&shared, &entry, client, upstream);
+    relay(&shared, &entry, client, upstream.into());
 }
 
 /// Registers a new upstream connection so stopping or spending the budget closes it, and
 /// refuses it if either already happened while it was being opened. Registering first means
 /// a later stop or budget close sees it, and checking afterwards covers one that came before.
 fn adopt(slot: &mut Slot, upstream: TcpStream) -> Result<TcpStream, Refusal> {
-    if slot.register(&upstream).is_err() || slot.shared.over_budget() {
+    if slot.register(&socket2::SockRef::from(&upstream)).is_err() || slot.shared.over_budget() {
         return Err(Refusal::Reply(Reply::GeneralFailure));
     }
     Ok(upstream)
@@ -377,7 +399,7 @@ fn open(shared: &Shared, destination: &Destination) -> Result<TcpStream, Refusal
 }
 
 /// Ends the client's side first and reads what it still sends, briefly, before the close.
-fn linger(client: &mut TcpStream) {
+fn linger(client: &mut Socket) {
     let _ = client.shutdown(Shutdown::Write);
     let _ = client.set_read_timeout(Some(LINGER));
     let deadline = Instant::now() + LINGER;
@@ -390,7 +412,7 @@ fn reply_bytes(reply: Reply) -> [u8; 10] {
 }
 
 /// Reads exactly `buffer.len()` bytes before `deadline`, however slowly they trickle in.
-fn read_by(socket: &mut TcpStream, buffer: &mut [u8], deadline: Instant) -> Result<(), Refusal> {
+fn read_by(socket: &mut Socket, buffer: &mut [u8], deadline: Instant) -> Result<(), Refusal> {
     let mut filled = 0;
     while filled < buffer.len() {
         let left = deadline
@@ -408,7 +430,7 @@ fn read_by(socket: &mut TcpStream, buffer: &mut [u8], deadline: Instant) -> Resu
     Ok(())
 }
 
-fn negotiate(socket: &mut TcpStream, deadline: Instant) -> Result<Destination, Refusal> {
+fn negotiate(socket: &mut Socket, deadline: Instant) -> Result<Destination, Refusal> {
     let mut greeting = [0; 2];
     read_by(socket, &mut greeting, deadline)?;
     if greeting[0] != VERSION {
@@ -488,7 +510,7 @@ fn name_destination(name: &[u8]) -> Option<Destination> {
     valid.then(|| Destination::Name(name.to_owned(), 0))
 }
 
-fn relay(shared: &Arc<Shared>, entry: &Arc<Entry>, client: TcpStream, upstream: TcpStream) {
+fn relay(shared: &Arc<Shared>, entry: &Arc<Entry>, client: Socket, upstream: Socket) {
     let (Ok(client_reader), Ok(upstream_writer)) = (client.try_clone(), upstream.try_clone()) else {
         return;
     };
@@ -508,7 +530,7 @@ fn relay(shared: &Arc<Shared>, entry: &Arc<Entry>, client: TcpStream, upstream: 
 }
 
 /// Writes as much of `bytes` as the peer takes and returns how much that was.
-fn write_counted(to: &mut TcpStream, bytes: &[u8]) -> usize {
+fn write_counted(to: &mut Socket, bytes: &[u8]) -> usize {
     let mut written = 0;
     while written < bytes.len() {
         match to.write(&bytes[written..]) {
@@ -522,7 +544,7 @@ fn write_counted(to: &mut TcpStream, bytes: &[u8]) -> usize {
 }
 
 /// Copies until end of input, then half-closes the other side so each direction ends on its own.
-fn copy(shared: &Shared, entry: &Entry, mut from: TcpStream, mut to: TcpStream) {
+fn copy(shared: &Shared, entry: &Entry, mut from: Socket, mut to: Socket) {
     let mut buffer = vec![0; BUFFER_BYTES];
     loop {
         match from.read(&mut buffer) {
@@ -552,6 +574,9 @@ fn copy(shared: &Shared, entry: &Entry, mut from: TcpStream, mut to: TcpStream) 
     let _ = from.shutdown(Shutdown::Both);
     let _ = to.shutdown(Shutdown::Both);
 }
+
+#[cfg(feature = "one-service-gateway")]
+mod private;
 
 mod relays;
 use relays::Entry;
