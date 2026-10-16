@@ -2,7 +2,7 @@
 mod records;
 #[cfg(test)]
 mod tests;
-mod unique_json;
+pub(in crate::cloud_runtime) mod unique_json;
 
 use super::{AllocationId, ControllerId, ProjectId, ProjectIdentity, SharingMode};
 use crate::cloud_runtime::state::Deployment;

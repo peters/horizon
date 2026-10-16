@@ -1,4 +1,5 @@
 //! Durable allocation fence and per-cloud ownership lock.
+pub mod exposure;
 pub mod migration;
 mod replacement;
 pub mod service_admission;

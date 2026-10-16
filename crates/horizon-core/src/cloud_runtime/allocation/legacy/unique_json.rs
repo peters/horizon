@@ -9,7 +9,7 @@ pub(super) fn parse(bytes: &[u8]) -> serde_json::Result<Value> {
     serde_json::from_slice::<UniqueValue>(bytes).map(|value| value.0)
 }
 
-struct UniqueValue(Value);
+pub(in crate::cloud_runtime) struct UniqueValue(pub(in crate::cloud_runtime) Value);
 
 impl<'de> Deserialize<'de> for UniqueValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
