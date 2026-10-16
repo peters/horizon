@@ -94,6 +94,80 @@ fn synthetic_worker_reports_existing_ready_and_exact_close_ends_source() {
     assert!(matches!(attached.status().gateway.state, State::Revoked { .. }));
 }
 
+struct DiagnosticWorker {
+    preparation_fails: bool,
+}
+impl Transport for DiagnosticWorker {
+    fn prepare(&self) -> Command {
+        let mut command = Command::new("sh");
+        let script = if self.preparation_fails {
+            "printf 'private-worker-note\\n'"
+        } else {
+            "printf 'horizon-local-network=1\\n'"
+        };
+        command.args(["-c", script]).env_clear();
+        command
+    }
+    fn hold(&self, _: &Nonce, _: Subnet, _: u16) -> Command {
+        assert!(!self.preparation_fails);
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "printf 'private-key-path private-known-hosts-path\\n' >&2; exit 1",
+            ])
+            .env_clear();
+        command
+    }
+}
+
+#[test]
+fn attachment_status_does_not_publish_preparation_output_or_ssh_diagnostics() {
+    for preparation_fails in [true, false] {
+        let gateway = Arc::new(Gateway::start_private(prepared("100.64.1.2:8123".parse().unwrap())).unwrap());
+        let mut attached = Attached::start(
+            gateway,
+            DiagnosticWorker { preparation_fails },
+            Subnet::containing("100.64.1.2".parse().unwrap(), 30).unwrap(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let diagnostic = loop {
+            let state = attached
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if let local_network::State::Reconnecting { error } = state {
+                break error;
+            }
+            assert!(Instant::now() < deadline, "owned child must report its actual failure");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(diagnostic.contains(if preparation_fails {
+            "private-worker-note"
+        } else {
+            "private-key-path private-known-hosts-path"
+        }));
+        assert_eq!(
+            attached.status().worker,
+            local_network::State::Reconnecting {
+                error: "The approved endpoint's worker connection is reconnecting".into(),
+            }
+        );
+        attached.cancel.cancel();
+        attached.supervisor.take().unwrap().join().unwrap();
+        attached.shared.set(local_network::State::Failed { error: diagnostic });
+        assert_eq!(
+            attached.status().worker,
+            local_network::State::Failed {
+                error: "The approved endpoint's worker connection is unavailable".into(),
+            }
+        );
+    }
+}
+
 struct PreparingWorker(PathBuf);
 impl Transport for PreparingWorker {
     fn prepare(&self) -> Command {

@@ -113,7 +113,16 @@ impl Attached {
     pub fn status(&self) -> StatusSnapshot {
         let gateway = self.gateway.status();
         let worker = if matches!(gateway.state, State::Active) {
-            self.shared.state.lock().unwrap_or_else(PoisonError::into_inner).clone()
+            match &*self.shared.state.lock().unwrap_or_else(PoisonError::into_inner) {
+                local_network::State::Starting => local_network::State::Starting,
+                local_network::State::Active { proxy } => local_network::State::Active { proxy: *proxy },
+                local_network::State::Reconnecting { .. } => local_network::State::Reconnecting {
+                    error: "The approved endpoint's worker connection is reconnecting".into(),
+                },
+                local_network::State::Failed { .. } => local_network::State::Failed {
+                    error: "The approved endpoint's worker connection is unavailable".into(),
+                },
+            }
         } else {
             local_network::State::Failed {
                 error: "The original endpoint admission ended".into(),

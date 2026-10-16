@@ -62,6 +62,8 @@ Drop closes the source and joins its owned supervisor.
 Private socket custody ends with the original gateway.
 
 Cached status separates the gateway state from the actual helper state.
+Attachment failure status uses fixed messages. Worker output and SSH diagnostics
+do not enter that status. The ordinary bridge retains its existing diagnostics.
 Only a usable reply from the unchanged helper supplies its loopback proxy address.
 Local Active and helper Ready do not prove target reachability or public exposure.
 No state from this component recreates access after application restart.
