@@ -39,6 +39,8 @@ run_libs() {
     run_cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody:: || status=$?
     # The shared-encoder sink is opt-in, so the workspace run does not build it.
     run_cargo test --locked -p horizon-chromecast --features encoder || status=$?
+    # Selection and inventory tests also cover the unsupported Windows state path.
+    run_cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths || status=$?
     return "$status"
 }
 
