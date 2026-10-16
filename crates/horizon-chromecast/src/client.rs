@@ -214,10 +214,12 @@ fn run(mut stream: channel::TlsStream, commands: Receiver<Command>, shared: &Sha
     if let Err(error) = io_loop(&mut stream, &commands, shared, events) {
         tracing::debug!(%error, "chromecast connection ended");
     }
+    // Report the end before a send or a wait can fail with Closed, so a caller
+    // that sees Closed never finds the client still open.
+    shared.open.store(false, Ordering::Release);
     // Close the queue before failing waiters: a request registered after the
     // clear below can then no longer be sent, so it cannot wait for a reply.
     drop(commands);
-    shared.open.store(false, Ordering::Release);
     lock(&shared.pending).clear();
     stream.conn.send_close_notify();
     let _ = stream.flush();
