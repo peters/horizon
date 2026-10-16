@@ -52,7 +52,7 @@ fn terminate_with(
         // XNU no longer exposes a zombie's group through getpgid. A fresh positive
         // WNOWAIT result keeps this exact child PID reserved until group cleanup.
         #[cfg(target_os = "macos")]
-        Err(rustix::io::Errno::SRCH) if exit_settled(child)? && mac_group::retained_leader(group)? => (),
+        Err(rustix::io::Errno::SRCH) if settled(|| Ok(exited(child)? && mac_group::retained_leader(group)?))? => (),
         _ => return Err(Error::CleanupUncertain),
     }
     child.stdin.take();
@@ -78,6 +78,9 @@ fn terminate_with(
             Err(rustix::io::Errno::SRCH) => return Ok(()),
             #[cfg(target_os = "macos")]
             Err(rustix::io::Errno::PERM) if group_cannot_execute(group)? => return Ok(()),
+            // XNU also reports EPERM while a killed member is still exiting.
+            #[cfg(target_os = "macos")]
+            Err(rustix::io::Errno::PERM) => (),
             Err(_) => return Err(Error::CleanupUncertain),
             Ok(()) if group_cannot_execute(group)? => return Ok(()),
             Ok(()) => (),
@@ -90,32 +93,34 @@ fn terminate_with(
 }
 
 #[cfg(unix)]
-fn acknowledge_signal(child: &Child, _group: rustix::process::Pid, result: rustix::io::Result<()>) -> Result<()> {
+fn acknowledge_signal(child: &Child, group: rustix::process::Pid, result: rustix::io::Result<()>) -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = group; // Only an XNU EPERM needs the group's state as proof.
     match result {
         Ok(()) => Ok(()),
         Err(rustix::io::Errno::SRCH) if exited(child)? => Ok(()),
         // XNU skips zombies and returns EPERM when no live recipient remains. This is not
         // permission to ignore EPERM for a live child or any executing group member.
         #[cfg(target_os = "macos")]
-        Err(rustix::io::Errno::PERM) if exit_settled(child)? && group_cannot_execute(_group)? => Ok(()),
+        Err(rustix::io::Errno::PERM) if settled(|| Ok(exited(child)? && group_cannot_execute(group)?))? => Ok(()),
         Err(_) => Err(Error::CleanupUncertain),
     }
 }
 
 // XNU refuses getpgid and group signals as soon as a process starts to exit, but
-// WNOWAIT reports the exit only after the teardown, so wait for that exit to settle.
-// A child that is not exiting stays unexited and the caller keeps the uncertainty.
+// WNOWAIT and ps report the exit only after its teardown. Poll the zombie proof until
+// that teardown settles; a group that keeps running stays uncertain at the deadline.
 #[cfg(target_os = "macos")]
-fn exit_settled(child: &Child) -> Result<bool> {
+fn settled(mut proof: impl FnMut() -> Result<bool>) -> Result<bool> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if exited(child)? {
+        if proof()? {
             return Ok(true);
         }
         if Instant::now() >= deadline {
             return Ok(false);
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
