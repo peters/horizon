@@ -11,6 +11,9 @@ description = "Shared cloud allocation identity and coordination contracts"
 [lints]
 workspace = true
 
+[features]
+exposure-gate = []
+
 [dependencies]
 ring.workspace = true
 horizon-cloud = { path = "../horizon-cloud" }
