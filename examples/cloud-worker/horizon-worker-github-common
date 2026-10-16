@@ -406,9 +406,11 @@ class Store:
         """Writes a pending chain again. Returns True when nothing is left in memory only."""
         if self.pending is not None and self.pending['serial'] <= self.cleared():
             self.pending = None
+        # Read first: copies() drops a pending chain that a clear in another process ended.
+        stored = self.copies()
         if self.pending is not None and any(
                 state['serial'] >= self.pending['serial'] and state != self.pending
-                for state, _ in self.copies() if state is not self.pending):
+                for state, _ in stored if state is not self.pending):
             # Another process stored a newer chain meanwhile; the pending one is superseded. A
             # copy equal to it is its own unconfirmed write, which is written again.
             self.pending = None

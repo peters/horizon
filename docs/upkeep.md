@@ -878,8 +878,9 @@ Trusted input:
 
 - The token chain that Horizon gives root on the worker. Horizon never reads it
   from repository files, and an agent cannot set it.
-- The cloud's own repositories, which Horizon names with the chain: for an Upkeep,
-  its list of repositories. Only their owners open packages.
+- The cloud's own repositories, which Horizon names with the chain and changes when
+  the Upkeep's list changes: for an Upkeep, its list of repositories. Only their
+  owners open packages.
 - GitHub's answers about the scopes of the token.
 
 Untrusted input:

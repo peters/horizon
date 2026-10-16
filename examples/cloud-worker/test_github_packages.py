@@ -104,6 +104,49 @@ class StorageTests(ServiceTestCase):
         self.assertFalse(state.exists())
         self.assertIsNone(service.status(self.store)['packages'])
 
+    def test_horizon_changes_the_repositories_without_a_new_chain(self):
+        install(self.store, request(repositories=['acme/api']))
+        self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
+        change = json.dumps({'version': 1, 'repositories': ['other-org/lib', 'acme/web']})
+        held = packages.install(self.store, change, check=lambda token: self.fail('no scope request'))
+        self.assertEqual(held['packages']['repositories'], ['other-org/lib', 'acme/web'])
+        self.assertIs(held['packages']['repositories_change'], True)
+        self.assertEqual(packages.token_for(self.store, 'OTHER-ORG'), (TOKEN, None))
+        self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
+        install(self.store, request(repositories=['acme/api']))
+        packages.install(self.store, json.dumps({'version': 1, 'repositories': ['other-org/lib']}))
+        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
+        # The repositories change with the chain in one state; the chain itself stays the same.
+        chains = packages.store_for(self.store)
+        before = chains.load()[0]['chain']
+        packages.install(self.store, json.dumps({'version': 1, 'repositories': ['acme/api']}))
+        self.assertEqual(chains.load()[0]['chain'], before)
+        self.assertEqual(packages.token_for(self.store, 'acme'), (TOKEN, None))
+        # A change that fails, or that finds no chain, stops whatever was held.
+        for bad in ({'version': 1, 'repositories': []}, {'version': 2, 'repositories': ['a/b']},
+                    {'version': 1, 'repositories': ['not a repository']}):
+            install(self.store)
+            with self.assertRaises(ValueError):
+                packages.install(self.store, json.dumps(bad))
+            self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
+        with self.assertRaises(ValueError):
+            packages.install(self.store, json.dumps({'version': 1, 'repositories': ['a/b']}))
+
+    def test_a_change_ends_a_state_that_the_serving_process_holds_in_memory_only(self):
+        install(self.store, request(repositories=['acme/api']))
+        serving = packages.store_for(self.store)
+        # The serving process kept a newer state that no storage took (as after failed saves).
+        state = serving.load()[0]
+        serving.keep_pending(dict(state, serial=state['serial'] + 2, last_error='transport'))
+        # Horizon's change runs in another process, with its own view of the store.
+        other = service.Store(self.store.persistent, self.store.runtime)
+        packages.install(other, json.dumps({'version': 1, 'repositories': ['other-org/lib']}))
+        with serving.lock():
+            serving.retry_pending()
+        self.assertIsNone(serving.pending)
+        self.assertEqual(packages.token_for(self.store, 'other-org'), (TOKEN, None))
+        self.assertIn('owns none of this cloud', packages.token_for(self.store, 'acme')[1])
+
     def test_malformed_requests_and_other_scopes_are_refused_without_echoing_a_token(self):
         good = json.loads(request())
         cases = [dict(good, version=2), dict(good, version=True), dict(good, extra=1),

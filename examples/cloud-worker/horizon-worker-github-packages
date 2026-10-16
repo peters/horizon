@@ -145,15 +145,20 @@ def only_read(scopes):
 
 def install(store, source, now=time.time, check=None):
     """Stores Horizon's chain in place of any earlier one, after GitHub confirmed that its only
-    scope is read:packages, or removes it for a null chain. Returns what the worker holds now.
-    A failed replacement leaves no chain served: neither the new one nor the earlier one. The
+    scope is read:packages, or removes it for a null chain. A request with only `repositories`
+    changes the repositories of the chain that the worker holds, as when the person changed
+    the Upkeep's list, without a new sign-in. Returns what the worker holds now. A failed
+    replacement or change leaves no chain served: neither the new one nor the earlier one. The
     chain store's own lock serializes this with the renewal."""
     chains = store_for(store)
     # The whole replacement holds the store lock, the scope request included, so a renewal
     # never rotates the chain between the check and the save.
     with chains.lock():
         try:
-            state = parse(json.loads(source), int(now()))
+            value = json.loads(source)
+            if isinstance(value, dict) and set(value) == {'version', 'repositories'}:
+                return {'packages': change_repositories(store, chains, value, int(now()))}
+            state = parse(value, int(now()))
             if state is not None and not only_read((check or scopes_of)(state['chain']['access_token'])):
                 raise ValueError('The package read access token has other scopes than read:packages')
             if state is None:
@@ -166,6 +171,28 @@ def install(store, source, now=time.time, check=None):
                 clear(chains)
             raise
     return {'packages': summary(store)}
+
+
+def change_repositories(store, chains, value, now):
+    """Under the store lock: the held chain with Horizon's new repositories, saved as one state
+    with the chain, or a refusal when the worker holds no chain that serves (the caller then
+    removes what is left)."""
+    if type(value['version']) is not int or value['version'] != 1:
+        raise ValueError('Invalid package read access request')
+    repositories = repositories_of(value['repositories'])
+    state, _ = chains.load()
+    if state is None or state['state'] != 'ok' or state['chain']['refresh_expires_at'] <= now:
+        raise ValueError('This worker holds no package read access to change')
+    # A state that the serving process holds in memory only (a renewal or a metadata save that
+    # no storage took) would be written again later and bring back the old repositories. A new
+    # clear mark ends it in every process first; then the change is saved as one state with the
+    # chain, so readers never see a chain with other repositories. If that pending state held a
+    # renewed chain, the stored chain is the cancelled one and the next renewal ends the
+    # access (bad_refresh_token): less access, never more.
+    common.write_private(common.private_directory(chains.runtime, create=True), common.CLEARED,
+                         json.dumps({'serial': chains.highest(), 'nonce': uuid.uuid4().hex}))
+    chains.save(dict(state, repositories=repositories), retain=False)
+    return summary(store)
 
 
 def remove(store):
@@ -201,7 +228,9 @@ def summary(store):
             'access_expires_at': state['chain']['access_expires_at'],
             'refresh_expires_at': state['chain']['refresh_expires_at'],
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
-            'repositories': list(state.get('repositories', []))}
+            'repositories': list(state.get('repositories', [])),
+            # Horizon may send only new repositories for this chain (change_repositories).
+            'repositories_change': True}
 
 
 def served(store, now=time.time):
