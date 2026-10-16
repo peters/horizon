@@ -327,7 +327,22 @@ fn a_budgeted_inspection_ends_with_its_budget_as_a_transport_failure() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let task = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            // A client that gave up before it connected never comes: end after a guard.
+            listener.set_nonblocking(true).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() > deadline {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fake accept failed: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             let mut input = [0; 4096];
             let _ = stream.read(&mut input);
