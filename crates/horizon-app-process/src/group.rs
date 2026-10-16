@@ -52,7 +52,7 @@ fn terminate_with(
         // XNU no longer exposes a zombie's group through getpgid. A fresh positive
         // WNOWAIT result keeps this exact child PID reserved until group cleanup.
         #[cfg(target_os = "macos")]
-        Err(rustix::io::Errno::SRCH) if exited(child)? && mac_group::retained_leader(group)? => (),
+        Err(rustix::io::Errno::SRCH) if settled(|| Ok(exited(child)? && mac_group::retained_leader(group)?))? => (),
         _ => return Err(Error::CleanupUncertain),
     }
     child.stdin.take();
@@ -78,6 +78,9 @@ fn terminate_with(
             Err(rustix::io::Errno::SRCH) => return Ok(()),
             #[cfg(target_os = "macos")]
             Err(rustix::io::Errno::PERM) if group_cannot_execute(group)? => return Ok(()),
+            // XNU also reports EPERM while a killed member is still exiting.
+            #[cfg(target_os = "macos")]
+            Err(rustix::io::Errno::PERM) => (),
             Err(_) => return Err(Error::CleanupUncertain),
             Ok(()) if group_cannot_execute(group)? => return Ok(()),
             Ok(()) => (),
@@ -90,15 +93,37 @@ fn terminate_with(
 }
 
 #[cfg(unix)]
-fn acknowledge_signal(child: &Child, _group: rustix::process::Pid, result: rustix::io::Result<()>) -> Result<()> {
+fn acknowledge_signal(child: &Child, group: rustix::process::Pid, result: rustix::io::Result<()>) -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = group; // Only an XNU EPERM needs the group's state as proof.
     match result {
         Ok(()) => Ok(()),
+        #[cfg(not(target_os = "macos"))]
         Err(rustix::io::Errno::SRCH) if exited(child)? => Ok(()),
+        #[cfg(target_os = "macos")]
+        Err(rustix::io::Errno::SRCH) if settled(|| exited(child))? => Ok(()),
         // XNU skips zombies and returns EPERM when no live recipient remains. This is not
         // permission to ignore EPERM for a live child or any executing group member.
         #[cfg(target_os = "macos")]
-        Err(rustix::io::Errno::PERM) if exited(child)? && group_cannot_execute(_group)? => Ok(()),
+        Err(rustix::io::Errno::PERM) if settled(|| Ok(exited(child)? && group_cannot_execute(group)?))? => Ok(()),
         Err(_) => Err(Error::CleanupUncertain),
+    }
+}
+
+// XNU refuses getpgid and group signals as soon as a process starts to exit, but
+// WNOWAIT and ps report the exit only after its teardown. Poll the zombie proof until
+// that teardown settles; a group that keeps running stays uncertain at the deadline.
+#[cfg(target_os = "macos")]
+fn settled(mut proof: impl FnMut() -> Result<bool>) -> Result<bool> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if proof()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -188,6 +213,42 @@ mod tests {
         }
         assert!(exited(&child).unwrap());
         terminate(&mut child).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_settling_proof_is_polled_until_it_holds_or_its_deadline_passes() {
+        let mut polls = 0;
+        assert_eq!(
+            settled(|| {
+                polls += 1;
+                Ok(polls == 3)
+            }),
+            Ok(true)
+        );
+        assert_eq!(polls, 3);
+        assert_eq!(settled(|| Err(Error::CleanupUncertain)), Err(Error::CleanupUncertain));
+        let started = Instant::now();
+        assert_eq!(settled(|| Ok(false)), Ok(false));
+        assert!(started.elapsed() >= Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_leader_that_is_still_exiting_is_cleaned_once_its_exit_settles() {
+        use std::io::Read;
+        // Output EOF arrives during the leader's exit teardown. On XNU about one
+        // in a hundred of these lands before waitid can report the exit.
+        for _ in 0..200 {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "exit 1"])
+                .stdout(std::process::Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let mut output = Vec::new();
+            child.stdout.take().unwrap().read_to_end(&mut output).unwrap();
+            terminate(&mut child).unwrap();
+        }
     }
 
     #[test]

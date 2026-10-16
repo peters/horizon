@@ -88,9 +88,7 @@ fn parse_state(bytes: &[u8], group: i32) -> Result<State> {
         if fields.len() != 3
             || !fields[0].parse::<u32>().is_ok_and(|pid| pid > 0)
             || fields[1].parse::<i32>().ok() != Some(group)
-            || !fields[2]
-                .bytes()
-                .all(|byte| byte.is_ascii_alphabetic() || b"<+N".contains(&byte))
+            || !(flags(fields[2]) || exiting(fields[2]))
         {
             return Err(Error::CleanupUncertain);
         }
@@ -99,6 +97,20 @@ fn parse_state(bytes: &[u8], group: i32) -> Result<State> {
         leader_zombie |= fields[0].parse::<i32>().ok() == Some(group) && zombie;
     }
     Ok(State { stopped, leader_zombie })
+}
+
+fn flags(state: &str) -> bool {
+    state
+        .bytes()
+        .all(|byte| byte.is_ascii_alphabetic() || b"<+N".contains(&byte))
+}
+
+/// XNU shows a member that is still tearing down as `?E`, an unknown state with the
+/// exiting flag, until it is a zombie. It is not stopped yet, and never proof.
+fn exiting(state: &str) -> bool {
+    state
+        .strip_prefix('?')
+        .is_some_and(|rest| rest.contains('E') && flags(rest))
 }
 
 #[cfg(test)]
@@ -119,12 +131,15 @@ mod tests {
     fn only_positive_zombie_rows_can_acknowledge_the_exact_group() {
         assert_eq!(parse(b"123 123 Z\n124 123 Z+\n", 123), Ok(true));
         assert_eq!(parse(b"123 123 Z\n124 123 S\n", 123), Ok(false));
+        assert_eq!(parse(b"123 123 Z\n124 123 ?E\n", 123), Ok(false));
+        assert!(!parse_state(b"123 123 ?E\n", 123).unwrap().leader_zombie);
         for bytes in [
             b"".as_slice(),
             b"123 456 Z\n",
             b"123 123\n",
             b"0 123 Z\n",
             b"123 123 ?\n",
+            b"123 123 ?S\n",
         ] {
             assert_eq!(parse(bytes, 123), Err(Error::CleanupUncertain));
         }

@@ -778,7 +778,10 @@ mod tests {
             let binary = if stage == "readiness" {
                 script(b"#!/bin/sh\nexit 0\n")
             } else {
-                fixture()
+                // The journal stage drops the output pipe before the fixture writes. Ignore
+                // SIGPIPE so the group stays alive for the stop below: XNU refuses to signal
+                // a group that holds only zombies.
+                script(b"#!/bin/sh\ntrap '' PIPE\necho 'You can now access your local servers'\nexec sleep 60\n")
             };
             let result = Tunnel::start(
                 binary,
