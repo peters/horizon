@@ -301,14 +301,15 @@ jobs:
     # pass runs the horizon-ui tests, so `all` skips the plain ui pass; the
     # Linux ui job tests the build without speech.
     timeout-minutes: ${{ matrix.timeout_minutes || 35 }}
-    # On a pull request that cannot affect speech (see Detect changed inputs),
-    # the Linux speech job skips its steps instead of the whole job: a
-    # job-level `if` cannot read the matrix, and a separate job would change
-    # the job id in the shared linux-test cache key. Clippy still compiles the
-    # speech code on every pull request. A push never skips, because this job
-    # saves the Linux cache on main. Only an explicit false skips, so a failed
-    # detection still runs the tests. Every step that this leg runs checks
-    # the flag; a new one must too (Verify CI change detection checks this).
+    # On a pull request that changes no speech input, horizon-ui included
+    # (see Detect changed inputs), the Linux speech job skips its steps
+    # instead of the whole job: a job-level `if` cannot read the matrix, and
+    # a separate job would change the job id in the shared linux-test cache
+    # key. Clippy still compiles the speech code on every pull request. A
+    # push never skips, because this job saves the Linux cache on main. Only
+    # an explicit false skips, so a failed detection still runs the tests.
+    # Every step that this leg runs checks the flag; a new one must too
+    # (Verify CI change detection checks this).
     env:
       HORIZON_CI_SKIP_SPEECH: ${{ github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && needs.changes.outputs.speech_inputs == 'false' }}
     strategy:

@@ -25,15 +25,18 @@
 # path, every push and every manual dispatch keep it true, so main always
 # runs the whole matrix and keeps the build caches warm.
 #
-# `speech_inputs` is false only for a pull request that changes nothing the
-# Linux speech test job reads beyond what the other jobs test: no file that
-# names the speech feature (`feature = "speech..."` or CARGO_FEATURE_SPEECH)
-# before or after the change, nothing in a speech, dictation or transcribe
-# module, no Cargo manifest, lock file, Cargo configuration or toolchain, and
-# not the workflow or scripts that run that job. The vendored speech C++ tree
-# comes from the transcribe-cpp crate, so it changes only with a manifest or
-# the lock file. Every push and dispatch keep it true, because the speech job
-# on main saves the Linux test cache.
+# `speech_inputs` is false only for a pull request that changes none of the
+# inputs of the Linux speech test job: nothing in horizon-ui (the speech job
+# runs that crate's whole test suite with the feature on, and its speech-only
+# tests drive ordinary app code), no file that names the speech feature
+# (`feature = "speech..."` or CARGO_FEATURE_SPEECH) before or after the
+# change, nothing in a speech, dictation or transcribe module, no Cargo
+# manifest, lock file, Cargo configuration or toolchain, and not the workflow
+# or scripts that run that job. The vendored speech C++ tree comes from the
+# transcribe-cpp crate, so it changes only with a manifest or the lock file.
+# A change in another crate can still break a speech-only horizon-ui test;
+# the speech job on the push to main finds it. Every push and dispatch keep
+# it true, because the speech job on main saves the Linux test cache.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -96,15 +99,11 @@ release_inputs=false
 macos_release_inputs=false
 rust_inputs=false
 speech_inputs=false
-declare -A speech_gated=()
+speech_gated=
 if [ "$event_name" != "pull_request" ]; then
   rust_inputs=true
   speech_inputs=true
-elif gated=$(speech_gated_files); then
-  while IFS= read -r path; do
-    [ -z "$path" ] || speech_gated[$path]=1
-  done <<< "$gated"
-else
+elif ! speech_gated=$(speech_gated_files); then
   speech_inputs=true
 fi
 
@@ -127,15 +126,17 @@ while IFS= read -r path; do
     rust_inputs=true
   fi
   case "$path" in
-    crates/*speech*|crates/*dictat*|crates/*transcrib*|crates/horizon-ui/build.rs \
+    crates/horizon-ui/*|crates/*speech*|crates/*dictat*|crates/*transcrib* \
       |Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|rust-toolchain.toml|.cargo/* \
       |.github/workflows/ci.yml|scripts/ci-cargo-test-shard.sh|scripts/install-ci-ubuntu-dependencies.sh)
       speech_inputs=true
       ;;
   esac
-  if [ -n "$path" ] && [ -n "${speech_gated[$path]:-}" ]; then
-    speech_inputs=true
-  fi
+  # A whole-line match in the newline-separated list; quoting keeps the path
+  # literal in the pattern.
+  case $'\n'"$speech_gated"$'\n' in
+    *$'\n'"$path"$'\n'*) [ -z "$path" ] || speech_inputs=true ;;
+  esac
 done <<< "$changed_paths"
 
 emit "$run_snap_build" "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs"

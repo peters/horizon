@@ -202,7 +202,8 @@ class DetectionTests(unittest.TestCase):
 
     def test_pull_request_speech_paths_run_the_speech_tests(self):
         for paths in [["crates/horizon-ui/src/app/speech/mod.rs"],
-                      ["crates/horizon-ui/src/app/settings/speech/model_info.rs"],
+                      ["crates/horizon-ui/src/app/panels/mod.rs"],
+                      ["crates/horizon-ui/README.md"],
                       ["crates/horizon-core/src/speech_config.rs"],
                       ["crates/horizon-core/src/dictation.rs"],
                       ["crates/horizon-x/src/transcribe/mod.rs"],
@@ -218,7 +219,7 @@ class DetectionTests(unittest.TestCase):
                 self.assertEqual(self.speech_inputs(), "true")
 
     def test_pull_request_without_speech_inputs_skips_the_speech_tests(self):
-        for paths in [["crates/horizon-ui/src/app/panels/mod.rs"],
+        for paths in [["crates/horizon-core/src/board.rs"],
                       ["crates/horizon-core/src/transcript.rs"],
                       ["crates/horizon-cloud/src/lib.rs", "docs/speech.md"],
                       ["assets/plugins/codex/skills/horizon-speech/SKILL.md"],
@@ -229,7 +230,7 @@ class DetectionTests(unittest.TestCase):
                 self.assertEqual(self.speech_inputs(), "false")
 
     def test_a_file_that_names_the_speech_feature_runs_the_speech_tests(self):
-        path = "crates/horizon-ui/src/app/lifecycle.rs"
+        path = "crates/horizon-core/src/panel.rs"
         for before, after in [
             ('#[cfg(feature = "speech")]\nfn a() {}\n', '#[cfg(feature = "speech")]\nfn b() {}\n'),
             ("fn a() {}\n", '#[cfg(all(test, feature="speech"))]\nfn a() {}\n'),
@@ -244,13 +245,24 @@ class DetectionTests(unittest.TestCase):
                 self.assertEqual(self.speech_inputs(), "true")
 
     def test_a_speech_file_elsewhere_does_not_mark_other_paths(self):
-        self.base = self.write("crates/horizon-ui/src/app/lifecycle.rs",
+        self.base = self.write("crates/horizon-core/src/panel.rs",
                                '#[cfg(feature = "speech")]\nfn a() {}\n')
-        self.write("crates/horizon-ui/src/app/canvas.rs", "// speech is opt-in\nfn c() {}\n")
+        self.write("crates/horizon-core/src/board.rs", "// speech is opt-in\nfn c() {}\n")
         self.assertEqual(self.speech_inputs(), "false")
 
+    def test_unusual_paths_that_name_the_speech_feature_run_the_speech_tests(self):
+        for path in ['crates/horizon-core/src/we"ird].rs', "crates/horizon-core/src/$(x)\u00e9.rs",
+                     "crates/horizon-core/src/back\\slash [x]*.rs", "crates/horizon-core/src/s p.rs"]:
+            with self.subTest(path=path):
+                self.setUp()
+                self.base = self.write(path, '#[cfg(feature = "speech")]\nfn a() {}\n')
+                self.write(path, "fn a() {}\n")
+                self.assertEqual(self.speech_inputs(), "true")
+                self.write("crates/horizon-core/src/other [x]*.rs", "fn o() {}\n")
+                self.assertEqual(self.speech_inputs(base="HEAD~1"), "false")
+
     def test_pushes_dispatches_and_unknown_bases_run_the_speech_tests(self):
-        self.commit("crates/horizon-ui/src/app/panels/mod.rs")
+        self.commit("crates/horizon-core/src/board.rs")
         self.assertEqual(self.detect(event="push")["speech_inputs"], "true")
         self.assertEqual(self.detect(event="workflow_dispatch")["speech_inputs"], "true")
         self.assertEqual(self.speech_inputs(base=ZERO_SHA), "true")
