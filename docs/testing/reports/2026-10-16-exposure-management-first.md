@@ -133,3 +133,61 @@ digests, metadata-only key bindings, pinned SSH observations, SDK intent/action
 journal, raw test output, supervisor result, exact absence reads and baseline
 comparison. This public report omitted account details, resource IDs, addresses,
 private paths and key material.
+
+## 7. Final post-review check
+
+The fixed candidate `89a390725ccbad6958f809f24ceeeb0f16d5ebfe`, based on
+merged Main `b7122fd7d38a785c1147d0b9a8e3dd5308f52862`, passed the final
+provider check. The first-run header and sections above remain historical
+first-reviewable evidence. The fixed candidate retains requested create rules
+before fallible action journaling, rejects fresh cleanup rule or SSH drift,
+and latches failed current-state verification into cleanup-only uncertainty.
+
+The final normal `cloud_deploy` executable had `profile.test=false` and SHA-256
+`884c9156622d866ece45c575e37c80587b0a7606a38441d83efb68f2b8d82589`.
+The enabled Core test executable had SHA-256
+`d7b191c83f985a953bc929ea433ac798f6ef5562e8d1e1d20a4831017348091d`.
+Both were frozen from the qualified current source. No executable was overlaid
+on the worker. The fresh original normal deployment used the same immutable
+image and resource shape as the first run, with Tailnet absent and SSH 22 only.
+It reached Ready in about 120 seconds.
+
+The actual consumer passed once in **34.44 seconds** with no stderr. Its
+original-client checks covered continued pinned SSH, sibling contributions,
+removal, same-firewall reuse, retirement and refusal to reopen. The exclusive
+SDK journal retained 23 complete rows, including intent and returned action IDs
+before waits. The original child was joined before fallback reconciliation.
+
+Normal deletion exited zero about **276 seconds** after deployment started.
+Fresh provider reads confirmed exact 404 responses for the five paid resources
+and the original firewall. All seven paginated inventory ID sets equalled the
+baseline. The original deployment, SDK child and supervisor were absent, with
+no member left in their process groups. Both exact local image-preflight
+containers were also absent. No Auth, Tailnet, separate guest, overlay, Gate or
+Native operation ran. The final window used a USD 1 cap and the same 20-minute
+cleanup and 30-minute hard bounds. No invoice or exact remaining budget was
+claimed.
+
+Current local coverage comprised 87 frozen products: default **7,048 passes**
+including 13 host complements, speech **2,416**, enabled Core **2,219**,
+gateway contract **113**, Owner-custody contract **three**, and freshly enabled
+SDK **520 plus two doctests**. Default SDK passed 489 tests and two doctests.
+Default runtime coverage combined 18 freshly executed roots with 45 roots
+whose actual executable, features, consumed inputs and environment matched.
+Worker Python coverage retained 730 passes and eight local root-only
+non-applicable cases under an exact 387-input comparison. Required tiers and
+repository checks passed; inherited pedantic findings remained advisory.
+
+Two local equipment assertions refused while preparing this final window.
+Offer selection initially inspected the empty primary-provider projection;
+the retained normal output's configured-provider comparison supplied the
+actual Hetzner offer without a repeated request. A later reporting assertion
+incorrectly equated the SSH server's container address with the external
+endpoint. The same successful pinned SSH output met the actual consumer's
+valid-address and port contract; no SSH retry or product change was needed.
+These records remain separate from the passing SDK result.
+
+This final check qualifies original-client SDK management, not public exposure,
+Gate traffic, provider source preservation, RunPod, Funnel or Native approval.
+The final report-only commit does not change the executed Rust, configuration,
+embedded guidance or fixture inputs.
