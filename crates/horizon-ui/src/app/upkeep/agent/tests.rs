@@ -240,7 +240,9 @@ fn status_returns_only_parsed_fields_and_exact_pull_request_pages() {
         "runs": [{"started_at": "2026-10-13T10:00:00Z", "outcome": "done", "merged": 2}],
         "pull_requests": [
             {"repository": "acme/web", "number": 7, "title": "Bump x", "url": "https://github.com/acme/web/pull/7", "state": "ready", "checks": "passed", "secret": "dropped"},
-            {"repository": "acme/web", "number": 8, "url": "https://evil.example/acme/web/pull/8", "state": "unknown_state"}
+            {"repository": "acme/web", "number": 8, "url": "https://evil.example/acme/web/pull/8", "state": "unknown_state"},
+            {"repository": "acme/web", "number": 9, "state": "blocked", "needs": "tooling"},
+            {"repository": "acme/web", "number": 10, "state": "blocked"}
         ],
         "activity": [{"at": "2026-10-13T10:01:00Z", "text": "merged #7"}],
         "extra": {"anything": true}
@@ -259,6 +261,8 @@ fn status_returns_only_parsed_fields_and_exact_pull_request_pages() {
     assert!(pulls[0].get("secret").is_none());
     assert_eq!(pulls[1]["url"], Value::Null);
     assert_eq!(pulls[1]["state"], "other");
+    let needs: Vec<&Value> = pulls.iter().map(|pr| &pr["needs"]).collect();
+    assert_eq!(needs, [&Value::Null, &Value::Null, &json!("tooling"), &json!("person")]);
     assert!(value.get("extra").is_none());
     // A missing or broken document gives a fixed text, never the parser's quote of it.
     let missing = status("upkeep-test-no-such-cloud", &config(&["acme/web"]), None);

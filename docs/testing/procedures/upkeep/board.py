@@ -17,8 +17,8 @@ def iso(at):
     return at.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def pull_request(repository, number, title, state, checks, note, updated_at):
-    return {
+def pull_request(repository, number, title, state, checks, note, updated_at, needs=None):
+    pull = {
         "repository": repository,
         "number": number,
         "title": title,
@@ -29,6 +29,9 @@ def pull_request(repository, number, title, state, checks, note, updated_at):
         "note": note,
         "updated_at": iso(updated_at),
     }
+    if needs:
+        pull["needs"] = needs
+    return pull
 
 
 def status(now):
@@ -61,7 +64,7 @@ def status(now):
         pull_request("peters/horizon", 1516, "chore(deps): bump comrak from 0.55.0 to 0.56.0", "ready", "passed", "Merges in the next run", hour),
         pull_request("acme/web", 409, "Bump the eslint group with 3 updates", "fixing", "failed", "A lint rule changed; fixing on the branch", hour),
         pull_request("acme/api", 88, "Bump serde from 1.0.226 to 1.0.228", "waiting_checks", "running", "", hour),
-        pull_request("acme/api", 86, "Bump tokio from 1.47.1 to 1.48.0", "blocked", "passed", "Needs a deployed preview that CI skips for bots", hour - dt.timedelta(hours=2)),
+        pull_request("acme/api", 86, "Bump tokio from 1.47.1 to 1.48.0", "blocked", "passed", "needs UI acceptance: no desktop", hour - dt.timedelta(hours=2), "tooling"),
         pull_request("acme/mobile", 31, "Bump the androidx group with 2 updates", "needs_review", "passed", "The repository requires a review from a person", hour - dt.timedelta(hours=5)),
         pull_request("acme/docs", 17, "Bump actions/checkout from 5 to 6", "merged", "passed", "", hour),
         pull_request("acme/web", 401, "Bump typescript from 5.9.2 to 5.9.3", "merged", "passed", "", hour - dt.timedelta(days=1)),
