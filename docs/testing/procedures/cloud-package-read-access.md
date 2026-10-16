@@ -13,10 +13,12 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that a deployment asks for the cloud's package read access
-right after its GitHub access, that only a chain with exactly `read:packages`
-reaches the root service of the worker, and that an agent on the worker can then
-read the versions of a private NuGet package. It also proves that Skip continues
-the deployment with a clear reason.
+right after its GitHub access, that the chain with `read:packages` reaches the
+root service of the worker, and that an agent on the worker can then read the
+versions of a private NuGet package. It also proves that Skip continues the
+deployment with a clear reason, and that **Connect GitHub again** asks again. Unit
+tests cover the refusal of a broader scope, cancellation and a worker image
+without package read access.
 
 ## 2. Applicability
 
@@ -122,10 +124,25 @@ the deployment with a clear reason.
 
    Result: The card does not ask again. The output has the line of step 1.
 
+4. Click **Connect GitHub again** on the card of this cloud.
+
+   Result: After the cloud's GitHub step, the card shows the package code again.
+   Click **Skip: package checks need a person**.
+
+### 6.4 D03 — An organization that limits OAuth apps
+
+1. Do this task only when an organization `RESTRICTED` that limits OAuth apps and
+   did not grant Horizon owns a repository of a test cloud. Start that cloud and
+   authorize the package code.
+
+   Result: The deployment output names `RESTRICTED` and the page
+   `https://github.com/organizations/RESTRICTED/settings/oauth_application_policy`.
+   The line about the worker ends with `except RESTRICTED`.
+
 ## 7. Pass criteria
 
 - Lane U shows `test result: ok`.
-- D01 and D02 give each result.
+- D01 and D02 give each result. D03 gives its result when it applies.
 - No evidence shows a token.
 
 ## 8. Cleanup

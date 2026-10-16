@@ -601,8 +601,11 @@ broader grant: the worker then gets nothing. Horizon gives the token chain to th
 root GitHub service of the worker over SSH standard input, never in a command line,
 a log or the cloud board, and keeps no copy. The worker renews the chain with the
 OAuth app's client ID alone, also while this computer is off. No agent gets the
-token: the service adds it only to reads of the NuGet and npm packages of the
-owners of the cloud's repositories, as
+token. With the chain, Horizon names the cloud's own repositories: its checkouts
+on GitHub (the primary and the same-worker siblings) and, for an Upkeep, its
+list. The service adds the token only to reads of the NuGet and npm packages of
+the owners of those repositories, never of a repository that an agent asked for,
+as
 [the trust boundary of the package token](upkeep.md#trust-boundary-of-the-package-token)
 tells. An agent reads them with `gh`, for example
 `gh api /orgs/OWNER/packages/nuget/NAME/versions`.
@@ -621,7 +624,8 @@ members can ask for it on the app's page,
 
 What you grant: the token reads every package that your account can read, of every
 type and owner. The worker limits its use to NuGet and npm package reads of the
-owners of the cloud's repositories. Only the root service of the worker holds it.
+owners of the cloud's own repositories, and removes other repositories from the
+replies. Only the root service of the worker holds it.
 
 To end the access:
 

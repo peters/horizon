@@ -1,7 +1,6 @@
 //! REST calls made with a user access token: who the token acts as, and which
 //! repositories the app may reach for that user. A repository's size, and whether a
-//! public app has a slug, can also be read without one. Also the scopes and the expiry day
-//! of a classic personal access token.
+//! public app has a slug, can also be read without one. Also the scopes of an OAuth token.
 use super::{Client, Error, Result, Secret, read};
 use serde::Deserialize;
 use std::fmt::Write as _;
@@ -300,24 +299,14 @@ pub fn valid_repository(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 
-/// What GitHub tells about a classic personal access token: the scopes it has and the day
-/// it runs out. GitHub's package API and its `NuGet` registry accept only such a token, so
-/// Cloud settings checks a package token with [`Client::token_scopes`] before it saves it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TokenScopes {
-    /// The scopes that GitHub names, or `None` when its answer names none at all: the token
-    /// is not a classic one.
-    pub scopes: Option<Vec<String>>,
-    /// The day the token runs out (`YYYY-MM-DD`, UTC), or `None` for a token without one.
-    pub expires_on: Option<String>,
-}
-
 impl Client {
-    /// The scopes of `token` and the day it runs out, from the headers of GitHub's answer for
-    /// the account the token acts as.
+    /// The scopes GitHub names for an OAuth token (`X-OAuth-Scopes` of its answer for the
+    /// account the token acts as), or `None` when it names none at all. The package read
+    /// access of a cloud checks that its token has exactly `read:packages` before a worker
+    /// gets it.
     /// # Errors
     /// Transport failures, or a refused token.
-    pub fn token_scopes(&self, token: &Secret) -> Result<TokenScopes> {
+    pub fn token_scopes(&self, token: &Secret) -> Result<Option<Vec<String>>> {
         let auth = bearer(token);
         let response = self
             .agent
@@ -331,32 +320,19 @@ impl Client {
             401 => return Err(Error::Revoked),
             status => return Err(Error::Refused(format!("HTTP {status}"))),
         }
-        let header = |name: &str| response.headers().get(name).and_then(|value| value.to_str().ok());
-        Ok(TokenScopes {
-            scopes: header("x-oauth-scopes").map(|value| {
+        Ok(response
+            .headers()
+            .get("x-oauth-scopes")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| {
                 value
                     .split(',')
                     .map(str::trim)
                     .filter(|scope| !scope.is_empty())
                     .map(str::to_owned)
                     .collect()
-            }),
-            expires_on: header("github-authentication-token-expiration").and_then(day),
-        })
+            }))
     }
-}
-
-/// The day of GitHub's expiry header, such as `2026-10-23 12:00:00 UTC`.
-fn day(value: &str) -> Option<String> {
-    let day = value.get(..10)?;
-    let valid = day.bytes().enumerate().all(|(index, byte)| {
-        if index == 4 || index == 7 {
-            byte == b'-'
-        } else {
-            byte.is_ascii_digit()
-        }
-    });
-    valid.then(|| day.to_owned())
 }
 
 #[cfg(test)]
@@ -399,46 +375,32 @@ mod scope_tests {
     }
 
     #[test]
-    fn scopes_and_the_expiry_day_come_from_the_headers() {
-        let (client, heads) = answer(
-            200,
-            "X-OAuth-Scopes: read:packages\r\nGitHub-Authentication-Token-Expiration: 2026-10-23 12:00:00 UTC\r\n",
-        );
-        let found = client.token_scopes(&Secret::new("ghp_synthetic".into())).unwrap();
-        assert_eq!(found.scopes, Some(vec!["read:packages".to_owned()]));
-        assert_eq!(found.expires_on.as_deref(), Some("2026-10-23"));
+    fn scopes_come_from_the_oauth_header() {
+        let (client, heads) = answer(200, "X-OAuth-Scopes: read:packages\r\n");
+        let found = client.token_scopes(&Secret::new("gho_synthetic".into())).unwrap();
+        assert_eq!(found, Some(vec!["read:packages".to_owned()]));
         let head = heads.recv().unwrap();
         assert!(head.starts_with("GET /user HTTP/1.1"));
-        assert!(head.contains("Bearer ghp_synthetic"));
-
+        assert!(head.contains("Bearer gho_synthetic"));
         let (client, _) = answer(200, "X-OAuth-Scopes: repo, read:packages,  workflow\r\n");
-        let found = client.token_scopes(&Secret::new("ghp_synthetic".into())).unwrap();
         assert_eq!(
-            found.scopes.unwrap(),
-            ["repo", "read:packages", "workflow"].map(str::to_owned)
+            client.token_scopes(&Secret::new("gho_synthetic".into())).unwrap(),
+            Some(["repo", "read:packages", "workflow"].map(str::to_owned).to_vec())
         );
-        assert_eq!(found.expires_on, None);
-
         let (client, _) = answer(200, "X-OAuth-Scopes: \r\n");
         assert_eq!(
-            client
-                .token_scopes(&Secret::new("ghp_synthetic".into()))
-                .unwrap()
-                .scopes,
+            client.token_scopes(&Secret::new("gho_synthetic".into())).unwrap(),
             Some(Vec::new())
         );
-        let (client, _) = answer(200, "GitHub-Authentication-Token-Expiration: soon\r\n");
-        let found = client
-            .token_scopes(&Secret::new("github_pat_synthetic".into()))
-            .unwrap();
-        assert_eq!((found.scopes, found.expires_on), (None, None));
+        let (client, _) = answer(200, "");
+        assert_eq!(client.token_scopes(&Secret::new("ghu_synthetic".into())).unwrap(), None);
     }
 
     #[test]
     fn a_refused_token_is_an_error() {
         let (client, _) = answer(401, "");
         assert_eq!(
-            client.token_scopes(&Secret::new("ghp_synthetic".into())),
+            client.token_scopes(&Secret::new("gho_synthetic".into())),
             Err(Error::Revoked)
         );
         let (client, _) = answer(403, "");

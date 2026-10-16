@@ -24,6 +24,8 @@ pub const SCOPE: &str = "read:packages";
 pub use publish::APP_PAGE;
 const STATUS: &str = "horizon-worker-github status 2>/dev/null || true";
 const INSTALL: &str = "horizon-worker-github packages";
+/// The most repositories the worker's root service takes with a chain.
+const MAX_REPOSITORIES: usize = 50;
 /// What a skip or a failed sign-in means for the cloud, also on the Upkeep board.
 const WITHOUT: &str = "This cloud has no package read access, so checks of private package versions need a person.";
 
@@ -42,34 +44,42 @@ enum Held {
     Current,
 }
 
-/// The worker's package read access and the owners of the cloud's repositories.
-fn held(output: &str) -> (Held, BTreeSet<String>) {
+/// The worker's package read access, from its GitHub service's `status`.
+fn held(output: &str) -> Held {
     let Some(value) = output
         .lines()
         .rev()
         .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
     else {
-        return (Held::Unsupported, BTreeSet::new());
+        return Held::Unsupported;
     };
-    let owners = value
-        .get("repositories")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|held| {
-            held.get("repository")
-                .or(Some(held))
-                .and_then(serde_json::Value::as_str)
-        })
-        .filter_map(|name| name.split_once('/').map(|(owner, _)| owner.to_ascii_lowercase()))
-        .collect();
-    let state = match value.get("packages") {
+    match value.get("packages") {
         None => Held::Unsupported,
         Some(serde_json::Value::Null) => Held::Missing,
         Some(packages) if packages.get("state").and_then(serde_json::Value::as_str) == Some("ok") => Held::Current,
         Some(_) => Held::Missing,
-    };
-    (state, owners)
+    }
+}
+
+/// The cloud's own repositories, which alone open packages on the worker: its checkouts on
+/// GitHub (the primary and the same-worker siblings) and, for an Upkeep, its list. Never a
+/// repository that an agent asked for. At most [`MAX_REPOSITORIES`], in lowercase.
+fn own_repositories(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<String>> {
+    let mut names: Vec<String> = super::grants(state, runner)?
+        .into_iter()
+        .map(|grant| grant.repository)
+        .collect();
+    if let Ok(config) = crate::upkeep::worker::load(&state.cloud_id) {
+        names.extend(config.repositories.iter().map(|name| name.to_ascii_lowercase()));
+    }
+    let mut seen = HashSet::new();
+    names.retain(|name| horizon_cloud::github::valid_repository(name) && seen.insert(name.clone()));
+    if names.len() > MAX_REPOSITORIES {
+        return Err(Error::Invalid(
+            "A cloud gives package read access for at most 50 repositories",
+        ));
+    }
+    Ok(names)
 }
 
 /// Gives the worker package read access when it holds none: one device sign-in for the cloud,
@@ -95,12 +105,22 @@ pub fn configure(
     );
     runner.cancel.check()?;
     let Ok(output) = status else {
+        say("the worker's package read access could not be read, so Horizon did not ask for it.");
         return Ok(());
     };
-    let (worker, owners) = held(&output);
-    if worker != Held::Missing || owners.is_empty() {
+    if held(&output) != Held::Missing {
         return Ok(());
     }
+    let repositories = match own_repositories(state, runner) {
+        Ok(repositories) if !repositories.is_empty() => repositories,
+        Ok(_) => return Ok(()),
+        Err(error) => {
+            runner.cancel.check()?;
+            say(&error.to_string());
+            say(WITHOUT);
+            return Ok(());
+        }
+    };
     let cloud_id = &state.cloud_id;
     if renew {
         SKIPPED.lock().map(|mut skipped| skipped.remove(cloud_id)).ok();
@@ -129,19 +149,35 @@ pub fn configure(
             return Ok(());
         }
     };
+    let owners: BTreeSet<&str> = repositories
+        .iter()
+        .filter_map(|name| name.split_once('/').map(|(owner, _)| owner))
+        .collect();
+    let mut closed = Vec::new();
     for owner in owners {
-        if client.packages_restricted(&chain.access_token, &owner).unwrap_or(false) {
-            say(&format!(
-                "the organization {owner} limits OAuth apps, so agents cannot read its packages until an owner of \
-                 {owner} grants Horizon at https://github.com/organizations/{owner}/settings/oauth_application_policy \
-                 (others can ask for it at {APP_PAGE})."
-            ));
+        match client.packages_restricted(&chain.access_token, owner) {
+            Ok(false) => {}
+            Ok(true) => {
+                closed.push(owner);
+                say(&format!(
+                    "the organization {owner} limits OAuth apps, so agents cannot read its packages until an owner \
+                     of {owner} grants Horizon at \
+                     https://github.com/organizations/{owner}/settings/oauth_application_policy (others can ask for \
+                     it at {APP_PAGE})."
+                ));
+            }
+            Err(error) => say(&format!("could not check whether {owner} limits OAuth apps: {error}")),
         }
     }
-    let installed = install(&chain, connection, runner);
+    let installed = install(&chain, &repositories, connection, runner);
     runner.cancel.check()?;
-    if installed.is_ok() {
+    if installed.is_ok() && closed.is_empty() {
         say("the worker can now read the packages of this cloud's owners for its agents.");
+    } else if installed.is_ok() {
+        say(&format!(
+            "the worker can now read the packages of this cloud's owners for its agents, except {}.",
+            closed.join(", ")
+        ));
     } else {
         say("the worker could not store the package read access.");
         say(WITHOUT);
@@ -178,10 +214,10 @@ fn sign_in(client: &Client, cloud_id: &str, runner: &Runner<'_>) -> std::result:
         Err(signin::Ended::Error(error)) => return Err(Ended::Cancelled(error)),
     };
     runner.cancel.check().map_err(|error| Ended::Cancelled(error.into()))?;
-    let found = client
+    let scopes = client
         .token_scopes(&chain.access_token)
         .map_err(|error| Ended::Reason(error.to_string()))?;
-    check_scopes(found.scopes.as_deref())?;
+    check_scopes(scopes.as_deref())?;
     Ok(chain)
 }
 
@@ -203,6 +239,7 @@ fn check_scopes(scopes: Option<&[String]>) -> std::result::Result<(), Ended> {
 struct Payload<'a> {
     version: u8,
     client_id: &'a str,
+    repositories: &'a [String],
     chain: PayloadChain<'a>,
 }
 
@@ -214,8 +251,9 @@ struct PayloadChain<'a> {
     refresh_expires_at: u64,
 }
 
-/// The request for the worker's root service: the client ID and the chain, no secret.
-fn payload(chain: &Chain) -> Result<tempfile::NamedTempFile> {
+/// The request for the worker's root service: the client ID, the cloud's own repositories and
+/// the chain, no secret.
+fn payload(chain: &Chain, repositories: &[String]) -> Result<tempfile::NamedTempFile> {
     let unix = |at: std::time::SystemTime| {
         at.duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_secs())
@@ -223,6 +261,7 @@ fn payload(chain: &Chain) -> Result<tempfile::NamedTempFile> {
     let value = Payload {
         version: 1,
         client_id: publish::CLIENT_ID,
+        repositories,
         chain: PayloadChain {
             access_token: chain.access_token.expose(),
             access_expires_at: unix(chain.access_expires_at),
@@ -237,8 +276,8 @@ fn payload(chain: &Chain) -> Result<tempfile::NamedTempFile> {
 }
 
 /// Gives the chain to root on the worker over SSH stdin; no token enters argv or output.
-fn install(chain: &Chain, connection: &Connection, runner: &Runner<'_>) -> Result<()> {
-    let file = payload(chain)?;
+fn install(chain: &Chain, repositories: &[String], connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    let file = payload(chain, repositories)?;
     runner.private_payload(&mut connection.command(INSTALL), file.path())
 }
 
@@ -258,20 +297,13 @@ mod tests {
     }
 
     #[test]
-    fn the_worker_status_says_what_it_holds_and_whose_repositories_it_serves() {
-        let line = |packages: &str| {
-            format!(
-                "{{\"state\":\"ok\",\"repositories\":[{{\"repository\":\"Acme/api\",\"target\":\"primary\"}},\
-                 {{\"repository\":\"acme/web\",\"target\":null}},\"other/tool\"]{packages}}}"
-            )
-        };
-        let (state, owners) = held(&line(",\"packages\":null"));
-        assert_eq!(state, Held::Missing);
-        assert_eq!(owners.into_iter().collect::<Vec<_>>(), ["acme", "other"]);
-        assert_eq!(held(&line(",\"packages\":{\"state\":\"ok\"}")).0, Held::Current);
-        assert_eq!(held(&line(",\"packages\":{\"state\":\"revoked\"}")).0, Held::Missing);
-        assert_eq!(held(&line("")).0, Held::Unsupported);
-        assert_eq!(held("not json").0, Held::Unsupported);
+    fn the_worker_status_says_what_it_holds() {
+        let line = |packages: &str| format!("{{\"state\":\"ok\",\"repositories\":[\"acme/api\"]{packages}}}");
+        assert_eq!(held(&line(",\"packages\":null")), Held::Missing);
+        assert_eq!(held(&line(",\"packages\":{\"state\":\"ok\"}")), Held::Current);
+        assert_eq!(held(&line(",\"packages\":{\"state\":\"revoked\"}")), Held::Missing);
+        assert_eq!(held(&line("")), Held::Unsupported);
+        assert_eq!(held("not json"), Held::Unsupported);
     }
 
     #[test]
@@ -294,10 +326,12 @@ mod tests {
 
     #[test]
     fn the_payload_holds_the_client_id_and_the_chain_but_no_secret() {
-        let file = payload(&sample("gho_synthetic-packages")).unwrap();
+        let repositories = vec!["acme/api".to_owned(), "acme/web".to_owned()];
+        let file = payload(&sample("gho_synthetic-packages"), &repositories).unwrap();
         let value: serde_json::Value = serde_json::from_reader(file.reopen().unwrap()).unwrap();
         assert_eq!(value["version"], 1);
         assert_eq!(value["client_id"], publish::CLIENT_ID);
+        assert_eq!(value["repositories"], serde_json::json!(["acme/api", "acme/web"]));
         assert_eq!(value["chain"]["access_token"], "gho_synthetic-packages");
         assert_eq!(value["chain"]["refresh_token"], "gho_synthetic-packages-refresh");
         assert!(value["chain"]["access_expires_at"].as_u64().unwrap() > 0);
