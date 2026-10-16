@@ -634,7 +634,10 @@ advisories (`gh api /advisories`), which are public, for example for a safety
 review of an update.
 
 The loop starts no agent on a worker where root did not set the policy, for example
-an older worker image. Rebuild such a cloud on a current image.
+an older worker image. Rebuild such a cloud on a current image: **Rebuild image &
+restart** on the cloud card moves the cloud of an Upkeep to the base image that this
+Horizon version pins, also when its repository commits its own `.horizon/cloud.yml`.
+The workspace volume stays, so the loop, its files and the policy copy stay.
 
 The refusals go to `/workspace/.horizon-gate/refused.jsonl`, a log that only root
 can change, at most 30 lines a minute: a refusal beyond that is refused but not

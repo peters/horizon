@@ -449,7 +449,8 @@ the base, every check passed, a bot or the account's own `upkeep/` branch as the
 only in a bot's own commits; otherwise the person's **Approve** of that head (with the line
 `upkeep-allow: workflows` for a workflow change). The board shows the refusals among the activity lines. A worker image
 without this service starts no Upkeep agent; the person rebuilds the cloud on a
-current image. `docs/upkeep.md` lists every refusal and what it does not stop.
+current image with **Rebuild image & restart**, which moves an Upkeep's cloud to the
+pinned base image also when its repository commits a `.horizon/cloud.yml`. `docs/upkeep.md` lists every refusal and what it does not stop.
 
 A worker image with `horizon-worker-github-upkeep-loop` also allows the Upkeep agent's
 own access requests by itself, also while no Horizon runs: only for that task, only

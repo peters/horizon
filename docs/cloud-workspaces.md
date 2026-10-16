@@ -1833,6 +1833,10 @@ the only exception.
 A cloud on the public base image without a `build` section can also rebuild. A quick
 start cloud is an example. Its latest commit must have no `.horizon/cloud.yml`. If it
 has one, Horizon refuses the rebuild, because it never ignores committed settings.
+The cloud of an Upkeep is the exception: New Upkeep starts the `quick-start` profile
+whatever the repository commits, so its rebuild does not read the repository's
+`.horizon/cloud.yml` either, and the output says so. Horizon knows such a cloud by the
+saved choice of its Upkeep, `~/.horizon/upkeep/<cloud>/upkeep.json`.
 The rebuild builds nothing. Horizon switches the worker to the base image that this
 Horizon version pins. Thus after an upgrade that changes the pin, **Rebuild image &
 restart** moves the cloud to the new image. If the cloud has the capabilities of the

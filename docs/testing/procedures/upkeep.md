@@ -2,7 +2,7 @@
 procedure: upkeep
 feature: Upkeep board, worker loop and New Upkeep (the dependency pull request agent)
 platforms: [linux]
-cost: rents compute (UPK-10, UPK-13 and UPK-15)
+cost: rents compute (UPK-10, UPK-13, UPK-15 and UPK-17)
 destructive: yes (UPK-12 deletes the cloud that UPK-10 made)
 secrets: [GitHub sign-in, Hetzner API token, ChatGPT login of Codex]
 owner: peters
@@ -22,7 +22,7 @@ board, and that **New Upkeep** starts a real Upkeep on a Hetzner cloud.
 - Candidate: a Horizon build with the `upkeep` panel kind.
 - Platforms: Linux host.
 - UPK-01 to UPK-06 read a synthetic status document. UPK-07 runs the worker
-  exchange in a local container. UPK-08 to UPK-16 use real GitHub data and a real
+  exchange in a local container. UPK-08 to UPK-17 use real GitHub data and a real
   Hetzner cloud.
 - This procedure does not test: the quality of the work of the agent, Renovate
   pull requests, or a schedule longer than one hour.
@@ -57,7 +57,7 @@ made-up repositories and one public pull request.
 - Network access to github.com for task UPK-03.
 - For task UPK-07: Docker, a Rust toolchain for this repository, and a Horizon
   worker image (`ghcr.io/peters/horizon-worker-base`) on this computer.
-- For tasks UPK-08 to UPK-16: the
+- For tasks UPK-08 to UPK-17: the
   [local device smoke fixture](../../../scripts/device-smoke/README.md) with
   `--native-view`, a persistent session, and Cloud settings with a GitHub sign-in,
   a Hetzner project with free capacity for one `cx23` server, and the ChatGPT login
@@ -710,9 +710,47 @@ Do this task before UPK-12, on the cloud of UPK-10, with the default instruction
 
    Result: The next run does not show them.
 
+### 6.17 UPK-17 — Rebuild moves the Upkeep to the pinned image
+
+Do this task before UPK-12, on the cloud of UPK-10. Use a Horizon build whose quick-start
+pin is newer than the image of the cloud.
+
+> **CAUTION:** THE REBUILD RELEASES THE SERVER OF THE CLOUD AND STARTS A NEW ONE ON THE
+> SAME VOLUME. A run in progress stops.
+
+1. On the board, wait until no run continues. On the card, click **Rebuild image &
+   restart…**.
+
+   Result: The confirmation says that the rebuild keeps the settings of this cloud,
+   also when the latest commit of the repository of the cloud has its own
+   `.horizon/cloud.yml`.
+
+2. Click **Rebuild and restart**.
+
+   Result: The deployment output has the line "This Upkeep moves to the base image
+   that this Horizon version pins. It does not read the repository's
+   .horizon/cloud.yml, as New Upkeep does not." The card shows Ready. The cloud has a new server ID. In the fixture home,
+   `spec.image_digest` of `~/.horizon/cloud/<cloud>/deployment.json` is the
+   quick-start pin of the Horizon build. On the worker,
+   `/workspace/home/upkeep/config.json` lists the same repositories as before.
+
+3. As root on the worker, read the Upkeep policy.
+
+   ```sh
+   horizon-worker-github requests
+   ```
+
+   Result: `upkeep` names the session `upkeep-<cloud>` and the repositories of the
+   Upkeep.
+
+4. On the board, click **Run now**.
+
+   Result: Within one minute, the board shows **Running**, and
+   `/workspace/home/upkeep/runs.jsonl` on the worker has a new run.
+
 ## 7. Pass criteria
 
-- UPK-01 to UPK-16 give the results above.
+- UPK-01 to UPK-17 give the results above.
 
 ## 8. Cleanup
 
