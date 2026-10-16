@@ -653,6 +653,14 @@ The M2 eight-hour constant does not expire M1 one-device sharing. Worker, provid
 owner and public interface qualification remain required for the full feature.
 See docs/architecture/exposure-policy.md and docs/testing/procedures/exposure-policy.md.
 
+Protected-ingress helpers calculate physical listeners 600–631 and backends 632–663
+for logical ports 20000–20031. Strict bounded receipts retain a complete claimed
+SSH22 plus 32 TCP publication set, container/image/generation and namespace facts.
+They perform no actual host, kernel or SSH checks and grant no publication,
+root-only binding, source preservation or readiness. Existing worker behavior
+is unchanged; opt-in provisioning and actual original runtime validation remain
+required. See docs/architecture/exposure-protected-ingress.md.
+
 
 The receipt-capture adapter reads only the worker's actual tagged Self.ID via pinned root SSH and the existing userspace daemon socket, persists it before readiness and records uncertain attempts before enrollment. It binds the existing allocation request and saved tailnet ID to the owning cloud root. Worker agents cannot query this private root lane. No API secret is sent to a worker and no API editor or node-delete operation is activated by this adapter.
 

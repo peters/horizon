@@ -6,6 +6,8 @@ applyTo: "crates/horizon-cloud-protocol/src/exposure.rs,crates/horizon-cloud-pro
 
 Read `docs/architecture/exposure-policy.md`. This default-off component provides
 pure comparison facts. It adds no control frames or public dispatch.
+For protected ingress geometry and receipt code, also read
+`docs/architecture/exposure-protected-ingress.md`.
 
 Report these failures:
 
@@ -18,6 +20,12 @@ Report these failures:
 - A refused HTTPS route falls back to raw TCP, accepts a non-Public policy, or accepts a port other than 443, 8443 or 10000.
 - A URL supplies readiness or TLS proof without the later original live controller.
 - The M2 eight-hour constant changes M1 sharing lifetime.
+- Receipt parsing accepts extra/missing/duplicate publications, a backend or
+  non-TCP publication, an incomplete address family, mutable image tags or
+  unbounded/unknown/duplicate JSON fields.
+- Passive receipt claims become actual host publication, root-only binding,
+  source preservation, ownership or readiness without original runtime checks.
+- New port helpers silently change existing policy, backend or listener behavior.
 
 Keep the control DTO, worker, provider and public owner interfaces outside this
 prerequisite. The Core record outcome must preserve existing publication,

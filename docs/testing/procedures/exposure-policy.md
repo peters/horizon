@@ -72,9 +72,26 @@ procedure uses no account, key, network service or paid resource.
    Result: Blocking and strict checks pass. Record advisory findings separately.
    Test the embedded skill references as application build inputs.
 
+### 6.4 P04 — Compare protected ingress geometry and receipt facts
+
+1. Examine the ingress tests included in P01.
+
+   Result: Every logical port maps to one disjoint privileged listener/backend.
+   Existing backend calculation stays unchanged. Complete single-family and
+   dual-family receipts parse. Partial, duplicate, extra, backend, non-TCP and
+   non-wildcard publication sets are refused. Identity changes stay distinct.
+   Invalid identities, unsafe claimed sysctls, unknown/duplicate JSON fields and
+   receipts larger than 16 KiB are refused.
+
+2. Read `docs/architecture/exposure-protected-ingress.md`.
+
+   Result: Tests grant no live host or kernel authority. Provisioning, effective
+   root-only binding, original SSH readback and real source-preservation tests
+   remain required before using this geometry in a running exposure.
+
 ## 7. Pass criteria
 
-- P01, P02 and P03 pass on the recorded candidate inputs.
+- P01, P02, P03 and P04 pass on the recorded candidate inputs.
 - No control DTO, public dispatch or live resource is added by this outcome.
 - The results retain the distinction between comparison facts and authority.
 
