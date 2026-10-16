@@ -151,6 +151,16 @@ fn a_cloud_in_view_at_ready_attaches_as_before() {
     );
 }
 
+/// Syncs the parking until the status read in flight, or the one due next, reported its failure.
+fn finish_failed_status_read(app: &mut HorizonApp) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while runtime(app).parking.error.is_none() {
+        assert!(std::time::Instant::now() < deadline, "the status read must finish");
+        app.sync_cloud_parking();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn a_cloud_parks_out_of_view_and_attaches_again_in_view() {
     let (_temp, mut app) = ready_cloud();
@@ -166,29 +176,24 @@ fn a_cloud_parks_out_of_view_and_attaches_again_in_view() {
         assert_eq!(wait_of(&app, local), Some(CloudWait::Parked), "{local}");
     }
     // The status read of the parked sessions fails here: the fixture worker refuses SSH.
-    // An older status must not stay on screen as if it were current.
-    app.cloud_prototype
-        .production
-        .runtimes
-        .get_mut(&1)
-        .unwrap()
-        .parking
-        .statuses
-        .insert(
-            "one".into(),
-            SessionStatus {
-                id: "one".into(),
-                activity: SessionActivity::Working,
-                quiet_for: None,
-                lines: vec!["old".into()],
-            },
-        );
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while runtime(&app).parking.error.is_none() {
-        assert!(std::time::Instant::now() < deadline, "the status read must finish");
-        app.sync_cloud_parking();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // An older status must not stay on screen as if it were current. The read that the
+    // park started can finish before the old status is in place, so the old status
+    // comes from an earlier read that succeeded and the failed read is the next one.
+    finish_failed_status_read(&mut app);
+    let parking = &mut app.cloud_prototype.production.runtimes.get_mut(&1).unwrap().parking;
+    parking.error = None;
+    parking.statuses.insert(
+        "one".into(),
+        SessionStatus {
+            id: "one".into(),
+            activity: SessionActivity::Working,
+            quiet_for: None,
+            lines: vec!["old".into()],
+        },
+    );
+    parking.next_read = Some(std::time::Instant::now());
+    assert_eq!(app.parked_strip_text("one"), "Parked · Working · old");
+    finish_failed_status_read(&mut app);
     assert_eq!(app.parked_strip_text("one"), "Parked · status unavailable");
 
     show(&mut app, "one");

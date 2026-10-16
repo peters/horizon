@@ -424,6 +424,22 @@ mod tests {
             }, ready_profiles: vec!["dev".into()], uncommitted: std::collections::BTreeMap::default(),
         }
     }
+    /// Draws the New cloud dialog at least three times and until the form can start. Its
+    /// tailnet settings load on a thread, and Enter in the title submits only a complete form.
+    fn draw_until_complete(ctx: &Context, app: &mut HorizonApp, input: impl Fn() -> egui::RawInput) {
+        use crate::test_egui::DiscardTextures;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        for frame in 0.. {
+            let _ = ctx
+                .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
+                .discard_textures();
+            if frame >= 2 && super::super::creation::can_submit(&app.cloud_prototype.production) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "the form must become complete");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
     #[test]
     fn deployment_persists_its_session_reference_before_creating_state() {
         let (temp, mut app) = test_app();
@@ -756,12 +772,8 @@ mod tests {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
             ..Default::default()
         };
-        for _ in 0..3 {
-            let _ = ctx
-                .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
-                .discard_textures();
-        }
         app.cloud_prototype.production.title = "Title only".into();
+        draw_until_complete(&ctx, &mut app, input);
         ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
         let mut event = input();
         event.events.push(egui::Event::Key {
@@ -798,12 +810,8 @@ mod tests {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
             ..Default::default()
         };
-        for _ in 0..3 {
-            let _ = ctx
-                .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
-                .discard_textures();
-        }
         app.cloud_prototype.production.title = "Title only".into();
+        draw_until_complete(&ctx, &mut app, input);
         app.cloud_prototype
             .production
             .source
