@@ -60,6 +60,8 @@ The **Watch** job of that workflow reports results on `main` as comments on [iss
 - A failed run adds one comment with the run link, the commit and the names of the failed jobs. Each failed run adds a comment.
 - The first green run after a failed run adds one short "recovered" comment with the run link.
 - A green run after a green run adds no comment. A cancelled run adds no comment.
+- A re-run compares its result with the previous attempt of the same run. A green re-run adds no comment when a newer run is complete.
+- If the Watch job cannot add a failure comment after three tries, the run fails. The next green run then adds a "recovered" comment.
 - Each comment starts with the hidden marker `<!-- nightly-macos-release -->`. Search for the marker to find all these comments.
 - GitHub sends the issue author a notification for each comment.
 

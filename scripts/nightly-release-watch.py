@@ -4,7 +4,8 @@
 Used by the Watch job of .github/workflows/macos-release-builds.yml.
 
 Usage: nightly-release-watch.py --needs <json> --runs <file> --jobs <file>
-           --run-id <id> --run-url <url> --sha <sha> --body-out <file>
+           --run-id <id> --run-attempt <n> [--previous-attempt <conclusion>]
+           --run-url <url> --sha <sha> --body-out <file>
 
 --needs is the `toJSON(needs)` of the Watch job. --runs is the
 `workflow_runs` list of this workflow, newest first, and --jobs is the `jobs`
@@ -14,10 +15,16 @@ form a workflow step appends to $GITHUB_OUTPUT, and writes the comment to
 --body-out unless the action is `none`.
 
 - failure: a job this run needs failed. Every failed run posts.
-- recovery: no needed job failed, and the newest earlier finished scheduled
-  or dispatched run failed.
-- none: everything else, routine success included. An unknown run history
-  never posts a recovery.
+- recovery: no needed job failed, and the run before this one failed. For a
+  first attempt that is the newest older finished scheduled or dispatched
+  run; for a re-run it is the previous attempt of this run
+  (--previous-attempt).
+- none: everything else, routine success included. A green run also stays
+  silent when a newer run has finished, because that run already reported
+  the current state. An unknown history never posts a recovery.
+
+A run that failed only because the Watch job could not post still counts as
+a failed run, so the next green run posts a recovery for it.
 """
 
 import argparse
@@ -35,19 +42,34 @@ def failed_needs(needs):
     return sorted(name for name, need in needs.items() if need.get("result") == "failure")
 
 
-def previous_conclusion(runs, run_id):
+def finished_runs(runs):
+    """(id, conclusion) of each finished scheduled or dispatched run, newest first."""
+    finished = []
     for run in runs:
-        if str(run.get("id")) == str(run_id) or run.get("event") not in WATCHED_EVENTS:
+        try:
+            run_id = int(run.get("id"))
+        except (TypeError, ValueError):
             continue
-        if run.get("status") == "completed" and run.get("conclusion") in FINISHED:
-            return run["conclusion"]
-    return None
+        if (run.get("event") in WATCHED_EVENTS and run.get("status") == "completed"
+                and run.get("conclusion") in FINISHED):
+            finished.append((run_id, run["conclusion"]))
+    return sorted(finished, reverse=True)
 
 
-def decide(needs, runs, run_id):
+def previous_conclusion(runs, run_id, run_attempt=1, previous_attempt=None):
+    """The conclusion of the run before this one, or None when it is unknown."""
+    finished = finished_runs(runs)
+    if any(other > int(run_id) for other, _ in finished):
+        return None
+    if int(run_attempt) > 1:
+        return previous_attempt if previous_attempt in FINISHED else None
+    return next((conclusion for other, conclusion in finished if other < int(run_id)), None)
+
+
+def decide(needs, runs, run_id, run_attempt=1, previous_attempt=None):
     if failed_needs(needs):
         return "failure"
-    previous = previous_conclusion(runs, run_id)
+    previous = previous_conclusion(runs, run_id, run_attempt, previous_attempt)
     if previous is not None and previous != "success":
         return "recovery"
     return "none"
@@ -83,8 +105,10 @@ def read_list(path, key):
 
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    for option in ["--needs", "--runs", "--jobs", "--run-id", "--run-url", "--sha", "--body-out"]:
+    for option in ["--needs", "--runs", "--jobs", "--run-id", "--run-attempt", "--run-url",
+                   "--sha", "--body-out"]:
         parser.add_argument(option, required=True)
+    parser.add_argument("--previous-attempt", default="")
     args = parser.parse_args(argv)
     try:
         needs = json.loads(args.needs)
@@ -92,7 +116,10 @@ def main(argv):
         parser.error(f"--needs is not JSON: {error}")
     if not isinstance(needs, dict):
         parser.error("--needs must be a JSON object")
-    action = decide(needs, read_list(args.runs, "workflow_runs"), args.run_id)
+    if not (args.run_id.isdigit() and args.run_attempt.isdigit()):
+        parser.error("--run-id and --run-attempt must be numbers")
+    action = decide(needs, read_list(args.runs, "workflow_runs"), args.run_id,
+                    args.run_attempt, args.previous_attempt)
     if action != "none":
         failed_jobs = failed_job_names(read_list(args.jobs, "jobs"), needs)
         with open(args.body_out, "w", encoding="utf-8") as handle:

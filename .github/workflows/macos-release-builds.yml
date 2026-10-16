@@ -115,11 +115,19 @@ jobs:
             || echo '{}' > "$RUNNER_TEMP/runs.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json" \
             || echo '{}' > "$RUNNER_TEMP/jobs.json"
+          # A re-run compares with its own previous attempt.
+          previous_attempt=
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            previous_attempt=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$((GITHUB_RUN_ATTEMPT - 1))" --jq .conclusion) \
+              || previous_attempt=
+          fi
           python3 -B scripts/nightly-release-watch.py \
             --needs "$NEEDS" \
             --runs "$RUNNER_TEMP/runs.json" \
             --jobs "$RUNNER_TEMP/jobs.json" \
             --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --previous-attempt "$previous_attempt" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --sha "$GITHUB_SHA" \
             --body-out "$RUNNER_TEMP/comment.md" >> "$GITHUB_OUTPUT"
@@ -129,4 +137,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/issues/$WATCH_ISSUE/comments" -F "body=@$RUNNER_TEMP/comment.md" --jq .html_url
+          # A network error or a rate limit can fail one request, so try three
+          # times. If all fail, this job fails and the run shows it.
+          for attempt in 1 2 3; do
+            gh api "repos/$GITHUB_REPOSITORY/issues/$WATCH_ISSUE/comments" -F "body=@$RUNNER_TEMP/comment.md" --jq .html_url \
+              && exit 0
+            sleep $((attempt * 10))
+          done
+          echo "::error::Could not comment on issue #$WATCH_ISSUE."
+          exit 1

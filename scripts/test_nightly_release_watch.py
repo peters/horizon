@@ -67,6 +67,30 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(watch.decide(GREEN, runs, 30), "recovery")
         self.assertEqual(watch.decide(GREEN, runs[:1] + runs[2:4] + runs[5:], "30"), "none")
 
+    def test_runs_are_ordered_by_id_not_by_list_position(self):
+        runs = [run(10, "failure"), run(20, "success"), {"id": "x", "event": "schedule"}]
+        self.assertEqual(watch.decide(GREEN, runs, 30), "none")
+        self.assertEqual(watch.decide(GREEN, list(reversed(runs)), 30), "none")
+
+    def test_a_re_run_compares_with_its_previous_attempt(self):
+        older_green = [run(20, "success")]
+        self.assertEqual(watch.decide(GREEN, older_green, 30, 2, "failure"), "recovery")
+        self.assertEqual(watch.decide(GREEN, [run(20, "failure")], 30, 2, "success"), "none")
+        for unknown in [None, "", "cancelled"]:
+            with self.subTest(unknown=unknown):
+                self.assertEqual(watch.decide(GREEN, older_green, 30, 2, unknown), "none")
+        self.assertEqual(watch.decide(RED, older_green, 30, 2, "failure"), "failure")
+
+    def test_a_green_run_stays_silent_once_a_newer_run_finished(self):
+        for newer in ["failure", "success"]:
+            with self.subTest(newer=newer):
+                runs = [run(40, newer), run(20, "failure")]
+                self.assertEqual(watch.decide(GREEN, runs, 30, 2, "failure"), "none")
+                self.assertEqual(watch.decide(GREEN, runs, 30), "none")
+                self.assertEqual(watch.decide(RED, runs, 30, 2, "failure"), "failure")
+        in_progress = [run(40, None, status="in_progress"), run(20, "failure")]
+        self.assertEqual(watch.decide(GREEN, in_progress, 30), "recovery")
+
 
 class CommentTests(unittest.TestCase):
     def test_failure_names_the_failed_jobs_with_a_marker(self):
@@ -102,7 +126,7 @@ class CommandTests(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(self.dir)], check=False)
         self.body = self.dir / "comment.md"
 
-    def call(self, needs_json, runs=None, jobs=None):
+    def call(self, needs_json, runs=None, jobs=None, extra=()):
         paths = {}
         for name, data in [("runs", runs), ("jobs", jobs)]:
             paths[name] = self.dir / f"{name}.json"
@@ -111,7 +135,8 @@ class CommandTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, "-B", str(SCRIPT), "--needs", needs_json,
              "--runs", str(paths["runs"]), "--jobs", str(paths["jobs"]), "--run-id", "30",
-             "--run-url", RUN_URL, "--sha", SHA, "--body-out", str(self.body)],
+             "--run-attempt", "1", "--run-url", RUN_URL, "--sha", SHA,
+             "--body-out", str(self.body), *extra],
             capture_output=True, text=True)
 
     def test_prints_the_action_and_writes_a_body_only_to_post(self):
@@ -137,6 +162,14 @@ class CommandTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, "")
 
+    def test_a_re_run_reads_its_previous_attempt(self):
+        runs = {"workflow_runs": [run(20, "success")]}
+        result = self.call(json.dumps(GREEN), runs=runs,
+                           extra=["--run-attempt", "2", "--previous-attempt", "failure"])
+        self.assertEqual(result.stdout, "action=recovery\n")
+        result = self.call(json.dumps(GREEN), runs=runs, extra=["--run-attempt", "x"])
+        self.assertEqual((result.returncode, result.stdout), (2, ""))
+
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -160,6 +193,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("      WATCH_ISSUE: 1534\n", self.jobs["watch"])
         self.assertIn("        if: steps.decide.outputs.action != 'none'\n", self.jobs["watch"])
         self.assertIn('NEEDS: ${{ toJSON(needs) }}', self.jobs["watch"])
+
+    def test_the_history_query_and_the_post_are_scoped(self):
+        job = self.jobs["watch"]
+        self.assertIn('/runs?branch=main&status=completed&per_page=30" > "$RUNNER_TEMP/runs.json"',
+                      job)
+        self.assertIn('/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json"',
+                      job)
+        self.assertIn('/attempts/$((GITHUB_RUN_ATTEMPT - 1))" --jq .conclusion', job)
+        for option in ['--run-id "$GITHUB_RUN_ID"', '--run-attempt "$GITHUB_RUN_ATTEMPT"',
+                       '--previous-attempt "$previous_attempt"', '--sha "$GITHUB_SHA"',
+                       '--body-out "$RUNNER_TEMP/comment.md" >> "$GITHUB_OUTPUT"']:
+            self.assertIn(option, job)
+        self.assertIn('gh api "repos/$GITHUB_REPOSITORY/issues/$WATCH_ISSUE/comments" '
+                      '-F "body=@$RUNNER_TEMP/comment.md"', job)
 
     def test_a_simulated_failure_fails_without_a_build(self):
         self.assertRegex(self.workflow, r"(?m)^      simulate_failure:\n(?:        .*\n)*"
