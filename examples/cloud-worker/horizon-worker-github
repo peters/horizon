@@ -183,7 +183,9 @@ def refresh_once(store, now=time.time, post=post_refresh, scope=None):
             store.save(dict(state, last_error=code))
             return 'retry'
         if scope is not None and [part.strip() for part in str(reply.get('scope', '')).split(',')] != [scope]:
-            store.clear()
+            # The package store's own clear: a copy it cannot remove is hidden by a clear mark,
+            # so the old chain stops at once also on a read-only volume.
+            packages.clear(store)
             return 'revoked'
         # GitHub already invalidated the old chain: store the new one before any agent can use it.
         store.save(dict(state, chain=rotated, last_refresh_at=started, last_error=None))

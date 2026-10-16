@@ -161,6 +161,12 @@ class StorageTests(ServiceTestCase):
         self.assertEqual(service.refresh_once(chains, lambda: due, post, packages.SCOPE), 'revoked')
         self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
         self.assertNotIn(OTHER, json.dumps(chains.copies()))
+        # Also when the volume copy cannot be removed: the clear mark hides it at once.
+        install(self.store)
+        with mock.patch.object(packages.common, 'remove_durably', side_effect=OSError('read-only volume')), \
+                self.assertRaises(ValueError):
+            service.refresh_once(chains, lambda: due, post, packages.SCOPE)
+        self.assertEqual(packages.token_for(self.store, 'example'), (None, packages.MISSING))
         install(self.store)
         self.assertEqual(packages.token_for(self.store, 'example', lambda: due + 3600 * 8),
                          (None, packages.EXPIRED))
