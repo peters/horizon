@@ -482,18 +482,23 @@ pub(in crate::webdriver::session) mod tests {
         let stop = AtomicBool::new(false);
         let mut pending = pending(state, viewport);
         assert_eq!(state.advance_resize(&mut pending, events, &stop).unwrap(), None);
-        std::thread::sleep(INITIAL_RETRY + Duration::from_millis(10));
-        state.signal_epoch += 1;
-        assert_eq!(state.advance_resize(&mut pending, events, &stop).unwrap(), None);
-        std::thread::sleep(INITIAL_RETRY + Duration::from_millis(10));
-        state.signal_epoch += 1;
+        // Two matching measurements in different signal epochs acknowledge. A
+        // measurement that misses its poll budget is repeated at the next poll; the
+        // resize deadline turns a missing acknowledgement into an error.
+        let acknowledged = loop {
+            std::thread::sleep(INITIAL_RETRY + Duration::from_millis(10));
+            state.signal_epoch += 1;
+            if let Some(value) = state.advance_resize(&mut pending, events, &stop).unwrap() {
+                break value;
+            }
+        };
         assert_eq!(
-            state.advance_resize(&mut pending, events, &stop).unwrap(),
-            Some(BrowserControlValue::Viewport {
+            acknowledged,
+            BrowserControlValue::Viewport {
                 requested: viewport,
                 applied: viewport.unwrap_or([900, 600]),
                 zoom_percent: 100,
-            })
+            }
         );
     }
 
@@ -616,12 +621,14 @@ pub(in crate::webdriver::session) mod tests {
 
     #[test]
     fn firefox_restores_committed_pin_on_rebind_drains_events_and_reset_stops_restoration() {
-        let classic = Server::start(
-            [[390, 844], [390, 844], [900, 600], [900, 600]]
-                .into_iter()
-                .map(|size| Reply::json(200, &json!({"value":size})))
-                .collect(),
-        );
+        // Classic WebDriver measures the size the page shows. A measurement that
+        // misses its poll budget still takes a reply, so the replies are not a fixed
+        // script: the first reply after a change can still carry the earlier size.
+        let shown = Arc::new(std::sync::Mutex::new([390, 844]));
+        let page = Arc::clone(&shown);
+        let classic = Server::generated(std::iter::repeat_with(move || {
+            Reply::json(200, &json!({"value": *page.lock().unwrap()}))
+        }));
         let (link, worker) = bidi_fixture(false, false);
         let mut state = fixture_driver(&classic, link);
         let events = events();
@@ -637,6 +644,7 @@ pub(in crate::webdriver::session) mod tests {
         assert_eq!(state.viewport_context.as_deref(), Some("second"));
         state.restore_viewport_binding(&events);
         assert_eq!(state.viewport_context.as_deref(), Some("third"));
+        *shown.lock().unwrap() = [900, 600];
         acknowledge(&mut state, None, &events);
         assert_eq!(state.panel_slot.viewport_override(), None);
         state.handle_bidi_event(&event("contextDestroyed", "third", &Value::Null), &events);
@@ -651,9 +659,12 @@ pub(in crate::webdriver::session) mod tests {
         }
         assert_eq!(commands[2]["params"]["viewport"], json!({"width":390,"height":844}));
         assert_eq!(commands[3]["params"]["viewport"], json!({"width":900,"height":600}));
-        assert_eq!(
-            classic.recorded().len(),
-            4,
+        let measured = classic.recorded();
+        assert!(
+            measured.len() >= 4
+                && measured
+                    .iter()
+                    .all(|request| request.method == "POST" && request.path.ends_with("/execute/sync")),
             "acknowledgement measures classic WebDriver dimensions"
         );
     }
