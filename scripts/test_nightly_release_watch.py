@@ -76,9 +76,12 @@ class DecisionTests(unittest.TestCase):
         older_green = [run(20, "success")]
         self.assertEqual(watch.decide(GREEN, older_green, 30, 2, "failure"), "recovery")
         self.assertEqual(watch.decide(GREEN, [run(20, "failure")], 30, 2, "success"), "none")
+        # An attempt without a verdict falls back to the older runs.
         for unknown in [None, "", "cancelled"]:
             with self.subTest(unknown=unknown):
                 self.assertEqual(watch.decide(GREEN, older_green, 30, 2, unknown), "none")
+                self.assertEqual(watch.decide(GREEN, [run(20, "failure")], 30, 2, unknown),
+                                 "recovery")
         self.assertEqual(watch.decide(RED, older_green, 30, 2, "failure"), "failure")
 
     def test_a_green_run_stays_silent_once_a_newer_run_finished(self):
@@ -207,6 +210,30 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(option, job)
         self.assertIn('gh api "repos/$GITHUB_REPOSITORY/issues/$WATCH_ISSUE/comments" '
                       '-F "body=@$RUNNER_TEMP/comment.md"', job)
+
+    def gate(self, runs):
+        """Runs the skip gate's jq filter on one page of run history."""
+        jq_filter = re.search(r"--jq '(.*?)'\)", self.jobs["changes"]).group(1)
+        result = subprocess.run(["jq", "-r", jq_filter], input=json.dumps({"workflow_runs": runs}),
+                                capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    def test_the_skip_gate_reads_the_newest_finished_run_of_the_commit(self):
+        self.assertIn("/runs?branch=main&status=completed&head_sha=$GITHUB_SHA&per_page=100",
+                      self.jobs["changes"])
+        self.assertIn("            success) build=false;", self.jobs["changes"])
+        cases = [
+            ([], "none"),
+            ([run(20, "success"), run(10, "failure")], "success"),
+            ([run(10, "success"), run(20, "failure")], "failure"),
+            ([run(20, "success"), run(30, "cancelled"), run(40, "skipped"),
+              run(50, None)], "success"),
+            ([run(20, "failure"), run(30, "timed_out")], "timed_out"),
+            ([run(30, "cancelled")], "none"),
+        ]
+        for runs, expected in cases:
+            with self.subTest(runs=runs):
+                self.assertEqual(self.gate(runs), expected)
 
     def test_a_simulated_failure_fails_without_a_build(self):
         self.assertRegex(self.workflow, r"(?m)^      simulate_failure:\n(?:        .*\n)*"

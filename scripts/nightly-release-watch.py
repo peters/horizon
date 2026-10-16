@@ -16,9 +16,9 @@ form a workflow step appends to $GITHUB_OUTPUT, and writes the comment to
 
 - failure: a job this run needs failed. Every failed run posts.
 - recovery: no needed job failed, and the run before this one failed. For a
-  first attempt that is the newest older finished scheduled or dispatched
-  run; for a re-run it is the previous attempt of this run
-  (--previous-attempt).
+  re-run that is the previous attempt of this run (--previous-attempt) when
+  that attempt finished; otherwise it is the newest older finished scheduled
+  or dispatched run.
 - none: everything else, routine success included. A green run also stays
   silent when a newer run has finished, because that run already reported
   the current state. An unknown history never posts a recovery.
@@ -61,8 +61,8 @@ def previous_conclusion(runs, run_id, run_attempt=1, previous_attempt=None):
     finished = finished_runs(runs)
     if any(other > int(run_id) for other, _ in finished):
         return None
-    if int(run_attempt) > 1:
-        return previous_attempt if previous_attempt in FINISHED else None
+    if int(run_attempt) > 1 and previous_attempt in FINISHED:
+        return previous_attempt
     return next((conclusion for other, conclusion in finished if other < int(run_id)), None)
 
 

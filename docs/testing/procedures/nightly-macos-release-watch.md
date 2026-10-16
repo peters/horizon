@@ -12,7 +12,11 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that the Watch job of `.github/workflows/macos-release-builds.yml` comments on issue #1534 when a run on `main` fails, comments once when the next run is green, and stays silent for a green run after a green run.
+This procedure proves three behaviors of the Watch job in `.github/workflows/macos-release-builds.yml`:
+
+- A failed run on `main` adds a comment on issue #1534.
+- The next green run adds one "recovered" comment.
+- A green run after a green run adds no comment.
 
 ## 2. Applicability
 
@@ -22,13 +26,14 @@ This procedure proves that the Watch job of `.github/workflows/macos-release-bui
 
 ## 3. Safety
 
-> **CAUTION:** THE WATCH JOB WRITES PUBLIC COMMENTS ON ISSUE #1534. GitHub sends each comment to the issue author as a notification. Do the tasks only one time for each change.
+> **CAUTION:** DO THE TASKS ONLY ONE TIME FOR EACH CHANGE. The Watch job writes public comments on issue #1534. GitHub sends each comment to the issue author.
 
 ## 4. Equipment and preconditions
 
 - The GitHub CLI `gh`, signed in to an account that can start workflows on `peters/horizon`.
 - The workflow change is on `main`. GitHub starts `workflow_dispatch` only for a workflow file on the default branch.
 - No other run of **macOS release builds** is in progress on `main`.
+- Do W1 and W2 one after the other, and not between 01:45 and 03:30 UTC. A scheduled run between them adds the recovery comment before W2.
 
 ## 5. Setup
 
@@ -81,9 +86,9 @@ This procedure proves that the Watch job of `.github/workflows/macos-release-bui
 
 ### 6.3 W3 — Silent success
 
-1. Wait for the next scheduled run at 02:17 UTC, or start a normal run again as in W2.
+1. Wait for the next scheduled run at 02:17 UTC.
 
-   Result: The run is green.
+   Result: The run is green. If no commit was added to `main` after W2, the run does not build again.
 
 2. Do the setup command again.
 
