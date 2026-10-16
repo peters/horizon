@@ -8,6 +8,7 @@ cloud's GitHub access grants. A module that horizon-worker-github loads, not a c
 import importlib.machinery
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -107,10 +108,16 @@ def load(store):
     try:
         with lock(store, shared=True):
             for directory in directories(store):
-                value = common.read_json(directory / TOKEN, MAX_SOURCE)
+                path = directory / TOKEN
+                value = common.read_json(path, MAX_SOURCE)
+                if value is None and not os.path.lexists(path):
+                    continue
+                # A copy that is there but names no token is not a removal: removal deletes
+                # the copies, so such a copy serves no token from the other one either.
                 token = None if value is None else parse(value)
-                if token is not None:
-                    found.add(token)
+                if token is None:
+                    return None
+                found.add(token)
     except (OSError, ValueError, RecursionError, UnicodeDecodeError):
         return None
     return found.pop() if len(found) == 1 else None

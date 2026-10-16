@@ -135,6 +135,9 @@ class StorageTests(ServiceTestCase):
         runtime.chmod(0o600)
         runtime.write_text('{')
         self.assertIsNone(packages.load(self.store))
+        for tokenless in ('null', request(None)):
+            runtime.write_text(tokenless)
+            self.assertIsNone(packages.load(self.store), tokenless)
 
     def test_a_revoked_chain_opens_no_owner_and_disconnecting_removes_the_token(self):
         self.install()
