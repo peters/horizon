@@ -374,16 +374,24 @@ mod tests {
     #[test]
     fn cancellation_handoff_preserves_established_teardown() {
         use std::sync::atomic::AtomicBool;
+        // Only guards against a hang: the outcome below does not depend on elapsed time.
+        const HANG_GUARD: Duration = Duration::from_secs(60);
         for established in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
             let cancel = Arc::new(Cancellation::new(Arc::new(AtomicBool::new(false))));
             let mut transport =
                 Transport::connect_cancellable(listener.local_addr().expect("address"), Some(cancel.clone()))
                     .expect("connect");
-            let (mut receiver, _) = listener.accept().expect("accept");
-            receiver
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .expect("timeout");
+            // On a slow runner the cancellable dial can give up on an attempt that the
+            // listener still queues. The receiver is the connection the transport kept.
+            let kept = transport.socket.local_addr().expect("transport address");
+            let mut receiver = loop {
+                let (socket, peer) = listener.accept().expect("accept");
+                if peer == kept {
+                    break socket;
+                }
+            };
+            receiver.set_read_timeout(Some(HANG_GUARD)).expect("timeout");
             if established {
                 transport.complete_setup().expect("release setup handle");
             }
