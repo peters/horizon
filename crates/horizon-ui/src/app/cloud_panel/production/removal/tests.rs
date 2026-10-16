@@ -34,8 +34,11 @@ fn deployment() -> cloud_runtime::state::Deployment {
     .unwrap()
 }
 
+/// Only stops a test that would otherwise hang; each wait ends on an event.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn until(mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_GUARD;
     while !done() {
         assert!(Instant::now() < deadline, "worker did not complete");
         std::thread::sleep(Duration::from_millis(1));
@@ -56,27 +59,50 @@ fn fifo(root: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
+/// A record read blocked on the FIFO, held open for writing until [`Self::release`].
+///
+/// A writer opened without blocking succeeds only once a reader has the FIFO open, so this
+/// observes the read without taking the record's lock. A test that polled `Store::lock`
+/// instead could hold the lock at the moment the worker tried it: the worker then saw
+/// `Busy`, never opened the FIFO, and the test waited for a read that never came.
 #[cfg(unix)]
-fn release_fifo(path: &std::path::Path) {
-    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
-    let bytes = serde_json::to_vec(&deployment()).unwrap();
-    let mut writer = None;
-    until(|| {
-        writer = std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
-            .open(path)
-            .ok();
-        writer.is_some()
-    });
-    writer.as_mut().unwrap().write_all(&bytes).unwrap();
-    drop(writer);
-    std::fs::remove_file(path).unwrap();
-    std::fs::write(path, bytes).unwrap();
+struct BlockedRead {
+    path: std::path::PathBuf,
+    writer: std::fs::File,
+}
+
+#[cfg(unix)]
+impl BlockedRead {
+    fn wait(path: &std::path::Path) -> Self {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut writer = None;
+        until(|| {
+            writer = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+                .open(path)
+                .ok();
+            writer.is_some()
+        });
+        Self {
+            path: path.into(),
+            writer: writer.unwrap(),
+        }
+    }
+
+    fn release(mut self) {
+        use std::io::Write as _;
+        let bytes = serde_json::to_vec(&deployment()).unwrap();
+        self.writer.write_all(&bytes).unwrap();
+        drop(self.writer);
+        std::fs::remove_file(&self.path).unwrap();
+        std::fs::write(&self.path, bytes).unwrap();
+    }
 }
 
 struct Releaser {
     permit: mpsc::Sender<()>,
+    blocked: mpsc::Receiver<()>,
     notice: mpsc::Receiver<bool>,
     thread: std::thread::JoinHandle<bool>,
 }
@@ -84,18 +110,29 @@ struct Releaser {
 impl Releaser {
     fn start(fifo: std::path::PathBuf) -> Self {
         let (permit, permitted) = mpsc::channel();
+        let (blocked_sender, blocked) = mpsc::channel();
         let (notice, released) = mpsc::channel();
         let thread = std::thread::spawn(move || {
-            let explicit = permitted.recv_timeout(Duration::from_secs(5)).is_ok();
+            let read = BlockedRead::wait(&fifo);
+            let _ = blocked_sender.send(());
+            let explicit = permitted.recv_timeout(HANG_GUARD).is_ok();
             let _ = notice.send(explicit);
-            release_fifo(&fifo);
+            read.release();
             explicit
         });
         Self {
             permit,
+            blocked,
             notice: released,
             thread,
         }
+    }
+
+    /// Waits until the record read is blocked on the FIFO, under the record's lock.
+    fn wait_for_blocked_read(&self) {
+        self.blocked
+            .recv_timeout(HANG_GUARD)
+            .expect("the record read must start");
     }
 
     fn release(self) {
@@ -114,7 +151,11 @@ fn cancelled_display_retains_its_slot_until_io_finishes_then_final_check_holds_c
     let first = owner(temp.path());
     let mut jobs = Jobs::default();
     jobs.request(first.clone(), Purpose::Display, &ctx);
-    until(|| matches!(Store::lock(&path), Err(cloud_runtime::Error::Busy)));
+    let read = BlockedRead::wait(&fifo);
+    assert!(
+        matches!(Store::lock(&path), Err(cloud_runtime::Error::Busy)),
+        "the deployment read holds the record's lock"
+    );
     assert!(jobs.poll(&ctx).is_empty(), "the actual deployment read is blocked");
     jobs.cancel(first.issue);
     jobs.reset(); // Session changes must retain the original OS read as well.
@@ -126,7 +167,7 @@ fn cancelled_display_retains_its_slot_until_io_finishes_then_final_check_holds_c
         assert_eq!(jobs.running.len(), 1);
         assert_eq!(jobs.running.values().next().unwrap().request.owner, first);
     }
-    release_fifo(&fifo);
+    read.release();
     let mut completion = None;
     until(|| {
         completion = jobs.poll(&ctx).pop();
@@ -201,7 +242,11 @@ fn blocked_record_does_not_block_ui_and_stale_context_cannot_remove() {
                 app.render_cloud_close_confirmation(ui.ctx());
             })
             .discard_textures();
-        until(|| matches!(Store::lock(&path), Err(cloud_runtime::Error::Busy)));
+        releaser.wait_for_blocked_read();
+        assert!(
+            matches!(Store::lock(&path), Err(cloud_runtime::Error::Busy)),
+            "the record read holds the record's lock: {change}"
+        );
         app.poll_cloud_removals(&ctx);
         let workspace = app.board.create_workspace("Another action");
         assert!(app.board.workspace(workspace).is_some());
