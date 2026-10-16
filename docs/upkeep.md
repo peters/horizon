@@ -86,6 +86,9 @@ when cloud workspaces are ready. It opens the **New Upkeep** dialog:
 - **Checkouts**: how the worker gets the code. **Only when needed** is the default.
 - **Instructions**: the text that each run starts from. **Reset to default** puts
   back the default text (see [The default instructions](#the-default-instructions)).
+  Instructions that are the default follow it: when a new Horizon changes the
+  default, the next exchange gives the new text to the worker. Instructions that
+  you changed stay as you wrote them.
 - **Summary**: the number of repositories, the open pull requests, and a warning
   when Codex has no login to give to the worker.
 
@@ -162,8 +165,9 @@ These rules follow from the steps:
   checked build. A fix or a new base makes the evidence for the changed inputs
   stale, and the agent does those checks again.
 
-An Upkeep that was started with earlier default instructions keeps them; it does
-not get these steps by itself.
+An Upkeep that was started with earlier default instructions and kept them gets
+these steps with its next exchange. Instructions that the person changed stay as
+they are and do not get these steps by themselves.
 
 ## Horizon and the worker
 
@@ -453,8 +457,8 @@ production workflow by hand. The only exception is the daily maintenance pass. I
 can start the releases to a test channel that the shared instructions authorize
 for a daily task, when the instructions of the Upkeep allow it. It never starts a
 production release or a production workflow, and never promotes a release to
-production. An Upkeep that has instructions from before this exception keeps them,
-so its daily pass starts no release. The Upkeep policy also refuses a workflow
+production. An Upkeep whose person changed the instructions before this exception
+keeps them, so its daily pass starts no release. The Upkeep policy also refuses a workflow
 dispatch that `workflows` of the Upkeep does not list (see
 [What the agent can do on GitHub](#what-the-agent-can-do-on-github)), so a release
 workflow of a daily task starts only when the person listed it there.
@@ -762,8 +766,8 @@ the default instructions tell the agents to do this.
   release steps of the shared instructions, and merges with `--match-head-commit`.
   It merges one only when the instructions of the Upkeep ask
   it to merge Upkeep's own pull requests, as the default instructions do. Thus an
-  Upkeep with instructions from before this change carries them up to **Ready to
-  merge** and does not merge them. A pull request that changes CI or a deployment
+  Upkeep whose person changed the instructions before this change carries them up
+  to **Ready to merge** and does not merge them. A pull request that changes CI or a deployment
   waits for the person. The generic part of the prompt says this too. Thus changed
   instructions cannot remove it.
 - The agent reports them with the author `Upkeep`. The board shows them as

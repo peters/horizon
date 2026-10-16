@@ -710,6 +710,29 @@ Do this task before UPK-12, on the cloud of UPK-10, with the default instruction
 
    Result: The next run does not show them.
 
+8. In the fixture home, read `~/.horizon/upkeep/<cloud>/upkeep.json`.
+
+   Result: `instructions_edited` is `false`.
+
+9. On the board, click **Pause** and wait until no run continues. Close Horizon. In
+   `upkeep.json`, set `instructions` to `Old default.`, keep `instructions_edited`
+   `false`, start Horizon and wait for 1 minute. Then type
+   `head -1 /workspace/home/upkeep/prompt.md` in the shell panel of UPK-10.
+
+   Result: The line is `Keep the bot pull requests of the selected repositories
+   moving.`: instructions that the person did not change follow the default.
+
+10. Close Horizon. In `upkeep.json`, set `instructions` to `Only merge patch
+    updates.` and `instructions_edited` to `true`. Start Horizon, wait for 1 minute
+    and type the command of step 9 again.
+
+    Result: The line is `Only merge patch updates.`: changed instructions stay.
+
+11. Close Horizon. In `upkeep.json`, set `instructions_edited` to `false`. Start
+    Horizon and click **Resume** on the board.
+
+    Result: After 1 minute, `prompt.md` starts with the default again.
+
 ### 6.17 UPK-17 — Rebuild moves the Upkeep to the pinned image
 
 Do this task before UPK-12, on the cloud of UPK-10. Use a Horizon build whose quick-start

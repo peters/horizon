@@ -89,6 +89,8 @@ pub struct Config {
     /// The agent that runs; the worker loop runs only [`AGENT`].
     pub agent: String,
     pub every_minutes: u32,
+    /// The instructions of each run. Saved ones follow the built-in default unless the
+    /// person changed them; see [`super::instructions`].
     pub instructions: String,
     /// Shown on the board, such as `Hetzner cx23, Helsinki`.
     #[serde(default)]
@@ -239,7 +241,7 @@ pub fn save(cloud_id: &str, config: &Config) -> std::io::Result<PathBuf> {
     let folder = directory(cloud_id);
     std::fs::create_dir_all(&folder)?;
     let path = folder.join("upkeep.json");
-    let text = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
+    let text = super::instructions::save(config).map_err(std::io::Error::other)?;
     write_atomically(&path, &text)?;
     Ok(path)
 }
@@ -334,7 +336,7 @@ pub fn load(cloud_id: &str) -> Result<Config> {
         return Err(Error::Invalid("Invalid cloud for Upkeep"));
     }
     let text = std::fs::read_to_string(directory(cloud_id).join("upkeep.json"))?;
-    serde_json::from_str(&text).map_err(|_| Error::Json)
+    super::instructions::parse(&text)
 }
 
 /// The cloud id of the Upkeep whose status document is `status`, when it is the one
@@ -389,7 +391,7 @@ pub fn read_saved(strict: bool) -> std::io::Result<Vec<(String, Config)>> {
             }
             Err(_) => continue,
         };
-        if let Ok(config) = serde_json::from_str(&text) {
+        if let Ok(config) = super::instructions::parse(&text) {
             saved.push((entry.file_name().to_string_lossy().into_owned(), config));
         }
     }

@@ -15,6 +15,8 @@ use time::format_description::well_known::Rfc3339;
 mod agent_change;
 #[cfg(feature = "cloud-workspaces")]
 mod discover;
+#[cfg(feature = "cloud-workspaces")]
+pub mod instructions;
 mod reader;
 #[cfg(feature = "cloud-workspaces")]
 pub mod worker;
