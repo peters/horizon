@@ -13,8 +13,9 @@ use crate::cloud_runtime::{ssh::Connection, state::Deployment};
 use horizon_cloud::github::{Chain, Client};
 use serde::Serialize;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io::Write as _,
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
@@ -57,8 +58,9 @@ enum Held {
     Unsupported,
     /// No chain, or one that GitHub ended.
     Missing,
-    /// A chain the worker renews, for these repositories (lowercase).
-    Current(Vec<String>),
+    /// A chain the worker renews, for these repositories (lowercase, sorted); `change` is
+    /// whether its image takes new repositories without a new chain.
+    Current { repositories: Vec<String>, change: bool },
 }
 
 /// The worker's package read access, and whether its GitHub service serves GitHub access.
@@ -70,7 +72,11 @@ fn held(output: &str) -> (Held, bool) {
     else {
         return (Held::Unsupported, false);
     };
-    let github = value.get("state").and_then(serde_json::Value::as_str) == Some("ok");
+    // The GitHub step's own reading: a chain that its running service serves for repositories.
+    let github = matches!(
+        super::worker::parse_status(output),
+        super::worker::Status::Current { .. }
+    );
     let held = match value.get("packages") {
         None => Held::Unsupported,
         Some(packages) if packages.get("state").and_then(serde_json::Value::as_str) == Some("ok") => {
@@ -83,7 +89,8 @@ fn held(output: &str) -> (Held, bool) {
                 .map(str::to_ascii_lowercase)
                 .collect();
             repositories.sort();
-            Held::Current(repositories)
+            let change = packages.get("repositories_change").and_then(serde_json::Value::as_bool) == Some(true);
+            Held::Current { repositories, change }
         }
         Some(_) => Held::Missing,
     };
@@ -154,21 +161,21 @@ pub fn configure(
             return Ok(());
         }
     };
-    if let Held::Current(held) = &worker
-        && !renew
+    let mut wanted = repositories.clone();
+    wanted.sort();
+    let held_access = matches!(worker, Held::Current { .. });
+    if !renew
+        && covered(
+            &worker,
+            &wanted,
+            &repositories,
+            &state.cloud_id,
+            connection,
+            runner,
+            &say,
+        )?
     {
-        let mut wanted = repositories.clone();
-        wanted.sort();
-        if *held == wanted {
-            return Ok(());
-        }
-        let changed = change(&repositories, connection, runner);
-        runner.cancel.check()?;
-        if changed.is_ok() {
-            say("the package read access now follows the Upkeep's repositories.");
-            return Ok(());
-        }
-        say("the worker could not change the repositories of its package read access, so Horizon asks again.");
+        return Ok(());
     }
     let cloud_id = &state.cloud_id;
     if renew {
@@ -187,25 +194,13 @@ pub fn configure(
     }
     let chain = match outcome {
         Ok(chain) => chain,
-        Err(Ended::Cancelled(error)) => return Err(error),
-        Err(Ended::Skipped) => {
-            let mark = crate::upkeep::worker::directory(cloud_id).join(SKIPPED);
-            if let Err(error) = crate::upkeep::worker::write_atomically(&mark, "skipped\n") {
-                say(&format!(
-                    "the skip could not be saved, so the next deployment asks again: {error}"
-                ));
-            }
-            say(WITHOUT);
-            return Ok(());
-        }
-        Err(Ended::Reason(reason)) => {
-            say(&reason);
-            say(WITHOUT);
-            return Ok(());
-        }
+        Err(ended) => return without(ended, held_access, cloud_id, &say),
     };
     let closed = closed_owners(&client, &chain, &repositories, &say);
     let installed = install(&chain, &repositories, connection, runner);
+    if installed.is_ok() {
+        remember(cloud_id, wanted);
+    }
     // Only now does the card learn the outcome: the worker holds the access or not.
     ended(installed.is_ok());
     runner.cancel.check()?;
@@ -221,6 +216,69 @@ pub fn configure(
         say(WITHOUT);
     }
     Ok(())
+}
+
+/// After a package sign-in that gave no chain: an earlier access stays as it was; otherwise a
+/// skip is saved for this Upkeep, and the output says that package checks need a person.
+/// # Errors
+/// The deployment was cancelled.
+fn without(ended: Ended, held_access: bool, cloud_id: &str, say: &dyn Fn(&str)) -> Result<()> {
+    match ended {
+        Ended::Cancelled(error) => return Err(error),
+        Ended::Reason(reason) => say(&reason),
+        Ended::Skipped if !held_access => {
+            let mark = crate::upkeep::worker::directory(cloud_id).join(SKIPPED);
+            if let Err(error) = crate::upkeep::worker::write_atomically(&mark, "skipped\n") {
+                say(&format!(
+                    "the skip could not be saved, so the next deployment asks again: {error}"
+                ));
+            }
+        }
+        Ended::Skipped => {}
+    }
+    say(if held_access {
+        "the earlier package read access of this Upkeep stays as it was."
+    } else {
+        WITHOUT
+    });
+    Ok(())
+}
+
+/// Whether the worker's access already covers the Upkeep's repositories (`wanted`, sorted), or
+/// covers them now because the worker took the new list; false when Horizon must ask again.
+/// # Errors
+/// The deployment was cancelled.
+fn covered(
+    worker: &Held,
+    wanted: &[String],
+    repositories: &[String],
+    cloud_id: &str,
+    connection: &Connection,
+    runner: &Runner<'_>,
+    say: &dyn Fn(&str),
+) -> Result<bool> {
+    let Held::Current {
+        repositories: held,
+        change: can_change,
+    } = worker
+    else {
+        return Ok(false);
+    };
+    if held == wanted {
+        return Ok(true);
+    }
+    if *can_change {
+        let changed = change(repositories, &mut connection.command(INSTALL), runner);
+        runner.cancel.check()?;
+        if changed.is_ok() {
+            remember(cloud_id, wanted.to_vec());
+            say("the package read access now follows the Upkeep's repositories.");
+            return Ok(true);
+        }
+        say("the worker could not change the repositories of its package read access.");
+    }
+    say("asking again, so that the package read access covers the Upkeep's repositories.");
+    Ok(false)
 }
 
 /// The owners of `repositories` whose organization limits OAuth apps, so `chain` reads none of
@@ -345,8 +403,9 @@ struct Change<'a> {
     repositories: &'a [String],
 }
 
-/// Tells root on the worker the Upkeep's repositories for the chain it holds, without a token.
-fn change(repositories: &[String], connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+/// Tells root on the worker the Upkeep's repositories for the chain it holds, without a token,
+/// through `command` (`horizon-worker-github packages`).
+fn change(repositories: &[String], command: &mut std::process::Command, runner: &Runner<'_>) -> Result<()> {
     let mut file = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(
         &mut file,
@@ -357,7 +416,52 @@ fn change(repositories: &[String], connection: &Connection, runner: &Runner<'_>)
     )
     .map_err(|_| Error::Json)?;
     file.flush()?;
-    runner.private_payload(&mut connection.command(INSTALL), file.path())
+    runner.private_payload(command, file.path())
+}
+
+/// The repositories each Upkeep's worker last took, so an exchange asks the worker only after
+/// the Upkeep's list changed (and once after Horizon starts).
+static FOLLOWED: LazyLock<Mutex<HashMap<String, Vec<String>>>> = LazyLock::new(Mutex::default);
+
+fn remember(cloud_id: &str, repositories: Vec<String>) {
+    if let Ok(mut followed) = FOLLOWED.lock() {
+        followed.insert(cloud_id.to_owned(), repositories);
+    }
+}
+
+/// Keeps the package read access of an Upkeep's worker on the Upkeep's repositories between
+/// deployments, as each exchange runs: when the person changes the list, the worker gets the
+/// new one without a sign-in. It asks the worker only when the list differs from the one it
+/// last took, and changes nothing when the worker holds no access (the next deployment asks)
+/// or its image cannot take a change. Never fails the exchange.
+pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, config: &crate::upkeep::worker::Config) {
+    let Ok(mut wanted) = own_repositories(config) else {
+        return;
+    };
+    wanted.sort();
+    if wanted.is_empty()
+        || FOLLOWED
+            .lock()
+            .is_ok_and(|followed| followed.get(cloud_id) == Some(&wanted))
+    {
+        return;
+    }
+    let Ok(output) = runner.run_parsed(
+        "Package read access status",
+        &mut connection.pinned_command(STATUS),
+        Duration::from_secs(20),
+    ) else {
+        return;
+    };
+    match held(&output).0 {
+        Held::Current { repositories, .. } if repositories == wanted => remember(cloud_id, wanted),
+        Held::Current { change: true, .. }
+            if change(&wanted, &mut connection.pinned_command(INSTALL), runner).is_ok() =>
+        {
+            remember(cloud_id, wanted);
+        }
+        _ => {}
+    }
 }
 
 /// Gives the chain to root on the worker over SSH stdin; no token enters argv or output.
@@ -383,20 +487,41 @@ mod tests {
 
     #[test]
     fn the_worker_status_says_what_it_holds_and_whether_github_works() {
-        let line = |state: &str, packages: &str| format!("{{\"state\":\"{state}\",\"repositories\":[]{packages}}}");
+        let line = |state: &str, extra: &str| {
+            format!(
+                "{{\"state\":\"{state}\",\"login\":\"octo\",\"repositories\":[{{\"repository\":\"acme/api\",\"target\":\"primary\"}}]{extra}}}"
+            )
+        };
         assert_eq!(held(&line("ok", ",\"packages\":null")), (Held::Missing, true));
         assert_eq!(
             held(&line(
                 "ok",
-                ",\"packages\":{\"state\":\"ok\",\"repositories\":[\"B/x\",\"a/y\"]}"
+                ",\"packages\":{\"state\":\"ok\",\"repositories\":[\"B/x\",\"a/y\"],\"repositories_change\":true}"
             )),
-            (Held::Current(vec!["a/y".into(), "b/x".into()]), true)
+            (
+                Held::Current {
+                    repositories: vec!["a/y".into(), "b/x".into()],
+                    change: true
+                },
+                true
+            )
         );
+        let old = held(&line(
+            "ok",
+            ",\"packages\":{\"state\":\"ok\",\"repositories\":[\"a/y\"]}",
+        ));
+        assert!(matches!(old.0, Held::Current { change: false, .. }));
         assert_eq!(
             held(&line("ok", ",\"packages\":{\"state\":\"revoked\"}")).0,
             Held::Missing
         );
+        // The GitHub step's own reading: an absent chain, a stopped service or no repository is no access.
         assert_eq!(held(&line("absent", ",\"packages\":null")), (Held::Missing, false));
+        assert!(!held(&line("ok", ",\"packages\":null,\"serving\":false")).1);
+        assert_eq!(
+            held("{\"state\":\"ok\",\"repositories\":[],\"packages\":null}"),
+            (Held::Missing, false)
+        );
         assert_eq!(held(&line("ok", "")).0, Held::Unsupported);
         assert_eq!(held("not json"), (Held::Unsupported, false));
     }

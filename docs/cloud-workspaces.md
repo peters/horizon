@@ -603,8 +603,10 @@ root GitHub service of the worker over SSH standard input, never in a command li
 a log or the cloud board, and keeps no copy. The worker renews the chain with the
 OAuth app's client ID alone, also while this computer is off. No agent gets the
 token. With the chain, Horizon names the Upkeep's repositories. When you change
-the Upkeep's list, the next deployment or reconnect gives the worker the new list
-without a new code; a worker image that cannot take it asks again. The service adds
+the Upkeep's list, the next exchange with the worker gives it the new list without
+a new code; a worker image that cannot take it gets the list at the next
+deployment, which asks for a new code. **Connect GitHub again** also asks again;
+when you skip it then, the earlier package read access stays. The service adds
 the token only to reads of the NuGet and npm packages of the owners of those
 repositories, never of a repository that an agent asked for, as
 [the trust boundary of the package token](upkeep.md#trust-boundary-of-the-package-token)

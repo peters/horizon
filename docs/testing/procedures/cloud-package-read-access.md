@@ -17,8 +17,8 @@ read access right after its GitHub access, that other clouds are not asked, that
 root service of the worker, and that an agent on the worker can then read the
 versions of a private NuGet package. It also proves that Skip continues the
 deployment with a clear reason, and that **Connect GitHub again** asks again. Unit
-tests cover the refusal of a broader scope, cancellation and a worker image
-without package read access. A person who allowed Horizon to publish images
+tests cover the refusal of a broader scope, the reading of the worker's status
+and the payload. A person who allowed Horizon to publish images
 (`write:packages`) earlier still gets exactly `read:packages` from this sign-in:
 GitHub does not merge the two grants (seen on 2026-10-16 with the operator's
 account).

@@ -204,7 +204,9 @@ impl Client {
         match answer.status {
             401 => Err(Error::Revoked),
             403 if String::from_utf8_lossy(&answer.body).contains(OAUTH_RESTRICTED) => Ok(true),
-            200..=299 | 403 | 404 => Ok(false),
+            // A user, or an organization whose packages the token reads.
+            200..=299 | 404 => Ok(false),
+            // Any other refusal, such as SAML single sign-on, says neither.
             status => Err(Error::Refused(format!("HTTP {status}"))),
         }
     }
