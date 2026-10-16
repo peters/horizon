@@ -250,8 +250,15 @@ fn a_confirmation_after_the_poll_window_can_finish_within_the_command_budget() {
 
 #[test]
 fn confirmation_poll_cannot_succeed_after_the_original_lifetime() {
-    let (mut driver, transport) = fixture(Platform::Ios, vec![Ok(json!({"value": null}))]);
-    driver.lifetime_deadline = Some(Instant::now() + Duration::from_millis(30));
+    // The confirmation poll answers only when its budget ends, so the lifetime always runs
+    // out inside the first poll. The lifetime only has to outlast the start of the link.
+    let lifetime = Duration::from_secs(1);
+    let (mut driver, transport) = fixture_with_alert_latency(
+        Platform::Ios,
+        vec![Ok(json!({"value": null}))],
+        super::super::COMMAND_TIMEOUT,
+    );
+    driver.lifetime_deadline = Some(Instant::now() + lifetime);
     assert_eq!(
         driver.act(&Action::DeepLink {
             url: "myapp://debug/state".into()
@@ -260,5 +267,5 @@ fn confirmation_poll_cannot_succeed_after_the_original_lifetime() {
     );
     let calls = transport.calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
-    assert!(calls[1].3 <= Duration::from_millis(30));
+    assert!(calls[1].1.ends_with("/alert/text") && calls[1].3 <= lifetime);
 }
