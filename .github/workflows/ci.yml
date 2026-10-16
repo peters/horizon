@@ -289,9 +289,11 @@ jobs:
     # entry per OS; the key still includes this job id. Only the speech shard
     # saves, and a miss on main rebuilds the whole workspace there before the
     # speech feature.
-    # macOS runs the three shards in sequence as one `all` job, which saves
-    # its own entry. GitHub-hosted accounts get about five concurrent macOS
-    # jobs, so three per run kept pull requests queued for macOS runners.
+    # macOS runs libs, then speech, as one `all` job, which saves its own
+    # entry. GitHub-hosted accounts get about five concurrent macOS jobs, so
+    # three per run kept pull requests queued for macOS runners. The speech
+    # pass runs the horizon-ui tests, so `all` skips the plain ui pass; the
+    # Linux ui job tests the build without speech.
     timeout-minutes: ${{ matrix.timeout_minutes || 35 }}
     strategy:
     # A failing OS releases the other runner instead of holding it to the
@@ -318,7 +320,7 @@ jobs:
             cache_key: macos-test
             shard: all
             save_cache: true
-            # The three shards in sequence, with the same cold-cache headroom.
+            # libs and speech in sequence, with the same cold-cache headroom.
             timeout_minutes: 60
     steps:
       - uses: actions/checkout@v7

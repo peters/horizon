@@ -247,11 +247,13 @@ mod tests {
     #[test]
     fn cancellation_interrupts_control_setup_before_video_and_releases_receiver() {
         use std::{
-            io::{BufRead, Read, Write},
+            io::{BufRead, ErrorKind, Read, Write},
             net::TcpListener,
             sync::{atomic::AtomicBool, mpsc},
-            time::{Duration, Instant},
+            time::Duration,
         };
+        // Only guards against a hang: the outcome below does not depend on elapsed time.
+        const HANG_GUARD: Duration = Duration::from_secs(60);
         let _serial = crate::session::lock(&TEST_RECEIVER);
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let address = listener.local_addr().expect("address");
@@ -270,7 +272,7 @@ mod tests {
         let (send, blocked) = mpsc::channel();
         let server = std::thread::spawn(move || {
             let (socket, _) = listener.accept().expect("accept");
-            socket.set_read_timeout(Some(Duration::from_secs(2))).expect("timeout");
+            socket.set_read_timeout(Some(HANG_GUARD)).expect("timeout");
             let mut socket = std::io::BufReader::new(socket);
             let mut first = String::new();
             socket.read_line(&mut first).expect("info");
@@ -315,14 +317,19 @@ mod tests {
             assert_eq!(socket.read(&mut [0]).expect("cancel closes setup"), 0);
         });
         let worker = std::thread::spawn(move || receiver.mirror(crate::VideoFormat::default()));
-        blocked.recv_timeout(Duration::from_secs(2)).expect("setup blocked");
-        let started = Instant::now();
+        blocked.recv_timeout(HANG_GUARD).expect("setup blocked");
         cancel.stop();
-        while !worker.is_finished() {
-            assert!(started.elapsed() < Duration::from_secs(1));
-            std::thread::sleep(Duration::from_millis(5));
+        // Without cancellation the setup read ends by its own timeout, so the
+        // error, not elapsed time, shows that cancellation interrupted it.
+        match worker.join().expect("worker") {
+            Ok(_) => panic!("cancelled setup started video"),
+            Err(Error::Io(error)) => assert!(
+                !matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock),
+                "setup ended by its read timeout, not by cancellation: {error}"
+            ),
+            Err(Error::Protocol("casting cancelled")) => {}
+            Err(error) => panic!("unexpected setup error: {error}"),
         }
-        assert!(worker.join().expect("worker").is_err());
         assert!(Reservation::acquire(address.ip()).is_ok());
         server.join().expect("server");
     }

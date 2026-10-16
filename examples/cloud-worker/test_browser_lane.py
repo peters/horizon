@@ -77,6 +77,7 @@ pick.addEventListener('change', async () => report('picked:' + await describe(pi
 pick.addEventListener('cancel', () => report('cancelled'));
 zone.addEventListener('dragover', event => event.preventDefault());
 zone.addEventListener('drop', async event => { event.preventDefault(); report('dropped:' + await describe(event.dataTransfer.files)); });
+report('loaded');
 </script>"""
 
 
@@ -555,7 +556,10 @@ class BrowserLaneTests(unittest.TestCase):
 
         opened = view.call({'operation': 'open', 'id': browser, 'url': url, 'backend': 'chromium'})
         self.assertIsNone(opened.get('error'), opened)
-        state = poll(until=lambda state: state['ready'] and state.get('uploads', {}).get('file_chooser'), label='ready')
+        # A ready browser can still be loading the page, and a click before the input
+        # exists is lost. The page reports after its listeners are in place.
+        state = poll(until=lambda state: state['ready'] and state.get('uploads', {}).get('file_chooser')
+                     and page_report(state)[1] == 'loaded', label='ready')
         self.assertTrue(state['uploads']['drops'])
 
         # A host that predates uploads never answers, so the service cancels its chooser at once.
