@@ -1134,3 +1134,5 @@ record so the core profile/publisher fences also govern its confirmation.
 Protocol `exposure::ingress` keeps fixed protected port geometry separate from
 bounded passive receipt parsing in `ingress::receipt`. Its colocated tests check
 complete publication sets and identity boundaries without host or kernel I/O.
+
+The default-off worker TCP Gate lives in `horizon-cloud-worker/src/exposure_gate/`: `mod.rs` owns exclusive listeners and cancellation, `state.rs` owns admission/accounting, `relay.rs` owns bounded byte forwarding, and colocated `tests.rs` exercises actual sockets. Shared policy parsing stays in `horizon-cloud-protocol::exposure`; the worker separately refuses unsupported identity modes before any bind.

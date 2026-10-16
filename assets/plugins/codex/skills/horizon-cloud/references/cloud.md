@@ -990,3 +990,7 @@ prepared by the trusted launch adapter. Selecting a historical revision must not
 reload today's profile for a mutation: that profile may be absent or prebuilt now.
 The public headless request still resolves its own working-copy context; callers
 cannot supply a trusted profile through the wire schema.
+
+### Default-off worker CIDR gate
+
+The Linux worker `exposure-gate` component accepts explicit Public or actual accepted-peer CIDR policies only. Named/tag rules (including mixed CIDR lists) and TailnetOnly refuse before binding, even when shared policy syntax is valid. Off binds nothing. There is no public UI, CLI or MCP activation, TLS, identity grant, owner approval or provider mapping. Root-controlled fresh listeners, finite connection/source/byte/time budgets, original flow shutdown and awaited close remain required. See docs/architecture/worker-exposure-gate.md and docs/testing/procedures/worker-exposure-gate.md; actual first/final root component evidence remains required.

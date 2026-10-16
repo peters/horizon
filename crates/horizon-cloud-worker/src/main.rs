@@ -6,6 +6,8 @@ mod companion_tools;
 mod companions;
 mod configuration;
 mod controller;
+#[cfg(all(target_os = "linux", feature = "exposure-gate"))]
+pub mod exposure_gate;
 #[cfg(unix)]
 mod local_network;
 mod offers;

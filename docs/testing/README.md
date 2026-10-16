@@ -26,6 +26,7 @@ documents that are not yet STE.
 | Procedure | Feature | Cost |
 |---|---|---|
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |
+| [worker-exposure-gate](procedures/worker-exposure-gate.md) | Default-off actual-peer CIDR/Public worker Gate | no local cost; approved real-root component only |
 | [portable-build-engine](procedures/portable-build-engine.md) | Retain publisher identity through image preparation | none |
 | [portable-image-publishing](procedures/portable-image-publishing.md) | Ordinary defaults, portable setup and first/final local publishing proof | none |
 | [bound-worker-pull](procedures/bound-worker-pull.md) | Exact read-only registry material for CPU hosts | none |
@@ -90,6 +91,7 @@ documents that are not yet STE.
 
 | Report | Procedure | Date |
 |---|---|---|
+| [2026-10-16-worker-cidr-gate](reports/2026-10-16-worker-cidr-gate.md) | [worker-exposure-gate](procedures/worker-exposure-gate.md) | 2026-10-16 |
 | [2026-10-15-one-service-gateway-engine](reports/2026-10-15-one-service-gateway-engine.md) | [one-service-gateway-engine](procedures/one-service-gateway-engine.md) | 2026-10-15 |
 | [2026-10-16-protected-host-ingress](reports/2026-10-16-protected-host-ingress.md) | [protected-host-ingress](procedures/protected-host-ingress.md) | 2026-10-16 |
 | [2026-10-05-cloud-panels](reports/2026-10-05-cloud-panels.md) | [cloud-panels](procedures/cloud-panels.md) | 2026-10-05 |
