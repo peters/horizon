@@ -5,7 +5,7 @@
 #   COPY --from=ghcr.io/peters/horizon-worker-helpers@sha256:<digest> / /
 ARG HORIZON_REVISION
 
-FROM rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS build
+FROM rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS source
 ARG HORIZON_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config nasm libssl-dev libxkbcommon-dev git ca-certificates python3 \
@@ -15,8 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN printf '%s\n' "$HORIZON_REVISION" | grep -Eqx '[0-9a-f]{40}' \
         || { echo 'HORIZON_REVISION must be a full 40-character commit' >&2; exit 1; }
 RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/peters/horizon.git "$HORIZON_REVISION" \
-    && git -C /src -c advice.detachedHead=false checkout -q FETCH_HEAD \
-    && cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.99.0 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
+    && git -C /src -c advice.detachedHead=false checkout -q FETCH_HEAD
+
+FROM source AS build
+RUN cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.99.0 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
         -p horizon-cloud-worker -p horizon-browser-cli -p horizon-device --features horizon-device/cli \
     && mkdir -p /output/usr/local/bin /output/usr/local/share/licenses/horizon \
     && install -m 755 -s target/release/horizon-cloud-worker target/release/horizon-browser \
@@ -32,16 +34,23 @@ RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/peters
     && rmdir /output/share/licenses /output/share \
     && rm -rf /src /tmp/helper-cargo
 
+# Same reviewed patch and builder as standalone worker contexts.
+FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS tailnet-runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl patch python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=source /src/examples/cloud-worker/tailscale/ /runtime-build/
+RUN sh /runtime-build/build.sh
+
 FROM scratch AS helpers
 ARG HORIZON_REVISION
 COPY --from=build /output/ /
+COPY --from=tailnet-runtime /output/ /
 LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
     org.opencontainers.image.revision="${HORIZON_REVISION}" \
     org.opencontainers.image.description="Horizon cloud worker helpers and scripts for COPY --from into a worker recipe"
 
 # Smallest base that meets the worker contract, used to check the published layout
 # before it is pushed. It is never published.
-FROM tailscale/tailscale:v1.102.5@sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065 AS tailnet-runtime
 FROM ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55 AS probe
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -49,7 +58,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xvfb openbox x11vnc x11-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=helpers / /
-COPY --from=tailnet-runtime /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
 RUN groupadd --gid 10001 horizon-agent \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /bin/bash horizon-agent
 RUN mkdir -p /etc/horizon-worker \

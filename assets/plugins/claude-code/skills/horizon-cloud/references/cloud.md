@@ -10,6 +10,22 @@ a new device sign-in. Launch preparation uses retained-account recovery; a visib
 selector and public destination controls use explicit account selection;
 existing-cloud recovery still requires its recorded identity.
 
+
+### Pinned Tailscale Unix PROXY runtime
+
+The image source recipes build a checksum-pinned Tailscale v1.102.5 source with
+Unix Serve PROXY v1 support. Unix headers use the virtual Serve ingress port;
+Unix v2 refuses. Existing TCP v1/v2, enrollment and HTTP/SOCKS proxies remain.
+Go is a build dependency only. Both native images must pass upstream behavior
+checks and retain notices before a new helper or worker digest is published.
+This is a prerequisite transport, with ordinary exposure defaults still off.
+An identity consumer must retain a root-owned 0700 Unix listener directory,
+original listener and accepted peer credentials from the pinned original daemon.
+A path, header, version or same-PID loopback stream proves no identity.
+See docs/architecture/tailscale-unix-proxy.md and
+`docs/testing/procedures/tailscale-unix-proxy.md`. No public control or runtime
+approval is supplied by this patch; old TCP-based evidence does not qualify it.
+
 ### Retained publication records
 
 Cloud persistence can retain a recipe, resolved destination and nonsecret publisher

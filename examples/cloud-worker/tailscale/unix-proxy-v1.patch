@@ -1,0 +1,312 @@
+--- a/cmd/tailscale/cli/serve_v2.go
++++ b/cmd/tailscale/cli/serve_v2.go
+@@ -1312,8 +1312,8 @@
+ 	// For tcp: targets, extract the host:port from the parsed URL.
+ 	var fwdAddr string
+ 	if strings.HasPrefix(targetURL, "unix:") {
+-		if proxyProtocol != 0 {
+-			return fmt.Errorf("PROXY protocol is not supported with unix socket targets")
++		if proxyProtocol != 0 && proxyProtocol != 1 {
++			return fmt.Errorf("Unix socket targets support only PROXY protocol v1")
+ 		}
+ 		fwdAddr = targetURL
+ 	} else {
+--- a/cmd/tailscale/cli/serve_v2_test.go
++++ b/cmd/tailscale/cli/serve_v2_test.go
+@@ -535,9 +535,29 @@
+ 			skipOn: []string{"windows"},
+ 		},
+ 		{
+-			name: "tcp_unix_socket_proxy_protocol_rejected",
+-			steps: []step{{
+-				command: cmd("serve --tcp=3128 --proxy-protocol=1 --bg unix:/var/run/app.sock"),
++			name: "tcp_unix_socket_proxy_protocol_v1",
++			steps: []step{
++				{
++					command: cmd("serve --tcp=3128 --proxy-protocol=1 --bg unix:/var/run/app.sock"),
++					want: &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{
++						3128: {TCPForward: "unix:/var/run/app.sock", ProxyProtocol: 1},
++					}},
++				},
++				{
++					command: cmd("serve --tcp=3128 --proxy-protocol=2 --bg unix:/var/run/replacement.sock"),
++					wantErr: anyErr(),
++				},
++				{
++					command: cmd("serve --tcp=3128 off"),
++					want:    &ipn.ServeConfig{},
++				},
++			},
++			skipOn: []string{"windows"},
++		},
++		{
++			name: "tcp_unix_socket_proxy_protocol_v2_rejected",
++			steps: []step{{
++				command: cmd("serve --tcp=3128 --proxy-protocol=2 --bg unix:/var/run/app.sock"),
+ 				wantErr: anyErr(),
+ 			}},
+ 			skipOn: []string{"windows"},
+@@ -2698,3 +2718,34 @@
+ 		}
+ 	})
+ }
++
++// A rejected Unix v2 update must not overwrite an already configured v1 route.
++func TestServeUnixProxyV2PreservesConfig(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("Unix sockets are unsupported on Windows")
++	}
++	lc := &fakeLocalServeClient{}
++	e := &serveEnv{lc: lc}
++	if err := newServeV2Command(e, serve).ParseAndRun(t.Context(), []string{
++		"--tcp=3128", "--proxy-protocol=1", "--bg", "unix:/var/run/original.sock",
++	}); err != nil {
++		t.Fatal(err)
++	}
++	before, err := json.Marshal(lc.config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	count := lc.setCount
++	if err := newServeV2Command(&serveEnv{lc: lc}, serve).ParseAndRun(t.Context(), []string{
++		"--tcp=3128", "--proxy-protocol=2", "--bg", "unix:/var/run/replacement.sock",
++	}); err == nil {
++		t.Fatal("Unix v2 update succeeded")
++	}
++	after, err := json.Marshal(lc.config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if lc.setCount != count || !bytes.Equal(before, after) {
++		t.Fatalf("rejected update changed original configuration: %s -> %s", before, after)
++	}
++}
+--- a/ipn/ipnlocal/serve.go
++++ b/ipn/ipnlocal/serve.go
+@@ -721,12 +721,20 @@
+ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string) error {
+ 	var proxyHeader []byte
+ 	if proxyProtoVer > 0 {
+-		// PROXY protocol requires a valid TCP destination address.
+-		// For Unix socket backends, RemoteAddr is *net.UnixAddr;
+-		// the CLI rejects this combination, but guard here as well.
+-		backAddr, ok := backConn.RemoteAddr().(*net.TCPAddr)
+-		if !ok {
+-			return fmt.Errorf("PROXY protocol is not supported with non-TCP backend %s", backDst)
++		var destPort int
++		unixBackend := false
++		switch addr := backConn.RemoteAddr().(type) {
++		case *net.TCPAddr:
++			destPort = addr.Port
++		case *net.UnixAddr:
++			if proxyProtoVer != 1 || dport == 0 {
++				return fmt.Errorf("Unix backends require PROXY protocol v1 and a nonzero Serve port")
++			}
++			// Unix sockets have no TCP port. Report the original virtual ingress.
++			destPort = int(dport)
++			unixBackend = true
++		default:
++			return fmt.Errorf("PROXY protocol is not supported with backend %s", backDst)
+ 		}
+ 
+ 		// We always want to format the PROXY protocol header based on
+@@ -752,6 +760,9 @@
+ 			}
+ 		}
+ 		if !destAddr.IsValid() {
++			if unixBackend {
++				return fmt.Errorf("no node address for Unix PROXY protocol destination")
++			}
+ 			// Unexpected: we couldn't determine the node's IP address.
+ 			// Pick a best-effort destination address of localhost.
+ 			if is4 {
+@@ -767,7 +778,7 @@
+ 			SourceAddr: net.TCPAddrFromAddrPort(proxySrcAddr),
+ 			DestinationAddr: &net.TCPAddr{
+ 				IP:   destAddr.AsSlice(),
+-				Port: backAddr.Port,
++				Port: destPort,
+ 			},
+ 		}
+ 		if is4 {
+@@ -778,6 +789,9 @@
+ 		var err error
+ 		proxyHeader, err = header.Format()
+ 		if err != nil {
++			if unixBackend {
++				return fmt.Errorf("format Unix PROXY protocol header: %w", err)
++			}
+ 			b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+ 		}
+ 	}
+--- /dev/null
++++ b/ipn/ipnlocal/serve_unix_proxy_test.go
+@@ -0,0 +1,168 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve && !windows
++
++package ipnlocal
++
++import (
++	"bufio"
++	"bytes"
++	"encoding/binary"
++	"fmt"
++	"io"
++	"net"
++	"net/netip"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"tailscale.com/ipn"
++	"tailscale.com/tailcfg"
++	"tailscale.com/types/netmap"
++)
++
++// Exercise the actual Serve handler's Unix dial, header ordering, and forwarding,
++// including the existing TCP destination-port semantics.
++func TestServeUnixProxyProtocol(t *testing.T) {
++	for _, tt := range []struct {
++		name, network, source string
++		version               int
++		port                  uint16
++		reject                bool
++	}{
++		{"unix-v1-ipv4", "unix", "100.101.102.103:4567", 1, 20000, false},
++		{"unix-v1-ipv6", "unix", "[fd7a:115c:a1e0::2]:4567", 1, 20000, false},
++		{"unix-v1-mapped", "unix", "[::ffff:100.101.102.103]:4567", 1, 20000, false},
++		{"unix-v1-header-looking-payload", "unix", "100.101.102.103:4567", 1, 20000, false},
++		{"unix-no-proxy", "unix", "100.101.102.103:4567", 0, 20000, false},
++		{"unix-zero-port-refused", "unix", "100.101.102.103:4567", 1, 0, true},
++		{"unix-no-node-address-refused", "unix", "100.101.102.103:4567", 1, 20000, true},
++		{"unix-v2-refused", "unix", "100.101.102.103:4567", 2, 20000, true},
++		{"tcp-v1-retained", "tcp", "100.101.102.103:4567", 1, 20000, false},
++		{"tcp-v2-retained", "tcp", "100.101.102.103:4567", 2, 20000, false},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			b := newTestBackend(t)
++			b.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: (&tailcfg.Node{
++				Addresses: []netip.Prefix{
++					netip.MustParsePrefix("100.150.151.151/32"),
++					netip.MustParsePrefix("fd7a:115c:a1e0::1/128"),
++				},
++			}).View()})
++			if tt.name == "unix-no-node-address-refused" {
++				b.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: (&tailcfg.Node{}).View()})
++			}
++			address := "127.0.0.1:0"
++			if tt.network == "unix" {
++				address = filepath.Join(t.TempDir(), "backend.sock")
++			}
++			ln, err := net.Listen(tt.network, address)
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { ln.Close() })
++			deadline := time.Now().Add(5 * time.Second)
++			switch listener := ln.(type) {
++			case *net.UnixListener:
++				err = listener.SetDeadline(deadline)
++			case *net.TCPListener:
++				err = listener.SetDeadline(deadline)
++			default:
++				t.Fatalf("unexpected listener type %T", ln)
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			target := ln.Addr().String()
++			wantPort := int(tt.port)
++			if tt.network == "unix" {
++				target = "unix:" + target
++			} else {
++				wantPort = ln.Addr().(*net.TCPAddr).Port
++			}
++			client, incoming := net.Pipe()
++			t.Cleanup(func() { client.Close(); incoming.Close() })
++			client.SetDeadline(time.Now().Add(5 * time.Second))
++			incoming.SetDeadline(time.Now().Add(5 * time.Second))
++			source := netip.MustParseAddrPort(tt.source)
++			handler := b.tcpHandlerForServeTCP((&ipn.TCPPortHandler{
++				TCPForward: target, ProxyProtocol: tt.version,
++			}).View(), tt.port, source, &serveHTTPContext{}, "")
++			done := make(chan error, 1)
++			go func() { done <- handler(incoming) }()
++			back, err := ln.Accept()
++			if err != nil {
++				select {
++				case handlerErr := <-done:
++					t.Fatalf("accept: %v; handler: %v", err, handlerErr)
++				default:
++					t.Fatal(err)
++				}
++			}
++			t.Cleanup(func() { back.Close() })
++			back.SetDeadline(time.Now().Add(5 * time.Second))
++			if tt.reject {
++				if err := <-done; err == nil {
++					t.Fatal("invalid Unix PROXY stream accepted")
++				}
++				if n, err := back.Read(make([]byte, 1)); n != 0 || err != io.EOF {
++					t.Fatalf("rejected stream delivered bytes or stayed open: n=%d err=%v", n, err)
++				}
++				return
++			}
++			application := "PING"
++			if tt.name == "unix-v1-header-looking-payload" {
++				application = "PROXY TCP4 100.64.0.9 100.64.0.10 1 2\r\nPING"
++			}
++			writeDone := make(chan error, 1)
++			go func() { _, err := io.WriteString(client, application); writeDone <- err }()
++			r := bufio.NewReader(back)
++			if tt.version == 1 {
++				family, destination := "TCP4", "100.150.151.151"
++				if source.Addr().Is6() && !source.Addr().Is4In6() {
++					family, destination = "TCP6", "fd7a:115c:a1e0::1"
++				}
++				want := fmt.Sprintf("PROXY %s %s %s 4567 %d\r\n", family, source.Addr().Unmap(), destination, wantPort)
++				if line, err := r.ReadString('\n'); err != nil || line != want {
++					t.Fatalf("header = %q, %v; want %q", line, err, want)
++				}
++			} else if tt.version == 2 {
++				header := make([]byte, 28)
++				if _, err := io.ReadFull(r, header); err != nil {
++					t.Fatal(err)
++				}
++				if !bytes.Equal(header[:12], []byte("\r\n\r\n\x00\r\nQUIT\n")) ||
++					header[12] != 0x21 || header[13] != 0x11 || binary.BigEndian.Uint16(header[14:16]) != 12 ||
++					!bytes.Equal(header[16:24], []byte{100, 101, 102, 103, 100, 150, 151, 151}) ||
++					binary.BigEndian.Uint16(header[24:26]) != 4567 || int(binary.BigEndian.Uint16(header[26:28])) != wantPort {
++					t.Fatalf("TCP v2 header changed: %x", header)
++				}
++			}
++			payload := make([]byte, len(application))
++			if _, err := io.ReadFull(r, payload); err != nil || string(payload) != application {
++				t.Fatalf("payload = %q, %v", payload, err)
++			}
++			if err := <-writeDone; err != nil {
++				t.Fatal(err)
++			}
++			go func() { _, err := io.WriteString(back, "PONG"); writeDone <- err }()
++			pong := make([]byte, 4)
++			if _, err := io.ReadFull(client, pong); err != nil || string(pong) != "PONG" {
++				t.Fatalf("reverse payload = %q, %v", pong, err)
++			}
++			if err := <-writeDone; err != nil {
++				t.Fatal(err)
++			}
++			back.Close()
++			select {
++			case err := <-done:
++				if err != nil {
++					t.Fatalf("forwarder returned an error: %v", err)
++				}
++			case <-time.After(5 * time.Second):
++				t.Fatal("forwarder did not retire")
++			}
++		})
++	}
++}

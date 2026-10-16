@@ -23,9 +23,10 @@ class WorkerContextTests(unittest.TestCase):
         self.assertEqual(copies, [list(context.WORKER_SCRIPTS)])
         rules = (source / '.dockerignore').read_text().splitlines()
         admitted = {line[1:] for line in rules if line.startswith('!')}
-        self.assertEqual(admitted, {'Dockerfile', 'Dockerfile.gpu', 'bin/'}
+        self.assertEqual(admitted, {'Dockerfile', 'Dockerfile.gpu', 'bin/', 'tailscale/'}
                          | set(context.WORKER_SCRIPTS)
-                         | {'bin/' + name for name in context.HELPERS})
+                         | {'bin/' + name for name in context.HELPERS}
+                         | {'tailscale/' + name for name in context.TAILSCALE_INPUTS})
         helper_copies = [shlex.split(line)[1:-1] for line in recipe.splitlines()
                          if line.startswith('COPY bin/')]
         self.assertEqual(helper_copies, [['bin/' + name for name in context.HELPERS]])
@@ -40,7 +41,8 @@ class WorkerContextTests(unittest.TestCase):
             return result
         for name in ['horizon-worker-credentials', 'horizon-worker-start.backup',
                      'bin/private-setting', 'bin/subdir/private-setting',
-                     'bin/horizon-cloud-worker.old']:
+                     'bin/horizon-cloud-worker.old', 'tailscale/private-setting',
+                     'tailscale/subdir/private-setting']:
             self.assertFalse(included(name), name)
         for name in context.WORKER_SCRIPTS:
             self.assertTrue(included(name), name)
@@ -67,6 +69,7 @@ class WorkerContextTests(unittest.TestCase):
             self.assertIn('FROM ${BASE_IMAGE}', gpu)
             self.assertTrue((output / '.dockerignore').is_file())
             self.assertFalse((output / 'bin/private-setting').exists())
+            self.assertEqual({p.name for p in (output / 'tailscale').iterdir()}, set(context.TAILSCALE_INPUTS))
             self.assertEqual(strip.call_count, 3)
             with self.assertRaises(ValueError):
                 context.prepare_context(binaries, output, base)
@@ -89,6 +92,9 @@ class WorkerContextTests(unittest.TestCase):
             original = Path(context.__file__).parent
             for name in context.CONTEXT_FILES:
                 (source / name).write_bytes((original / name).read_bytes())
+            (source / 'tailscale').mkdir()
+            for name in context.TAILSCALE_INPUTS:
+                (source / 'tailscale' / name).write_bytes((original / 'tailscale' / name).read_bytes())
             for name in context.HELPERS:
                 (binaries / name).write_bytes(b'synthetic-helper')
             secret = root / 'private-runtime-setting'
@@ -100,7 +106,7 @@ class WorkerContextTests(unittest.TestCase):
                 output = root / 'allowed'
                 context.prepare_context(binaries, output)
                 self.assertEqual({p.name for p in output.iterdir()},
-                                 set(context.CONTEXT_FILES) | {'bin', 'manifest.json'})
+                                 set(context.CONTEXT_FILES) | {'bin', 'tailscale', 'manifest.json'})
                 for path in output.rglob('*'):
                     if path.is_file():
                         self.assertNotIn(secret.read_bytes(), path.read_bytes())

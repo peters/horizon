@@ -25,6 +25,7 @@ documents that are not yet STE.
 
 | Procedure | Feature | Cost |
 |---|---|---|
+| [tailscale-unix-proxy](procedures/tailscale-unix-proxy.md) | Pinned Tailscale Unix PROXY v1 runtime and both native images | none |
 | [cloud-tailnet-selection](procedures/cloud-tailnet-selection.md) | Select an existing saved tailnet before cloud allocation | none |
 | [protected-ingress-reader](procedures/protected-ingress-reader.md) | Default-off original host receipt and namespace readback | rents compute |
 | [exposure-policy](procedures/exposure-policy.md) | Bounded default-off policy and route comparison facts | none |

@@ -519,6 +519,11 @@ and credential logic must not be copied into either transport or UI rendering.
 
 ## Cloud workspaces
 
+`examples/cloud-worker/tailscale` owns the checksum-pinned upstream Unix PROXY v1
+patch, its shared Go build script and consumed-module notices. Both image recipes
+use this same boundary; Go stays in build stages. This transport does not grant
+source authority or enable an exposure controller. See `tailscale-unix-proxy.md`.
+
 The shared `horizon-cloud::SshHost` and `SshEndpoint` types validate provider SSH destinations without DNS lookups. Controller and companion SSH transports resolve validated names inside their bounded subprocesses, while worker journals retain legacy numeric fields.
 
 `horizon-cloud::companions` owns passive repository declarations and pure,
