@@ -1793,12 +1793,16 @@ mod tests {
 
     #[test]
     fn durable_cast_pin_is_removed_with_provenance_for_later_reuse() {
-        for pin in [json!("7391"), json!({"$var":"code"}), json!([{"$var":"code"}, "7391"])] {
+        // A digits-only PIN can occur by chance in the job UUID, a timestamp or the
+        // runner PID, so the leak checks below look for text that generated state
+        // cannot contain.
+        const PIN: &str = "Synthetic-PIN-7391";
+        for pin in [json!(PIN), json!({"$var":"code"}), json!([{"$var":"code"}, PIN])] {
             let root = tempfile::tempdir().expect("job root");
             let original = Plan {
                 version: 1,
                 project: None,
-                variables: std::collections::BTreeMap::from([("code".into(), json!("7391"))]),
+                variables: std::collections::BTreeMap::from([("code".into(), json!(PIN))]),
                 steps: vec![
                     PlanStep {
                         id: "pair".into(),
@@ -1823,15 +1827,15 @@ mod tests {
             if original.steps[0].arguments["pin"].is_string() {
                 assert_eq!(saved.steps[0].arguments["pin"], json!("<redacted>"));
             } else {
-                assert!(!saved_text.contains("7391"));
+                assert!(!saved_text.contains(PIN));
                 assert!(crate::variables::resume_blocked_by_cast_secrets(
                     &saved,
                     1,
                     &run.state.redacted_cast_variables
                 ));
             }
-            assert!(!state_text.contains("7391"));
-            assert_eq!(original.variables["code"], json!("7391"));
+            assert!(!state_text.contains(PIN));
+            assert_eq!(original.variables["code"], json!(PIN));
             let mut legacy: Value = serde_json::from_str(&state_text).expect("state json");
             legacy
                 .as_object_mut()

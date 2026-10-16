@@ -6,6 +6,8 @@ use horizon_browser_control::manifest::provider_usage::{ProviderUsageSummary, Us
 use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
+mod support;
+
 // Process startup and manifest persistence must leave time for the blocking action.
 const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 6;
 // A starved job can reach its deadline before it queues the blocking action; it then
@@ -1414,7 +1416,7 @@ fn cli_plan_calls_the_public_usage_tool_and_preserves_multiple_provider_results(
     let queue = UsageQueue::new(root.path().join(".horizon"));
     let deadline = Instant::now() + JOB_PROGRESS_GUARD;
     loop {
-        let requests = queue.claim("usage-host").expect("host queue");
+        let requests = support::claim_host_requests(&queue, "usage-host");
         if let Some(request) = requests.first() {
             assert!(request.provider.is_none());
             let rows = ["account-a", "account-b"]
@@ -1490,7 +1492,7 @@ fn cli_plan_discovers_provider_devices_without_a_browser_or_configured_target() 
     let queue = UsageQueue::new(root.path().join(".horizon"));
     let deadline = Instant::now() + JOB_PROGRESS_GUARD;
     loop {
-        if let Some(request) = queue.claim("catalog-host").unwrap().first() {
+        if let Some(request) = support::claim_host_requests(&queue, "catalog-host").first() {
             let query = request.catalog.as_ref().unwrap();
             assert_eq!(query.provider, "account");
             assert_eq!(query.search, "phone");

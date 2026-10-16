@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod support;
+
 struct OwnedChild(Option<Child>);
 impl Drop for OwnedChild {
     fn drop(&mut self) {
@@ -51,7 +53,7 @@ fn pending_metadata(operation: CredentialOperation) {
     let queue = UsageQueue::new(root.path().join(".horizon"));
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let requests = queue.claim("00000000-0000-0000-0000-000000000001").unwrap();
+        let requests = support::claim_host_requests(&queue, "00000000-0000-0000-0000-000000000001");
         if let Some(request) = requests.first() {
             assert_eq!(request.actor, "horizon:synthetic-credential-agent");
             let input = request.tailnet_credential.as_ref().unwrap();
