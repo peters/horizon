@@ -1137,8 +1137,9 @@ complete publication sets and identity boundaries without host or kernel I/O.
 
 The default-off worker TCP Gate lives in `horizon-cloud-worker/src/exposure_gate/`: `mod.rs` owns exclusive listeners and cancellation, `state.rs` owns admission/accounting, `relay.rs` owns bounded byte forwarding, and colocated `tests.rs` exercises actual sockets. Shared policy parsing stays in `horizon-cloud-protocol::exposure`; the worker separately refuses unsupported identity modes before any bind.
 
-The exposure intent model lives in `horizon-core/src/cloud_runtime/state/exposure/`.
+Retained exposure metadata lives in `horizon-core/src/cloud_runtime/state/exposure/`.
 The root validates bounded data; `binding.rs` validates original comparison facts,
 `provider.rs` validates passive progress, and `lifecycle.rs` owns feature-gated pure transitions.
 The model reuses the existing unique-key JSON decoder within cloud runtime.
-Saved Deployment and paired Allocation formats remain outside this first prerequisite.
+Deployment and paired Allocation readers, writers and neighbor fences share one atomic version change.
+Colocated tests retain exposure, publication, admission and enrollment together without runtime activation.

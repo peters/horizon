@@ -1,11 +1,11 @@
-# Exposure intent model
+# Retained exposure records
 
 ## Scope and trust boundary
 
 Core defines bounded exposure intent and comparison facts.
 The `cloud-exposure` feature is off by default and enables pure model transitions only.
-The model is not connected to Deployment, Allocation or Store persistence.
-Existing saved formats, version selection and neighbor fences stay unchanged.
+Passive decoding is available with cloud workspaces.
+Store and paired conversion retain exposure metadata without activating a runtime.
 This prerequisite adds no listener, keeper, provider client, owner approval or public operation.
 
 Serialized input is untrusted.
@@ -13,6 +13,19 @@ Strict decoding rejects unknown fields, duplicate nested keys and values that fa
 A decoded value supplies no authenticated membership, transport custody or permission to reopen.
 Validation bounds the decoded value, not allocations in a caller's JSON parser.
 A caller must bound encoded input before decoding; this model adds no raw JSON dispatcher.
+
+## Storage and versions
+
+A present exposure record selects Deployment version 7 and paired Allocation version 5.
+An absent exposure record keeps the existing version selection and encoding.
+The highest version retains publication, enrollment, one-device admission and sibling metadata.
+Store reads and writes, paired conversion and neighboring-worker checks recognize the same version.
+An earlier version cannot carry exposure data; a highest-version record without exposure is invalid.
+
+Deployment validation binds retained exposure to its cloud ID.
+Paired conversion also requires the original session, workspace and cloud to match the project identity.
+It preserves the allocation/project identity and dedicated-worker fences.
+These checks validate comparison facts and do not grant provider or transport authority.
 
 ## Original comparison facts
 
@@ -49,20 +62,34 @@ A decoded Closed value does not prove that a worker, process, provider resource 
 
 Optional provider progress is passive evidence.
 Its bounded rule text, action IDs and resource IDs supply no permission to repeat an effect.
+Duplicate provider map keys and noncanonical typed key aliases cannot erase retained evidence.
 The Closed shape requires absent provider progress when that field is present.
 Actual absence still needs proof from the later original controller.
 
-## Serial delivery and module boundaries
+## Atomic delivery and module boundaries
 
-This first outcome defines the model and pure transitions behind the feature flag.
+The model and pure transitions were delivered separately behind the feature flag.
+This outcome connects them to Store and paired Allocation persistence.
 It reuses the existing unique-key JSON decoder within cloud runtime.
 `binding.rs` validates comparison facts; `provider.rs` validates passive progress.
-`lifecycle.rs` owns the feature-gated transitions; colocated tests exercise the model without Store.
+`lifecycle.rs` owns the feature-gated transitions.
+The model's duplicate-provider and Finish/service operation checks remain unchanged.
 
-The separate persistence outcome must update every Deployment and paired Allocation reader and writer together.
-That outcome must retain publication, enrollment, one-device admission and exposure in one composite round trip.
-It must also retain the project ownership and neighbor fences.
-This first outcome adds no new saved format version or persistence field.
+The nine source/test leaves form one atomic persisted-format outcome.
+The Deployment and Allocation schemas, version selection, readers, writers, conversion,
+neighbor fence and required fixture initializers must agree to prevent rejected or lost state.
+The existing UI fixture stores its larger Deployment array on the heap to satisfy the blocking stack-array lint.
+A split that exposes only part of this format would leave an incomplete reader/writer contract.
+
+One composite regression retains publication, enrollment, one-device admission and exposure
+through the same Store and paired-format round trip.
+Separate field tests do not establish that result.
+The Store regression retains unresolved exposure without granting reopen authority,
+and a rejected cross-cloud exposure save leaves the original durable bytes unchanged.
+A version-7 neighbor regression exercises the public migration API: a shared worker
+is refused, a different worker succeeds, and both preserve the original neighbor bytes.
+Absent-exposure records retain the earlier formats and existing regression coverage.
+
 Runtime, provider and public activation remain later outcomes in issue #1335.
-
-Use the [model procedure](../testing/procedures/exposure-records.md) for this prerequisite.
+These records do not deliver the complete M2 feature.
+Use the [record procedure](../testing/procedures/exposure-records.md) for this outcome.

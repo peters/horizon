@@ -59,6 +59,9 @@ pub struct Deployment {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_admission: Option<service_admission::Record>,
+    /// Original exposure intent; a decoded record never recreates a live keeper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<exposure::Record>,
     pub cloud_id: String,
     pub repository: PathBuf,
     pub revision: String,
@@ -151,7 +154,9 @@ impl Deployment {
     }
 
     pub(in crate::cloud_runtime) fn record_version(&self) -> u32 {
-        if self.service_admission.is_some() {
+        if self.exposure.is_some() {
+            exposure::RECORD_VERSION
+        } else if self.service_admission.is_some() {
             service_admission::RECORD_VERSION
         } else if self.publication.is_some() {
             PUBLISHING_RECORD_VERSION
@@ -169,12 +174,24 @@ impl Deployment {
         self.version == self.record_version()
             && self.known_version_shape()
             && self
+                .exposure
+                .as_ref()
+                .is_none_or(|record| record.valid() && record.binding().owner.cloud_id == self.cloud_id)
+            && self
                 .service_admission
                 .as_ref()
                 .is_none_or(|record| record.valid() && record.owner().cloud_id == self.cloud_id)
     }
 
     fn known_version_shape(&self) -> bool {
+        if self.version == exposure::RECORD_VERSION {
+            return self.exposure.is_some()
+                && self.siblings.as_ref().is_none_or(super::siblings::Set::fits)
+                && self
+                    .publication
+                    .as_ref()
+                    .is_none_or(|record| record.validate(&self.profile).is_ok());
+        }
         if self.version == service_admission::RECORD_VERSION {
             return self.service_admission.is_some()
                 && self.siblings.as_ref().is_none_or(super::siblings::Set::fits)
@@ -329,6 +346,10 @@ impl Store {
             publication.validate(&state.profile)?;
         }
         if !state.known_version_shape()
+            || state
+                .exposure
+                .as_ref()
+                .is_some_and(|record| !record.valid() || record.binding().owner.cloud_id != state.cloud_id)
             || state
                 .service_admission
                 .as_ref()

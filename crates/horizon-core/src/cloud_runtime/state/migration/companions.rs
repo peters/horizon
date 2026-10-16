@@ -68,6 +68,7 @@ pub(super) fn reject_duplicate_workers(root: &Path, deployment: &Deployment) -> 
             || version == Some(u64::from(crate::cloud_runtime::siblings::RECORD_VERSION))
             || version == Some(u64::from(super::super::ENROLLMENT_RECORD_VERSION))
             || version == Some(u64::from(super::super::service_admission::RECORD_VERSION))
+            || version == Some(u64::from(super::super::exposure::RECORD_VERSION))
             || version == Some(u64::from(super::super::PUBLISHING_RECORD_VERSION))
         {
             let other: Deployment = serde_json::from_slice(&bytes).map_err(|_| Error::Json)?;

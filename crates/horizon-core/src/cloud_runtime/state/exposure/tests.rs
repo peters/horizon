@@ -1,7 +1,11 @@
 use super::super::service_admission::OwnerScope;
 use super::*;
 use crate::cloud_panel::{CloudLaunch, Placement};
-use crate::cloud_runtime::ssh::Connection;
+use crate::cloud_runtime::{
+    allocation::{AllocationId, ControllerId, ProjectId, ProjectIdentity, legacy::Records},
+    ssh::Connection,
+    state::{Deployment, Store},
+};
 use horizon_cloud::WorkerSpec;
 use horizon_cloud_protocol::exposure::{ConnectionLimits, SourceRule};
 use serde_json::json;
@@ -73,6 +77,31 @@ fn retained(cloud: &str, worker: &str, owner: Option<OwnerScope>) -> Record {
     )
     .unwrap()
 }
+fn deployment() -> Deployment {
+    serde_json::from_value(json!({
+        "version":1,"cloud_id":"exposure-cloud","repository":"/synthetic","revision":"a".repeat(40),
+        "profile":{"provider":"hetzner","image":"registry.example/worker","cpu":4,"memory_gb":8},
+        "stage":"Ready","operation":{"state":"bound","worker_id":"worker-a"},"spec":null,
+        "worker":null,"sessions":[],"source_ready":true
+    }))
+    .unwrap()
+}
+fn pair(state: &Deployment, owner: &OwnerScope) -> Records {
+    Records::from_legacy(
+        &serde_json::to_vec(state).unwrap(),
+        ProjectIdentity::new(
+            ProjectId::generate(),
+            owner.session_id.to_string(),
+            owner.workspace_id.clone(),
+            owner.cloud_id.clone(),
+        )
+        .unwrap(),
+        AllocationId::generate(),
+        ControllerId::generate(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn renewal_changes_only_the_selected_service_after_explicit_new_operation() {
     let mut record = retained("exposure-cloud", "worker-a", None);
@@ -354,5 +383,196 @@ fn decoded_finish_and_finish_unknown_cannot_reuse_a_retained_service_operation()
         decoded.finished(epoch, custody, finish_operation).unwrap();
         value["startup"]["operation"] = json!(service_operation);
         assert!(serde_json::from_value::<Record>(value).is_err());
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
+fn original_store_and_paired_migration_retain_uncertainty_without_granting_reopen() {
+    let temporary = tempfile::tempdir().unwrap();
+    let store = Store::lock(temporary.path()).unwrap();
+    let mut state = deployment();
+    let mut record = retained("exposure-cloud", "worker-a", None);
+    record.uncertain(record.epoch()).unwrap();
+    state.exposure = Some(record.clone());
+    store.save(&state).unwrap();
+    let restored = store.load().unwrap().unwrap();
+    assert_eq!(restored.version, RECORD_VERSION);
+    assert_eq!(restored.exposure, Some(record.clone()));
+    let split = pair(&restored, &record.binding().owner);
+    let allocation = split.allocation_bytes().unwrap();
+    let project = split.project_bytes().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&allocation).unwrap()["version"],
+        ALLOCATION_VERSION
+    );
+    assert_eq!(
+        Records::decode(&allocation, &project).unwrap().deployment().exposure,
+        Some(record.clone())
+    );
+    let saved = std::fs::read(temporary.path().join("deployment.json")).unwrap();
+    let mut conflicting = restored.clone();
+    conflicting.exposure = Some(retained("other-cloud", "worker-a", None));
+    assert!(store.save(&conflicting).is_err());
+    assert_eq!(std::fs::read(temporary.path().join("deployment.json")).unwrap(), saved);
+    let mut old = serde_json::from_slice::<serde_json::Value>(&saved).unwrap();
+    old["version"] = 1.into();
+    std::fs::write(
+        temporary.path().join("deployment.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    assert!(store.load().is_err());
+    let mut wrong = record.binding().owner.clone();
+    wrong.workspace_id = "other-workspace".into();
+    assert!(
+        Records::from_legacy(
+            &saved,
+            ProjectIdentity::new(
+                ProjectId::generate(),
+                wrong.session_id.to_string(),
+                wrong.workspace_id,
+                wrong.cloud_id
+            )
+            .unwrap(),
+            AllocationId::generate(),
+            ControllerId::generate()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
+fn exposure_publication_admission_and_enrollment_survive_store_and_paired_migration() {
+    use crate::cloud_runtime::{publishing::Publication, tailnet::receipt::tests::populated};
+    use horizon_cloud::image_publishing::Destination;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let store = Store::lock(temporary.path()).unwrap();
+    let mut state = deployment();
+    state.profile.build = Some(serde_json::from_value(json!({"context":".","dockerfile":"Dockerfile"})).unwrap());
+    let draft = retained("exposure-cloud", "worker-a", None);
+    let mut binding = draft.binding().clone();
+    binding.launch.profile = state.profile.clone();
+    binding.spec.profile = state.profile.clone();
+    let owner = binding.owner.clone();
+    let mut exposure = Record::starting(
+        binding,
+        draft.epoch(),
+        draft.intents()[0].service.clone(),
+        draft.intents()[0].operation,
+        1_000,
+    )
+    .unwrap();
+    exposure.uncertain(exposure.epoch()).unwrap();
+    state.spec = Some(exposure.binding().spec.clone());
+    state.exposure = Some(exposure);
+    state.publication = Some(Box::new(Publication {
+        profile: "cpu".into(),
+        requested_image: String::new(),
+        destination: Destination::bound(state.profile.image.clone(), "synthetic-grant".into()).unwrap(),
+        account: None,
+    }));
+    state.service_admission = Some(
+        serde_json::from_value(json!({
+            "owner": &owner,
+            "worker_id":"worker-a",
+            "attempt":{"operation_id":Uuid::new_v4(),"generation":Uuid::new_v4()},
+            "checked":{"host":"device.example.ts.net","address":"100.64.1.2:8123",
+                "binding":{"source":"tailnet","desktop":"desktop-a","peer":"peer-a","name":"device.example.ts.net"}},
+            "phase":{"state":"armed"}
+        }))
+        .unwrap(),
+    );
+    state.tailnet_enrollment = populated();
+    store.save(&state).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    let records = pair(&saved, &owner);
+    let allocation = records.allocation_bytes().unwrap();
+    let project = records.project_bytes().unwrap();
+    let allocation_value: serde_json::Value = serde_json::from_slice(&allocation).unwrap();
+    assert_eq!(allocation_value["version"], 5);
+    let decoded = Records::decode(&allocation, &project).unwrap().deployment();
+    for restored in [&saved, &decoded] {
+        assert_eq!(restored.version, 7);
+        assert_eq!(restored.exposure, state.exposure);
+        assert_eq!(restored.publication, state.publication);
+        assert_eq!(restored.service_admission, state.service_admission);
+        assert_eq!(restored.tailnet_enrollment, state.tailnet_enrollment);
+    }
+    for pointer in [
+        "/exposure/binding/owner/session_id",
+        "/exposure/binding/owner/workspace_id",
+        "/service_admission/owner/session_id",
+        "/service_admission/owner/workspace_id",
+    ] {
+        let mut changed = allocation_value.clone();
+        *changed.pointer_mut(pointer).unwrap() = if pointer.ends_with("session_id") {
+            Uuid::new_v4().to_string().into()
+        } else {
+            "other-workspace".into()
+        };
+        assert!(
+            Records::decode(&serde_json::to_vec(&changed).unwrap(), &project).is_err(),
+            "{pointer}"
+        );
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
+fn highest_version_exposure_neighbor_preserves_metadata_and_duplicate_worker_fences() {
+    use crate::cloud_runtime::{Error, state::migration::MigratedStore};
+
+    for same_worker in [true, false] {
+        let temporary = tempfile::tempdir().unwrap();
+        let own_root = temporary.path().join("exposure-cloud");
+        let own_store = Store::lock(&own_root).unwrap();
+        let mut own = deployment();
+        let exposure = retained("exposure-cloud", "worker-a", None);
+        let owner = exposure.binding().owner.clone();
+        own.exposure = Some(exposure);
+        own_store.save(&own).unwrap();
+        drop(own_store);
+        let own_before = std::fs::read(own_root.join("deployment.json")).unwrap();
+
+        let other_root = temporary.path().join("neighbor-cloud");
+        let worker = if same_worker { "worker-a" } else { "worker-b" };
+        let mut other = deployment();
+        other.cloud_id = "neighbor-cloud".into();
+        other.operation = horizon_cloud::CreateState::Bound {
+            worker_id: worker.into(),
+        };
+        let mut other_owner = owner.clone();
+        other_owner.cloud_id = other.cloud_id.clone();
+        other.exposure = Some(retained(&other.cloud_id, worker, Some(other_owner)));
+        Store::lock(&other_root).unwrap().save(&other).unwrap();
+        let other_before = std::fs::read(other_root.join("deployment.json")).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&other_before).unwrap()["version"],
+            RECORD_VERSION
+        );
+
+        let result = MigratedStore::migrate(
+            &own_root,
+            &owner.session_id.to_string(),
+            &owner.workspace_id,
+            ControllerId::generate(),
+        );
+        if same_worker {
+            assert!(matches!(
+                result,
+                Err(Error::Invalid(
+                    "Another legacy project references the same provider worker"
+                ))
+            ));
+            assert_eq!(std::fs::read(own_root.join("deployment.json")).unwrap(), own_before);
+        } else {
+            let restored = result.unwrap().load().unwrap().deployment();
+            assert_eq!(restored.version, RECORD_VERSION);
+            assert_eq!(restored.exposure, own.exposure);
+        }
+        assert_eq!(std::fs::read(other_root.join("deployment.json")).unwrap(), other_before);
     }
 }

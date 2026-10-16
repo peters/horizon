@@ -220,6 +220,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
     let store = Store::lock(&root).unwrap();
     let mut state = cloud_runtime::state::Deployment {
         service_admission: None,
+        exposure: None,
         version: 1,
         cloud_id: "fixture".into(),
         repository: temp.path().into(),
@@ -695,14 +696,16 @@ fn deletion_offers_cancel_only_while_hosted_devices_can_still_be_released() {
         };
     let bound = serde_json::json!({"state": "bound", "worker_id": "worker1"});
     let prepared = serde_json::json!({"state": "prepared"});
-    for (record, first) in [
+    for (record, first) in vec![
         (Some(state(bound.clone(), true, false)), Stage::ReleaseDevices),
         (Some(state(bound.clone(), true, true)), Stage::DeleteWorker),
         (Some(state(bound, false, false)), Stage::DeleteWorker),
         (Some(state(prepared.clone(), true, false)), Stage::DeleteStorage),
         (Some(state(prepared, false, false)), Stage::DeleteStorage),
         (None, Stage::DeleteWorker),
-    ] {
+    ]
+    .into_boxed_slice()
+    {
         assert_eq!(super::first_deletion_step(record.as_ref()), first);
     }
 }

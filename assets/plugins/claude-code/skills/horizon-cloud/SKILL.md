@@ -67,11 +67,12 @@ bounded actual-peer CIDR/Public TCP component only; no public operation starts
 it. DNS/tag and TailnetOnly policies refuse before binding. Follow the worker
 CIDR gate section of the cloud reference for its limits and test procedure.
 
-The exposure intent model defines bounded comparison data and service intent.
+Retained exposure records store bounded comparison data and service intent.
 The `cloud-exposure` feature enables pure record transitions only and stays off
-by default. A decoded record supplies no live approval, transport or cleanup
-proof. It is not connected to saved Deployment or Allocation formats. Read the
-exposure intent model section of the cloud reference.
+by default. Present exposure selects Deployment 7 and paired Allocation 5;
+absent exposure keeps the earlier formats. A decoded record supplies no live
+approval, transport or cleanup proof. Read the retained exposure metadata
+section of the cloud reference.
 
 Machine-local destination preference helpers retain a checkout/profile scope and
 nonsecret account or exact registry grant metadata. The launch engine retains

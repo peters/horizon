@@ -10,6 +10,9 @@ use horizon_cloud_protocol::exposure::{EXPOSURE_LEASE_SECONDS, ExposureMode, Exp
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub(in crate::cloud_runtime) const RECORD_VERSION: u32 = 7;
+pub(in crate::cloud_runtime) const ALLOCATION_VERSION: u32 = 5;
+
 const MAX_LIFETIME_MILLIS: i64 = EXPOSURE_LEASE_SECONDS.cast_signed() * 1_000;
 const MAX_SERVICES: usize = 8;
 

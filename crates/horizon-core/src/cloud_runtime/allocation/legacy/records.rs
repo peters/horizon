@@ -14,6 +14,8 @@ pub(super) struct Allocation {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_admission: Option<crate::cloud_runtime::state::service_admission::Record>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<crate::cloud_runtime::state::exposure::Record>,
     pub id: AllocationId,
     pub controller: ControllerId,
     pub member: ProjectIdentity,
@@ -43,7 +45,9 @@ impl Allocation {
     const SERVICE_VERSION: u32 = 4;
 
     pub(super) fn record_version(&self) -> u32 {
-        if self.service_admission.is_some() {
+        if self.exposure.is_some() {
+            crate::cloud_runtime::state::exposure::ALLOCATION_VERSION
+        } else if self.service_admission.is_some() {
             Self::SERVICE_VERSION
         } else if self.publication.is_some() {
             Self::PUBLISHING_VERSION
@@ -101,6 +105,7 @@ impl Records {
         let Deployment {
             version: _,
             service_admission,
+            exposure,
             cloud_id: _,
             repository,
             revision,
@@ -131,7 +136,9 @@ impl Records {
         } = legacy;
         Self {
             allocation: Allocation {
-                version: if service_admission.is_some() {
+                version: if exposure.is_some() {
+                    crate::cloud_runtime::state::exposure::ALLOCATION_VERSION
+                } else if service_admission.is_some() {
                     Allocation::SERVICE_VERSION
                 } else if publication.is_some() {
                     Allocation::PUBLISHING_VERSION
@@ -154,6 +161,7 @@ impl Records {
                 image_replacement,
                 tailnet_enrollment,
                 service_admission,
+                exposure,
             },
             project: Project {
                 version: Project::VERSION,
@@ -181,7 +189,9 @@ impl Records {
     #[must_use]
     pub fn deployment(&self) -> Deployment {
         Deployment {
-            version: if self.allocation.service_admission.is_some() {
+            version: if self.allocation.exposure.is_some() {
+                crate::cloud_runtime::state::exposure::RECORD_VERSION
+            } else if self.allocation.service_admission.is_some() {
                 crate::cloud_runtime::state::service_admission::RECORD_VERSION
             } else if self.allocation.publication.is_some() {
                 crate::cloud_runtime::state::PUBLISHING_RECORD_VERSION
@@ -191,6 +201,7 @@ impl Records {
                 crate::cloud_runtime::state::ENROLLMENT_RECORD_VERSION
             },
             service_admission: self.allocation.service_admission.clone(),
+            exposure: self.allocation.exposure.clone(),
             cloud_id: self.project.identity.cloud_id().into(),
             repository: self.project.repository.clone(),
             revision: self.project.revision.clone(),
