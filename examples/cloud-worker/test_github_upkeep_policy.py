@@ -98,6 +98,8 @@ class PolicyTests(ServiceTestCase):
     def test_the_policy_refuses_changes_that_an_upkeep_never_needs(self):
         policy = upkeep.Policy()
         refused = [('POST', 'releases'), ('PATCH', 'releases/1'), ('POST', 'releases/assets'),
+                   ('POST', 'check-runs'), ('PATCH', 'check-runs/1'), ('POST', 'check-suites'),
+                   ('PATCH', 'check-suites/preferences'), ('POST', 'check-runs/01/rerequest'),
                    ('POST', 'dispatches'), ('POST', 'deployments'), ('POST', 'statuses/' + HEAD), ('PUT', 'contents/.github/workflows/ci.yml'),
                    ('DELETE', 'contents/.github/workflows/ci.yml'), ('POST', 'actions/runs/1/approve'),
                    ('POST', 'actions/runs/1/pending_deployments'), ('DELETE', 'actions/caches'),
@@ -108,7 +110,8 @@ class PolicyTests(ServiceTestCase):
                    ('POST', 'merges'), ('POST', 'merge-upstream'), ('POST', 'git/refs'),
                    ('PATCH', 'git/refs/tags/v1'), ('DELETE', 'git/refs/tags/v1'), ('PATCH', 'git/refs/notes/x'),
                    ('PATCH', 'git/refs/heads'), ('PATCH', 'git/refs/heads/x/'), ('PUT', 'pulls/04/update-branch'),
-                   ('PUT', 'pulls/4/update-branch/')]
+                   ('PUT', 'pulls/4/update-branch/'), ('PUT', 'pulls/3/reviews/8'),
+                   ('PATCH', 'pulls/7/'), ('PATCH', 'pulls/comments/5/'), ('PATCH', 'pulls/comments')]
         for method, path in refused:
             self.assertIsNotNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
         allowed = [('GET', 'git/trees/x'), ('POST', 'issues/1/comments'), ('POST', 'labels'),
@@ -116,8 +119,10 @@ class PolicyTests(ServiceTestCase):
                    ('PUT', 'contents/src/main.rs'), ('PUT', 'contents/.github/dependabot.yml'),
                    ('POST', 'actions/runs/1/rerun'), ('POST', 'actions/runs/1/rerun-failed-jobs'),
                    ('POST', 'actions/runs/1/cancel'), ('POST', 'actions/jobs/1/rerun'),
+                   ('POST', 'check-runs/1/rerequest'), ('POST', 'check-suites/1/rerequest'),
                    ('PUT', 'pulls/1/merge'), ('DELETE', 'git/refs/heads/dependabot/cargo/x'),
-                   ('POST', 'pulls/3/reviews'), ('PUT', 'pulls/3/reviews/8'), ('DELETE', 'pulls/3/reviews/8'),
+                   ('POST', 'pulls/3/reviews'), ('DELETE', 'pulls/3/reviews/8'), ('PATCH', 'pulls/7'),
+                   ('PATCH', 'pulls/comments/5'),
                    ('POST', 'actions/workflows/release.yml/dispatches')]
         for method, path in allowed:
             self.assertIsNone(upkeep.rest_refusal(policy, method, path.split('/')), (method, path))
