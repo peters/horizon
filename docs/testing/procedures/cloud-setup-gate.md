@@ -2,7 +2,7 @@
 procedure: cloud-setup-gate
 feature: Setup gate (Horizon's proof and desktop preview of the setup agent on real repositories)
 platforms: [linux]
-cost: none
+cost: rents compute  # G05 only; G01 to G04 use this computer's Docker or a Docker host of yours
 destructive: yes
 secrets: [the Git login of this computer for private Rust git dependencies, the NuGet credentials of this computer for private .NET packages]
 owner: peters
@@ -23,8 +23,8 @@ not find.
   desktop preview. Run the gate on the first head that is ready for review. Run it again
   on the final head before you ask for permission to merge.
 - Platforms: Linux with Docker.
-- This procedure does not test: the setup agent itself, the **New cloud** dialog, a
-  deploy or a provider. No step rents compute. The
+- This procedure does not test: the setup agent itself, the **New cloud** dialog or a
+  deploy. Only G05 rents compute: a Hetzner server that the gate deletes again. The
   [setup agent procedure](cloud-setup-agent.md) tests the dialog.
 
 ## 3. Safety
@@ -202,6 +202,10 @@ rented builder. It rents a Hetzner server for some minutes.
    ```
 
 2. Run the gate with one lane and `GATE_DOCKER_HOST=rented-builder`:
+
+   > **CAUTION:** THIS STEP RENTS A HETZNER SERVER, AND HETZNER BILLS IT UNTIL IT IS
+   > DELETED. The gate deletes it at the end and fails when it cannot. If the gate does
+   > not end normally, do step 3 at once and delete a server or SSH key that is left.
 
    ```bash
    HORIZON_HOME=<home> GATE_DOCKER_HOST=rented-builder \
