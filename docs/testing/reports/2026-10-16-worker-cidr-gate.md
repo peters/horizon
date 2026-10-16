@@ -1,7 +1,7 @@
 ---
 procedure: worker-exposure-gate
-candidate_commit: 93b353755eb349dec024002b77846634f5e3dbfc
-candidate_sha256: fbd9f0d87a5932461cc71edad48f6c17455c76e937efb314cbd397010aef530d
+candidate_commit: cbfd117f2b0885e12a26faf50db646b8df42d0a8
+candidate_sha256: 92274c30e0f5bcaaca825e0ecd1eff933030da3f5c0a60e481e06eb5f3fa12d8
 date: 2026-10-16
 lanes: [linux-offline, linux-root-cidr-component]
 issue: https://github.com/peters/horizon/issues/1335
@@ -11,10 +11,9 @@ issue: https://github.com/peters/horizon/issues/1335
 
 ## 1. Summary
 
-The current run passed G01–G05 for the default-off Linux component.
+The current candidate passed G01–G05 for the default-off Linux component after rebasing onto Main `5e868c76`.
 The candidate hash identifies the feature-enabled Worker test ELF, not a normal Worker executable.
-The actual root constructor used the original accepted peer for CIDR admission.
-The separate client completed PING, PONG and DONE on one connection.
+The current Worker source and manifest match the previously reviewed component; Main changed shared dependencies, Protocol and embedded guidance, so the applicable matrix and actual smoke were run freshly.
 The run did not qualify provider source preservation, named/tag identity, TailnetOnly, public interfaces or complete M2.
 Exclusive ownership ends when the listener closes; separate root-only ingress and backend custody proof is required before provider/public activation.
 
@@ -22,67 +21,78 @@ Exclusive ownership ends when the listener closes; separate root-only ingress an
 
 | Task ID | Result | Note | Defect |
 |---|---|---|---|
-| G01 | pass, reused | The unchanged enabled protocol passed 49 tests. Its unchanged documentation-test result is reused after input comparison. | — |
-| G02 | pass, new | The enabled Worker passed 235 tests, including 24 gate passes; four tests stayed explicitly ignored in the general lane. Five prior reservation/cancellation regressions and seven new real-socket grace regressions passed. The separate root lane ran the remaining ignored gate case. | — |
-| G03 | pass, new | Accepted reservations reached the kernel before bounded half-close and input drain. Slow readers received every allowed byte and clean EOF after actual flow/socket-owner release despite unread reverse input. Idle siblings and completed-copy races entered grace. Cancellation, deadline expiry and peer resets remained immediate, with no refunds or deadline extension. | — |
-| G04 | pass, new and reused | The unchanged default Worker result of 210 passes and three ignores is reused. Enabled blocking/strict, formatting, maintainability and whitespace checks passed on the fixture fix; default lint results are reused. Unchanged non-Worker results from the prior full matrix were reused after input comparison. | — |
-| G05 | pass, new | The current enabled test ELF ran the exact ignored actual-worker case as root. The wrong source was refused; the admitted client exchanged bytes, reached EOF and observed refusal after the close marker and test exit. | — |
+| G01 | pass, new | The current enabled Protocol passed 57 tests and one documentation test. | — |
+| G02 | pass, new | Enabled Worker: 235 passes and four general-lane ignores, comprising 234 container passes and the separate host-only lease case. Gate: 24 general passes and one general-lane ignore; the actual root lane ran that ignored gate case. | — |
+| G03 | pass, new | Five prior reservation/cancellation and seven real-socket grace regressions passed. Slow readers received all allowed bytes and clean EOF after actual flow/socket-owner release despite unread reverse input. Idle siblings and completed-copy races entered grace. Cancellation, deadlines and peer resets remained immediate. | — |
+| G04 | pass, new | Fresh default workspace: 7,012 passes and 55 ignores across 63 offline roots plus 13 host complements. Fresh speech: 2,411 UI and five integration passes, three ignores. Required blocking/strict lints, formatting, maintainability, skill coverage and whitespace checks passed. The Board complement needed the diagnostic sequence described below. | — |
+| G05 | pass, new | The exact current enabled test ELF ran the ignored actual-worker case as root. Wrong-source refusal, admitted PING/PONG/DONE, EOF, close marker plus test exit, then independent listener refusal all passed. | — |
 
-The prior full default workspace result was 7,003 passes and 55 ignored tests.
-The prior speech result was 2,411 UI and five integration passes, with three ignored tests.
-The current candidate reuses the unchanged non-Worker source, dependency, feature, toolchain and embedded-guidance inputs of those results; it did not repeat that full matrix.
-The Worker is a binary with no reverse workspace package dependencies. All changed Rust is inside its default-off gate module.
-The private input comparison records the exact closure and distinguishes the fresh package graphs from the prior workspace graph.
+The default container supplied 6,999 passes; the separate host complements supplied 13.
+The default Worker supplied 209 container passes and one host lease pass, with three ignores.
+The enabled Worker supplied 234 container passes and one host lease pass, with four ignores.
+The enabled Protocol passed 57 tests on its current feature graph; the earlier 49-test result was not transferred.
+Workspace documentation checks passed three tests across 22 groups; enabled Protocol documentation passed one test.
 One custom live WebAuthn harness remained outside the offline matrix.
 
-The pedantic tier retained two unchanged dependency structures with too many Boolean fields.
-The current Worker passed a separate pedantic check without dependency diagnostics.
+No earlier whole-matrix runtime or required-check result was reused after this rebase.
+Cargo could cache unchanged dependency products; actual compiler JSON, frozen products, toolchain, flags, source inventories and environment records bind the current results.
+Both current normal UI graphs contain the complete current paired cloud skills and references.
+The broad pedantic tier reported only the same two Main dependency structures with too many Boolean fields.
+The current enabled Worker/Protocol surfaces passed their separate pedantic check without dependency diagnostics.
 No suppression was added.
-The general unit lane kept G05 ignored; the separate root lane ran that exact case once on the current test ELF.
 
 ## 3. Defects
 
-Review first found that budget exhaustion could truncate outstanding reservations and that listener shutdown could race the cancellation notification.
-A second review identified that kernel write acceptance was being treated as peer receipt: shutdown and socket release with unread reverse input could reset the connection and discard queued output.
+Review first found that budget exhaustion could truncate outstanding reservations and that listener shutdown could race cancellation notification.
+A later review found that kernel write acceptance was being treated as peer receipt: shutdown and release with unread reverse input could reset the connection and discard queued output.
 The preserved pre-fix reproducer delivered only 1,152 of 8,192 response bytes before reset.
-The candidate separates immediate failure closure from budget grace, drains inputs to EOF under the original deadlines and a fixed three-second/64 KiB-per-direction bound, then releases sockets normally.
-All five prior and seven new regressions passed; the decisive slow-reader cases received all 8,192 bytes and clean EOF after the actual owners released.
+The candidate separates immediate failure closure from budget grace, drains inputs to EOF under original deadlines and a fixed three-second/64 KiB-per-direction bound, then releases sockets normally.
+The decisive slow-reader cases received all 8,192 bytes and clean EOF after actual owners released.
 Conservative charging, admission refusal, bounded buffers and immediate failure cancellation remain in place.
 
-A later review found that two test fixtures could select ephemeral ports 47280 or 47281, which the validated service policy refuses.
-Both fixtures now use the existing policy-validating backend helper and retain the same socket behavior assertions.
-This is a test-fixture correction; production behavior is unchanged.
+A subsequent review found that two fixtures could select ephemeral ports 47280 or 47281, which service policy refuses.
+Both use the existing policy-validating backend helper and retain the same socket assertions.
+This is a fixture correction; production behavior is unchanged.
 
 ## 4. Deviations from the procedure
 
-The passing current G05 run had no cleanup deviation.
-An earlier round-two ELF attempt stopped before start because its orchestration required a populated Docker attachment NetworkID before containers ran.
-Both created containers and their network were positively removed; no gate test ran in that attempt.
-After correcting that phase-specific assertion, a newly authorized round-two nonce completed G05 and cleanup.
-The current fixture-correction ELF used another fresh G05 nonce and passed without an orchestration or cleanup deviation.
-Earlier pre-review evidence retained a cleanup-summary error caused by Docker's network-not-found wording.
-Its original removal receipts and independent read-only reconciliation proved that earlier cleanup; the raw summary remains historical evidence.
-The current changed Rust used a fresh G05 run and did not reuse that earlier runtime result.
+The first current enabled container plan omitted the established host-only lease-test exclusion.
+That case failed under the unprivileged container user; Protocol 57 and all Gate cases passed, and the exact container was positively removed.
+The same lease case then passed on both current default and enabled frozen host ELFs.
+A new recorded nonce reran the enabled Worker with the established exclusion and passed 234 tests, with four ignores.
+No source, executable, assertion or budget changed for that correction; the original failed receipts remain preserved.
+
+The unchanged standalone Core Board shutdown complement twice failed its two-second completion assertion.
+Source and environment comparisons preceded further execution.
+An own-child process/signal trace observed both Bash children receive SIGHUP and be reaped, and passed; instrumentation can perturb scheduling, so that diagnostic is not counted as the ordinary matrix result.
+After other fixtures and compilers finished, one ordinary confirmation using the same frozen ELF, environment and assertion passed in 0.01 seconds.
+Both original failures remain preserved. No deterministic cause, product fix or timer/assertion change is claimed.
+
+The current G05 passed without an orchestration or cleanup deviation.
+Earlier round-two evidence retains a prestart NetworkID assertion failure: both created containers and the network were removed, and no gate test ran.
+Its corrected round-two run and the later round-three fixture-correction run also passed with positive cleanup; they are historical after this rebase.
+An earlier pre-review cleanup-summary wording error remains preserved with original removal receipts and independent reconciliation.
 
 ## 5. Cleanup
 
-Both exact current test containers and their internal network were deleted.
-Healthy fixed-daemon exhaustive container and network inventories showed that all three original resource IDs were absent.
-The fixture used no host ports, provider resources, credentials or paid capacity.
+All exact current offline containers and both actual-smoke containers were deleted.
+The internal actual-smoke network was deleted.
+Healthy fixed-daemon exhaustive inventories showed that every original owned resource ID was absent.
+The fixtures used no host ports, provider resources, credentials or paid capacity.
 
 ## 6. Evidence
 
-The report metadata identifies the reviewed fix commit and the current enabled test ELF.
-The subsequent report-only commit changes prose; its executable-input comparison permits reuse of the recorded checks.
+The metadata identifies the rebased fixture-fix commit and current enabled test ELF.
+A subsequent report-only commit must preserve executable inputs and rerun Git-aware documentation/static/readiness checks.
 
-Current private evidence stays under `.task-1335-work/worker-gate-round3-fixes/`:
+Current private evidence is under `.task-1335-work/worker-gate-round3-fixes/rebase-main5e/`:
 
-- `final-handoff.json`, `input-closure-reuse.json` and the source-fix patch record the checked inputs and affected results.
-- `input-closure-reuse.json` records the exact reuse comparison for the previous full matrix.
-- `enabled-tests/` and the required lint directories record fresh affected checks. The input comparison points to reused default Worker and non-Worker results.
-- `products/enabled-manifest.json` binds the actual feature-enabled test ELF and compiler graph.
-- `G05-actual-final/command-effect-ledger.json`, `test-output.log` and `result.json` record the fresh actual component run and positive exact-resource cleanup.
-- Earlier round-two evidence preserves the expected truncation reproducer and cleaned prestart orchestration failure under `.task-1335-work/worker-gate-round2-fixes/`.
-- `final-prose-reuse-proof.json` records the comparison after this report update.
+- `qualification-handoff.json`, `stable-all-check-input-proof.json` and `strict-parent-root-accounting.json` bind current source, commands, parent counts and deviations.
+- `products/{default,speech,enabled}/` contains 84 frozen products and actual compiler manifests; `frozen-artifacts-rehash.json` records their hashes.
+- `default-runtime/`, `speech-runtime/`, `enabled-runtime/` and `enabled-runtime-host-excluded/` preserve original create receipts, results and exact cleanup.
+- `Core-host11/`, `Worker-lease-host/` and `Worker-enabled-lease-host/` record ordinary host complements.
+- `Core-Board/`, `Core-Board-retry/`, `board-failure-source-environment/`, `Core-Board-process-trace/` and `Core-Board-post-diagnostic/` preserve the complete Board sequence.
+- `G05-actual-final/` records the fresh actual peer/bytes/close run and positive exhaustive cleanup.
+- `current-normal-embedding-proof.json`, `advisory-base-comparison.json`, `documentation-summary.json` and `report-nonconsumption-audit.json` record the corresponding comparisons.
 
-The earlier full-matrix and pre-review runtime evidence remains under `.task-1335-work/worker-gate-delivery-qualification/`.
+Earlier evidence remains under `worker-gate-delivery-qualification/`, `worker-gate-round2-fixes/` and the parent `worker-gate-round3-fixes/` directories.
