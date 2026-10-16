@@ -162,21 +162,12 @@ pub fn configure(
             return Ok(());
         }
     };
-    let mut wanted = repositories.clone();
-    wanted.sort();
-    let held_access = matches!(worker, Held::Current { .. });
-    if !renew
-        && covered(
-            &worker,
-            &wanted,
-            &repositories,
-            &state.cloud_id,
-            connection,
-            runner,
-            &say,
-        )?
-    {
-        return Ok(());
+    let mut held_access = matches!(worker, Held::Current { .. });
+    if !renew {
+        match covered(&worker, &state.cloud_id, connection, runner, &say)? {
+            None => return Ok(()),
+            Some(held) => held_access = held,
+        }
     }
     let cloud_id = &state.cloud_id;
     if renew {
@@ -201,11 +192,14 @@ pub fn configure(
         Ok(chain) => chain,
         Err(ended) => return without(ended, held_access, cloud_id, &say),
     };
-    let closed = closed_owners(&client, &chain, &repositories, &say);
-    let installed = install(&chain, &repositories, connection, runner);
-    if installed.is_ok() {
-        remember(cloud_id, wanted);
-    }
+    let closed = match closed_owners(&client, &chain, &repositories, runner, &say) {
+        Ok(closed) => closed,
+        Err(error) => {
+            ended(false);
+            return Err(error);
+        }
+    };
+    let installed = install_saved(&chain, cloud_id, connection, runner);
     // Only now does the card learn the outcome: the worker holds the access or not.
     ended(installed.is_ok());
     runner.cancel.check()?;
@@ -248,52 +242,83 @@ fn without(ended: Ended, held_access: bool, cloud_id: &str, say: &dyn Fn(&str)) 
     Ok(())
 }
 
-/// Whether the worker's access already covers the Upkeep's repositories (`wanted`, sorted), or
-/// covers them now because the worker took the new list; false when Horizon must ask again.
+/// The Upkeep's saved repositories, read again under its settings lock, sorted.
+fn saved_repositories(cloud_id: &str) -> Result<Vec<String>> {
+    let mut repositories = own_repositories(&crate::upkeep::worker::load(cloud_id)?)?;
+    repositories.sort();
+    Ok(repositories)
+}
+
+/// `None` when the worker's access already covers the Upkeep's saved repositories, or covers
+/// them now because the worker took the new list; otherwise whether the worker still holds
+/// access while Horizon asks again. The list is read and sent under the Upkeep's settings
+/// lock, so a change saved meanwhile is never undone.
 /// # Errors
-/// The deployment was cancelled.
+/// The deployment was cancelled, or the saved choice cannot be read.
 fn covered(
     worker: &Held,
-    wanted: &[String],
-    repositories: &[String],
     cloud_id: &str,
     connection: &Connection,
     runner: &Runner<'_>,
     say: &dyn Fn(&str),
-) -> Result<bool> {
+) -> Result<Option<bool>> {
     let Held::Current {
         repositories: held,
         change: can_change,
     } = worker
     else {
-        return Ok(false);
+        return Ok(Some(false));
     };
-    if held == wanted {
-        return Ok(true);
+    let _lock = crate::upkeep::worker::settings_lock(cloud_id)?;
+    let wanted = saved_repositories(cloud_id)?;
+    if *held == wanted {
+        return Ok(None);
     }
     if *can_change {
-        let changed = change(repositories, &mut connection.command(INSTALL), runner);
+        let changed = change(&wanted, &mut connection.command(INSTALL), runner);
         runner.cancel.check()?;
         if changed.is_ok() {
-            remember(cloud_id, wanted.to_vec());
+            remember(cloud_id, wanted);
             say("the package read access now follows the Upkeep's repositories.");
-            return Ok(true);
+            return Ok(None);
         }
+        // A worker that refuses a change removes its chain.
         say("the worker could not change the repositories of its package read access.");
+        say("asking again, so that the package read access covers the Upkeep's repositories.");
+        return Ok(Some(false));
     }
     say("asking again, so that the package read access covers the Upkeep's repositories.");
-    Ok(false)
+    Ok(Some(true))
+}
+
+/// Installs `chain` with the Upkeep's repositories as saved now, under its settings lock, so a
+/// list that changed during the sign-in is the one the worker gets.
+fn install_saved(chain: &Chain, cloud_id: &str, connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+    let _lock = crate::upkeep::worker::settings_lock(cloud_id)?;
+    let repositories = saved_repositories(cloud_id)?;
+    install(chain, &repositories, connection, runner)?;
+    remember(cloud_id, repositories);
+    Ok(())
 }
 
 /// The owners of `repositories` whose organization limits OAuth apps, so `chain` reads none of
 /// their packages; each is named with its grant page. A check that fails is said too.
-fn closed_owners(client: &Client, chain: &Chain, repositories: &[String], say: &dyn Fn(&str)) -> Vec<String> {
+/// # Errors
+/// The deployment was cancelled; it is checked before each request.
+fn closed_owners(
+    client: &Client,
+    chain: &Chain,
+    repositories: &[String],
+    runner: &Runner<'_>,
+    say: &dyn Fn(&str),
+) -> Result<Vec<String>> {
     let owners: BTreeSet<&str> = repositories
         .iter()
         .filter_map(|name| name.split_once('/').map(|(owner, _)| owner))
         .collect();
     let mut closed = Vec::new();
     for owner in owners {
+        runner.cancel.check()?;
         match client.packages_restricted(&chain.access_token, owner) {
             Ok(false) => {}
             Ok(true) => {
@@ -308,7 +333,7 @@ fn closed_owners(client: &Client, chain: &Chain, repositories: &[String], say: &
             Err(error) => say(&format!("could not check whether {owner} limits OAuth apps: {error}")),
         }
     }
-    closed
+    Ok(closed)
 }
 
 /// Why no chain came back.
