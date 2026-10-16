@@ -386,12 +386,18 @@ class BrokerTests(BrokerTestCase):
 
     def test_ranges_and_conditions_never_reach_github_and_partial_replies_are_refused(self):
         install(self.store)
-        self.answer_with(200, b'[{"name":"a"}]', [('Content-Type', 'application/json'), ('Accept-Ranges', 'bytes')])
+        self.answer_with(200, b'[{"name":"a"}]', [('Content-Type', 'application/json'), ('Accept-Ranges', 'bytes'),
+                                                   ('ETag', '"unfiltered"'), ('Last-Modified', 'Fri, 16 Oct 2026 07:00:00 GMT')])
         status, fields, _ = self.send('GET', VERSIONS, fields=['Range: bytes=10-40', 'If-Range: "x"',
                                                                'If-None-Match: "x"', 'Accept-Encoding: gzip',
-                                                               'Accept: application/vnd.github+json'])
+                                                               'Accept: application/vnd.github+json',
+                                                               'X-GitHub-Api-Version: 2099-01-01'])
         self.assertEqual(status, 200)
-        self.assertNotIn('accept-ranges', fields)
+        # Validators and ranges describe the unfiltered reply, so they do not go on.
+        for name in ('accept-ranges', 'etag', 'last-modified'):
+            self.assertNotIn(name, fields, name)
+        # The API version is pinned to the one whose fields the filter knows.
+        self.assertEqual(self.heads[-1]['x-github-api-version'], packages.API_VERSION)
         for name in ('range', 'if-range', 'if-none-match', 'if-modified-since', 'accept-encoding'):
             self.assertNotIn(name, self.heads[-1], name)
         self.assertEqual(self.heads[-1]['accept'], 'application/vnd.github+json')

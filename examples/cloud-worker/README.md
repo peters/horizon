@@ -1448,8 +1448,8 @@ The broker does these steps for each connection:
     `/orgs/OWNER/packages?package_type=nuget` (or `npm`, also under `/users/`),
     `/orgs/OWNER/packages/TYPE/NAME`, `.../versions` and `.../versions/ID`, where
     TYPE is `nuget` or `npm`, without a body, with only the request fields
-    `Accept`, `User-Agent` and `X-GitHub-Api-Version` (no range, condition or
-    encoding reaches GitHub), and with only the query parameters
+    `Accept` and `User-Agent` (no range, condition or encoding reaches GitHub, and
+    `X-GitHub-Api-Version` is always `2022-11-28`), and with only the query parameters
     `package_type`, `visibility`, `page`, `per_page` and `state`. OWNER must own
     one of the cloud's own repositories that Horizon named with the package read
     access below; no grant, also not one that an agent asked for, opens an owner.
@@ -1546,7 +1546,8 @@ each package kept only for the cloud's own repositories and `null` otherwise, an
 each text that names another repository by its address on `github.com` or
 `api.github.com/repos` replaced by `null`; a
 reply that is not JSON, is larger, holds the token, or is partial (206 or
-`Content-Range`) is refused. A redirect goes back to `gh` with an empty body and
+`Content-Range`) is refused. `ETag` and `Last-Modified` describe the reply before
+the filter, so they do not go on. A redirect goes back to `gh` with an empty body and
 only its `Location`, without the token; `gh` follows it through the broker again.
 `HEAD` is refused: its length would tell the size of the unfiltered reply. Without a chain, package reads get
 `gh: Horizon: this worker has no package read access, ...`, which tells that the

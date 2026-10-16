@@ -313,6 +313,8 @@ class Exchange(checks.Checks):
         # so no range, condition or encoding of the client's reaches GitHub.
         keep = packages.REQUEST_FIELDS if route.kind == 'package' else REQUEST_FIELDS
         fields = [(name, value) for name, value in request.fields if name in keep]
+        if route.kind == 'package':
+            fields.append(('X-GitHub-Api-Version', packages.API_VERSION))
         secrets = ()
         if candidate is not None:
             secrets = (candidate.token,)

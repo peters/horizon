@@ -68,9 +68,13 @@ REPOSITORY_ADDRESS = re.compile(r'https?://(?:www\.)?(?:github\.com/(?!orgs/|use
                                 r'(?P<name>[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})', re.IGNORECASE)
 
 
-# The only fields of a client's package read that reach GitHub: no range, condition or
-# encoding, so GitHub sends the whole reply that the broker examines.
-REQUEST_FIELDS = {'accept', 'user-agent', 'x-github-api-version'}
+# The only fields of a client's package read that reach GitHub: no range, condition, encoding
+# or API version, so GitHub sends the whole reply that the broker examines, in the version
+# whose `repository` field the filter knows.
+REQUEST_FIELDS = {'accept', 'user-agent'}
+API_VERSION = '2022-11-28'
+# Reply fields that describe the reply before the filter changed it.
+UNFILTERED = {'content-range', 'accept-ranges', 'content-encoding', 'etag', 'last-modified'}
 
 
 class Unchecked(Exception):
@@ -255,7 +259,7 @@ def checked_reply(response, own, keep, secrets=()):
         raise Unchecked('the package reply from GitHub broke off.') from None
     if len(data) > MAX_REPLY:
         raise Unchecked('the package reply from GitHub is too large to examine.')
-    return filtered(data, own, secrets), keep - {'content-range', 'accept-ranges', 'content-encoding'}
+    return filtered(data, own, secrets), keep - UNFILTERED
 
 
 def filtered(data, own, secrets=()):
