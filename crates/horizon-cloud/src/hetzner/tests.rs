@@ -352,8 +352,9 @@ fn a_budgeted_inspection_ends_with_its_budget_as_a_transport_failure() {
                 stream,
                 "HTTP/1.1 {status}\r\nContent-Length: 200\r\nConnection: close\r\n\r\n"
             );
-            // The body never comes: hold the connection until the client leaves.
-            let _ = stream.read(&mut input);
+            // The body never comes: hold the connection until the client leaves, also
+            // when the first read took only part of the request.
+            while stream.read(&mut input).is_ok_and(|read| read > 0) {}
         });
         let mut hetzner = Hetzner::new(Credential::new("secret-test-key".into()).unwrap());
         hetzner.endpoint = format!("http://{address}");
