@@ -3,11 +3,10 @@
 //! version exists or how old it is. During a deployment of an Upkeep's cloud, right after its
 //! GitHub access, Horizon therefore asks the person once: a device code for Horizon's own OAuth
 //! app, with the scope `read:packages` only, approved with the person's own GitHub account.
-//! Other clouds are not asked. The chain goes to
-//! the worker's root GitHub service only (`horizon-worker-github packages`), which adds its
-//! token to package reads and renews it with the client ID alone. No agent gets it, and Horizon
-//! keeps no copy. A skipped or refused sign-in leaves the cloud without package reads and the
-//! deployment continues.
+//! Other clouds are not asked. The chain goes to the worker's root GitHub service only
+//! (`horizon-worker-github packages`), which adds its token to package reads and renews it with
+//! the client ID alone. No agent gets it, and Horizon keeps no copy. A skipped or refused
+//! sign-in leaves the cloud without package reads and the deployment continues.
 use super::{Error, Event, Prompt, Result, Runner, Settings, publish, signin};
 use crate::cloud_runtime::{ssh::Connection, state::Deployment};
 use horizon_cloud::github::{Chain, Client};
@@ -31,6 +30,15 @@ const MAX_REPOSITORIES: usize = 50;
 /// What a skip or a failed sign-in means for the cloud, also on the Upkeep board.
 const WITHOUT: &str = "This Upkeep has no package read access, so checks of private package versions need a person.";
 
+/// What the output says when no new access was installed: the earlier one stays, if any.
+fn kept(held_access: bool) -> &'static str {
+    if held_access {
+        "the earlier package read access of this Upkeep stays as it was."
+    } else {
+        WITHOUT
+    }
+}
+
 /// Saved beside the Upkeep's choice when the person skipped the package sign-in: a reconnect
 /// does not ask again; Connect GitHub again on the card does.
 const SKIPPED: &str = "package-access-skipped";
@@ -41,8 +49,7 @@ pub fn skipped(cloud_id: &str) -> bool {
     crate::upkeep::worker::directory(cloud_id).join(SKIPPED).exists()
 }
 
-/// Forgets a skip, so the next deployment of the Upkeep `cloud_id` asks again. Blocks on the
-/// disk.
+/// Forgets a skip, so the next deployment of the Upkeep `cloud_id` asks again. Blocks on disk.
 /// # Errors
 /// The mark is there but cannot be removed.
 pub fn ask_again(cloud_id: &str) -> std::io::Result<()> {
@@ -153,20 +160,27 @@ pub fn configure(
         say("this cloud has no GitHub access, so Horizon does not ask for package read access.");
         return Ok(());
     }
-    let repositories = match own_repositories(&config) {
-        Ok(repositories) if !repositories.is_empty() => repositories,
+    match own_repositories(&config) {
+        Ok(repositories) if !repositories.is_empty() => {}
         Ok(_) => return Ok(()),
         Err(error) => {
             say(&error.to_string());
             say(WITHOUT);
             return Ok(());
         }
-    };
+    }
     let mut held_access = matches!(worker, Held::Current { .. });
     if !renew {
-        match covered(&worker, &state.cloud_id, connection, runner, &say)? {
-            None => return Ok(()),
-            Some(held) => held_access = held,
+        match covered(&worker, &state.cloud_id, connection, runner, &say) {
+            Ok(None) => return Ok(()),
+            Ok(Some(held)) => held_access = held,
+            // Package access is optional: only a cancellation stops the deployment.
+            Err(error) => {
+                runner.cancel.check()?;
+                say(&format!("the Upkeep's repositories could not be read: {error}"));
+                say(kept(held_access));
+                return Ok(());
+            }
         }
     }
     let cloud_id = &state.cloud_id;
@@ -175,11 +189,7 @@ pub fn configure(
             say(&format!("the earlier skip could not be forgotten: {error}"));
         }
     } else if skipped(cloud_id) {
-        say(if held_access {
-            "the earlier package read access of this Upkeep stays as it was."
-        } else {
-            WITHOUT
-        });
+        say(kept(held_access));
         return Ok(());
     }
     let client = Client::new();
@@ -192,16 +202,15 @@ pub fn configure(
         Ok(chain) => chain,
         Err(ended) => return without(ended, held_access, cloud_id, &say),
     };
-    let closed = match closed_owners(&client, &chain, &repositories, runner, &say) {
-        Ok(closed) => closed,
-        Err(error) => {
-            ended(false);
-            return Err(error);
-        }
-    };
     let installed = install_saved(&chain, cloud_id, connection, runner);
+    // The owners are checked as the worker got them, also when the list changed during the sign-in.
+    let closed = match &installed {
+        Ok(repositories) => closed_owners(&client, &chain, repositories, runner, &say),
+        Err(_) => Ok(Vec::new()),
+    };
     // Only now does the card learn the outcome: the worker holds the access or not.
     ended(installed.is_ok());
+    let closed = closed?;
     runner.cancel.check()?;
     if installed.is_ok() && closed.is_empty() {
         say("the worker can now read the packages of this cloud's owners for its agents.");
@@ -234,11 +243,7 @@ fn without(ended: Ended, held_access: bool, cloud_id: &str, say: &dyn Fn(&str)) 
             }
         }
     }
-    say(if held_access {
-        "the earlier package read access of this Upkeep stays as it was."
-    } else {
-        WITHOUT
-    });
+    say(kept(held_access));
     Ok(())
 }
 
@@ -292,13 +297,15 @@ fn covered(
 }
 
 /// Installs `chain` with the Upkeep's repositories as saved now, under its settings lock, so a
-/// list that changed during the sign-in is the one the worker gets.
-fn install_saved(chain: &Chain, cloud_id: &str, connection: &Connection, runner: &Runner<'_>) -> Result<()> {
+/// list that changed during the sign-in is the one the worker gets; returns that list.
+fn install_saved(chain: &Chain, cloud_id: &str, connection: &Connection, runner: &Runner<'_>) -> Result<Vec<String>> {
     let _lock = crate::upkeep::worker::settings_lock(cloud_id)?;
     let repositories = saved_repositories(cloud_id)?;
-    install(chain, &repositories, connection, runner)?;
-    remember(cloud_id, repositories);
-    Ok(())
+    // From memory through `private_exchange`; no token enters argv, output or a named file.
+    let request = payload(chain, &repositories)?;
+    runner.private_exchange(&mut connection.command(INSTALL), &request, UPLOAD)?;
+    remember(cloud_id, repositories.clone());
+    Ok(repositories)
 }
 
 /// The owners of `repositories` whose organization limits OAuth apps, so `chain` reads none of
@@ -403,8 +410,8 @@ struct PayloadChain<'a> {
 }
 
 /// The request for the worker's root service: the client ID, the cloud's own repositories and
-/// the chain, no secret. Bytes in memory, wiped on drop: no file on this computer ever holds
-/// the chain, also when Horizon stops during the upload.
+/// the chain, no secret. Bytes in memory, wiped on drop: no named file on this computer ever
+/// holds the chain, also when Horizon stops during the upload.
 fn payload(chain: &Chain, repositories: &[String]) -> Result<zeroize::Zeroizing<Vec<u8>>> {
     let unix = |at: std::time::SystemTime| {
         at.duration_since(std::time::UNIX_EPOCH)
@@ -426,20 +433,11 @@ fn payload(chain: &Chain, repositories: &[String]) -> Result<zeroize::Zeroizing<
         .map_err(|_| Error::Json)
 }
 
-#[derive(Serialize)]
-struct Change<'a> {
-    version: u8,
-    repositories: &'a [String],
-}
-
 /// Tells root on the worker the Upkeep's repositories for the chain it holds, without a token,
 /// through `command` (`horizon-worker-github packages`).
 fn change(repositories: &[String], command: &mut std::process::Command, runner: &Runner<'_>) -> Result<()> {
-    let request = serde_json::to_vec(&Change {
-        version: 1,
-        repositories,
-    })
-    .map_err(|_| Error::Json)?;
+    let request = serde_json::to_vec(&serde_json::json!({"version": 1, "repositories": repositories}))
+        .map_err(|_| Error::Json)?;
     runner.private_exchange(command, &request, UPLOAD).map(drop)
 }
 
@@ -477,9 +475,9 @@ pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, conf
     ) else {
         return;
     };
-    // Asked once per list: whatever the worker answers, the next exchange with the same list
-    // does not ask again. A worker without access, or whose image cannot take a change, gets
-    // the list at the next deployment.
+    // A worker without access, or whose image cannot take a change, gets the list at the next
+    // deployment. A change that fails is not remembered, so the next exchange tries again; a
+    // worker that refused it has removed its chain and then holds no access.
     if let Held::Current {
         repositories,
         change: true,
@@ -488,17 +486,9 @@ pub fn follow(connection: &Connection, runner: &Runner<'_>, cloud_id: &str, conf
         && change(&wanted, &mut connection.pinned_command(INSTALL), runner).is_err()
     {
         tracing::warn!(cloud = %cloud_id, "the worker did not take the Upkeep's repositories for its package read access");
+        return;
     }
     remember(cloud_id, wanted);
-}
-
-/// Gives the chain to root on the worker over SSH stdin, from an anonymous temporary file that
-/// `private_exchange` unlinks at once; no token enters argv, output or a named file.
-fn install(chain: &Chain, repositories: &[String], connection: &Connection, runner: &Runner<'_>) -> Result<()> {
-    let request = payload(chain, repositories)?;
-    runner
-        .private_exchange(&mut connection.command(INSTALL), &request, UPLOAD)
-        .map(drop)
 }
 
 #[cfg(test)]
