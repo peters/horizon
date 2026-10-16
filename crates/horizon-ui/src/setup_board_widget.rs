@@ -124,9 +124,19 @@ fn row_card(ui: &mut Ui, row: &Row) -> Option<Request> {
                     request = buttons(ui, row);
                 });
             });
-            ui.add(
-                egui::Label::new(RichText::new(&row.path).size(11.5).monospace().color(theme::FG_SOFT())).truncate(),
-            );
+            // Where it builds comes first on the second line, which has room for it; the
+            // path gives way.
+            ui.horizontal(|ui| {
+                if let Some(host) = &row.build_on {
+                    ui.label(RichText::new(format!("builds on {host}")).size(11.5).color(theme::FG()))
+                        .on_hover_text("The proof builds the image and runs the CI with this Docker.");
+                    ui.label(RichText::new("·").size(11.5).color(theme::FG_DIM()));
+                }
+                ui.add(
+                    egui::Label::new(RichText::new(&row.path).size(11.5).monospace().color(theme::FG_SOFT()))
+                        .truncate(),
+                );
+            });
             ui.add_space(2.0);
             progress(ui, &row.steps);
             let color = if row.alert {

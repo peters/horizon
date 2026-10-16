@@ -813,6 +813,20 @@ that build at that time on its **Build image** step. Slots go in the order that 
 setups asked for them. To change the number, start Horizon with
 `HORIZON_SETUP_BUILD_SLOTS` set to a number from 1 to 16.
 
+**Build on** chooses where the proof of the next setup runs. It shows under the agent
+chips when Cloud settings has a Docker host on another machine and Docker hosts are
+on. **This computer** uses this computer's Docker. A Docker host uses the Docker of that
+machine: Horizon opens an SSH session with your own SSH configuration and keys, which
+forwards the host's `/var/run/docker.sock` to a socket in a private folder of this
+computer, and every docker command of the proof and of its cleanup goes through it.
+The agent still runs on this computer and reads the repository here. The proof copies
+the bundle, the restored packages and the Rust git clones to the host, as it copies
+them into a container on this computer. A live preview is brought back to this
+computer through a second SSH forward of its port. A Docker host has build slots of its
+own. A proof of a GPU profile fails on a Docker host, and a desktop preview that needs
+`/dev/kvm` is skipped there; choose **This computer** for them. The setup board names
+the host of each setup that builds on one.
+
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions
 they use and where those versions come from. Horizon proves GitHub Actions jobs

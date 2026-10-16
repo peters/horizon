@@ -593,9 +593,42 @@ checked on the cloud card, and an agent panel in the same workspace.
 
    Result: The setup board opens again with the row of the first copy.
 
+### 6.23 S23 — Build on a Docker host
+
+1. In **Cloud settings**, save a Docker host with SSH access to a Linux machine that
+   runs Docker and that your SSH key reaches without a password prompt. Turn Docker
+   hosts on.
+
+   Result: The Docker host card lists the host.
+
+2. Open **New cloud** for a copy of the fixture without `.horizon`.
+
+   Result: Under the agent chips, **Build on** shows **This computer** and the name of
+   the host.
+
+3. Click the name of the host, then start the setup agent.
+
+   Result: The agent starts on this computer. The setup board row says **builds on**
+   and the name of the host.
+
+4. Wait until the proof ends.
+
+   Result: Build image, Run CI in image and Fast rerun pass. On the host, `docker
+   images` lists `horizon-setup-ci-app-<hash>-<run>:candidate` while the run lives.
+   On this computer, `docker images` does not list it.
+
+5. Repeat steps 2 to 4 with the GUI fixture `<home>/smoke/gui-app`.
+
+   Result: The live preview opens in a Device panel on this computer and shows the app.
+
+6. Click **Stop** on both runs.
+
+   Result: Within one minute, `docker ps -a`, `docker images` and `docker volume ls` on
+   the host no longer list the resources of the runs.
+
 ## 7. Pass criteria
 
-- S01 to S22 give the results above.
+- S01 to S23 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

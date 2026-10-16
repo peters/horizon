@@ -282,6 +282,8 @@ impl HorizonApp {
         form.source = source::State::default();
         form.checks = checks::State::default();
         form.publishing = publishing::State::default();
+        // A Start that waits for the Docker hosts' read goes with the dialog.
+        form.setup_build_on.read_again();
     }
 
     /// What the dialog settles before it draws: the pickers that closed, the prices and the
@@ -297,6 +299,20 @@ impl HorizonApp {
         // Start needs the tailnet settings, and their picker now waits in More options.
         self.cloud_prototype.production.tailnets.poll(ctx);
         self.offer_setup_presets();
+        let root = self.cloud_prototype.root.clone();
+        self.cloud_prototype
+            .production
+            .setup_build_on
+            .refresh(root.as_deref(), ctx);
+        match self.cloud_prototype.production.setup_build_on.deferred() {
+            super::repository_setup::Deferred::Waiting => {}
+            super::repository_setup::Deferred::Start(submitted) => {
+                self.start_submitted_setup(ctx, *submitted);
+                // Another waiting Start goes on in the next frame.
+                ctx.request_repaint();
+            }
+            super::repository_setup::Deferred::Gone(reason) => self.cloud_prototype.error = Some(reason),
+        }
         checks::update(
             &mut self.cloud_prototype.production,
             self.cloud_prototype.root.as_deref(),

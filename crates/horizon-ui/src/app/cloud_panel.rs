@@ -410,8 +410,7 @@ impl HorizonApp {
 
     pub(super) fn add_mock_cloud(&mut self, ctx: &egui::Context) {
         if std::env::var_os("HORIZON_CLOUD_MOCK_DIR").is_none() {
-            self.cloud_prototype.production.creating = true;
-            self.cloud_prototype.production.focus_title_on_open = true;
+            self.cloud_prototype.production.open_creation();
             return;
         }
         let workspace = self.board.ensure_workspace();
