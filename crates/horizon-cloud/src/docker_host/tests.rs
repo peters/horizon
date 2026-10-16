@@ -776,6 +776,8 @@ fn a_host_forwards_its_engine_socket_and_a_loopback_port_over_its_own_ssh() {
     );
 }
 
+// The rented builder serves setups, which run on Linux; its key paths are Unix paths.
+#[cfg(unix)]
 #[test]
 fn a_rented_machine_is_reached_only_with_its_own_key_and_host_key() {
     let mut rented = Host {

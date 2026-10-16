@@ -197,7 +197,9 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("exited with code 101", gate.lane_failure(lane(101), True))
         self.assertIsNone(gate.lane_failure(lane(0), True))
         self.assertIsNone(gate.lane_failure(lane(101), False), "an entry without a result is told already")
-        self.assertIsNone(gate.lane_failure(lane(-15, reason="stopped"), True), "the runner stopped it")
+        self.assertIn("was stopped after its entries", gate.lane_failure(lane(-15, reason="overdue"), True),
+                      "a timeout during the builder's deletion")
+        self.assertIsNone(gate.lane_failure(lane(-15, reason="overdue"), False))
 
     def test_rows(self):
         passed = {"passed": True, "phases": self.phases(42, 31, 5),

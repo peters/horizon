@@ -846,7 +846,9 @@ reached as a Docker host is, through an SSH forward of its Docker socket.
   folder of the Cloud settings folder. The server takes only that login key, and Horizon
   accepts only that host key, so the first connection already checks the server. Your
   own SSH keys, agent and configuration are not used, and no secret of yours goes to
-  the builder.
+  the builder. Its proofs also pull images without Horizon's ghcr.io login, since that
+  login can publish packages; a setup whose image builds on a private ghcr.io base needs
+  **This computer** or a Docker host of yours.
 - The setup board shows the builder's server type, location, price per hour and how
   long it runs. A builder that no setup has used for 10 minutes is deleted, and so is
   the builder as Horizon exits. A setup still uses it while it is not ready, while a

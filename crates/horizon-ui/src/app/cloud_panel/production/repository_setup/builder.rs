@@ -138,6 +138,9 @@ impl Builder {
                 self.owner = None;
                 self.status = Status::Idle;
             }
+            // With the tries used up and no builder, the claim goes while the setups wait,
+            // so another Horizon can rent one; a new setup claims it again.
+            Status::Failed { left: false, .. } if !may_rent => self.owner = None,
             Status::Ready { .. } if self.unused_since.is_some_and(|since| since.elapsed() >= IDLE_RETURN) => {
                 self.give_back(ctx);
             }
