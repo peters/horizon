@@ -276,22 +276,20 @@ impl Builder {
             }
         }
         // A builder that an earlier Horizon left and this one never claimed, as on an exit
-        // from the session chooser, goes too.
-        let owner = match self.owner.clone() {
-            Some(owner) => owner,
-            None => match self
-                .recovery_root
-                .as_deref()
-                .filter(|root| setup_builder::left_behind(root))
-                .and_then(|root| setup_builder::claim(root).ok().flatten())
-            {
-                Some(owner) => Arc::new(owner),
-                None => return,
-            },
-        };
+        // from the session chooser, goes too. Its journal and claim are read on the
+        // thread, so a stalled folder holds the exit no longer than the bounded wait.
+        let (owner, root) = (self.owner.clone(), self.recovery_root.clone());
+        if owner.is_none() && root.is_none() {
+            return;
+        }
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(give_back(&owner, &Cancellation::default()));
+            let owner = owner.or_else(|| {
+                root.filter(|root| setup_builder::left_behind(root))
+                    .and_then(|root| setup_builder::claim(&root).ok().flatten())
+                    .map(Arc::new)
+            });
+            let _ = sender.send(owner.map_or(Ok(()), |owner| give_back(&owner, &Cancellation::default())));
         });
         match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok(())) => {}
