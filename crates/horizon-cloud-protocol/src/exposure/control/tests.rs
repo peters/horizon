@@ -77,8 +77,8 @@ fn independent_service_and_command_identities_survive_all_command_round_trips() 
         request.command.clone(),
         Command::Renew { service, lifetime },
         Command::Close { service },
-        Command::Read,
-        Command::Finish,
+        Command::Read {},
+        Command::Finish {},
     ] {
         let value = Request {
             id: OperationId::generate(),
@@ -520,6 +520,58 @@ fn raw_worker_and_recipient_facts_refuse_ipv4_mapped_addresses() {
         assert_eq!(
             Request::from_json(&serde_json::to_vec(&invalid).unwrap()),
             Err(Error::Worker)
+        );
+    }
+}
+
+#[test]
+fn raw_tagged_variants_refuse_unknown_fields() {
+    let original = serde_json::to_value(open()).unwrap();
+    let mut accepted = Vec::new();
+    for command in [
+        original["command"].clone(),
+        json!({"action":"renew","service":original["command"]["service"],
+            "lifetime":original["command"]["lifetime"]}),
+        json!({"action":"close","service":original["command"]["service"]}),
+        json!({"action":"read"}),
+        json!({"action":"finish"}),
+    ] {
+        let mut frame = original.clone();
+        frame["command"] = command;
+        assert!(Request::from_json(&serde_json::to_vec(&frame).unwrap()).is_ok());
+        frame["command"]["approved"] = json!(true);
+        if Request::from_json(&serde_json::to_vec(&frame).unwrap()) != Err(Error::Encoding) {
+            accepted.push(frame["command"]["action"].as_str().unwrap().to_owned());
+        }
+    }
+    assert!(accepted.is_empty(), "Commands accepted unknown fields: {accepted:?}");
+    for route in [json!({"kind":"gate"}), json!({"kind":"funnel_https","https":8443})] {
+        let mut frame = original.clone();
+        frame["command"]["policy"]["mode"] = json!("public");
+        frame["command"]["policy"]["sources"] = json!([]);
+        frame["command"]["route"] = route;
+        assert!(Request::from_json(&serde_json::to_vec(&frame).unwrap()).is_ok());
+        frame["command"]["route"]["approved"] = json!(true);
+        assert_eq!(
+            Request::from_json(&serde_json::to_vec(&frame).unwrap()),
+            Err(Error::Encoding)
+        );
+    }
+    let original = serde_json::to_value(reply()).unwrap();
+    for state in ["unavailable", "running", "unverified"] {
+        let mut frame = original.clone();
+        frame["outcome"] = json!("uncertain");
+        frame["worker"] = json!({"state":state});
+        if state != "unavailable" {
+            frame["worker"]["identity"] = json!({"self_id":"nOriginal",
+                "full_dns_name":"root.example.ts.net","magic_dns_suffix":"example.ts.net",
+                "addresses":["100.64.0.1"]});
+        }
+        assert!(Reply::from_json(&serde_json::to_vec(&frame).unwrap()).is_ok());
+        frame["worker"]["approved"] = json!(true);
+        assert_eq!(
+            Reply::from_json(&serde_json::to_vec(&frame).unwrap()),
+            Err(Error::Encoding)
         );
     }
 }

@@ -77,8 +77,8 @@ pub enum Command {
     Close {
         service: OperationId,
     },
-    Read,
-    Finish,
+    Read {},
+    Finish {},
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -127,7 +127,7 @@ impl Request {
             Command::Renew { lifetime, .. } => {
                 lifetime.deadline_millis()?;
             }
-            Command::Close { .. } | Command::Read | Command::Finish => {}
+            Command::Close { .. } | Command::Read {} | Command::Finish {} => {}
         }
         Ok(())
     }
