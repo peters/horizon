@@ -146,6 +146,7 @@ for-each-ref --format='%(objectname)' refs/kept; fi";
 
 /// Takes the bundle, when there is one, into the run's git cache, which keeps each
 /// commit and tag the checkout names, then makes the checkout from the cache: it fetches
+/// the tested commit first, so `FETCH_HEAD` names it as a fetch of the bundle did, then
 /// what the cache keeps, never following tags, so a tag deleted since an earlier proof
 /// stays gone, names the tested commit and the tags of this proof's list alone,
 /// and checks the commit out on its branch, as `actions/checkout` does for a push, or
@@ -163,7 +164,7 @@ while read -r object name; do $G -C /cache update-ref \"refs/kept/$object\" \"$o
 $G -C /cache update-ref \"refs/kept/$HEAD_SHA\" \"$HEAD_SHA\"; \
 $G -C /cache for-each-ref --format='delete %(refname)' refs/incoming | $G -C /cache update-ref --stdin; \
 rm -rf /workspace/checkout; mkdir /workspace/checkout; cd /workspace/checkout; git init -q; \
-$G fetch -q --no-tags /cache '+refs/kept/*:refs/kept/*'; \
+$G fetch -q --no-tags /cache \"refs/kept/$HEAD_SHA\" '+refs/kept/*:refs/kept/*'; \
 while read -r object name; do $G update-ref \"$name\" \"$object\"; done < /names; \
 $G for-each-ref --format='delete %(refname)' refs/kept | $G update-ref --stdin; \
 if [ -n \"$HEAD_BRANCH\" ]; then $G checkout -q --force -B \"$HEAD_BRANCH\" \"$HEAD_SHA\"; \

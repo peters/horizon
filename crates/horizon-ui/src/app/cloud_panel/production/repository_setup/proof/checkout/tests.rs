@@ -245,6 +245,34 @@ fn a_tag_deleted_between_proofs_stays_gone() {
 }
 
 #[test]
+fn fetch_head_names_the_tested_commit_after_an_incremental_proof() {
+    let work = tempfile::tempdir().unwrap();
+    let source = work.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    git(&source, &["init", "-q", "-b", "main"]);
+    let place = Place::new();
+    let mut kept = Vec::new();
+    // Prove commits until the cache holds one whose name sorts before the next head, as
+    // a listing of the cache's refs then puts it first.
+    let head = loop {
+        let head = commit(&source, &format!("change {}", kept.len()));
+        let (bundle, names) = bundle(work.path(), &source, &place.kept(), Some("main"));
+        let output = place.clone(bundle.as_deref(), &names, &head, "main");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        if kept.iter().any(|earlier: &String| earlier.as_str() < head.as_str()) {
+            break head;
+        }
+        kept.push(head);
+        assert!(kept.len() < 64, "a smaller name comes within a few commits");
+    };
+    assert_eq!(
+        git(&place.checkout(), &["rev-parse", "FETCH_HEAD"]),
+        head,
+        "CI that diffs FETCH_HEAD sees the tested commit"
+    );
+}
+
+#[test]
 fn a_cache_without_the_prerequisites_fails_the_checkout() {
     let work = tempfile::tempdir().unwrap();
     let source = work.path().join("source");
