@@ -1,4 +1,5 @@
 //! Validated raw-TCP policy facts, never an owner approval or authenticated identity.
+pub mod ingress;
 mod route;
 pub use route::Route;
 use serde::{Deserialize, Serialize};

@@ -1125,3 +1125,7 @@ compare the exact shown override and retain the current credential references.
 The cloud-launch wire adapter preserves publisher intent in core. UI preparation
 forwards that metadata to the shared engine; UI rebuild preview passes the entire
 record so the core profile/publisher fences also govern its confirmation.
+
+Protocol `exposure::ingress` keeps fixed protected port geometry separate from
+bounded passive receipt parsing in `ingress::receipt`. Its colocated tests check
+complete publication sets and identity boundaries without host or kernel I/O.
