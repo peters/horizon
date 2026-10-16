@@ -65,9 +65,10 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return dict(line.split("=", 1) for line in result.stdout.split())
 
-    def assert_gates(self, outputs, *, snap, release, macos="false", rust="true"):
+    def assert_gates(self, outputs, *, snap, release, macos="false", rust="true", speech="true"):
         self.assertEqual(outputs, {"run_snap_build": snap, "release_inputs": release,
-                                   "macos_release_inputs": macos, "rust_inputs": rust})
+                                   "macos_release_inputs": macos, "rust_inputs": rust,
+                                   "speech_inputs": speech})
 
     def test_documentation_only_change_gates_both_lanes_off(self):
         self.commit("docs/architecture/maintainability.md", "README.md")
@@ -188,6 +189,72 @@ class DetectionTests(unittest.TestCase):
         self.assert_gates(self.detect(event="pull_request", base=ZERO_SHA),
                           snap="true", release="true", macos="true", rust="true")
 
+    def write(self, path, text):
+        target = self.repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-m", f"write {path}")
+        return self.git("rev-parse", "HEAD")
+
+    def speech_inputs(self, base=None):
+        return self.detect(event="pull_request", base=base)["speech_inputs"]
+
+    def test_pull_request_speech_paths_run_the_speech_tests(self):
+        for paths in [["crates/horizon-ui/src/app/speech/mod.rs"],
+                      ["crates/horizon-ui/src/app/settings/speech/model_info.rs"],
+                      ["crates/horizon-core/src/speech_config.rs"],
+                      ["crates/horizon-core/src/dictation.rs"],
+                      ["crates/horizon-x/src/transcribe/mod.rs"],
+                      ["crates/horizon-ui/build.rs"], ["Cargo.toml"], ["Cargo.lock"],
+                      ["crates/horizon-cloud/Cargo.toml"], ["rust-toolchain.toml"],
+                      [".cargo/config.toml"], [".github/workflows/ci.yml"],
+                      ["scripts/ci-cargo-test-shard.sh"],
+                      ["scripts/install-ci-ubuntu-dependencies.sh"],
+                      ["docs/plan.md", "crates/horizon-ui/src/app/speech/capture.rs"]]:
+            with self.subTest(paths=paths):
+                self.setUp()
+                self.commit(*paths)
+                self.assertEqual(self.speech_inputs(), "true")
+
+    def test_pull_request_without_speech_inputs_skips_the_speech_tests(self):
+        for paths in [["crates/horizon-ui/src/app/panels/mod.rs"],
+                      ["crates/horizon-core/src/transcript.rs"],
+                      ["crates/horizon-cloud/src/lib.rs", "docs/speech.md"],
+                      ["assets/plugins/codex/skills/horizon-speech/SKILL.md"],
+                      ["scripts/install-ci-video-build-tools.sh"], ["docs/plan.md"]]:
+            with self.subTest(paths=paths):
+                self.setUp()
+                self.commit(*paths)
+                self.assertEqual(self.speech_inputs(), "false")
+
+    def test_a_file_that_names_the_speech_feature_runs_the_speech_tests(self):
+        path = "crates/horizon-ui/src/app/lifecycle.rs"
+        for before, after in [
+            ('#[cfg(feature = "speech")]\nfn a() {}\n', '#[cfg(feature = "speech")]\nfn b() {}\n'),
+            ("fn a() {}\n", '#[cfg(all(test, feature="speech"))]\nfn a() {}\n'),
+            ('#[cfg_attr(not(feature = "speech"), allow(dead_code))]\nfn a() {}\n', "fn a() {}\n"),
+            ('const GPU: bool = cfg!(feature = "speech-cuda");\n', "const GPU: bool = true;\n"),
+            ('let cuda = env::var_os("CARGO_FEATURE_SPEECH_CUDA");\n', "let cuda = None;\n"),
+        ]:
+            with self.subTest(before=before, after=after):
+                self.setUp()
+                self.base = self.write(path, before)
+                self.write(path, after)
+                self.assertEqual(self.speech_inputs(), "true")
+
+    def test_a_speech_file_elsewhere_does_not_mark_other_paths(self):
+        self.base = self.write("crates/horizon-ui/src/app/lifecycle.rs",
+                               '#[cfg(feature = "speech")]\nfn a() {}\n')
+        self.write("crates/horizon-ui/src/app/canvas.rs", "// speech is opt-in\nfn c() {}\n")
+        self.assertEqual(self.speech_inputs(), "false")
+
+    def test_pushes_dispatches_and_unknown_bases_run_the_speech_tests(self):
+        self.commit("crates/horizon-ui/src/app/panels/mod.rs")
+        self.assertEqual(self.detect(event="push")["speech_inputs"], "true")
+        self.assertEqual(self.detect(event="workflow_dispatch")["speech_inputs"], "true")
+        self.assertEqual(self.speech_inputs(base=ZERO_SHA), "true")
+
     def test_wrong_argument_count_fails_without_output(self):
         for arguments in [[], ["push"], ["push", "HEAD"], ["push", "HEAD", "HEAD", "extra"]]:
             with self.subTest(arguments=arguments):
@@ -213,6 +280,37 @@ class WorkflowGateTests(unittest.TestCase):
                     jobs[name],
                 )
         self.assertNotIn("needs.repo-checks.outputs", workflow)
+
+    def test_only_the_linux_speech_leg_skips_and_only_on_a_pull_request(self):
+        jobs = jobs_of(WORKFLOW.read_text())
+        self.assertIn("speech_inputs: ${{ steps.changes.outputs.speech_inputs }}",
+                      jobs["changes"])
+        self.assertIn(
+            "      HORIZON_CI_SKIP_SPEECH: ${{ github.event_name == 'pull_request' && "
+            "matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && "
+            "needs.changes.outputs.speech_inputs == 'false' }}\n",
+            jobs["rust-test"],
+        )
+        self.assertNotIn("HORIZON_CI_SKIP_SPEECH", jobs["windows-smoke"])
+        # The saver leg keeps its cache key and main-only save.
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}",
+                      jobs["rust-test"])
+
+    def test_every_step_of_the_linux_speech_leg_checks_the_skip_flag(self):
+        steps = jobs_of(WORKFLOW.read_text())["rust-test"].split("\n    steps:\n", 1)[1]
+        steps = re.split(r"(?m)^      - ", steps)[1:]
+        self.assertGreater(len(steps), 5)
+        for step in steps:
+            with self.subTest(step=step.splitlines()[0]):
+                condition = re.search(r"(?m)^(?:        )?if: (.*)$", step)
+                condition = condition.group(1) if condition else ""
+                if ("startsWith(matrix.os, 'macos-')" in condition
+                        or "matrix.shard == 'libs'" in condition):
+                    continue
+                if "Skip the speech tests" in step:
+                    self.assertEqual(condition, "env.HORIZON_CI_SKIP_SPEECH == 'true'")
+                    continue
+                self.assertIn("env.HORIZON_CI_SKIP_SPEECH != 'true'", condition)
 
     def test_ci_builds_macos_only_for_artifact_build_inputs_or_a_dispatch(self):
         job = jobs_of(WORKFLOW.read_text())["rust-artifacts"]

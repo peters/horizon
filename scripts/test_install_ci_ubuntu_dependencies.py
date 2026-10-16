@@ -192,7 +192,8 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual([shlex.split(command) for command in commands], packages)
                 if name == "rust-test":
                     self.assertIn(
-                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' }}\n"
+                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'"
+                        " && env.HORIZON_CI_SKIP_SPEECH != 'true' }}\n"
                         "        run: " + prefix,
                         jobs[name],
                     )
@@ -211,7 +212,9 @@ class WorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         sites = workflow.count("run: bash scripts/install-ci-video-build-tools.sh")
         guarded = re.findall(
-            r"- name: Install video assembler\n\s+if: \$\{\{ !env\.LOCALCI \}\}\n(?:\s+shell: bash\n)?"
+            # The Linux speech leg also skips it on a pull request without speech inputs.
+            r"- name: Install video assembler\n\s+if: \$\{\{ !env\.LOCALCI"
+            r"(?: && env\.HORIZON_CI_SKIP_SPEECH != 'true')? \}\}\n(?:\s+shell: bash\n)?"
             r"\s+run: bash scripts/install-ci-video-build-tools\.sh",
             workflow,
         )
