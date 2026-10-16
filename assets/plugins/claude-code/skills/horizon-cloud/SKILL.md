@@ -25,12 +25,17 @@ it does not supply an unknown domain. Marker 2 qualifies this display fallback
 only; selected-tailnet operations require marker 4. Connect again to refresh
 names after an administrator rename.
 
-The worker image source recipes include a pinned Tailscale Unix PROXY v1 patch.
-This supplies a transport only; it does not activate M2 or grant source identity.
-An original root-private Unix listener and same-daemon kernel peer custody remain
-required. Same-PID loopback TCP and generic-proxy output are insufficient.
-An existing published image retains its recorded pin until actual publication.
-See `docs/testing/procedures/tailscale-unix-proxy.md` for both native image checks.
+The worker source recipes include pinned Unix PROXY1 and explicit flow
+cancellation. `--horizon-flow-cancel` / JSON `HorizonFlowCancel` defaults false;
+only Linux raw Unix PROXY1 without TLS supports it. The root controller must own
+the original private listener and exact daemon pair; agents must not substitute
+routes or infer identity from a header/config/descriptor. Payload write EOF keeps
+reverse flow open. Control `DRAINED=0x01` then EOF confirms daemon copying, not
+remote application delivery. This transport does not activate M2; actual Kernel
+and userspace Worker consumer qualification remains separate. Same-PID TCP and
+generic-proxy output are insufficient. Published pins stay unchanged until actual
+publication. See `references/cloud.md` and
+`docs/testing/procedures/tailscale-unix-proxy.md` for current native-image gates.
 
 A selected tailnet requires `horizon-tailnet-contract=4` and an auth key with
 only `tag:horizon-worker`. The tailnet policy must define this tag in `tagOwners`.

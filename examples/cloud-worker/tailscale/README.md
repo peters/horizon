@@ -19,7 +19,8 @@ Its native Linux manifests are:
 | amd64 | `sha256:433f9dc4f8ea3a1ce4e28f9f15d0f7c056b10475307f886d6f1ac1ccc4abd976` |
 | arm64/v8 | `sha256:7939e2c75db3d059fc944bb6464a916d0fa64bd5a3bd7b3528f2a1ac7673a0eb` |
 
-The native image jobs run both affected upstream test packages before building
+The native image jobs run complete `./ipn`, `./ipn/ipnlocal` and
+`./cmd/tailscale/cli` test packages before building
 the two binaries. The builder uses the local compiler, unchanged module checksums,
 CGO disabled, trimmed paths and no embedded build ID. The version includes the
 complete patch SHA-256. Bit-for-bit reproducibility still requires two independent
@@ -29,6 +30,31 @@ The patch permits Unix PROXY v1, reports the original virtual Serve port and ref
 Unix v2. TCP v1/v2 retain their existing destination backend port and behavior.
 The new Unix path refuses a missing same-family node address or zero ingress port.
 Existing Unix forwarding without PROXY remains available.
+
+The additional Serve-only `--horizon-flow-cancel` boolean defaults false.
+JSON `TCPPortHandler.HorizonFlowCancel` is omitted when false. Opt-in requires
+Linux raw TCP, an absolute filesystem Unix backend, PROXY1 and nonzero ingress;
+HTTP/HTTPS, TLS termination and Funnel refuse. CLI, direct LocalAPI recursive
+config and restored handlers validate it; rejected updates retain prior config.
+Ordinary false/absent paths keep their existing bytes and behavior.
+
+An opted-in handler sends header byte `P` once with one SCM_RIGHTS unnamed Unix
+stream cancellation endpoint, closes its local sent-end copy, then sends the
+remaining header and payload. Payload write EOF half-closes only that direction.
+Consumer control EOF/data/error cancels both payload directions; the consumer
+never sends control bytes or half-closes control. Only after both copies and
+required CloseWrite calls succeed does the daemon send control `DRAINED=0x01`,
+close control and join its reader. Consumer finish requires exactly that byte
+then EOF under existing deadlines. No ambiguous FD/ACK retry or hidden duplicate
+is permitted. All sender/copy/control goroutines and original FDs retire.
+ACK means daemon copying/frontend half-close, not remote app delivery.
+
+This capability requires the exact qualified pair and original root-controlled
+private listener/daemon custody; configuration and descriptors alone grant no
+identity. Actual Producer/Gate Kernel and userspace Worker consumption remains
+a separate gate. Earlier non-descriptor image/package/reproducibility evidence
+cannot qualify the new protocol; current-head native and independent-build
+results must be recorded before claiming them.
 
 `collect-notices.py` copies upstream BSD-3-Clause licensing, the upstream dependency
 index, Go licensing and full notices from the exact consumed Go modules. Their

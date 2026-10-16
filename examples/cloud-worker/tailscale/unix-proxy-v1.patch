@@ -1,6 +1,140 @@
+--- /dev/null
++++ b/cmd/tailscale/cli/serve_horizon_test.go
+@@ -0,0 +1,65 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++package cli
++
++import (
++	"bytes"
++	"encoding/json"
++	"runtime"
++	"testing"
++)
++
++func TestHorizonFlowCancelCLI(t *testing.T) {
++	lc := &fakeLocalServeClient{}
++	var flagOut bytes.Buffer
++	if runtime.GOOS != "linux" {
++		err := newServeV2Command(&serveEnv{lc: lc, testFlagOut: &flagOut}, serve).ParseAndRun(t.Context(), []string{"--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "--bg", "unix:/run/original.sock"})
++		if err == nil || lc.setCount != 0 {
++			t.Fatalf("unsupported opt-in mutated config: %v", err)
++		}
++		return
++	}
++	if err := newServeV2Command(&serveEnv{lc: lc, testFlagOut: &flagOut}, serve).ParseAndRun(t.Context(), []string{"--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "--bg", "unix:/run/original.sock"}); err != nil {
++		t.Fatal(err)
++	}
++	if !lc.config.TCP[20000].HorizonFlowCancel {
++		t.Fatal("CLI did not persist explicit opt-in")
++	}
++	before, err := json.Marshal(lc.config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	count := lc.setCount
++	for _, args := range [][]string{
++		{"--tcp=20000", "--horizon-flow-cancel", "--bg", "unix:/run/replacement.sock"},
++		{"--tcp=20000", "--proxy-protocol=2", "--horizon-flow-cancel", "--bg", "unix:/run/replacement.sock"},
++		{"--tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "--bg", "tcp://localhost:8080"},
++		{"--tls-terminated-tcp=20000", "--proxy-protocol=1", "--horizon-flow-cancel", "--bg", "unix:/run/replacement.sock"},
++		{"--http=20000", "--horizon-flow-cancel", "--bg", "http://localhost:8080"},
++	} {
++		if err := newServeV2Command(&serveEnv{lc: lc, testFlagOut: &flagOut}, serve).ParseAndRun(t.Context(), args); err == nil {
++			t.Fatalf("invalid flags accepted: %v", args)
++		}
++		after, err := json.Marshal(lc.config)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if lc.setCount != count || !bytes.Equal(before, after) {
++			t.Fatalf("rejected update mutated original route: %v", args)
++		}
++	}
++	if err := newServeV2Command(&serveEnv{lc: lc, testFlagOut: &flagOut}, funnel).ParseAndRun(t.Context(), []string{"--horizon-flow-cancel", "443"}); err == nil {
++		t.Fatal("Funnel accepted private flow flag")
++	}
++	if lc.setCount != count {
++		t.Fatal("Funnel rejection mutated config")
++	}
++	// Omitting the opt-in explicitly returns this route to ordinary Unix PROXY1.
++	if err := newServeV2Command(&serveEnv{lc: lc, testFlagOut: &flagOut}, serve).ParseAndRun(t.Context(), []string{"--tcp=20000", "--proxy-protocol=1", "--bg", "unix:/run/original.sock"}); err != nil {
++		t.Fatal(err)
++	}
++	if lc.config.TCP[20000].HorizonFlowCancel {
++		t.Fatal("ordinary route retained stale opt-in")
++	}
++}
+--- a/cmd/tailscale/cli/serve_legacy.go
++++ b/cmd/tailscale/cli/serve_legacy.go
+@@ -163,19 +163,20 @@
+ 	json bool // output JSON (status only for now)
+ 
+ 	// v2 specific flags
+-	bg               bgBoolFlag               // background mode
+-	setPath          string                   // serve path
+-	https            uint                     // HTTP port
+-	http             uint                     // HTTP port
+-	tcp              uint                     // TCP port
+-	tlsTerminatedTCP uint                     // a TLS terminated TCP port
+-	proxyProtocol    uint                     // PROXY protocol version (1 or 2)
+-	subcmd           serveMode                // subcommand
+-	yes              bool                     // update without prompt
+-	service          tailcfg.ServiceName      // service name
+-	tun              bool                     // redirect traffic to OS for service
+-	allServices      bool                     // apply config file to all services
+-	acceptAppCaps    []tailcfg.PeerCapability // app capabilities to forward
++	bg                bgBoolFlag               // background mode
++	setPath           string                   // serve path
++	https             uint                     // HTTP port
++	http              uint                     // HTTP port
++	tcp               uint                     // TCP port
++	tlsTerminatedTCP  uint                     // a TLS terminated TCP port
++	horizonFlowCancel bool                     // explicit Linux Unix PROXY1 cancellation contract
++	proxyProtocol     uint                     // PROXY protocol version (1 or 2)
++	subcmd            serveMode                // subcommand
++	yes               bool                     // update without prompt
++	service           tailcfg.ServiceName      // service name
++	tun               bool                     // redirect traffic to OS for service
++	allServices       bool                     // apply config file to all services
++	acceptAppCaps     []tailcfg.PeerCapability // app capabilities to forward
+ 
+ 	lc localServeClient // localClient interface, specific to serve
+ 	// optional stuff for tests:
 --- a/cmd/tailscale/cli/serve_v2.go
 +++ b/cmd/tailscale/cli/serve_v2.go
-@@ -1312,8 +1312,8 @@
+@@ -248,6 +248,9 @@
+ 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
+ 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
+ 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
++			if subcmd == serve {
++				fs.BoolVar(&e.horizonFlowCancel, "horizon-flow-cancel", false, "Opt into Horizon's Linux Unix PROXY1 descriptor cancellation contract")
++			}
+ 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
+ 		}),
+ 		UsageFunc: usageFuncNoDefaultValues,
+@@ -991,6 +994,9 @@
+ }
+ 
+ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability, proxyProtocol int) error {
++	if e.horizonFlowCancel && (srvType != serveTypeTCP || allowFunnel) {
++		return fmt.Errorf("Horizon flow cancellation requires raw TCP Serve without Funnel")
++	}
+ 	// update serve config based on the type
+ 	switch srvType {
+ 	case serveTypeHTTPS, serveTypeHTTP:
+@@ -1129,6 +1135,9 @@
+ 		if tcpHandler.TerminateTLS != "" {
+ 			annotations = append(annotations, "TLS terminated")
+ 		}
++		if tcpHandler.HorizonFlowCancel {
++			annotations = append(annotations, "Horizon flow cancellation")
++		}
+ 		if ver := tcpHandler.ProxyProtocol; ver != 0 {
+ 			annotations = append(annotations, fmt.Sprintf("PROXY protocol v%d", ver))
+ 		}
+@@ -1312,8 +1321,8 @@
  	// For tcp: targets, extract the host:port from the parsed URL.
  	var fwdAddr string
  	if strings.HasPrefix(targetURL, "unix:") {
@@ -11,6 +145,44 @@
  		}
  		fwdAddr = targetURL
  	} else {
+@@ -1327,6 +1336,17 @@
+ 		fwdAddr = dstURL.Host
+ 	}
+ 
++	if e.horizonFlowCancel && terminateTLS {
++		return fmt.Errorf("Horizon flow cancellation requires raw TCP without TLS termination")
++	}
++	proposed := &ipn.TCPPortHandler{TCPForward: fwdAddr, ProxyProtocol: proxyProtocol, HorizonFlowCancel: e.horizonFlowCancel}
++	if terminateTLS {
++		proposed.TerminateTLS = dnsName
++	}
++	if err := proposed.CheckHorizonFlowCancel(srcPort); err != nil {
++		return err
++	}
++
+ 	if sc.IsServingWeb(srcPort, svcName) {
+ 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
+ 	}
+@@ -1334,16 +1354,19 @@
+ 	// TODO: needs to account for multiple configs from foreground mode
+ 	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
+ 		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
++		sc.Services[svcName].TCP[srcPort].HorizonFlowCancel = e.horizonFlowCancel
+ 		return nil
+ 	}
+ 
+ 	// TODO: needs to account for multiple configs from foreground mode
+ 	if svcName != "" {
+ 		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
++		sc.Services[svcName].TCP[srcPort].HorizonFlowCancel = e.horizonFlowCancel
+ 		return nil
+ 	}
+ 
+ 	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, proxyProtocol, dnsName)
++	sc.TCP[srcPort].HorizonFlowCancel = e.horizonFlowCancel
+ 	return nil
+ }
+ 
 --- a/cmd/tailscale/cli/serve_v2_test.go
 +++ b/cmd/tailscale/cli/serve_v2_test.go
 @@ -535,9 +535,29 @@
@@ -81,10 +253,86 @@
 +		t.Fatalf("rejected update changed original configuration: %s -> %s", before, after)
 +	}
 +}
+--- a/ipn/ipn_clone.go
++++ b/ipn/ipn_clone.go
+@@ -223,11 +223,12 @@
+ 
+ // A compilation failure here means this code must be regenerated, with the command at the top of this file.
+ var _TCPPortHandlerCloneNeedsRegeneration = TCPPortHandler(struct {
+-	HTTPS         bool
+-	HTTP          bool
+-	TCPForward    string
+-	TerminateTLS  string
+-	ProxyProtocol int
++	HTTPS             bool
++	HTTP              bool
++	TCPForward        string
++	TerminateTLS      string
++	ProxyProtocol     int
++	HorizonFlowCancel bool
+ }{})
+ 
+ // Clone makes a deep copy of HTTPHandler.
+--- a/ipn/ipn_view.go
++++ b/ipn/ipn_view.go
+@@ -846,13 +846,18 @@
+ // This is only valid if TCPForward is non-empty.
+ func (v TCPPortHandlerView) ProxyProtocol() int { return v.ж.ProxyProtocol }
+ 
++// HorizonFlowCancel opts into the Linux Unix PROXY1 descriptor cancellation
++// contract. Ordinary forwarding never sends ancillary descriptors.
++func (v TCPPortHandlerView) HorizonFlowCancel() bool { return v.ж.HorizonFlowCancel }
++
+ // A compilation failure here means this code must be regenerated, with the command at the top of this file.
+ var _TCPPortHandlerViewNeedsRegeneration = TCPPortHandler(struct {
+-	HTTPS         bool
+-	HTTP          bool
+-	TCPForward    string
+-	TerminateTLS  string
+-	ProxyProtocol int
++	HTTPS             bool
++	HTTP              bool
++	TCPForward        string
++	TerminateTLS      string
++	ProxyProtocol     int
++	HorizonFlowCancel bool
+ }{})
+ 
+ // View returns a read-only view of HTTPHandler.
 --- a/ipn/ipnlocal/serve.go
 +++ b/ipn/ipnlocal/serve.go
-@@ -721,12 +721,20 @@
- func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string) error {
+@@ -646,6 +646,16 @@
+ }
+ 
+ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport uint16, srcAddr netip.AddrPort, httpCtx *serveHTTPContext, forVIPService tailcfg.ServiceName) func(net.Conn) error {
++	err := tcph.AsStruct().CheckHorizonFlowCancel(dport)
++	if err == nil && tcph.HorizonFlowCancel() && httpCtx != nil && httpCtx.Funnel != nil {
++		err = fmt.Errorf("Horizon flow cancellation is not available to Funnel ingress")
++	}
++	if err != nil {
++		return func(conn net.Conn) error {
++			conn.Close()
++			return err
++		}
++	}
+ 	if tcph.HTTPS() || tcph.HTTP() {
+ 		hs := &http.Server{
+ 			Handler: http.HandlerFunc(b.serveWebHandler),
+@@ -708,7 +718,7 @@
+ 
+ 			// TODO(bradfitz): do the RegisterIPPortIdentity and
+ 			// UnregisterIPPortIdentity stuff that netstack does
+-			return b.forwardTCPWithProxyProtocol(conn, backConn, tcph.ProxyProtocol(), srcAddr, dport, backDst)
++			return b.forwardTCPWithProxyProtocol(conn, backConn, tcph.ProxyProtocol(), srcAddr, dport, backDst, tcph.HorizonFlowCancel())
+ 		}
+ 	}
+ 
+@@ -718,15 +728,23 @@
+ // forwardTCPWithProxyProtocol forwards TCP traffic between conn and backConn,
+ // optionally prepending a PROXY protocol header if proxyProtoVer > 0.
+ // The srcAddr is the original client address used to build the PROXY header.
+-func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string) error {
++func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, proxyProtoVer int, srcAddr netip.AddrPort, dport uint16, backDst string, horizonFlowCancel bool) error {
  	var proxyHeader []byte
  	if proxyProtoVer > 0 {
 -		// PROXY protocol requires a valid TCP destination address.
@@ -110,7 +358,7 @@
  		}
  
  		// We always want to format the PROXY protocol header based on
-@@ -752,6 +760,9 @@
+@@ -752,6 +770,9 @@
  			}
  		}
  		if !destAddr.IsValid() {
@@ -120,7 +368,7 @@
  			// Unexpected: we couldn't determine the node's IP address.
  			// Pick a best-effort destination address of localhost.
  			if is4 {
-@@ -767,7 +778,7 @@
+@@ -767,7 +788,7 @@
  			SourceAddr: net.TCPAddrFromAddrPort(proxySrcAddr),
  			DestinationAddr: &net.TCPAddr{
  				IP:   destAddr.AsSlice(),
@@ -129,7 +377,7 @@
  			},
  		}
  		if is4 {
-@@ -778,6 +789,9 @@
+@@ -778,8 +799,19 @@
  		var err error
  		proxyHeader, err = header.Format()
  		if err != nil {
@@ -138,7 +386,1086 @@
 +			}
  			b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
  		}
++	}
++
++	if horizonFlowCancel {
++		backend, ok := backConn.(*net.UnixConn)
++		if !ok {
++			return fmt.Errorf("Horizon flow cancellation requires the original Unix connection")
++		}
++		return forwardHorizonUnix(b.ctx, conn, backend, proxyHeader)
  	}
+ 
+ 	errc := make(chan error, 1)
+@@ -1744,6 +1776,10 @@
+ 		return nil
+ 	}
+ 
++	if err := incoming.AsStruct().CheckHorizonFlowCancel(); err != nil {
++		return err
++	}
++
+ 	// For Services, TUN mode is mutually exclusive with L4 or L7 handlers.
+ 	for svcName, svcCfg := range incoming.Services().All() {
+ 		hasTCP := svcCfg.TCP().Len() > 0
+--- /dev/null
++++ b/ipn/ipnlocal/serve_horizon_cancel_linux_test.go
+@@ -0,0 +1,151 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve && linux
++
++package ipnlocal
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"net"
++	"os"
++	"os/exec"
++	"runtime"
++	"strings"
++	"testing"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++func TestHorizonUnixHeaderSendCancellation(t *testing.T) {
++	for _, mode := range []string{"blocked-header", "header-write-error"} {
++		t.Run(mode, func(t *testing.T) {
++			_, incoming := horizonFrontPair(t, false)
++			back, peer, err := horizonCancellationPair()
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { back.Close(); peer.Close() })
++			if mode == "blocked-header" {
++				raw, err := back.SyscallConn()
++				if err != nil {
++					t.Fatal(err)
++				}
++				var fillErr error
++				err = raw.Control(func(fd uintptr) {
++					if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUF, 4096); err != nil {
++						fillErr = err
++						return
++					}
++					var buffer [4096]byte
++					for sent := 0; sent < 4*1024*1024; {
++						n, err := unix.Write(int(fd), buffer[:])
++						sent += n
++						if err == unix.EAGAIN {
++							return
++						}
++						if err != nil {
++							fillErr = err
++							return
++						}
++					}
++					fillErr = errors.New("fixture could not fill original backend write buffer")
++				})
++				if err != nil || fillErr != nil {
++					t.Fatalf("buffer precondition: %v, %v", err, fillErr)
++				}
++			} else {
++				peer.Close()
++			}
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			done := make(chan error, 1)
++			go func() {
++				done <- forwardHorizonUnix(ctx, incoming, back, []byte("PROXY TCP4 100.1.1.1 100.2.2.2 1 2\r\n"))
++			}()
++			if mode == "blocked-header" {
++				// Require the original send to be parked in network poll, not merely
++				// a scheduled goroutine that cancellation could beat to first poll.
++				awaitBlockedHorizonHeader(t, done)
++				cancel()
++			}
++			select {
++			case err := <-done:
++				if err == nil {
++					t.Fatal("header failure/cancellation reported success")
++				}
++			case <-time.After(5 * time.Second):
++				t.Fatal("header writer/cancellation reader leaked")
++			}
++		})
++	}
++}
++
++func TestHorizonUnixReceiverExit(t *testing.T) {
++	if os.Getenv("HORIZON_CANCEL_ENDPOINT_CHILD") == "1" {
++		os.Exit(0)
++	}
++	f := newHorizonFlow(t, false)
++	file, err := f.cancel.File()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer file.Close()
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHorizonUnixReceiverExit$")
++	cmd.Env = append(os.Environ(), "HORIZON_CANCEL_ENDPOINT_CHILD=1")
++	cmd.ExtraFiles = []*os.File{file}
++	cmd.Stdout = io.Discard
++	cmd.Stderr = io.Discard
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	file.Close()
++	f.cancel.Close()
++	if err := cmd.Wait(); err != nil {
++		t.Fatal(err)
++	}
++	f.finished(t, true)
++}
++
++func TestHorizonUnixUnsupportedMeteredHalfCloseRefuses(t *testing.T) {
++	front, peer := net.Pipe()
++	defer front.Close()
++	defer peer.Close()
++	back, receiver, err := horizonCancellationPair()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer back.Close()
++	defer receiver.Close()
++	if err := forwardHorizonUnix(context.Background(), &serviceMeteredConn{Conn: front}, back, []byte("PROXY ")); err == nil {
++		t.Fatal("metered wrapper hid unsupported CloseWrite")
++	}
++}
++
++func awaitBlockedHorizonHeader(t *testing.T, done <-chan error) {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	stack := make([]byte, 1024*1024)
++	for time.Now().Before(deadline) {
++		select {
++		case err := <-done:
++			t.Fatalf("header send returned before cancellation: %v", err)
++		default:
++		}
++		n := runtime.Stack(stack, true)
++		for _, goroutine := range bytes.Split(stack[:n], []byte("\n\n")) {
++			trace := string(goroutine)
++			if strings.Contains(trace, "sendHorizonHeader.func1") && strings.Contains(trace, "WriteMsgUnix") && strings.Contains(trace, "internal/poll.runtime_pollWait") {
++				return
++			}
++		}
++		runtime.Gosched()
++	}
++	t.Fatal("original descriptor send was not observed blocked in network poll")
++}
+--- /dev/null
++++ b/ipn/ipnlocal/serve_horizon_config_test.go
+@@ -0,0 +1,115 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve
++
++package ipnlocal
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net"
++	"net/netip"
++	"testing"
++
++	"tailscale.com/ipn"
++	"tailscale.com/tailcfg"
++)
++
++func TestHorizonFlowCancelRejectedConfigPreservesOriginal(t *testing.T) {
++	b := newTestBackend(t)
++	original := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{20000: {TCPForward: "127.0.0.1:8080"}}}
++	if err := b.SetServeConfig(original, ""); err != nil {
++		t.Fatal(err)
++	}
++	before, etag, err := b.ServeConfigETag()
++	if err != nil {
++		t.Fatal(err)
++	}
++	beforeJSON, err := json.Marshal(before.AsStruct())
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, scope := range []string{"node", "foreground", "service"} {
++		t.Run(scope, func(t *testing.T) {
++			h := &ipn.TCPPortHandler{TCPForward: "127.0.0.1:8080", ProxyProtocol: 1, HorizonFlowCancel: true}
++			incoming := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{20001: h}}
++			if scope == "foreground" {
++				incoming = &ipn.ServeConfig{Foreground: map[string]*ipn.ServeConfig{"new": incoming}}
++			}
++			if scope == "service" {
++				incoming = &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{"svc:new": {TCP: incoming.TCP}}}
++			}
++			if err := b.SetServeConfig(incoming, etag); err == nil {
++				t.Fatal("invalid opt-in replaced original config")
++			}
++			after, afterETag, err := b.ServeConfigETag()
++			if err != nil {
++				t.Fatal(err)
++			}
++			afterJSON, err := json.Marshal(after.AsStruct())
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !bytes.Equal(beforeJSON, afterJSON) || etag != afterETag {
++				t.Fatal("rejected update changed original config/etag")
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelFunnelUpdatePreservesOriginal(t *testing.T) {
++	b := newTestBackend(t)
++	original := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{20001: {TCPForward: "127.0.0.1:8080"}}}
++	if err := b.SetServeConfig(original, ""); err != nil {
++		t.Fatal(err)
++	}
++	before, etag, err := b.ServeConfigETag()
++	if err != nil {
++		t.Fatal(err)
++	}
++	beforeJSON, err := json.Marshal(before.AsStruct())
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, foreground := range []bool{false, true} {
++		t.Run(fmt.Sprint("foreground=", foreground), func(t *testing.T) {
++			h := &ipn.TCPPortHandler{TCPForward: "unix:/run/private/producer.sock", ProxyProtocol: 1, HorizonFlowCancel: true}
++			incoming := &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{20000: h}}
++			if foreground {
++				incoming = &ipn.ServeConfig{Foreground: map[string]*ipn.ServeConfig{"incoming": incoming}}
++			}
++			incoming.AllowFunnel = map[ipn.HostPort]bool{"example.ts.net:20000": true}
++			if err := b.SetServeConfig(incoming, etag); err == nil {
++				t.Fatal("direct API enabled Funnel on private cancellation route")
++			}
++			after, afterETag, err := b.ServeConfigETag()
++			if err != nil {
++				t.Fatal(err)
++			}
++			afterJSON, err := json.Marshal(after.AsStruct())
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !bytes.Equal(beforeJSON, afterJSON) || etag != afterETag {
++				t.Fatal("rejected Funnel update changed original config")
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelFunnelHandlerRefusesBeforeDial(t *testing.T) {
++	b := newTestBackend(t)
++	client, incoming := net.Pipe()
++	defer client.Close()
++	defer incoming.Close()
++	handler := b.tcpHandlerForServeTCP((&ipn.TCPPortHandler{TCPForward: "unix:/does-not-exist", ProxyProtocol: 1, HorizonFlowCancel: true}).View(), 20000, netip.MustParseAddrPort("100.101.102.103:4567"), &serveHTTPContext{Funnel: &funnelFlow{}}, "")
++	if err := handler(incoming); err == nil {
++		t.Fatal("runtime Funnel context reached opted-in forwarder")
++	}
++	if n, err := client.Read(make([]byte, 1)); n != 0 || err != io.EOF {
++		t.Fatalf("rejected payload stayed open: %d, %v", n, err)
++	}
++}
+--- /dev/null
++++ b/ipn/ipnlocal/serve_horizon_unix_linux.go
+@@ -0,0 +1,207 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve && linux
++
++package ipnlocal
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++
++	"golang.org/x/sys/unix"
++)
++
++const horizonFlowDrained byte = 0x01
++
++// forwardHorizonUnix retains the original payload connections until both write
++// halves drain, or the separate descriptor channel explicitly cancels the flow.
++func forwardHorizonUnix(ctx context.Context, front net.Conn, back *net.UnixConn, header []byte) error {
++	underlying := front
++	for {
++		metered, ok := underlying.(*serviceMeteredConn)
++		if !ok {
++			break
++		}
++		underlying = metered.Conn
++	}
++	frontWrite, ok := underlying.(interface{ CloseWrite() error })
++	if !ok {
++		return fmt.Errorf("Horizon flow cancellation requires frontend write-half close support")
++	}
++	if len(header) == 0 || header[0] != 'P' {
++		return fmt.Errorf("Horizon flow cancellation requires a PROXY1 header")
++	}
++	cancelRead, passedEnd, err := horizonCancellationPair()
++	if err != nil {
++		return err
++	}
++	defer cancelRead.Close()
++	cancelled := make(chan error, 1)
++	go func() {
++		var byte [1]byte
++		n, err := cancelRead.Read(byte[:])
++		if n != 0 {
++			err = fmt.Errorf("unexpected data on Horizon cancellation channel")
++		} else if err == io.EOF {
++			err = fmt.Errorf("Horizon consumer cancelled the flow")
++		} else if err == nil {
++			err = io.ErrNoProgress
++		}
++		cancelled <- err
++	}()
++	copied := make(chan error, 2)
++	go func() {
++		// This goroutine exclusively owns passedEnd. Closing back interrupts an
++		// in-flight send; nobody races a close/reused FD with SCM_RIGHTS.
++		err := sendHorizonHeader(back, passedEnd, header)
++		if err == nil {
++			_, err = io.Copy(back, front)
++		}
++		if err == nil {
++			err = back.CloseWrite()
++		}
++		copied <- err
++	}()
++	go func() {
++		_, err := io.Copy(front, back)
++		if err == nil {
++			err = frontWrite.CloseWrite()
++		}
++		copied <- err
++	}()
++	var result error
++	stopped := false
++	stop := func(err error) {
++		if stopped {
++			return
++		}
++		stopped = true
++		result = err
++		front.Close()
++		back.Close()
++		cancelRead.Close()
++	}
++	cancelResult := cancelled
++	contextDone := ctx.Done()
++	for remaining := 2; remaining > 0; {
++		select {
++		case err := <-copied:
++			remaining--
++			if err != nil {
++				stop(err)
++			}
++		case err := <-cancelResult:
++			cancelResult = nil
++			stop(err)
++		case <-contextDone:
++			contextDone = nil
++			stop(ctx.Err())
++		}
++	}
++	// Both copies and their CloseWrite have succeeded before a normal commit.
++	// The receiver must retain its endpoint until this acknowledgement and EOF.
++	if !stopped {
++		select {
++		case err := <-cancelResult:
++			cancelResult = nil
++			stop(err)
++		default:
++		}
++		if err := ctx.Err(); err != nil {
++			stop(err)
++		}
++		if !stopped {
++			n, err := cancelRead.Write([]byte{horizonFlowDrained}) // DRAINED; never payload data.
++			if err == nil && n != 1 {
++				err = io.ErrShortWrite
++			}
++			if err != nil {
++				stop(err)
++			}
++		}
++	}
++	cancelRead.Close()
++	if cancelResult != nil {
++		// Local Close induces net.ErrClosed. Peer EOF/unexpected data retain
++		// their distinct meaningful failure, including a cancellation race.
++		if err := <-cancelResult; !stopped && !errors.Is(err, net.ErrClosed) {
++			stop(err)
++		}
++	}
++	if err := ctx.Err(); err != nil && !stopped {
++		stop(err)
++	}
++	return result
++}
++
++func horizonCancellationPair() (*net.UnixConn, *net.UnixConn, error) {
++	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
++	if err != nil {
++		return nil, nil, err
++	}
++	wrap := func(fd int) (*net.UnixConn, error) {
++		file := os.NewFile(uintptr(fd), "horizon-flow-cancel")
++		conn, err := net.FileConn(file)
++		// FileConn duplicates the same original socket; retire the temporary
++		// handle immediately, leaving exactly one live local owner per end.
++		file.Close()
++		if err != nil {
++			return nil, err
++		}
++		c, ok := conn.(*net.UnixConn)
++		if !ok {
++			conn.Close()
++			return nil, fmt.Errorf("cancellation socket is not Unix")
++		}
++		return c, nil
++	}
++	reader, err := wrap(fds[0])
++	if err != nil {
++		unix.Close(fds[1])
++		return nil, nil, err
++	}
++	passed, err := wrap(fds[1])
++	if err != nil {
++		reader.Close()
++		return nil, nil, err
++	}
++	return reader, passed, nil
++}
++
++func sendHorizonHeader(back, passedEnd *net.UnixConn, header []byte) error {
++	defer passedEnd.Close()
++	raw, err := passedEnd.SyscallConn()
++	if err != nil {
++		return err
++	}
++	var sendErr error
++	// The FD is valid only inside Control. Cancellation closes back to unblock
++	// WriteMsgUnix, then this sole owner closes passedEnd after Control returns.
++	err = raw.Control(func(fd uintptr) {
++		rights := unix.UnixRights(int(fd))
++		n, oobn, err := back.WriteMsgUnix(header[:1], rights, nil)
++		if err != nil {
++			sendErr = err
++		} else if n != 1 || oobn != len(rights) {
++			sendErr = io.ErrShortWrite
++		}
++	})
++	if err != nil {
++		return err
++	}
++	if sendErr != nil {
++		return sendErr
++	}
++	// Do not retain a local peer-end copy while forwarding application bytes.
++	passedEnd.Close()
++	n, err := back.Write(header[1:])
++	if err == nil && n != len(header)-1 {
++		err = io.ErrShortWrite
++	}
++	return err
++}
+--- /dev/null
++++ b/ipn/ipnlocal/serve_horizon_unix_linux_test.go
+@@ -0,0 +1,554 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve && linux
++
++package ipnlocal
++
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"io"
++	"net"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"golang.org/x/sys/unix"
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
++	"gvisor.dev/gvisor/pkg/tcpip/header"
++	"gvisor.dev/gvisor/pkg/tcpip/link/loopback"
++	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
++	"gvisor.dev/gvisor/pkg/tcpip/stack"
++	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
++	"tailscale.com/ipn"
++	"tailscale.com/tailcfg"
++	"tailscale.com/types/netmap"
++)
++
++type horizonHalfConn interface {
++	net.Conn
++	CloseWrite() error
++}
++
++func TestHorizonUnixHalfClose(t *testing.T) {
++	for _, userspace := range []bool{false, true} {
++		name := "kernel"
++		if userspace {
++			name = "gonet"
++		}
++		t.Run(name+"-request-EOF-delayed-response", func(t *testing.T) {
++			f := newHorizonFlow(t, userspace)
++			if _, err := io.WriteString(f.client, "request"); err != nil {
++				t.Fatal(err)
++			}
++			if err := f.client.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			request, err := io.ReadAll(f.back)
++			if err != nil || string(request) != "request" {
++				t.Fatalf("request = %q, %v", request, err)
++			}
++			// The response is deliberately sent only after the backend sees request EOF.
++			if _, err := io.WriteString(f.back, "delayed response"); err != nil {
++				t.Fatal(err)
++			}
++			if err := f.back.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			response, err := io.ReadAll(f.client)
++			if err != nil || string(response) != "delayed response" {
++				t.Fatalf("response = %q, %v", response, err)
++			}
++			f.finished(t, false)
++		})
++		t.Run(name+"-reverse-EOF-still-writable", func(t *testing.T) {
++			f := newHorizonFlow(t, userspace)
++			if err := f.back.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			response, err := io.ReadAll(f.client)
++			if err != nil || len(response) != 0 {
++				t.Fatalf("reverse EOF = %q, %v", response, err)
++			}
++			if _, err := io.WriteString(f.client, "after reverse EOF"); err != nil {
++				t.Fatal(err)
++			}
++			if err := f.client.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			request, err := io.ReadAll(f.back)
++			if err != nil || string(request) != "after reverse EOF" {
++				t.Fatalf("request = %q, %v", request, err)
++			}
++			f.finished(t, false)
++		})
++	}
++}
++
++func TestHorizonUnixCancellation(t *testing.T) {
++	for _, mode := range []string{"idle", "unexpected-byte", "context", "response-write-blocked-after-request-EOF", "frontend-read-error", "frontend-write-error", "half-close-error"} {
++		t.Run(mode, func(t *testing.T) {
++			f := newHorizonFlow(t, false)
++			switch mode {
++			case "idle":
++				f.cancel.Close()
++			case "unexpected-byte":
++				if _, err := f.cancel.Write([]byte{1}); err != nil {
++					t.Fatal(err)
++				}
++			case "context":
++				f.shutdown()
++			case "response-write-blocked-after-request-EOF":
++				if err := f.client.CloseWrite(); err != nil {
++					t.Fatal(err)
++				}
++				if data, err := io.ReadAll(f.back); err != nil || len(data) != 0 {
++					t.Fatalf("request EOF: %q, %v", data, err)
++				}
++				f.front.blockWrite.Store(true)
++				if _, err := io.WriteString(f.back, "buffered response"); err != nil {
++					t.Fatal(err)
++				}
++				select {
++				case <-f.front.writeEntered:
++				case <-time.After(5 * time.Second):
++					t.Fatal("response write did not block")
++				}
++				f.cancel.Close()
++			case "frontend-read-error":
++				// Wake the already-blocked original read, then fail the next copy read.
++				f.front.failRead.Store(true)
++				if _, err := io.WriteString(f.client, "wake"); err != nil {
++					t.Fatal(err)
++				}
++			case "frontend-write-error":
++				f.front.failWrite.Store(true)
++				if _, err := io.WriteString(f.back, "response"); err != nil {
++					t.Fatal(err)
++				}
++			case "half-close-error":
++				f.front.failHalf.Store(true)
++				if err := f.back.CloseWrite(); err != nil {
++					t.Fatal(err)
++				}
++			}
++			f.finished(t, true)
++		})
++	}
++}
++
++func TestHorizonUnixResponseDrainDoesNotTreatHUPAsCancel(t *testing.T) {
++	f := newHorizonFlow(t, false)
++	if err := f.client.CloseWrite(); err != nil {
++		t.Fatal(err)
++	}
++	if data, err := io.ReadAll(f.back); err != nil || len(data) != 0 {
++		t.Fatalf("request EOF: %q, %v", data, err)
++	}
++	f.front.blockWrite.Store(true)
++	if _, err := io.WriteString(f.back, "response held across both half closes"); err != nil {
++		t.Fatal(err)
++	}
++	if err := f.back.CloseWrite(); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-f.front.writeEntered:
++	case <-time.After(5 * time.Second):
++		t.Fatal("response write did not block")
++	}
++	if err := f.cancel.SetReadDeadline(time.Now().Add(30 * time.Millisecond)); err != nil {
++		t.Fatal(err)
++	}
++	var early [1]byte
++	if n, err := f.cancel.Read(early[:]); n != 0 || err == nil {
++		t.Fatalf("acknowledged a still-blocked response: %x, %v", early[:n], err)
++	} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
++		t.Fatalf("control retired before response drain: %v", err)
++	}
++	if err := f.cancel.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	// Both payload write halves are now closed, which can produce Unix POLLHUP.
++	// The explicit cancellation descriptor remains live; release the original write.
++	close(f.front.releaseWrite)
++	response, err := io.ReadAll(f.client)
++	if err != nil || string(response) != "response held across both half closes" {
++		t.Fatalf("response = %q, %v", response, err)
++	}
++	f.finished(t, false)
++}
++
++type horizonFlow struct {
++	client       horizonHalfConn
++	back, cancel *net.UnixConn
++	front        *horizonTrackedFront
++	done         <-chan error
++	shutdown     context.CancelFunc
++}
++
++func newHorizonFlow(t *testing.T, userspace bool) *horizonFlow {
++	t.Helper()
++	b := newTestBackend(t)
++	b.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: (&tailcfg.Node{Addresses: []netip.Prefix{netip.MustParsePrefix("100.150.151.151/32")}}).View()})
++	ctx, cancel := context.WithCancel(b.ctx)
++	b.ctx = ctx
++	t.Cleanup(cancel)
++	client, incoming := horizonFrontPair(t, userspace)
++	tracked := &horizonTrackedFront{Conn: incoming, closed: make(chan struct{}), writeEntered: make(chan struct{}, 1), releaseWrite: make(chan struct{})}
++	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "backend.sock"), Net: "unix"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { ln.Close() })
++	if err := ln.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	handler := b.tcpHandlerForServeTCP((&ipn.TCPPortHandler{TCPForward: "unix:" + ln.Addr().String(), ProxyProtocol: 1, HorizonFlowCancel: true}).View(), 20000, netip.MustParseAddrPort("100.101.102.103:4567"), &serveHTTPContext{}, "")
++	done := make(chan error, 1)
++	go func() { done <- handler(tracked) }()
++	back, err := ln.AcceptUnix()
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { back.Close() })
++	if err := back.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	cancelEnd := receiveHorizonHeader(t, back)
++	return &horizonFlow{client: client, back: back, cancel: cancelEnd, front: tracked, done: done, shutdown: cancel}
++}
++
++func receiveHorizonHeader(t *testing.T, back *net.UnixConn) *net.UnixConn {
++	t.Helper()
++	var first [1]byte
++	oob := make([]byte, unix.CmsgSpace(4))
++	rawSocket, err := back.SyscallConn()
++	if err != nil {
++		t.Fatal(err)
++	}
++	var n, oobn, flags int
++	var recvErr error
++	err = rawSocket.Read(func(fd uintptr) bool {
++		for {
++			n, oobn, flags, _, recvErr = unix.Recvmsg(int(fd), first[:], oob, unix.MSG_CMSG_CLOEXEC|unix.MSG_DONTWAIT)
++			if recvErr != unix.EINTR {
++				break
++			}
++		}
++		return recvErr != unix.EAGAIN
++	})
++	if err == nil {
++		err = recvErr
++	}
++	if err != nil || n != 1 || first[0] != 'P' || flags&(unix.MSG_CTRUNC|unix.MSG_TRUNC) != 0 {
++		t.Fatalf("first byte/control: %d %q %x %v", n, first, flags, err)
++	}
++	messages, err := unix.ParseSocketControlMessage(oob[:oobn])
++	if err != nil {
++		t.Fatal(err)
++	}
++	var files []*os.File
++	t.Cleanup(func() {
++		for _, file := range files {
++			file.Close()
++		}
++	})
++	for _, message := range messages {
++		fds, err := unix.ParseUnixRights(&message)
++		if err != nil {
++			t.Fatal(err)
++		}
++		for _, fd := range fds {
++			files = append(files, os.NewFile(uintptr(fd), "received-cancel"))
++		}
++	}
++	if len(messages) != 1 || len(files) != 1 {
++		t.Fatalf("control messages=%d descriptors=%d", len(messages), len(files))
++	}
++	if flags, err := unix.FcntlInt(files[0].Fd(), unix.F_GETFD, 0); err != nil || flags&unix.FD_CLOEXEC == 0 {
++		t.Fatalf("CLOEXEC: %x, %v", flags, err)
++	}
++	raw, err := net.FileConn(files[0])
++	files[0].Close()
++	if err != nil {
++		t.Fatal(err)
++	}
++	cancelEnd, ok := raw.(*net.UnixConn)
++	if !ok {
++		raw.Close()
++		t.Fatalf("cancel endpoint %T", raw)
++	}
++	t.Cleanup(func() { cancelEnd.Close() })
++	for _, addr := range []net.Addr{cancelEnd.LocalAddr(), cancelEnd.RemoteAddr()} {
++		if addr.Network() != "unix" || (addr.String() != "" && addr.String() != "@") {
++			t.Fatalf("not unnamed socketpair: %q", addr)
++		}
++	}
++	want := "ROXY TCP4 100.101.102.103 100.150.151.151 4567 20000\r\n"
++	header := make([]byte, len(want))
++	if _, err := io.ReadFull(back, header); err != nil || string(header) != want {
++		t.Fatalf("remaining header %q, %v", header, err)
++	}
++	return cancelEnd
++}
++
++func (f *horizonFlow) finished(t *testing.T, wantError bool) {
++	t.Helper()
++	select {
++	case err := <-f.done:
++		if (err != nil) != wantError {
++			t.Fatalf("handler error=%v, wantError=%v", err, wantError)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("handler/copy/cancellation goroutines did not retire")
++	}
++	if !wantError {
++		if err := f.cancel.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
++			t.Fatal(err)
++		}
++		ack, err := io.ReadAll(f.cancel)
++		if err != nil || len(ack) != 1 || ack[0] != 1 {
++			t.Fatalf("DRAINED+EOF = %x, %v", ack, err)
++		}
++	}
++	if got := f.front.active.Load(); got != 0 {
++		t.Fatalf("original frontend operations still live: %d", got)
++	}
++}
++
++type horizonTrackedFront struct {
++	net.Conn
++	active                                    atomic.Int32
++	blockWrite, failRead, failWrite, failHalf atomic.Bool
++	closed, writeEntered, releaseWrite        chan struct{}
++	closeOnce                                 sync.Once
++}
++
++func (c *horizonTrackedFront) Read(b []byte) (int, error) {
++	c.active.Add(1)
++	defer c.active.Add(-1)
++	if c.failRead.Load() {
++		return 0, io.ErrUnexpectedEOF
++	}
++	return c.Conn.Read(b)
++}
++func (c *horizonTrackedFront) Write(b []byte) (int, error) {
++	c.active.Add(1)
++	defer c.active.Add(-1)
++	if c.failWrite.Load() {
++		return 0, io.ErrClosedPipe
++	}
++	if c.blockWrite.Load() {
++		select {
++		case c.writeEntered <- struct{}{}:
++		default:
++		}
++		select {
++		case <-c.closed:
++			return 0, net.ErrClosed
++		case <-c.releaseWrite:
++		}
++	}
++	return c.Conn.Write(b)
++}
++func (c *horizonTrackedFront) Close() error {
++	c.closeOnce.Do(func() { close(c.closed) })
++	return c.Conn.Close()
++}
++func (c *horizonTrackedFront) CloseWrite() error {
++	if c.failHalf.Load() {
++		return io.ErrClosedPipe
++	}
++	return c.Conn.(horizonHalfConn).CloseWrite()
++}
++
++func horizonFrontPair(t *testing.T, userspace bool) (horizonHalfConn, horizonHalfConn) {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	var ln net.Listener
++	var dial func() (net.Conn, error)
++	if userspace {
++		s := stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol}})
++		t.Cleanup(func() { s.Close(); s.Wait() })
++		if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpip.TCPReceiveBufferSizeRangeOption{Min: 65536, Default: 65536, Max: 65536}); err != nil {
++			t.Fatal(err)
++		}
++		if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpip.TCPSendBufferSizeRangeOption{Min: 65536, Default: 65536, Max: 65536}); err != nil {
++			t.Fatal(err)
++		}
++		var receive tcpip.TCPReceiveBufferSizeRangeOption
++		if err := s.TransportProtocolOption(tcp.ProtocolNumber, &receive); err != nil || receive.Max != 65536 {
++			t.Fatalf("gonet receive capacity: %+v, %v", receive, err)
++		}
++
++		if err := s.CreateNIC(1, loopback.New()); err != nil {
++			t.Fatal(err)
++		}
++		addr := tcpip.AddrFrom4([4]byte{127, 0, 0, 1})
++		if err := s.AddProtocolAddress(1, tcpip.ProtocolAddress{Protocol: ipv4.ProtocolNumber, AddressWithPrefix: addr.WithPrefix()}, stack.AddressProperties{}); err != nil {
++			t.Fatal(err)
++		}
++		s.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
++		var err error
++		ln, err = gonet.ListenTCP(s, tcpip.FullAddress{NIC: 1, Addr: addr}, ipv4.ProtocolNumber)
++		if err != nil {
++			t.Fatal(err)
++		}
++		dial = func() (net.Conn, error) {
++			ctx, cancel := context.WithDeadline(context.Background(), deadline)
++			defer cancel()
++			return gonet.DialContextTCP(ctx, s, tcpip.FullAddress{NIC: 1, Addr: addr, Port: uint16(ln.Addr().(*net.TCPAddr).Port)}, ipv4.ProtocolNumber)
++		}
++	} else {
++		var err error
++		ln, err = net.Listen("tcp4", "127.0.0.1:0")
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := ln.(*net.TCPListener).SetDeadline(deadline); err != nil {
++			t.Fatal(err)
++		}
++		dial = func() (net.Conn, error) { return net.DialTimeout("tcp4", ln.Addr().String(), 5*time.Second) }
++	}
++	t.Cleanup(func() { ln.Close() })
++	client, err := dial()
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { client.Close() })
++	type accepted struct {
++		conn net.Conn
++		err  error
++	}
++	ch := make(chan accepted, 1)
++	go func() { conn, err := ln.Accept(); ch <- accepted{conn, err} }()
++	var incoming net.Conn
++	select {
++	case result := <-ch:
++		if result.err != nil {
++			t.Fatal(result.err)
++		}
++		incoming = result.conn
++	case <-time.After(time.Until(deadline)):
++		ln.Close()
++		result := <-ch
++		if result.conn != nil {
++			result.conn.Close()
++		}
++		t.Fatal("frontend accept deadline")
++	}
++	t.Cleanup(func() { incoming.Close() })
++	if !userspace {
++		if err := client.(*net.TCPConn).SetReadBuffer(65536); err != nil {
++			t.Fatal(err)
++		}
++		if err := incoming.(*net.TCPConn).SetWriteBuffer(65536); err != nil {
++			t.Fatal(err)
++		}
++		raw, err := client.(*net.TCPConn).SyscallConn()
++		if err != nil {
++			t.Fatal(err)
++		}
++		var capacity int
++		var capacityErr error
++		if err := raw.Control(func(fd uintptr) { capacity, capacityErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF) }); err != nil || capacityErr != nil || capacity <= 0 || capacity > 131072 {
++			t.Fatalf("kernel receive capacity: %d, %v, %v", capacity, err, capacityErr)
++		}
++	}
++
++	for _, conn := range []net.Conn{client, incoming} {
++		if err := conn.SetDeadline(deadline); err != nil {
++			t.Fatal(err)
++		}
++	}
++	return client.(horizonHalfConn), incoming.(horizonHalfConn)
++}
++
++func TestHorizonUnixLargeResponseDrain(t *testing.T) {
++	for _, userspace := range []bool{false, true} {
++		t.Run(fmt.Sprintf("gonet=%v", userspace), func(t *testing.T) {
++			f := newHorizonFlow(t, userspace)
++			if err := f.client.CloseWrite(); err != nil {
++				t.Fatal(err)
++			}
++			if request, err := io.ReadAll(f.back); err != nil || len(request) != 0 {
++				t.Fatalf("request EOF: %q, %v", request, err)
++			}
++			// 2MiB exceeds the actual verified 128KiB kernel receive buffer and
++			// the pinned gonet stack's 64KiB receive/send limits.
++			response := make([]byte, 2*1024*1024)
++			for i := range response {
++				response[i] = byte((i*31 + i/257) % 251)
++			}
++			written := make(chan error, 1)
++			go func() {
++				_, err := f.back.Write(response)
++				if err == nil {
++					err = f.back.CloseWrite()
++				}
++				written <- err
++			}()
++			awaitBlockedHorizonResponse(t, userspace, written)
++			if err := f.cancel.SetReadDeadline(time.Now().Add(30 * time.Millisecond)); err != nil {
++				t.Fatal(err)
++			}
++			var early [1]byte
++			if n, err := f.cancel.Read(early[:]); n != 0 || err == nil {
++				t.Fatalf("early DRAINED before real response drain: %x, %v", early[:n], err)
++			} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
++				t.Fatalf("control retired before drain: %v", err)
++			}
++			if err := f.cancel.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
++				t.Fatal(err)
++			}
++			got, err := io.ReadAll(f.client)
++			if err != nil || !bytes.Equal(got, response) {
++				t.Fatalf("large response changed/truncated: got%d want%d err=%v", len(got), len(response), err)
++			}
++			select {
++			case err := <-written:
++				if err != nil {
++					t.Fatal(err)
++				}
++			case <-time.After(5 * time.Second):
++				t.Fatal("backend response writer did not retire")
++			}
++			f.finished(t, false)
++		})
++	}
++}
++
++func awaitBlockedHorizonResponse(t *testing.T, userspace bool, written <-chan error) {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	stack := make([]byte, 1024*1024)
++	for time.Now().Before(deadline) {
++		select {
++		case err := <-written:
++			t.Fatalf("large response did not exceed forwarding capacity: %v", err)
++		default:
++		}
++		n := runtime.Stack(stack, true)
++		for _, goroutine := range bytes.Split(stack[:n], []byte("\n\n")) {
++			trace := string(goroutine)
++			if !strings.Contains(trace, "(*horizonTrackedFront).Write") {
++				continue
++			}
++			if (!userspace && strings.Contains(trace, "internal/poll.runtime_pollWait")) || (userspace && strings.Contains(trace, "gonet.(*TCPConn).Write") && strings.Contains(trace, "[select]")) {
++				return
++			}
++		}
++		runtime.Gosched()
++	}
++	t.Fatal("original frontend write was not observed blocked by receive capacity")
++}
+--- /dev/null
++++ b/ipn/ipnlocal/serve_horizon_unix_other.go
+@@ -0,0 +1,16 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !ts_omit_serve && !linux
++
++package ipnlocal
++
++import (
++	"context"
++	"fmt"
++	"net"
++)
++
++func forwardHorizonUnix(context.Context, net.Conn, *net.UnixConn, []byte) error {
++	return fmt.Errorf("Horizon flow cancellation requires Linux")
++}
 --- /dev/null
 +++ b/ipn/ipnlocal/serve_unix_proxy_test.go
 @@ -0,0 +1,168 @@
@@ -308,5 +1635,265 @@
 +				t.Fatal("forwarder did not retire")
 +			}
 +		})
++	}
++}
+--- a/ipn/serve.go
++++ b/ipn/serve.go
+@@ -10,6 +10,7 @@
+ 	"net"
+ 	"net/netip"
+ 	"net/url"
++	"path/filepath"
+ 	"runtime"
+ 	"slices"
+ 	"strconv"
+@@ -160,6 +161,78 @@
+ 	//
+ 	// This is only valid if TCPForward is non-empty.
+ 	ProxyProtocol int `json:",omitzero"`
++
++	// HorizonFlowCancel opts into the Linux Unix PROXY1 descriptor cancellation
++	// contract. Ordinary forwarding never sends ancillary descriptors.
++	HorizonFlowCancel bool `json:",omitzero"`
++}
++
++// CheckHorizonFlowCancel validates the explicit ancillary cancellation contract.
++func (h *TCPPortHandler) CheckHorizonFlowCancel(port uint16) error {
++	if h == nil || !h.HorizonFlowCancel {
++		return nil
++	}
++	path, isUnix := strings.CutPrefix(h.TCPForward, "unix:")
++	if runtime.GOOS != "linux" || !isUnix || !filepath.IsAbs(path) ||
++		h.ProxyProtocol != 1 || port == 0 || h.HTTP || h.HTTPS || h.TerminateTLS != "" {
++		return fmt.Errorf("Horizon flow cancellation requires Linux raw TCP to an absolute Unix target with PROXY1 and a nonzero Serve port")
++	}
++	return nil
++}
++
++// CheckHorizonFlowCancel validates opted-in handlers, including foreground and
++// service entries, before any incoming configuration is persisted.
++func (sc *ServeConfig) CheckHorizonFlowCancel() error {
++	horizonPorts := make(map[uint16]bool)
++	funnelPorts := make(map[uint16]bool)
++	if err := sc.checkHorizonFlowCancel(horizonPorts, funnelPorts); err != nil {
++		return err
++	}
++	for port := range horizonPorts {
++		if funnelPorts[port] {
++			return fmt.Errorf("Horizon flow cancellation cannot share port %d with Funnel", port)
++		}
++	}
++	return nil
++}
++
++func (sc *ServeConfig) checkHorizonFlowCancel(horizonPorts, funnelPorts map[uint16]bool) error {
++	if sc == nil {
++		return nil
++	}
++	for port, handler := range sc.TCP {
++		if err := handler.CheckHorizonFlowCancel(port); err != nil {
++			return err
++		}
++		if handler != nil && handler.HorizonFlowCancel {
++			horizonPorts[port] = true
++		}
++	}
++	for target, allowed := range sc.AllowFunnel {
++		if allowed {
++			if port, err := target.Port(); err == nil {
++				funnelPorts[port] = true
++			}
++		}
++	}
++	// Funnel target and TCP handler lookups cross the background/foreground
++	// boundary by port, so independent per-block validation is insufficient.
++	for _, foreground := range sc.Foreground {
++		if err := foreground.checkHorizonFlowCancel(horizonPorts, funnelPorts); err != nil {
++			return err
++		}
++	}
++	for _, service := range sc.Services {
++		if service == nil {
++			continue
++		}
++		for port, handler := range service.TCP {
++			if err := handler.CheckHorizonFlowCancel(port); err != nil {
++				return err
++			}
++		}
++	}
++	return nil
+ }
+ 
+ // HTTPHandler is either a path or a proxy to serve.
+--- /dev/null
++++ b/ipn/serve_horizon_test.go
+@@ -0,0 +1,168 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++package ipn
++
++import (
++	"bytes"
++	"encoding/json"
++	"runtime"
++	"testing"
++
++	"tailscale.com/tailcfg"
++)
++
++func TestHorizonFlowCancelConfig(t *testing.T) {
++	for _, scope := range []string{"node", "foreground", "service"} {
++		t.Run(scope, func(t *testing.T) {
++			h := &TCPPortHandler{TCPForward: "unix:/run/private/producer.sock", ProxyProtocol: 1, HorizonFlowCancel: true}
++			sc := &ServeConfig{TCP: map[uint16]*TCPPortHandler{20000: h}}
++			if scope == "foreground" {
++				sc = &ServeConfig{Foreground: map[string]*ServeConfig{"original": sc}}
++			}
++			if scope == "service" {
++				sc = &ServeConfig{Services: map[tailcfg.ServiceName]*ServiceConfig{"svc:original": {TCP: sc.TCP}}}
++			}
++			if err := sc.CheckHorizonFlowCancel(); (err == nil) != (runtime.GOOS == "linux") {
++				t.Fatalf("platform validation: %v", err)
++			}
++			encoded, err := json.Marshal(sc)
++			if err != nil {
++				t.Fatal(err)
++			}
++			var decoded ServeConfig
++			if err := json.Unmarshal(encoded, &decoded); err != nil {
++				t.Fatal(err)
++			}
++			cloned := decoded.Clone()
++			after, err := json.Marshal(cloned)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !bytes.Equal(encoded, after) {
++				t.Fatalf("clone/JSON changed contract: %s -> %s", encoded, after)
++			}
++			var got *TCPPortHandler
++			switch scope {
++			case "node":
++				got = cloned.TCP[20000]
++			case "foreground":
++				got = cloned.Foreground["original"].TCP[20000]
++			case "service":
++				got = cloned.Services["svc:original"].TCP[20000]
++			}
++			if !got.View().HorizonFlowCancel() {
++				t.Fatal("view lost opt-in")
++			}
++			switch scope {
++			case "node":
++				h = decoded.TCP[20000]
++			case "foreground":
++				h = decoded.Foreground["original"].TCP[20000]
++			case "service":
++				h = decoded.Services["svc:original"].TCP[20000]
++			}
++			h.HorizonFlowCancel = false
++			if !got.HorizonFlowCancel {
++				t.Fatal("clone aliases decoded handler")
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelInvalidHandlers(t *testing.T) {
++	for _, invalid := range []string{"tcp", "relative", "no-proxy", "v2", "zero-port", "tls", "http", "https"} {
++		t.Run(invalid, func(t *testing.T) {
++			h := &TCPPortHandler{TCPForward: "unix:/run/private/producer.sock", ProxyProtocol: 1, HorizonFlowCancel: true}
++			port := uint16(20000)
++			switch invalid {
++			case "tcp":
++				h.TCPForward = "127.0.0.1:20032"
++			case "relative":
++				h.TCPForward = "unix:relative.sock"
++			case "no-proxy":
++				h.ProxyProtocol = 0
++			case "v2":
++				h.ProxyProtocol = 2
++			case "zero-port":
++				port = 0
++			case "tls":
++				h.TerminateTLS = "example.ts.net"
++			case "http":
++				h.HTTP = true
++			case "https":
++				h.HTTPS = true
++			}
++			if err := h.CheckHorizonFlowCancel(port); err == nil {
++				t.Fatal("invalid opted-in handler accepted")
++			}
++			h.HorizonFlowCancel = false
++			if err := h.CheckHorizonFlowCancel(port); err != nil {
++				t.Fatalf("new validation changed ordinary false-field behavior: %v", err)
++			}
++		})
++	}
++}
++
++func TestHorizonFlowCancelAbsentIsWireCompatible(t *testing.T) {
++	const original = `{"TCP":{"20000":{"TCPForward":"unix:/run/original.sock","ProxyProtocol":1}}}`
++	var sc ServeConfig
++	if err := json.Unmarshal([]byte(original), &sc); err != nil {
++		t.Fatal(err)
++	}
++	if sc.TCP[20000].View().HorizonFlowCancel() {
++		t.Fatal("old config enabled cancellation")
++	}
++	after, err := json.Marshal(&sc)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if string(after) != original {
++		t.Fatalf("old config bytes changed: %s", after)
++	}
++}
++
++func TestHorizonFlowCancelFunnelScopes(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("other platforms reject every opt-in")
++	}
++	for _, scope := range []string{"same", "foreground-handler", "foreground-funnel", "siblings", "nested"} {
++		t.Run(scope, func(t *testing.T) {
++			h := &TCPPortHandler{TCPForward: "unix:/run/private/producer.sock", ProxyProtocol: 1, HorizonFlowCancel: true}
++			handler := &ServeConfig{TCP: map[uint16]*TCPPortHandler{20000: h}}
++			funnel := &ServeConfig{AllowFunnel: map[HostPort]bool{"different-host.ts.net:20000": true}}
++			var sc *ServeConfig
++			switch scope {
++			case "same":
++				sc = handler
++				sc.AllowFunnel = funnel.AllowFunnel
++			case "foreground-handler":
++				sc = funnel
++				sc.Foreground = map[string]*ServeConfig{"handler": handler}
++			case "foreground-funnel":
++				sc = handler
++				sc.Foreground = map[string]*ServeConfig{"funnel": funnel}
++			case "siblings":
++				sc = &ServeConfig{Foreground: map[string]*ServeConfig{"handler": handler, "funnel": funnel}}
++			case "nested":
++				sc = funnel
++				sc.Foreground = map[string]*ServeConfig{"outer": {Foreground: map[string]*ServeConfig{"handler": handler}}}
++			}
++			if err := sc.CheckHorizonFlowCancel(); err == nil {
++				t.Fatal("Funnel can route to opted-in handler across scopes")
++			}
++		})
++	}
++	// Distinct ports, disabled Funnel entries and separate VIP service handlers
++	// do not route public ingress to the node's opted-in payload connection.
++	h := &TCPPortHandler{TCPForward: "unix:/run/private/producer.sock", ProxyProtocol: 1, HorizonFlowCancel: true}
++	for _, sc := range []*ServeConfig{
++		{TCP: map[uint16]*TCPPortHandler{20000: h}, AllowFunnel: map[HostPort]bool{"example.ts.net:443": true}},
++		{TCP: map[uint16]*TCPPortHandler{20000: h}, AllowFunnel: map[HostPort]bool{"example.ts.net:20000": false}},
++		{Services: map[tailcfg.ServiceName]*ServiceConfig{"svc:private": {TCP: map[uint16]*TCPPortHandler{20000: h}}}, AllowFunnel: map[HostPort]bool{"example.ts.net:20000": true}},
++	} {
++		if err := sc.CheckHorizonFlowCancel(); err != nil {
++			t.Fatalf("unrelated Funnel rejected: %v", err)
++		}
 +	}
 +}

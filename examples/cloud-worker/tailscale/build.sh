@@ -14,8 +14,12 @@ printf '%s  %s\n' "$archive_sha256" /tmp/tailscale-source.tar.gz | sha256sum -c 
 tar -xzf /tmp/tailscale-source.tar.gz --strip-components=1 -C /tmp/tailscale-source
 cd /tmp/tailscale-source
 patch --batch --fuzz=0 -p1 < "$inputs/unix-proxy-v1.patch"
+# Validate the checked-in scalar field/view/clone against the pinned generators.
+sha256sum ipn/ipn_view.go ipn/ipn_clone.go > /tmp/ipn-generated.sha256
+go generate ./ipn
+sha256sum -c /tmp/ipn-generated.sha256
 # Both native architecture jobs run the entire affected upstream test packages.
-go test -p 6 -timeout 10m ./ipn/ipnlocal ./cmd/tailscale/cli
+go test -p 6 -timeout 10m ./ipn ./ipn/ipnlocal ./cmd/tailscale/cli
 patch_hash=$(sha256sum "$inputs/unix-proxy-v1.patch" | cut -d ' ' -f 1)
 version="1.102.5-horizon-unix-proxy-v1-$patch_hash"
 mkdir -p /output/usr/local/bin

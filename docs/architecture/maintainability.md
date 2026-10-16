@@ -520,9 +520,13 @@ and credential logic must not be copied into either transport or UI rendering.
 ## Cloud workspaces
 
 `examples/cloud-worker/tailscale` owns the checksum-pinned upstream Unix PROXY v1
-patch, its shared Go build script and consumed-module notices. Both image recipes
-use this same boundary; Go stays in build stages. This transport does not grant
-source authority or enable an exposure controller. See `tailscale-unix-proxy.md`.
+patch, explicit default-false Linux descriptor cancellation, shared Go builder
+and consumed-module notices. Its focused Linux leaf owns FD transfer/copy/terminal
+ACK lifetime; non-Linux opt-in refuses. Config validation and generated clone/view
+preserve the field without changing ordinary paths. Both image recipes test the
+same three upstream packages; Go stays in build stages. Runtime drain ACK is not
+source authority or remote delivery, and Producer/Gate consumer qualification
+remains separate. See `tailscale-unix-proxy.md`.
 
 The shared `horizon-cloud::SshHost` and `SshEndpoint` types validate provider SSH destinations without DNS lookups. Controller and companion SSH transports resolve validated names inside their bounded subprocesses, while worker journals retain legacy numeric fields.
 

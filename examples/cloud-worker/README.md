@@ -300,10 +300,17 @@ The function does not give these conditions:
 
 ## Cloud tailnet contract
 
-The source recipes build pinned Tailscale v1.102.5 with the narrow
-[Unix PROXY v1 patch](tailscale/README.md). An existing published image keeps its
-recorded digest until a new image is built, checked and published. This runtime
-change enables no Horizon exposure feature. Startup isolates
+The source recipes build pinned Tailscale v1.102.5 with the
+[Unix PROXY v1 and explicit cancellation patch](tailscale/README.md).
+`--horizon-flow-cancel` / JSON `HorizonFlowCancel` defaults false and is restricted
+to Linux raw Unix PROXY1 without TLS. Use this contract only with the root
+controller's original private listener and daemon route. Runtime scope validation
+does not establish that custody; the identity consumer must check it. This is not
+an agent configuration or source-identity grant. Payload write EOF preserves reverse flow;
+control `DRAINED=0x01` plus EOF confirms daemon copying, not remote application
+delivery. Existing ordinary paths and published digests remain unchanged until
+actual qualification/publication. Producer/Gate actual consumer qualification
+is separate; this runtime enables no Horizon exposure feature. Startup isolates
 workspace services before they can execute user code. `horizon-worker-tailnet`
 is a root control helper; agents cannot enroll, retrieve credentials, or open the
 administrative socket. `configure` accepts bounded private JSON on stdin and

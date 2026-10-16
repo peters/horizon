@@ -13,18 +13,42 @@ existing-cloud recovery still requires its recorded identity.
 
 ### Pinned Tailscale Unix PROXY runtime
 
-The image source recipes build a checksum-pinned Tailscale v1.102.5 source with
-Unix Serve PROXY v1 support. Unix headers use the virtual Serve ingress port;
-Unix v2 refuses. Existing TCP v1/v2, enrollment and HTTP/SOCKS proxies remain.
-Go is a build dependency only. Both native images must pass upstream behavior
-checks and retain notices before a new helper or worker digest is published.
-This is a prerequisite transport, with ordinary exposure defaults still off.
-An identity consumer must retain a root-owned 0700 Unix listener directory,
-original listener and accepted peer credentials from the pinned original daemon.
-A path, header, version or same-PID loopback stream proves no identity.
-See docs/architecture/tailscale-unix-proxy.md and
-`docs/testing/procedures/tailscale-unix-proxy.md`. No public control or runtime
-approval is supplied by this patch; old TCP-based evidence does not qualify it.
+The source recipes build checksum-pinned Tailscale v1.102.5 with Unix Serve
+PROXY1 and an explicit descriptor cancellation capability. Unix headers retain
+the source-family node address and virtual Serve port; Unix v2 refuses.
+Serve-only `--horizon-flow-cancel` / JSON `HorizonFlowCancel` defaults false and
+requires Linux raw TCP, absolute filesystem Unix, PROXY1, nonzero ingress and no
+TLS/HTTP/Funnel. Invalid CLI/direct API recursive config updates refuse while
+retaining prior config. False/absent preserves ordinary TCP v1/v2, Unix v0/v1,
+enrollment and HTTP/SOCKS proxy behavior.
+
+Opt-in sends exactly first header byte `P` with one SCM_RIGHTS unnamed Unix stream
+control endpoint, then the remaining header before payload. The daemon closes its
+local sent-end copy after transfer. The consumer sends no control bytes and never
+half-closes it. Payload write EOF preserves reverse copying/control. Control
+close/death/data/error cancels the whole flow. Only two successful copies and
+required CloseWrite operations permit daemon `DRAINED=0x01` then EOF; no ACK on
+error or ambiguous retry. ACK proves daemon copying and frontend half-close,
+not remote app delivery. All original FD/goroutine retirement remains required.
+
+A future identity consumer must retain the root-owned 0700 original listener,
+exclusive original Serve route and pinned original root daemon's kernel custody.
+It must reject missing/extra/truncated/late/wrong descriptors, close all delivered
+FDs on refusal, and preserve bounded header/destination/generation/current identity
+checks. Old or ordinary Unix streams without the descriptor refuse, without a
+TCP fallback. Normal finish requires exact ACK+EOF under existing deadlines;
+whole cancel must shutdown payload/control despite private retained references.
+A path, header, config bool, version, descriptor or same-PID TCP proves no identity.
+
+Go remains build-only. Both native images must pass complete `./ipn`,
+`./ipn/ipnlocal` and `./cmd/tailscale/cli` tests and retain consumed notices.
+Independent equal-input binary hashes establish reproducibility. Earlier
+non-descriptor green images/tests cannot qualify this protocol. Actual original
+Kernel and userspace Worker consumer cases are separate first/final gates;
+compiled support does not activate Producer/Gate/M2 or public controls.
+Published pins remain unchanged until actual publication. See
+`docs/architecture/tailscale-unix-proxy.md` and
+`docs/testing/procedures/tailscale-unix-proxy.md` for pending/current evidence.
 
 ### Retained publication records
 
