@@ -4,7 +4,7 @@ feature: Package reads on a worker with a read-only package token that only root
 platforms: [linux]
 cost: rents compute
 destructive: yes
-secrets: [a classic GitHub token with only the read:packages scope in <evidence>/packages-token.json, the SSH identity of Cloud settings]
+secrets: [a token with only the read:packages scope from a device sign-in of Horizon's OAuth app, in <evidence>/chain.json and <evidence>/packages-token.json, the SSH identity of Cloud settings]
 owner: peters
 ---
 
@@ -28,18 +28,22 @@ package read access.
 - Lanes:
   - Lane U: the unit tests.
   - Lane W: a real worker, a real package token and a private NuGet package.
-- This procedure does not test: how Horizon gets the token and gives it to the
-  worker, or the NuGet registry. Lane W uses a classic token with only
-  `read:packages` that the operator makes; any token with that scope works the
-  same way.
+- This procedure does not test: how Horizon sets up the cloud's package read
+  access, or the NuGet registry. Lane W gets its token from a device sign-in of
+  Horizon's OAuth app with only `read:packages`, as Horizon's packages sign-in
+  does.
 
 ## 3. Safety
 
 > **CAUTION:** DO NOT SHOW THE PACKAGE TOKEN IN EVIDENCE OR IN A REPORT. It reads
 > every package that its account can read.
 
-> **CAUTION:** USE A DEDICATED TOKEN WITH A SHORT EXPIRY. Do not use the token of
-> your own `gh` login. Delete the token on GitHub in the cleanup.
+> **CAUTION:** USE ONLY A TOKEN WITH THE SCOPE `read:packages`. Do not use the
+> token of your own `gh` login or of Horizon's image publishing.
+
+> **CAUTION:** DO NOT REVOKE HORIZON'S OAUTH APP ON GITHUB IN THE CLEANUP. That
+> also ends the image publishing sign-in of Horizon. The test token runs out
+> after 8 hours.
 
 > **CAUTION:** DELETE THE TEST CLOUD IN THE CLEANUP. The cloud rents compute until
 > somebody deletes it.
@@ -50,7 +54,7 @@ package read access.
 ## 4. Equipment and preconditions
 
 - A clone of the candidate commit in `<repo>`.
-- Python 3.11 or later on this computer.
+- Python 3.11 or later, `curl` and `jq` on this computer.
 - For lane W:
   - A GitHub account that can read a private NuGet package `PACKAGE` of the owner
     `OWNER`, and a repository `OWNER/REPOSITORY` of that owner.
@@ -60,22 +64,37 @@ package read access.
 
 ## 5. Setup
 
-1. For lane W, make a classic token on GitHub
-   (**Settings › Developer settings › Personal access tokens › Tokens (classic)**).
-   Select only the scope `read:packages`. Set the expiry to 7 days.
-
-   Result: GitHub shows the token one time.
-
-2. Write the token request to a private file. Do not write the token in a
-   terminal history.
+1. For lane W, start a device sign-in of Horizon's OAuth app with only the scope
+   `read:packages`.
 
    ```sh
-   (umask 077; read -rs TOKEN; printf '{"version":1,"token":"%s"}' "$TOKEN" > <evidence>/packages-token.json; unset TOKEN)
+   (umask 077; curl -sS -X POST -H 'Accept: application/json' \
+     -d 'client_id=Ov23liPNCPgWraJDo6XM&scope=read:packages' \
+     https://github.com/login/device/code > <evidence>/device.json)
+   jq -r '.verification_uri + " " + .user_code' <evidence>/device.json
    ```
 
-   Result: `<evidence>/packages-token.json` has mode `0600`.
+   Result: The command shows an address and a code.
 
-3. If the image of the worker is older than the candidate, copy the candidate's
+2. Ask the operator to open the address, type the code and click **Authorize**.
+
+   Result: GitHub says that the device is connected.
+
+3. Get the chain and write the token request to a private file. The token does
+   not go to the terminal.
+
+   ```sh
+   (umask 077; curl -sS -X POST -H 'Accept: application/json' \
+     -d "client_id=Ov23liPNCPgWraJDo6XM&device_code=$(jq -r .device_code <evidence>/device.json)&grant_type=urn:ietf:params:oauth:grant-type:device_code" \
+     https://github.com/login/oauth/access_token > <evidence>/chain.json
+    jq '{version: 1, token: .access_token}' <evidence>/chain.json > <evidence>/packages-token.json)
+   jq -r .scope <evidence>/chain.json
+   ```
+
+   Result: The last command shows `read:packages`. `<evidence>/packages-token.json`
+   has mode `0600`.
+
+4. If the image of the worker is older than the candidate, copy the candidate's
    `horizon-worker-github*` files to `/usr/local/bin` on the worker. Then stop the
    process `horizon-worker-github serve` and start it again as root with
    `setsid nohup horizon-worker-github serve </dev/null >/dev/null 2>&1 &`.
@@ -203,14 +222,10 @@ package read access.
 
    Result: The provider shows no server, volume or SSH key of the test cloud.
 
-2. Delete the token on GitHub
-   (**Settings › Developer settings › Personal access tokens › Tokens (classic)**).
+2. Delete `<evidence>/device.json`, `<evidence>/chain.json` and
+   `<evidence>/packages-token.json`. Do not revoke Horizon's OAuth app on GitHub.
 
-   Result: GitHub does not show the token.
-
-3. Delete `<evidence>/packages-token.json`.
-
-   Result: The file does not exist.
+   Result: The files do not exist. The access token runs out after 8 hours.
 
 ## 9. Record of results
 

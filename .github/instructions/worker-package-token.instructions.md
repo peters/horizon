@@ -5,7 +5,7 @@ applyTo: "examples/cloud-worker/horizon-worker-github-packages,examples/cloud-wo
 # Trust boundary of the worker's package token
 
 GitHub's package API and its NuGet registry accept only a token with the
-`read:packages` scope (a classic token or an OAuth app's token). Horizon gives such a token to root on the worker
+`read:packages` scope, such as an OAuth app's token. Horizon gives such a token to root on the worker
 (`horizon-worker-github packages`, JSON on stdin). The user-facing description is in
 `docs/upkeep.md`, section "Trust boundary of the package token", and in
 `examples/cloud-worker/README.md`, "Package token".

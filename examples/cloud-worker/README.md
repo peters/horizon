@@ -1504,8 +1504,8 @@ broker itself sent the token to GitHub for the request, to resolve a repository
 ID or to look up the IDs of a mutation, and then refused it.
 
 **Package read access.** GitHub's package API and its NuGet registry accept only
-a token with the `read:packages` scope, such as a classic token or the token of an
-OAuth app; the GitHub App's user token never reads them. Horizon gives such a
+a token with the `read:packages` scope, such as the token of Horizon's OAuth app;
+the GitHub App's user token never reads them. Horizon gives such a
 token, the package read access of the cloud, to root on the worker with JSON on
 stdin, never in argv or a log:
 

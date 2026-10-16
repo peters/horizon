@@ -859,9 +859,8 @@ Horizon and the worker do not guarantee these items:
 ## Trust boundary of the package token
 
 GitHub's package API and its NuGet registry accept only a token with the
-`read:packages` scope, such as a classic token or the token of an OAuth app. The
-token of the GitHub App never reads them. Thus Horizon can give the worker a
-separate package token, the package read access of the cloud. The worker uses it
+`read:packages` scope. The token of the GitHub App never reads them. Thus Horizon
+sets up a separate package token for the worker, the cloud's package read access. The worker uses it
 for package reads only.
 
 Trusted input:

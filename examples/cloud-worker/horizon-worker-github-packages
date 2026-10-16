@@ -1,6 +1,6 @@
 """The package read access of the worker's GitHub access. GitHub's package API and its NuGet
-registry take only a token with the `read:packages` scope (a classic token or an OAuth app's
-token), which a GitHub App's user token never has. Horizon gives such a token to this root
+registry take only a token with the `read:packages` scope, such as an OAuth app's token,
+which a GitHub App's user token never has. Horizon gives such a token to this root
 service (`horizon-worker-github packages`, JSON on stdin, never in argv or a log). It lives in root-only files next to the chain, and no agent gets it: no variable, no
 file, no NuGet.Config. The API broker adds it only to the package reads that the REST policy
 allows (horizon-worker-github-api-rest), and only for an owner of a repository that the
