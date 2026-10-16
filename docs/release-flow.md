@@ -49,11 +49,31 @@ v0.1.0
 
 If the stable tag for the current base version already exists, the script stops and tells you to bump `Cargo.toml` to the next release line first.
 
+## Nightly macOS Release Builds
+
+CI on `main` builds the macOS release assets only for a change to how they are built or packaged.
+The **macOS release builds** workflow (`.github/workflows/macos-release-builds.yml`) builds them each night at 02:17 UTC from the tip of `main`.
+A scheduled run does not build again when a run for the same commit is already green.
+
+The **Watch** job of that workflow reports results on `main` as comments on [issue #1534](https://github.com/peters/horizon/issues/1534):
+
+- A failed run adds one comment with the run link, the commit and the names of the failed jobs. Each failed run adds a comment.
+- The first green run after a failed run adds one short "recovered" comment with the run link.
+- A green run after a green run adds no comment. A cancelled run adds no comment.
+- Each comment starts with the hidden marker `<!-- nightly-macos-release -->`. Search for the marker to find all these comments.
+- GitHub sends the issue author a notification for each comment.
+
+The Watch job writes only issue comments. It does not open issues.
+
+To test the Watch job, start **GitHub Actions → macOS release builds → Run workflow** on `main` and select **simulate_failure**.
+The run fails on purpose without a build, and the Watch job adds a failure comment.
+Then start the workflow on `main` again without **simulate_failure**. When the build is green, the Watch job adds a "recovered" comment.
+
 ## Publish From GitHub Releases
 
 1. Make sure the target commit is already on GitHub and has green CI.
    CI on `main` builds the macOS release assets only for a change to how they are built or packaged.
-   The **macOS release builds** workflow builds them each night from the tip of `main`.
+   The **macOS release builds** workflow builds them each night from the tip of `main` (see [Nightly macOS Release Builds](#nightly-macos-release-builds)).
    Make sure that a run of that workflow for the target commit is green.
    If no such run exists, start **GitHub Actions → macOS release builds → Run workflow** on `main` while the target commit is the tip of `main`. Wait for a green result.
 2. Run `./scripts/next-version.sh <alpha|beta|stable>` locally.

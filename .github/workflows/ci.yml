@@ -92,6 +92,8 @@ jobs:
         run: python3 scripts/check-browser-client-dependencies.py
       - name: Verify CI change detection
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
+      - name: Verify the nightly macOS release builds watcher
+        run: python3 -B scripts/test_nightly_release_watch.py -v
       - name: Verify the PR readiness check
         run: python3 -B scripts/test_check_pr_readiness.py -v
       - name: Verify platform test shards
