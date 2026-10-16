@@ -166,8 +166,8 @@ class BrokerTests(BrokerTestCase):
     def test_without_a_package_token_a_package_read_never_reaches_github(self):
         status, _, payload = self.send('GET', VERSIONS)
         self.assertEqual(status, 403)
-        self.assertIn(b'no package token', payload)
-        self.assertIn(b'Cloud settings', payload)
+        self.assertIn(b'no package read access', payload)
+        self.assertIn(b'in Horizon', payload)
         self.assertEqual(self.api.seen, [])
 
     def test_a_package_read_of_a_granted_owner_gets_only_the_package_token(self):
@@ -217,7 +217,7 @@ class BrokerTests(BrokerTestCase):
         with mock.patch.object(APIHandler, 'answer', refuse):
             status, _, payload = self.send('GET', VERSIONS)
         self.assertEqual(status, 403)
-        self.assertIn(b'refused the package token', payload)
+        self.assertIn(b'refused the package read access', payload)
 
     def test_a_token_replaced_while_the_request_is_read_does_not_go_out(self):
         packages.install(self.store, request())

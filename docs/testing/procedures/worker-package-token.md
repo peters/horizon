@@ -15,7 +15,8 @@ owner: peters
 This procedure proves that root on a worker keeps a package token that no agent
 can read, and that the API broker adds it only to package reads for the owners of
 the granted repositories. An agent can then read the versions of a private NuGet
-package and their dates. Without a token, the refusal names Cloud settings.
+package and their dates. Without a token, the refusal says that the cloud has no
+package read access.
 
 ## 2. Applicability
 
@@ -27,8 +28,10 @@ package and their dates. Without a token, the refusal names Cloud settings.
 - Lanes:
   - Lane U: the unit tests.
   - Lane W: a real worker, a real package token and a private NuGet package.
-- This procedure does not test: the Cloud settings field that keeps the token on
-  the computer, or the NuGet registry. Other procedures cover them.
+- This procedure does not test: how Horizon gets the token and gives it to the
+  worker, or the NuGet registry. Lane W uses a classic token with only
+  `read:packages` that the operator makes; any token with that scope works the
+  same way.
 
 ## 3. Safety
 
@@ -100,7 +103,7 @@ package and their dates. Without a token, the refusal names Cloud settings.
    ```
 
    Result: `gh` stops with an error. The message starts with
-   `Horizon: this worker has no package token` and names Cloud settings.
+   `Horizon: this worker has no package read access`.
 
 ### 6.3 W02 — Root keeps the token
 
@@ -184,7 +187,7 @@ package and their dates. Without a token, the refusal names Cloud settings.
 
 2. Run the package read of W03 again.
 
-   Result: The message starts with `Horizon: this worker has no package token`.
+   Result: The message starts with `Horizon: this worker has no package read access`.
    `/workspace/.horizon-root/github/packages.json` and
    `/run/horizon-github/packages.json` do not exist.
 

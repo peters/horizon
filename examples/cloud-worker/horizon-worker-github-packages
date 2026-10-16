@@ -1,8 +1,7 @@
-"""The package token of the worker's GitHub access. GitHub's package API and its NuGet
-registry take only a classic token with `read:packages`, which a GitHub App's user token
-never has. So the person saves such a token in Horizon's Cloud settings, and Horizon gives it
-to this root service (`horizon-worker-github packages`, JSON on stdin, never in argv or a
-log). It lives in root-only files next to the chain, and no agent gets it: no variable, no
+"""The package read access of the worker's GitHub access. GitHub's package API and its NuGet
+registry take only a token with the `read:packages` scope (a classic token or an OAuth app's
+token), which a GitHub App's user token never has. Horizon gives such a token to this root
+service (`horizon-worker-github packages`, JSON on stdin, never in argv or a log). It lives in root-only files next to the chain, and no agent gets it: no variable, no
 file, no NuGet.Config. The API broker adds it only to the package reads that the REST policy
 allows (horizon-worker-github-api-rest), and only for an owner of a repository that the
 cloud's GitHub access grants. A module that horizon-worker-github loads, not a command."""
@@ -33,9 +32,9 @@ TOKEN = 'packages.json'
 LOCK = 'packages.lock'
 MAX_SOURCE = 4096
 FIELDS = {'version', 'token'}
-MISSING = ('this worker has no package token, so GitHub\'s package API and NuGet registry stay closed. Add one in '
-           'Cloud settings in Horizon: a classic token whose only scope is read:packages.')
-REFUSED = 'GitHub refused the package token of this worker. Save a new one in Cloud settings in Horizon.'
+MISSING = ('this worker has no package read access, so GitHub\'s package API stays closed to agents. The person '
+           'can give the cloud package read access in Horizon.')
+REFUSED = 'GitHub refused the package read access of this worker. The person can give the cloud package read access again in Horizon.'
 
 
 def parse(value):

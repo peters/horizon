@@ -554,7 +554,7 @@ def main(argv):
             raise ValueError('Upkeep policy is too large')
         print_json(upkeep_loop.install(store, source.decode(), agents.Book(store.runtime)))
     elif operation == 'packages':
-        # The package token from Cloud settings; see horizon-worker-github-packages. Only under
+        # The package read access from Horizon; see horizon-worker-github-packages. Only under
         # agent isolation does the agent account stay out of its root-only files.
         if not common.AGENT_ISOLATION.exists():
             raise ValueError('A package token requires agent isolation')

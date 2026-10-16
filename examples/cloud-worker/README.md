@@ -1503,10 +1503,11 @@ The broker writes one line for each connection to the request log below, with
 broker itself sent the token to GitHub for the request, to resolve a repository
 ID or to look up the IDs of a mutation, and then refused it.
 
-**Package token.** GitHub's package API and its NuGet registry accept only a
-classic token with `read:packages`; the GitHub App's user token never reads them.
-The person saves such a token in Cloud settings, and Horizon gives it to root on
-the worker with JSON on stdin, never in argv or a log:
+**Package read access.** GitHub's package API and its NuGet registry accept only
+a token with the `read:packages` scope, such as a classic token or the token of an
+OAuth app; the GitHub App's user token never reads them. Horizon gives such a
+token, the package read access of the cloud, to root on the worker with JSON on
+stdin, never in argv or a log:
 
 ```sh
 horizon-worker-github packages < private-file   # {"version":1,"token":"..."}
@@ -1520,11 +1521,12 @@ volume and on tmpfs, and reports only whether it holds one (`packages` in
 no owner; the static token file still opens its own.
 No agent gets the token: no variable, no file and no NuGet configuration holds
 it. The broker adds it only to the package reads above. Without a token, those
-reads get `gh: Horizon: this worker has no package token, ...`, which names Cloud
-settings. When GitHub refuses the token, the broker asks for a new one. The token
-reads every NuGet and npm package that its account can read through these paths,
-for the owners of the granted repositories. Use a dedicated token with a short
-expiry, never the token of your own `gh` login.
+reads get `gh: Horizon: this worker has no package read access, ...`, which tells
+that the person can give the cloud package read access in Horizon. When GitHub
+refuses the token, the broker says so. Through these paths the token reads every
+NuGet and npm package that its account can read, for the owners of the granted
+repositories. Give a worker a token that can only read packages, never one with
+other scopes.
 
 **Agent access.** Agents ask the service on `/run/horizon-worker/github.sock`.
 The socket accepts every local account, but the service reads the caller's user
