@@ -72,6 +72,7 @@ pub struct Manager {
     uncertain: bool,
     pending: Option<Vec<Rule>>,
     original_id: Option<u64>,
+    unresolved_create: bool,
     retired: bool,
 }
 impl Hetzner {
@@ -102,6 +103,7 @@ impl Hetzner {
             uncertain: false,
             pending: None,
             original_id: None,
+            unresolved_create: false,
             retired: false,
         })
     }
@@ -259,12 +261,20 @@ impl Manager {
             rules,
             foreign: &self.snapshot.foreign,
         })?;
-        // The previous generation is absent; only this saved intent can own a new create.
-        self.original_id = None;
-        let created = self.client.create_exposure_firewall_once(&self.scope, rules, cancel)?;
+        let mut unresolved = false;
+        let result = self
+            .client
+            .create_exposure_firewall_attempt(&self.scope, rules, cancel, &mut unresolved);
+        // A saved intent alone cannot own a pre-existing matching resource.
+        self.unresolved_create = unresolved;
+        if unresolved {
+            self.original_id = None;
+        }
+        let created = result?;
         let id = created.firewall.id;
         // Retain returned identity even if the durable action save fails.
         self.original_id = Some(id);
+        self.unresolved_create = false;
         self.snapshot.owned = Some(created.firewall);
         self.expected_rules(rules.to_vec());
         self.save_wait(id, &created.actions, journal, cancel)?;
@@ -301,8 +311,14 @@ impl Manager {
         cancel.check()?;
         let found = if let Some(id) = self.original_id {
             self.client.inspect_exposure_firewall(&self.scope, id, cancel)?
+        } else if self.unresolved_create {
+            Some(
+                self.client
+                    .find_exposure_firewall(&self.scope, cancel)?
+                    .ok_or(CloudError::CreationUnresolved)?,
+            )
         } else {
-            self.client.find_exposure_firewall(&self.scope, cancel)?
+            None
         };
         if let Some(firewall) = found {
             let expected = self
@@ -314,7 +330,6 @@ impl Manager {
             if !expected {
                 return Err(CloudError::IdentityMismatch);
             }
-            self.original_id = Some(firewall.id);
             let actual = Snapshot::read(&self.client, &self.scope, Some(firewall.id), cancel)?;
             let captured = actual.owned.as_ref().ok_or(CloudError::IdentityMismatch)?;
             if actual.foreign != self.snapshot.foreign
@@ -324,6 +339,8 @@ impl Manager {
                 return Err(CloudError::IdentityMismatch);
             }
             journal.save(Update::Reconciled { firewall: captured })?;
+            self.original_id = Some(captured.id);
+            self.unresolved_create = false;
             self.snapshot = actual;
             self.retire(journal, cancel)?;
         } else {

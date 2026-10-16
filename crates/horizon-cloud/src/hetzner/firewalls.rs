@@ -213,14 +213,29 @@ impl Hetzner {
         rules: &[Rule],
         cancel: &Cancellation,
     ) -> Result<Created, CloudError> {
+        self.create_exposure_firewall_attempt(scope, rules, cancel, &mut false)
+    }
+
+    fn create_exposure_firewall_attempt(
+        &self,
+        scope: &Scope,
+        rules: &[Rule],
+        cancel: &Cancellation,
+        unresolved: &mut bool,
+    ) -> Result<Created, CloudError> {
         valid_rules(rules)?;
         self.firewall_server(scope, cancel)?;
-        let value = self.send(
+        let result = self.send(
             Method::Post,
             "/firewalls",
             Some(json!({"name":resource_name(&scope.operation)?,"labels":scope.labels(),"rules":rules})),
             cancel,
-        )?;
+        );
+        *unresolved = match &result {
+            Ok(_) => true,
+            Err(failure) => !failure.definite() && !failure.name_taken(),
+        };
+        let value = result?;
         let created: Created = serde_json::from_value(value).map_err(|_| CloudError::CreationUnresolved)?;
         created.firewall.verify(scope)?;
         if !created.firewall.applied_to.is_empty() {

@@ -49,6 +49,19 @@ under the same original scope and expected complete rules. It never changes rule
 reopens a service or adopts a successor during cleanup. A new create clears the previous
 resource ID only after its own durable intent succeeds. A failed intent retains the
 previous exact cleanup identity; a lost new reply uses the new scoped intent.
+Generic pending rules and a saved intent alone never authorize a scope search.
+Scope-based cleanup requires that this live manager both durably saved its Create
+intent and reached an unresolved create request. Failed comparison, intent save,
+server preflight, cancellation before dispatch and definite provider/name-conflict
+refusals cannot adopt a pre-existing unattached match. Known earlier IDs remain
+exact cleanup identities until a new create request has an uncertain outcome.
+An empty scope lookup after an unknown create is not an absence proof: cleanup
+retains uncertainty and the unresolved intent until the original resource is
+uniquely observed. A scoped candidate becomes the retained numeric identity only
+after the fresh snapshot, rules, SSH and foreign baseline pass and the original
+journal durably saves the captured reconciliation. Failed validation or save
+retains the unresolved request; a candidate's later 404 cannot close it. A known
+created ID's exact 404 remains a separate absence path.
 Cleanup uncertainty remains
 uncertain; a retired manager cannot reopen. Dropping a manager does not prove cleanup.
 Before cleanup adopts a fresh snapshot, it must match the original SSH endpoint and

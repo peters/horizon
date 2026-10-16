@@ -1017,3 +1017,317 @@ fn cleanup_journals_the_freshly_captured_attachment_before_retirement() {
     );
     assert!(!manager.uncertain());
 }
+
+fn cleanup_without_a_create_attempt_preserves_the_existing_match(failure: &str) {
+    let rules = vec![tcp(22, "192.0.2.10/32"), rule()];
+    let existing = owned(&rules, false);
+    let mut script = vec![];
+    snapshot(&mut script, None, None);
+    // An independent read proves this unattached exact-scope match predates the attempt.
+    script.push((200, listing("firewalls", json!([existing.clone()]))));
+    let compare = script.len();
+    snapshot(&mut script, None, None);
+    if failure == "compare" {
+        for (_, response) in &mut script[compare..] {
+            response["server"]["public_net"]["ipv4"]["ip"] = "192.0.2.43".into();
+        }
+    } else if failure == "preflight" {
+        script.push((500, error("server_error", "original server preflight unavailable")));
+    } else if failure != "intent" {
+        script.push((200, server_with(&[])));
+        script.push(if failure == "unique" {
+            (409, error("uniqueness_error", "name is already in use"))
+        } else {
+            (400, error("invalid_input", "create refused"))
+        });
+    }
+    // These first replies work for a snapshot and also expose the old unsafe scoped lookup.
+    let mut both = server_with(&[]);
+    both["firewalls"] = json!([existing.clone()]);
+    both["meta"] = json!({"pagination":{"next_page":null}});
+    script.push((200, both));
+    script.push((200, server_with(&[])));
+    script.push((200, json!({"firewall":existing.clone()})));
+    // The old implementation can continue through exact adoption and deletion.
+    script.push((200, server_with(&[])));
+    script.push((200, json!({"firewall":existing.clone()})));
+    snapshot(&mut script, None, Some((&rules, false)));
+    script.push((200, json!({"firewall":existing})));
+    script.push((204, Value::Null));
+    script.push((404, error("not_found", "deleted pre-existing match")));
+    snapshot(&mut script, None, None);
+    script.push((404, error("not_found", "deleted pre-existing match")));
+    let (client, requests, task) = provider(script);
+    let mut observer = Hetzner::new(Credential::new("secret-test-key".into()).unwrap());
+    observer.endpoint.clone_from(&client.endpoint);
+    let cancel = Cancellation::default();
+    let mut manager = client
+        .prepare_exposure_management(scope(), management(), &cancel)
+        .unwrap();
+    assert_eq!(
+        observer.find_exposure_firewall(&scope(), &cancel).unwrap().unwrap().id,
+        7
+    );
+    let mut saved = Saved {
+        fail: (failure == "intent").then_some("intent:Create"),
+        ..Saved::default()
+    };
+    assert!(
+        manager
+            .replace_service("service-a", vec![rule()], &mut saved, &cancel)
+            .is_err()
+    );
+    assert!(manager.uncertain());
+    assert_eq!(manager.firewall_id(), None);
+    saved.fail = None;
+    let before = requests.lock().unwrap().len();
+    let cleanup = manager.cleanup_original(&mut saved, &cancel);
+    let remaining = observer.inspect_exposure_firewall(&scope(), 7, &cancel);
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(
+        !requests[before..].iter().any(|r| r.starts_with("GET /firewalls?")),
+        "Cleanup searched without an unresolved create: {failure}; destructive requests: {:?}",
+        requests
+            .iter()
+            .filter(|r| r.starts_with("DELETE ") || r.contains("remove_from_resources"))
+            .map(|r| r.lines().next().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert!(cleanup.is_ok(), "{failure}: {cleanup:?}");
+    assert_eq!(remaining.unwrap().unwrap().id, 7);
+    assert!(saved.reconciled.is_empty());
+    assert!(!manager.uncertain());
+    assert!(
+        !requests
+            .iter()
+            .any(|r| r.starts_with("DELETE ") || r.contains("remove_from_resources"))
+    );
+    assert_eq!(
+        requests.iter().filter(|r| r.starts_with("POST /firewalls ")).count(),
+        usize::from(failure == "unique" || failure == "rejected")
+    );
+}
+
+#[test]
+fn failed_first_create_intent_cannot_adopt_a_preexisting_unattached_match() {
+    cleanup_without_a_create_attempt_preserves_the_existing_match("intent");
+}
+#[test]
+fn failed_initial_compare_cannot_adopt_a_preexisting_unattached_match() {
+    cleanup_without_a_create_attempt_preserves_the_existing_match("compare");
+}
+#[test]
+fn failed_create_server_preflight_cannot_adopt_a_preexisting_unattached_match() {
+    cleanup_without_a_create_attempt_preserves_the_existing_match("preflight");
+}
+#[test]
+fn refused_create_name_conflict_cannot_adopt_a_preexisting_unattached_match() {
+    cleanup_without_a_create_attempt_preserves_the_existing_match("unique");
+}
+#[test]
+fn definitely_rejected_create_cannot_adopt_a_preexisting_unattached_match() {
+    cleanup_without_a_create_attempt_preserves_the_existing_match("rejected");
+}
+
+#[test]
+fn failed_second_create_preflight_retains_the_previous_exact_cleanup_identity() {
+    let rules = vec![tcp(22, "192.0.2.10/32"), rule()];
+    let mut script = vec![];
+    closed_first_generation(&mut script, &rules);
+    snapshot(&mut script, None, None);
+    script.push((500, error("server_error", "second create preflight unavailable")));
+    script.push((404, error("not_found", "original generation absent")));
+    snapshot(&mut script, None, None);
+    let (client, requests, task) = provider(script);
+    let cancel = Cancellation::default();
+    let mut manager = client
+        .prepare_exposure_management(scope(), management(), &cancel)
+        .unwrap();
+    let mut saved = Saved {
+        firewall: Some(201),
+        ..Saved::default()
+    };
+    manager
+        .replace_service("service-a", vec![rule()], &mut saved, &cancel)
+        .unwrap();
+    manager.close_service("service-a", &mut saved, &cancel).unwrap();
+    assert!(
+        manager
+            .replace_service("service-b", vec![rule()], &mut saved, &cancel)
+            .is_err()
+    );
+    assert!(manager.uncertain());
+    let before = requests.lock().unwrap().len();
+    manager.cleanup_original(&mut saved, &cancel).unwrap();
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(requests[before].starts_with("GET /firewalls/201 "));
+    assert!(!requests.iter().any(|r| r.starts_with("GET /firewalls?")));
+    assert_eq!(requests.iter().filter(|r| r.starts_with("POST /firewalls ")).count(), 1);
+}
+
+#[test]
+fn an_empty_lookup_after_an_unknown_create_remains_unresolved_until_the_original_appears() {
+    let rules = vec![tcp(22, "192.0.2.10/32"), rule()];
+    let mut script = vec![];
+    snapshot(&mut script, None, None);
+    snapshot(&mut script, None, None);
+    script.push((200, server_with(&[])));
+    script.push((500, error("server_error", "original create response lost")));
+    script.push((200, listing("firewalls", json!([]))));
+    // A delayed response can become visible only after the first empty lookup.
+    // The server fields also permit the old false-absence path to complete.
+    let mut later = server_with(&[]);
+    later["firewalls"] = json!([owned(&rules, false)]);
+    later["meta"] = json!({"pagination":{"next_page":null}});
+    script.push((200, later));
+    snapshot(&mut script, None, Some((&rules, false)));
+    script.push((200, json!({"firewall":owned(&rules,false)})));
+    snapshot(&mut script, None, Some((&rules, false)));
+    script.push((200, json!({"firewall":owned(&rules,false)})));
+    script.push((204, Value::Null));
+    script.push((404, error("not_found", "original deleted")));
+    snapshot(&mut script, None, None);
+    let (client, requests, task) = provider(script);
+    let cancel = Cancellation::default();
+    let mut manager = client
+        .prepare_exposure_management(scope(), management(), &cancel)
+        .unwrap();
+    let mut saved = Saved::default();
+    assert!(
+        manager
+            .replace_service("service-a", vec![rule()], &mut saved, &cancel)
+            .is_err()
+    );
+    let before = requests.lock().unwrap().len();
+    let first_cleanup = manager.cleanup_original(&mut saved, &cancel);
+    assert!(
+        matches!(first_cleanup, Err(CloudError::CreationUnresolved)),
+        "Empty lookup falsely resolved: {first_cleanup:?}; durable events: {:?}",
+        saved.events
+    );
+    assert!(manager.uncertain());
+    assert_eq!(manager.firewall_id(), None);
+    assert_eq!(saved.events, ["intent:Create"]);
+    assert_eq!(requests.lock().unwrap().len(), before + 1);
+    assert!(matches!(
+        manager.replace_service("service-b", vec![rule()], &mut saved, &cancel),
+        Err(CloudError::CreationUnresolved)
+    ));
+    assert_eq!(requests.lock().unwrap().len(), before + 1);
+    manager.cleanup_original(&mut saved, &cancel).unwrap();
+    assert!(!manager.uncertain());
+    assert!(matches!(
+        manager.replace_service("service-b", vec![rule()], &mut saved, &cancel),
+        Err(CloudError::CreationUnresolved)
+    ));
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.iter().filter(|r| r.starts_with("POST /firewalls ")).count(), 1);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("DELETE /firewalls/7 "))
+            .count(),
+        1
+    );
+    assert_eq!(saved.events.last().unwrap(), "confirmed");
+}
+
+fn rejected_candidate_keeps_the_original_request_unresolved(failed_save: bool) {
+    let rules = vec![tcp(22, "192.0.2.10/32"), rule()];
+    let mut script = vec![];
+    snapshot(&mut script, None, None);
+    snapshot(&mut script, None, None);
+    script.push((200, server_with(&[])));
+    script.push((500, error("server_error", "original create reply lost")));
+    script.push((200, listing("firewalls", json!([owned(&rules, false)]))));
+    if failed_save {
+        snapshot(&mut script, None, Some((&rules, false)));
+    } else {
+        script.push((200, server_with(&[])));
+        script.push((404, error("not_found", "stale lookup candidate")));
+    }
+    script.push((200, listing("firewalls", json!([]))));
+    let id = if failed_save { 7 } else { 8 };
+    let mut found = owned(&rules, false);
+    found["id"] = id.into();
+    script.push((200, listing("firewalls", json!([found]))));
+    let later = script.len();
+    snapshot(&mut script, None, Some((&rules, false)));
+    script.push((200, json!({"firewall":owned(&rules,false)})));
+    snapshot(&mut script, None, Some((&rules, false)));
+    script.push((200, json!({"firewall":owned(&rules,false)})));
+    script.push((204, Value::Null));
+    script.push((404, error("not_found", "original retired")));
+    snapshot(&mut script, None, None);
+    for (_, response) in &mut script[later..] {
+        if let Some(firewall) = response.get_mut("firewall") {
+            firewall["id"] = id.into();
+        }
+    }
+    let (client, requests, task) = provider(script);
+    let cancel = Cancellation::default();
+    let mut manager = client
+        .prepare_exposure_management(scope(), management(), &cancel)
+        .unwrap();
+    let mut saved = Saved::default();
+    assert!(
+        manager
+            .replace_service("service-a", vec![rule()], &mut saved, &cancel)
+            .is_err()
+    );
+    saved.fail = failed_save.then_some("reconciled");
+    let first = manager.cleanup_original(&mut saved, &cancel);
+    if failed_save {
+        assert!(matches!(first, Err(CloudError::Persistence)));
+    } else {
+        assert!(first.is_err());
+    }
+    assert!(manager.uncertain());
+    assert_eq!(manager.firewall_id(), None);
+    saved.fail = None;
+    let before = requests.lock().unwrap().len();
+    let second = manager.cleanup_original(&mut saved, &cancel);
+    let requests_so_far = requests.lock().unwrap();
+    assert!(
+        requests_so_far[before].starts_with("GET /firewalls?"),
+        "Unvalidated or unsaved candidate became an exact cleanup identity: {}",
+        requests_so_far[before].lines().next().unwrap()
+    );
+    drop(requests_so_far);
+    assert!(matches!(second, Err(CloudError::CreationUnresolved)));
+    assert!(manager.uncertain());
+    assert!(!saved.events.iter().any(|event| event == "confirmed"));
+    assert!(matches!(
+        manager.replace_service("service-b", vec![rule()], &mut saved, &cancel),
+        Err(CloudError::CreationUnresolved)
+    ));
+    saved.firewall = Some(id);
+    manager.cleanup_original(&mut saved, &cancel).unwrap();
+    assert!(!manager.uncertain());
+    task.join().unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.iter().filter(|r| r.starts_with("POST /firewalls ")).count(), 1);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with(&format!("DELETE /firewalls/{id} ")))
+            .count(),
+        1
+    );
+    if id == 8 {
+        assert!(!requests.iter().any(|r| r.starts_with("DELETE /firewalls/7 ")));
+    }
+    assert_eq!(saved.events.last().unwrap(), "confirmed");
+}
+
+#[test]
+fn a_stale_unknown_create_candidate_cannot_replace_the_unresolved_request() {
+    rejected_candidate_keeps_the_original_request_unresolved(false);
+}
+#[test]
+fn a_failed_reconciliation_save_cannot_promote_the_unknown_create_candidate() {
+    rejected_candidate_keeps_the_original_request_unresolved(true);
+}

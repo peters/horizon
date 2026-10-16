@@ -19,7 +19,17 @@ current verification must latch cleanup-only uncertainty, even after provider
 recovery. Before snapshot adoption in cleanup, compare the original SSH endpoint,
 foreign baseline and the captured owned rules against the first validated lookup;
 journal the fresh captured firewall. The absent branch must also reject SSH drift.
-Inspect lost replies, failed journal saves and action waits together. No new
+Scope-based cleanup requires a successful durable Create intent and an unresolved
+request from this same live manager. Pending rules, failed compares/intent saves,
+server preflight failures, pre-dispatch cancellation and definite/name-conflict
+refusals cannot adopt a pre-existing unattached matching firewall. Preserve earlier
+exact IDs after these failures. An empty lookup after unknown POST must retain
+CreationUnresolved without confirmation, retirement or reopen; later exact original
+reconciliation may clean it. Promote a scoped candidate only after fresh validation
+and successful durable Reconciled save; failure must retain the unresolved request,
+not turn a rejected candidate into exact-ID absence authority. Keep known-created-ID
+404 distinct. Inspect lost replies, failed journal saves and
+action waits together. No new
 activation, credential factory or restored controller belongs in this outcome.
 
 For the ignored actual-provider consumer, require the actual normal Store lock,
