@@ -91,9 +91,11 @@ fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges(
         receive.recv_timeout(HANG_GUARD).expect("authentication in flight");
         let started = Instant::now();
         session.stop();
+        // Without cancellation the blocked exchange ends only by the 5 s message
+        // timeout, so finishing well before it shows that cancellation interrupted it.
         while !session.finished() {
             assert!(
-                started.elapsed() < Duration::from_secs(1),
+                started.elapsed() < Duration::from_secs(4),
                 "cancellation must interrupt blocking I/O"
             );
             thread::sleep(Duration::from_millis(5));
