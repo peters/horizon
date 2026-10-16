@@ -131,7 +131,9 @@ instructions the repositories' AGENTS.md link; its read request for that shared
 repository waits on the card too. Pull requests that Upkeep agents open use an
 `upkeep/` branch and the `upkeep` label; the loop finds them and carries them through
 the same gates. The default instructions ask for the checks that each repository's
-`AGENTS.md` makes apply to a change, and no more. See `docs/upkeep.md` for its limits
+`AGENTS.md` makes apply to a change, and no more. Instructions that the person kept
+as the default follow a newer default of Horizon with the next exchange; changed
+instructions stay as written. See `docs/upkeep.md` for its limits
 and trust boundaries. From an agent panel in its workspace, `cloud_upkeep` reads the
 Upkeep, proposes repositories or a new Upkeep for the person to confirm, and removes,
 pauses, resumes or runs it (see the Upkeep section of [the cloud reference](references/cloud.md)).
