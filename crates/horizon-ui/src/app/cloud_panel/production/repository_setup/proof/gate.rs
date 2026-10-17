@@ -175,7 +175,7 @@ fn proves_each_listed_repository() {
         let entry = Entry::read(value, &prefix, index);
         append(&out, "started.jsonl", &entry.names());
         let started = Instant::now();
-        let mut result = prove(&entry, &out, host.clone());
+        let mut result = prove(&entry, &out, host.as_ref());
         result["entry"] = entry.label.clone().into();
         result["run"] = entry.run.clone().into();
         result["seconds"] = started.elapsed().as_secs().into();
@@ -188,7 +188,11 @@ fn proves_each_listed_repository() {
 
 /// Proves the entry, starts its preview after a passed proof and removes all the entry's
 /// Docker resources; the entry's result.
-fn prove(entry: &Entry, out: &Path, host: Option<horizon_core::cloud_runtime::docker_host::Host>) -> serde_json::Value {
+fn prove(
+    entry: &Entry,
+    out: &Path,
+    host: Option<&horizon_core::cloud_runtime::docker_host::Host>,
+) -> serde_json::Value {
     let Some(spec) = Spec::parse(&entry.spec) else {
         return serde_json::json!({"passed": false, "error": "the spec does not parse"});
     };
@@ -206,7 +210,7 @@ fn prove(entry: &Entry, out: &Path, host: Option<horizon_core::cloud_runtime::do
     let start = |request: u64, log: &Path, access: crates::Access| {
         Proof::start(
             (&entry.repository, &entry.run, identity),
-            host.clone(),
+            host.cloned(),
             (request, spec.clone()),
             log.to_owned(),
             (true, root_dirty.clone(), access),

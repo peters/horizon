@@ -2,7 +2,7 @@
 procedure: cloud-setup-gate
 feature: Setup gate (Horizon's proof and desktop preview of the setup agent on real repositories)
 platforms: [linux]
-cost: rents compute  # G05 only; G01 to G04 use this computer's Docker or a Docker host of yours
+cost: rents compute  # G05 only; G01 to G04 and G06 use this computer's Docker or a Docker host of yours
 destructive: yes
 secrets: [the Git login of this computer for private Rust git dependencies, the NuGet credentials of this computer for private .NET packages]
 owner: peters
