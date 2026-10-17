@@ -104,6 +104,7 @@ This component does not enroll or delete devices.
 
    Result: A valid header from a process other than the original daemon refuses.
    The Worker selector then proves that its SOCKS and HTTP probe sockets belong to that same original daemon. SOCKS attempts to the old TCP backend and the Unix target, and HTTP CONNECT to the old backend, refuse before admission.
+   The test-only ownership observer waits within its original deadline for the daemon to accept each proxy connection. A completed TCP handshake with no accepted server descriptor is not an ownership proof.
 
 4. Send PING, receive PONG, send DONE and half-close the peer write side through the genuine original connection.
 

@@ -37,13 +37,16 @@ pub(super) struct Proof {
 }
 
 pub(super) async fn prove_owned(stream: &TcpStream, pid: rustix::process::Pid, until: Instant) -> Result<Proof, Error> {
-    for attempt in 0..3 {
+    loop {
         match prove_once(stream, pid, until) {
-            Err(Error::Observation) if attempt < 2 => tokio::task::yield_now().await,
+            Err(Error::Observation) => {
+                tokio::time::timeout_at(until, tokio::time::sleep(std::time::Duration::from_millis(1)))
+                    .await
+                    .map_err(|_| Error::Deadline)?;
+            }
             result => return result,
         }
     }
-    Err(Error::Observation)
 }
 
 fn prove_once(stream: &TcpStream, pid: rustix::process::Pid, until: Instant) -> Result<Proof, Error> {
@@ -71,7 +74,7 @@ fn prove_once(stream: &TcpStream, pid: rustix::process::Pid, until: Instant) -> 
         }
     }
     if descriptors.is_empty() {
-        return Err(Error::Custody);
+        return Err(Error::Observation);
     }
     let proof = Proof { binding, descriptors };
     recheck(stream, pid, &proof, until)?;
@@ -100,20 +103,19 @@ pub(super) fn recheck(
 fn binding(rows: &[Row], inode: u64, local: SocketAddr, peer: SocketAddr) -> Result<Binding, Error> {
     let own: Vec<_> = rows.iter().filter(|r| r.local == local && r.peer == peer).collect();
     let reversed: Vec<_> = rows.iter().filter(|r| r.local == peer && r.peer == local).collect();
-    if own.is_empty() || reversed.is_empty() {
+    if own.is_empty() {
         return Err(Error::Custody);
     }
     if own.len() != 1 || reversed.len() != 1 {
         return Err(Error::Observation);
     }
     let (a, b) = (own[0], reversed[0]);
-    if a.inode != inode
-        || b.inode == 0
-        || b.inode == inode
-        || matches!(a.state, 6 | 7 | 10)
-        || matches!(b.state, 6 | 7 | 10)
-    {
+    if a.inode != inode || b.inode == inode || matches!(a.state, 6 | 7 | 10) || matches!(b.state, 6 | 7 | 10) {
         return Err(Error::Custody);
+    }
+    // The TCP handshake can finish before the server calls accept and gains an FD.
+    if b.inode == 0 {
+        return Err(Error::Observation);
     }
     if !matches!((a.state, b.state), (1, 1) | (8, 4 | 5)) {
         return Err(Error::Observation);
@@ -176,4 +178,34 @@ fn address(text: &str, v6: bool) -> Result<SocketAddr, Error> {
         ip,
         u16::from_str_radix(port, 16).map_err(|_| Error::Encoding)?,
     ))
+}
+
+#[tokio::test]
+async fn connected_socket_requires_original_server_accept_before_ownership_passes() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+    let until = Instant::now() + std::time::Duration::from_secs(3);
+    let pid = rustix::process::getpid();
+    assert!(matches!(prove_once(&client, pid, until), Err(Error::Observation)));
+    let proof = prove_owned(&client, pid, until);
+    tokio::pin!(proof);
+    tokio::select! {
+        _ = &mut proof => panic!("An unaccepted connection cannot prove server ownership"),
+        () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {}
+    }
+    let (accepted, _) = listener.accept().await.unwrap();
+    let proof = proof.await.unwrap();
+    assert_eq!(proof.binding.reverse, rustix::fs::fstat(&accepted).unwrap().st_ino);
+    recheck(&client, pid, &proof, until).unwrap();
+}
+
+#[tokio::test]
+async fn unaccepted_connection_expires_without_an_ownership_proof() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+    let until = Instant::now() + std::time::Duration::from_millis(25);
+    assert!(matches!(
+        prove_owned(&client, rustix::process::getpid(), until).await,
+        Err(Error::Deadline)
+    ));
 }

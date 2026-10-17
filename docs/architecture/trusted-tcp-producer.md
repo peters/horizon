@@ -1,6 +1,6 @@
 # Original TCP producer
 
-The current candidate is held pending qualification of the Unix backend described below. Independent review found that the earlier TCP backend admitted a generic same-daemon proxy connection carrying an attacker-supplied header. Earlier positive results do not establish the corrected boundary.
+The Unix backend below replaces the earlier TCP backend. Independent review found that the TCP backend admitted a generic same-daemon proxy connection carrying an attacker-supplied header. Earlier positive results do not establish the corrected boundary. The [qualification report](../testing/reports/2026-10-16-trusted-tcp-producer.md) records the current results.
 
 The Linux Worker `trusted-tcp-producer` feature stays off by default.
 It identifies a tailnet TCP connection through the original daemon's private Unix Serve backend.
