@@ -148,7 +148,7 @@ account).
 
 7. When the card shows **Ready**, click **Give package access** again.
 
-   Result: Within two seconds the board line is gone and the file
+   Result: Within five seconds the board line is gone and the file
    `package-access-skipped` does not exist. The cloud reconnects. After its GitHub
    step the card shows the package code without a new GitHub code.
 

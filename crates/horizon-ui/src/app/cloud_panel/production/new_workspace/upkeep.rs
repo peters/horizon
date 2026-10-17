@@ -32,7 +32,10 @@ impl HorizonApp {
             .find(|group| group.remote.as_ref().is_some_and(|launch| launch.id == cloud))?
             .issue;
         let runtime = self.cloud_prototype.production.runtimes.get(&id)?;
-        (runtime.connected_ready() && !runtime.busy() && !runtime.checking_provider()).then_some(id)
+        // A reconnect keeps Ready until its first step arrives; its fresh attempt has not
+        // reached Ready yet, so it counts as running.
+        let reached = runtime.progress.ended_in(cloud_runtime::Stage::Ready).is_some();
+        (runtime.connected_ready() && reached && !runtime.busy() && !runtime.checking_provider()).then_some(id)
     }
 
     /// Reconnects the card `runtime`, which then asks for what its deployment needs.

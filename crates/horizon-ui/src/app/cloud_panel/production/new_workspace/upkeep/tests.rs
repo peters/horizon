@@ -269,3 +269,41 @@ fn saved_settings_are_read_again_and_sent_at_once() {
     assert!(app.upkeep.syncs["c1"].next.is_none());
     assert_eq!(app.upkeep.syncs["c1"].loop_running(), None);
 }
+
+#[test]
+fn a_reconnect_that_has_not_reported_its_first_step_is_not_reconnectable() {
+    let (temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("Upkeep");
+    let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
+    let mut group =
+        horizon_core::cloud_panel::CloudGroup::new(7, "Upkeep".into(), local_id, temp.path().into(), [0.0; 2]);
+    group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+        publishing_selection: None,
+        deployment_started: true,
+        id: "upkeep-ready".into(),
+        revision: "a".repeat(40),
+        profile_name: "quick-start".into(),
+        profile: serde_json::from_value(
+            serde_json::json!({"provider": "hetzner", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4}),
+        )
+        .unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    let (_events, receiver) = std::sync::mpsc::channel();
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(horizon_core::cloud_runtime::Stage::Ready),
+        receiver: Some(receiver),
+        ..Default::default()
+    };
+    // As a reconnect in the frame it starts: its attempt is fresh while the stage still says Ready.
+    runtime.progress.reset();
+    app.cloud_prototype.production.runtimes.insert(7, runtime);
+    assert_eq!(app.upkeep_reconnectable("upkeep-ready"), None);
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+    runtime
+        .progress
+        .stage(horizon_core::cloud_runtime::Stage::Ready, std::time::Instant::now());
+    assert_eq!(app.upkeep_reconnectable("upkeep-ready"), Some(7));
+}
