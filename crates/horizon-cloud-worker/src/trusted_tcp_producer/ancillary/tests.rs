@@ -84,7 +84,7 @@ async fn late_header_rights_are_refused_and_closed_without_reading_application()
 async fn timeout_and_unpolled_drop_release_original_payload_and_received_control() {
     let (stream, mut sender) = UnixStream::pair().unwrap();
     let pending = Arc::new(tokio::sync::Semaphore::new(1));
-    let future = super::super::begin_identification(stream, pending);
+    let future = super::super::begin_identification(super::super::pending_fixture(stream), pending);
     drop(future);
     let mut byte = [0];
     assert_eq!(timeout(WAIT, sender.read(&mut byte)).await.unwrap().unwrap(), 0);
@@ -94,12 +94,12 @@ async fn timeout_and_unpolled_drop_release_original_payload_and_received_control
     send(&sender, b'P', &[endpoint.as_fd()]);
     drop(endpoint);
     let (_, fd) = timeout(WAIT, super::byte(&stream, true)).await.unwrap().unwrap();
-    let closing = super::super::Closing {
-        payload: Some(stream),
-        control: Some(super::super::accepted::Control::new(fd.unwrap()).unwrap()),
-    };
+    let closing = super::super::pending_fixture(stream);
+    closing
+        .install_control(super::super::accepted::Control::new(fd.unwrap()).unwrap())
+        .unwrap();
     assert!(matches!(
-        super::super::proxy::read(closing.payload.as_ref().unwrap(), Instant::now()).await,
+        super::super::proxy::read(closing.payload().unwrap(), Instant::now()).await,
         Err(super::super::Error::Deadline)
     ));
 

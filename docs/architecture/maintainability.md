@@ -558,6 +558,10 @@ Worker `trusted_tcp_producer` keeps original process/socket custody in `daemon`,
 the root-private Unix listener in `backend`, bounded process reads in `procfs`,
 bounded headers in `proxy`, and CLI facts/supervision in `whois`. Its root owns the opaque original stream. It adds
 no Gate admission, keeper or public runtime dispatch.
+The `pending` leaf binds acceptance to one original backend, holds the sole
+pre-receipt payload owner, and exposes only weak cancellation/comparison handles.
+The same private owner reaches the accepted phase; no descriptor clone bridges
+that transition. Receipt/install and bounded first-byte cancellation are serialized.
 The Producer's `ancillary` leaf bounds original descriptor/header receipt. Its
 `accepted` leaf owns opaque payload/control cancellation and persistent drain
 acknowledgement. Public original-bound IO/finish methods create no identity and

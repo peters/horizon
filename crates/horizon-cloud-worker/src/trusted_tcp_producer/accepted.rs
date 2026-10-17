@@ -1,5 +1,8 @@
 //! Original per-flow payload and cancellation custody; no independent authority.
-use super::ancillary;
+use super::{
+    ancillary,
+    pending::{Inner, PendingCancellation},
+};
 use std::{
     io,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
@@ -65,7 +68,7 @@ impl Control {
         })
     }
 
-    fn cancel(&self) {
+    pub(super) fn cancel(&self) {
         let endpoint = self
             .state
             .lock()
@@ -153,19 +156,23 @@ fn validate(fd: &OwnedFd) -> io::Result<()> {
 /// Original Producer payload with inseparable, private whole-flow cancellation.
 /// This type cannot be constructed, cloned or restored by its consumers.
 pub struct AcceptedStream {
-    payload: UnixStream,
-    control: Control,
+    inner: Arc<Inner>,
 }
 
 impl AcceptedStream {
-    pub(super) fn new(payload: UnixStream, control: Control) -> Self {
-        Self { payload, control }
+    pub(super) fn new(inner: Arc<Inner>) -> Self {
+        Self { inner }
+    }
+
+    /// Compare the exact original acceptance, never an address or serialized fact.
+    #[must_use]
+    pub fn matches_pending(&self, pending: &PendingCancellation) -> bool {
+        pending.matches(&self.inner)
     }
 
     /// Immediately cancel the original payload and control, including held readers.
     pub fn cancel(&self) {
-        let _ = rustix::net::shutdown(&self.payload, rustix::net::Shutdown::Both);
-        self.control.cancel();
+        self.inner.cancel();
     }
 
     /// Wait for original daemon `DRAINED` plus EOF, preserving interrupted progress.
@@ -175,7 +182,7 @@ impl AcceptedStream {
     /// # Errors
     /// Refuses cancellation, missing/wrong/extra acknowledgement or control I/O failure.
     pub async fn finish(&self) -> io::Result<()> {
-        let result = self.control.finish().await;
+        let result = self.inner.control()?.finish().await;
         if result.is_err() {
             self.cancel();
         }
@@ -186,57 +193,79 @@ impl AcceptedStream {
     /// # Errors
     /// Returns the original payload's readiness error.
     pub async fn readable(&self) -> io::Result<()> {
-        self.payload.readable().await
+        self.inner.payload.readable().await
     }
     /// Wait for write readiness of the original payload only.
     ///
     /// # Errors
     /// Returns the original payload's readiness error.
     pub async fn writable(&self) -> io::Result<()> {
-        self.payload.writable().await
+        self.inner.payload.writable().await
     }
     /// Read available original payload bytes without blocking.
     ///
     /// # Errors
     /// Returns the original payload error, including `WouldBlock`.
     pub fn try_read(&self, bytes: &mut [u8]) -> io::Result<usize> {
-        self.payload.try_read(bytes)
+        self.inner.payload.try_read(bytes)
     }
     /// Write available original payload capacity without blocking.
     ///
     /// # Errors
     /// Returns the original payload error, including `WouldBlock`.
     pub fn try_write(&self, bytes: &[u8]) -> io::Result<usize> {
-        self.payload.try_write(bytes)
+        self.inner.payload.try_write(bytes)
     }
     /// Half-close the original payload while retaining whole-flow cancellation.
     ///
     /// # Errors
     /// Returns the original payload's write-shutdown error.
     pub fn shutdown_write(&self) -> io::Result<()> {
-        rustix::net::shutdown(&self.payload, rustix::net::Shutdown::Write).map_err(Into::into)
+        rustix::net::shutdown(&self.inner.payload, rustix::net::Shutdown::Write).map_err(Into::into)
     }
 }
 
 impl AsFd for AcceptedStream {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.payload.as_fd()
+        self.inner.payload.as_fd()
     }
 }
 impl AsyncRead for AcceptedStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().payload).poll_read(cx, buf)
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        loop {
+            std::task::ready!(self.inner.payload.poll_read_ready(cx))?;
+            match self.inner.payload.try_read(buf.initialize_unfilled()) {
+                Ok(count) => {
+                    buf.advance(count);
+                    return Poll::Ready(Ok(()));
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Poll::Ready(Err(error)),
+            }
+        }
     }
 }
 impl AsyncWrite for AcceptedStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().payload).poll_write(cx, bytes)
+        if bytes.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        loop {
+            std::task::ready!(self.inner.payload.poll_write_ready(cx))?;
+            match self.inner.payload.try_write(bytes) {
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                result => return Poll::Ready(result),
+            }
+        }
     }
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().payload).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().payload).poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(self.shutdown_write())
     }
 }
 impl Drop for AcceptedStream {
@@ -248,8 +277,15 @@ impl Drop for AcceptedStream {
 // Mechanical test transport only: no identity, AcceptedPeer or named authority.
 #[cfg(test)]
 pub(crate) fn transport_fixture(payload: UnixStream, endpoint: UnixStream) -> AcceptedStream {
+    pending_transport_fixture(super::pending_fixture(payload), endpoint)
+}
+
+// Preserves one pending cookie, but supplies no daemon identity or AcceptedPeer.
+#[cfg(test)]
+pub(crate) fn pending_transport_fixture(pending: super::PendingStream, endpoint: UnixStream) -> AcceptedStream {
     let fd = OwnedFd::from(endpoint.into_std().unwrap());
-    AcceptedStream::new(payload, Control::new(fd).unwrap())
+    pending.install_control(Control::new(fd).unwrap()).unwrap();
+    AcceptedStream::new(pending.into_inner().unwrap())
 }
 
 #[cfg(test)]

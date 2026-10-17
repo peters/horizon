@@ -62,7 +62,7 @@ async fn finish_requires_exact_drained_then_eof_and_preserves_interrupted_progre
     control.write_all(&[DRAINED]).await.unwrap();
     timeout(WAIT, async {
         loop {
-            let drained = stream.control.state.lock().unwrap().acknowledged == Ack::Drained;
+            let drained = stream.inner.control().unwrap().state.lock().unwrap().acknowledged == Ack::Drained;
             if drained {
                 break;
             }
@@ -152,18 +152,18 @@ async fn control_shape_refuses_files_datagrams_named_sockets_and_wrong_flags() {
 #[tokio::test]
 async fn control_live_refuses_closed_or_premature_ack_without_making_identity() {
     let (stream, _peer, mut control) = fixture();
-    stream.control.live().unwrap();
+    stream.inner.control().unwrap().live().unwrap();
     control.write_all(&[DRAINED]).await.unwrap();
     timeout(WAIT, async {
-        while stream.control.live().is_ok() {
+        while stream.inner.control().unwrap().live().is_ok() {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
     drop(control);
-    assert!(stream.control.live().is_err());
+    assert!(stream.inner.control().unwrap().live().is_err());
     let (stream, _peer, control) = fixture();
     drop(control);
-    assert!(stream.control.live().is_err());
+    assert!(stream.inner.control().unwrap().live().is_err());
 }

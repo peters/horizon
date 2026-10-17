@@ -25,6 +25,34 @@ The socket has mode 0600, and the reserved backend number identifies its filenam
 An existing socket is never removed or adopted to start another producer.
 The original path inode, trusted ancestors and permissions must remain unchanged.
 The accepted stream must name that backend locally, and its kernel peer credentials must identify the same original root daemon.
+
+`accept()` returns only an opaque `PendingStream`, bound to the original backend
+instance through a private per-bind Arc identity. Identification consumes it and
+checks that identity before daemon or header work. A retained stream from a retired
+backend cannot transfer to a successor at the same pathname, inode reuse or ports.
+The pathname and current listener checks remain additional comparisons.
+
+The pending owner exposes no constructor, Clone, Deserialize, raw Unix stream or
+AsFd. Its weak `PendingCancellation` handle provides physical cancellation and
+original-connection comparison without retaining payload descriptors. The same
+private inner owner reaches `AcceptedStream`, so cancellation remains effective
+across descriptor receipt and the return-before-admission transition. Original
+identity comparison uses this private acceptance, not a pathname or caller field.
+Before receipt, drop, unpolled cancellation and capacity refusal close the sole
+payload descriptor. Unread queued SCM_RIGHTS cannot survive through retained weak
+handles. Weak cancellation also closes the legitimate first-P control descriptor
+while its pending owner remains retained. Cancel first shuts down the payload and
+performs one nonblocking first-byte discard when no control is installed. Linux
+closes SCM_RIGHTS attached to that byte. Synchronous receipt, validation and
+installation share the cancellation mutex; no await holds that lock. If receipt
+wins, cancel closes its installed control. If cancel wins, later receipt refuses.
+This bounded rule concerns the legitimate first-P descriptor. Malformed rights
+attached to later bytes still require the pending owner's drop, which closes the
+whole remaining queue. It does not authorize or silently drain a malformed flow.
+After receipt, cancellation also closes the original control endpoint,
+including its held private reader. Accepted-only AsFd remains available after
+that control custody exists. Payload half-close still retains control through
+DRAINED and EOF.
 These checks repeat around header parsing and identity queries.
 
 The pinned Tailscale runtime patch requires explicit `--horizon-flow-cancel` for this Unix Serve PROXY-v1 contract, using the virtual service port as the destination port. Ordinary Unix PROXY1 without the opt-in cannot pass the updated receiver.
@@ -54,6 +82,9 @@ Control data and parsed headers are comparison/protocol data, not an independent
 ## Bounds and cancellation
 
 At most sixteen identifications can remain pending.
+Admission reserves its slot before it returns the future, without waiting.
+An unpolled owner retains that finite reservation; dropping it releases the slot
+and sole payload. Busy refusal immediately drops the incoming payload owner.
 Each identification uses one three-second deadline across its observations and commands.
 The PROXY header has a 108-byte limit.
 CLI output and procfs input have explicit byte limits.
@@ -92,7 +123,8 @@ Read the [procedure](../testing/procedures/trusted-tcp-producer.md) before a rea
 
 `mod.rs` owns the producer and opaque peer.
 `ancillary.rs` owns bounded one-byte descriptor/header receipt and rejection cleanup.
-`accepted.rs` owns opaque payload/control lifetime, cancellation and drain acknowledgement.
+`pending.rs` owns original acceptance, weak cancellation and sole pre-receipt ownership.
+`accepted.rs` retains that same owner through payload/control lifetime and drain acknowledgement.
 `daemon.rs` owns original process, UNIX socket and executable custody.
 `backend.rs` owns the private Unix listener and its original path.
 `procfs.rs` bounds reads of original process observations.

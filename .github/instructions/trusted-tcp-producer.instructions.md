@@ -10,6 +10,16 @@ Report concrete inputs and wrong results for:
 - A caller-selected path, decoded identity or PROXY header creating producer authority.
 - Missing original UNIX credentials, pidfd, executable, process-start or namespace checks.
 - An accepted stream from another Unix listener or process becoming an original Serve stream.
+- A retained pending stream from retired backend A being identified by successor B
+  at the same path. Require the exact private per-bind origin, not current path metadata.
+- PendingStream exposing a constructor, raw descriptor/UnixStream, Clone or
+  Deserialize before original control receipt; retained weak handles keeping
+  queued SCM_RIGHTS alive after drop, unpolled cancellation or capacity refusal.
+- Weak cancellation leaving the legitimate first-P control queued while the
+  original pending owner remains retained, or receipt/install racing past cancel.
+  Keep the one-byte discard bounded; malformed later rights need final owner drop.
+- Pending cancellation losing the original payload/control when identification
+  transfers to AcceptedStream, or original acceptance comparison using caller facts.
 - A replaced backend path, writable ancestor, wrong permissions or stale listener becoming authority.
 - A generic SOCKS or HTTP proxy in the original daemon forwarding an attacker-supplied identity header; same-daemon descriptor ownership does not prove Serve ingress.
 - A changed daemon, Self identity, enrollment generation or backend passing a recheck.

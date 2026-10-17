@@ -5,8 +5,12 @@ mod ancillary;
 mod backend;
 pub use accepted::AcceptedStream;
 #[cfg(test)]
-pub(crate) use accepted::transport_fixture;
+pub(crate) use accepted::{pending_transport_fixture, transport_fixture};
 mod daemon;
+mod pending;
+#[cfg(test)]
+pub(crate) use pending::fixture as pending_fixture;
+pub use pending::{PendingCancellation, PendingStream};
 mod procfs;
 mod proxy;
 mod whois;
@@ -14,7 +18,6 @@ mod whois;
 use daemon::Daemon;
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
-    net::UnixStream,
     sync::{OwnedSemaphorePermit, Semaphore},
     time::Instant,
 };
@@ -115,7 +118,7 @@ impl Producer {
     ///
     /// # Errors
     /// Refuses changed listener paths or transport failure.
-    pub async fn accept(&self) -> Result<UnixStream, Error> {
+    pub async fn accept(&self) -> Result<PendingStream, Error> {
         self.backend.accept().await
     }
 
@@ -135,7 +138,7 @@ impl Producer {
     ///
     /// # Errors
     /// Every ambiguous, stale, oversized or unsupported observation refuses admission.
-    pub fn identify(&self, stream: UnixStream) -> impl Future<Output = Result<AcceptedPeer, Error>> + '_ {
+    pub fn identify(&self, stream: PendingStream) -> impl Future<Output = Result<AcceptedPeer, Error>> + '_ {
         let admission = begin_identification(stream, Arc::clone(&self.pending));
         async move {
             let (stream, _slot) = admission.await?;
@@ -143,37 +146,34 @@ impl Producer {
         }
     }
 
-    async fn identify_owned(&self, mut stream: Closing) -> Result<AcceptedPeer, Error> {
+    async fn identify_owned(&self, stream: PendingStream) -> Result<AcceptedPeer, Error> {
         let until = Instant::now() + IDENTIFY_TIME;
-        let socket = stream.payload.as_ref().ok_or(Error::Custody)?;
-        self.backend.verify_stream(socket, until)?;
+        let socket = stream.payload()?;
+        self.backend.verify_stream(&stream, until)?;
         self.daemon.prove(socket, until)?;
         self.same_generation(until).await?;
         self.daemon.prove(socket, until)?;
-        let socket = stream.payload.as_ref().ok_or(Error::Custody)?;
-        stream.control = Some(ancillary::receipt(socket, until).await?);
-        let control = stream.control.as_ref().ok_or(Error::Custody)?;
-        self.backend.verify_stream(socket, until)?;
+        let socket = stream.payload()?;
+        stream.receive_control(until).await?;
+        let control = stream.control()?;
+        self.backend.verify_stream(&stream, until)?;
         self.daemon.prove(socket, until)?;
         control.prove(&self.daemon, until)?;
         control.live()?;
         let header = proxy::read(socket, until).await?;
         verify_destination(header.destination, self.virtual_port, &self.generation)?;
-        let socket = stream.payload.as_ref().ok_or(Error::Custody)?;
-        self.backend.verify_stream(socket, until)?;
+        let socket = stream.payload()?;
+        self.backend.verify_stream(&stream, until)?;
         self.daemon.prove(socket, until)?;
         let identity = self.daemon.whois(header.source, until).await?;
         self.same_generation(until).await?;
-        self.backend.verify_stream(socket, until)?;
+        self.backend.verify_stream(&stream, until)?;
         self.daemon.prove(socket, until)?;
-        let control = stream.control.as_ref().ok_or(Error::Custody)?;
+        let control = stream.control()?;
         control.prove(&self.daemon, until)?;
         control.live()?;
         Ok(AcceptedPeer {
-            stream: AcceptedStream::new(
-                stream.payload.take().ok_or(Error::Custody)?,
-                stream.control.take().ok_or(Error::Custody)?,
-            ),
+            stream: AcceptedStream::new(stream.into_inner()?),
             identity,
             source: header.source,
         })
@@ -225,38 +225,20 @@ impl AcceptedPeer {
     }
 }
 
-struct Closing {
-    payload: Option<UnixStream>,
-    control: Option<accepted::Control>,
-}
-impl Closing {
-    fn new(payload: UnixStream) -> Self {
-        Self {
-            payload: Some(payload),
-            control: None,
-        }
-    }
-}
-
 fn begin_identification(
-    stream: UnixStream,
+    stream: PendingStream,
     pending: Arc<Semaphore>,
-) -> impl Future<Output = Result<(Closing, OwnedSemaphorePermit), Error>> {
-    // Construct before returning the future: unpolled cancellation still shuts the socket.
-    let stream = Closing::new(stream);
-    async move {
-        let slot = pending.try_acquire_owned().map_err(|_| Error::Busy)?;
-        Ok((stream, slot))
-    }
+) -> std::future::Ready<Result<(PendingStream, OwnedSemaphorePermit), Error>> {
+    // Reserve before returning: even an unpolled owner consumes finite capacity.
+    // Busy drops the captured sole payload immediately; Ready drops release both.
+    std::future::ready(
+        pending
+            .try_acquire_owned()
+            .map(|slot| (stream, slot))
+            .map_err(|_| Error::Busy),
+    )
 }
 
-impl Drop for Closing {
-    fn drop(&mut self) {
-        if let Some(stream) = &self.payload {
-            let _ = rustix::net::shutdown(stream, rustix::net::Shutdown::Both);
-        }
-    }
-}
 fn live(until: Instant) -> Result<(), Error> {
     if Instant::now() >= until {
         return Err(Error::Deadline);

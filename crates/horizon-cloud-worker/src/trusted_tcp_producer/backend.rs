@@ -1,13 +1,11 @@
-use super::{Error, Runtime, daemon, live};
+use super::{Error, PendingStream, Runtime, daemon, live, pending::Origin};
 use std::{
     fs,
     os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::Arc,
 };
-use tokio::{
-    net::{UnixListener, UnixStream},
-    time::Instant,
-};
+use tokio::{net::UnixListener, time::Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Key {
@@ -28,6 +26,7 @@ pub(super) struct Backend {
     listener: Option<UnixListener>,
     path: PathBuf,
     original: Key,
+    origin: Arc<Origin>,
 }
 impl Backend {
     pub fn bind(runtime: Runtime, port: u16) -> Result<Self, Error> {
@@ -54,6 +53,7 @@ impl Backend {
             listener: Some(listener),
             path,
             original,
+            origin: Arc::new(Origin),
         };
         fs::set_permissions(&result.path, fs::Permissions::from_mode(0o600))?;
         result.verify()?;
@@ -64,17 +64,20 @@ impl Backend {
         &self.path
     }
 
-    pub async fn accept(&self) -> Result<UnixStream, Error> {
+    pub async fn accept(&self) -> Result<PendingStream, Error> {
         self.verify()?;
         let stream = self.listener.as_ref().ok_or(Error::Custody)?.accept().await?.0;
         self.verify()?;
-        Ok(stream)
+        Ok(PendingStream::new(stream, Arc::clone(&self.origin)))
     }
 
-    pub fn verify_stream(&self, stream: &UnixStream, until: Instant) -> Result<(), Error> {
+    pub fn verify_stream(&self, pending: &PendingStream, until: Instant) -> Result<(), Error> {
         live(until)?;
+        if !pending.has_origin(&self.origin) {
+            return Err(Error::Custody);
+        }
         self.verify()?;
-        if stream.local_addr()?.as_pathname() != Some(self.path.as_path()) {
+        if pending.payload()?.local_addr()?.as_pathname() != Some(self.path.as_path()) {
             return Err(Error::Custody);
         }
         live(until)
@@ -125,7 +128,44 @@ fn private_directory(path: &Path) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
+    use tokio::{io::AsyncWriteExt, net::UnixStream};
+
+    #[tokio::test]
+    #[ignore = "Requires the separate isolated root backend fixture; no tailnet enrollment"]
+    async fn retired_backend_acceptance_cannot_transfer_to_a_successor_at_the_same_path() {
+        assert!(rustix::process::geteuid().is_root());
+        let directory = tempfile::tempdir_in("/run").unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let original = Backend::bind_in(directory.path(), 20032).unwrap();
+        let path = original.path().to_owned();
+        let _peer = UnixStream::connect(&path).await.unwrap();
+        let pending = original.accept().await.unwrap();
+        original
+            .verify_stream(&pending, Instant::now() + super::super::IDENTIFY_TIME)
+            .unwrap();
+        original.retire().unwrap();
+        let successor = Backend::bind_in(directory.path(), 20032).unwrap();
+        // The old stream still has exactly the new listener's pathname, while
+        // the successor has valid current inode/mode/ancestor checks.
+        assert_eq!(
+            pending.payload().unwrap().local_addr().unwrap().as_pathname(),
+            Some(path.as_path())
+        );
+        successor.verify().unwrap();
+        assert!(matches!(
+            successor.verify_stream(&pending, Instant::now() + super::super::IDENTIFY_TIME),
+            Err(Error::Custody)
+        ));
+        let _new_peer = UnixStream::connect(&path).await.unwrap();
+        let current = successor.accept().await.unwrap();
+        successor
+            .verify_stream(&current, Instant::now() + super::super::IDENTIFY_TIME)
+            .unwrap();
+        drop(current);
+        drop(pending);
+        successor.retire().unwrap();
+        assert!(!path.exists());
+    }
 
     #[tokio::test]
     #[ignore = "Requires the separate isolated root backend fixture; no tailnet enrollment"]
@@ -144,7 +184,10 @@ mod tests {
         let (unbound, _) = UnixStream::pair().unwrap();
         assert!(
             backend
-                .verify_stream(&unbound, Instant::now() + super::super::IDENTIFY_TIME)
+                .verify_stream(
+                    &super::super::pending_fixture(unbound),
+                    Instant::now() + super::super::IDENTIFY_TIME
+                )
                 .is_err()
         );
         client.write_all(b"PROXY forged").await.unwrap();

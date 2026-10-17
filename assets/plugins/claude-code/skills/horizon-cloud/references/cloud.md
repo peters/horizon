@@ -816,6 +816,12 @@ Protected receipt/runtime and full owner, Native and public M2 qualification rem
 required. M1 sharing keeps its no-expiry contract. See
 docs/architecture/trusted-tcp-producer.md and docs/testing/procedures/trusted-tcp-producer.md.
 
+Producer acceptance is opaque and bound to its exact original backend instance;
+a successor at the same path cannot adopt it. Retain only the weak pending
+cancellation handle before identification. It keeps no queued descriptor alive
+and continues to cancel the original payload/control after acceptance. Serialized
+facts, path equality and a retained bare socket clone are not this authority.
+
 ### Protected host receipt reader
 
 The Linux Worker `protected-ingress` feature is off by default. It adds no CLI,

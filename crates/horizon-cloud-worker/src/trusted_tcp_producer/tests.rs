@@ -314,22 +314,23 @@ async fn dropped_command_future_kills_reaps_and_retains_capacity_until_terminal(
 }
 
 #[tokio::test]
-async fn dropping_identification_transport_shuts_the_original_stream() {
+async fn dropping_pending_owner_shuts_the_original_stream_despite_retained_weak_handles() {
     let (accepted, mut client) = pair();
-    let retained = accepted.into_std().unwrap().try_clone().unwrap();
-    let stream = UnixStream::from_std(retained.try_clone().unwrap()).unwrap();
-    drop(Closing::new(stream));
+    let stream = pending_fixture(accepted);
+    let retained = stream.cancellation();
+    drop(stream);
     assert_eq!(
         timeout(WAIT, client.read_u8()).await.unwrap().unwrap_err().kind(),
         io::ErrorKind::UnexpectedEof
     );
+    retained.cancel();
 }
 
 #[tokio::test]
-async fn dropping_unpolled_identification_shuts_even_a_retained_socket_descriptor() {
+async fn dropping_unpolled_identification_closes_the_sole_original_payload() {
     let (accepted, mut client) = pair();
-    let retained = accepted.into_std().unwrap();
-    let stream = UnixStream::from_std(retained.try_clone().unwrap()).unwrap();
+    let stream = pending_fixture(accepted);
+    let retained = stream.cancellation();
     let pending = Arc::new(Semaphore::new(1));
     let identification = begin_identification(stream, Arc::clone(&pending));
     drop(identification);
@@ -338,14 +339,14 @@ async fn dropping_unpolled_identification_shuts_even_a_retained_socket_descripto
         timeout(WAIT, client.read_u8()).await.unwrap().unwrap_err().kind(),
         io::ErrorKind::UnexpectedEof
     );
-    assert!(retained.peer_addr().is_ok());
+    retained.cancel();
 }
 
 #[tokio::test]
-async fn capacity_refusal_shuts_the_original_socket_before_returning_busy() {
+async fn capacity_refusal_closes_the_original_socket_before_returning_busy() {
     let (accepted, mut client) = pair();
-    let retained = accepted.into_std().unwrap();
-    let stream = UnixStream::from_std(retained.try_clone().unwrap()).unwrap();
+    let stream = pending_fixture(accepted);
+    let retained = stream.cancellation();
     let pending = Arc::new(Semaphore::new(0));
     let mut identification = Box::pin(begin_identification(stream, Arc::clone(&pending)));
     assert!(matches!(identification.as_mut().await, Err(Error::Busy)));
@@ -354,7 +355,7 @@ async fn capacity_refusal_shuts_the_original_socket_before_returning_busy() {
         timeout(WAIT, client.read_u8()).await.unwrap().unwrap_err().kind(),
         io::ErrorKind::UnexpectedEof
     );
-    assert!(retained.peer_addr().is_ok());
+    retained.cancel();
 }
 
 #[test]

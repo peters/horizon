@@ -61,18 +61,27 @@ This component does not enroll or delete devices.
    Result: Applicable tests pass. The real-daemon selector stays ignored.
    Foreign sockets, stale descriptors and invalid headers refuse before identity admission.
    Cancellation and capacity refusal shut payload and private control, including retained reader Arcs.
+   Queued SCM_RIGHTS close after owner drop, unpolled identification and Busy refusal,
+   even when opaque weak handles remain. Pending cancellation still closes both
+   original endpoints after the transfer to AcceptedStream.
+   Cancel also closes the legitimate first-P descriptor while the pending owner remains retained.
+   Malformed later rights require final owner drop, not an unbounded cancellation drain.
    Missing/extra/truncated/late-header descriptors and wrong prefix/type/flags/credentials refuse.
    Mechanical transport fixtures do not issue an AcceptedPeer or genuine daemon identity.
    Exact DRAINED0x01 plus EOF is required, and interrupted ack progress remains with its original owner.
    Child supervisors retain capacity until the original child exits and is reaped.
 
-2. Run the separately isolated root backend selector with no enrollment.
+2. Run the separate isolated root backend selectors.
+
+   Use the original fixture and these exact selectors with `--ignored --exact`:
 
    ```text
-   trusted_tcp_producer::backend::tests::original_private_listener_refuses_replacement_and_cleans_only_its_own_path --ignored --exact
+   trusted_tcp_producer::backend::tests::original_private_listener_refuses_replacement_and_cleans_only_its_own_path
+   trusted_tcp_producer::backend::tests::retired_backend_acceptance_cannot_transfer_to_a_successor_at_the_same_path
    ```
 
-   Result: Only the original private listener/path can pass. Replaced paths survive uncertain retirement; normal retirement removes the owned path.
+   Result: A retained acceptance refuses the successor despite the same pathname.
+   The successor still accepts its own current stream. Replaced paths survive uncertain retirement; normal retirement removes the owned path.
 
 3. Complete the applicable repository, workspace, speech and required lint checks.
 

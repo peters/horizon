@@ -109,6 +109,12 @@ daemon DRAINED0x01 plus EOF, bounded by the caller's captured deadline and cance
 Serve/Funnel mapping or public operation. Read
 docs/architecture/trusted-tcp-producer.md and its component procedure.
 
+Producer acceptance is opaque and bound to its exact original backend instance;
+a successor at the same path cannot adopt it. Retain only the weak pending
+cancellation handle before identification. It keeps no queued descriptor alive
+and continues to cancel the original payload/control after acceptance. Serialized
+facts, path equality and a retained bare socket clone are not this authority.
+
 The Linux worker `exposure-gate` feature is also off by default. It provides a
 bounded actual-peer CIDR/Public TCP component only; no public operation starts
 it. DNS/tag and TailnetOnly policies refuse before binding. Follow the worker

@@ -7,6 +7,7 @@ use std::{
 };
 use tokio::{io::Interest, net::UnixStream};
 
+#[cfg(test)]
 pub(super) async fn receipt(
     stream: &UnixStream,
     until: tokio::time::Instant,
@@ -14,6 +15,13 @@ pub(super) async fn receipt(
     let (prefix, descriptor) = tokio::time::timeout_at(until, byte(stream, true))
         .await
         .map_err(|_| super::Error::Deadline)??;
+    original_control(prefix, descriptor)
+}
+
+pub(super) fn original_control(
+    prefix: Option<u8>,
+    descriptor: Option<OwnedFd>,
+) -> Result<super::accepted::Control, super::Error> {
     if prefix != Some(b'P') {
         return Err(super::Error::Encoding);
     }
@@ -33,7 +41,7 @@ pub(super) async fn byte(stream: &UnixStream, rights: bool) -> io::Result<(Optio
     }
 }
 
-fn receive(stream: &UnixStream, rights: bool) -> io::Result<(Option<u8>, Option<OwnedFd>)> {
+pub(super) fn receive(stream: &UnixStream, rights: bool) -> io::Result<(Option<u8>, Option<OwnedFd>)> {
     let mut bytes = [0];
     // Two slots distinguish an extra descriptor even when cmsghdr alignment
     // leaves room for it. Overflow is a hard refusal, never partial authority.
