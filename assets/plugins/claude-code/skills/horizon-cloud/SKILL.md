@@ -117,8 +117,17 @@ facts, path equality and a retained bare socket clone are not this authority.
 
 The Linux worker `exposure-gate` feature is also off by default. It provides a
 bounded actual-peer CIDR/Public TCP component only; no public operation starts
-it. DNS/tag and TailnetOnly policies refuse before binding. Follow the worker
-CIDR gate section of the cloud reference for its limits and test procedure.
+it. The direct constructor refuses DNS/tag and TailnetOnly before binding.
+The separate default-off `trusted-exposure-gate` adapter consumes an original
+Producer and opaque accepted Unix stream for Restricted DNS/tag/CIDR rules.
+Pending streams expose no raw FD; Gate keeps only a weak cancellation handle and
+compares the private original-accept cookie before named admission.
+The original root-private Unix backend has no TCP bridge; direct public sockets
+retain their actual-peer CIDR behavior. The shared relay preserves byte budgets,
+half-close and physical cancellation on both transports. It owns no
+Serve mapping, protected runtime, keeper or public operation; TailnetOnly still
+refuses. Actual named allow/deny in both daemon modes remains a required gate.
+Follow the worker Gate sections of the cloud reference and their procedures.
 
 Retained exposure records store bounded comparison data and service intent.
 The `cloud-exposure` feature enables record transitions and SDK availability for

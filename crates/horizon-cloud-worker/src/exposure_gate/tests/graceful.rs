@@ -46,7 +46,7 @@ async fn slow_reader(join_completes: bool) {
     };
     timeout(
         WAIT,
-        coordinate(&flow, &client, Some(&backend), watching.clone(), forwarding),
+        coordinate(&flow, client.as_ref(), Some(&backend), watching.clone(), forwarding),
     )
     .await
     .unwrap();
@@ -138,7 +138,7 @@ async fn global_budget_wakes_idle_sibling_and_explicit_cancel_overrides_grace() 
                 copy(&idle, Arc::clone(&backend), Arc::clone(&client), watching.clone()),
             )
         };
-        coordinate(&idle, &client, Some(&backend), watching.clone(), forwarding).await;
+        coordinate(&idle, client.as_ref(), Some(&backend), watching.clone(), forwarding).await;
     });
     tokio::task::yield_now().await;
     assert_eq!(lock(&shared).reserve(charging.id, 1), 1);
@@ -176,7 +176,7 @@ async fn discard_cap_cannot_extend_original_deadline_or_refund_budget() {
             let end = copy(&flow, Arc::clone(&backend), Arc::clone(&client), watching.clone()).await;
             (end, CopyEnd::Eof)
         };
-        coordinate(&flow, &client, Some(&backend), watching.clone(), forwarding).await;
+        coordinate(&flow, client.as_ref(), Some(&backend), watching.clone(), forwarding).await;
     });
     read(&mut caller, b"x").await;
     caller.write_all(&vec![7; 64 * 1024 + 1]).await.unwrap();
@@ -235,7 +235,7 @@ async fn peer_reset_during_budget_grace_closes_the_other_socket_promptly() {
     write_part(&flow, &client, b"x").await;
     let (_cancel, watching) = watch::channel(false);
     let relay = tokio::spawn(async move {
-        coordinate(&flow, &client, Some(&backend), watching, pending()).await;
+        coordinate(&flow, client.as_ref(), Some(&backend), watching, pending()).await;
     });
     read(&mut caller, b"x").await;
     let mut byte = [0];

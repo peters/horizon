@@ -1,7 +1,10 @@
-//! Default-off worker TCP gate. CIDRs use only the original accepted socket peer.
+//! Default-off TCP gate: direct socket CIDRs or original opaque producer peers.
 //! Configuration is trusted-root input, not owner approval or authenticated identity.
 mod relay;
 mod state;
+mod transport;
+#[cfg(feature = "trusted-exposure-gate")]
+mod trusted;
 use horizon_cloud_protocol::exposure::{
     EXPOSURE_LEASE_SECONDS, ExposureMode, ExposureRequest, RESERVED_INGRESS_END, RESERVED_INGRESS_START,
 };
@@ -95,6 +98,9 @@ pub enum Error {
     Task,
     #[error(transparent)]
     Policy(#[from] horizon_cloud_protocol::exposure::Error),
+    #[cfg(feature = "trusted-exposure-gate")]
+    #[error(transparent)]
+    Producer(#[from] crate::trusted_tcp_producer::Error),
     #[error("TCP gate transport failed")]
     Io(#[from] io::Error),
 }
@@ -103,7 +109,9 @@ pub enum Error {
 pub struct Gate {
     shared: Shared,
     cancel: watch::Sender<bool>,
-    task: Option<JoinHandle<io::Result<()>>>,
+    task: Option<JoinHandle<Result<(), Error>>>,
+    #[cfg(feature = "trusted-exposure-gate")]
+    producer_backend: Option<std::path::PathBuf>,
 }
 impl Gate {
     /// Bind both wildcard families at an exclusively owned reserved ingress port.
@@ -134,20 +142,57 @@ impl Gate {
         Self::owned(listeners, policy, budgets)
     }
 
+    /// Consume an original producer for Restricted CIDR/DNS/tag admission.
+    /// The caller owns its external mapping; this neither creates nor proves one.
+    /// # Errors
+    /// Refuses other modes, nonroot callers, invalid ports and partial binds.
+    #[cfg(feature = "trusted-exposure-gate")]
+    pub fn bind_with_producer(
+        port: u16,
+        producer: crate::trusted_tcp_producer::Producer,
+        request: &ExposureRequest,
+        budgets: Budgets,
+    ) -> Result<Self, Error> {
+        trusted::bind(port, producer, request, budgets)
+    }
+
+    /// Comparison data for the Producer-owned private Unix path, not mapping proof.
+    #[cfg(feature = "trusted-exposure-gate")]
+    #[must_use]
+    pub fn producer_backend(&self) -> Option<&std::path::Path> {
+        self.producer_backend.as_deref()
+    }
+
     fn owned(
         listeners: Vec<Arc<TcpListener>>,
         policy: horizon_cloud_protocol::exposure::ExposurePolicy,
         budgets: Budgets,
     ) -> Result<Self, Error> {
+        Self::start(listeners, policy, budgets, Admission::default())
+    }
+
+    fn start(
+        listeners: Vec<Arc<TcpListener>>,
+        policy: horizon_cloud_protocol::exposure::ExposurePolicy,
+        budgets: Budgets,
+        admission: Admission,
+    ) -> Result<Self, Error> {
         let until = Instant::now().checked_add(budgets.gate_lifetime).ok_or(Error::Clock)?;
         let shared = Arc::new(Mutex::new(State::new(listeners.clone(), policy, budgets, until)));
+        #[cfg(feature = "trusted-exposure-gate")]
+        let producer_backend = admission
+            .producer
+            .as_ref()
+            .map(|producer| producer.backend_path().to_owned());
         let (cancel, watching) = watch::channel(false);
         let running = Arc::clone(&shared);
-        let task = tokio::spawn(run(running, listeners, watching, until));
+        let task = tokio::spawn(run(running, listeners, watching, until, admission));
         Ok(Self {
             shared,
             cancel,
             task: Some(task),
+            #[cfg(feature = "trusted-exposure-gate")]
+            producer_backend,
         })
     }
 
@@ -205,13 +250,78 @@ fn bounded_socket(socket: &Socket) -> io::Result<()> {
     Ok(())
 }
 
-async fn accept(listeners: &[Arc<TcpListener>]) -> io::Result<TcpStream> {
+async fn accept_direct(listeners: &[Arc<TcpListener>]) -> io::Result<TcpStream> {
     let accepted = if listeners.len() == 1 {
         listeners[0].accept().await
     } else {
-        tokio::select! { result = listeners[0].accept() => result, result = listeners[1].accept() => result }
+        tokio::select! {
+            result = listeners[0].accept() => result,
+            result = listeners[1].accept() => result,
+        }
     };
     accepted.map(|(stream, _)| stream)
+}
+
+enum Incoming {
+    Direct(TcpStream),
+    #[cfg(feature = "trusted-exposure-gate")]
+    Producer(
+        crate::trusted_tcp_producer::PendingStream,
+        Arc<crate::trusted_tcp_producer::Producer>,
+    ),
+}
+
+impl Incoming {
+    fn spawn(self, tasks: &mut JoinSet<()>, shared: Shared, cancel: watch::Receiver<bool>) {
+        let client = match self {
+            #[cfg(feature = "trusted-exposure-gate")]
+            Self::Producer(client, producer) => {
+                let id = lock(&shared).reserve_pending(&client);
+                if let Some(id) = id {
+                    trusted::spawn(tasks, shared, id, client, producer, cancel);
+                    return;
+                }
+                client.cancellation().cancel();
+                return;
+            }
+            Self::Direct(client) => Arc::new(client),
+        };
+        let id = lock(&shared).admit(Arc::clone(&client));
+        if let Some(id) = id {
+            relay::spawn(tasks, shared, id, client, cancel);
+        }
+    }
+}
+
+#[derive(Default)]
+struct Admission {
+    #[cfg(feature = "trusted-exposure-gate")]
+    producer: Option<Arc<crate::trusted_tcp_producer::Producer>>,
+}
+impl Admission {
+    async fn accept(&self, listeners: &[Arc<TcpListener>]) -> Result<Incoming, Error> {
+        #[cfg(feature = "trusted-exposure-gate")]
+        if let Some(producer) = &self.producer {
+            return tokio::select! {
+                result = producer.accept() => result
+                    .map(|stream| Incoming::Producer(stream, Arc::clone(producer)))
+                    .map_err(Error::from),
+                result = accept_direct(listeners) => result.map(Incoming::Direct).map_err(Error::from),
+            };
+        }
+        accept_direct(listeners)
+            .await
+            .map(Incoming::Direct)
+            .map_err(Error::from)
+    }
+
+    #[cfg(feature = "trusted-exposure-gate")]
+    async fn retire(self) -> Result<(), Error> {
+        if let Some(producer) = self.producer {
+            Arc::try_unwrap(producer).map_err(|_| Error::Task)?.retire().await?;
+        }
+        Ok(())
+    }
 }
 
 async fn run(
@@ -219,7 +329,8 @@ async fn run(
     listeners: Vec<Arc<TcpListener>>,
     mut cancel: watch::Receiver<bool>,
     until: Instant,
-) -> io::Result<()> {
+    admission: Admission,
+) -> Result<(), Error> {
     let mut flows = JoinSet::new();
     let mut failure = None;
     loop {
@@ -229,15 +340,13 @@ async fn run(
             () = tokio::time::sleep_until(until) => break,
             result = flows.join_next(), if !flows.is_empty() => {
                 if result.is_some_and(|result| result.is_err()) {
-                    failure = Some(io::Error::other("Gate flow task failed"));
+                    failure = Some(Error::Io(io::Error::other("Gate flow task failed")));
                     break;
                 }
             },
-            result = accept(&listeners) => match result {
+            result = admission.accept(&listeners) => match result {
                 Ok(client) => {
-                    let client = Arc::new(client);
-                    let id = lock(&shared).admit(Arc::clone(&client));
-                    if let Some(id) = id { relay::spawn(&mut flows, Arc::clone(&shared), id, client, cancel.clone()); }
+                    client.spawn(&mut flows, Arc::clone(&shared), cancel.clone());
                 },
                 Err(error) => {
                     if !lock(&shared).stopped { failure = Some(error); }
@@ -252,6 +361,8 @@ async fn run(
     while flows.join_next().await.is_some() {}
     lock(&shared).listeners.clear();
     drop(listeners);
+    #[cfg(feature = "trusted-exposure-gate")]
+    admission.retire().await?;
     failure.map_or(Ok(()), Err)
 }
 

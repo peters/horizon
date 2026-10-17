@@ -453,3 +453,7 @@ async fn listener_shutdown_before_watch_notification_is_orderly_cancellation() {
     assert!(lock(&gate.shared).listeners.is_empty());
     gate.close().await.unwrap();
 }
+
+#[cfg(feature = "trusted-exposure-gate")]
+#[path = "tests/trusted.rs"]
+mod trusted_adapter;

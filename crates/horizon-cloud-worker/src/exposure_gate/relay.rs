@@ -1,6 +1,7 @@
 use super::{
     BUFFER_BYTES,
     state::{Phase, Shared, lock},
+    transport::Transport,
 };
 use socket2::SockRef;
 use std::{
@@ -16,9 +17,9 @@ use tokio::{
     time::Instant,
 };
 
-struct Flow {
-    shared: Shared,
-    id: u64,
+pub(super) struct Flow {
+    pub shared: Shared,
+    pub id: u64,
 }
 impl Drop for Flow {
     fn drop(&mut self) {
@@ -45,10 +46,14 @@ pub(super) fn spawn(
     tasks.spawn(run(flow, client, cancel));
 }
 
-async fn run(flow: Flow, client: Arc<TcpStream>, cancel: watch::Receiver<bool>) {
-    let backend = connect(&flow, cancel.clone()).await;
+pub(super) async fn run<C: Transport>(flow: Flow, client: Arc<C>, cancel: watch::Receiver<bool>) {
+    let backend = tokio::select! {
+        biased;
+        () = client.failed() => None,
+        backend = connect(&flow, cancel.clone()) => backend,
+    };
     if let Some(backend) = backend {
-        let _ = client.set_nodelay(true);
+        client.prepare();
         let _ = backend.set_nodelay(true);
         let forwarding = async {
             tokio::join!(
@@ -56,11 +61,11 @@ async fn run(flow: Flow, client: Arc<TcpStream>, cancel: watch::Receiver<bool>) 
                 copy(&flow, Arc::clone(&backend), Arc::clone(&client), cancel.clone()),
             )
         };
-        coordinate(&flow, &client, Some(&backend), cancel.clone(), forwarding).await;
+        coordinate(&flow, client.as_ref(), Some(&backend), cancel.clone(), forwarding).await;
     } else {
         let phase = lock(&flow.shared).phase(flow.id);
         if let Phase::Budget(until) = phase {
-            graceful(&flow, &client, None, until, cancel).await;
+            graceful(&flow, client.as_ref(), None, until, cancel).await;
         }
     }
 }
@@ -92,25 +97,74 @@ async fn connect(flow: &Flow, mut cancel: watch::Receiver<bool>) -> Option<Arc<T
         .then_some(backend)
 }
 
-async fn coordinate(
+async fn coordinate<C: Transport>(
     flow: &Flow,
-    client: &TcpStream,
+    client: &C,
     backend: Option<&TcpStream>,
     cancel: watch::Receiver<bool>,
     forwarding: impl Future<Output = (CopyEnd, CopyEnd)>,
 ) {
     // wait owns and drops both copy futures (and their buffers) before graceful
     // allocates drain buffers. A phase check also covers a completed-join race.
-    let phase = wait(flow, cancel.clone(), forwarding).await;
+    let phase = wait(flow, client, cancel.clone(), forwarding).await;
     match phase {
-        Phase::Running => lock(&flow.shared).complete(flow.id),
+        Phase::Running => complete(flow, client, backend, cancel).await,
         Phase::Budget(until) => graceful(flow, client, backend, until, cancel).await,
         Phase::Cancelled => lock(&flow.shared).cancel_flow(flow.id),
     }
 }
 
-async fn wait(
+async fn complete<C: Transport>(
     flow: &Flow,
+    client: &C,
+    backend: Option<&TcpStream>,
+    mut cancel: watch::Receiver<bool>,
+) {
+    let Some(mut phase) = lock(&flow.shared).subscribe(flow.id) else {
+        return;
+    };
+    let Some(until) = lock(&flow.shared).deadline(flow.id) else {
+        return;
+    };
+    let running = *phase.borrow() == Phase::Running;
+    let finished = if running {
+        tokio::select! {
+            biased;
+            _ = cancel.changed() => None,
+            _ = phase.changed() => None,
+            () = tokio::time::sleep_until(until) => None,
+            result = client.finish() => Some(result.is_ok()),
+        }
+    } else {
+        None
+    };
+    let budget = {
+        let mut state = lock(&flow.shared);
+        if *cancel.borrow() || state.deadline(flow.id).is_none() || finished == Some(false) {
+            state.cancel_flow(flow.id);
+            None
+        } else {
+            match state.phase(flow.id) {
+                Phase::Running if finished == Some(true) => {
+                    state.complete(flow.id);
+                    None
+                }
+                Phase::Budget(until) => Some(until),
+                _ => {
+                    state.cancel_flow(flow.id);
+                    None
+                }
+            }
+        }
+    };
+    if let Some(until) = budget {
+        graceful(flow, client, backend, until, cancel).await;
+    }
+}
+
+async fn wait<C: Transport>(
+    flow: &Flow,
+    client: &C,
     mut cancel: watch::Receiver<bool>,
     forwarding: impl Future<Output = (CopyEnd, CopyEnd)>,
 ) -> Phase {
@@ -123,6 +177,7 @@ async fn wait(
             biased;
             _ = cancel.changed() => None,
             _ = phase.changed() => None,
+            () = client.failed() => None,
             result = forwarding => Some(result),
         }
     } else {
@@ -138,9 +193,9 @@ async fn wait(
     }
 }
 
-async fn graceful(
+async fn graceful<C: Transport>(
     flow: &Flow,
-    client: &TcpStream,
+    client: &C,
     backend: Option<&TcpStream>,
     until: Instant,
     mut cancel: watch::Receiver<bool>,
@@ -148,8 +203,8 @@ async fn graceful(
     let Some(mut phase) = lock(&flow.shared).subscribe(flow.id) else {
         return;
     };
-    let shutdown = SockRef::from(client)
-        .shutdown(Shutdown::Write)
+    let shutdown = client
+        .shutdown_socket(Shutdown::Write)
         .and_then(|()| backend.map_or(Ok(()), |stream| SockRef::from(stream).shutdown(Shutdown::Write)));
     let permitted = shutdown.is_ok() && *phase.borrow() != Phase::Cancelled && !*cancel.borrow();
     let drained = if permitted {
@@ -159,27 +214,29 @@ async fn graceful(
                     Some(stream) => drain(stream).await,
                     None => Ok(()),
                 }
-            })
+            })?;
+            client.finish().await
         };
         tokio::select! {
             biased;
             _ = cancel.changed() => false,
             _ = phase.changed() => false,
             () = tokio::time::sleep_until(until) => false,
+            () = client.failed() => false,
             result = inputs => result.is_ok(),
         }
     } else {
         false
     };
     let mut state = lock(&flow.shared);
-    if drained {
+    if drained && !*cancel.borrow() {
         state.complete(flow.id);
     } else {
         state.cancel_flow(flow.id);
     }
 }
 
-async fn drain(stream: &TcpStream) -> io::Result<()> {
+async fn drain<S: Transport>(stream: &S) -> io::Result<()> {
     let mut buffer = Box::new([0; BUFFER_BYTES]);
     let mut remaining = 64 * 1024;
     while remaining > 0 {
@@ -197,7 +254,7 @@ async fn drain(stream: &TcpStream) -> io::Result<()> {
     pending().await
 }
 
-async fn ready(flow: &Flow, stream: &TcpStream, writing: bool, cancel: &mut watch::Receiver<bool>) -> bool {
+async fn ready<S: Transport>(flow: &Flow, stream: &S, writing: bool, cancel: &mut watch::Receiver<bool>) -> bool {
     loop {
         let Some(until) = lock(&flow.shared).deadline(flow.id) else {
             return false;
@@ -222,15 +279,20 @@ fn retry(error: &io::Error) -> bool {
     matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted)
 }
 
-async fn copy(flow: &Flow, from: Arc<TcpStream>, to: Arc<TcpStream>, mut cancel: watch::Receiver<bool>) -> CopyEnd {
+async fn copy<F: Transport, T: Transport>(
+    flow: &Flow,
+    from: Arc<F>,
+    to: Arc<T>,
+    mut cancel: watch::Receiver<bool>,
+) -> CopyEnd {
     let mut buffer = Box::new([0; BUFFER_BYTES]);
     'reading: loop {
-        if !ready(flow, &from, false, &mut cancel).await {
+        if !ready(flow, from.as_ref(), false, &mut cancel).await {
             break;
         }
         let count = match from.try_read(&mut buffer[..]) {
             Ok(0) => {
-                if SockRef::from(to.as_ref()).shutdown(Shutdown::Write).is_err() {
+                if to.shutdown_socket(Shutdown::Write).is_err() {
                     break;
                 }
                 return CopyEnd::Eof;
@@ -242,7 +304,7 @@ async fn copy(flow: &Flow, from: Arc<TcpStream>, to: Arc<TcpStream>, mut cancel:
         let allowed = lock(&flow.shared).reserve(flow.id, count);
         let mut written = 0;
         while written < allowed {
-            if !ready(flow, &to, true, &mut cancel).await {
+            if !ready(flow, to.as_ref(), true, &mut cancel).await {
                 break 'reading;
             }
             match to.try_write(&buffer[written..allowed]) {

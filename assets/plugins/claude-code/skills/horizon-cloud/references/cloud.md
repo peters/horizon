@@ -791,6 +791,31 @@ no exposure action or readiness claim: actual original runtime consumers, source
 preservation and protected Gate/keeper qualification remain required. See
 docs/architecture/protected-host-ingress.md and docs/testing/procedures/protected-host-ingress.md.
 
+### Original producer to named TCP Gate
+
+The Linux Worker `trusted-exposure-gate` feature is off by default. Its Restricted
+adapter consumes the original Producer and its opaque AcceptedPeer. Only the exact
+registered private accept cookie may enter DNS/tag matching and StableID accounting.
+PendingStream exposes no raw FD or replacement-stream constructor; the Gate keeps
+only its weak cancellation handle. It cannot retain payload/control ownership,
+but physically cancels both across identification. Original socket-buffer bounds
+remain enforced by the opaque pending operation.
+Producer owns the root-private Unix listener; its original path, daemon credentials
+and pinned Unix Serve PROXY-v1 runtime are required. There is no TCP B listener
+or relay bridge. Pending Unix flows have one bounded provisional bucket without
+an invented source IP. The same byte/half-close/drain/cancel implementation serves
+Unix↔TCP and direct TCP↔TCP. Direct
+wildcard sockets still use only actual peer CIDRs. A forged PROXY header or
+loopback connection cannot obtain named authority. Targets and existing byte,
+connection, grace and cancellation bounds remain unchanged. The direct constructor
+and TailnetOnly still refuse unsupported rules. No owned Serve/Funnel, protected
+publication, keeper, renewal, native owner or public interface is added. Root
+must retain external mapping custody; this component cannot adopt or clean it.
+Actual named allow/deny on genuine original accepted streams in both daemon modes
+is a required qualification gate, not a result inferred from unit fixtures. See
+`docs/architecture/trusted-exposure-gate.md` and
+`docs/testing/procedures/trusted-exposure-gate.md`.
+
 ### Original TCP producer
 
 The Linux Worker `trusted-tcp-producer` feature stays off by default. It accepts
@@ -1199,4 +1224,4 @@ cannot supply a trusted profile through the wire schema.
 
 ### Default-off worker CIDR gate
 
-The Linux worker `exposure-gate` component accepts explicit Public or actual accepted-peer CIDR policies only. Named/tag rules (including mixed CIDR lists) and TailnetOnly refuse before binding, even when shared policy syntax is valid. Off binds nothing. There is no public UI, CLI or MCP activation, TLS, identity grant, owner approval or provider mapping. Root-controlled fresh listeners, finite connection/source/byte/time budgets, original flow shutdown and awaited close remain required. See docs/architecture/worker-exposure-gate.md and docs/testing/procedures/worker-exposure-gate.md; actual first/final root component evidence remains required.
+The Linux worker `exposure-gate` direct constructor accepts explicit Public or actual accepted-peer CIDR policies only. That constructor refuses named/tag rules (including mixed CIDR lists) and TailnetOnly before binding, even when shared policy syntax is valid. The separately default-off `trusted-exposure-gate` adapter supports Restricted DNS/tag rules only through the original opaque Producer peer; its own procedure requires genuine allow/deny in both daemon modes. Off binds nothing. There is no public UI, CLI or MCP activation, TLS, identity grant, owner approval or provider mapping. Root-controlled fresh listeners, finite connection/source/byte/time budgets, original flow shutdown and awaited close remain required. See docs/architecture/worker-exposure-gate.md and docs/testing/procedures/worker-exposure-gate.md; actual first/final root component evidence remains required.
