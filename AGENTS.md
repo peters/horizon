@@ -338,13 +338,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   gh pr edit <n> --add-label claude-review
   ```
 
-  The review posts its findings as inline comments and ends with one summary comment from `claude[bot]`. The last line of the summary names the reviewed head and the number of findings, `<!-- claude-review head=<sha> findings=<n> -->`. Read that line for the current head:
+  The review posts its findings as inline comments from `claude[bot]`. The workflow then posts one summary comment from `github-actions[bot]`, whose last line names the reviewed head and the number of findings, `<!-- claude-review head=<sha> findings=<n> -->`. Read that line for the current head:
 
   ```bash
   claude_review_findings() {
     head=$(gh api repos/<owner>/<repo>/pulls/<n> --jq .head.sha)
     gh api --paginate --slurp repos/<owner>/<repo>/issues/<n>/comments \
-      | jq -r --arg h "$head" '[.[][] | select(.user.login == "claude[bot]") | .body
+      | jq -r --arg h "$head" '[.[][] | select(.user.login == "github-actions[bot]") | .body
           | capture("<!-- claude-review head=(?<head>[0-9a-f]{40}) findings=(?<n>[0-9]+) -->")
           | select(.head == $h) | .n] | last // empty'
   }
