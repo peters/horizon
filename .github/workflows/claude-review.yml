@@ -145,8 +145,9 @@ jobs:
             Post each finding as one inline comment on the changed line with
             `mcp__github_inline_comment__create_inline_comment`, `confirmed: true` and
             `commit_id: ${{ github.event.pull_request.head.sha }}`.
-            Name the input, the wrong result and the fix. End each comment with this line:
-            <!-- claude-review-run ${{ github.run_id }} -->
+            Name the input, the wrong result and the fix. End each comment with this line,
+            as plain text:
+            claude-review-run ${{ github.run_id }}
 
             A finding from an earlier review of this head that is still valid, and that no
             reply from `peters` explained, counts as a finding again. Do not post it twice.
@@ -163,7 +164,7 @@ jobs:
           # The count Claude returns is its own claim. Count the comments that
           # this run posted on this head too, and keep the larger number.
           posted=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" \
-            | jq --arg run "<!-- claude-review-run $GITHUB_RUN_ID -->" --arg h "$HEAD_SHA" \
+            | jq --arg run "claude-review-run $GITHUB_RUN_ID" --arg h "$HEAD_SHA" \
                 '[.[][] | select(.user.login == "claude[bot]" and .in_reply_to_id == null
                   and .original_commit_id == $h and (.body | contains($run)))] | length')
           [[ "$posted" =~ ^[0-9]+$ ]]
