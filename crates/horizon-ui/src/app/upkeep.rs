@@ -385,10 +385,9 @@ impl HorizonApp {
         for (cloud, result) in finished {
             match result.map(|()| self.upkeep_reconnectable(&cloud)) {
                 Ok(Some(runtime)) => {
-                    // The reader sees the mark gone within seconds; until then the line stays off.
-                    for upkeep in self.upkeep_boards_of(&cloud) {
-                        upkeep.package_skipped = false;
-                    }
+                    // The line stays the reader's: it goes when the reader sees the mark gone
+                    // and comes back on a new skip. A press until then finds the cloud busy
+                    // with this reconnect.
                     self.note_package_access(&cloud, None);
                     self.reconnect_upkeep_cloud(runtime, ctx);
                 }
