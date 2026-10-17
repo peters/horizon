@@ -148,6 +148,9 @@ jobs:
             Name the input, the wrong result and the fix. End each comment with this line:
             <!-- claude-review-run ${{ github.run_id }} -->
 
+            A finding from an earlier review of this head that is still valid, and that no
+            reply from `peters` explained, counts as a finding again. Do not post it twice.
+
             Return `findings`, the number of findings you identified, posted or not, and
             `summary`, a short Markdown list with one line per finding, or `No findings.`
             when there are none. Say in the summary which findings you could not post.
