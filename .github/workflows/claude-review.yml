@@ -42,7 +42,6 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
     defaults:
       run:
         # pipefail, so a failed gh call in a pipe fails the step.
@@ -100,6 +99,9 @@ jobs:
         uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The Claude app token exchange rejects this event's OIDC token, so
+          # Claude comments with the job's own token, as github-actions[bot].
+          github_token: ${{ github.token }}
           # Post each inline comment at once, so the summary step can count them.
           classify_inline_comments: "false"
           settings: |
@@ -165,7 +167,7 @@ jobs:
           # this run posted on this head too, and keep the larger number.
           posted=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" \
             | jq --arg tag "claude-review-run $GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" --arg h "$HEAD_SHA" \
-                '[.[][] | select(.user.login == "claude[bot]" and .in_reply_to_id == null
+                '[.[][] | select(.user.login == "github-actions[bot]" and .in_reply_to_id == null
                   and .original_commit_id == $h
                   and (.body | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | index($tag)))] | length')
           [[ "$posted" =~ ^[0-9]+$ ]]

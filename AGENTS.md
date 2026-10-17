@@ -338,7 +338,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   gh pr edit <n> --add-label claude-review
   ```
 
-  The review posts its findings as inline comments from `claude[bot]`. The workflow then posts one summary comment from `github-actions[bot]`, whose last line names the reviewed head and the number of findings, `<!-- claude-review head=<sha> findings=<n> -->`. Read that line for the current head:
+  The review posts its findings as inline comments and then one summary comment, all from `github-actions[bot]`. The last line of the summary names the reviewed head and the number of findings, `<!-- claude-review head=<sha> findings=<n> -->`. Read that line for the current head:
 
   ```bash
   claude_review_findings() {
