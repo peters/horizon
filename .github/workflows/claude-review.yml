@@ -74,7 +74,13 @@ jobs:
           # A symlink in the head could point Claude's file tools at runner files.
           find pr-head -type l -delete
           mkdir -p review-context
-          gh pr diff "$PR" --repo "$REPO" > review-context/diff.patch
+          # GitHub refuses the diff of a very large PR. List the changed files then.
+          if ! gh pr diff "$PR" --repo "$REPO" > review-context/diff.patch; then
+            {
+              echo "GitHub did not return the diff. Changed files, read them in pr-head/:"
+              gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | "\(.status) \(.filename)"'
+            } > review-context/diff.patch
+          fi
           gh pr view "$PR" --repo "$REPO" --comments > review-context/conversation.txt
           gh api --paginate "repos/$REPO/pulls/$PR/comments" \
             --jq '.[] | "\(.user.login) on \(.path):\(.line // .original_line) (\(.html_url))\n\(.body)\n"' \
