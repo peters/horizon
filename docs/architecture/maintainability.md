@@ -9,7 +9,8 @@ back into large multi-purpose modules.
 
 The standalone SSH package keeps caller-owned trust and credentials in `types`,
 bounded input/events and task ownership in `command`, physical cancellation in
-`control`, and SSH exchange handling in `protocol`. It has no Horizon dependency.
+`control`, cancellation-aware socket I/O in `control/transport`, and SSH exchange
+handling in `protocol`. It has no Horizon dependency.
 Provider selection, session authorization and UI integration remain caller
 responsibilities. See [the transport boundary](remote-session.md).
 

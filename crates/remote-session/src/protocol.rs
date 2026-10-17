@@ -19,6 +19,7 @@ use tokio::{
 use crate::{
     Cancellation, Completion, Credentials, Error, Event, ExecRequest, Exit,
     command::{CHUNK, Input, QUEUE, SHUTDOWN},
+    control::Transport,
 };
 
 struct PinHandler {
@@ -81,7 +82,7 @@ pub(crate) async fn run(
     socket.set_nodelay(true).map_err(|_| Error::Transport)?;
     let socket = socket.into_std().map_err(|_| Error::Transport)?;
     control.install(socket.try_clone().map_err(|_| Error::Transport)?)?;
-    let socket = TcpStream::from_std(socket).map_err(|_| Error::Transport)?;
+    let socket = Transport::new(TcpStream::from_std(socket).map_err(|_| Error::Transport)?, &control);
     let config = Arc::new(client::Config {
         window_size: 128 * 1024,
         maximum_packet_size: u32::try_from(CHUNK).map_err(|_| Error::InvalidOptions)?,

@@ -7,6 +7,9 @@ use tokio::sync::watch;
 
 use crate::Error;
 
+mod transport;
+pub(crate) use transport::Transport;
+
 #[derive(Default)]
 struct State {
     cancelled: bool,
