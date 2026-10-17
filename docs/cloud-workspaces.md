@@ -619,8 +619,18 @@ tells. An agent reads them with `gh`, for example
 deployment output says so, and an agent that needs a package check reports that
 the cloud has no package read access. Horizon saves the skip beside the Upkeep's
 choice (`~/.horizon/upkeep/<cloud>/package-access-skipped`) and does not ask again
-for that Upkeep, also after a restart, until you choose **Connect GitHub again** on
-the card.
+for that Upkeep, also after a restart, until you choose **Give package access** on
+the Upkeep board or **Connect GitHub again** on the card.
+
+While the skip is saved, the Upkeep board shows **Package sign-in skipped: checks of
+private package versions may need a person** with **Give package access**. "May":
+a skip after **Connect GitHub again** keeps an earlier access. The button works when
+the cloud is ready, connected and runs nothing else: Horizon forgets the skip and
+reconnects the cloud. Unless the worker already reads the packages of the Upkeep's
+repositories, that deployment shows the package code again, without a new GitHub
+sign-in. When the cloud is not ready or is busy, the board says so and keeps the
+skip. When the cloud stops being ready while Horizon forgets the skip, the board says
+that the next reconnect asks for the package code.
 
 An organization that limits OAuth apps hides its packages from Horizon's OAuth
 app. Then the deployment output names the organization and the page where an

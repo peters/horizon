@@ -23,6 +23,26 @@ const NAME: &str = "Upkeep";
 const SAVED_SESSION: &str = "Open a saved session from Sessions before starting a cloud.";
 
 impl HorizonApp {
+    /// The card runtime of the Upkeep `cloud` when a reconnect can start for it now: a cloud
+    /// that is ready and connected and runs no preparation, operation, deployment or provider
+    /// check. Give package
+    /// access asks the next deployment, so it must be one that starts at once.
+    pub(in crate::app) fn upkeep_reconnectable(&self, cloud: &str) -> Option<u32> {
+        let id = (self.cloud_prototype.groups.0.iter())
+            .find(|group| group.remote.as_ref().is_some_and(|launch| launch.id == cloud))?
+            .issue;
+        let runtime = self.cloud_prototype.production.runtimes.get(&id)?;
+        // A reconnect keeps Ready until its first step arrives; its fresh attempt has not
+        // reached Ready yet, so it counts as running.
+        let reached = runtime.progress.ended_in(cloud_runtime::Stage::Ready).is_some();
+        (runtime.connected_ready() && reached && !runtime.busy() && !runtime.checking_provider()).then_some(id)
+    }
+
+    /// Reconnects the card `runtime`, which then asks for what its deployment needs.
+    pub(in crate::app) fn reconnect_upkeep_cloud(&mut self, runtime: u32, ctx: &egui::Context) {
+        self.start_production_deployment(runtime, ctx);
+    }
+
     /// The folder of this computer's cloud settings, once cloud workspaces are ready.
     pub(in crate::app) fn ready_cloud_root(&self) -> Option<PathBuf> {
         self.cloud_launch_ready()

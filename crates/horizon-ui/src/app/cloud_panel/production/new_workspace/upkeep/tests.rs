@@ -216,6 +216,41 @@ fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
     app.apply_upkeep_requests(&ctx);
     assert_eq!(app.upkeep.syncs["upkeep-test-board"].signals.paused, Some(true));
 
+    // Give package access needs a ready cloud that runs nothing else: this one has no card,
+    // so the skip stays and the board says why nothing started.
+    upkeep(&mut app, board).request = Some(Request::PackageAccess);
+    app.apply_upkeep_requests(&ctx);
+    assert!(app.upkeep.package_asks.is_empty());
+    assert_eq!(
+        upkeep(&mut app, board).package_note.as_deref(),
+        Some("The cloud is not ready or is busy. Try again when its card shows Ready.")
+    );
+    // A removal that fails keeps the skip and says why on every board of the Upkeep.
+    let ask = |result: std::io::Result<()>| {
+        let (tx, removed) = std::sync::mpsc::channel();
+        tx.send(result).unwrap();
+        crate::app::upkeep::PackageAsk {
+            cloud: "upkeep-test-board".into(),
+            removed,
+        }
+    };
+    app.upkeep.package_asks.push(ask(Err(std::io::Error::other("refused"))));
+    app.apply_upkeep_requests(&ctx);
+    assert!(app.upkeep.package_asks.is_empty());
+    for shown in [board, second] {
+        assert_eq!(
+            upkeep(&mut app, shown).package_note.as_deref(),
+            Some("The earlier skip could not be forgotten: refused")
+        );
+    }
+    // A skip that is gone while the cloud stopped being ready waits for its next reconnect.
+    app.upkeep.package_asks.push(ask(Ok(())));
+    app.apply_upkeep_requests(&ctx);
+    assert_eq!(
+        upkeep(&mut app, second).package_note.as_deref(),
+        Some("The skip is forgotten: the next reconnect of this cloud asks for the package code.")
+    );
+
     app.link_upkeep_boards(&crate::app::upkeep::Saved::default());
     assert_eq!(
         upkeep(&mut app, board).cloud,
@@ -233,4 +268,42 @@ fn saved_settings_are_read_again_and_sent_at_once() {
     assert!(app.upkeep.saved.is_none());
     assert!(app.upkeep.syncs["c1"].next.is_none());
     assert_eq!(app.upkeep.syncs["c1"].loop_running(), None);
+}
+
+#[test]
+fn a_reconnect_that_has_not_reported_its_first_step_is_not_reconnectable() {
+    let (temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("Upkeep");
+    let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
+    let mut group =
+        horizon_core::cloud_panel::CloudGroup::new(7, "Upkeep".into(), local_id, temp.path().into(), [0.0; 2]);
+    group.remote = Some(horizon_core::cloud_panel::CloudLaunch {
+        publishing_selection: None,
+        deployment_started: true,
+        id: "upkeep-ready".into(),
+        revision: "a".repeat(40),
+        profile_name: "quick-start".into(),
+        profile: serde_json::from_value(
+            serde_json::json!({"provider": "hetzner", "image": "registry.example/worker", "cpu": 2, "memory_gb": 4}),
+        )
+        .unwrap(),
+        placement: horizon_core::cloud_panel::Placement::default(),
+    });
+    app.cloud_prototype.groups.0.push(group);
+    let (_events, receiver) = std::sync::mpsc::channel();
+    let mut runtime = super::super::super::Runtime {
+        stage: Some(horizon_core::cloud_runtime::Stage::Ready),
+        receiver: Some(receiver),
+        ..Default::default()
+    };
+    // As a reconnect in the frame it starts: its attempt is fresh while the stage still says Ready.
+    runtime.progress.reset();
+    app.cloud_prototype.production.runtimes.insert(7, runtime);
+    assert_eq!(app.upkeep_reconnectable("upkeep-ready"), None);
+
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&7).unwrap();
+    runtime
+        .progress
+        .stage(horizon_core::cloud_runtime::Stage::Ready, std::time::Instant::now());
+    assert_eq!(app.upkeep_reconnectable("upkeep-ready"), Some(7));
 }

@@ -43,8 +43,8 @@ fn kept(held_access: bool) -> &'static str {
 }
 
 /// Saved beside the Upkeep's choice when the person skipped the package sign-in: a reconnect
-/// does not ask again; Connect GitHub again on the card does.
-const SKIPPED: &str = "package-access-skipped";
+/// does not ask again; Connect GitHub again on the card and Give package access on the board do.
+const SKIPPED: &str = crate::upkeep::PACKAGE_ACCESS_SKIPPED;
 
 /// Whether the person skipped the package sign-in of the Upkeep `cloud_id`.
 #[must_use]

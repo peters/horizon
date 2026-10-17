@@ -1,5 +1,5 @@
 //! The board's title, what runs where, and the actions of an Upkeep cloud's board: Run now,
-//! Pause and Repositories.
+//! Pause, Repositories and, after a skip, Give package access.
 use egui::{Align, Layout, RichText, Ui, Vec2};
 use horizon_core::upkeep::{AgentChange, Request, Status};
 
@@ -87,7 +87,7 @@ fn buttons(ui: &mut Ui, status: &Status, actions: Actions, from_right: bool) -> 
                     .on_hover_text(hint)
                     .clicked()
             }
-            Request::Open(_) => false,
+            Request::Open(_) | Request::PackageAccess => false,
         };
         if clicked {
             request = Some(button);
@@ -107,6 +107,28 @@ fn chrome(text: &str) -> egui::Button<'_> {
         .fill(theme::PANEL_BG_ALT())
         .stroke(egui::Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)))
         .corner_radius(10)
+}
+
+/// The line of an Upkeep whose package sign-in the person skipped, with its button. A skip
+/// can keep an earlier access, so the line says what was skipped, not that access is
+/// missing. Returns true on a press.
+pub(super) fn package_access(ui: &mut Ui) -> bool {
+    let mut pressed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("Package sign-in skipped: checks of private package versions may need a person.")
+                .size(12.0)
+                .color(theme::PALETTE_YELLOW()),
+        );
+        pressed = ui
+            .add(chrome("Give package access").min_size(Vec2::new(0.0, 26.0)))
+            .on_hover_text(
+                "Reconnects this cloud now. Unless its worker already reads the packages of this Upkeep's \
+                 repositories, the deployment shows a GitHub code for read:packages only.",
+            )
+            .clicked();
+    });
+    pressed
 }
 
 /// What agents changed through `cloud_upkeep`, newest first. Horizon writes these lines,

@@ -124,8 +124,10 @@ cause, and **Try again**.
    access of the Upkeep: a second code for Horizon's own OAuth app, with the scope
    `read:packages` only, that you approve with your own GitHub account. The worker
    keeps it as root and renews it. **Skip: package checks need a person** continues
-   without it and is saved for this Upkeep; **Connect GitHub again** asks again.
-   See [Package read access](cloud-workspaces.md#package-read-access) in the cloud
+   without it and is saved for this Upkeep. The board then shows **Package sign-in
+   skipped** with **Give package access**, which reconnects the cloud and asks for
+   the code again without a new GitHub sign-in; **Connect GitHub again** on the
+   card asks again too. See [Package read access](cloud-workspaces.md#package-read-access) in the cloud
    workspaces guide.
 
 **Start Upkeep** is unavailable until Codex has a login to give to the worker: the
