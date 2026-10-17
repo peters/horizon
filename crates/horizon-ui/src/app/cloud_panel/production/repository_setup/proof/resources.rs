@@ -21,6 +21,12 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn run_id(status: 
     format!("{:08x}", hash & 0xffff_ffff)
 }
 
+/// The volume that keeps what the proofs of the run whose volume is `volume` sent for
+/// their checkouts; only Horizon's own containers mount it, never the image's.
+pub(super) fn git_cache(volume: &str) -> String {
+    format!("{volume}-git")
+}
+
 /// The start of the worker-check operation names of the run whose volume is `volume`;
 /// each check adds its profile's number.
 pub(super) fn check_operations(volume: &str) -> String {
@@ -733,7 +739,10 @@ impl RunResources {
         let mut remove_images = arguments(["rmi", "--force", &self.image]);
         remove_images.extend(images);
         let _ = docker(cleanup, &remove_images);
-        let _ = docker(cleanup, &arguments(["volume", "rm", "--force", &self.volume]));
+        let _ = docker(
+            cleanup,
+            &arguments(["volume", "rm", "--force", &self.volume, &git_cache(&self.volume)]),
+        );
         if self.network_left(cleanup).is_some_and(|left| left) {
             let _ = docker(cleanup, &arguments(["network", "rm", &preview_network(&self.volume)]));
         }
@@ -795,7 +804,12 @@ impl RunResources {
             "--filter",
             &format!("name={}", self.volume),
         ]))?;
-        left.extend(volumes.into_iter().filter(|name| *name == self.volume));
+        let cache = git_cache(&self.volume);
+        left.extend(
+            volumes
+                .into_iter()
+                .filter(|name| *name == self.volume || *name == cache),
+        );
         if self.network_left(cleanup)? {
             left.push(preview_network(&self.volume));
         }

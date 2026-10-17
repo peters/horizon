@@ -188,6 +188,26 @@ machine.
    Result: The commands show nothing. The runner looks for leftovers on this computer
    only, so do this step by hand.
 
+### 6.6 G06: Prove again in the same run
+
+Do this task for a pull request that changes what a proof sends for its checkout.
+
+1. Run the gate with `GATE_PROVE_AGAIN` set, on this computer's Docker or with
+   `GATE_DOCKER_HOST` as in G04, and with `--only` for a short list of entries.
+
+   ```bash
+   GATE_PROVE_AGAIN=1 python3 scripts/setup-gate.py <list> --lanes 1 --only <repo>
+   ```
+
+   Result: Each entry passes as in G01. After a passed proof, the gate proves the same
+   commit again in the same run. The `again` field of the entry's line in
+   `results.jsonl` shows the second proof passed and lists what each checkout sent: the
+   first proof sends the commit and its history, and the second sends nothing.
+
+2. Run the commands of G03 steps 2 and 3, on the host for a Docker host.
+
+   Result: The commands show nothing, also no volume whose name ends in `-git`.
+
 ## 7. Pass criteria
 
 - Every entry shows PASS, and the exit code is 0.

@@ -362,7 +362,8 @@ def leftover_names(record, listings):
     return {
         "container": [n for n in listings["container"] if n.startswith((volume + "-", record["checks"]))],
         "image": [n for n in listings["image"] if n == record["image"] or n.startswith(volume + "-build")],
-        "volume": [n for n in listings["volume"] if n == volume],
+        # The run's volume and its git cache, which only Horizon's own containers mount.
+        "volume": [n for n in listings["volume"] if n in (volume, volume + "-git")],
         "network": [n for n in listings["network"] if n == record["network"]],
     }
 
@@ -479,7 +480,9 @@ class Lane:
             return False
 
     def overdue(self):
-        return time.monotonic() - self.begun > ENTRY_LIMIT_SECONDS * len(self.entries)
+        # GATE_PROVE_AGAIN proves each entry twice in the same run.
+        proofs = 2 if os.environ.get("GATE_PROVE_AGAIN") else 1
+        return time.monotonic() - self.begun > ENTRY_LIMIT_SECONDS * proofs * len(self.entries)
 
     def stop(self, reason):
         if self.process is None or self.running():

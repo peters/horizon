@@ -670,6 +670,11 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   that host's Docker over the person's SSH; the agent still runs on this computer. A
   GPU proof and a `/dev/kvm` preview do not run on a host: they fail or are skipped
   there, and the person picks **This computer** for them.
+  The first proof of a setup run sends the commit and its history; a later proof of
+  the run sends only the commits and tags its git cache (a volume of the run that only
+  Horizon's base image mounts) does not hold, and nothing for the same commit. A cache
+  that cannot give the commit is removed and the whole history sent again, and the
+  cache goes with the run's other resources.
 - When that proof's build fails because an organization limits OAuth apps, Horizon names
   the organization and offers the fix on GitHub; the Dockerfile is not the cause. If the
   person lets the setup agent make the fix, the agent gets one **GitHub access** browser

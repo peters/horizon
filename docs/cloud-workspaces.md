@@ -932,7 +932,14 @@ setup with a GPU profile is proved only on a computer with an NVIDIA GPU, and th
 CI uses that GPU when the default profile asks for one. The proof
 gets the tested commit and its history as a bundle, never this computer's git
 folder, checked out on its branch with the tags in its history, as
-`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. The proof
+`actions/checkout` leaves a push build, and each setup run has its own image and volume, removed when it ends. The
+first proof of a run sends the commit and its whole history. A later proof of the run
+sends only the commits and tags that the run's git cache does not hold yet, and nothing
+when it holds them all, so a Docker host or a rented builder gets new commits only. The
+git cache is a volume of the run that only Horizon's own base image mounts, never the
+setup's image, its CI or a preview; git checks every object it receives, and a cache
+that cannot give the commit is removed and the whole history sent again. It goes with
+the run's other resources. The proof
 mounts no folder of this computer into its containers. It copies what a container
 needs into it before the container starts: the bundle, the committed tree with its
 submodules and Git LFS files, Horizon's localci, the restored .NET packages and the

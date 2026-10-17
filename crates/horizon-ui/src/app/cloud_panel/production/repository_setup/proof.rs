@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 mod bundle;
+mod checkout;
 mod launch;
 // Its only user, a UI test, runs where the setup agent is offered: on Linux.
 #[cfg(all(test, target_os = "linux"))]
@@ -734,54 +735,6 @@ impl Job {
         self.stream_within(command, log, Some(BUILD_TIMEOUT))
     }
 
-    /// Clones the committed repository into the proof volume, or brings the clone
-    /// up to date, so build output and caches stay between runs.
-    fn prepare(&self, log: &mut Option<std::fs::File>) -> Result<(), String> {
-        // The image the agent wrote gets the tested commit and its history only, as a
-        // bundle made here, never this computer's git folder with its other branches.
-        let head = self.head().ok_or("the repository has no commit")?;
-        // In a new private folder with a random name, never beside the agent's files.
-        let folder = tempfile::Builder::new()
-            .prefix("horizon-setup-bundle-")
-            .tempdir()
-            .map_err(|error| format!("cannot make a private folder for the bundle: {error}"))?;
-        let (bundle, branch) = self.bundle(folder.path(), head, log)?;
-        // Horizon's pinned base image, not the candidate, prepares the volume: what the
-        // CI later runs on is the bundled commit, whatever the candidate's tools do.
-        let mut own = self.docker();
-        own.args(["run", "--rm", "--name", &self.container, "-v"])
-            .arg(format!("{}:/workspace", self.volume))
-            .args(["--entrypoint", "sh", TOOLS, "-c"]);
-        let take_back = self.root_dirty.load(std::sync::atomic::Ordering::SeqCst);
-        own.arg(if take_back {
-            format!("{OWN}; {TAKE_BACK}")
-        } else {
-            OWN.to_owned()
-        });
-        self.stream(own, log)?;
-        if take_back {
-            self.root_dirty.store(false, std::sync::atomic::Ordering::SeqCst);
-        }
-        // As root, so the checkout can be handed to the worker's account after. The
-        // bundle goes into the container as a copy, so any daemon can run it.
-        let mut clone = self.docker();
-        clone
-            .args(["run", "--rm", "--name", &self.container, "-v"])
-            .arg(format!("{}:/workspace", self.volume))
-            .arg("-e")
-            .arg(format!("HEAD_SHA={head}"))
-            .arg("-e")
-            .arg(format!("HEAD_BRANCH={}", branch.unwrap_or_default()))
-            .args(["--entrypoint", "sh", TOOLS, "-c"])
-            .arg(CLONE);
-        let mut clone = launch::Launch::new(clone);
-        clone.copies.push(launch::Copy::new(bundle, "/src.bundle"));
-        let result = self.stream_launch(clone, log, Some(STEP_TIMEOUT), false);
-        drop(folder);
-        result?;
-        self.hydrate(head, log)
-    }
-
     /// Fills the checkout's submodules and Git LFS files as `actions/checkout` would and
     /// deployment does: when the commit has submodules or LFS files, deployment's own
     /// snapshot of it, made on this computer, goes over the checkout in the volume.
@@ -919,36 +872,6 @@ impl Job {
 
 /// Why a built image fails the proof when a worker session finds no localci.
 const NO_LOCALCI: &str = "a worker session finds no localci on its PATH; install it for the agents on the worker, for example at /usr/local/bin/localci";
-
-/// Fetches the tested commit from its bundle into the volume's checkout and checks it
-/// out on its branch, as `actions/checkout` does for a push, or detached when it has no
-/// branch without doubt, then removes everything untracked. It runs as root in Horizon's base image, so
-/// it starts from a fresh git folder with no global settings and no hooks: an earlier
-/// proof's CI could have written to the checkout's .git and to HOME, and none of that
-/// may run here. Git LFS files stay pointers, as `actions/checkout` leaves them without
-/// `lfs: true`; the bundle has no LFS objects, and `hydrate` brings them when the commit
-/// has any.
-const CLONE: &str = "set -e; export HOME=/tmp/horizon-clone GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1; mkdir -p \"$HOME\"; \
-git config --system --add safe.directory '*'; rm -rf /workspace/checkout; mkdir /workspace/checkout; \
-cd /workspace/checkout; git init -q; G='git -c core.hooksPath=/dev/null -c core.fsmonitor=false'; \
-$G fetch -q /src.bundle HEAD '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'; \
-if [ -n \"$HEAD_BRANCH\" ]; then $G checkout -q --force -B \"$HEAD_BRANCH\" \"$HEAD_SHA\"; \
-else $G checkout -q --force --detach \"$HEAD_SHA\"; fi; $G clean -q -ffdx; \
-chown -R 10001:10001 /workspace/checkout";
-
-/// Hands the volume to the worker's account, with the folders a worker session names:
-/// HOME, the session's data folder and the GPU lock's folder. They stay between runs for
-/// their caches, but a link an earlier run left in their place goes, so nothing is made
-/// through it.
-const OWN: &str = "for d in /workspace/home /workspace/session-data /workspace/session-data/proof /workspace/locks; do \
-if [ -L \"$d\" ]; then rm -f \"$d\"; fi; mkdir -p \"$d\"; done; \
-chown 10001:10001 /workspace /workspace/home /workspace/session-data /workspace/session-data/proof /workspace/locks";
-
-/// Gives the worker's account back what a preview of the run that ran as root left in
-/// those folders (links themselves, never followed). It runs only when Horizon knows
-/// such a preview ran; nothing on the volume decides it.
-const TAKE_BACK: &str =
-    "find /workspace/home /workspace/session-data /workspace/locks ! -user 10001 -exec chown -h 10001:10001 {} +";
 
 /// Forgets localci's step records when the volume last ran a proof in another image.
 /// It runs with Horizon's settings only, never the image's: the records' folder comes
