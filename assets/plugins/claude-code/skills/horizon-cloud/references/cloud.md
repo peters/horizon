@@ -791,6 +791,37 @@ no exposure action or readiness claim: actual original runtime consumers, source
 preservation and protected Gate/keeper qualification remain required. See
 docs/architecture/protected-host-ingress.md and docs/testing/procedures/protected-host-ingress.md.
 
+### Original TCP producer
+
+The Linux Worker `trusted-tcp-producer` feature stays off by default. It accepts
+only fixed Worker/Kernel daemon endpoints and reserved component ports. Original
+UNIX credentials, pidfd, executable and namespaces must remain valid around
+bounded header, Running Self generation and WhoIs queries. A root-private Unix
+listener and its original path bind the accepted stream to that same daemon.
+Generic SOCKS/HTTP TCP dials cannot reach this backend. The pinned runtime patch
+adds Unix Serve PROXY-v1 and explicit `--horizon-flow-cancel` with the original virtual destination port; stock
+v1.102.5 cannot qualify this path. Current Unix qualification remains pending.
+A valid PROXY header, copied StableID, DNS name or tag cannot replace that proof.
+The opaque AcceptedPeer consumes into an AcceptedStream owning the exact payload
+and private cancellation endpoint, with no public constructor or control-FD export.
+Bounded one-byte recvmsg requires exactly one original-daemon SCM_RIGHTS endpoint;
+late header rights, extras, truncation, wrong shape/flags and payload overread refuse.
+Write EOF keeps control alive. Whole cancel shuts both immediately despite retained
+Arcs. The caller must await daemon DRAINED0x01 plus EOF under its captured
+lifetime/cancellation; the Producer adds no detached waiter or new deadline.
+Queued forwarding does not prove remote application delivery.
+Cancellation shuts it; original child kill/wait controls capacity and retirement.
+No enrollment, Gate admission, owned mapping, keeper or public operation is added.
+Protected receipt/runtime and full owner, Native and public M2 qualification remain
+required. M1 sharing keeps its no-expiry contract. See
+docs/architecture/trusted-tcp-producer.md and docs/testing/procedures/trusted-tcp-producer.md.
+
+Producer acceptance is opaque and bound to its exact original backend instance;
+a successor at the same path cannot adopt it. Retain only the weak pending
+cancellation handle before identification. It keeps no queued descriptor alive
+and continues to cancel the original payload/control after acceptance. Serialized
+facts, path equality and a retained bare socket clone are not this authority.
+
 ### Protected host receipt reader
 
 The Linux Worker `protected-ingress` feature is off by default. It adds no CLI,

@@ -15,6 +15,8 @@ mod offers;
 pub mod protected_ingress;
 mod queues;
 mod remote;
+#[cfg(all(target_os = "linux", feature = "trusted-tcp-producer"))]
+pub mod trusted_tcp_producer;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},

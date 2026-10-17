@@ -8,6 +8,7 @@ publish = false
 [lints]
 workspace = true
 [features]
+trusted-tcp-producer = ["dep:thiserror", "tokio/net", "tokio/io-util", "tokio/process", "tokio/sync"]
 exposure-gate = ["horizon-cloud-protocol/exposure-gate", "dep:socket2", "dep:thiserror", "tokio/net", "tokio/io-util", "tokio/sync"]
 protected-ingress = ["horizon-cloud-protocol/exposure-gate"]
 
