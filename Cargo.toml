@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/remote-session",
     "crates/horizon-app-testing",
     "crates/horizon-app-provider",
     "crates/horizon-app-runtime",

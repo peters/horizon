@@ -5,6 +5,14 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### `remote-session`
+
+The standalone SSH package keeps caller-owned trust and credentials in `types`,
+bounded input/events and task ownership in `command`, physical cancellation in
+`control`, and SSH exchange handling in `protocol`. It has no Horizon dependency.
+Provider selection, session authorization and UI integration remain caller
+responsibilities. See [the transport boundary](remote-session.md).
+
 ### Agent skills
 
 `horizon-ui::plugin_install::mcp_skills` owns the additional MCP skill assets,

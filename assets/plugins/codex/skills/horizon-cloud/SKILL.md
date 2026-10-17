@@ -483,3 +483,16 @@ prepared by the trusted launch adapter. Selecting a historical revision must not
 reload today's profile for a mutation: that profile may be absent or prebuilt now.
 The public headless request still resolves its own working-copy context; callers
 cannot supply a trusted profile through the wire schema.
+
+## Remote transport development
+
+The independent `remote-session` crate provides non-PTY Rust SSH command
+execution with Ed25519 keys, an exact caller-supplied host-key pin and a numeric
+`SocketAddr`. It reads no saved credentials and starts no SSH client executable.
+Current Horizon cloud connections and visible UI behavior are unchanged. The
+crate supplies no public cloud operation or Mosh route. Do not infer RunPod UDP
+or history qualification from its library tests. Genuine OpenSSH tests
+are opt-in on Unix and use synthetic loopback fixtures; they are separate from
+Rust-server tests and the explicit check with no SSH program on PATH. Follow
+`docs/architecture/remote-session.md` and
+`docs/testing/procedures/remote-session-ssh.md` for setup and package checks.

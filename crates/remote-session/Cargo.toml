@@ -1,0 +1,28 @@
+[package]
+name = "remote-session"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Bounded asynchronous remote command sessions with pinned SSH host keys"
+repository = "https://github.com/peters/horizon"
+readme = "README.md"
+
+[features]
+default = ["ssh"]
+ssh = ["dep:russh", "dep:tokio", "dep:thiserror", "dep:zeroize"]
+
+[dependencies]
+russh = { version = "=0.64.1", default-features = false, features = ["ring"], optional = true }
+tokio = { version = "1.53.1", features = ["rt", "net", "sync", "time", "macros"], optional = true }
+thiserror = { version = "2.0.20", optional = true }
+zeroize = { version = "1.9.0", optional = true }
+
+[dev-dependencies]
+rand = "0.10.0"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["rt", "net", "sync", "time", "macros", "io-util", "process"] }
+
+[[example]]
+name = "ssh_exec"
+required-features = ["ssh"]

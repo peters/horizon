@@ -378,7 +378,7 @@ jobs:
       - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}
-        run: bash scripts/install-ci-ubuntu-dependencies.sh tmux
+        run: bash scripts/install-ci-ubuntu-dependencies.sh tmux openssh-server
       - name: Test shard
         if: env.HORIZON_CI_SKIP_SPEECH != 'true'
         shell: bash
@@ -386,6 +386,16 @@ jobs:
           HORIZON_CI_SHARD: ${{ matrix.shard }}
           HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: bash scripts/ci-cargo-test-shard.sh
+      - name: Standalone remote command transport
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 'libs'
+        env:
+          REMOTE_SESSION_TEST_SSHD: /usr/sbin/sshd
+        run: |
+          cargo test --locked -p remote-session --no-default-features
+          cargo build --locked -p remote-session --example ssh_exec
+          REMOTE_SESSION_TEST_EXAMPLE="$PWD/target/debug/examples/ssh_exec" \
+            cargo test --locked -p remote-session --test openssh -- --ignored --test-threads=1
+          cargo package --locked -p remote-session
       # horizon-chromecast and horizon-media are standalone libraries that also
       # target Apple mobile platforms; keep device and simulator builds compiling.
       - name: Cross-build portable casting crates for Apple mobile targets
