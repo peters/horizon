@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a branch against the pull request rules in AGENTS.md before the PR opens.
 
-Copilot reports these rules as review findings, and each finding costs a review
+The PR review reports these rules as findings, and each finding costs a review
 round. The check finds them in a second instead:
 
 - scope: more than 10 source or test files, or more than 1,500 lines, gives a size note;
