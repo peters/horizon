@@ -34,7 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
+      # A labeled run gets its own group, so an opened or ready_for_review run
+      # cannot cancel it and remove the label while a review is still running.
+      group: claude-review-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && 'label' || 'auto' }}
       cancel-in-progress: true
     permissions:
       contents: read
@@ -62,6 +64,13 @@ jobs:
 
       - name: Collect the diff and the conversation
         run: |
+          # The marker names the head from the event, so review only that head.
+          live_head=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          if [ "$live_head" != "$HEAD_SHA" ]; then
+            echo "::error::The PR head moved to $live_head after the event for $HEAD_SHA. Request the review again."
+            exit 1
+          fi
+          date -u +%Y-%m-%dT%H:%M:%SZ > review-started-at
           # A symlink in the head could point Claude's file tools at runner files.
           find pr-head -type l -delete
           mkdir -p review-context
@@ -76,13 +85,18 @@ jobs:
         uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Post each inline comment at once, so the summary step can count them.
+          classify_inline_comments: "false"
           settings: |
             {
               "permissions": {
                 "deny": [
                   "Read(//proc/**)",
                   "Read(//sys/**)",
-                  "Read(//home/runner/work/_temp/**)"
+                  "Read(//home/runner/work/_temp/**)",
+                  "Read(//home/runner/work/**/.git/**)",
+                  "Read(./.git/**)",
+                  "Read(./pr-head/.git/**)"
                 ]
               }
             }
@@ -124,7 +138,14 @@ jobs:
         env:
           RESULT: ${{ steps.review.outputs.structured_output }}
         run: |
-          findings=$(jq -er '.findings | select(type == "number" and . >= 0 and floor == .)' <<< "$RESULT")
+          reported=$(jq -er '.findings | select(type == "number" and . >= 0 and floor == .)' <<< "$RESULT")
+          # The count Claude returns is its own claim. Count the comments it
+          # posted in this run too, and keep the larger number.
+          started=$(cat review-started-at)
+          posted=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" \
+            | jq --arg s "$started" '[.[][] | select(.user.login == "claude[bot]"
+                and .in_reply_to_id == null and .created_at >= $s)] | length')
+          findings=$(( reported > posted ? reported : posted ))
           {
             echo "## Claude review"
             echo
@@ -137,4 +158,5 @@ jobs:
 
       - name: Remove the review label
         if: always() && github.event.action == 'labeled'
-        run: gh api --method DELETE "repos/$REPO/issues/$PR/labels/claude-review"
+        # Someone may have removed the label already.
+        run: gh api --method DELETE "repos/$REPO/issues/$PR/labels/claude-review" || true
