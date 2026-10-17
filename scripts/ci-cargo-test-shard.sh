@@ -40,6 +40,7 @@ run_libs() {
     # The original Unix/FD producer is a default-off Linux Worker component.
     if [[ "${RUNNER_OS:?RUNNER_OS is required}" == "Linux" ]]; then
         run_cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer:: || status=$?
+        run_cargo test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate:: || status=$?
     fi
     # The shared-encoder sink is opt-in, so the workspace run does not build it.
     run_cargo test --locked -p horizon-chromecast --features encoder || status=$?

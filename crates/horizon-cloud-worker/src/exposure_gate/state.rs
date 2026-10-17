@@ -34,8 +34,48 @@ pub(super) struct State {
     charged: u64,
     forwarded: u64,
     refused: u64,
-    sources: BTreeMap<IpAddr, Source>,
+    sources: BTreeMap<SourceKey, Source>,
+    #[cfg(all(test, feature = "trusted-exposure-gate"))]
+    pub verified_peers: u64,
+    #[cfg(all(test, feature = "trusted-exposure-gate"))]
+    pub verified_peer_id: Option<Arc<str>>,
+    #[cfg(all(test, feature = "trusted-exposure-gate"))]
+    pub policy_denials: u64,
+    #[cfg(all(test, feature = "trusted-exposure-gate"))]
+    pub normal_completed: u64,
     flows: BTreeMap<u64, Flow>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum SourceKey {
+    Ip(IpAddr),
+    #[cfg(feature = "trusted-exposure-gate")]
+    StableId(Arc<str>),
+    #[cfg(feature = "trusted-exposure-gate")]
+    Pending,
+}
+
+enum Client {
+    Direct(Arc<TcpStream>),
+    #[cfg(feature = "trusted-exposure-gate")]
+    Identifying(crate::trusted_tcp_producer::PendingCancellation),
+    #[cfg(feature = "trusted-exposure-gate")]
+    Trusted(Arc<crate::trusted_tcp_producer::AcceptedStream>),
+}
+impl Client {
+    fn shutdown(&self) {
+        match self {
+            Self::Direct(stream) => shutdown(stream),
+            #[cfg(feature = "trusted-exposure-gate")]
+            Self::Trusted(stream) => {
+                stream.cancel();
+            }
+            #[cfg(feature = "trusted-exposure-gate")]
+            Self::Identifying(stream) => {
+                stream.cancel();
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -44,8 +84,8 @@ struct Source {
     charged: u64,
 }
 struct Flow {
-    source: IpAddr,
-    client: Arc<TcpStream>,
+    source: SourceKey,
+    client: Client,
     backend: Option<Arc<TcpStream>>,
     until: Instant,
     progress: Instant,
@@ -68,6 +108,14 @@ impl State {
             forwarded: 0,
             refused: 0,
             sources: BTreeMap::new(),
+            #[cfg(all(test, feature = "trusted-exposure-gate"))]
+            verified_peers: 0,
+            #[cfg(all(test, feature = "trusted-exposure-gate"))]
+            verified_peer_id: None,
+            #[cfg(all(test, feature = "trusted-exposure-gate"))]
+            policy_denials: 0,
+            #[cfg(all(test, feature = "trusted-exposure-gate"))]
+            normal_completed: 0,
             flows: BTreeMap::new(),
         }
     }
@@ -78,11 +126,18 @@ impl State {
             return None;
         }
         let source = canonical_ip(client.peer_addr().ok()?.ip());
+        if !self.policy.allows(source) {
+            self.refused = self.refused.saturating_add(1);
+            return None;
+        }
+        self.register(Client::Direct(client), SourceKey::Ip(source))
+    }
+
+    fn register(&mut self, client: Client, source: SourceKey) -> Option<u64> {
         let previous = self.sources.get(&source);
         let limits = self.policy.limits();
         if self.stopped
             || Instant::now() >= self.until
-            || !self.policy.allows(source)
             || self.flows.len() >= limits.total as usize
             || previous
                 .is_some_and(|entry| entry.active >= limits.per_source || entry.charged >= self.budgets.source_bytes)
@@ -96,7 +151,7 @@ impl State {
         let now = Instant::now();
         let until = now.checked_add(self.budgets.connection_lifetime)?.min(self.until);
         self.next = id;
-        self.sources.entry(source).or_default().active += 1;
+        self.sources.entry(source.clone()).or_default().active += 1;
         self.flows.insert(
             id,
             Flow {
@@ -112,6 +167,74 @@ impl State {
             },
         );
         Some(id)
+    }
+
+    #[cfg(feature = "trusted-exposure-gate")]
+    pub fn reserve_pending(&mut self, client: &crate::trusted_tcp_producer::PendingStream) -> Option<u64> {
+        if client
+            .bound_buffers(super::SOCKET_BUFFER_BYTES, super::MAX_SOCKET_BUFFER_BYTES)
+            .is_err()
+        {
+            self.refuse();
+            return None;
+        }
+        self.register(Client::Identifying(client.cancellation()), SourceKey::Pending)
+    }
+
+    #[cfg(feature = "trusted-exposure-gate")]
+    pub fn identify(
+        &mut self,
+        id: u64,
+        peer: crate::trusted_tcp_producer::AcceptedPeer,
+    ) -> Option<Arc<crate::trusted_tcp_producer::AcceptedStream>> {
+        let allowed = self
+            .policy
+            .matches_tailnet(peer.original_source().ip(), peer.full_dns_name(), peer.tags());
+        let source = SourceKey::StableId(Arc::from(peer.stable_id()));
+        let stream = peer.into_stream();
+        let same = self.flows.get(&id).is_some_and(|flow| match &flow.client {
+            Client::Identifying(original) => super::trusted::same_accept(original, &stream),
+            Client::Direct(_) | Client::Trusted(_) => false,
+        });
+        #[cfg(test)]
+        if same {
+            self.verified_peers = self.verified_peers.saturating_add(1);
+            self.verified_peer_id = match &source {
+                SourceKey::StableId(id) => Some(Arc::clone(id)),
+                SourceKey::Ip(_) | SourceKey::Pending => None,
+            };
+        }
+        let previous = self.sources.get(&source);
+        let eligible = same
+            && self.deadline(id).is_some()
+            && self.phase(id) == Phase::Running
+            && self.charged < self.budgets.gate_bytes
+            && previous.is_none_or(|entry| {
+                entry.active < self.policy.limits().per_source && entry.charged < self.budgets.source_bytes
+            })
+            && (previous.is_some() || self.sources.len() < MAX_SOURCES);
+        #[cfg(test)]
+        if eligible && !allowed {
+            self.policy_denials = self.policy_denials.saturating_add(1);
+        }
+        if !allowed || !eligible {
+            self.refuse();
+            stream.cancel();
+            return None;
+        }
+        let flow = self.flows.get_mut(&id)?;
+        let previous = self.sources.get_mut(&flow.source)?;
+        previous.active = previous.active.saturating_sub(1);
+        self.sources.entry(source.clone()).or_default().active += 1;
+        let stream = Arc::new(stream);
+        flow.client = Client::Trusted(Arc::clone(&stream));
+        flow.source = source;
+        Some(stream)
+    }
+
+    #[cfg(feature = "trusted-exposure-gate")]
+    pub fn refuse(&mut self) {
+        self.refused = self.refused.saturating_add(1);
     }
 
     pub fn deadline(&self, id: u64) -> Option<Instant> {
@@ -140,6 +263,10 @@ impl State {
         let grace_expired = matches!(self.phase(id), Phase::Budget(until) if Instant::now() >= until);
         if self.deadline(id).is_some() && !grace_expired {
             if let Some(flow) = self.flows.get_mut(&id) {
+                #[cfg(all(test, feature = "trusted-exposure-gate"))]
+                if flow.pending == 0 && !flow.graceful && *flow.phase.borrow() == Phase::Running {
+                    self.normal_completed = self.normal_completed.saturating_add(1);
+                }
                 flow.graceful = flow.pending == 0;
             }
         } else {
@@ -156,6 +283,11 @@ impl State {
             shutdown(&backend);
             return false;
         };
+        #[cfg(feature = "trusted-exposure-gate")]
+        if matches!(flow.client, Client::Identifying(_)) {
+            shutdown(&backend);
+            return false;
+        }
         flow.backend = Some(backend);
         true
     }
@@ -169,6 +301,10 @@ impl State {
         let Some(flow) = self.flows.get_mut(&id) else {
             return 0;
         };
+        #[cfg(feature = "trusted-exposure-gate")]
+        if matches!(flow.client, Client::Identifying(_)) {
+            return 0;
+        }
         let Some(source) = self.sources.get_mut(&flow.source) else {
             return 0;
         };
@@ -232,7 +368,7 @@ impl State {
     pub fn release(&mut self, id: u64) {
         if let Some(flow) = self.flows.remove(&id) {
             if !flow.graceful || *flow.phase.borrow() == Phase::Cancelled {
-                shutdown(&flow.client);
+                flow.client.shutdown();
                 if let Some(backend) = &flow.backend {
                     shutdown(backend);
                 }
@@ -270,9 +406,13 @@ fn shutdown(stream: &TcpStream) {
 impl Flow {
     fn close(&mut self) {
         self.phase.send_replace(Phase::Cancelled);
-        shutdown(&self.client);
+        self.client.shutdown();
         if let Some(backend) = &self.backend {
             shutdown(backend);
         }
     }
 }
+
+#[cfg(all(test, feature = "trusted-exposure-gate"))]
+#[path = "tests/unix_relay.rs"]
+mod unix_tests;

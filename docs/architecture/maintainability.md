@@ -567,6 +567,15 @@ The Producer's `ancillary` leaf bounds original descriptor/header receipt. Its
 acknowledgement. Public original-bound IO/finish methods create no identity and
 accept no replacement descriptor; callers retain their own lifetime deadlines.
 
+The default-off `exposure_gate::trusted` adapter consumes that original Producer;
+`state` retains only a weak `PendingCancellation` while identity is pending.
+It compares the opaque peer's private original-accept cookie before admission
+and accounts by StableID. Existing `relay`
+keeps direct and trusted flows on the same byte/grace/close implementation.
+Its private `transport` operations cover TCP and original Unix sockets without
+a forwarding bridge. Colocated State Unix relay fixtures prove transport bounds
+without issuing opaque peers or named identities.
+
 `cloud_runtime::local_network` owns Local Network Bridge policy and transport on
 the client. `scope` reads interfaces and routes and decides destinations, `Scope`
 resolves names and admits only checked addresses, `socks` is the loopback SOCKS5
