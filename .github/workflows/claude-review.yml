@@ -43,6 +43,10 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+    defaults:
+      run:
+        # pipefail, so a failed gh call in a pipe fails the step.
+        shell: bash
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
@@ -70,7 +74,6 @@ jobs:
             echo "::error::The PR head moved to $live_head after the event for $HEAD_SHA. Request the review again."
             exit 1
           fi
-          date -u +%Y-%m-%dT%H:%M:%SZ > review-started-at
           # A symlink in the head could point Claude's file tools at runner files.
           find pr-head -type l -delete
           mkdir -p review-context
@@ -142,7 +145,8 @@ jobs:
             Post each finding as one inline comment on the changed line with
             `mcp__github_inline_comment__create_inline_comment`, `confirmed: true` and
             `commit_id: ${{ github.event.pull_request.head.sha }}`.
-            Name the input, the wrong result and the fix.
+            Name the input, the wrong result and the fix. End each comment with this line:
+            <!-- claude-review-run ${{ github.run_id }} -->
 
             Return `findings`, the number of findings you identified, posted or not, and
             `summary`, a short Markdown list with one line per finding, or `No findings.`
@@ -153,13 +157,13 @@ jobs:
           RESULT: ${{ steps.review.outputs.structured_output }}
         run: |
           reported=$(jq -er '.findings | select(type == "number" and . >= 0 and floor == .)' <<< "$RESULT")
-          # The count Claude returns is its own claim. Count the comments it
-          # posted in this run too, and keep the larger number.
-          started=$(cat review-started-at)
+          # The count Claude returns is its own claim. Count the comments that
+          # this run posted on this head too, and keep the larger number.
           posted=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" \
-            | jq --arg s "$started" --arg h "$HEAD_SHA" '[.[][] | select(.user.login == "claude[bot]"
-                and .in_reply_to_id == null and .created_at >= $s
-                and .original_commit_id == $h)] | length')
+            | jq --arg run "<!-- claude-review-run $GITHUB_RUN_ID -->" --arg h "$HEAD_SHA" \
+                '[.[][] | select(.user.login == "claude[bot]" and .in_reply_to_id == null
+                  and .original_commit_id == $h and (.body | contains($run)))] | length')
+          [[ "$posted" =~ ^[0-9]+$ ]]
           findings=$(( reported > posted ? reported : posted ))
           {
             echo "## Claude review"
