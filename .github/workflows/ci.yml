@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_socket_close_diagnostic:
+        description: Run only the bounded Windows loopback socket shutdown probe
+        type: boolean
+        required: false
+        default: false
 
 # Each push to main gets its own group. With a shared group, GitHub keeps only one
 # pending run, so when merges land close together the run of a middle merge is
@@ -54,6 +60,7 @@ jobs:
   # steps; give a check its own job only when it needs a different runner
   # or cache. See #677.
   repo-checks:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) }}
     name: Repo checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -108,6 +115,7 @@ jobs:
   # script with its own test suite (run in Repo checks) because a silent
   # misclassification skips a build.
   changes:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) }}
     name: Detect changed inputs
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -139,7 +147,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ubuntu-latest
     # Two sequential feature sets, with headroom for a cold cache.
     timeout-minutes: 25
@@ -173,7 +181,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -217,6 +225,7 @@ jobs:
           '
 
   browser-harness-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) }}
     name: Browser harness tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -237,7 +246,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ubuntu-latest
     # Three sequential tiers, with headroom for a cold cache: the first tier
     # then compiles the vendored speech C++ tree before it can lint.
@@ -288,7 +297,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ${{ matrix.os }}
     # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
     # rebuilds the vendored speech C++ tree, and a job that times out skips
@@ -443,7 +452,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: windows-latest
     # Headroom for a cold cache: a cacheless run passed 15 minutes while
     # still compiling the vendored speech C++ tree, and a timed-out job
@@ -523,10 +532,31 @@ jobs:
   # release build can still be forced on demand.
   rust-artifacts:
     name: Artifacts
-    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.changes.outputs.release_inputs == 'true'))
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.changes.outputs.release_inputs == 'true'))) }}
     needs: changes
     uses: ./.github/workflows/release-artifacts.yml
     with:
       platforms: >-
         linux-x64 windows-x64
         ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.macos_release_inputs == 'true') && 'macos-arm64 macos-x64' || '' }}
+
+  windows-socket-close-diagnostic:
+    name: Windows socket shutdown diagnostic (manual only)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic }}
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: scripts/diagnostics/windows_socket_shutdown.py
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: ''
+      - name: Observe duplicate and shared-object shutdown once per subcase
+        shell: pwsh
+        run: python -I -B scripts/diagnostics/windows_socket_shutdown.py
