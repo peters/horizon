@@ -11,6 +11,11 @@ on:
         type: boolean
         required: false
         default: false
+      windows_rust_relay_close_diagnostic:
+        description: Run only two original Rust relay EOF selectors with test telemetry
+        type: boolean
+        required: false
+        default: false
 
 # Each push to main gets its own group. With a shared group, GitHub keeps only one
 # pending run, so when merges land close together the run of a middle merge is
@@ -60,7 +65,7 @@ jobs:
   # steps; give a check its own job only when it needs a different runner
   # or cache. See #677.
   repo-checks:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) }}
     name: Repo checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -115,7 +120,7 @@ jobs:
   # script with its own test suite (run in Repo checks) because a silent
   # misclassification skips a build.
   changes:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) }}
     name: Detect changed inputs
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -147,7 +152,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ubuntu-latest
     # Two sequential feature sets, with headroom for a cold cache.
     timeout-minutes: 25
@@ -181,7 +186,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -225,7 +230,7 @@ jobs:
           '
 
   browser-harness-tests:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) }}
     name: Browser harness tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -246,7 +251,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ubuntu-latest
     # Three sequential tiers, with headroom for a cold cache: the first tier
     # then compiles the vendored speech C++ tree before it can lint.
@@ -297,7 +302,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: ${{ matrix.os }}
     # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
     # rebuilds the vendored speech C++ tree, and a job that times out skips
@@ -452,7 +457,7 @@ jobs:
     # A pull request that changes only documentation or other workflows skips
     # this job (see Detect changed inputs). Anything but an explicit false runs
     # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) && (!cancelled() && needs.changes.outputs.rust_inputs != 'false') }}
     runs-on: windows-latest
     # Headroom for a cold cache: a cacheless run passed 15 minutes while
     # still compiling the vendored speech C++ tree, and a timed-out job
@@ -532,7 +537,7 @@ jobs:
   # release build can still be forced on demand.
   rust-artifacts:
     name: Artifacts
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic) && (always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.changes.outputs.release_inputs == 'true'))) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_socket_close_diagnostic || inputs.windows_rust_relay_close_diagnostic)) && (always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.changes.outputs.release_inputs == 'true'))) }}
     needs: changes
     uses: ./.github/workflows/release-artifacts.yml
     with:
@@ -542,7 +547,7 @@ jobs:
 
   windows-socket-close-diagnostic:
     name: Windows socket shutdown diagnostic (manual only)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_socket_close_diagnostic && !inputs.windows_rust_relay_close_diagnostic }}
     permissions:
       contents: read
     runs-on: windows-latest
@@ -560,3 +565,85 @@ jobs:
       - name: Observe duplicate and shared-object shutdown once per subcase
         shell: pwsh
         run: python -I -B scripts/diagnostics/windows_socket_shutdown.py
+
+  windows-rust-relay-close-diagnostic:
+    name: Windows original Rust relay shutdown diagnostic (manual only)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_rust_relay_close_diagnostic && !inputs.windows_socket_close_diagnostic }}
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+          persist-credentials: false
+      - name: Install and verify the original Windows failure toolchain
+        shell: pwsh
+        run: |
+          & rustup toolchain install 1.99.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $info = & rustup run 1.99.0 rustc -Vv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $info | Write-Output
+          if ($info -notcontains 'release: 1.99.0' -or $info -notcontains 'commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4') {
+            throw 'Original Windows toolchain changed; refuse before compilation'
+          }
+          & rustup run 1.99.0 cargo --version
+          exit $LASTEXITCODE
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-test-build-windows-smoke
+          save-if: false
+          cmd-format: rustup run 1.99.0 {0}
+      - id: rust-graph
+        name: Compile the exact Core one-service library test graph once
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'original-relay-compiler.jsonl'
+          & rustup run 1.99.0 cargo test --locked --jobs 6 -p horizon-core --lib --features one-service-gateway --no-run --message-format=json > $log
+          $status = $LASTEXITCODE
+          Get-Content -LiteralPath $log
+          if ($status -ne 0) { exit $status }
+          $artifacts = @(Get-Content -LiteralPath $log | ForEach-Object { ConvertFrom-Json $_ } | Where-Object {
+            $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'horizon_core' -and $_.profile.test -eq $true -and $_.executable
+          })
+          if ($artifacts.Count -ne 1) { throw 'Expected one actual Core library TEST artifact' }
+          $test = $artifacts[0]
+          $features = @($test.features | Sort-Object) -join ','
+          if ($features -ne 'cloud-workspaces,default,one-service-gateway,tailnet-node-cleanup') {
+            throw "Unexpected Core feature graph: $features"
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $test.executable).Hash
+          Write-Output "HORIZON_RUST_RELAY_TEST path=$($test.executable) sha256=$hash features=$features profile_test=$($test.profile.test)"
+          Add-Content -LiteralPath $env:GITHUB_ENV "HORIZON_RELAY_DIAGNOSTIC_EXE=$($test.executable)"
+          Add-Content -LiteralPath $env:GITHUB_ENV "HORIZON_RELAY_DIAGNOSTIC_SHA=$hash"
+      - id: identity
+        name: Original identity-revocation EOF selector once
+        if: ${{ !cancelled() && steps.rust-graph.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          HORIZON_WINDOWS_RELAY_DIAGNOSTIC: '1'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $env:HORIZON_RELAY_DIAGNOSTIC_EXE).Hash -ne $env:HORIZON_RELAY_DIAGNOSTIC_SHA) { throw 'Original TEST bytes changed' }
+          & $env:HORIZON_RELAY_DIAGNOSTIC_EXE cloud_runtime::local_network::endpoint::tests::relay::source_identity_change_closes_an_existing_relay_and_refuses_new_connections --exact --nocapture --test-threads=1
+          $status = $LASTEXITCODE
+          Write-Output "HORIZON_RUST_RELAY_CASE_RESULT identity exit=$status"
+          exit $status
+      - id: receipt
+        name: Original synchronous-revocation EOF selector once
+        if: ${{ !cancelled() && steps.rust-graph.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          HORIZON_WINDOWS_RELAY_DIAGNOSTIC: '1'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $env:HORIZON_RELAY_DIAGNOSTIC_EXE).Hash -ne $env:HORIZON_RELAY_DIAGNOSTIC_SHA) { throw 'Original TEST bytes changed' }
+          & $env:HORIZON_RELAY_DIAGNOSTIC_EXE cloud_runtime::local_network::endpoint::tests::relay::stale_receipt_at_a_reused_port_cannot_close_a_replacement_gateway --exact --nocapture --test-threads=1
+          $status = $LASTEXITCODE
+          Write-Output "HORIZON_RUST_RELAY_CASE_RESULT receipt exit=$status"
+          exit $status

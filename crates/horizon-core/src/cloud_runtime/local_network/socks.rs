@@ -15,6 +15,40 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(all(test, windows, feature = "one-service-gateway"))]
+mod diagnostic;
+
+macro_rules! relay_observe {
+    ($event:expr, $($fields:tt)*) => {
+        #[cfg(all(test, windows, feature = "one-service-gateway"))]
+        if diagnostic::enabled() {
+            let _ = diagnostic::record($event, format_args!($($fields)*));
+        }
+    };
+}
+
+// Every non-diagnostic expansion is exactly the original I/O expression once.
+macro_rules! relay_io {
+    ($event:literal, $operation:expr, $($fields:tt)*) => {{
+        #[cfg(all(test, windows, feature = "one-service-gateway"))]
+        {
+            if diagnostic::enabled() {
+                let operation_id = diagnostic::record(concat!($event, "_begin"), format_args!($($fields)*));
+                let result = $operation;
+                let _ = diagnostic::record(concat!($event, "_end"), format_args!(
+                    "operation={operation_id:?} success={} error={:?}", result.is_ok(),
+                    result.as_ref().err().map(|e| (e.kind(), e.raw_os_error()))
+                ));
+                result
+            } else {
+                $operation
+            }
+        }
+        #[cfg(not(all(test, windows, feature = "one-service-gateway")))]
+        { $operation }
+    }};
+}
+
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// All connection attempts for one request together.
@@ -95,29 +129,60 @@ impl Shared {
 
     fn register(&self, socket: &Socket) -> io::Result<u64> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        let clone = socket.try_clone()?;
+        let clone = relay_io!(
+            "register_clone",
+            socket.try_clone(),
+            "shared={self:p} id={id} {}",
+            diagnostic::socket(socket)
+        )?;
+        relay_observe!(
+            "register_clone_ready",
+            "shared={self:p} id={id} {}",
+            diagnostic::socket(&clone)
+        );
         let mut sockets = self.sockets.lock().unwrap_or_else(PoisonError::into_inner);
+        relay_observe!("register_locked", "shared={self:p} id={id} stopped={}", sockets.stopped);
         if sockets.stopped {
+            relay_observe!("register_refused", "shared={self:p} id={id}");
             return Err(io::Error::other("Local network proxy stopped"));
         }
         sockets.open.insert(id, clone);
+        relay_observe!("registered", "shared={self:p} id={id} count={}", sockets.open.len());
         Ok(id)
     }
 
     fn release(&self, id: u64) {
+        relay_observe!("release_begin", "shared={self:p} id={id}");
         self.sockets
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .open
             .remove(&id);
+        relay_observe!("release_end", "shared={self:p} id={id}");
     }
 
     fn stop(&self) {
+        relay_observe!("stop_begin", "shared={self:p}");
         let mut sockets = self.sockets.lock().unwrap_or_else(PoisonError::into_inner);
         sockets.stopped = true;
-        for (_, socket) in sockets.open.drain() {
-            let _ = socket.shutdown(Shutdown::Both);
+        relay_observe!("stop_locked", "shared={self:p} registered={}", sockets.open.len());
+        for (_id, socket) in sockets.open.drain() {
+            let _ = relay_io!(
+                "stop_shutdown",
+                socket.shutdown(Shutdown::Both),
+                "shared={self:p} id={_id} {}",
+                diagnostic::socket(&socket)
+            );
+            relay_observe!(
+                "registry_drop_begin",
+                "shared={self:p} id={_id} {}",
+                diagnostic::socket(&socket)
+            );
+            #[cfg(all(test, windows, feature = "one-service-gateway"))]
+            drop(socket);
+            relay_observe!("registry_drop_end", "shared={self:p} id={_id}");
         }
+        relay_observe!("stop_end_before_unlock", "shared={self:p}");
     }
 
     /// Ends every open relay once the byte budget is spent; new ones are refused before dialling.
@@ -365,9 +430,18 @@ fn serve(mut client: Socket, mut slot: Slot) {
 /// refuses it if either already happened while it was being opened. Registering first means
 /// a later stop or budget close sees it, and checking afterwards covers one that came before.
 fn adopt(slot: &mut Slot, upstream: TcpStream) -> Result<TcpStream, Refusal> {
+    relay_observe!(
+        "adopt_begin",
+        "shared={:p} upstream={:?}->{:?}",
+        Arc::as_ptr(&slot.shared),
+        upstream.local_addr(),
+        upstream.peer_addr()
+    );
     if slot.register(&socket2::SockRef::from(&upstream)).is_err() || slot.shared.over_budget() {
+        relay_observe!("adopt_refused", "shared={:p}", Arc::as_ptr(&slot.shared));
         return Err(Refusal::Reply(Reply::GeneralFailure));
     }
+    relay_observe!("adopt_end", "shared={:p} ids={:?}", Arc::as_ptr(&slot.shared), slot.ids);
     Ok(upstream)
 }
 
@@ -511,9 +585,38 @@ fn name_destination(name: &[u8]) -> Option<Destination> {
 }
 
 fn relay(shared: &Arc<Shared>, entry: &Arc<Entry>, client: Socket, upstream: Socket) {
-    let (Ok(client_reader), Ok(upstream_writer)) = (client.try_clone(), upstream.try_clone()) else {
+    relay_observe!(
+        "relay_begin",
+        "shared={:p} client={} upstream={}",
+        Arc::as_ptr(shared),
+        diagnostic::socket(&client),
+        diagnostic::socket(&upstream)
+    );
+    let (Ok(client_reader), Ok(upstream_writer)) = (
+        relay_io!(
+            "relay_client_clone",
+            client.try_clone(),
+            "shared={:p} {}",
+            Arc::as_ptr(shared),
+            diagnostic::socket(&client)
+        ),
+        relay_io!(
+            "relay_upstream_clone",
+            upstream.try_clone(),
+            "shared={:p} {}",
+            Arc::as_ptr(shared),
+            diagnostic::socket(&upstream)
+        ),
+    ) else {
         return;
     };
+    relay_observe!(
+        "relay_clones_ready",
+        "shared={:p} client_reader={} upstream_writer={}",
+        Arc::as_ptr(shared),
+        diagnostic::socket(&client_reader),
+        diagnostic::socket(&upstream_writer)
+    );
     let downstream = {
         let (shared, entry) = (Arc::clone(shared), Arc::clone(entry));
         thread::Builder::new()
@@ -527,6 +630,7 @@ fn relay(shared: &Arc<Shared>, entry: &Arc<Entry>, client: Socket, upstream: Soc
     };
     copy(shared, entry, client_reader, upstream_writer);
     let _ = downstream.join();
+    relay_observe!("relay_end", "shared={:p}", Arc::as_ptr(shared));
 }
 
 /// Writes as much of `bytes` as the peer takes and returns how much that was.
@@ -545,14 +649,32 @@ fn write_counted(to: &mut Socket, bytes: &[u8]) -> usize {
 
 /// Copies until end of input, then half-closes the other side so each direction ends on its own.
 fn copy(shared: &Shared, entry: &Entry, mut from: Socket, mut to: Socket) {
+    relay_observe!(
+        "copy_begin",
+        "shared={shared:p} from={} to={}",
+        diagnostic::socket(&from),
+        diagnostic::socket(&to)
+    );
     let mut buffer = vec![0; BUFFER_BYTES];
     loop {
-        match from.read(&mut buffer) {
+        match relay_io!(
+            "copy_read",
+            from.read(&mut buffer),
+            "shared={shared:p} {}",
+            diagnostic::socket(&from)
+        ) {
             Ok(0) => {
-                let _ = to.shutdown(Shutdown::Write);
+                let _ = relay_io!(
+                    "copy_shutdown_write",
+                    to.shutdown(Shutdown::Write),
+                    "shared={shared:p} {}",
+                    diagnostic::socket(&to)
+                );
+                relay_observe!("copy_end_eof", "shared={shared:p}");
                 return;
             }
             Ok(count) => {
+                relay_observe!("copy_read_bytes", "shared={shared:p} count={count}");
                 let (allowed, spent) = shared.reserve(count as u64);
                 let allowed = usize::try_from(allowed).unwrap_or(count);
                 let written = write_counted(&mut to, &buffer[..allowed]);
@@ -571,8 +693,19 @@ fn copy(shared: &Shared, entry: &Entry, mut from: Socket, mut to: Socket) {
             Err(_) => break,
         }
     }
-    let _ = from.shutdown(Shutdown::Both);
-    let _ = to.shutdown(Shutdown::Both);
+    let _ = relay_io!(
+        "copy_shutdown_from",
+        from.shutdown(Shutdown::Both),
+        "shared={shared:p} {}",
+        diagnostic::socket(&from)
+    );
+    let _ = relay_io!(
+        "copy_shutdown_to",
+        to.shutdown(Shutdown::Both),
+        "shared={shared:p} {}",
+        diagnostic::socket(&to)
+    );
+    relay_observe!("copy_end_error_or_budget", "shared={shared:p}");
 }
 
 #[cfg(feature = "one-service-gateway")]
