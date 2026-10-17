@@ -313,7 +313,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
 - Request at most five Claude reviews of a PR without external commits, that is, commits from a contributor other than `peters` (see [External Contributions](#external-contributions)). A round is a Claude review that arrived for a pushed head; a request that produced no review does not count.
-  Fix the findings of each round, "Previously missed" ones included, or record why one is out of scope as a follow-up candidate.
+  Fix the findings of each round, or record why one is out of scope as a follow-up candidate.
   If the fifth review still has findings, fix them, run the local review loop and the affected checks on the fixed head, and stop requesting reviews. Report the fixes and the remaining risk to `peters`. For that head, the explicit permission of `peters` replaces the Claude review gate below.
   More than three rounds is a sign that the PR is too large: reassess its scope with the rules above before the next round.
 - Before you open a PR, write its title and body, then run the readiness check:
