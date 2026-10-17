@@ -147,7 +147,7 @@ jobs:
             `commit_id: ${{ github.event.pull_request.head.sha }}`.
             Name the input, the wrong result and the fix. End each comment with this line,
             as plain text:
-            claude-review-run ${{ github.run_id }}
+            claude-review-run ${{ github.run_id }}.${{ github.run_attempt }}
 
             A finding from an earlier review of this head that is still valid, and that no
             reply from `peters` explained, counts as a finding again. Do not post it twice.
@@ -164,9 +164,10 @@ jobs:
           # The count Claude returns is its own claim. Count the comments that
           # this run posted on this head too, and keep the larger number.
           posted=$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/comments" \
-            | jq --arg run "claude-review-run $GITHUB_RUN_ID" --arg h "$HEAD_SHA" \
+            | jq --arg tag "claude-review-run $GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" --arg h "$HEAD_SHA" \
                 '[.[][] | select(.user.login == "claude[bot]" and .in_reply_to_id == null
-                  and .original_commit_id == $h and (.body | contains($run)))] | length')
+                  and .original_commit_id == $h
+                  and (.body | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | index($tag)))] | length')
           [[ "$posted" =~ ^[0-9]+$ ]]
           findings=$(( reported > posted ? reported : posted ))
           {
