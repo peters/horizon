@@ -186,6 +186,17 @@ impl Peer {
             "flood" => {
                 session.data(channel, vec![b'x'; 512 * 1024])?;
             }
+            "signal-custom" | "signal-standard" | "signal-limit" | "signal-oversized" => {
+                let signal = match self.mode {
+                    "signal-standard" => russh::Sig::TERM,
+                    "signal-limit" => russh::Sig::Custom("x".repeat(128)),
+                    "signal-oversized" => russh::Sig::Custom("x".repeat(129)),
+                    _ => russh::Sig::Custom("USR2".to_owned()),
+                };
+                session.exit_signal_request(channel, signal, false, "", "")?;
+                session.eof(channel)?;
+                session.close(channel)?;
+            }
             _ => {}
         }
         Ok(())
@@ -246,6 +257,56 @@ async fn binary_streams_exit_and_eof_stay_separate_and_output_after_status_drain
             remote_eof: true
         }
     );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn signal_event_and_completion_preserve_names_but_debug_redacts_them() {
+    for (mode, name) in [
+        ("signal-custom", "USR2".to_owned()),
+        ("signal-standard", "TERM".to_owned()),
+        ("signal-limit", "x".repeat(128)),
+    ] {
+        let fixture = Fixture::new(mode).await;
+        let mut command = execute(fixture.request(Duration::from_secs(3)), fixture.credentials()).unwrap();
+        let expected = Exit::Signal {
+            name,
+            core_dumped: false,
+        };
+        let mut exits = Vec::new();
+        while let Some(event) = command.next_event().await {
+            if let Event::Exit(exit) = event {
+                exits.push(exit);
+            }
+        }
+        assert_eq!(exits.as_slice(), std::slice::from_ref(&expected));
+        let completion = command.completion().await.unwrap();
+        assert_eq!(
+            completion,
+            Completion {
+                exit: expected,
+                remote_eof: true
+            }
+        );
+        let Exit::Signal { name, .. } = &completion.exit else {
+            panic!("expected signal");
+        };
+        for debug in [format!("{:?}", completion.exit), format!("{completion:?}")] {
+            assert!(!debug.contains(name.as_str()), "untrusted signal name must be redacted");
+            assert!(debug.contains("<redacted>"));
+        }
+        fixture.close().await;
+    }
+}
+
+#[tokio::test]
+async fn oversized_signal_name_is_refused_before_exit_event() {
+    let fixture = Fixture::new("signal-oversized").await;
+    let mut command = execute(fixture.request(Duration::from_secs(3)), fixture.credentials()).unwrap();
+    while let Some(event) = command.next_event().await {
+        assert!(!matches!(event, Event::Exit(_)));
+    }
+    assert_eq!(command.completion().await, Err(Error::Protocol));
     fixture.close().await;
 }
 

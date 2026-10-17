@@ -67,7 +67,11 @@ host-key file:
 cargo run --example ssh_exec -- 127.0.0.1:2222 user ./id_ed25519 ./host.pub 'printf hello'
 ```
 
-The example closes stdin immediately and forwards binary stdout/stderr separately.
+The example closes stdin immediately and buffers at most 4 MiB each of stdout
+and stderr. It completes the command and retires SSH before it forwards those
+buffers to local output. A local pipe can still block the example afterward,
+but cannot delay SSH cancellation or cleanup. Transport errors discard the
+buffered output.
 Its key is an unencrypted test/user-supplied file; the library itself accepts
 in-memory encrypted keys and a caller-supplied password.
 

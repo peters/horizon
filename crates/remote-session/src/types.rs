@@ -157,10 +157,23 @@ impl ExecRequest {
 }
 
 /// Remote termination information, distinct from transport closure.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Exit {
     Status(u32),
     Signal { name: String, core_dumped: bool },
+}
+
+impl std::fmt::Debug for Exit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Status(status) => f.debug_tuple("Status").field(status).finish(),
+            Self::Signal { core_dumped, .. } => f
+                .debug_struct("Signal")
+                .field("name", &"<redacted>")
+                .field("core_dumped", core_dumped)
+                .finish(),
+        }
+    }
 }
 
 /// Untrusted remote bytes are intentionally not Debug-formatted.

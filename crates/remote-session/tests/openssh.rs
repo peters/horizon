@@ -70,7 +70,7 @@ impl Server {
              UsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n\
              AuthenticationMethods publickey\nPermitRootLogin prohibit-password\n\
              AllowUsers {user}\nStrictModes yes\nDisableForwarding yes\nPermitTTY no\n\
-             PermitUserRC no\nPermitUserEnvironment no\nUseDNS no\nLoginGraceTime 5\nSetEnv HOME={}/home\n",
+             PermitUserRC no\nPermitUserEnvironment no\nUseDNS no\nLoginGraceTime 5\nLogLevel VERBOSE\nSetEnv HOME={}/home\n",
             endpoint.port(),
             path.display(),
             path.display(),
@@ -293,4 +293,68 @@ async fn deadline_retires_a_command_waiting_for_input() {
     .expect("deadline must retire");
     assert!(accepted, "exercise a running command, not a connect timeout");
     drop(input);
+}
+
+#[tokio::test]
+#[ignore = "requires a genuine sshd and REMOTE_SESSION_TEST_EXAMPLE executable"]
+async fn example_retires_ssh_before_writing_to_an_unconsumed_pipe() {
+    let server = Server::start();
+    let example = PathBuf::from(std::env::var_os("REMOTE_SESSION_TEST_EXAMPLE").expect("built ssh_exec example"));
+    assert!(example.is_absolute() && example.is_file());
+    let mut child = tokio::process::Command::new(example)
+        .arg(server.endpoint.to_string())
+        .arg(&server.user)
+        .arg(server.key_path("client"))
+        .arg(server.key_path("host.pub"))
+        .arg("dd if=/dev/zero bs=1048576 count=2 2>/dev/null")
+        .env_clear()
+        .env("HOME", server.key_path("home"))
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("owned example process");
+    // Keep the pipe unread. Two MiB exceeds the fixture platforms' pipe capacity.
+    let authentication = format!("Accepted publickey for {} from 127.0.0.1 port ", server.user);
+    let retired = timeout(Duration::from_secs(10), async {
+        loop {
+            let log = fs::read_to_string(server.key_path("sshd.log")).unwrap();
+            let mut authenticated_ports = log.lines().filter_map(|line| {
+                line.strip_prefix(&authentication)
+                    .and_then(|suffix| suffix.split_once(" ssh2:"))
+                    .map(|(port, _)| port)
+            });
+            if let Some(port) = authenticated_ports.next()
+                && authenticated_ports.next().is_none()
+                && port.parse::<u16>().is_ok()
+                && log
+                    .lines()
+                    .any(|line| line == format!("Connection closed by 127.0.0.1 port {port}"))
+            {
+                break true;
+            }
+            if child.try_wait().unwrap().is_some() {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    let output_still_blocked = child.try_wait().unwrap().is_none();
+    timeout(Duration::from_secs(3), async {
+        if output_still_blocked {
+            child.kill().await.expect("kill only the owned blocked example");
+        }
+        child.wait().await.expect("join the owned example");
+    })
+    .await
+    .expect("owned example cleanup deadline");
+    assert!(output_still_blocked, "the output sink must actually remain unconsumed");
+    assert_eq!(
+        retired,
+        Ok(true),
+        "sshd must observe authenticated disconnect before local output unblocks"
+    );
 }

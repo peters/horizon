@@ -243,11 +243,14 @@ async fn read_output(
                 core_dumped,
                 ..
             } if exit.is_none() => {
-                let name = format!("{signal_name:?}");
+                let name = signal_name_text(&signal_name);
                 if name.len() > 128 {
                     return Err(Error::Protocol);
                 }
-                let signal = Exit::Signal { name, core_dumped };
+                let signal = Exit::Signal {
+                    name: name.to_owned(),
+                    core_dumped,
+                };
                 exit = Some(signal.clone());
                 Event::Exit(signal)
             }
@@ -264,6 +267,24 @@ async fn read_output(
         emit(&events, event).await?;
     }
     Err(Error::Transport)
+}
+
+fn signal_name_text(signal: &russh::Sig) -> &str {
+    match signal {
+        russh::Sig::ABRT => "ABRT",
+        russh::Sig::ALRM => "ALRM",
+        russh::Sig::FPE => "FPE",
+        russh::Sig::HUP => "HUP",
+        russh::Sig::ILL => "ILL",
+        russh::Sig::INT => "INT",
+        russh::Sig::KILL => "KILL",
+        russh::Sig::PIPE => "PIPE",
+        russh::Sig::QUIT => "QUIT",
+        russh::Sig::SEGV => "SEGV",
+        russh::Sig::TERM => "TERM",
+        russh::Sig::USR1 => "USR1",
+        russh::Sig::Custom(name) => name,
+    }
 }
 
 fn charge(total: &mut usize, bytes: usize, limit: usize, eof: bool) -> Result<(), Error> {

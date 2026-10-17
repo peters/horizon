@@ -178,7 +178,7 @@ class WorkflowTests(unittest.TestCase):
         expected = {
             "device": [["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth", "bubblewrap"]],
             "clippy": [["libasound2-dev", "pkg-config"]],
-            "rust-test": [["libasound2-dev", "pkg-config"], ["tmux"]],
+            "rust-test": [["libasound2-dev", "pkg-config"], ["tmux", "openssh-server"]],
         }
         sites = sum(len(commands) for commands in expected.values())
         self.assertEqual(workflow.count(prefix), sites)

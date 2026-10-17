@@ -59,6 +59,8 @@ Do not use a saved cloud, a production host or the user's SSH agent.
    ```
 
    Result: Host verification, authentication, event ordering, bounds and cancellation tests pass.
+   Signal events preserve the server's exact name within the 128-byte limit.
+   Debug output hides signal names, including names in completion values.
 
 2. Run the package without its default SSH feature.
 
@@ -110,12 +112,15 @@ Do not use a saved cloud, a production host or the user's SSH agent.
    The supplied server must support the selected directives and its required
    privilege-separation directory must already exist; do not enable a service.
 
-2. Check the six actual outcomes.
+2. Check the seven actual outcomes.
 
    Result: Wrong host key refuses before exec; an unauthorized client key refuses
    authentication; binary stdin survives through EOF with separate stdout/stderr
    and nonzero status; cancellation and deadline retire an accepted command that
-   is waiting for input. The example also runs with an empty PATH. Record ignored tests separately from executed tests.
+   is waiting for input. The example also runs with an empty PATH.
+   With an unread output pipe, the server records an authenticated disconnect
+   while the example still waits for its local output consumer.
+   Record ignored tests separately from executed tests.
 
 3. Check the client without an external SSH program on PATH.
 
