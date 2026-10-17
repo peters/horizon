@@ -24,7 +24,7 @@ mod repositories;
 mod state;
 
 #[cfg(feature = "cloud-workspaces")]
-pub(super) use state::{Answer, Exchanged, Prepared, Preparing, Read, Saved, State, Sync};
+pub(super) use state::{Answer, Exchanged, PackageAsk, Prepared, Preparing, Read, Saved, State, Sync};
 
 /// Without cloud workspaces there is no Upkeep to keep.
 #[cfg(not(feature = "cloud-workspaces"))]
@@ -210,6 +210,8 @@ impl HorizonApp {
 impl HorizonApp {
     /// Carries out what Upkeep boards asked for while they were drawn.
     pub(super) fn apply_upkeep_requests(&mut self, ctx: &Context) {
+        #[cfg(feature = "cloud-workspaces")]
+        self.finish_package_asks(ctx);
         let requests: Vec<(PanelId, Request)> = self
             .board
             .panels
@@ -223,7 +225,7 @@ impl HorizonApp {
             match request {
                 Request::Open(url) => self.open_pull_request(ctx, board, &url),
                 #[cfg(feature = "cloud-workspaces")]
-                Request::RunNow | Request::Pause(_) | Request::Repositories => {
+                Request::RunNow | Request::Pause(_) | Request::Repositories | Request::PackageAccess => {
                     let Some(cloud) = self
                         .board
                         .panel(board)
@@ -238,6 +240,7 @@ impl HorizonApp {
                             self.share_run_request(board, &cloud);
                         }
                         Request::Pause(paused) => self.signal_upkeep(&cloud, false, Some(paused)),
+                        Request::PackageAccess => self.give_package_access(cloud, ctx),
                         _ => {
                             // While the saved Upkeeps are read again, the click waits a frame.
                             if !self.open_upkeep_repositories(ctx, &cloud)
@@ -251,7 +254,7 @@ impl HorizonApp {
                 }
                 // Without cloud workspaces no board has a cloud, so none offers these.
                 #[cfg(not(feature = "cloud-workspaces"))]
-                Request::RunNow | Request::Pause(_) | Request::Repositories => {}
+                Request::RunNow | Request::Pause(_) | Request::Repositories | Request::PackageAccess => {}
             }
         }
     }
@@ -341,3 +344,85 @@ impl HorizonApp {
         ctx.request_repaint();
     }
 }
+
+#[cfg(feature = "cloud-workspaces")]
+impl HorizonApp {
+    /// Give package access on the board of `cloud`: forgets the skip off the UI thread, then
+    /// [`Self::finish_package_asks`] reconnects the cloud, whose deployment asks for the
+    /// package read access again. Only a ready cloud that runs nothing else takes it.
+    fn give_package_access(&mut self, cloud: String, ctx: &Context) {
+        if self.upkeep.package_asks.iter().any(|ask| ask.cloud == cloud) {
+            return;
+        }
+        if self.upkeep_reconnectable(&cloud).is_none() {
+            self.note_package_access(&cloud, Some(NOT_READY));
+            return;
+        }
+        let (tx, removed) = std::sync::mpsc::channel();
+        let (forget, repaint) = (cloud.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(horizon_core::cloud_runtime::github::packages::ask_again(&forget));
+            repaint.request_repaint();
+        });
+        self.upkeep.package_asks.push(PackageAsk { cloud, removed });
+    }
+
+    /// Reconnects each cloud whose skip mark is gone, when it is still ready and idle; every
+    /// board of that Upkeep says what happened.
+    fn finish_package_asks(&mut self, ctx: &Context) {
+        let mut finished = Vec::new();
+        self.upkeep.package_asks.retain(|ask| match ask.removed.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Ok(result) => {
+                finished.push((ask.cloud.clone(), result.map_err(|error| error.to_string())));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                finished.push((ask.cloud.clone(), Err("the removal stopped".into())));
+                false
+            }
+        });
+        for (cloud, result) in finished {
+            match result.map(|()| self.upkeep_reconnectable(&cloud)) {
+                Ok(Some(runtime)) => {
+                    // The reader sees the mark gone within seconds; until then the line stays off.
+                    for upkeep in self.upkeep_boards_of(&cloud) {
+                        upkeep.package_skipped = false;
+                    }
+                    self.note_package_access(&cloud, None);
+                    self.reconnect_upkeep_cloud(runtime, ctx);
+                }
+                // The cloud changed while the skip was forgotten: its next reconnect asks.
+                Ok(None) => self.note_package_access(&cloud, Some(FORGOTTEN)),
+                Err(error) => {
+                    let note = format!("The earlier skip could not be forgotten: {error}");
+                    self.note_package_access(&cloud, Some(&note));
+                }
+            }
+        }
+    }
+
+    /// Every board of the Upkeep `cloud`.
+    fn upkeep_boards_of<'a>(
+        &'a mut self,
+        cloud: &'a str,
+    ) -> impl Iterator<Item = &'a mut horizon_core::upkeep::UpkeepBoard> + 'a {
+        (self.board.panels.iter_mut())
+            .filter_map(|panel| panel.content.upkeep_mut())
+            .filter(move |upkeep| upkeep.cloud.as_deref() == Some(cloud))
+    }
+
+    /// Shows `note` under Give package access on every board of the Upkeep `cloud`.
+    fn note_package_access(&mut self, cloud: &str, note: Option<&str>) {
+        for upkeep in self.upkeep_boards_of(cloud) {
+            upkeep.package_note = note.map(str::to_owned);
+        }
+    }
+}
+
+/// Why Give package access did not start.
+#[cfg(feature = "cloud-workspaces")]
+const NOT_READY: &str = "The cloud is not ready or is busy. Try again when its card shows Ready.";
+/// The skip is gone, but the cloud stopped being ready before its reconnect.
+#[cfg(feature = "cloud-workspaces")]
+const FORGOTTEN: &str = "The skip is forgotten: the next reconnect of this cloud asks for the package code.";

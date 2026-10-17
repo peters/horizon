@@ -54,8 +54,10 @@ impl<'a> UpkeepView<'a> {
                 Frame::new().inner_margin(Margin::symmetric(16, 14)).show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
                     let Some(status) = board.status.clone() else {
-                        // An agent's change shows even before the first status arrives.
+                        // An agent's change and a skipped package access show even before the
+                        // first status arrives: the first deployment asks before any run.
                         header::agent_changes(ui, &board.agent_changes);
+                        package_access(ui, board);
                         empty(ui, board.error.as_deref(), &board.path().display().to_string());
                         return;
                     };
@@ -78,6 +80,7 @@ impl<'a> UpkeepView<'a> {
                         board.request = Some(request);
                     }
                     header::agent_changes(ui, &board.agent_changes);
+                    package_access(ui, board);
                     if let Some(error) = board.error.as_deref() {
                         // The last status stays, marked as old, until a valid one arrives.
                         ui.add(
@@ -105,6 +108,21 @@ impl<'a> UpkeepView<'a> {
             });
         ui.data_mut(|data| data.insert_temp(filter_id, filter));
         hovered
+    }
+}
+
+/// Give package access, on the board of an Upkeep cloud whose package sign-in was skipped,
+/// and the note of the last press, which stays also once the skip is gone.
+fn package_access(ui: &mut Ui, board: &mut horizon_core::upkeep::UpkeepBoard) {
+    if board.cloud.is_none() {
+        return;
+    }
+    if board.package_skipped && header::package_access(ui) {
+        board.package_note = None;
+        board.request = Some(horizon_core::upkeep::Request::PackageAccess);
+    }
+    if let Some(note) = board.package_note.as_deref() {
+        ui.label(RichText::new(note).size(12.0).color(theme::FG_DIM()));
     }
 }
 

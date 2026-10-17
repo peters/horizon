@@ -616,8 +616,9 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   service keeps that access; no agent sees it, and there is no token for you to ask
   for. **Skip: package checks need a person** is saved for that Upkeep, so later
   deployments do not ask again. When the refusal says that the cloud has no package
-  read access, tell the person that **Connect GitHub again** on the cloud's card asks
-  for it again; a skip then keeps any earlier access.
+  read access, tell the person that **Give package access** on the Upkeep board, or
+  **Connect GitHub again** on the cloud's card, asks for it again; a skip then keeps any
+  earlier access.
 - On workers whose image provides it, `horizon-worker-github mcp` offers
   `github_access` (`repository`, `access` `push` or `read`, `reason`). It asks the
   person for access to one more repository. The person allows it for this task

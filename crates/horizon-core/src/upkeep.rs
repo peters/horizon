@@ -5,14 +5,13 @@
 //! size-limited, parsed into a fixed schema with bounded lists and texts, and never run.
 //! Unknown fields are ignored, and unknown states show as "Other".
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 mod agent_change;
+mod board;
 #[cfg(feature = "cloud-workspaces")]
 mod discover;
 #[cfg(feature = "cloud-workspaces")]
@@ -22,6 +21,7 @@ mod reader;
 pub mod worker;
 
 pub use agent_change::{AgentChange, AgentChangeKind, record as record_agent_change};
+pub use board::{PACKAGE_ACCESS_SKIPPED, UpkeepBoard};
 #[cfg(feature = "cloud-workspaces")]
 pub use discover::{Catalog, CatalogRepository, discover};
 
@@ -334,92 +334,9 @@ pub enum Request {
     Pause(bool),
     /// Edit the repositories of this Upkeep.
     Repositories,
-}
-
-/// Panel content of the Upkeep board.
-pub struct UpkeepBoard {
-    path: PathBuf,
-    /// The last valid status; it stays while a newer document is broken or gone.
-    pub status: Option<Arc<Status>>,
-    /// Why the document could not be read, the last time it changed.
-    pub error: Option<String>,
-    pub request: Option<Request>,
-    /// The browser panel this board opened for pull requests, while it exists.
-    pub browser: Option<crate::PanelId>,
-    /// The Upkeep cloud whose status this is, once the app knows it: only such a board
-    /// offers Run now, Pause and Repositories.
-    pub cloud: Option<String>,
-    /// Run now was pressed: the start of the newest run the status showed then, and when it
-    /// was pressed by the monotonic clock, until the status shows a newer run.
-    pub run_requested: Option<(Option<OffsetDateTime>, std::time::Instant)>,
-    /// What agents changed through `cloud_upkeep`, newest first; the app fills it in.
-    pub agent_changes: Vec<AgentChange>,
-    latest: Option<reader::Latest>,
-    /// The reader thread could not start; the board does not try again.
-    reader_failed: bool,
-    alive: Arc<AtomicBool>,
-}
-
-impl UpkeepBoard {
-    #[must_use]
-    pub fn new(path: Option<PathBuf>) -> Self {
-        Self {
-            path: path.unwrap_or_else(default_status_path),
-            status: None,
-            error: None,
-            request: None,
-            browser: None,
-            cloud: None,
-            run_requested: None,
-            agent_changes: Vec::new(),
-            latest: None,
-            reader_failed: false,
-            alive: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Takes what the reader thread found since the last call, starting the thread on
-    /// the first call. Never touches the file itself. Returns true when anything changed.
-    pub fn poll(&mut self) -> bool {
-        if self.latest.is_none() {
-            if self.reader_failed {
-                return false;
-            }
-            self.latest = reader::spawn(self.path.clone(), self.alive.clone());
-            if self.latest.is_none() {
-                self.reader_failed = true;
-                self.error = Some("The Upkeep status reader could not start.".into());
-                return true;
-            }
-        }
-        let Some((status, error)) = self.latest.as_ref().and_then(|latest| {
-            let mut pending = latest.lock().ok()?;
-            Some((pending.status.take(), pending.error.take()))
-        }) else {
-            return false;
-        };
-        let changed = status.is_some() || error.is_some();
-        if let Some(status) = status {
-            self.status = Some(Arc::new(status));
-        }
-        match error {
-            Some(reader::ErrorChange::Cleared) => self.error = None,
-            Some(reader::ErrorChange::Set(error)) => self.error = Some(error),
-            None => {}
-        }
-        changed
-    }
-}
-
-impl Drop for UpkeepBoard {
-    fn drop(&mut self) {
-        self.alive.store(false, Ordering::Relaxed);
-    }
+    /// Ask again for the package read access that the person skipped, with a deployment of
+    /// the cloud that starts now.
+    PackageAccess,
 }
 
 /// `owner/name` in the characters GitHub allows, with no `.` or `..` segment.
@@ -747,6 +664,15 @@ mod tests {
         }
         assert_eq!(board.error.as_deref(), Some("The Upkeep status file is gone."));
         assert!(board.status.is_some());
+        // A skip of the package read access beside the status reaches the board too.
+        assert!(!board.package_skipped);
+        std::fs::write(dir.path().join(PACKAGE_ACCESS_SKIPPED), "skipped\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !board.package_skipped && std::time::Instant::now() < deadline {
+            board.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(board.package_skipped);
     }
 
     #[test]

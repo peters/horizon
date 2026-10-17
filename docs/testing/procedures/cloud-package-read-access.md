@@ -75,6 +75,8 @@ account).
    cargo test -p horizon-cloud --lib scope_tests
    cargo test -p horizon-core --lib github::packages
    cargo test -p horizon-ui cards::github
+   cargo test -p horizon-core --lib upkeep
+   cargo test -p horizon-ui upkeep
    ```
 
    Result: Each command shows `test result: ok`.
@@ -132,6 +134,29 @@ account).
 
    Result: After the cloud's GitHub step, the card shows the package code again.
    Click **Skip: package checks need a person**.
+
+5. Open the Upkeep board of this cloud.
+
+   Result: The board shows `Package sign-in skipped: checks of private package
+   versions may need a person.` and **Give package access**.
+
+6. While the card of this cloud shows a deployment in progress, click **Give package
+   access** on the board.
+
+   Result: The board says `The cloud is not ready or is busy. Try again when its
+   card shows Ready.` The file `package-access-skipped` still exists.
+
+7. When the card shows **Ready**, click **Give package access** again.
+
+   Result: Within two seconds the board line is gone and the file
+   `package-access-skipped` does not exist. The cloud reconnects. After its GitHub
+   step the card shows the package code without a new GitHub code.
+
+8. Authorize the package code.
+
+   Result: The deployment output has `GitHub packages: the worker can now read the
+   packages of this cloud's owners for its agents.` The `gh api` command of D01
+   shows a version and a date.
 
 ### 6.4 D03 — An organization that limits OAuth apps
 

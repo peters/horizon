@@ -216,6 +216,41 @@ fn the_board_of_a_saved_upkeep_runs_now_and_pauses_through_its_exchange() {
     app.apply_upkeep_requests(&ctx);
     assert_eq!(app.upkeep.syncs["upkeep-test-board"].signals.paused, Some(true));
 
+    // Give package access needs a ready cloud that runs nothing else: this one has no card,
+    // so the skip stays and the board says why nothing started.
+    upkeep(&mut app, board).request = Some(Request::PackageAccess);
+    app.apply_upkeep_requests(&ctx);
+    assert!(app.upkeep.package_asks.is_empty());
+    assert_eq!(
+        upkeep(&mut app, board).package_note.as_deref(),
+        Some("The cloud is not ready or is busy. Try again when its card shows Ready.")
+    );
+    // A removal that fails keeps the skip and says why on every board of the Upkeep.
+    let ask = |result: std::io::Result<()>| {
+        let (tx, removed) = std::sync::mpsc::channel();
+        tx.send(result).unwrap();
+        crate::app::upkeep::PackageAsk {
+            cloud: "upkeep-test-board".into(),
+            removed,
+        }
+    };
+    app.upkeep.package_asks.push(ask(Err(std::io::Error::other("refused"))));
+    app.apply_upkeep_requests(&ctx);
+    assert!(app.upkeep.package_asks.is_empty());
+    for shown in [board, second] {
+        assert_eq!(
+            upkeep(&mut app, shown).package_note.as_deref(),
+            Some("The earlier skip could not be forgotten: refused")
+        );
+    }
+    // A skip that is gone while the cloud stopped being ready waits for its next reconnect.
+    app.upkeep.package_asks.push(ask(Ok(())));
+    app.apply_upkeep_requests(&ctx);
+    assert_eq!(
+        upkeep(&mut app, second).package_note.as_deref(),
+        Some("The skip is forgotten: the next reconnect of this cloud asks for the package code.")
+    );
+
     app.link_upkeep_boards(&crate::app::upkeep::Saved::default());
     assert_eq!(
         upkeep(&mut app, board).cloud,

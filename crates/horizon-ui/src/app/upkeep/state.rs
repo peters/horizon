@@ -36,6 +36,15 @@ pub(in crate::app) struct State {
     pub(in crate::app) syncs: HashMap<String, Sync>,
     /// The `cloud_upkeep` requests of agents.
     pub(in crate::app) agent: super::agent::Requests,
+    /// Give package access presses whose skip mark is being removed off the UI thread; the
+    /// cloud's deployment starts once it is gone.
+    pub(in crate::app) package_asks: Vec<PackageAsk>,
+}
+
+/// One Give package access press: the Upkeep's cloud and the removal of its skip mark.
+pub(in crate::app) struct PackageAsk {
+    pub(in crate::app) cloud: String,
+    pub(in crate::app) removed: Receiver<std::io::Result<()>>,
 }
 
 /// A start waiting for its first repository on this computer.

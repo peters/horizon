@@ -37,11 +37,17 @@ pub(super) struct Reader {
     last_error: Option<String>,
     /// Whether a valid status was read before.
     read_once: bool,
+    /// [`super::PACKAGE_ACCESS_SKIPPED`] beside the document, and whether it was there at the
+    /// last look.
+    skip_mark: PathBuf,
+    skipped: Option<bool>,
 }
 
 impl Reader {
     pub(super) fn new(path: PathBuf) -> Self {
         Self {
+            skip_mark: path.with_file_name(super::PACKAGE_ACCESS_SKIPPED),
+            skipped: None,
             path,
             last_hash: None,
             missing: false,
@@ -101,6 +107,18 @@ impl Reader {
     }
 }
 
+impl Reader {
+    /// Whether the person skipped the package read access, when that changed since the last
+    /// look. It reads the mark as the deployment does, so the board offers what it would ask.
+    pub(super) fn check_skipped(&mut self) -> Option<bool> {
+        let skipped = self.skip_mark.exists();
+        (self.skipped != Some(skipped)).then(|| {
+            self.skipped = Some(skipped);
+            skipped
+        })
+    }
+}
+
 /// The newest reading the thread found and the board has not taken yet. A newer reading
 /// replaces an older one, so a board that is not drawn holds at most one.
 pub(super) type Latest = Arc<Mutex<Pending>>;
@@ -111,6 +129,8 @@ pub(super) type Latest = Arc<Mutex<Pending>>;
 pub(super) struct Pending {
     pub(super) status: Option<Status>,
     pub(super) error: Option<ErrorChange>,
+    /// Whether the package read access is skipped, when that changed.
+    pub(super) package_skipped: Option<bool>,
 }
 
 /// How the board's error line changes.
@@ -145,10 +165,16 @@ pub(super) fn spawn(path: PathBuf, alive: Arc<AtomicBool>) -> Option<Latest> {
                 let Some(slot) = slot.upgrade() else {
                     return;
                 };
-                if let Some(reading) = reader.check()
+                let (reading, skipped) = (reader.check(), reader.check_skipped());
+                if (reading.is_some() || skipped.is_some())
                     && let Ok(mut pending) = slot.lock()
                 {
-                    pending.put(reading);
+                    if let Some(reading) = reading {
+                        pending.put(reading);
+                    }
+                    if skipped.is_some() {
+                        pending.package_skipped = skipped;
+                    }
                 }
                 drop(slot);
                 std::thread::sleep(CHECK_EVERY);
@@ -297,6 +323,20 @@ fn clip(text: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_skip_mark_beside_the_status_is_reported_when_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut reader = Reader::new(dir.path().join("status.json"));
+        assert_eq!(reader.check_skipped(), Some(false), "the first look reports the state");
+        assert_eq!(reader.check_skipped(), None);
+        let mark = dir.path().join(crate::upkeep::PACKAGE_ACCESS_SKIPPED);
+        std::fs::write(&mark, "skipped\n").unwrap();
+        assert_eq!(reader.check_skipped(), Some(true));
+        assert_eq!(reader.check_skipped(), None);
+        std::fs::remove_file(&mark).unwrap();
+        assert_eq!(reader.check_skipped(), Some(false));
+    }
 
     #[test]
     fn reports_each_change_once() {
