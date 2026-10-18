@@ -19,11 +19,10 @@ mod workbench;
 
 use std::fmt;
 
-use base64::Engine as _;
 use horizon_browser::remote::{
-    ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAuthentication,
-    RemoteProviderProfile,
+    ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteProviderProfile,
 };
+use horizon_browser_control::remote_authorization::{CredentialValueError, authorization_header, header_safe_value};
 use zeroize::Zeroizing;
 
 pub use environment::EnvironmentCredentialStore;
@@ -34,9 +33,7 @@ pub use workbench::{
     CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice, credential_destination,
 };
 
-/// Largest accepted secret. Provider keys are far smaller; the bound stops a
-/// pasted file from becoming a header.
-pub const MAX_SECRET_BYTES: usize = 16 * 1024;
+pub use horizon_browser_control::remote_authorization::MAX_SECRET_BYTES;
 
 mod private {
     /// Sealing supertrait: only this crate's stores and sinks exist.
@@ -118,6 +115,17 @@ pub enum RemoteCredentialError {
     /// The OS store has not answered yet; try again after the next poll.
     #[error("credential store is still being checked")]
     Checking,
+}
+
+impl From<CredentialValueError> for RemoteCredentialError {
+    fn from(error: CredentialValueError) -> Self {
+        match error {
+            CredentialValueError::InvalidValue => Self::InvalidValue,
+            CredentialValueError::NotHeaderSafe => Self::NotHeaderSafe,
+            CredentialValueError::InvalidUsername => Self::InvalidUsername,
+            CredentialValueError::InvalidBearerToken => Self::InvalidBearerToken,
+        }
+    }
 }
 
 /// Readiness of one reference for display. Never carries a value.
@@ -267,38 +275,16 @@ pub fn resolve_authorization(
     stores: &CredentialStores<'_>,
 ) -> Result<Option<ProviderAuthorization>, ResolveError> {
     let origin = profile.endpoint.origin();
-    let header = match &profile.authentication {
-        RemoteAuthentication::None {} => return Ok(None),
-        RemoteAuthentication::Basic {
-            username_ref,
-            password_ref,
-        } => {
-            let username = fetch(profile, stores, username_ref)?;
-            if username.contains(':') {
-                return Err(ResolveError {
-                    reference: username_ref.clone(),
-                    variable: variable_name(profile, username_ref),
-                    error: RemoteCredentialError::InvalidUsername,
-                });
-            }
-            let password = fetch(profile, stores, password_ref)?;
-            let joined = Zeroizing::new(format!("{}:{}", username.as_str(), password.as_str()));
-            let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(joined.as_bytes()));
-            Zeroizing::new(format!("Basic {}", encoded.as_str()))
-        }
-        RemoteAuthentication::Bearer { token_ref } => {
-            let token = fetch(profile, stores, token_ref)?;
-            if !is_token68(&token) {
-                return Err(ResolveError {
-                    reference: token_ref.clone(),
-                    variable: variable_name(profile, token_ref),
-                    error: RemoteCredentialError::InvalidBearerToken,
-                });
-            }
-            Zeroizing::new(format!("Bearer {}", token.as_str()))
-        }
-    };
-    Ok(Some(ProviderAuthorization { origin, header }))
+    let header = authorization_header(
+        &profile.authentication,
+        |reference| fetch(profile, stores, reference),
+        |reference, error| ResolveError {
+            reference: reference.clone(),
+            variable: variable_name(profile, reference),
+            error: error.into(),
+        },
+    )?;
+    Ok(header.map(|header| ProviderAuthorization { origin, header }))
 }
 
 fn fetch(
@@ -330,15 +316,6 @@ fn variable_name(profile: &RemoteProviderProfile, reference: &CredentialReferenc
         .map(str::to_string)
 }
 
-/// RFC 7235 `token68`: the only shape a Bearer credential may take.
-fn is_token68(token: &str) -> bool {
-    let trimmed = token.trim_end_matches('=');
-    !trimmed.is_empty()
-        && trimmed
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/'))
-}
-
 /// Accepts one printable-ASCII value into a zeroizing buffer.
 #[derive(Default)]
 struct HeaderSafeSink {
@@ -349,20 +326,13 @@ impl Sealed for HeaderSafeSink {}
 
 impl SecretSink for HeaderSafeSink {
     fn accept(&mut self, bytes: &[u8]) -> Result<(), RemoteCredentialError> {
-        validate_secret(bytes)?;
-        if !bytes.iter().all(|byte| byte.is_ascii_graphic() || *byte == b' ') {
-            return Err(RemoteCredentialError::NotHeaderSafe);
-        }
-        self.value = Some(Zeroizing::new(String::from_utf8_lossy(bytes).into_owned()));
+        self.value = Some(header_safe_value(bytes)?);
         Ok(())
     }
 }
 
 pub(crate) fn validate_secret(bytes: &[u8]) -> Result<(), RemoteCredentialError> {
-    if bytes.is_empty() || bytes.len() > MAX_SECRET_BYTES {
-        return Err(RemoteCredentialError::InvalidValue);
-    }
-    Ok(())
+    horizon_browser_control::remote_authorization::validate_secret(bytes).map_err(Into::into)
 }
 
 #[cfg(test)]

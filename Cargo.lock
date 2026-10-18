@@ -2478,6 +2478,7 @@ name = "horizon-browser-control"
 version = "0.2.7"
 dependencies = [
  "atomicwrites",
+ "base64 0.23.1",
  "horizon-browser",
  "libc",
  "same-file",

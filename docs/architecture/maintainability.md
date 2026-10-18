@@ -178,7 +178,11 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   encoder. Explicit path constructors do not override global coordination APIs.
 - Depends on the browser engine and small filesystem/serialization helpers.
   It must not depend on core, UI, terminal state, MCP, or agent runtimes. Provider
-  credentials, device quotas, Teach, and host panel state stay outside this crate.
+  credential stores, Teach, and host panel state stay outside this crate.
+- `remote_authorization` forms the provider authorization header from bound values
+  that a host's own stores supply, and `remote_slots` owns the cross-instance
+  provider slot leases and their quota key. Every host uses these two modules, so
+  a host without core forms the same header and counts the same slots.
 
 ### `horizon-core`
 
@@ -257,7 +261,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   store, the launch-time environment snapshot (`environment`), the `keyring-core`
   adapter (`keyring_store`), the fake store seam,
   and the resolver that turns bindings into one origin-bound authorization
-  header. It never serializes values, never writes a secret back into the
+  header through `horizon-browser-control::remote_authorization`. It never serializes values, never writes a secret back into the
   process environment, and holds no transport, allocation or UI code. `workbench`
   runs OS-store operations on a worker thread with a presence cache the UI
   reads, so a locked store or an unlock prompt never blocks the render loop.

@@ -18,7 +18,7 @@ pub mod remote_catalog;
 pub mod remote_profile;
 pub mod remote_recovery;
 pub mod remote_session;
-pub mod remote_slots;
+pub use horizon_browser_control::remote_slots;
 pub mod remote_usage;
 mod shared_session;
 pub mod teach;
