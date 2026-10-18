@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use horizon_browser::remote::{CredentialReference, RemoteBrowserConfig};
 
-use super::config::{self, HostConfig};
+use super::config;
 use super::holds::Holds;
 
 const PROVIDERS: &str = "
@@ -153,10 +153,10 @@ fn a_host_file_that_others_can_change_is_refused() {
     );
     std::fs::write(&path, text).expect("host file");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("mode");
-    let config = HostConfig::load(&path).expect("an owner-writable host file loads");
-    assert_eq!(config.remote.targets.len(), 1);
+    let loaded = config::HostConfig::load(&path).expect("an owner-writable host file loads");
+    assert_eq!(loaded.remote.targets.len(), 1);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).expect("mode");
-    let refused = HostConfig::load(&path).unwrap_err().to_string();
+    let refused = config::HostConfig::load(&path).unwrap_err().to_string();
     assert!(
         refused.contains("must not be writable by group or other users"),
         "{refused}"
