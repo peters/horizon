@@ -314,6 +314,11 @@ per-profile errors. Profiles use their own credential bindings; names alone do
 not provide isolation. Usage does not reserve a device. Never pass credentials
 or raw provider capabilities.
 
+Outside Horizon, `horizon-browser mcp --standalone --config <host-file>` serves
+the same tools for the remote targets of a host file. It starts no local
+browser, so `browser_create` needs a `target`. Close each session when the task
+ends; the host also releases every session when the MCP client disconnects.
+
 ## Actions, attachments, and screenshots
 
 `browser_act` operations are `click`, `fill`, `press`, `scroll`, `reload`, `back`,

@@ -17,6 +17,7 @@ use horizon_browser_control::{
 use thiserror::Error;
 
 mod lease;
+pub mod remote;
 
 pub use lease::StandaloneHostRef;
 
@@ -46,6 +47,10 @@ pub enum StandaloneError {
     Mcp(#[from] horizon_browser_mcp::StdioServerError),
     #[error("standalone browser did not stop within the cleanup deadline")]
     Shutdown,
+    #[error(
+        "a remote session was not released before the exit deadline; the next standalone host on this runtime root checks it at the provider"
+    )]
+    Release,
 }
 
 pub(crate) struct OwnedSession {
@@ -138,6 +143,8 @@ impl OwnedHostProcess {
             .env(horizon_browser_control::paths::RUNTIME_ROOT_ENV, &horizon_root)
             .env("RUST_LOG", "off")
             .env_remove("HORIZON_BROWSER_ACTOR")
+            // A job's host is a local browser, never the remote host of a host file.
+            .env_remove(remote::CONFIG_ENV)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr))

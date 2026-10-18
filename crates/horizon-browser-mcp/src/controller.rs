@@ -220,6 +220,15 @@ impl BrowserController {
         )
     }
 
+    pub(crate) fn for_host(actor: &str, host_instance: &str) -> Self {
+        sweep_stale_attachments();
+        Self {
+            actor: actor.to_owned(),
+            host_instance: Some(host_instance.to_owned()),
+            process_local_ownership: None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_actor(actor: impl Into<String>) -> Self {
         Self {

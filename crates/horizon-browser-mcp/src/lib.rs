@@ -28,9 +28,21 @@ pub enum StdioServerError {
 /// # Errors
 /// Returns when transport initialization or the service task fails.
 pub async fn serve_stdio() -> Result<(), StdioServerError> {
+    serve(HorizonBrowserMcp::from_environment()).await
+}
+
+/// Serve the contract over stdio as `actor`, the one agent of the host
+/// `host_instance` that runs in this process.
+///
+/// # Errors
+/// Returns when transport initialization or the service task fails.
+pub async fn serve_stdio_for_host(actor: &str, host_instance: &str) -> Result<(), StdioServerError> {
+    serve(HorizonBrowserMcp::for_host(actor, host_instance)).await
+}
+
+async fn serve(server: HorizonBrowserMcp) -> Result<(), StdioServerError> {
     use rmcp::ServiceExt as _;
 
-    let server = HorizonBrowserMcp::from_environment();
     let service = server
         .serve(rmcp::transport::stdio())
         .await

@@ -209,6 +209,97 @@ Remote sessions still use the public `browser_*` MCP tools (`browser_create`
 with a configured `target`, then snapshot/actions, then `browser_close`). No
 alternate control API is added for environment credentials.
 
+### Standalone remote host
+
+A server or CI host can drive remote device sessions without Horizon. It runs
+standalone `horizon-browser` with a host file:
+
+```bash
+horizon-browser mcp --standalone --config /etc/horizon-browser/remote.yaml
+```
+
+`HORIZON_BROWSER_CONFIG` can name the host file instead of `--config`. It holds
+a path, never a value, and it applies only when no `--backend`, `--visible` or
+`--keep-alive` flag asks for a local browser. The host file uses the `browser.remote` providers and
+targets of the desktop configuration. A provider has no `credential_bindings`.
+`credential_files` names, for each provider, one file for each reference of its
+authentication block:
+
+```yaml
+browser:
+  remote:
+    providers:
+      device_cloud:
+        adapter: browserstack
+        endpoint: https://hub-cloud.browserstack.com/wd/hub
+        authentication:
+          kind: basic
+          username_ref: device-cloud-user
+          password_ref: device-cloud-key
+    targets:
+      ios_phone:
+        provider: device_cloud
+        browser_name: safari
+        platform_name: iOS
+        device: { kind: physical, model: configured-ios-model, os_version: "18" }
+credential_files:
+  device_cloud:
+    device-cloud-user: /run/secrets/device-cloud/username
+    device-cloud-key: /run/secrets/device-cloud/access-key
+```
+
+Each credential file holds one value. One final line break is removed. The
+host reads the files each time it forms a header, so a changed or removed file
+applies to the next session, usage sample or device list.
+
+The host serves the public MCP contract over stdio. `browser_create` with a
+configured `target`, or a target from `browser_provider_devices`, opens a
+session. `browser_close` releases it. It answers `release_failed` or
+`release_unknown`, as the desktop host does, when the provider did not confirm
+the release, and the provider slot stays held until a check confirms it. `browser_provider_usage` samples the
+configured providers and `browser_remote_allocations` lists and reconciles the
+holds of the host. The host starts no local browser: a create without a target
+fails with `target_required`. Requests that need a Horizon host, such as the
+cloud tools and the device viewer, fail with an `_unavailable` code.
+
+Lifecycle:
+
+- When MCP stdin closes, or the process gets an interrupt or a termination
+  signal, the host releases every session. It waits up to 30 seconds for all
+  releases, then stops the drivers that did not finish, and waits up to 15
+  seconds for the provider checks of unconfirmed releases. The process exits
+  with an error when a release of its own session stays unconfirmed. Give the
+  process at least two minutes before a supervisor kills it.
+- Before a driver starts, the host saves the hold under
+  `<runtime root>/standalone-remote-holds/<host instance>/`. The host locks its
+  folder while it runs. On Unix the folder gets its name only after the lock is
+  held. On Windows two hosts that start at the same moment on one runtime root
+  can race for a starting folder; give each host its own runtime root there.
+- A host that starts on the same runtime root takes over the folders of hosts
+  that do not hold their lock any more, also after a kill. It checks each exact
+  session at the original provider and lists the result in
+  `browser_remote_allocations`. A hold without an exact session identity stays
+  listed until a person verifies it at the provider and removes its two files
+  from the hold folder. A hold whose journal was never saved had no driver, so
+  the next host removes it.
+- A provider with a local session limit shares its slot files with the other
+  hosts of the same runtime root.
+
+Trust boundary:
+
+- Trusted: the host file and the credential files. The host file decides where
+  the credentials go, so the host refuses a host file that the group or other
+  users can write. It refuses a credential file that the group or other users
+  can read or write.
+- Untrusted: the MCP client. It can name a target and use the public tools. It
+  can not supply an endpoint, a capability or a credential, and no tool returns
+  a credential value or a credential file path.
+- The runtime root is the private state of the user that runs the host. Each
+  host claims only the requests of its own agent identity and host instance.
+- Not protected: another process of the same operating-system user can read the
+  credential files. Run the host as a user that the MCP client can not become,
+  and give that user the only access to the credential files.
+
 ## Device identity and evidence
 
 Requested versus actual identity is compared from provider session metadata or
@@ -421,4 +512,6 @@ host request/reply queue. The MCP controller transports the request and the UI
 host bridge drives the shared usage model. These files are an internal transport;
 agents must use the public MCP tool rather than reading the queue directly.
 A standalone local-browser host has no configured remote-provider credentials,
-so the tool reports that a live Horizon host identity is required.
+so the tool reports that a live Horizon host identity is required. A standalone
+remote host (see [Standalone remote host](#standalone-remote-host)) answers the
+tool itself from its credential files.

@@ -44,6 +44,7 @@ USAGE:
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
+    horizon-browser mcp --standalone --config <HOST-FILE>
     horizon-browser mcp --stop [PANEL-ID]
 
 COMMANDS:
@@ -61,7 +62,10 @@ COMMANDS:
            a standalone browser; --connect uses existing Horizon panels only.
            --keep-alive leaves that browser running after MCP stdin closes so
            a later --connect or resume can reuse it. --stop asks keep-alive
-           hosts to exit and clean up.
+           hosts to exit and clean up. --config (or HORIZON_BROWSER_CONFIG)
+           names a host file of remote targets and credential files; the
+           standalone host then serves only those targets and releases their
+           sessions when MCP stdin closes.
 
 OPTIONS:
     --backend <BACKEND>   Select a backend; prompt/MCP jobs default to auto.
@@ -93,6 +97,7 @@ enum Command {
     Mcp {
         standalone: bool,
         options: StandaloneOptions,
+        config: Option<PathBuf>,
     },
     Stop {
         panel_id: Option<String>,
@@ -120,7 +125,11 @@ async fn main() -> ExitCode {
         Ok(Command::Orientation(options)) => options.run().await,
         Ok(Command::Cloud(options)) => options.run().await,
         Ok(Command::Do(options)) => run_job(&options),
-        Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
+        Ok(Command::Mcp {
+            standalone,
+            options,
+            config,
+        }) => serve_mcp(standalone, options, config.as_deref()).await,
         Ok(Command::Stop { panel_id }) => stop_standalone(panel_id.as_deref()),
         Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
         Ok(Command::Resume {
@@ -175,9 +184,13 @@ fn stop_standalone(panel_id: Option<&str>) -> ExitCode {
     }
 }
 
-async fn serve_mcp(standalone: bool, options: StandaloneOptions) -> ExitCode {
+async fn serve_mcp(standalone: bool, options: StandaloneOptions, config: Option<&Path>) -> ExitCode {
     horizon_browser_cli::standalone::prune_dead_hosts();
-    let result = if standalone {
+    let result = if let Some(config) = config {
+        horizon_browser_cli::standalone::remote::serve(config)
+            .await
+            .map_err(|error| error.to_string())
+    } else if standalone {
         horizon_browser_cli::standalone::serve(options)
             .await
             .map_err(|error| error.to_string())
@@ -690,6 +703,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     let mut backend_seen = false;
     let mut visible = false;
     let mut keep_alive = false;
+    let mut config = None;
     let mut stop = false;
     let mut stop_panel = None;
     while let Some(argument) = args.next() {
@@ -724,18 +738,36 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             }
             Some("--backend") => return Err("--backend may be specified only once".to_string()),
             Some("--visible") if !visible => visible = true,
+            Some("--config") if config.is_none() => {
+                config = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--config requires a host file path".to_string())?,
+                ));
+            }
+            Some("--config") => return Err("--config may be specified only once".to_string()),
             Some(argument) => return Err(format!("unexpected mcp argument `{argument}`")),
             None => return Err("mcp argument is not valid UTF-8".to_string()),
         }
     }
     if stop {
-        if mode_seen || keep_alive || backend_seen || visible {
+        if mode_seen || keep_alive || backend_seen || visible || config.is_some() {
             return Err("--stop cannot be combined with other MCP mode flags".to_string());
         }
         return Ok(Command::Stop { panel_id: stop_panel });
     }
-    if !standalone && (backend_seen || visible || keep_alive) {
-        return Err("--backend, --visible, and --keep-alive require standalone MCP mode".to_string());
+    if !standalone && (backend_seen || visible || keep_alive || config.is_some()) {
+        return Err("--backend, --visible, --keep-alive, and --config require standalone MCP mode".to_string());
+    }
+    // The variable applies only when no flag asks for a local browser.
+    if standalone && config.is_none() && !(backend_seen || visible || keep_alive) {
+        config = std::env::var_os(horizon_browser_cli::standalone::remote::CONFIG_ENV)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+    }
+    if config.is_some() && (backend_seen || visible || keep_alive) {
+        return Err(
+            "a host file serves remote targets only; --backend, --visible, and --keep-alive do not apply".to_string(),
+        );
     }
     Ok(Command::Mcp {
         standalone,
@@ -744,6 +776,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             visible,
             keep_alive,
         },
+        config,
     })
 }
 
@@ -974,9 +1007,10 @@ mod tests {
         );
         assert!(parse_args(["mcp", "extra"].map(OsString::from)).is_err());
 
-        let Command::Mcp { standalone, options } =
-            parse_args(["mcp", "--standalone", "--backend", "firefox", "--visible"].map(OsString::from))
-                .expect("standalone MCP")
+        let Command::Mcp {
+            standalone, options, ..
+        } = parse_args(["mcp", "--standalone", "--backend", "firefox", "--visible"].map(OsString::from))
+            .expect("standalone MCP")
         else {
             panic!("expected MCP command");
         };
@@ -993,6 +1027,23 @@ mod tests {
         };
         assert_eq!(panel_id.as_deref(), Some("standalone-1-abc"));
         assert!(parse_args(["mcp", "--stop", "--standalone"].map(OsString::from)).is_err());
+        let Command::Mcp { config, .. } =
+            parse_args(["mcp", "--standalone", "--config", "/etc/horizon/remote.yaml"].map(OsString::from))
+                .expect("remote host MCP")
+        else {
+            panic!("expected MCP command");
+        };
+        assert_eq!(config.as_deref(), Some(Path::new("/etc/horizon/remote.yaml")));
+        for refused in [
+            &["mcp", "--connect", "--config", "/h.yaml"][..],
+            &["mcp", "--standalone", "--config", "/h.yaml", "--visible"],
+            &["mcp", "--standalone", "--config", "/h.yaml", "--keep-alive"],
+            &["mcp", "--standalone", "--config", "/h.yaml", "--config", "/i.yaml"],
+            &["mcp", "--standalone", "--config"],
+            &["mcp", "--stop", "--config", "/h.yaml"],
+        ] {
+            assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
+        }
     }
 
     #[test]

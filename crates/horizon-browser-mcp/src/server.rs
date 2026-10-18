@@ -43,6 +43,13 @@ impl HorizonBrowserMcp {
         Self::new(BrowserController::from_environment())
     }
 
+    /// Build a service for the one agent of a host that runs in this
+    /// process, such as a standalone remote host.
+    #[must_use]
+    pub fn for_host(actor: &str, host_instance: &str) -> Self {
+        Self::new(BrowserController::for_host(actor, host_instance))
+    }
+
     fn new(controller: BrowserController) -> Self {
         crate::controller::spawn_attachment_janitor();
         Self {
