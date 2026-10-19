@@ -1,17 +1,23 @@
-use egui::ColorImage;
+//! The desktop as the server draws it: decoded rectangles composited into one
+//! RGBA buffer, with the bounds of what changed since the last image.
 use vnc::{Rect, VncEvent};
 
-use super::session::ViewError;
+use crate::{Error, Frame, Region};
+
+/// The most desktop pixels a framebuffer holds (3840 × 2160).
+const MAX_PIXELS: usize = 8_294_400;
 
 #[derive(Default)]
-pub(super) struct Framebuffer {
+pub(crate) struct Framebuffer {
     width: usize,
     height: usize,
     rgba: Vec<u8>,
+    /// Bounds every pixel written since the last `take_damage`.
+    damage: Option<Region>,
 }
 
 impl Framebuffer {
-    pub(super) fn apply(&mut self, event: VncEvent) -> Result<bool, ViewError> {
+    pub(crate) fn apply(&mut self, event: VncEvent) -> Result<bool, Error> {
         match event {
             VncEvent::SetResolution(size) => self.resize(usize::from(size.width), usize::from(size.height)),
             VncEvent::DesktopUpdate(update) => {
@@ -32,7 +38,7 @@ impl Framebuffer {
                 self.check(source)?;
                 self.check(destination)?;
                 if source.width != destination.width || source.height != destination.height {
-                    return Err(ViewError::Frame("copy dimensions differ"));
+                    return Err(Error::Frame("copy dimensions differ"));
                 }
                 // Snapshot the source so overlapping copies have memmove semantics.
                 let mut bytes = Vec::with_capacity(usize::from(source.width) * usize::from(source.height) * 4);
@@ -43,40 +49,46 @@ impl Framebuffer {
                 self.write(destination, &bytes)?;
                 Ok(true)
             }
-            VncEvent::Error(error) => Err(ViewError::Server(error)),
-            VncEvent::JpegImage(_, _) | VncEvent::SetCursor(_, _) => {
-                Err(ViewError::Frame("unrequested image encoding"))
-            }
+            VncEvent::Error(error) => Err(Error::Server(error)),
+            VncEvent::JpegImage(_, _) | VncEvent::SetCursor(_, _) => Err(Error::Frame("unrequested image encoding")),
             VncEvent::SetPixelFormat(_) | VncEvent::Bell | VncEvent::Text(_) => Ok(false),
-            _ => Err(ViewError::Frame("unsupported viewer event")),
+            _ => Err(Error::Frame("unsupported viewer event")),
         }
     }
 
-    fn resize(&mut self, width: usize, height: usize) -> Result<bool, ViewError> {
-        if width == 0 || height == 0 || width * height > 8_294_400 {
-            return Err(ViewError::Frame("unsupported desktop size"));
+    fn resize(&mut self, width: usize, height: usize) -> Result<bool, Error> {
+        if width == 0 || height == 0 || width * height > MAX_PIXELS {
+            return Err(Error::Frame("unsupported desktop size"));
         }
         self.width = width;
         self.height = height;
         self.rgba = vec![0; width * height * 4];
+        self.damage = Some(Region::whole([width, height]));
         Ok(true)
     }
 
-    fn check(&self, rect: Rect) -> Result<(), ViewError> {
+    fn check(&self, rect: Rect) -> Result<(), Error> {
         if usize::from(rect.x) + usize::from(rect.width) > self.width
             || usize::from(rect.y) + usize::from(rect.height) > self.height
         {
-            return Err(ViewError::Frame("rectangle outside desktop"));
+            return Err(Error::Frame("rectangle outside desktop"));
         }
         Ok(())
     }
 
-    fn write(&mut self, rect: Rect, bytes: &[u8]) -> Result<(), ViewError> {
+    fn write(&mut self, rect: Rect, bytes: &[u8]) -> Result<(), Error> {
         self.check(rect)?;
         let row_bytes = usize::from(rect.width) * 4;
         if bytes.len() != row_bytes * usize::from(rect.height) {
-            return Err(ViewError::Frame("rectangle byte count mismatch"));
+            return Err(Error::Frame("rectangle byte count mismatch"));
         }
+        let written = Region {
+            x: usize::from(rect.x),
+            y: usize::from(rect.y),
+            width: usize::from(rect.width),
+            height: usize::from(rect.height),
+        };
+        self.damage = Some(self.damage.map_or(written, |damage| damage.union(written)));
         for row in 0..usize::from(rect.height) {
             let start = ((usize::from(rect.y) + row) * self.width + usize::from(rect.x)) * 4;
             let destination = &mut self.rgba[start..start + row_bytes];
@@ -88,89 +100,41 @@ impl Framebuffer {
         Ok(())
     }
 
-    pub(super) fn size(&self) -> [usize; 2] {
+    pub(crate) fn size(&self) -> [usize; 2] {
         [self.width, self.height]
     }
 
-    pub(super) fn full_image(&self) -> Result<ColorImage, ViewError> {
+    /// A copy of the whole desktop.
+    pub(crate) fn frame(&self) -> Result<Frame, Error> {
         if self.size().contains(&0) {
-            return Err(ViewError::Frame("unsupported desktop size"));
+            return Err(Error::Frame("unsupported desktop size"));
         }
-        Ok(ColorImage::from_rgba_unmultiplied(self.size(), &self.rgba))
+        Frame::from_rgba(self.size(), &self.rgba)
+    }
+
+    /// The bounds of every pixel written since the last call; `None` when
+    /// nothing was. A resize counts as a write of the whole desktop.
+    pub(crate) fn take_damage(&mut self) -> Option<Region> {
+        self.damage.take()
     }
 
     #[cfg(test)]
-    pub(super) fn image(&self, options: horizon_core::DeviceViewOptions) -> Result<ColorImage, ViewError> {
-        present_image(&self.full_image()?, options)
+    pub(crate) fn image(&self, options: crate::ViewOptions) -> Result<Frame, Error> {
+        self.frame()?.present(options)
     }
-}
-
-/// Whether a picture is one flat colour apart from a stray pointer or a clock: a desktop with
-/// nothing open on it. It samples a fixed grid, so the cost does not grow with the desktop.
-pub(super) fn looks_empty(image: &ColorImage) -> bool {
-    const GRID: usize = 64;
-    // A pointer or a small clock may differ; a window or a wallpaper would differ a lot more.
-    const OTHER_PER_HUNDRED: usize = 2;
-    let [width, height] = image.size;
-    if width == 0 || height == 0 || image.pixels.len() != width * height {
-        return false;
-    }
-    let (columns, rows) = (width.min(GRID), height.min(GRID));
-    let samples = || {
-        (0..rows).flat_map(move |row| {
-            (0..columns).map(move |column| image.pixels[(row * height / rows) * width + column * width / columns])
-        })
-    };
-    // The background is the colour most samples share (a majority vote in fixed memory), not
-    // whatever sits in a corner, where a pointer or a clock may be.
-    let (mut background, mut votes) = (image.pixels[0], 0_usize);
-    for pixel in samples() {
-        if votes == 0 {
-            background = pixel;
-        }
-        votes = if pixel == background { votes + 1 } else { votes - 1 };
-    }
-    let other = samples().filter(|pixel| *pixel != background).count();
-    other * 100 <= columns * rows * OTHER_PER_HUNDRED
-}
-
-/// Crop and scale a full desktop image for local view controls.
-pub(super) fn present_image(
-    source: &ColorImage,
-    options: horizon_core::DeviceViewOptions,
-) -> Result<ColorImage, ViewError> {
-    let layout = options
-        .for_desktop(source.size)
-        .layout(source.size)
-        .map_err(|error| ViewError::Server(error.to_string()))?;
-    if layout.source.x == 0
-        && layout.source.y == 0
-        && layout.source.width == source.size[0]
-        && layout.source.height == source.size[1]
-        && layout.output == source.size
-    {
-        return Ok(source.clone());
-    }
-    let width = source.size[0];
-    let columns: Vec<_> = (0..layout.output[0])
-        .map(|x| layout.source.x + (2 * x + 1) * layout.source.width / (2 * layout.output[0]))
-        .collect();
-    let mut pixels = Vec::with_capacity(layout.output[0] * layout.output[1]);
-    for y in 0..layout.output[1] {
-        let row = layout.source.y + (2 * y + 1) * layout.source.height / (2 * layout.output[1]);
-        for column in &columns {
-            pixels.push(source.pixels[row * width + *column]);
-        }
-    }
-    Ok(ColorImage::new(layout.output, pixels))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ViewOptions;
+
+    fn reds(frame: &Frame) -> Vec<u8> {
+        frame.rgba().as_chunks::<4>().0.iter().map(|pixel| pixel[0]).collect()
+    }
 
     #[test]
-    fn unchanged_extended_layout_preserves_pixels_and_rejection_preserves_geometry() -> Result<(), ViewError> {
+    fn unchanged_extended_layout_preserves_pixels_and_rejection_preserves_geometry() -> Result<(), Error> {
         let mut frame = Framebuffer::default();
         frame.resize(2, 1)?;
         frame.write(
@@ -205,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_copy_and_resize_preserve_valid_pixels() -> Result<(), ViewError> {
+    fn overlapping_copy_and_resize_preserve_valid_pixels() -> Result<(), Error> {
         let mut frame = Framebuffer::default();
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 3, height: 1 }))?;
         frame.apply(VncEvent::RawImage(
@@ -233,13 +197,13 @@ mod tests {
         ))?;
         assert_eq!(frame.rgba, [1, 2, 3, 255, 1, 2, 3, 255, 4, 5, 6, 255]);
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 1, height: 2 }))?;
-        assert_eq!(frame.image(horizon_core::DeviceViewOptions::default())?.size, [1, 2]);
+        assert_eq!(frame.image(ViewOptions::default())?.size(), [1, 2]);
         assert_eq!(frame.rgba, [0; 8]);
         Ok(())
     }
 
     #[test]
-    fn viewport_scaling_samples_the_selected_source_pixels() -> Result<(), ViewError> {
+    fn viewport_scaling_samples_the_selected_source_pixels() -> Result<(), Error> {
         let mut frame = Framebuffer::default();
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 4, height: 2 }))?;
         frame.apply(VncEvent::RawImage(
@@ -251,14 +215,11 @@ mod tests {
             },
             (0..8).flat_map(|value| [value, 0, 0, 255]).collect(),
         ))?;
-        let identity = frame.image(horizon_core::DeviceViewOptions::default())?;
-        assert_eq!(identity.size, [4, 2]);
-        assert_eq!(
-            identity.pixels.iter().map(egui::Color32::r).collect::<Vec<_>>(),
-            (0..8).collect::<Vec<_>>()
-        );
-        let options = horizon_core::DeviceViewOptions {
-            viewport: Some(horizon_core::DeviceViewport {
+        let identity = frame.image(ViewOptions::default())?;
+        assert_eq!(identity.size(), [4, 2]);
+        assert_eq!(reds(&identity), (0..8).collect::<Vec<_>>());
+        let options = ViewOptions {
+            viewport: Some(Region {
                 x: 2,
                 y: 0,
                 width: 2,
@@ -269,20 +230,15 @@ mod tests {
             ..Default::default()
         };
         let image = frame.image(options)?;
-        assert_eq!(image.size, [1, 1]);
-        assert_eq!(image.pixels[0].r(), 7);
+        assert_eq!(image.size(), [1, 1]);
+        assert_eq!(reds(&image), [7]);
         assert_eq!(frame.size(), [4, 2]);
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 2, height: 2 }))?;
-        assert_eq!(frame.image(options)?.size, [1, 1]);
-        let presented = present_image(
-            &ColorImage::new(
-                [4, 2],
-                (0..8).map(|value| egui::Color32::from_rgb(value, 0, 0)).collect(),
-            ),
-            options,
-        )?;
-        assert_eq!(presented.size, [1, 1]);
-        assert_eq!(presented.pixels[0].r(), 7);
+        assert_eq!(frame.image(options)?.size(), [1, 1]);
+        let held = Frame::from_rgba([4, 2], &(0..8).flat_map(|value| [value, 0, 0, 255]).collect::<Vec<_>>())?;
+        let presented = held.present(options)?;
+        assert_eq!(presented.size(), [1, 1]);
+        assert_eq!(reds(&presented), [7]);
         Ok(())
     }
 
@@ -310,5 +266,67 @@ mod tests {
                 }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn damage_bounds_every_write_since_it_was_taken() -> Result<(), Error> {
+        let mut frame = Framebuffer::default();
+        assert_eq!(frame.take_damage(), None);
+        frame.apply(VncEvent::SetResolution(vnc::Screen { width: 4, height: 3 }))?;
+        assert_eq!(
+            frame.take_damage(),
+            Some(Region::whole([4, 3])),
+            "a resize redraws everything"
+        );
+        assert_eq!(frame.take_damage(), None);
+        let pixel = |x, y| {
+            VncEvent::RawImage(
+                Rect {
+                    x,
+                    y,
+                    width: 1,
+                    height: 1,
+                },
+                vec![9; 4],
+            )
+        };
+        frame.apply(pixel(1, 0))?;
+        frame.apply(pixel(3, 1))?;
+        assert_eq!(
+            frame.take_damage(),
+            Some(Region {
+                x: 1,
+                y: 0,
+                width: 3,
+                height: 2,
+            })
+        );
+        frame.apply(VncEvent::Copy(
+            Rect {
+                x: 0,
+                y: 2,
+                width: 2,
+                height: 1,
+            },
+            Rect {
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+        ))?;
+        assert_eq!(
+            frame.take_damage(),
+            Some(Region {
+                x: 0,
+                y: 2,
+                width: 2,
+                height: 1,
+            }),
+            "a copy changes its destination only"
+        );
+        assert!(!frame.apply(VncEvent::Bell)?);
+        assert_eq!(frame.take_damage(), None, "events without pixels change nothing");
+        Ok(())
     }
 }

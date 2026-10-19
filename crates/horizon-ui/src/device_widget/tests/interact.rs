@@ -1,19 +1,14 @@
 //! Interact sends the viewer's pointer and keys to the desktop, and only then.
 use super::*;
-use vnc::X11Event;
+use horizon_vnc::{InputEvent, SentInput};
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 800.0);
 
-fn viewer_with_input() -> (
-    egui::Context,
-    DevicePanelState,
-    DeviceUiState,
-    tokio::sync::mpsc::UnboundedReceiver<X11Event>,
-) {
+fn viewer_with_input() -> (egui::Context, DevicePanelState, DeviceUiState, SentInput) {
     let ctx = egui::Context::default();
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let desktop = ColorImage::filled([160, 80], egui::Color32::GREEN);
-    let (session, receiver) = Session::pending_frame_with_input(desktop.clone(), desktop, DeviceViewOptions::default());
+    let (session, receiver) = Session::pending_frame_with_input(desktop.clone(), desktop, ViewOptions::default());
     let state = DeviceUiState {
         initialized: true,
         status: Status::Connected,
@@ -67,30 +62,26 @@ fn image_rect(output: &egui::FullOutput) -> egui::Rect {
         .expect("desktop image")
 }
 
-fn drain(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<X11Event>) -> Vec<X11Event> {
-    let mut events = Vec::new();
-    while let Ok(event) = receiver.try_recv() {
-        events.push(event);
-    }
-    events
+fn drain(receiver: &mut SentInput) -> Vec<InputEvent> {
+    receiver.drain()
 }
 
-fn keys(events: &[X11Event]) -> Vec<(u32, bool)> {
+fn keys(events: &[InputEvent]) -> Vec<(u32, bool)> {
     events
         .iter()
         .filter_map(|event| match event {
-            X11Event::KeyEvent(key) => Some((key.keycode, key.down)),
-            _ => None,
+            InputEvent::Key { keysym, down } => Some((*keysym, *down)),
+            InputEvent::Pointer { .. } => None,
         })
         .collect()
 }
 
-fn pointers(events: &[X11Event]) -> Vec<(u16, u16, u8)> {
+fn pointers(events: &[InputEvent]) -> Vec<(u16, u16, u8)> {
     events
         .iter()
         .filter_map(|event| match event {
-            X11Event::PointerEvent(mouse) => Some((mouse.position_x, mouse.position_y, mouse.bottons)),
-            _ => None,
+            InputEvent::Pointer { x, y, buttons } => Some((*x, *y, *buttons)),
+            InputEvent::Key { .. } => None,
         })
         .collect()
 }
@@ -604,7 +595,7 @@ fn wheel_events_go_to_the_image_under_the_pointer_when_they_happened() {
     };
     frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
     drain(&mut receiver);
-    let notches = |events: Vec<X11Event>| {
+    let notches = |events: Vec<InputEvent>| {
         pointers(&events)
             .iter()
             .filter(|(_, _, buttons)| *buttons == 16)

@@ -55,10 +55,10 @@ fn painted_texts(ctx: &egui::Context, state: &mut DeviceUiState) -> Vec<String> 
 #[test]
 fn a_flat_picture_is_an_empty_desktop_and_anything_drawn_on_it_is_not() {
     let flat = |size: [usize; 2]| ColorImage::filled(size, egui::Color32::BLACK);
-    assert!(frame::looks_empty(&flat([1920, 1080])));
-    assert!(frame::looks_empty(&flat([3, 2])), "a small picture too");
+    assert!(picture::looks_empty(&flat([1920, 1080])));
+    assert!(picture::looks_empty(&flat([3, 2])), "a small picture too");
     assert!(
-        !frame::looks_empty(&ColorImage::default()),
+        !picture::looks_empty(&ColorImage::default()),
         "no picture is not an empty desktop"
     );
 
@@ -69,7 +69,7 @@ fn a_flat_picture_is_an_empty_desktop_and_anything_drawn_on_it_is_not() {
             with_pointer.pixels[y * 1920 + x] = egui::Color32::WHITE;
         }
     }
-    assert!(frame::looks_empty(&with_pointer));
+    assert!(picture::looks_empty(&with_pointer));
     // Not even at the very corner the background colour was once read from.
     let mut at_the_corner = flat([1920, 1080]);
     for y in 0..14 {
@@ -77,7 +77,7 @@ fn a_flat_picture_is_an_empty_desktop_and_anything_drawn_on_it_is_not() {
             at_the_corner.pixels[y * 1920 + x] = egui::Color32::WHITE;
         }
     }
-    assert!(frame::looks_empty(&at_the_corner));
+    assert!(picture::looks_empty(&at_the_corner));
 
     // A window, a panel or a wallpaper is.
     let mut with_window = flat([1920, 1080]);
@@ -86,8 +86,8 @@ fn a_flat_picture_is_an_empty_desktop_and_anything_drawn_on_it_is_not() {
             with_window.pixels[y * 1920 + x] = egui::Color32::from_rgb(40, 60, 90);
         }
     }
-    assert!(!frame::looks_empty(&with_window));
-    assert!(!frame::looks_empty(&patterned_desktop()));
+    assert!(!picture::looks_empty(&with_window));
+    assert!(!picture::looks_empty(&patterned_desktop()));
 }
 
 #[test]

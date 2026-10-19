@@ -6,9 +6,9 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use egui::ColorImage;
 use horizon_browser::{BrowserVideoCaptureOptions, FrameSlot, PixelVideoRecorder, VideoCaptureHandle};
 use horizon_core::browser::manifest::device::{Outcome, VideoAction, VideoRecording};
+use horizon_vnc::Frame;
 
 use super::DeviceUiState;
 
@@ -70,11 +70,7 @@ impl Recording {
         })
     }
 
-    fn start(
-        &mut self,
-        first: &ColorImage,
-        source: impl Fn() -> Option<Arc<ColorImage>> + Send + 'static,
-    ) -> Result<(), String> {
+    fn start(&mut self, first: &Frame, source: impl Fn() -> Option<Arc<Frame>> + Send + 'static) -> Result<(), String> {
         if self
             .worker
             .as_ref()
@@ -140,7 +136,7 @@ impl Recording {
     }
 }
 
-fn publish_changed(frames: &FrameSlot, previous: &mut Option<Arc<ColorImage>>, image: Arc<ColorImage>) -> bool {
+fn publish_changed(frames: &FrameSlot, previous: &mut Option<Arc<Frame>>, image: Arc<Frame>) -> bool {
     if previous.as_ref().is_some_and(|last| Arc::ptr_eq(last, &image)) {
         return true;
     }
@@ -151,20 +147,20 @@ fn publish_changed(frames: &FrameSlot, previous: &mut Option<Arc<ColorImage>>, i
     true
 }
 
-fn publish(frames: &FrameSlot, image: &ColorImage) -> bool {
-    let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1])) else {
+fn publish(frames: &FrameSlot, image: &Frame) -> bool {
+    let [width, height] = image.size();
+    let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
         return false;
     };
     if u64::from(width) * u64::from(height) > 33_554_432 {
         return false;
     }
     let rgb = image
-        .pixels
+        .rgba()
+        .as_chunks::<4>()
+        .0
         .iter()
-        .flat_map(|pixel| {
-            let [r, g, b, _] = pixel.to_array();
-            [r, g, b]
-        })
+        .flat_map(|&[r, g, b, _]| [r, g, b])
         .collect();
     frames.store_rgb(width, height, rgb).is_some()
 }
@@ -187,7 +183,7 @@ impl DeviceUiState {
     }
 
     fn start_recording(&mut self) -> Result<(), String> {
-        let first = self.screenshot_image()?;
+        let first = self.current_desktop()?;
         let session = self.session.as_ref().ok_or("Device viewer is not connected")?;
         self.recording.start(&first, session.recording_source())
     }
@@ -250,8 +246,8 @@ impl DeviceUiState {
 mod tests {
     use super::*;
 
-    fn frame() -> ColorImage {
-        ColorImage::filled([64, 64], egui::Color32::RED)
+    fn frame() -> Frame {
+        Frame::from_rgba([64, 64], &[255, 0, 0, 255].repeat(64 * 64)).expect("64 × 64 pixels")
     }
 
     #[test]

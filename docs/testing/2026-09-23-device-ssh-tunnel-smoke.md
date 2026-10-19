@@ -15,6 +15,7 @@ developer's real hosts.
 ```sh
 cargo test -p horizon-core device::
 cargo test -p horizon-core ssh::
+cargo test -p horizon-vnc session::
 cargo test -p horizon-ui --bin horizon device_widget
 ```
 

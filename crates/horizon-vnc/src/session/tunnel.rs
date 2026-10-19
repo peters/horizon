@@ -12,7 +12,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::ViewError;
+use crate::Error;
 
 const STDERR_LINE_CHARS: usize = 200;
 /// ssh reports a failed forward as a cause line followed by a summary line.
@@ -89,7 +89,7 @@ impl SshTunnel {
 
     /// Attach ssh's last diagnostic lines, which name the real failure when
     /// the forwarded stream simply ended.
-    pub(super) async fn explain(&mut self, error: ViewError) -> ViewError {
+    pub(super) async fn explain(&mut self, error: Error) -> Error {
         let _ = tokio::time::timeout(STDERR_FLUSH_GRACE, &mut self.stderr_reader).await;
         let tail = self
             .stderr_tail
@@ -102,13 +102,13 @@ impl SshTunnel {
         } else if tail.contains("host key is known") {
             // Only an unknown key can be trusted by connecting once; a changed
             // key is a verification failure that must stay a failure.
-            ViewError::Tunnel(format!(
+            Error::Tunnel(format!(
                 "{error}; ssh: {tail} (the tunnel never trusts a first-contact key; open the host over SSH once to trust it)"
             ))
         } else if tail.starts_with("ssh: ") {
-            ViewError::Tunnel(format!("{error}; {tail}"))
+            Error::Tunnel(format!("{error}; {tail}"))
         } else {
-            ViewError::Tunnel(format!("{error}; ssh: {tail}"))
+            Error::Tunnel(format!("{error}; ssh: {tail}"))
         }
     }
 }
@@ -185,7 +185,7 @@ mod tests {
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
             let mut stream = tunnel.take_stream().unwrap();
             assert_eq!(stream.read(&mut [0; 1]).await.unwrap(), 0, "the forward ended");
-            let error = tunnel.explain(ViewError::Frame("early end of stream")).await;
+            let error = tunnel.explain(Error::Frame("early end of stream")).await;
             assert_eq!(
                 error.to_string(),
                 "early end of stream; ssh: channel 0: open failed: connect failed: Connection refused; \
@@ -199,7 +199,7 @@ mod tests {
         runtime().block_on(async {
             let script = "echo 'ssh: Could not resolve hostname nowhere.invalid: Name or service not known' >&2";
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
-            let error = tunnel.explain(ViewError::Timeout).await;
+            let error = tunnel.explain(Error::Timeout).await;
             assert_eq!(
                 error.to_string(),
                 "connection timed out; ssh: Could not resolve hostname nowhere.invalid: Name or service not known"
@@ -235,14 +235,14 @@ mod tests {
             let unknown = "echo 'No ED25519 host key is known for [lab]:22 and you have requested strict checking.' >&2; \
                 echo 'Host key verification failed.' >&2; exit 255";
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), unknown.to_string()]).unwrap();
-            let text = tunnel.explain(ViewError::Frame("early end of stream")).await.to_string();
+            let text = tunnel.explain(Error::Frame("early end of stream")).await.to_string();
             assert!(text.starts_with("early end of stream; ssh: No ED25519 host key is known"), "{text}");
             assert!(text.contains("open the host over SSH once"), "{text}");
 
             let changed = "echo 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!' >&2; \
                 echo 'Host key verification failed.' >&2; exit 255";
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), changed.to_string()]).unwrap();
-            let text = tunnel.explain(ViewError::Frame("early end of stream")).await.to_string();
+            let text = tunnel.explain(Error::Frame("early end of stream")).await.to_string();
             assert!(text.contains("Host key verification failed."), "{text}");
             assert!(!text.contains("open the host over SSH once"), "a changed key must not invite a bypass: {text}");
         });
@@ -252,8 +252,8 @@ mod tests {
     fn a_silent_failure_keeps_the_original_error() {
         runtime().block_on(async {
             let mut tunnel = SshTunnel::spawn("true", &[]).unwrap();
-            let error = tunnel.explain(ViewError::Timeout).await;
-            assert!(matches!(error, ViewError::Timeout));
+            let error = tunnel.explain(Error::Timeout).await;
+            assert!(matches!(error, Error::Timeout));
         });
     }
 }

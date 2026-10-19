@@ -25,6 +25,7 @@ members = [
     "crates/horizon-cursor",
     "crates/horizon-process-time",
     "crates/horizon-ui",
+    "crates/horizon-vnc",
     "crates/horizon-wayland",
     "vendor/smithay-clipboard",
 ]
@@ -72,6 +73,10 @@ ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
 horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.2.7" }
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
 vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "773ec2351241c80bbab88ffedae73f1972e0a4c1" }
+# The live VNC session behind the native Device viewer, usable by any UI.
+horizon-vnc = { path = "crates/horizon-vnc", version = "0.2.7" }
+# Zero-copy views of VNC pixels as RGBA bytes and as egui colors.
+bytemuck = { version = "1.25.2", features = ["extern_crate_alloc", "must_cast"] }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
