@@ -3,21 +3,22 @@
 mod capture;
 mod controls;
 mod details;
-mod frame;
 mod host;
-mod input;
+mod keys;
 mod observation;
+mod picture;
 mod recording;
 mod session;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions, Ui};
-use horizon_core::{DeviceInput, DevicePanelState, DeviceViewOptions, browser::manifest::device::DeviceServerDetails};
+use horizon_core::{DeviceInput, DevicePanelState, browser::manifest::device::DeviceServerDetails};
+use horizon_vnc::{Frame, InputState, ViewOptions};
 
-use frame::present_image;
-use input::InputState;
-use session::{DeviceRoute, Session, Status};
+use picture::present_image;
+use session::{Session, Status};
 
 /// How often a connected viewer that is not drawn (off canvas, hidden, behind
 /// a fullscreen panel) still uploads the latest received frame. Uploads keep
@@ -44,7 +45,7 @@ pub(crate) struct DeviceUiState {
     /// Last full desktop from the worker. View controls crop/scale this locally.
     source: Option<ColorImage>,
     texture: Option<TextureHandle>,
-    presented_options: Option<DeviceViewOptions>,
+    presented_options: Option<ViewOptions>,
     status: Status,
     server: DeviceServerDetails,
     native_labels: details::NativeLabels,
@@ -81,6 +82,12 @@ impl DeviceUiState {
     }
 
     pub(crate) fn screenshot_image(&mut self) -> Result<ColorImage, String> {
+        self.current_desktop()
+            .map(|frame| picture::color_image(Arc::unwrap_or_clone(frame)))
+    }
+
+    /// The full desktop of a connected session, for a screenshot or a recording.
+    fn current_desktop(&mut self) -> Result<Arc<Frame>, String> {
         if let Some(observation) = self.session.as_ref().map(Session::observation) {
             if let Some(status) = observation.status {
                 self.status = status;
@@ -92,7 +99,7 @@ impl DeviceUiState {
         }
         self.session
             .as_ref()
-            .and_then(Session::latest_full)
+            .and_then(Session::latest_frame)
             .ok_or_else(|| "Device viewer has not received a desktop frame".into())
     }
 
@@ -300,7 +307,7 @@ impl DeviceUiState {
         }
     }
 
-    fn apply_worker_image(&mut self, ctx: &Context, image: ColorImage, produced_with: Option<DeviceViewOptions>) {
+    fn apply_worker_image(&mut self, ctx: &Context, image: ColorImage, produced_with: Option<ViewOptions>) {
         let current = self.controls.options.for_desktop(self.desktop.unwrap_or(image.size));
         if produced_with.is_none_or(|produced| produced.same_presentation(current)) {
             let uploaded = self.upload_displayed(ctx, image);
@@ -323,7 +330,7 @@ impl DeviceUiState {
         }
     }
 
-    fn apply_view_options(&mut self, previous: DeviceViewOptions) -> bool {
+    fn apply_view_options(&mut self, previous: ViewOptions) -> bool {
         if let Some(session) = &self.session {
             session.set_options(self.controls.options);
         }
@@ -368,7 +375,7 @@ impl DeviceUiState {
     }
 
     fn upload_displayed(&mut self, ctx: &Context, image: ColorImage) -> bool {
-        self.empty_desktop = frame::looks_empty(&image);
+        self.empty_desktop = picture::looks_empty(&image);
         let limit = ctx.input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
@@ -395,11 +402,7 @@ impl DeviceUiState {
             owner: Some(owner.into()),
             initialized: true,
             status: Status::Connected,
-            session: Some(Session::pending_frame(
-                image.clone(),
-                image,
-                DeviceViewOptions::default(),
-            )),
+            session: Some(Session::pending_frame(image.clone(), image, ViewOptions::default())),
             ..Default::default()
         }
     }
@@ -423,12 +426,7 @@ impl DeviceUiState {
             self.source = Some(full);
         }
         self.session = None;
-        match Session::start(
-            DeviceRoute::from(device),
-            ctx.clone(),
-            ctx.viewport_id(),
-            self.controls.options,
-        ) {
+        match Session::start(device, ctx.clone(), ctx.viewport_id(), self.controls.options) {
             Ok(session) => {
                 self.session = Some(session);
                 self.status = Status::Connecting;

@@ -10,6 +10,7 @@ SOURCE_DIRS=(
   "$ROOT_DIR/crates/horizon-browser/src"
   "$ROOT_DIR/crates/horizon-core/src"
   "$ROOT_DIR/crates/horizon-ui/src"
+  "$ROOT_DIR/crates/horizon-vnc/src"
 )
 status=0
 

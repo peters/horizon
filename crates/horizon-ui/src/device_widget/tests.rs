@@ -57,11 +57,7 @@ fn ready_viewer() -> DeviceUiState {
     DeviceUiState {
         initialized: true,
         status: Status::Connected,
-        session: Some(Session::pending_frame(
-            image.clone(),
-            image,
-            DeviceViewOptions::default(),
-        )),
+        session: Some(Session::pending_frame(image.clone(), image, ViewOptions::default())),
         ..DeviceUiState::default()
     }
 }
@@ -161,11 +157,7 @@ fn undrawn_viewer_uploads_in_the_background_without_claiming_display() {
     let image = ColorImage::filled([2, 2], egui::Color32::GREEN);
     let mut state = DeviceUiState {
         initialized: true,
-        session: Some(Session::pending_frame(
-            image.clone(),
-            image,
-            DeviceViewOptions::default(),
-        )),
+        session: Some(Session::pending_frame(image.clone(), image, ViewOptions::default())),
         ..Default::default()
     };
     // A pass that never drew the viewer (off canvas, hidden) still uploads the
@@ -187,11 +179,7 @@ fn undrawn_viewer_uploads_in_the_background_without_claiming_display() {
     // never turns an undrawn stream into per-frame uploads. It schedules its
     // own wake, so a stream that goes static cannot strand it.
     let newer = ColorImage::filled([2, 2], egui::Color32::RED);
-    state.session = Some(Session::pending_frame(
-        newer.clone(),
-        newer,
-        DeviceViewOptions::default(),
-    ));
+    state.session = Some(Session::pending_frame(newer.clone(), newer, ViewOptions::default()));
     let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorded = std::sync::Arc::clone(&delays);
     ctx.set_request_repaint_callback(move |info| recorded.lock().unwrap().push(info.delay));
@@ -274,7 +262,7 @@ fn image_limits_and_viewport_apply_without_a_live_session() {
 
     state.controls.options.max_width = 2048;
     state.controls.options.max_height = 2048;
-    state.controls.options.viewport = Some(horizon_core::DeviceViewport {
+    state.controls.options.viewport = Some(horizon_vnc::Region {
         x: 4,
         y: 0,
         width: 4,
@@ -288,7 +276,7 @@ fn image_limits_and_viewport_apply_without_a_live_session() {
 #[test]
 fn desktop_shrink_lets_controls_clear_the_stale_viewport_draft() {
     let (ctx, device, mut state) = disconnected_viewer();
-    let crop = horizon_core::DeviceViewport {
+    let crop = horizon_vnc::Region {
         x: 4,
         y: 0,
         width: 4,
@@ -320,7 +308,7 @@ fn desktop_shrink_lets_controls_clear_the_stale_viewport_draft() {
 #[test]
 fn fit_one_to_one_and_whole_desktop_clicks_work_without_a_session() {
     let (ctx, device, mut state) = disconnected_viewer();
-    state.controls.options.viewport = Some(horizon_core::DeviceViewport {
+    state.controls.options.viewport = Some(horizon_vnc::Region {
         x: 4,
         y: 0,
         width: 4,
@@ -343,7 +331,7 @@ fn apply_viewport_and_reconnect_keep_the_last_desktop() {
     let (ctx, device, mut state) = disconnected_viewer();
     show_viewer(&ctx, &mut state, &device, Vec::new());
     click_label(&ctx, &mut state, &device, "View controls");
-    state.controls.draft = Some(horizon_core::DeviceViewport {
+    state.controls.draft = Some(horizon_vnc::Region {
         x: 0,
         y: 0,
         width: 2,
@@ -425,8 +413,8 @@ fn discarded_stale_worker_frame_represents_the_latest_desktop() {
     state.session = Some(Session::pending_frame(
         latest,
         queued,
-        DeviceViewOptions {
-            viewport: Some(horizon_core::DeviceViewport {
+        ViewOptions {
+            viewport: Some(horizon_vnc::Region {
                 x: 0,
                 y: 0,
                 width: 2,
@@ -452,9 +440,9 @@ fn worker_frame_with_a_different_fps_is_not_treated_as_stale() {
     show_viewer(&ctx, &mut state, &device, Vec::new());
     let latest = ColorImage::filled([8, 4], egui::Color32::RED);
     let cropped = ColorImage::filled([2, 2], egui::Color32::GREEN);
-    let crop = DeviceViewOptions {
+    let crop = ViewOptions {
         max_fps: 1,
-        viewport: Some(horizon_core::DeviceViewport {
+        viewport: Some(horizon_vnc::Region {
             x: 0,
             y: 0,
             width: 2,
@@ -462,7 +450,7 @@ fn worker_frame_with_a_different_fps_is_not_treated_as_stale() {
         }),
         ..Default::default()
     };
-    state.controls.options = DeviceViewOptions {
+    state.controls.options = ViewOptions {
         max_fps: 30,
         viewport: crop.viewport,
         ..Default::default()
@@ -532,11 +520,7 @@ fn diagnostics_distinguish_hidden_presentation_from_active_reception() {
     let mut state = DeviceUiState {
         initialized: true,
         status: Status::Connected,
-        session: Some(Session::pending_frame(
-            image.clone(),
-            image,
-            DeviceViewOptions::default(),
-        )),
+        session: Some(Session::pending_frame(image.clone(), image, ViewOptions::default())),
         ..Default::default()
     };
     // Hiding presentation never pauses background reception, including the immediate response.
@@ -697,7 +681,7 @@ fn native_caption_matches_inspection_without_paint_and_survives_disconnect() {
     state.absorb_updates(&ctx);
     let mut native = native_metadata();
     let session = state.session.as_ref().unwrap();
-    assert!(session.native_text_for_test(&ctx, &native.wire_text().unwrap()));
+    assert!(session.native_text_for_test(&native.wire_text().unwrap()));
     assert!(session.pending_in_background(egui::ViewportId::ROOT));
     let observation = state.observation("fixture".into(), &device, false, "actor");
     assert_eq!(observation.server.native_session.as_ref(), Some(&native));
@@ -730,7 +714,7 @@ fn native_caption_matches_inspection_without_paint_and_survives_disconnect() {
             .session
             .as_ref()
             .unwrap()
-            .native_text_for_test(&ctx, &native.wire_text().unwrap())
+            .native_text_for_test(&native.wire_text().unwrap())
     );
     state.absorb_updates(&ctx);
     state.session = None;
@@ -756,18 +740,17 @@ fn native_caption_matches_inspection_without_paint_and_survives_disconnect() {
 
 #[test]
 fn ordinary_or_invalid_clipboard_text_cannot_replace_native_metadata() {
-    let ctx = Context::default();
     let device = fixture_device();
     let mut state = ready_viewer();
     let native = native_metadata();
     let session = state.session.as_ref().unwrap();
-    assert!(session.native_text_for_test(&ctx, &native.wire_text().unwrap()));
+    assert!(session.native_text_for_test(&native.wire_text().unwrap()));
     for text in [
         "ordinary clipboard",
         "horizon-native-session-v1:{}",
         "horizon-native-session-v2:{}",
     ] {
-        assert!(!session.native_text_for_test(&ctx, text));
+        assert!(!session.native_text_for_test(text));
     }
     assert_eq!(
         state

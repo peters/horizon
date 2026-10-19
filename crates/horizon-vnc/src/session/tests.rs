@@ -1,18 +1,20 @@
 use std::io::{Read, Write};
+use std::time::Duration;
 
 use super::*;
-use crate::test_egui::DiscardTextures;
+
+fn direct(address: SocketAddr, options: ViewOptions) -> Config {
+    Config {
+        options,
+        ..Config::new(Route::Direct(address))
+    }
+}
 
 #[test]
-fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewError> {
+fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), Error> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
-    let session = Session::start(
-        DeviceRoute::Direct(listener.local_addr()?),
-        Context::default(),
-        ViewportId::ROOT,
-        DeviceViewOptions::default(),
-    )?;
+    let session = Session::start(direct(listener.local_addr()?, ViewOptions::default()), |_| {})?;
     let accepted = std::time::Instant::now();
     let (mut stream, _) = loop {
         match listener.accept() {
@@ -34,14 +36,11 @@ fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewErro
 }
 
 #[test]
-fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), ViewError> {
+fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     // Begin one Raw rectangle but leave its pixel payload unfinished.
     stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 1, 2, 3, 0])?;
-    assert!(matches!(
-        session.take_updates(ViewportId::ROOT).status,
-        Some(Status::Connected)
-    ));
+    assert!(matches!(session.take_updates().status, Some(Status::Connected)));
     let closed = std::time::Instant::now();
     drop(session);
     assert!(closed.elapsed() < Duration::from_secs(1));
@@ -55,36 +54,32 @@ fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), Vie
     assert!(remaining.as_chunks::<10>().0.iter().all(|request| request[0] == 3));
     Ok(())
 }
-fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
+
+fn connected_session() -> Result<(Session, std::net::TcpStream), Error> {
     named_session_with_visibility("", true)
 }
 
-fn named_session_with_visibility(name: &str, visible: bool) -> Result<(Session, std::net::TcpStream), ViewError> {
-    named_session_with_context(name, visible, Context::default())
+fn named_session_with_visibility(name: &str, visible: bool) -> Result<(Session, std::net::TcpStream), Error> {
+    named_session_with_wake(name, visible, |_| {})
 }
 
-fn named_session_with_context(
+fn named_session_with_wake(
     name: &str,
     visible: bool,
-    ctx: Context,
-) -> Result<(Session, std::net::TcpStream), ViewError> {
-    session_with_options(name, visible, ctx, DeviceViewOptions::default())
+    wake: impl Fn(Wake) + Send + Sync + 'static,
+) -> Result<(Session, std::net::TcpStream), Error> {
+    session_with_options(name, visible, wake, ViewOptions::default())
 }
 
 fn session_with_options(
     name: &str,
     visible: bool,
-    ctx: Context,
-    options: DeviceViewOptions,
-) -> Result<(Session, std::net::TcpStream), ViewError> {
+    wake: impl Fn(Wake) + Send + Sync + 'static,
+    options: ViewOptions,
+) -> Result<(Session, std::net::TcpStream), Error> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
-    let session = Session::start(
-        DeviceRoute::Direct(listener.local_addr()?),
-        ctx,
-        ViewportId::ROOT,
-        options,
-    )?;
+    let session = Session::start(direct(listener.local_addr()?, options), wake)?;
     session.set_visible(visible);
     let started = std::time::Instant::now();
     let (mut stream, _) = loop {
@@ -130,7 +125,7 @@ fn session_with_options(
     Ok((session, stream))
 }
 
-fn refresh_until(stream: &mut std::net::TcpStream, expected: [u8; 10]) -> Result<(), ViewError> {
+fn refresh_until(stream: &mut std::net::TcpStream, expected: [u8; 10]) -> Result<(), Error> {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         let mut request = [0; 10];
@@ -146,36 +141,50 @@ fn refresh_until(stream: &mut std::net::TcpStream, expected: [u8; 10]) -> Result
     }
 }
 
-fn send_pixel(stream: &mut std::net::TcpStream) -> Result<(), ViewError> {
-    stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 20, 180, 40, 0])?;
+fn send_pixel(stream: &mut std::net::TcpStream) -> Result<(), Error> {
+    send_pixel_at(stream, 0, 0, [20, 180, 40])
+}
+
+/// One Raw rectangle of one pixel in a `FramebufferUpdate` message.
+fn send_pixel_at(stream: &mut std::net::TcpStream, x: u8, y: u8, rgb: [u8; 3]) -> Result<(), Error> {
+    let mut message = vec![0, 0, 0, 1, 0, x, 0, y, 0, 1, 0, 1, 0, 0, 0, 0];
+    message.extend(rgb);
+    message.push(0);
+    stream.write_all(&message)?;
     Ok(())
 }
 
+const GREEN: [u8; 4] = [20, 180, 40, 255];
+
 #[test]
-fn decoded_frame_evidence_survives_observation_without_consuming_pixels() -> Result<(), ViewError> {
+fn decoded_frame_evidence_survives_observation_without_consuming_pixels() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     send_pixel(&mut stream)?;
     let deadline = Instant::now() + Duration::from_secs(2);
-    while session.stream_evidence().0.sequence == 0 {
+    while session.stream_evidence().sequence == 0 {
         assert!(Instant::now() < deadline, "decoder did not publish evidence");
         std::thread::sleep(Duration::from_millis(5));
     }
-    let (before, paused) = session.stream_evidence();
-    assert!(!paused);
+    let before = session.stream_evidence();
     assert!(before.last_frame.is_some());
-    assert!(session.take_updates(ViewportId::ROOT).image.is_some());
-    assert_eq!(session.stream_evidence().0.sequence, before.sequence);
+    assert!(session.take_updates().image.is_some());
+    assert_eq!(session.stream_evidence().sequence, before.sequence);
     session.set_visible(false);
-    assert!(!session.stream_evidence().1, "offscreen sampling stays active");
+    send_pixel(&mut stream)?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while session.stream_evidence().sequence == before.sequence {
+        assert!(Instant::now() < deadline, "offscreen sampling stays active");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     Ok(())
 }
 
 fn wait_for_green_pixel(session: &Session, size: [usize; 2]) {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        if let Some(image) = session.take_updates(ViewportId::ROOT).image
-            && image.size == size
-            && image.pixels[0] == egui::Color32::from_rgb(20, 180, 40)
+        if let Some(image) = session.take_updates().image
+            && image.frame.size() == size
+            && image.frame.rgba()[..4] == GREEN
         {
             return;
         }
@@ -185,7 +194,7 @@ fn wait_for_green_pixel(session: &Session, size: [usize; 2]) {
 }
 
 #[test]
-fn resized_desktop_requests_all_pixels_before_incremental_updates() -> Result<(), ViewError> {
+fn resized_desktop_requests_all_pixels_before_incremental_updates() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     send_pixel(&mut stream)?;
     wait_for_green_pixel(&session, [2, 2]);
@@ -212,26 +221,23 @@ fn wait_for_sequence(session: &Session, minimum: u64) -> u64 {
 }
 
 #[test]
-fn hidden_viewer_receives_first_image_and_retains_only_latest_with_delayed_repaints() -> Result<(), ViewError> {
+fn hidden_viewer_receives_first_image_and_retains_only_latest_with_delayed_wakes() -> Result<(), Error> {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let ctx = Context::default();
-    let (session, mut stream) = named_session_with_context("", true, ctx.clone())?;
-    session.set_visible(false);
-    // Drain the handshake repaint so coalescing cannot hide a background request.
-    for _ in 0..3 {
-        let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
-    }
     let repaints = Arc::new(AtomicUsize::new(0));
     let delayed = Arc::new(AtomicUsize::new(0));
     let (count, count_delayed) = (Arc::clone(&repaints), Arc::clone(&delayed));
-    ctx.set_request_repaint_callback(move |info| {
-        if info.delay.is_zero() {
-            count.fetch_add(1, Ordering::Relaxed);
-        } else {
-            count_delayed.fetch_add(1, Ordering::Relaxed);
-        }
-    });
+    let (session, mut stream) = named_session_with_wake("", true, move |wake| {
+        let counter = match wake {
+            Wake::Visible => &count,
+            Wake::Hidden => &count_delayed,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    })?;
+    session.set_visible(false);
+    // The handshake woke the drawn viewer before its first refresh; count from here.
+    repaints.store(0, Ordering::Relaxed);
+    delayed.store(0, Ordering::Relaxed);
     assert_eq!(session.observation().received_frame_sequence, 0);
     send_pixel(&mut stream)?;
     let first = wait_for_sequence(&session, 1);
@@ -242,30 +248,27 @@ fn hidden_viewer_receives_first_image_and_retains_only_latest_with_delayed_repai
     assert_eq!(session.observation().received_frame_sequence, latest);
     session.set_visible(true);
     // No more server output: returning must present the already received pixels.
-    let updates = session.take_updates(ViewportId::ROOT);
+    let updates = session.take_updates();
     assert_eq!(updates.received_frame_sequence, latest);
-    assert_eq!(updates.image.unwrap().pixels[0], egui::Color32::from_rgb(200, 10, 30));
-    assert!(session.take_updates(ViewportId::ROOT).image.is_none());
-    assert_eq!(
-        session.latest_full().unwrap().pixels[0],
-        egui::Color32::from_rgb(200, 10, 30)
-    );
-    // Hidden frames only schedule the bounded background upload; nothing
-    // repaints the host at the stream rate.
+    assert_eq!(updates.image.unwrap().frame.rgba()[..4], [200, 10, 30, 255]);
+    assert!(session.take_updates().image.is_none());
+    assert_eq!(session.latest_full().unwrap().rgba()[..4], [200, 10, 30, 255]);
+    // Hidden frames only ask for a deferred wake; nothing wakes the host at
+    // the stream rate.
     assert_eq!(repaints.load(Ordering::Relaxed), 0);
     assert!(
         delayed.load(Ordering::Relaxed) >= 1,
         "hidden frame never scheduled an upload"
     );
     // A visible update must trigger the same callback: the negative check above
-    // must not pass simply because egui is coalescing every repaint request.
+    // must not pass simply because no wake arrives at all.
     send_pixel(&mut stream)?;
     wait_for_sequence(&session, latest + 1);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while repaints.load(Ordering::Relaxed) == 0 {
         assert!(
             std::time::Instant::now() < deadline,
-            "visible update never requested repaint"
+            "visible update never woke the viewer"
         );
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -280,7 +283,7 @@ fn hidden_viewer_receives_first_image_and_retains_only_latest_with_delayed_repai
 }
 
 #[test]
-fn hidden_viewer_processes_resize_and_disconnect() -> Result<(), ViewError> {
+fn hidden_viewer_processes_resize_and_disconnect() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     session.set_visible(false);
     send_pixel(&mut stream)?;
@@ -289,7 +292,7 @@ fn hidden_viewer_processes_resize_and_disconnect() -> Result<(), ViewError> {
     refresh_until(&mut stream, [3, 0, 0, 0, 0, 0, 0, 1, 0, 1])?;
     send_pixel(&mut stream)?;
     wait_for_sequence(&session, first + 1);
-    assert_eq!(session.latest_full().unwrap().size, [1, 1]);
+    assert_eq!(session.latest_full().unwrap().size(), [1, 1]);
     drop(stream);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
@@ -299,7 +302,7 @@ fn hidden_viewer_processes_resize_and_disconnect() -> Result<(), ViewError> {
         assert!(std::time::Instant::now() < deadline, "hidden disconnect never observed");
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(session.take_updates(ViewportId::ROOT).image.is_some());
+    assert!(session.take_updates().image.is_some());
     Ok(())
 }
 
@@ -317,13 +320,13 @@ fn extended_size_packet(width: u16, height: u16) -> Vec<u8> {
     packet
 }
 
-fn send_extended_size(stream: &mut std::net::TcpStream, width: u16, height: u16) -> Result<(), ViewError> {
+fn send_extended_size(stream: &mut std::net::TcpStream, width: u16, height: u16) -> Result<(), Error> {
     stream.write_all(&extended_size_packet(width, height))?;
     Ok(())
 }
 
 #[test]
-fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Result<(), ViewError> {
+fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     let mut connected = false;
     for width in [2_u16, 3, 1, 2] {
@@ -334,7 +337,7 @@ fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Resul
         stream.write_all(&packet)?;
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            let updates = session.take_updates(ViewportId::ROOT);
+            let updates = session.take_updates();
             if let Some(status) = updates.status {
                 assert!(
                     !matches!(status, Status::Disconnected(_)),
@@ -343,8 +346,8 @@ fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Resul
                 connected |= matches!(status, Status::Connected);
             }
             if let Some(image) = updates.image
-                && image.size == [usize::from(width), 2]
-                && image.pixels[0] == egui::Color32::from_rgb(20, 180, 40)
+                && image.frame.size() == [usize::from(width), 2]
+                && image.frame.rgba()[..4] == GREEN
             {
                 break;
             }
@@ -362,7 +365,7 @@ fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Resul
 }
 
 #[test]
-fn extended_layout_announcements_do_not_start_full_refresh_loops() -> Result<(), ViewError> {
+fn extended_layout_announcements_do_not_start_full_refresh_loops() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     send_pixel(&mut stream)?;
     wait_for_green_pixel(&session, [2, 2]);
@@ -383,12 +386,12 @@ fn extended_layout_announcements_do_not_start_full_refresh_loops() -> Result<(),
 }
 
 #[test]
-fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), ViewError> {
+fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), Error> {
     let (session, mut stream) = connected_session()?;
     send_pixel(&mut stream)?;
     wait_for_green_pixel(&session, [2, 2]);
-    session.set_options(DeviceViewOptions {
-        viewport: Some(horizon_core::DeviceViewport {
+    session.set_options(ViewOptions {
+        viewport: Some(Region {
             x: 1,
             y: 1,
             width: 1,
@@ -404,12 +407,13 @@ fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), ViewError> 
     Ok(())
 }
 
+/// The name is the server's untrusted text, as it sent it; a UI cleans it.
 #[test]
-fn handshake_name_is_observable_without_receiving_or_displaying_an_image() -> Result<(), ViewError> {
+fn handshake_name_is_observable_without_receiving_or_displaying_an_image() -> Result<(), Error> {
     for (raw, expected) in [
         ("Lab desktop ÆØÅ", Some("Lab desktop ÆØÅ")),
         ("", None),
-        ("\nLab\0desktop", Some("Lab desktop")),
+        ("\nLab\0desktop", Some("\nLab\0desktop")),
     ] {
         let (session, _stream) = named_session_with_visibility(raw, false)?;
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -426,7 +430,7 @@ fn handshake_name_is_observable_without_receiving_or_displaying_an_image() -> Re
 }
 
 #[test]
-fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(), ViewError> {
+fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(), Error> {
     for extended in [false, true] {
         let (session, mut stream) = named_session_with_visibility("Lab desktop", false)?;
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -455,24 +459,20 @@ fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(
 }
 
 #[test]
-fn queued_input_reaches_the_server_before_the_next_refresh() -> Result<(), ViewError> {
+fn queued_input_reaches_the_server_before_the_next_refresh() -> Result<(), Error> {
     // One frame a second: the next refresh request is a second away, so
     // anything the server reads first was forwarded while the worker waited.
-    let options = DeviceViewOptions {
+    let options = ViewOptions {
         max_fps: 1,
-        ..DeviceViewOptions::default()
+        ..ViewOptions::default()
     };
-    let (session, mut stream) = session_with_options("", true, Context::default(), options)?;
+    let (session, mut stream) = session_with_options("", true, |_| {}, options)?;
     session.send_input([
-        X11Event::KeyEvent(vnc::ClientKeyEvent {
-            keycode: 0xff0d,
+        InputEvent::Key {
+            keysym: 0xff0d,
             down: true,
-        }),
-        X11Event::PointerEvent(vnc::ClientMouseEvent {
-            position_x: 1,
-            position_y: 0,
-            bottons: 1,
-        }),
+        },
+        InputEvent::Pointer { x: 1, y: 0, buttons: 1 },
     ]);
     let mut key = [0; 8];
     stream.read_exact(&mut key)?;
@@ -484,5 +484,48 @@ fn queued_input_reaches_the_server_before_the_next_refresh() -> Result<(), ViewE
     stream.read_exact(&mut refresh)?;
     assert_eq!(refresh[0], 3, "the refresh follows the input");
     drop(session);
+    Ok(())
+}
+
+#[test]
+fn each_image_bounds_what_changed_since_the_image_taken_before() -> Result<(), Error> {
+    let (session, mut stream) = connected_session()?;
+    let next_image = |minimum: u64| {
+        wait_for_sequence(&session, minimum);
+        session.take_updates().image.expect("a published image")
+    };
+    send_pixel(&mut stream)?;
+    let first = next_image(1);
+    assert_eq!(
+        first.changed,
+        Region::whole([2, 2]),
+        "the first image is new everywhere"
+    );
+    send_pixel_at(&mut stream, 1, 1, [1, 2, 3])?;
+    let second = next_image(2);
+    assert_eq!(
+        second.changed,
+        Region {
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        }
+    );
+    assert_eq!(second.frame.rgba()[..4], GREEN, "the rest of the desktop stays");
+    // Two images published before the UI takes one: the second covers both.
+    send_pixel_at(&mut stream, 1, 0, [4, 5, 6])?;
+    wait_for_sequence(&session, 3);
+    send_pixel_at(&mut stream, 1, 1, [7, 8, 9])?;
+    let merged = next_image(4);
+    assert_eq!(
+        merged.changed,
+        Region {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 2,
+        }
+    );
     Ok(())
 }

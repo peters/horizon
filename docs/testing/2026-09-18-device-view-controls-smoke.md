@@ -28,7 +28,7 @@ use noVNC or drive the developer's desktop.
 
 ```sh
 cargo test -p horizon-ui --bin horizon device_widget -- --test-threads=1
-cargo test -p horizon-core device::view -- --test-threads=1
+cargo test -p horizon-vnc -- --test-threads=1
 ```
 
 Must include:

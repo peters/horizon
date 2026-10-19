@@ -1,11 +1,11 @@
 //! Interact: forwarding a person's pointer and keyboard to the desktop while
 //! the image has focus, and letting go of everything when it does not.
 use egui::Ui;
-use horizon_core::{DeviceImageLayout, DeviceInput};
+use horizon_core::DeviceInput;
+use horizon_vnc::{ImageLayout, InputEvent, InputState, SCROLL_NOTCH_POINTS};
 
 use super::DeviceUiState;
-use super::input::{InputState, SCROLL_NOTCH_POINTS, button_bit, desktop_point};
-use vnc::X11Event;
+use super::keys::{self, button_bit, desktop_point};
 
 pub(super) const VIEW_ONLY_REASON: &str = "View only: the VNC server of this desktop ignores mouse and keyboard input";
 
@@ -40,7 +40,7 @@ impl DeviceUiState {
     }
 
     /// The crop and scale the current image was made with, for mapping points.
-    fn image_layout(&self) -> Option<DeviceImageLayout> {
+    fn image_layout(&self) -> Option<ImageLayout> {
         let desktop = self.desktop?;
         self.controls.options.for_desktop(desktop).layout(desktop).ok()
     }
@@ -71,7 +71,7 @@ impl DeviceUiState {
     /// Pointer input is replayed per event rather than sampled once per frame:
     /// a click whose press and release land in one frame, or several moves
     /// coalesced by a slow repaint, must all reach the desktop.
-    fn pointer_input(&mut self, ui: &Ui, response: &egui::Response, layout: &DeviceImageLayout) -> Vec<X11Event> {
+    fn pointer_input(&mut self, ui: &Ui, response: &egui::Response, layout: &ImageLayout) -> Vec<InputEvent> {
         let pointer_events: Vec<egui::Event> = ui.input(|input| {
             input
                 .events
@@ -175,7 +175,7 @@ impl DeviceUiState {
     /// Every key belongs to the desktop while it is captured, Escape
     /// included; clicking outside the image or turning Interact off gives the
     /// keyboard back.
-    fn keyboard_input(&mut self, ui: &Ui, response: &egui::Response) -> Vec<X11Event> {
+    fn keyboard_input(&mut self, ui: &Ui, response: &egui::Response) -> Vec<InputEvent> {
         ui.memory_mut(|memory| {
             memory.set_focus_lock_filter(
                 response.id,
@@ -215,8 +215,8 @@ impl DeviceUiState {
                 } => {
                     // The key's own modifier snapshot comes first, so a chord
                     // reaches the desktop with its modifier already down.
-                    events.extend(self.input.modifiers(modifiers));
-                    events.extend(self.input.key(key, pressed, modifiers));
+                    events.extend(self.input.modifiers(keys::modifiers(modifiers)));
+                    events.extend(keys::key(&mut self.input, key, pressed, modifiers));
                 }
                 egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                     events.extend(InputState::text(&text));
@@ -224,7 +224,7 @@ impl DeviceUiState {
                 _ => {}
             }
         }
-        events.extend(self.input.modifiers(modifiers));
+        events.extend(self.input.modifiers(keys::modifiers(modifiers)));
         events
     }
 
@@ -258,10 +258,11 @@ fn publish_ime_output(ui: &Ui, image: egui::Rect) {
 
 /// One wheel event's travel in points, from raw events rather than egui's
 /// smoothed delta, which hands out only a fraction of it per repaint.
-fn wheel_points(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> egui::Vec2 {
-    match unit {
+fn wheel_points(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> [f32; 2] {
+    let points = match unit {
         egui::MouseWheelUnit::Point => delta,
         egui::MouseWheelUnit::Line => delta * SCROLL_NOTCH_POINTS,
         egui::MouseWheelUnit::Page => delta * SCROLL_NOTCH_POINTS * 3.0,
-    }
+    };
+    [points.x, points.y]
 }

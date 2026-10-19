@@ -1,220 +1,160 @@
-mod tunnel;
-
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-    thread::JoinHandle,
-    time::{Duration, Instant},
-};
+//! The egui side of a `horizon_vnc` session: its wakes repaint the viewport
+//! that shows the viewer, its frames become texture images, and its untrusted
+//! server texts become Horizon's bounded labels and native session metadata.
+use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{ColorImage, Context, ViewportId};
 use horizon_core::{
-    DevicePanelState, DeviceViewOptions, SshConnection,
+    DevicePanelState,
     browser::manifest::device::{DeviceServerDetails, NativeSessionMetadata},
 };
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{mpsc, oneshot};
-use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
+use horizon_vnc::{Config, Frame, InputEvent, Route, ViewOptions, Wake};
 
-use self::tunnel::SshTunnel;
-use super::frame::{Framebuffer, present_image};
+pub(super) use horizon_vnc::{Error as ViewError, Observation, Status, StreamEvidence};
 
-const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// Key exchange over a mesh network plus the VNC handshake behind it.
-const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum ViewError {
-    #[error("{0}")]
-    Io(#[from] std::io::Error),
-    #[error("{0}")]
-    Protocol(#[from] vnc::VncError),
-    #[error("{0}")]
-    Frame(&'static str),
-    #[error("{0}")]
-    Server(String),
-    #[error("{0}")]
-    Tunnel(String),
-    #[error("connection timed out")]
-    Timeout,
-}
-
-/// How the worker reaches the VNC server; owned so the worker thread can keep it.
-#[derive(Clone, Debug)]
-pub(super) enum DeviceRoute {
-    Direct(SocketAddr),
-    /// `remote` is the endpoint as seen from the SSH host.
-    SshTunnel {
-        connection: SshConnection,
-        remote: SocketAddr,
-    },
-}
-
-impl From<&DevicePanelState> for DeviceRoute {
-    fn from(device: &DevicePanelState) -> Self {
-        match &device.ssh_tunnel {
-            Some(connection) => Self::SshTunnel {
-                connection: connection.clone(),
-                remote: device.target.address(),
-            },
-            None => Self::Direct(device.target.address()),
-        }
-    }
-}
-
-#[derive(Default)]
-pub(super) enum Status {
-    #[default]
-    Stopped,
-    Connecting,
-    Connected,
-    Disconnected(String),
-}
+use super::picture::color_image;
 
 pub(super) struct Updates {
-    pub stream: StreamEvidence,
     pub image: Option<ColorImage>,
-    pub produced_with: Option<DeviceViewOptions>,
+    pub produced_with: Option<ViewOptions>,
     pub status: Option<Status>,
     pub received_frame_sequence: u64,
-    viewport: ViewportId,
-    visible: bool,
-    options: DeviceViewOptions,
     pub desktop: Option<[usize; 2]>,
     pub server_name: Option<String>,
     pub native_session: Option<NativeSessionMetadata>,
 }
 
-#[derive(Clone, Copy, Default)]
-pub(super) struct StreamEvidence {
-    pub sequence: u64,
-    pub last_frame: Option<Instant>,
-}
-
-pub(super) struct Observation {
-    pub status: Option<Status>,
-    pub received_frame_sequence: u64,
-}
-
 pub(super) struct Session {
-    updates: Arc<Mutex<Updates>>,
-    latest_full: Arc<Mutex<Option<Arc<ColorImage>>>>,
-    recording_live: Arc<std::sync::atomic::AtomicBool>,
-    /// Pointer and key events a person sends through Interact; the worker
-    /// forwards them ahead of the next refresh.
-    input: mpsc::UnboundedSender<X11Event>,
-    stop: Option<oneshot::Sender<()>>,
-    thread: Option<JoinHandle<()>>,
+    inner: horizon_vnc::Session,
+    /// The viewport whose pass uploads for this viewer, so a closed detached
+    /// window cannot keep its wakes.
+    viewport: Arc<Mutex<ViewportId>>,
+}
+
+/// How the worker reaches the VNC server: directly, or through `ssh -W` on
+/// the tunnel host, where the target is the endpoint as that host sees it.
+fn route(device: &DevicePanelState) -> Route {
+    match &device.ssh_tunnel {
+        Some(connection) => Route::Tunnel {
+            program: "ssh".into(),
+            args: connection.stdio_forward_args(&device.target.address().to_string()),
+        },
+        None => Route::Direct(device.target.address()),
+    }
+}
+
+/// Only native session metadata is kept from the server clipboard; ordinary
+/// clipboard text never replaces it.
+fn is_native_metadata(text: &str) -> bool {
+    NativeSessionMetadata::from_wire_text(text).is_some()
+}
+
+/// A drawn viewer repaints for every frame; an undrawn one only asks for the
+/// bounded background upload, so a hidden or off-canvas stream never drives
+/// the host at its own rate.
+fn wake_ui(ctx: &Context, wake: Wake, viewport: ViewportId) {
+    match wake {
+        Wake::Visible => ctx.request_repaint_of(viewport),
+        Wake::Hidden => ctx.request_repaint_after_for(super::BACKGROUND_UPLOAD_INTERVAL, viewport),
+    }
 }
 
 impl Session {
     pub(super) fn start(
-        route: DeviceRoute,
+        device: &DevicePanelState,
         ctx: Context,
         viewport: ViewportId,
-        options: DeviceViewOptions,
+        options: ViewOptions,
     ) -> Result<Self, ViewError> {
-        let updates = Arc::new(Mutex::new(Updates {
-            stream: StreamEvidence::default(),
-            image: None,
-            produced_with: None,
-            status: Some(Status::Connecting),
-            received_frame_sequence: 0,
-            viewport,
-            visible: true,
+        let viewport = Arc::new(Mutex::new(viewport));
+        let target = Arc::clone(&viewport);
+        let config = Config {
+            route: route(device),
             options,
-            desktop: None,
-            server_name: None,
-            native_session: None,
-        }));
-        let latest_full = Arc::new(Mutex::new(None));
-        let state = Arc::clone(&updates);
-        let retained = Arc::clone(&latest_full);
-        let recording_live = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let worker_live = Arc::clone(&recording_live);
-        let (stop, cancelled) = oneshot::channel();
-        let (input, mut input_events) = mpsc::unbounded_channel();
-        let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
-            let result = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map(|runtime| {
-                    runtime.block_on(async {
-                        // Dropping the connection future and its runtime cancels every
-                        // decoder/socket task, including a stalled handshake or read.
-                        tokio::select! {
-                            _ = cancelled => Ok(()),
-                            result = connection(route, &state, &retained, &ctx, &mut input_events) => result,
-                        }
-                    })
-                });
-            let status = match result {
-                Ok(Ok(())) => Status::Stopped,
-                Ok(Err(error)) => Status::Disconnected(error.to_string()),
-                Err(error) => Status::Disconnected(error.to_string()),
-            };
-            worker_live.store(false, std::sync::atomic::Ordering::Release);
-            publish_status(&state, &ctx, status);
+            keep_server_text: is_native_metadata,
+        };
+        let inner = horizon_vnc::Session::start(config, move |wake| {
+            let viewport = *target.lock().unwrap_or_else(PoisonError::into_inner);
+            wake_ui(&ctx, wake, viewport);
         })?;
-        Ok(Self {
-            updates,
-            latest_full,
-            recording_live,
-            input,
-            stop: Some(stop),
-            thread: Some(thread),
-        })
+        Ok(Self { inner, viewport })
+    }
+
+    fn route_wakes_to(&self, viewport: ViewportId) {
+        *self.viewport.lock().unwrap_or_else(PoisonError::into_inner) = viewport;
     }
 
     /// Queue input for the server. A worker that has already stopped drops it.
-    pub(super) fn send_input(&self, events: impl IntoIterator<Item = X11Event>) {
-        for event in events {
-            if self.input.send(event).is_err() {
-                return;
-            }
-        }
+    pub(super) fn send_input(&self, events: impl IntoIterator<Item = InputEvent>) {
+        self.inner.send_input(events);
     }
 
-    pub(super) fn set_options(&self, options: DeviceViewOptions) {
-        self.updates
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .options = options;
+    pub(super) fn set_options(&self, options: ViewOptions) {
+        self.inner.set_options(options);
     }
 
     pub(super) fn latest_full(&self) -> Option<ColorImage> {
-        self.latest_full
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_deref()
-            .cloned()
+        self.inner
+            .latest_full()
+            .map(|frame| color_image(Arc::unwrap_or_clone(frame)))
+    }
+
+    pub(super) fn latest_frame(&self) -> Option<Arc<Frame>> {
+        self.inner.latest_full()
     }
 
     /// True when this session has a full desktop. Does not copy the pixels.
     pub(super) fn has_latest_full(&self) -> bool {
-        self.latest_full
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some()
+        self.inner.has_latest_full()
     }
 
-    pub(super) fn recording_source(&self) -> impl Fn() -> Option<Arc<ColorImage>> + Send + 'static {
-        let source = Arc::downgrade(&self.latest_full);
-        let live = Arc::clone(&self.recording_live);
-        move || {
-            if !live.load(std::sync::atomic::Ordering::Acquire) {
-                return None;
-            }
-            source
-                .upgrade()?
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
+    pub(super) fn recording_source(&self) -> impl Fn() -> Option<Arc<Frame>> + Send + 'static {
+        self.inner.frame_source()
+    }
+
+    /// Marks the viewer undrawn and routes its wakes to `viewport`, the pass
+    /// that uploads for it. Returns whether an image or status change is waiting.
+    pub(super) fn pending_in_background(&self, viewport: ViewportId) -> bool {
+        self.route_wakes_to(viewport);
+        self.inner.pending_while_hidden()
+    }
+
+    pub(super) fn set_visible(&self, visible: bool) {
+        self.inner.set_visible(visible);
+    }
+
+    pub(super) fn take_updates(&self, viewport: ViewportId) -> Updates {
+        self.route_wakes_to(viewport);
+        let updates = self.inner.take_updates();
+        let (image, produced_with) = updates
+            .image
+            .map(|image| (color_image(image.frame), image.produced_with))
+            .unzip();
+        Updates {
+            image,
+            produced_with,
+            status: updates.status,
+            received_frame_sequence: updates.received_frame_sequence,
+            desktop: updates.desktop,
+            server_name: server_label(updates.server_name.as_deref()),
+            native_session: native_metadata(updates.server_text.as_deref()),
         }
     }
 
+    pub(super) fn take_server_details(&self) -> DeviceServerDetails {
+        server_details(&self.inner.take_server_details())
+    }
+
+    pub(super) fn observation(&self) -> Observation {
+        self.inner.observation()
+    }
+
+    pub(super) fn stream_evidence(&self) -> (StreamEvidence, bool) {
+        (self.inner.stream_evidence(), false)
+    }
+
     #[cfg(test)]
-    pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
+    pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: ViewOptions) -> Self {
         Self::pending_frame_with_input(latest_full, image, produced_with).0
     }
 
@@ -223,388 +163,108 @@ impl Session {
     pub(super) fn pending_frame_with_input(
         latest_full: ColorImage,
         image: ColorImage,
-        produced_with: DeviceViewOptions,
-    ) -> (Self, mpsc::UnboundedReceiver<X11Event>) {
-        let (input, receiver) = mpsc::unbounded_channel();
+        produced_with: ViewOptions,
+    ) -> (Self, horizon_vnc::SentInput) {
+        let (inner, input) = horizon_vnc::Session::fixture(
+            super::picture::frame(latest_full),
+            super::picture::frame(image),
+            produced_with,
+            is_native_metadata,
+        );
         let session = Self {
-            updates: Arc::new(Mutex::new(Updates {
-                stream: StreamEvidence {
-                    sequence: 1,
-                    last_frame: Some(Instant::now()),
-                },
-                image: Some(image),
-                produced_with: Some(produced_with),
-                status: Some(Status::Connected),
-                received_frame_sequence: 1,
-                viewport: ViewportId::ROOT,
-                visible: true,
-                options: produced_with,
-                desktop: Some(latest_full.size),
-                server_name: None,
-                native_session: None,
-            })),
-            latest_full: Arc::new(Mutex::new(Some(Arc::new(latest_full)))),
-            recording_live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            input,
-            stop: None,
-            thread: None,
+            inner,
+            viewport: Arc::new(Mutex::new(ViewportId::ROOT)),
         };
-        (session, receiver)
+        (session, input)
     }
 
     #[cfg(test)]
-    pub(super) fn native_text_for_test(&self, ctx: &Context, text: &str) -> bool {
-        publish_native_text(&self.updates, ctx, text)
-    }
-
-    /// Marks the viewer undrawn and routes its wakes to `viewport`, the pass
-    /// that uploads for it, so a closed detached window cannot keep them.
-    /// Returns whether an image or status change is waiting.
-    pub(super) fn pending_in_background(&self, viewport: ViewportId) -> bool {
-        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.visible = false;
-        state.viewport = viewport;
-        state.image.is_some() || state.status.is_some() || state.native_session.is_some()
-    }
-
-    pub(super) fn set_visible(&self, visible: bool) {
-        self.updates
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .visible = visible;
-    }
-
-    pub(super) fn take_updates(&self, viewport: ViewportId) -> Updates {
-        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.viewport = viewport;
-        Updates {
-            stream: state.stream,
-            image: state.image.take(),
-            produced_with: state.produced_with,
-            status: state.status.take(),
-            received_frame_sequence: state.received_frame_sequence,
-            viewport,
-            visible: state.visible,
-            options: state.options,
-            desktop: state.desktop,
-            server_name: state.server_name.take(),
-            native_session: state.native_session.take(),
-        }
-    }
-
-    pub(super) fn take_server_details(&self) -> DeviceServerDetails {
-        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        DeviceServerDetails {
-            name: state.server_name.take(),
-            native_session: state.native_session.take(),
-            desktop_size: state.desktop,
-        }
-    }
-
-    pub(super) fn observation(&self) -> Observation {
-        let mut state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        Observation {
-            status: state.status.take(),
-            received_frame_sequence: state.received_frame_sequence,
-        }
-    }
-
-    pub(super) fn stream_evidence(&self) -> (StreamEvidence, bool) {
-        let state = self.updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        (state.stream, false)
+    pub(super) fn native_text_for_test(&self, text: &str) -> bool {
+        self.inner.push_server_text(text)
     }
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(thread) = self.thread.take()
-            && thread.join().is_err()
-        {
-            tracing::warn!("device viewer worker panicked during shutdown");
-        }
-    }
+/// Bound the untrusted handshake name and flatten its controls for display.
+fn server_label(raw: Option<&str>) -> Option<String> {
+    raw.and_then(DevicePanelState::server_label)
 }
 
-fn publish_status(updates: &Mutex<Updates>, ctx: &Context, status: Status) {
-    let (drawn, viewport) = {
-        let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.status = Some(status);
-        (state.visible, state.viewport)
-    };
-    wake_ui(ctx, drawn, viewport);
+fn native_metadata(text: Option<&str>) -> Option<NativeSessionMetadata> {
+    text.and_then(NativeSessionMetadata::from_wire_text)
 }
 
-/// A drawn viewer repaints for every frame; an undrawn one only asks for the
-/// bounded background upload, so a hidden or off-canvas stream never drives
-/// the host at its own rate.
-fn wake_ui(ctx: &Context, drawn: bool, viewport: ViewportId) {
-    if drawn {
-        ctx.request_repaint_of(viewport);
-    } else {
-        ctx.request_repaint_after_for(super::BACKGROUND_UPLOAD_INTERVAL, viewport);
+fn server_details(details: &horizon_vnc::ServerDetails) -> DeviceServerDetails {
+    DeviceServerDetails {
+        name: server_label(details.name.as_deref()),
+        native_session: native_metadata(details.text.as_deref()),
+        desktop_size: details.desktop_size,
     }
-}
-
-fn publish_native_text(updates: &Mutex<Updates>, ctx: &Context, text: &str) -> bool {
-    let Some(metadata) = NativeSessionMetadata::from_wire_text(text) else {
-        return false;
-    };
-    let (drawn, viewport) = {
-        let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.native_session = Some(metadata);
-        (state.visible, state.viewport)
-    };
-    wake_ui(ctx, drawn, viewport);
-    true
-}
-
-async fn connection(
-    route: DeviceRoute,
-    updates: &Mutex<Updates>,
-    latest_full: &Mutex<Option<Arc<ColorImage>>>,
-    ctx: &Context,
-    input: &mut mpsc::UnboundedReceiver<X11Event>,
-) -> Result<(), ViewError> {
-    // The tunnel process lives exactly as long as this connection.
-    let (client, mut tunnel) = connect_client(route).await?;
-    let result = stream_desktop(client, updates, latest_full, ctx, input).await;
-    match (result, tunnel.as_mut()) {
-        // A forward that dies mid-session ends the stream; ssh says why.
-        (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
-        (result, _) => result,
-    }
-}
-
-async fn stream_desktop(
-    client: vnc::VncClient,
-    updates: &Mutex<Updates>,
-    latest_full: &Mutex<Option<Arc<ColorImage>>>,
-    ctx: &Context,
-    input: &mut mpsc::UnboundedReceiver<X11Event>,
-) -> Result<(), ViewError> {
-    let mut framebuffer = Framebuffer::default();
-    let mut received_pixels = false;
-    // ServerInit queues resolution before the client is returned. Observe that
-    // metadata before the first image refresh, independently of presentation.
-    if let Some(event) = client.poll_event().await? {
-        apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
-    }
-    {
-        let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.server_name = DevicePanelState::server_label(client.server_name());
-        state.desktop = (!framebuffer.size().contains(&0)).then(|| framebuffer.size());
-    }
-    publish_status(updates, ctx, Status::Connected);
-    loop {
-        let mut full_refresh = false;
-        let options = updates
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .options;
-        forward_input_until(&client, input, options.interval()).await?;
-        let mut changed = false;
-        let started = std::time::Instant::now();
-        let mut idle = false;
-        for _ in 0..4096 {
-            if started.elapsed() >= Duration::from_millis(10) {
-                break;
-            }
-            if let Some(event) = client.poll_event().await? {
-                if let vnc::VncEvent::Text(text) = &event {
-                    publish_native_text(updates, ctx, text);
-                    continue;
-                }
-                full_refresh |= matches!(event, vnc::VncEvent::SetResolution(_));
-                let previous_size = framebuffer.size();
-                changed |= apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
-                if framebuffer.size() != previous_size {
-                    updates
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .desktop = Some(framebuffer.size());
-                }
-                idle = false;
-            } else if idle {
-                break;
-            } else {
-                // Let the decoder refill its bounded queue before publishing a
-                // partial frame; do not throttle every desktop to a few tiles.
-                tokio::task::yield_now().await;
-                idle = true;
-            }
-        }
-        // Sample off the UI thread. The full desktop is retained so view
-        // controls can re-present after disconnect or an options change.
-        if received_pixels && changed && !framebuffer.size().contains(&0) {
-            let full = framebuffer.full_image()?;
-            let image = present_image(&full, options)?;
-            *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(full));
-            let (drawn, viewport) = {
-                let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                // Only the latest frame is retained; slow rendering cannot grow
-                // an application-side queue of full desktop images.
-                state.image = Some(image);
-                state.stream.sequence = state.stream.sequence.saturating_add(1);
-                state.stream.last_frame = Some(Instant::now());
-                state.produced_with = Some(options.for_desktop(framebuffer.size()));
-                state.desktop = Some(framebuffer.size());
-                state.received_frame_sequence = state.received_frame_sequence.saturating_add(1);
-                (state.visible, state.viewport)
-            };
-            wake_ui(ctx, drawn, viewport);
-        }
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            client.input(if full_refresh {
-                X11Event::FullRefresh
-            } else {
-                X11Event::Refresh
-            }),
-        )
-        .await
-        .map_err(|_| ViewError::Timeout)??;
-    }
-}
-
-/// Wait out the refresh cadence, sending any queued input as it arrives so a
-/// click or keystroke never waits for the next frame.
-async fn forward_input_until(
-    client: &vnc::VncClient,
-    input: &mut mpsc::UnboundedReceiver<X11Event>,
-    interval: Duration,
-) -> Result<(), ViewError> {
-    let deadline = Instant::now() + interval;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(());
-        }
-        match tokio::time::timeout(remaining, input.recv()).await {
-            Ok(Some(event)) => {
-                tokio::time::timeout(Duration::from_secs(5), client.input(event))
-                    .await
-                    .map_err(|_| ViewError::Timeout)??;
-            }
-            // The sender lives in the Session, which cancels this worker when it
-            // drops; until then a closed channel just means no more input.
-            Ok(None) => {
-                tokio::time::sleep(remaining).await;
-                return Ok(());
-            }
-            Err(_) => return Ok(()),
-        }
-    }
-}
-
-async fn connect_client(route: DeviceRoute) -> Result<(vnc::VncClient, Option<SshTunnel>), ViewError> {
-    match route {
-        DeviceRoute::Direct(address) => {
-            let client = tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, async {
-                let stream = tokio::net::TcpStream::connect(address).await?;
-                stream.set_nodelay(true)?;
-                handshake(stream).await
-            })
-            .await
-            .map_err(|_| ViewError::Timeout)??;
-            Ok((client, None))
-        }
-        DeviceRoute::SshTunnel { connection, remote } => {
-            let mut tunnel = SshTunnel::spawn("ssh", &connection.stdio_forward_args(&remote.to_string()))?;
-            let stream = tunnel.take_stream()?;
-            match tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, handshake(stream)).await {
-                Ok(Ok(client)) => Ok((client, Some(tunnel))),
-                Ok(Err(error)) => Err(tunnel.explain(error).await),
-                Err(_) => Err(tunnel.explain(ViewError::Timeout).await),
-            }
-        }
-    }
-}
-
-async fn handshake<S>(stream: S) -> Result<vnc::VncClient, ViewError>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-{
-    // The local MVP has no credentials. Password-required servers fail
-    // explicitly; input and clipboard are never forwarded by this viewer.
-    let client = VncConnector::new(stream)
-        .set_auth_method(async { Err(vnc::VncError::NoPassword) })
-        .add_encoding(VncEncoding::Zrle)
-        .add_encoding(VncEncoding::CopyRect)
-        .add_encoding(VncEncoding::Raw)
-        .add_encoding(VncEncoding::DesktopSizePseudo)
-        .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
-        .allow_shared(true)
-        .set_pixel_format(PixelFormat::rgba())
-        .build()?
-        .try_start()
-        .await?
-        .finish()?;
-    Ok(client)
-}
-
-fn apply_frame_event(
-    framebuffer: &mut Framebuffer,
-    received_pixels: &mut bool,
-    event: vnc::VncEvent,
-) -> Result<bool, ViewError> {
-    let reset = matches!(event, vnc::VncEvent::SetResolution(_));
-    let pixels = matches!(event, vnc::VncEvent::RawImage(_, _));
-    let previous_size = framebuffer.size();
-    let changed = framebuffer.apply(event)?;
-    if reset || framebuffer.size() != previous_size {
-        *received_pixels = false;
-    }
-    *received_pixels |= pixels;
-    Ok(changed)
 }
 
 #[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-mod image_evidence_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn extended_resize_waits_for_pixels_but_same_size_announcement_preserves_them() -> Result<(), ViewError> {
-        let mut framebuffer = Framebuffer::default();
-        let mut received_pixels = false;
-        for width in [2, 2, 4] {
-            let previous_size = framebuffer.size();
-            let event = vnc::VncEvent::DesktopUpdate(vnc::DesktopUpdate {
-                reason: vnc::DesktopReason::Server,
-                status: vnc::DesktopStatus::Success,
-                layout: Some(vnc::DesktopLayout {
-                    width,
-                    height: 1,
-                    screens: Vec::new(),
-                }),
+    fn handshake_names_are_bounded_plain_labels_before_anything_shows_them() {
+        for (raw, expected) in [
+            ("Lab desktop ÆØÅ", Some("Lab desktop ÆØÅ")),
+            ("", None),
+            ("\nLab\0desktop", Some("Lab desktop")),
+        ] {
+            let details = server_details(&horizon_vnc::ServerDetails {
+                name: Some(raw.into()),
+                desktop_size: Some([2, 2]),
+                text: None,
             });
-            let changed = apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
-            let resized = previous_size != framebuffer.size();
-            assert_eq!(changed, resized);
-            assert_eq!(
-                received_pixels, !resized,
-                "a resized blank buffer is not received pixels"
-            );
-            apply_frame_event(
-                &mut framebuffer,
-                &mut received_pixels,
-                vnc::VncEvent::RawImage(
-                    vnc::Rect {
-                        x: 0,
-                        y: 0,
-                        width,
-                        height: 1,
-                    },
-                    vec![255; usize::from(width) * 4],
-                ),
-            )?;
-            assert!(received_pixels, "new pixels resume image publication");
+            assert_eq!(details.name.as_deref(), expected);
+            assert_eq!(details.desktop_size, Some([2, 2]));
         }
-        Ok(())
+    }
+
+    #[test]
+    fn hidden_wakes_schedule_the_background_upload_and_visible_ones_repaint_now() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = Context::default();
+        // Drain the first passes so coalescing cannot hide a background request.
+        for _ in 0..3 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+        }
+        let delays = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&delays);
+        ctx.set_request_repaint_callback(move |info| recorded.lock().unwrap().push(info.delay));
+        wake_ui(&ctx, Wake::Hidden, ViewportId::ROOT);
+        let hidden = std::mem::take(&mut *delays.lock().unwrap());
+        assert!(!hidden.is_empty(), "a hidden frame still schedules its upload");
+        assert!(
+            hidden
+                .iter()
+                .all(|delay| !delay.is_zero() && *delay <= super::super::BACKGROUND_UPLOAD_INTERVAL),
+            "nothing repaints the host at the stream rate: {hidden:?}"
+        );
+        wake_ui(&ctx, Wake::Visible, ViewportId::ROOT);
+        assert!(delays.lock().unwrap().iter().any(std::time::Duration::is_zero));
+    }
+
+    #[test]
+    fn a_tunnelled_viewer_reaches_its_target_through_ssh() {
+        let mut device = DevicePanelState {
+            target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5901").unwrap(),
+            input: horizon_core::DeviceInput::Accepted,
+            identity: None,
+            connect_on_start: false,
+            ssh_tunnel: None,
+        };
+        assert!(matches!(route(&device), Route::Direct(address) if address.port() == 5901));
+        let connection = horizon_core::SshConnection {
+            host: "lab.example".into(),
+            ..Default::default()
+        };
+        device.ssh_tunnel = Some(connection.clone());
+        let Route::Tunnel { program, args } = route(&device) else {
+            panic!("expected a tunnel");
+        };
+        assert_eq!(program, "ssh");
+        assert_eq!(args, connection.stdio_forward_args("127.0.0.1:5901"));
     }
 }

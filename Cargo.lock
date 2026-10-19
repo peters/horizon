@@ -2742,6 +2742,7 @@ version = "0.2.7"
 dependencies = [
  "alacritty_terminal",
  "arboard",
+ "bytemuck",
  "cpal",
  "eframe",
  "egui",
@@ -2753,6 +2754,7 @@ dependencies = [
  "horizon-cast",
  "horizon-core",
  "horizon-cursor",
+ "horizon-vnc",
  "horizon-wayland",
  "libc",
  "png",
@@ -2771,12 +2773,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "transcribe-cpp",
- "vnc-rs",
  "wgpu",
  "winit",
  "wl-clipboard-rs",
  "x11rb 0.14.0",
  "zeroize",
+]
+
+[[package]]
+name = "horizon-vnc"
+version = "0.2.7"
+dependencies = [
+ "bytemuck",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "vnc-rs",
 ]
 
 [[package]]
