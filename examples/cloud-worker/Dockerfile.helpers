@@ -5,7 +5,7 @@
 #   COPY --from=ghcr.io/peters/horizon-worker-helpers@sha256:<digest> / /
 ARG HORIZON_REVISION
 
-FROM rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS source
+FROM rust:1.99.1-slim-bookworm@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c AS source
 ARG HORIZON_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config nasm libssl-dev libxkbcommon-dev git ca-certificates python3 \
