@@ -9,6 +9,7 @@
 mod controller;
 mod model;
 mod network_watch;
+mod screenshot;
 mod server;
 
 pub use server::HorizonBrowserMcp;
@@ -29,6 +30,18 @@ pub enum StdioServerError {
 /// Returns when transport initialization or the service task fails.
 pub async fn serve_stdio() -> Result<(), StdioServerError> {
     serve(HorizonBrowserMcp::from_environment()).await
+}
+
+/// Serve as [`serve_stdio`] does, and also give the PNG of each
+/// `browser_screenshot` of a profile host as an image block, for a client on
+/// another computer that cannot read the private path of the result. Only a
+/// PNG under the runtime root is read, so the screenshots of a Horizon host
+/// stay a path.
+///
+/// # Errors
+/// Returns when transport initialization or the service task fails.
+pub async fn serve_stdio_with_inline_screenshots() -> Result<(), StdioServerError> {
+    serve(HorizonBrowserMcp::from_environment().with_inline_screenshots()).await
 }
 
 /// Serve the contract over stdio as `actor`, the one agent of the host

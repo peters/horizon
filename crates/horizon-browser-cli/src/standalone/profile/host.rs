@@ -17,10 +17,9 @@ use horizon_browser_control::manifest::{
     self, AgentIdentity, BrowserCloseRequest, BrowserCloseResult, BrowserCreateRequest, BrowserCreateResult,
     BrowserVisibilityResult, CreateNavigation, ManifestCoordination, ManifestWorkspace,
 };
-use horizon_browser_control::paths::safe_local_id;
 
 use super::config::{Profile, ProfileConfig, forget_removed_prefs, user_js};
-use super::rules::{Close, Refusal, admit, close_action, idle_pages, page_id, refuse};
+use super::rules::{Close, Refusal, admit, close_action, host_action, idle_pages, page_id, refuse};
 
 /// At most this many pages run in one host, also while they stop.
 pub const MAX_PAGES: usize = 16;
@@ -32,7 +31,6 @@ const EXIT_TIMEOUT: Duration = Duration::from_secs(20);
 const FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(3);
 /// The folder of the persistent profiles under the runtime root.
 pub const PROFILES: &str = "browser-profiles";
-const CAPTURES: &str = "profile-host-captures";
 
 struct Page {
     profile: String,
@@ -45,6 +43,8 @@ struct Page {
     url: Option<String>,
     warning: Option<String>,
     opened: SystemTime,
+    /// The time of the last screenshot. A screenshot is an action too.
+    screenshot: Option<SystemTime>,
 }
 
 struct Stopping {
@@ -68,7 +68,8 @@ pub struct ProfileHost {
 
 impl ProfileHost {
     /// Make the folder of each profile and write the `user.js` of each
-    /// Firefox profile. A profile that is already there stays as it is.
+    /// Firefox profile. A profile that is already there stays as it is. The
+    /// screenshots that an earlier host left (after a kill) are removed.
     ///
     /// # Errors
     /// A profile folder or a `user.js` cannot be written.
@@ -79,6 +80,8 @@ impl ProfileHost {
         headed: bool,
         idle: Duration,
     ) -> std::io::Result<Self> {
+        // Only one host runs on a root, so no page of this root is open now.
+        let _ = std::fs::remove_dir_all(super::capture::captures(&root));
         let mut groups = BTreeMap::new();
         for (name, profile) in &config.profiles {
             let dir = profile_dir(&root, name, profile.backend);
@@ -128,7 +131,7 @@ impl ProfileHost {
         for (id, page) in &self.pages {
             let _ = manifest::sync_host_state(id, page.visible, &self.workspace(page));
         }
-        self.refuse_host_only();
+        self.host_requests();
     }
 
     /// Stop every page and keep every profile. Returns whether each browser
@@ -252,7 +255,7 @@ impl ProfileHost {
                 height: horizon_browser::DEFAULT_VIEWPORT.1,
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: Some(Arc::new(ManifestCoordination::default())),
-                capture_directory: Some(self.root.join(CAPTURES).join(safe_local_id(&id))),
+                capture_directory: Some(super::capture::folder(&self.root, &id)),
                 video: Arc::new(VideoCaptureHandle::default()),
                 remote: None,
             },
@@ -271,6 +274,7 @@ impl ProfileHost {
                 url: None,
                 warning: None,
                 opened: SystemTime::now(),
+                screenshot: None,
             },
         );
         Ok(id)
@@ -402,13 +406,14 @@ impl ProfileHost {
     }
 
     /// Close each ready page whose last action is older than the idle limit.
-    /// An action is each line of the audit journal of the page.
+    /// An action is each line of the audit journal of the page, and each
+    /// screenshot.
     fn idle_pages(&mut self) {
         let ready = self
             .pages
             .iter()
             .filter(|(_, page)| page.ready)
-            .map(|(id, page)| (id.as_str(), page.opened));
+            .map(|(id, page)| (id.as_str(), host_action(page.opened, page.screenshot)));
         let idle = idle_pages(&self.root, ready, SystemTime::now(), self.idle);
         for id in idle {
             tracing::info!(page = %id, "the page had no action within the idle limit and closes");
@@ -453,12 +458,13 @@ impl ProfileHost {
         }
         for id in done {
             self.stopping.remove(&id);
-            let _ = std::fs::remove_dir_all(self.root.join(CAPTURES).join(safe_local_id(&id)));
+            let _ = std::fs::remove_dir_all(super::capture::folder(&self.root, &id));
         }
     }
 
     /// Requests that only a Horizon host answers get a refusal, not a wait.
-    fn refuse_host_only(&self) {
+    /// A screenshot gets the newest frame of its page.
+    fn host_requests(&mut self) {
         use horizon_browser_control::manifest::{cast, device, provider_usage, recovery};
         if let Ok(requests) = cast::claim(&self.host) {
             for request in requests {
@@ -470,10 +476,34 @@ impl ProfileHost {
         }
         if let Ok(requests) = device::claim(&self.host) {
             for request in requests {
-                let outcome = device::Outcome::failed(
-                    "viewer_requires_horizon",
-                    "A profile host has no Horizon window to show a device viewer.",
-                );
+                let outcome = match &request.operation {
+                    device::Operation::BrowserScreenshot { input } => {
+                        let frame = self
+                            .pages
+                            .get(&input.panel_id)
+                            .and_then(|page| page.session.frame_slot.latest());
+                        let live = manifest::read(&input.panel_id);
+                        let caller = AgentIdentity::new(&request.actor, Some(&self.host));
+                        let outcome = super::capture::answer(
+                            &self.root,
+                            caller,
+                            input,
+                            live.as_ref(),
+                            frame.as_deref(),
+                            manifest::now_millis(),
+                        );
+                        if matches!(outcome, device::Outcome::Screenshot { .. })
+                            && let Some(page) = self.pages.get_mut(&input.panel_id)
+                        {
+                            page.screenshot = Some(SystemTime::now());
+                        }
+                        outcome
+                    }
+                    _ => device::Outcome::failed(
+                        "viewer_requires_horizon",
+                        "A profile host has no Horizon window to show a device viewer.",
+                    ),
+                };
                 let _ = device::complete(&request, outcome);
             }
         }
@@ -526,7 +556,7 @@ fn browser_config(root: &Path, name: &str, profile: &Profile, headed: bool) -> B
     }
 }
 
-fn private_dir(dir: &Path) -> std::io::Result<()> {
+pub fn private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {

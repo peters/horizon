@@ -8,7 +8,7 @@ use horizon_browser_control::manifest::{self, BrowserCreateRequest};
 use super::config::{Pref, ProfileConfig, forget_removed_prefs, user_js, valid_name};
 use super::host::{MAX_ACTOR_PAGES, MAX_PAGES, profile_dir};
 use super::instance::{Claim, Record};
-use super::rules::{Close, admit, close_action, idle, idle_pages, page_id};
+use super::rules::{Close, admit, close_action, host_action, idle, idle_pages, page_id};
 
 const HOST_FILE: &str = "\
 browser:
@@ -312,4 +312,130 @@ fn one_host_holds_a_root_and_keeps_its_instance_over_a_restart() {
     drop(first);
     let again = Claim::take(root.path()).unwrap_or_else(|error| panic!("second claim: {error}"));
     assert_eq!(again.host_instance(), instance);
+}
+
+#[test]
+fn a_screenshot_is_a_private_png_and_only_the_newest_captures_stay() {
+    let root = tempfile::tempdir().unwrap_or_else(|error| panic!("temp: {error}"));
+    let page = "profile-mail-aaaaaaaaaaaa";
+    let frame = |seq| horizon_browser::FrameData {
+        width: 2,
+        height: 1,
+        rgb: vec![255, 0, 0, 0, 0, 255],
+        seq,
+    };
+    let mut paths = Vec::new();
+    for seq in 0..10 {
+        paths.push(super::capture::write(root.path(), page, &frame(seq)).unwrap_or_else(|error| panic!("{error}")));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let bytes = std::fs::read(&paths[9]).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    let left = std::fs::read_dir(super::capture::folder(root.path(), page))
+        .map(Iterator::count)
+        .unwrap_or_default();
+    assert_eq!(left, super::capture::MAX_CAPTURES);
+    assert!(!paths[0].exists() && paths[9].exists(), "the oldest captures go");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&paths[9])
+            .map(|m| m.permissions().mode() & 0o777)
+            .unwrap_or_default();
+        assert_eq!(mode, 0o600);
+    }
+    for n in 0..super::capture::MAX_CAPTURES {
+        let ahead = super::capture::folder(root.path(), page).join(format!("capture-99999999999999999999-{n}.png"));
+        std::fs::write(ahead, b"png").unwrap_or_else(|error| panic!("{error}"));
+    }
+    let written = super::capture::write(root.path(), page, &frame(10)).unwrap_or_else(|error| panic!("{error}"));
+    assert!(written.exists(), "a clock step never removes the capture just written");
+    let left = std::fs::read_dir(super::capture::folder(root.path(), page))
+        .map(Iterator::count)
+        .unwrap_or_default();
+    assert_eq!(left, super::capture::MAX_CAPTURES);
+    let mut broken = frame(11);
+    broken.rgb.pop();
+    assert!(super::capture::write(root.path(), page, &broken).is_err());
+}
+
+#[test]
+fn only_the_live_owner_of_a_page_gets_its_screenshot() {
+    use horizon_browser_control::manifest::device::{Outcome, ScreenshotInput};
+    use horizon_browser_control::manifest::{AgentIdentity, BrowserManifest, ManifestOwner, ManifestWorkspace};
+    let root = tempfile::tempdir().unwrap_or_else(|error| panic!("temp: {error}"));
+    let (host, mine, other) = ("host-1", "horizon:example/ws/agent", "horizon:example/other/agent");
+    let page = "profile-mail-aaaaaaaaaaaa";
+    let now = manifest::now_millis();
+    let live = |owner: Option<(&str, i64)>| BrowserManifest {
+        panel_local_id: page.into(),
+        host: Some(host.into()),
+        workspace: Some(ManifestWorkspace::new(host, "mail", vec![mine.to_owned()])),
+        owner: owner.map(|(name, updated_at)| ManifestOwner {
+            name: name.into(),
+            tty: None,
+            updated_at,
+        }),
+        ..BrowserManifest::default()
+    };
+    let input = ScreenshotInput {
+        panel_id: page.into(),
+        copy_to_clipboard: false,
+    };
+    let frame = horizon_browser::FrameData {
+        width: 2,
+        height: 1,
+        rgb: vec![0; 6],
+        seq: 1,
+    };
+    let me = AgentIdentity::new(mine, Some(host));
+    let code = |caller, live: Option<BrowserManifest>, frame: Option<&horizon_browser::FrameData>| {
+        match super::capture::answer(root.path(), caller, &input, live.as_ref(), frame, now) {
+            Outcome::Failed { code, .. } => code,
+            Outcome::Screenshot { capture } => {
+                assert!(capture.path.starts_with(super::capture::folder(root.path(), page)));
+                "screenshot".into()
+            }
+            _ => "other".into(),
+        }
+    };
+    assert_eq!(code(me, None, Some(&frame)), "browser_unavailable");
+    let stranger = AgentIdentity::new(other, Some(host));
+    assert_eq!(
+        code(stranger, Some(live(Some((other, now)))), Some(&frame)),
+        "panel_unavailable"
+    );
+    let elsewhere = AgentIdentity::new(mine, Some("host-2"));
+    assert_eq!(
+        code(elsewhere, Some(live(Some((mine, now)))), Some(&frame)),
+        "panel_unavailable"
+    );
+    assert_eq!(code(me, Some(live(None)), Some(&frame)), "not_owner");
+    assert_eq!(code(me, Some(live(Some((other, now)))), Some(&frame)), "not_owner");
+    let stale = now - manifest::OWNER_TTL_MILLIS - 1;
+    assert_eq!(code(me, Some(live(Some((mine, stale)))), Some(&frame)), "not_owner");
+    assert_eq!(code(me, Some(live(Some((mine, now)))), None), "screenshot_unavailable");
+    assert!(
+        !super::capture::folder(root.path(), page).exists(),
+        "a refused screenshot writes no file"
+    );
+    assert_eq!(code(me, Some(live(Some((mine, now)))), Some(&frame)), "screenshot");
+}
+
+#[test]
+fn a_screenshot_is_an_action_of_its_page() {
+    let opened = SystemTime::now() - Duration::from_hours(2);
+    assert_eq!(host_action(opened, None), opened);
+    let shot = opened + Duration::from_hours(1);
+    assert_eq!(host_action(opened, Some(shot)), shot);
+    assert_eq!(
+        host_action(shot, Some(opened)),
+        shot,
+        "an earlier screenshot changes nothing"
+    );
+    assert!(!idle(
+        host_action(opened, Some(SystemTime::now())),
+        SystemTime::now(),
+        Duration::from_hours(1)
+    ));
 }

@@ -45,6 +45,7 @@ USAGE:
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
     horizon-browser mcp --standalone --config <HOST-FILE>
+    horizon-browser mcp --connect --inline-screenshots
     horizon-browser mcp --stop [PANEL-ID]
     horizon-browser host --config <HOST-FILE> [--visible]
 
@@ -66,7 +67,10 @@ COMMANDS:
            hosts to exit and clean up. --config (or HORIZON_BROWSER_CONFIG)
            names a host file of remote targets and credential files; the
            standalone host then serves only those targets and releases their
-           sessions when MCP stdin closes.
+           sessions when MCP stdin closes. --inline-screenshots (--connect
+           only) also returns the PNG of each browser_screenshot of a profile
+           host as an image block, for a client on another computer than the
+           host. The screenshots of a Horizon host stay a path.
     host   Keep the named persistent profiles of a host file (browser.profiles)
            for `mcp --connect` clients until an interrupt or a termination
            signal. A client names a profile as the browser_create target; the
@@ -104,6 +108,7 @@ enum Command {
         standalone: bool,
         options: StandaloneOptions,
         config: Option<PathBuf>,
+        inline_screenshots: bool,
     },
     Stop {
         panel_id: Option<String>,
@@ -139,7 +144,8 @@ async fn main() -> ExitCode {
             standalone,
             options,
             config,
-        }) => serve_mcp(standalone, options, config.as_deref()).await,
+            inline_screenshots,
+        }) => serve_mcp(standalone, options, config.as_deref(), inline_screenshots).await,
         Ok(Command::Stop { panel_id }) => stop_standalone(panel_id.as_deref()),
         Ok(Command::Host { config, visible }) => serve_profile_host(&config, visible).await,
         Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
@@ -195,7 +201,12 @@ fn stop_standalone(panel_id: Option<&str>) -> ExitCode {
     }
 }
 
-async fn serve_mcp(standalone: bool, options: StandaloneOptions, config: Option<&Path>) -> ExitCode {
+async fn serve_mcp(
+    standalone: bool,
+    options: StandaloneOptions,
+    config: Option<&Path>,
+    inline_screenshots: bool,
+) -> ExitCode {
     horizon_browser_cli::standalone::prune_dead_hosts();
     let result = if let Some(config) = config {
         horizon_browser_cli::standalone::remote::serve(config)
@@ -203,6 +214,10 @@ async fn serve_mcp(standalone: bool, options: StandaloneOptions, config: Option<
             .map_err(|error| error.to_string())
     } else if standalone {
         horizon_browser_cli::standalone::serve(options)
+            .await
+            .map_err(|error| error.to_string())
+    } else if inline_screenshots {
+        horizon_browser_mcp::serve_stdio_with_inline_screenshots()
             .await
             .map_err(|error| error.to_string())
     } else {
@@ -728,6 +743,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     let mut config = None;
     let mut stop = false;
     let mut stop_panel = None;
+    let mut inline_screenshots = false;
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("--stop") if !stop => {
@@ -760,6 +776,8 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             }
             Some("--backend") => return Err("--backend may be specified only once".to_string()),
             Some("--visible") if !visible => visible = true,
+            Some("--inline-screenshots") if !inline_screenshots => inline_screenshots = true,
+            Some("--inline-screenshots") => return Err("--inline-screenshots may be specified only once".to_string()),
             Some("--config") if config.is_none() => {
                 config = Some(PathBuf::from(
                     args.next()
@@ -772,13 +790,16 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
         }
     }
     if stop {
-        if mode_seen || keep_alive || backend_seen || visible || config.is_some() {
+        if mode_seen || keep_alive || backend_seen || visible || config.is_some() || inline_screenshots {
             return Err("--stop cannot be combined with other MCP mode flags".to_string());
         }
         return Ok(Command::Stop { panel_id: stop_panel });
     }
     if !standalone && (backend_seen || visible || keep_alive || config.is_some()) {
         return Err("--backend, --visible, --keep-alive, and --config require standalone MCP mode".to_string());
+    }
+    if standalone && inline_screenshots {
+        return Err("--inline-screenshots requires --connect".to_string());
     }
     // The variable applies only when no flag asks for a local browser.
     if standalone && config.is_none() && !(backend_seen || visible || keep_alive) {
@@ -799,6 +820,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             keep_alive,
         },
         config,
+        inline_screenshots,
     })
 }
 
@@ -1065,6 +1087,22 @@ mod tests {
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
         assert!(parse_args(["mcp", "--connect", "--keep-alive"].map(OsString::from)).is_err());
         assert!(parse_args(["mcp", "--connect", "--backend", "chromium"].map(OsString::from)).is_err());
+        let Command::Mcp {
+            standalone,
+            inline_screenshots,
+            ..
+        } = parse_args(["mcp", "--connect", "--inline-screenshots"].map(OsString::from)).expect("inline MCP")
+        else {
+            panic!("expected MCP command");
+        };
+        assert!(!standalone && inline_screenshots);
+        for refused in [
+            &["mcp", "--standalone", "--inline-screenshots"][..],
+            &["mcp", "--connect", "--inline-screenshots", "--inline-screenshots"],
+            &["mcp", "--stop", "--inline-screenshots"],
+        ] {
+            assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
+        }
         let Command::Stop { panel_id } =
             parse_args(["mcp", "--stop", "standalone-1-abc"].map(OsString::from)).expect("stop MCP")
         else {
