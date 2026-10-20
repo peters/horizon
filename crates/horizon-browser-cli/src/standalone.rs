@@ -17,6 +17,7 @@ use horizon_browser_control::{
 use thiserror::Error;
 
 mod lease;
+pub mod profile;
 pub mod remote;
 
 pub use lease::StandaloneHostRef;
