@@ -24,6 +24,7 @@ members = [
     "crates/horizon-core",
     "crates/horizon-cursor",
     "crates/horizon-process-time",
+    "crates/horizon-terminal",
     "crates/horizon-ui",
     "crates/horizon-vnc",
     "crates/horizon-wayland",
@@ -75,6 +76,8 @@ horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.
 vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "773ec2351241c80bbab88ffedae73f1972e0a4c1" }
 # The live VNC session behind the native Device viewer, usable by any UI.
 horizon-vnc = { path = "crates/horizon-vnc", version = "0.2.7" }
+# The click targets and the search of a terminal grid, usable by any UI or server.
+horizon-terminal = { path = "crates/horizon-terminal", version = "0.2.7" }
 # Zero-copy views of VNC pixels as RGBA bytes and as egui colors.
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc", "must_cast"] }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }

@@ -2646,11 +2646,11 @@ dependencies = [
  "horizon-browser-routines",
  "horizon-cloud",
  "horizon-cloud-protocol",
+ "horizon-terminal",
  "if-addrs",
  "keyring-core",
  "libc",
  "profiling",
- "regex",
  "ring",
  "rmcp",
  "rusqlite",
@@ -2734,6 +2734,14 @@ version = "0.2.7"
 dependencies = [
  "time",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "horizon-terminal"
+version = "0.2.7"
+dependencies = [
+ "alacritty_terminal",
+ "regex",
 ]
 
 [[package]]

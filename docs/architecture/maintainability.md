@@ -51,6 +51,14 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   sends the session wakes to the egui viewport of the viewer, and it keeps only
   the clipboard texts that are native session metadata. `picture.rs` gives the
   frames to egui without a copy.
+- The `horizon-terminal` crate owns the click targets and the search of a
+  terminal grid, with no PTY and no UI. It must not depend on egui, eframe,
+  wgpu, winit or other Horizon crates, because other applications use it as a
+  Git dependency. `logical_line.rs` assembles the text under a grid point from
+  soft-wrapped rows and from URL rows a program hard-wrapped; its row-shape
+  heuristics are tested under `logical_line/tests/`. `links.rs` finds the OSC 8
+  hyperlink, URL or path at a column, and `search.rs` matches a literal or regex
+  query in lines of text for `search_board` of horizon-core.
 - The `horizon-vnc` crate owns the live session without a UI. It must not
   depend on egui, eframe, wgpu, winit or other Horizon crates, because other
   applications use it as a Git dependency. `framebuffer` validates and
@@ -216,9 +224,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   creation restores an inert transcript and restart refuses local task fallback.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
-  `terminal/` leaf modules. `terminal/logical_line.rs` assembles the text under
-  a click from soft-wrapped rows and from URL rows a program hard-wrapped; its
-  row-shape heuristics are tested under `terminal/logical_line/tests/`.
+  `terminal/` leaf modules. `terminal/content.rs` maps a viewport cell to a grid
+  point and asks `horizon-terminal` what the cell opens.
   Terminal destruction sends shutdown, then a helper thread joins and destroys
   the PTY. A finished thread handle can still own a PTY that waits for its child.
   The bounded regression for this case lives in `terminal/lifecycle/tests.rs`.
@@ -395,8 +402,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 The automated line-limit and `too_many_lines` suppression checks cover
 `horizon-device`, `horizon-browser-protocol`, `horizon-browser`, `horizon-core`,
-`horizon-ui` and `horizon-vnc`; extracting a new crate is not an escape hatch
-for oversized modules.
+`horizon-terminal`, `horizon-ui` and `horizon-vnc`; extracting a new crate is
+not an escape hatch for oversized modules.
 
 - Start splitting a Rust source file before it reaches roughly 600 lines.
 - CI fails non-test Rust source files above 1000 lines in:
@@ -404,6 +411,7 @@ for oversized modules.
   - `crates/horizon-browser-protocol/src`
   - `crates/horizon-browser/src`
   - `crates/horizon-core/src`
+  - `crates/horizon-terminal/src`
   - `crates/horizon-ui/src`
   - `crates/horizon-vnc/src`
 - Inline `#[cfg(test)]` modules should stay at the end of the file; the line
