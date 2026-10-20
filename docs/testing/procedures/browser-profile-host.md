@@ -19,30 +19,47 @@ A new page of a profile host on a shared display must not take the keyboard focu
 
 ## 2. Applicability
 
-- Candidate: a source build of `horizon-browser` that has the profile host library.
-  The `host` command is not part of this candidate, so the tasks use the regressions only.
-- Platforms: Linux and macOS. The mode checks of files apply only to Unix.
+- Candidate: a source build of `horizon-browser` that has the `host` command.
+- Platforms: Linux and macOS. The mode checks of files apply only to Unix. Task PH-VISIBLE needs an X11 display.
 - This procedure does not test: remote targets, the Horizon desktop host or a Windows computer.
 
 ## 3. Safety
 
-The tasks of this version run only regressions. They rent no compute, delete no data,
-send no secret and change no access.
+> **CAUTION:** USE A NEW BROWSER RUNTIME ROOT FOR EACH RUN.
+> A browser profile keeps cookies and sign-ins. The root of a real profile host contains real sign-ins.
+
+> **CAUTION:** OPEN ONLY THE LOOPBACK TEST SITE IN A BROWSER PROFILE OF THIS PROCEDURE.
+> The profile host keeps each sign-in after the run.
 
 ## 4. Equipment and preconditions
 
 - The source of the candidate and the Rust toolchain of the repository.
+- Chromium or Google Chrome, for the live tasks.
+- For task PH-VISIBLE: `Xvfb`, `xmessage` and `xdotool`.
+- An MCP client that can call a tool of an MCP server over stdio, for example an agent.
+- An empty directory for the run, for example `$HOME/ph-run`.
+  If Chromium is a snap package, use a directory in your home directory whose name does not start with a dot.
 
 ## 5. Setup
 
-1. Build the test executables of the candidate.
+1. Build the candidate.
 
    ```sh
-   cargo test -p horizon-browser --lib --no-run
-   cargo test -p horizon-browser-cli --lib --no-run
+   cargo build -p horizon-browser-cli
    ```
 
-   Result: The command succeeds.
+   Result: The file `target/debug/horizon-browser` is available.
+
+2. Write the host file `$HOME/ph-run/host.yaml` and give it the mode 0600.
+
+   ```yaml
+   browser:
+     profiles:
+       mail:
+         backend: chromium
+   ```
+
+   Result: `stat -c %a $HOME/ph-run/host.yaml` (Linux) or `stat -f %Lp $HOME/ph-run/host.yaml` (macOS) shows `600`.
 
 ## 6. Tasks
 
@@ -100,13 +117,106 @@ Give each task an ID. A report uses the ID to give a result.
    - A page with no action for the idle limit closes.
    - One profile host runs on a browser runtime root. It keeps its host instance after a restart.
 
+### 6.4 PH-START: Start, refuse and stop a profile host
+
+1. Run the regressions of the `host` command.
+
+   ```sh
+   cargo test -p horizon-browser-cli --bin horizon-browser the_profile_host
+   cargo test -p horizon-browser-cli --test standalone_profile
+   ```
+
+   Result: The tests pass. The `host` command needs one `--config`.
+   A bad host file and a second host on the same browser runtime root stop with the code 1.
+   A connect client that names no browser profile, an unknown browser profile or a remote target gets a refusal.
+
+2. In a second terminal, start the profile host with a new browser runtime root.
+
+   ```sh
+   HORIZON_BROWSER_ROOT=$HOME/ph-run/root target/debug/horizon-browser host --config $HOME/ph-run/host.yaml
+   ```
+
+   Result: The file `$HOME/ph-run/root/profile-host.json` has the mode 600.
+   It contains `host_instance`, `pid` and `started_at`.
+   The folder `$HOME/ph-run/root/browser-profiles/profile-mail` has the mode 700.
+
+3. Send SIGTERM to the `pid` of `profile-host.json`, for example with `kill -TERM <pid>`.
+   Then start the profile host again with the command of step 2.
+
+   Result: The first process stops with the code 0. The folder of the browser profile stays.
+   The new `profile-host.json` contains the same `host_instance`.
+
+### 6.5 PH-SHARE: Two agents share the cookies of a browser profile
+
+1. Run the live regression. It starts the profile host, two connect clients and a loopback test site.
+   If Chromium is a snap package, make the folder `$HOME/ph-run/tmp` and add `TMPDIR=$HOME/ph-run/tmp` before the command.
+   The snap cannot use a profile folder under `/tmp`.
+
+   ```sh
+   cargo test -p horizon-browser-cli --test standalone_profile -- --ignored
+   ```
+
+   Result: The test passes. It proves these results:
+   - The page of the second agent gets the cookie that the page of the first agent set.
+   - `browser_list` of each agent shows only its own page.
+   - A tool call of one agent on the page of the other agent fails.
+   - A connect client of another host instance sees no page.
+   - The cookie stays after a restart of the profile host.
+
+### 6.6 PH-VISIBLE: A visible page does not take the keyboard focus
+
+1. Start an X11 display with no window manager. Open a window and give it the focus.
+   If the display `:77` is already in use, use a free number in all steps of this task.
+
+   ```sh
+   Xvfb :77 -screen 0 1280x800x24 &
+   sleep 2
+   DISPLAY=:77 xmessage -name ph-focus "keyboard owner" &
+   DISPLAY=:77 xdotool search --sync --name "^ph-focus$" windowfocus --sync
+   DISPLAY=:77 xdotool getwindowfocus getwindowname
+   ```
+
+   Result: The last command shows `ph-focus`.
+
+2. Start the profile host with `--visible` on this display.
+
+   ```sh
+   env -u WAYLAND_DISPLAY DISPLAY=:77 HORIZON_BROWSER_ROOT=$HOME/ph-run/visible \
+     target/debug/horizon-browser host --config $HOME/ph-run/host.yaml --visible
+   ```
+
+   Result: No Chromium window opens.
+   The command removes `WAYLAND_DISPLAY`, so the browser uses the X11 display and not the desktop of your session.
+
+3. Start a connect client with your MCP client.
+   Use the command `target/debug/horizon-browser mcp --connect` and these environment variables:
+   - `HORIZON_BROWSER_ROOT=$HOME/ph-run/visible`;
+   - `HORIZON_BROWSER_ACTOR=horizon:example/ws/agent`;
+   - `HORIZON_BROWSER_HOST_INSTANCE` with the `host_instance` of `$HOME/ph-run/visible/profile-host.json`.
+
+   Result: The MCP client lists the browser tools.
+
+4. Call `browser_create` with `{"target": "mail", "url": "about:blank"}`.
+   Then call it again with `"allow_additional": true` in the arguments.
+
+   Result: Each call gives a page ID that starts with `profile-mail-`.
+   `DISPLAY=:77 xdotool search --onlyvisible --class chrom` shows a window for each page.
+   `DISPLAY=:77 xdotool getwindowfocus getwindowname` still shows `ph-focus`.
+
 ## 7. Pass criteria
 
 - Every result in section 6 is as written.
+- No step changes a browser profile outside `$HOME/ph-run`.
 
 ## 8. Cleanup
 
-No cleanup is necessary. The tests remove their temporary folders.
+1. Send SIGTERM to each profile host of the run. Stop `Xvfb` and `xmessage`.
+
+   Result: Each process stops.
+
+2. Remove the directory `$HOME/ph-run`.
+
+   Result: No browser profile of the run stays on the computer.
 
 ## 9. Record of results
 

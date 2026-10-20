@@ -5,7 +5,8 @@ applyTo: "crates/horizon-browser-cli/src/standalone/profile.rs,crates/horizon-br
 # Trust boundary of the profile host
 
 A profile host keeps named browser profiles for `horizon-browser mcp --connect`
-clients on the same computer. The design is in the module comment of
+clients on the same computer. The design is in the section "Profile host" of
+`crates/horizon-browser-cli/README.md` and in the module comment of
 `crates/horizon-browser-cli/src/standalone/profile.rs`.
 
 ## Trusted: the host file

@@ -46,6 +46,7 @@ USAGE:
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
     horizon-browser mcp --standalone --config <HOST-FILE>
     horizon-browser mcp --stop [PANEL-ID]
+    horizon-browser host --config <HOST-FILE> [--visible]
 
 COMMANDS:
     orientation Rotate a remote device through browser_orientation; reports measured acknowledgement.
@@ -66,6 +67,11 @@ COMMANDS:
            names a host file of remote targets and credential files; the
            standalone host then serves only those targets and releases their
            sessions when MCP stdin closes.
+    host   Keep the named persistent profiles of a host file (browser.profiles)
+           for `mcp --connect` clients until an interrupt or a termination
+           signal. A client names a profile as the browser_create target; the
+           pages of one profile share its cookies, and each client sees only
+           its own pages. --visible shows each page as a window on the display.
 
 OPTIONS:
     --backend <BACKEND>   Select a backend; prompt/MCP jobs default to auto.
@@ -102,6 +108,10 @@ enum Command {
     Stop {
         panel_id: Option<String>,
     },
+    Host {
+        config: PathBuf,
+        visible: bool,
+    },
     Help,
     Version,
 }
@@ -131,6 +141,7 @@ async fn main() -> ExitCode {
             config,
         }) => serve_mcp(standalone, options, config.as_deref()).await,
         Ok(Command::Stop { panel_id }) => stop_standalone(panel_id.as_deref()),
+        Ok(Command::Host { config, visible }) => serve_profile_host(&config, visible).await,
         Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
         Ok(Command::Resume {
             job_id,
@@ -203,6 +214,16 @@ async fn serve_mcp(standalone: bool, options: StandaloneOptions, config: Option<
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "Horizon browser MCP server stopped with an error");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn serve_profile_host(config: &Path, visible: bool) -> ExitCode {
+    match horizon_browser_cli::standalone::profile::serve(config, visible).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
             ExitCode::FAILURE
         }
     }
@@ -650,6 +671,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Some("-h" | "--help") => no_more(args, Command::Help),
         Some("-V" | "--version") => no_more(args, Command::Version),
         Some("mcp") => parse_mcp(args),
+        Some("host") => parse_host(args),
         Some("do") => parse_do(args),
         Some("orientation") => orientation::Options::parse(args).map(Command::Orientation),
         Some("cloud") => cloud::Options::parse(args).map(Command::Cloud),
@@ -778,6 +800,28 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
         },
         config,
     })
+}
+
+fn parse_host(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut config = None;
+    let mut visible = false;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--config") if config.is_none() => {
+                config = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--config requires a host file path".to_string())?,
+                ));
+            }
+            Some("--config") => return Err("--config may be specified only once".to_string()),
+            Some("--visible") if !visible => visible = true,
+            Some("--visible") => return Err("--visible may be specified only once".to_string()),
+            Some(argument) => return Err(format!("unexpected host argument `{argument}`")),
+            None => return Err("host argument is not valid UTF-8".to_string()),
+        }
+    }
+    let config = config.ok_or_else(|| "host requires --config <HOST-FILE>".to_string())?;
+    Ok(Command::Host { config, visible })
 }
 
 fn parse_backend(value: Option<&OsString>) -> Result<Option<BackendKind>, String> {
@@ -1020,6 +1064,7 @@ mod tests {
         assert!(!options.keep_alive);
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
         assert!(parse_args(["mcp", "--connect", "--keep-alive"].map(OsString::from)).is_err());
+        assert!(parse_args(["mcp", "--connect", "--backend", "chromium"].map(OsString::from)).is_err());
         let Command::Stop { panel_id } =
             parse_args(["mcp", "--stop", "standalone-1-abc"].map(OsString::from)).expect("stop MCP")
         else {
@@ -1041,6 +1086,35 @@ mod tests {
             &["mcp", "--standalone", "--config", "/h.yaml", "--config", "/i.yaml"],
             &["mcp", "--standalone", "--config"],
             &["mcp", "--stop", "--config", "/h.yaml"],
+        ] {
+            assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_profile_host_takes_one_host_file_and_an_optional_visible_flag() {
+        let Command::Host { config, visible } =
+            parse_args(["host", "--config", "/profiles/host.yaml", "--visible"].map(OsString::from))
+                .expect("profile host")
+        else {
+            panic!("expected host command");
+        };
+        assert_eq!(config, Path::new("/profiles/host.yaml"));
+        assert!(visible);
+        let Command::Host { visible, .. } =
+            parse_args(["host", "--config", "/h.yaml"].map(OsString::from)).expect("headless profile host")
+        else {
+            panic!("expected host command");
+        };
+        assert!(!visible);
+        for refused in [
+            &["host"][..],
+            &["host", "--visible"],
+            &["host", "--config"],
+            &["host", "--config", "/h.yaml", "--config", "/i.yaml"],
+            &["host", "--config", "/h.yaml", "--visible", "--visible"],
+            &["host", "--config", "/h.yaml", "--backend", "chromium"],
+            &["host", "--config", "/h.yaml", "--keep-alive"],
         ] {
             assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
         }
