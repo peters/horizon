@@ -1,9 +1,8 @@
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 
-use super::logical_line::{RowJoin, logical_line_at_viewport_point};
 use super::{
     Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, Terminal, TerminalEventProxy,
-    current_cwd_for_pid, find_file_path_at_column, find_url_at_column, viewport_to_point,
+    current_cwd_for_pid, viewport_to_point,
 };
 
 impl Terminal {
@@ -235,38 +234,34 @@ impl Terminal {
     #[must_use]
     pub fn clickable_at_point(&self, row: usize, col: usize) -> Option<String> {
         let term = self.term.lock();
-        let cols = usize::from(self.cols);
-        if let Some(uri) = hyperlink_uri_at_viewport_point(&term, cols, row, col) {
-            return Some(uri);
-        }
-        // Hard-wrap joints only ever drop blank cells, so a click they leave
-        // without a position has no path under it either.
-        let line = logical_line_at_viewport_point(&term, cols, row, col, RowJoin::UrlHardWraps)?;
-        if let Some(url) = find_url_at_column(&line.chars, line.column) {
-            return Some(url);
-        }
-        let line = if line.joins_hard_wraps {
-            logical_line_at_viewport_point(&term, cols, row, col, RowJoin::SoftWraps)?
-        } else {
-            line
-        };
-
-        find_file_path_at_column(&line.chars, line.column)
+        let point = grid_point(&term, usize::from(self.cols), row, col)?;
+        horizon_terminal::target_at(&*term, point).map(horizon_terminal::Target::into_text)
     }
 
     /// Return the OSC 8 hyperlink URI at the given viewport-relative cell.
     #[must_use]
     pub fn hyperlink_at_point(&self, row: usize, col: usize) -> Option<String> {
-        let term = self.term.lock();
-        hyperlink_uri_at_viewport_point(&term, usize::from(self.cols), row, col)
+        self.hyperlink_at_viewport_point(row, col)
+            .map(|hyperlink| hyperlink.uri().to_owned())
     }
 
     /// Return whether the given viewport-relative cell has an OSC 8 hyperlink.
     #[must_use]
     pub fn has_hyperlink_at_point(&self, row: usize, col: usize) -> bool {
-        let term = self.term.lock();
-        hyperlink_at_viewport_point(&term, usize::from(self.cols), row, col).is_some()
+        self.hyperlink_at_viewport_point(row, col).is_some()
     }
+
+    fn hyperlink_at_viewport_point(&self, row: usize, col: usize) -> Option<Hyperlink> {
+        let term = self.term.lock();
+        horizon_terminal::hyperlink_at(&*term, grid_point(&term, usize::from(self.cols), row, col)?)
+    }
+}
+
+/// The grid point of a viewport cell, in the history while the view is scrolled back.
+fn grid_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<Point> {
+    let grid = term.grid();
+    (col < cols && row < grid.screen_lines())
+        .then(|| viewport_to_point(grid.display_offset(), Point::new(row, Column(col))))
 }
 
 fn last_lines_from(content: RenderableContent<'_>, cols: u16, rows: u16, max_lines: usize) -> String {
@@ -304,34 +299,6 @@ fn last_lines_from(content: RenderableContent<'_>, cols: u16, rows: u16, max_lin
     }
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
-}
-
-fn hyperlink_uri_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<String> {
-    hyperlink_at_viewport_point(term, cols, row, col).map(|hyperlink| hyperlink.uri().to_owned())
-}
-
-fn hyperlink_at_viewport_point<T>(term: &Term<T>, cols: usize, row: usize, col: usize) -> Option<Hyperlink> {
-    if col >= cols {
-        return None;
-    }
-    let grid = term.grid();
-    if row >= grid.screen_lines() {
-        return None;
-    }
-    let point = viewport_to_point(grid.display_offset(), Point::new(row, Column(col)));
-    let cell = &grid[point.line][Column(col)];
-    if let Some(hyperlink) = nonempty_hyperlink(cell) {
-        return Some(hyperlink);
-    }
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 {
-        return nonempty_hyperlink(&grid[point.line][Column(col - 1)]);
-    }
-    None
-}
-
-fn nonempty_hyperlink(cell: &Cell) -> Option<Hyperlink> {
-    let hyperlink = cell.hyperlink()?;
-    (!hyperlink.uri().is_empty()).then_some(hyperlink)
 }
 
 /// Text of the non-empty rows within the bottom `max_rows` rows of a visible

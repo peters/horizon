@@ -9,8 +9,8 @@ use std::ops::Range;
 
 use alacritty_terminal::grid::{Dimensions, Grid, Row};
 use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::{Term, viewport_to_point};
 
 /// Hard line breaks followed from the clicked row in each direction.
 const MAX_HARD_WRAPPED_ROWS: usize = 64;
@@ -36,7 +36,7 @@ const DELIMITER_PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
 const PROMPT_TERMINATORS: [char; 3] = ['$', '#', '%'];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RowJoin {
+pub(crate) enum RowJoin {
     /// Join only rows the terminal soft-wrapped.
     SoftWraps,
     /// Also join rows a program hard-wrapped through the middle of a URL.
@@ -49,31 +49,26 @@ enum Joint {
     Hard,
 }
 
-pub(super) struct LogicalLine {
-    pub(super) chars: Vec<char>,
+pub(crate) struct LogicalLine {
+    pub(crate) chars: Vec<char>,
     /// Index of the clicked cell within `chars`.
-    pub(super) column: usize,
+    pub(crate) column: usize,
     /// Whether any hard-wrapped rows were joined, so the text differs from
     /// the [`RowJoin::SoftWraps`] line at the same cell.
-    pub(super) joins_hard_wraps: bool,
+    pub(crate) joins_hard_wraps: bool,
 }
 
-/// Return the logical line containing a viewport cell. Hard-wrap joints drop
-/// the continuation row's indentation and the previous row's trailing
-/// padding, so a click on those blank cells has no logical position.
-pub(super) fn logical_line_at_viewport_point<T>(
-    term: &Term<T>,
-    cols: usize,
-    row: usize,
-    col: usize,
-    join: RowJoin,
-) -> Option<LogicalLine> {
+/// Return the logical line containing the cell at `point`, on the screen or in
+/// the history. Hard-wrap joints drop the continuation row's indentation and
+/// the previous row's trailing padding, so a click on those blank cells has no
+/// logical position.
+pub(crate) fn logical_line_at<T>(term: &Term<T>, point: Point, join: RowJoin) -> Option<LogicalLine> {
     let grid = term.grid();
-    if col >= cols || row >= grid.screen_lines() {
+    let (cols, col, clicked) = (grid.columns(), point.column.0, point.line);
+    if col >= cols || clicked < grid.topmost_line() || clicked > grid.bottommost_line() {
         return None;
     }
 
-    let clicked = viewport_to_point(grid.display_offset(), Point::new(row, Column(col))).line;
     let (first, joints) = logical_line_rows(grid, cols, clicked, join);
 
     let mut chars = Vec::with_capacity(cols * (joints.len() + 1));
