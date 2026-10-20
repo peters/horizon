@@ -36,6 +36,7 @@ struct SharedLaunchIdentity {
     headless: bool,
     hide_native_window: bool,
     disclosure: crate::AutomationDisclosurePolicy,
+    background_windows: bool,
 }
 
 impl SharedState {
@@ -149,6 +150,8 @@ impl SharedBrowserSession {
             headless: launch.headless,
             hide_native_window,
             disclosure: launch.automation_disclosure,
+            // A headless browser has no window, so the setting has no effect there.
+            background_windows: launch.background_windows && !launch.headless,
         };
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.launch_identity.as_ref().is_some_and(|pinned| pinned != &identity) {
@@ -199,7 +202,11 @@ impl SharedBrowserSession {
             state.retiring = false;
             state.process = Some(process);
             state.endpoint = endpoint;
-            initial_target = claim_initial_target(&state.endpoint, stop);
+            let background = state
+                .launch_identity
+                .as_ref()
+                .is_some_and(|launch| launch.background_windows && !launch.headless);
+            initial_target = claim_initial_target(&state.endpoint, stop, background);
             if initial_target.is_none() {
                 state.close_browser(None);
                 return Err("shared browser did not expose its initial page".into());
@@ -232,10 +239,10 @@ impl SharedBrowserSession {
     }
 }
 
-fn claim_initial_target(endpoint: &str, stop: &AtomicBool) -> Option<String> {
+fn claim_initial_target(endpoint: &str, stop: &AtomicBool, background: bool) -> Option<String> {
     CdpLink::connect(endpoint).ok().and_then(|mut link| {
         super::startup::first_page_target(&mut link, stop)
-            .or_else(|| super::startup::create_page_target(&mut link, stop))
+            .or_else(|| super::startup::create_page_target(&mut link, stop, background))
     })
 }
 

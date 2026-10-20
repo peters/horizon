@@ -236,7 +236,8 @@ fn initialize_target(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    let Some(target_id) = existing_target.or_else(|| create_page_target(&mut link, stop_requested)) else {
+    let background = config.browser.background_windows && !config.browser.headless;
+    let Some(target_id) = existing_target.or_else(|| create_page_target(&mut link, stop_requested, background)) else {
         if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
             return None;
         }
@@ -563,14 +564,14 @@ fn first_available_page_target_id(targets: &[serde_json::Value]) -> Option<&str>
 }
 
 /// Create a fresh page target as a fallback (browser opened without one).
-pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
-    let result = call_during_startup(
-        link,
-        stop_requested,
-        "Target.createTarget",
-        &serde_json::json!({ "url": "about:blank" }),
-    )
-    .ok()?;
+/// `background` opens it in its own window that does not take the focus.
+pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool, background: bool) -> Option<String> {
+    let params = if background {
+        serde_json::json!({ "url": "about:blank", "newWindow": true, "background": true })
+    } else {
+        serde_json::json!({ "url": "about:blank" })
+    };
+    let result = call_during_startup(link, stop_requested, "Target.createTarget", &params).ok()?;
     result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
 }
 
@@ -587,6 +588,7 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeL
         headless: config.browser.headless,
         extra_args: config.browser.extra_args.clone(),
         automation_disclosure: config.browser.automation_disclosure,
+        background_windows: config.browser.background_windows,
     })
 }
 

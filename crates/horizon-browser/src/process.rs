@@ -81,6 +81,8 @@ pub struct ChromeLaunch {
     /// Engine-managed profile, `DevTools`, and disclosure switches are rejected.
     pub extra_args: Vec<String>,
     pub automation_disclosure: AutomationDisclosurePolicy,
+    /// A headed browser starts with no window (`BrowserConfig::background_windows`).
+    pub background_windows: bool,
 }
 
 /// A running `Chrome` process plus its captured `DevTools` endpoint.
@@ -309,6 +311,9 @@ fn launch_args(launch: &ChromeLaunch, devtools_port: u16) -> Result<Vec<String>>
     ];
     if launch.headless {
         args.insert(0, "--headless=new".to_string());
+    } else if launch.background_windows {
+        // Each page then opens in its own window in the background.
+        args.push("--no-startup-window".to_string());
     }
     if launch.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals {
         args.push("--disable-blink-features=AutomationControlled".to_string());
@@ -894,6 +899,7 @@ mod tests {
             headless: true,
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::MinimizeCommonSignals,
+            background_windows: false,
         };
         let args = launch_args(&launch, 49_152).unwrap_or_default();
 
@@ -917,11 +923,32 @@ mod tests {
             headless: false,
             extra_args: Vec::new(),
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+            background_windows: false,
         };
         let args = launch_args(&launch, 0).unwrap_or_default();
 
         assert!(!args.iter().any(|argument| argument == "--headless=new"));
         assert!(args.iter().any(|argument| argument == "--remote-debugging-port=0"));
+        assert!(!args.iter().any(|argument| argument == "--no-startup-window"));
+    }
+
+    #[test]
+    fn a_headed_launch_with_background_windows_opens_no_window_of_its_own() {
+        let mut launch = ChromeLaunch {
+            command: "chrome".to_string(),
+            profile_dir: PathBuf::from("profile"),
+            width: 1280,
+            height: 800,
+            headless: false,
+            extra_args: Vec::new(),
+            automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+            background_windows: true,
+        };
+        let args = launch_args(&launch, 0).unwrap_or_default();
+        assert!(args.iter().any(|argument| argument == "--no-startup-window"));
+        launch.headless = true;
+        let args = launch_args(&launch, 0).unwrap_or_default();
+        assert!(!args.iter().any(|argument| argument == "--no-startup-window"));
     }
 
     #[test]
@@ -949,6 +976,7 @@ mod tests {
             headless: true,
             extra_args: vec!["--enable-blink-features=ExperimentalFoo".to_string()],
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+            background_windows: false,
         };
         let args = launch_args(&launch, 0).unwrap_or_default();
 
