@@ -350,13 +350,15 @@ print(json.dumps('complete' if tunnel else {'phase':'complete','success':True}),
             Configuration {
                 process_worker: worker.clone(),
                 tunnel_worker: worker.clone(),
-                tunnel_binary: worker,
-                tunnel_sha256: Sha256::digest(script.as_bytes())
-                    .iter()
-                    .fold(String::new(), |mut text, byte| {
-                        let _ = write!(text, "{byte:02x}");
-                        text
-                    }),
+                tunnel: Some(crate::local::TunnelPin {
+                    binary: worker,
+                    sha256: Sha256::digest(script.as_bytes())
+                        .iter()
+                        .fold(String::new(), |mut text, byte| {
+                            let _ = write!(text, "{byte:02x}");
+                            text
+                        }),
+                }),
                 state,
             },
         )
@@ -1026,8 +1028,10 @@ fn provider_retention_uses_legacy_completed_records_after_actor_restart() {
             Configuration {
                 process_worker: worker.clone(),
                 tunnel_worker: worker.clone(),
-                tunnel_binary: worker,
-                tunnel_sha256: digest,
+                tunnel: Some(crate::local::TunnelPin {
+                    binary: worker,
+                    sha256: digest,
+                }),
                 state: path.join("local"),
             },
         )

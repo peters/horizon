@@ -23,11 +23,23 @@ impl Account {
         let authorization = resolve_authorization(profile, stores)
             .map_err(|_| Error::CredentialsUnavailable)?
             .ok_or(Error::CredentialsInvalid)?;
+        Self::new(authorization.origin(), authorization.header_value())
+    }
+
+    /// An authorization header that the host formed itself, for example from private credential files.
+    /// # Errors
+    /// The profile is not a valid provider, or the header is not a Basic authorization of the provider.
+    pub fn authorized(profile: &RemoteProviderProfile, header: &str) -> Result<Self> {
+        horizon_browser::provider_catalog::validate_provider(profile).map_err(|_| Error::CredentialsInvalid)?;
+        Self::new(&profile.endpoint.origin(), header)
+    }
+
+    fn new(origin: &str, header: &str) -> Result<Self> {
         let mut hash = Sha256::new();
         hash.update(b"horizon-native-realm-v1\0");
-        hash.update(authorization.origin().as_bytes());
+        hash.update(origin.as_bytes());
         hash.update(b"\0");
-        hash.update(authorization.header_value().as_bytes());
+        hash.update(header.as_bytes());
         let realm = hash
             .finalize()
             .iter()
@@ -36,11 +48,8 @@ impl Account {
                 let _ = write!(value, "{byte:02x}");
                 value
             });
-        let provider = BrowserStack::new(
-            authorization.origin(),
-            Zeroizing::new(authorization.header_value().to_owned()),
-        )
-        .map_err(|_| Error::CredentialsInvalid)?;
+        let provider =
+            BrowserStack::new(origin, Zeroizing::new(header.to_owned())).map_err(|_| Error::CredentialsInvalid)?;
         Ok(Self {
             realm,
             provider: Arc::new(provider),
