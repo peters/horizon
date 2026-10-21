@@ -2343,6 +2343,7 @@ dependencies = [
  "horizon-app-runtime",
  "horizon-app-testing",
  "horizon-browser",
+ "horizon-browser-control",
  "horizon-core",
  "png",
  "rmcp",

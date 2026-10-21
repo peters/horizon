@@ -6,7 +6,8 @@ The native server is separate from the injected browser MCP.
 Register the packaged executable as `horizon --native-mcp --client <private-client.json>`
 only when server setup is part of the requested task. The client selects the
 project, persistent owner UUID, private state, Horizon configuration, approved
-tunnel executable, and its SHA-256. Tool arguments cannot replace these bindings.
+tunnel executable, and its SHA-256. Optional `credential_files` replace the OS
+keyring. Tool arguments cannot replace these bindings.
 Use the repository runbook `docs/architecture/remote-device-testing.md` and its
 schema when available; do not invent a client or project contract from this summary.
 

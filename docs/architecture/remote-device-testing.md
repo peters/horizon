@@ -112,6 +112,54 @@ An observed replacement entry retains uncertainty and is never removed as the ow
 The standalone development executable uses `horizon-native --mcp --client <file>`.
 MCP arguments cannot replace the configured project or credentials.
 
+### A host with credential files
+
+A server can run `horizon-native` with no OS keyring.
+The client file then names one private file for each authentication reference of the provider.
+The names are the same as in the `credential_files` of the `horizon-browser` host file.
+
+```json
+{
+  "version": 1,
+  "owner": "<fresh UUID for this project client>",
+  "project": "/absolute/path/to/isolated-app-checkout",
+  "state": "/absolute/path/to/private/shared-native-state",
+  "provider": "browserstack",
+  "tunnel_binary": "/absolute/path/to/verified/BrowserStackLocal",
+  "tunnel_sha256": "<approved SHA-256>",
+  "credential_files": {
+    "browserstack-user": "/run/secrets/browserstack-user",
+    "browserstack-key": "/run/secrets/browserstack-key"
+  }
+}
+```
+
+1. Put each credential value in its own file.
+
+   Result: The host reads each file again at each start.
+   It removes one final line break.
+
+2. Make each file a regular file of the user that runs the host, with mode `0600` or stricter.
+
+   Result: The host refuses a link in any part of the path, a file of another owner,
+   a file that the group or other users can read, a file larger than 4 KiB and a value that does not fit the scheme.
+
+3. Name exactly one file for each authentication reference of the provider.
+
+   Result: The host refuses a missing or an extra reference and a relative path.
+
+4. Remove `credential_bindings` from that provider in the Horizon configuration.
+
+   Result: The host refuses a provider with `credential_bindings`, also with bindings to environment variables.
+
+With `credential_files`, the host never opens the OS keyring.
+Without it, the host reads the OS-store bindings as before.
+`horizon --native-catalog` still reads the OS-store bindings.
+
+The checks of the files do not keep a value from a process of the same user.
+The MCP client usually runs as that user.
+On macOS, `/tmp` and `/var` are links. Give a path under `/private` there.
+
 ## 3. Examine the device catalog
 
 1. Run the catalog command.
