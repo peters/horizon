@@ -79,7 +79,11 @@ worker, your injected actor must match a registered workspace session. For a
 request addressed to the current worker, an actor outside that workspace receives `panel_outside_workspace` before a browser starts.
 Use the registered session identity; do not retry an unregistered actor. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
-short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
+short-lived `ref` in `browser_act`. Remote iOS clicks and field entry use
+synchronous target checks before trusted native input. Verify the visible result
+after each action. A driver that omits its script timeout can still refuse
+`browser_evaluate`; do not treat working clicks as proof of evaluation support.
+Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
 before an action when the page may have changed.
 
