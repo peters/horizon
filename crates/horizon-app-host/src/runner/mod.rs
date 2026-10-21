@@ -213,8 +213,7 @@ pub fn run(
         // Fixed services have one exclusive port owner. Managed services remain lane-isolated.
         .min(
             if contract
-                .tunnel
-                .ports
+                .ports()
                 .values()
                 .any(|port| matches!(port, horizon_app_testing::contract::Port::Fixed(_)))
             {

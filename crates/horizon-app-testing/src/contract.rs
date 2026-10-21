@@ -206,7 +206,7 @@ impl Contract {
             }
         }
         let mut ports = BTreeSet::new();
-        for (name, port) in &self.tunnel.ports {
+        for (name, port) in self.ports() {
             if !identifier(name) {
                 return Err(invalid());
             }
@@ -242,12 +242,17 @@ impl Contract {
         Ok(())
     }
 
+    /// The declared tunnel ports.
+    #[must_use]
+    pub fn ports(&self) -> &BTreeMap<String, Port> {
+        &self.tunnel.ports
+    }
+
     /// # Errors
     /// Fixed-port projects can resolve without a managed backend instance.
     pub fn resolve_value(&self, value: &str) -> Result<String> {
         let ports = self
-            .tunnel
-            .ports
+            .ports()
             .iter()
             .map(|(name, spec)| match spec {
                 Port::Fixed(port) => Ok((name.clone(), *port)),
@@ -261,11 +266,11 @@ impl Contract {
     /// Host-only resolution requires every declared nonzero port, no extras, and unchanged fixed bindings.
     pub fn resolve_value_with_ports(&self, value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
         let _ = self.validate_value(value)?;
-        if ports.len() != self.tunnel.ports.len() {
+        if ports.len() != self.ports().len() {
             return Err(Error::ContractInvalid);
         }
         let mut seen = BTreeSet::new();
-        for (name, spec) in &self.tunnel.ports {
+        for (name, spec) in self.ports() {
             let port = ports.get(name).ok_or(Error::ContractInvalid)?;
             if *port == 0 || !seen.insert(*port) || matches!(spec, Port::Fixed(fixed) if fixed != port) {
                 return Err(Error::ContractInvalid);
@@ -275,7 +280,7 @@ impl Contract {
     }
 
     fn validate_value(&self, value: &str) -> Result<Option<(u16, bool)>> {
-        for (name, spec) in &self.tunnel.ports {
+        for (name, spec) in self.ports() {
             let template = format!("{{tunnel.port.{name}}}");
             if matches!(spec, Port::Managed(_)) && value.contains(&template) {
                 let authority = value
@@ -292,15 +297,14 @@ impl Contract {
         }
         let mut ports = BTreeMap::new();
         let mut used: BTreeSet<u16> = self
-            .tunnel
-            .ports
+            .ports()
             .values()
             .filter_map(|port| match port {
                 Port::Fixed(port) => Some(*port),
                 Port::Managed(_) => None,
             })
             .collect();
-        for (name, spec) in &self.tunnel.ports {
+        for (name, spec) in self.ports() {
             let port = match spec {
                 Port::Fixed(port) => *port,
                 Port::Managed(_) => (1..=u16::MAX)
@@ -314,11 +318,10 @@ impl Contract {
         if let Ok(url) = url::Url::parse(&resolved) {
             let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
             let static_binding = self
-                .tunnel
-                .ports
+                .ports()
                 .values()
                 .any(|spec| matches!(spec, Port::Fixed(fixed) if *fixed == port));
-            let managed_template = self.tunnel.ports.iter().any(|(name, spec)| {
+            let managed_template = self.ports().iter().any(|(name, spec)| {
                 matches!(spec, Port::Managed(_))
                     && value.split_once("://").is_some_and(|(_, rest)| {
                         let authority = rest.split(['/', '?', '#']).next().unwrap_or("");

@@ -23,7 +23,7 @@ pub struct Launch {
     app: App,
     arguments: BTreeMap<String, String>,
     provider_app: String,
-    tunnel_id: String,
+    tunnel_id: Option<String>,
     operation_id: String,
     evidence: Evidence,
 }
@@ -37,7 +37,7 @@ impl Launch {
         app: App,
         arguments: BTreeMap<String, String>,
         provider_app: String,
-        tunnel_id: String,
+        tunnel_id: Option<String>,
         operation_id: String,
         evidence: Evidence,
     ) -> Result<Self> {
@@ -48,7 +48,7 @@ impl Launch {
         };
         if !(16..=128).contains(&app_token.len())
             || !app_token.bytes().all(|b| b.is_ascii_hexdigit())
-            || !identifier(&tunnel_id)
+            || tunnel_id.as_deref().is_some_and(|id| !identifier(id))
             || !identifier(&operation_id)
             || arguments.len() > 32
             || arguments
@@ -83,13 +83,17 @@ impl Launch {
             "appium:noReset": false,
             "appium:fullReset": true,
             "bstack:options": {
-                "local": true, "localIdentifier": self.tunnel_id,
                 "buildName": format!("horizon-native-{}", self.operation_id),
                 "sessionName": format!("native-{}", self.operation_id),
                 "video": self.evidence.video, "debug": self.evidence.screenshots,
                 "deviceLogs": self.evidence.logs_on_failure, "appiumLogs": self.evidence.logs_on_failure,
             }
         });
+        // With no tunnel, the session asks for no BrowserStack Local.
+        if let Some(tunnel) = &self.tunnel_id {
+            caps["bstack:options"]["local"] = json!(true);
+            caps["bstack:options"]["localIdentifier"] = json!(tunnel);
+        }
         // This generation includes iOS deepLink; older iOS retains the provider's compatible default.
         if !ios
             || version(&self.device.os_version)

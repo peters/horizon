@@ -320,6 +320,15 @@ fn launch_policy(platform: Platform, evidence: Evidence) -> Result<Launch, Error
 }
 
 fn launch_policy_os(platform: Platform, evidence: Evidence, os_version: &str) -> Result<Launch, Error> {
+    launch_tunnel(platform, evidence, os_version, Some("private-tunnel".into()))
+}
+
+fn launch_tunnel(
+    platform: Platform,
+    evidence: Evidence,
+    os_version: &str,
+    tunnel: Option<String>,
+) -> Result<Launch, Error> {
     Launch::new(
         Device {
             platform,
@@ -335,7 +344,7 @@ fn launch_policy_os(platform: Platform, evidence: Evidence, os_version: &str) ->
         },
         BTreeMap::from([("YOUPARK_BASE_URL".into(), "http://localhost:8080".into())]),
         "bs://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-        "private-tunnel".into(),
+        tunnel,
         "run-1".into(),
         evidence,
     )
@@ -945,5 +954,24 @@ fn direct_wait_rejects_unbounded_and_malformed_targets_without_provider_requests
         );
         assert_eq!(fake.calls.lock().unwrap().len(), before);
     }
+    Ok(())
+}
+
+#[test]
+fn session_with_no_tunnel_asks_for_no_browserstack_local() -> Result<(), Error> {
+    let fake = Arc::new(Fake::default());
+    let launch = launch_tunnel(Platform::Android, Evidence::default(), "27.0", None)?;
+    let mut driver = NativeDriver::allocate(fake.clone(), &launch)?;
+    driver.close()?;
+    let calls = fake.calls.lock().unwrap();
+    let options = calls[0]
+        .2
+        .as_ref()
+        .unwrap()
+        .pointer("/capabilities/alwaysMatch/bstack:options")
+        .unwrap();
+    assert!(options.get("local").is_none());
+    assert!(options.get("localIdentifier").is_none());
+    assert_eq!(options["sessionName"], "native-run-1");
     Ok(())
 }

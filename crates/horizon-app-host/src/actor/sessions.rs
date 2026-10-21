@@ -72,7 +72,7 @@ impl Actor {
                         declaration.clone(),
                         arguments,
                         token.to_owned(),
-                        horizon_app_provider::tunnel::local_identifier(tunnel),
+                        Some(horizon_app_provider::tunnel::local_identifier(tunnel)),
                         lane.id.to_string(),
                         self.contract.evidence.clone(),
                     )
