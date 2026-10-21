@@ -7,7 +7,7 @@ use horizon_browser_control::manifest::{self, BrowserCreateRequest};
 
 use super::config::{Pref, ProfileConfig, forget_removed_prefs, user_js, valid_name};
 use super::host::{MAX_ACTOR_PAGES, MAX_PAGES, profile_dir};
-use super::instance::{Claim, RECORD, Record};
+use super::instance::{Claim, Record};
 use super::rules::{Close, admit, close_action, idle, idle_pages, page_id};
 
 const HOST_FILE: &str = "\
@@ -301,6 +301,8 @@ fn one_host_holds_a_root_and_keeps_its_instance_over_a_restart() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
+
+        use super::instance::RECORD;
         let mode = std::fs::metadata(root.path().join(RECORD))
             .map(|metadata| metadata.permissions().mode() & 0o777)
             .unwrap_or_default();
