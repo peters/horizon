@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-app-host/src/bootstrap.rs,crates/horizon-app-host/src/bootstrap/**,crates/horizon-app-runtime/src/account.rs"
+applyTo: "crates/horizon-app-host/src/bootstrap.rs,crates/horizon-app-host/src/bootstrap/**,crates/horizon-app-runtime/src/account.rs,crates/horizon-app-host/src/services.rs,crates/horizon-app-testing/src/contract.rs"
 ---
 
 # Trust boundary of the native client file
@@ -7,7 +7,7 @@ applyTo: "crates/horizon-app-host/src/bootstrap.rs,crates/horizon-app-host/src/b
 `horizon-native --mcp --client <file>` reads its bindings from a private client
 file. The client file can name private credential files, so that the host reads
 the provider credentials from files and not from the OS keyring. The design is in
-the section "A host with credential files" of
+the section "A host with credential files and no tunnel" of
 `docs/architecture/remote-device-testing.md`.
 
 ## Trusted: the client file and the credential files
@@ -25,6 +25,18 @@ The operator writes these files.
 - With credential files, the host never opens the OS keyring.
 - No answer to the MCP client contains a credential value or a credential file
   path.
+
+## A project with no tunnel
+
+The project contract can leave out `tunnel`. The client file can then leave out
+`tunnel_binary` and `tunnel_sha256`.
+
+- The host starts no tunnel and no tunnel guardian. The session asks for no
+  `local` capability. So the device has no path to a service of the host.
+- A launch argument can not be a URL or a `{tunnel.port.*}` value, because a
+  launch URL must use a declared tunnel port.
+- A contract with tunnel ports and a client file with no tunnel binary cause a
+  refusal with `app_tunnel_unconfigured` before the host serves a tool.
 
 ## Untrusted: the MCP client
 

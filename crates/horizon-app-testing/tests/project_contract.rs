@@ -472,15 +472,10 @@ fn published_schema_matches_the_project_contract_wire_types() {
     assert_eq!(actual["$defs"]["Tunnel"]["properties"]["ports"]["minProperties"], 1);
     assert_eq!(actual["$defs"]["Tunnel"]["properties"]["ports"]["maxProperties"], 16);
     assert!(
-        actual["$defs"]["Contract"]["required"]
+        !actual["$defs"]["Contract"]["required"]
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("tunnel"))
-    );
-    assert!(
-        actual["$defs"]["Contract"]["properties"]["tunnel"]
-            .get("default")
-            .is_none()
     );
     assert_eq!(
         published, actual,
@@ -586,17 +581,17 @@ fn unsupported_providers_are_rejected_before_host_dispatch() {
 }
 
 #[test]
-fn refuses_missing_and_empty_tunnel_before_any_session_can_start() {
+fn refuses_an_empty_tunnel_before_any_session_can_start() {
     let agents = AGENTS.replace(
         "  launch_arguments:\n    BASE_URL: \"http://localhost:{tunnel.port.backend}\"\n",
         "",
     );
-    for tunnel in ["", "  tunnel:\n    ports: {}\n"] {
+    for tunnel in ["  tunnel: {}\n", "  tunnel:\n    ports: {}\n"] {
         let input = agents.replace("  tunnel:\n    ports: {backend: 8080}\n", tunnel);
         assert_eq!(Contract::from_agents(&input).err(), Some(Error::ContractInvalid));
     }
     let mut contract = Contract::from_agents(&agents).unwrap();
-    contract.tunnel.ports.clear();
+    contract.tunnel.as_mut().unwrap().ports.clear();
     assert_eq!(contract.validate(), Err(Error::ContractInvalid));
 }
 
@@ -631,6 +626,8 @@ fn one_tunnel_port_requires_a_consistent_tls_mode_across_launch_arguments() {
     assert_eq!(contract.validate(), Err(Error::ContractInvalid));
     contract
         .tunnel
+        .as_mut()
+        .unwrap()
         .ports
         .insert("secure".into(), horizon_app_testing::contract::Port::Fixed(8443));
     contract.launch_arguments.insert(
@@ -638,4 +635,25 @@ fn one_tunnel_port_requires_a_consistent_tls_mode_across_launch_arguments() {
         "https://127.0.0.1:{tunnel.port.secure}/other".into(),
     );
     assert_eq!(contract.validate(), Ok(()));
+}
+
+#[test]
+fn contract_with_no_tunnel_validates_and_refuses_empty_ports_and_port_templates() -> Result<(), Error> {
+    let tunnel = "  launch_arguments:\n    BASE_URL: \"http://localhost:{tunnel.port.backend}\"\n  tunnel:\n    ports: {backend: 8080}\n";
+    assert!(AGENTS.contains(tunnel));
+    let none = AGENTS.replace(tunnel, "");
+    let contract = Contract::from_agents(&none)?;
+    assert!(contract.tunnel.is_none());
+    assert!(contract.ports().is_empty());
+    assert_eq!(contract.resolve_value("no-port")?, "no-port");
+    for extra in [
+        "  tunnel:\n    ports: {}\n",
+        "  launch_arguments:\n    BASE_URL: \"http://localhost:{tunnel.port.backend}\"\n",
+        "  launch_arguments:\n    BASE_URL: \"http://localhost:8080\"\n",
+        "  launch_arguments:\n    BASE_URL: \"https://api.example.com/v1\"\n",
+    ] {
+        let invalid = none.replace("  matrix:", &format!("{extra}  matrix:"));
+        assert_eq!(Contract::from_agents(&invalid).err(), Some(Error::ContractInvalid));
+    }
+    Ok(())
 }

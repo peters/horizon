@@ -355,8 +355,11 @@ fn client_with_tunnel_ports_needs_a_tunnel_binary_and_both_pin_fields() {
     fields.remove("tunnel_sha256");
     let unpinned: Client = serde_json::from_value(value.clone()).unwrap();
     let ports = Contract::from_agents(TUNNEL_CONTRACT).unwrap();
+    let mut none = ports.clone();
+    none.tunnel = None;
     assert!(tunnel_pin(&pinned, &ports).unwrap().is_some());
     assert!(matches!(tunnel_pin(&unpinned, &ports), Err(Error::TunnelUnconfigured)));
+    assert!(tunnel_pin(&unpinned, &none).unwrap().is_none());
 
     let path = root.join("client.json");
     private_file(&path, value.to_string().as_bytes());
