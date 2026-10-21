@@ -28,7 +28,7 @@ pub(crate) fn start(
     owner: Uuid,
     deadline: Instant,
     resources: &mut Vec<Lease>,
-) -> Result<(Uuid, BTreeMap<String, String>)> {
+) -> Result<(Option<Uuid>, BTreeMap<String, String>)> {
     let mut ports = BTreeMap::new();
     for (name, declaration) in contract.ports() {
         let port = match declaration {
@@ -81,11 +81,16 @@ pub(crate) fn start(
         })
         .collect::<Vec<_>>();
     let arguments = native_launch::arguments(contract, &ports, &live)?;
+    // A project with no tunnel starts no BrowserStack Local.
+    if contract.tunnel.is_none() {
+        budget(deadline)?;
+        return Ok((None, arguments));
+    }
     let tunnel = local.tunnel(live, budget(deadline)?)?;
     let tunnel_id = tunnel.id;
     resources.insert(0, tunnel);
     budget(deadline)?;
-    Ok((tunnel_id, arguments))
+    Ok((Some(tunnel_id), arguments))
 }
 fn budget(deadline: Instant) -> Result<Duration> {
     let remaining = deadline.saturating_duration_since(Instant::now());

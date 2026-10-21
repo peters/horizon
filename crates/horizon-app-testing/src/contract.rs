@@ -113,7 +113,9 @@ pub struct Contract {
     pub apps: BTreeMap<Platform, App>,
     #[serde(default)]
     pub launch_arguments: BTreeMap<String, String>,
-    pub tunnel: Tunnel,
+    /// Loopback ports for the app. Leave it out when the app uses only public backends: then no tunnel starts.
+    #[serde(default)]
+    pub tunnel: Option<Tunnel>,
     pub matrix: Vec<MatrixEntry>,
     /// Exact project-relative recipe files. Markdown recipes contain a device-recipe YAML fence.
     pub recipes: Vec<PathBuf>,
@@ -174,8 +176,10 @@ impl Contract {
             || self.recipes.len() > 128
             || !(1..=16).contains(&self.max_parallel)
             || self.launch_arguments.len() > 32
-            || self.tunnel.ports.is_empty()
-            || self.tunnel.ports.len() > 16
+            || self
+                .tunnel
+                .as_ref()
+                .is_some_and(|tunnel| tunnel.ports.is_empty() || tunnel.ports.len() > 16)
         {
             return Err(invalid());
         }
@@ -242,10 +246,11 @@ impl Contract {
         Ok(())
     }
 
-    /// The declared tunnel ports.
+    /// The declared tunnel ports, empty for a project with no tunnel.
     #[must_use]
     pub fn ports(&self) -> &BTreeMap<String, Port> {
-        &self.tunnel.ports
+        static NONE: BTreeMap<String, Port> = BTreeMap::new();
+        self.tunnel.as_ref().map_or(&NONE, |tunnel| &tunnel.ports)
     }
 
     /// # Errors

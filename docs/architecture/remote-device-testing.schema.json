@@ -129,7 +129,16 @@
           }
         },
         "tunnel": {
-          "$ref": "#/$defs/Tunnel"
+          "description": "Loopback ports for the app. Leave it out when the app uses only public backends: then no tunnel starts.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tunnel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "version": {
           "type": "integer",
@@ -142,7 +151,6 @@
         "version",
         "provider",
         "apps",
-        "tunnel",
         "matrix",
         "recipes"
       ]
