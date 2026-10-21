@@ -81,7 +81,11 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | control service | The worker service `horizon-cloud-worker serve`. It hosts the browsers of a cloud. With agent isolation, it runs as UID 10001. | browser service, worker service |
 | agent isolation | The worker mode in which agent panels and workspace services run as UID 10001. The stock worker image starts it. | sandbox |
 | browser tools | The `browser_*` MCP tools of an agent. | browser MCP |
-| background window | A Chromium window that opens without the keyboard focus. | hidden window |
+| profile host | The process `horizon-browser host --config <host file>`. It keeps named browser profiles for agents on the same computer. | profile server |
+| background window | A Chromium window that opens without the keyboard focus. A profile host opens each visible page in one. | hidden window |
+| browser profile | A named entry under `browser.profiles` in the host file of a profile host, and the persistent folder of its browser. Its pages share its cookies. | profile (alone) |
+| host file | The YAML file that `--config` gives to a standalone `horizon-browser`. It holds no credential value. | config file |
+| connect client | The process `horizon-browser mcp --connect`. It gives the browser tools of a host to one agent. | MCP proxy |
 | image-only profile | A profile without a `build` section. Horizon uses its image and builds nothing. | — |
 | base image | The public CPU worker image `ghcr.io/peters/horizon-worker-base`. Horizon pins it by digest. | default image, stock image |
 | quick start | The **New cloud** choice that runs a repository without `.horizon/cloud.yml` on the base image, with the built-in profile `quick-start`. | easy start, default cloud |
