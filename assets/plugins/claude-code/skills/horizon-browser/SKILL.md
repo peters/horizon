@@ -319,6 +319,17 @@ the same tools for the remote targets of a host file. It starts no local
 browser, so `browser_create` needs a `target`. Close each session when the task
 ends; the host also releases every session when the MCP client disconnects.
 
+A profile host (`horizon-browser host --config <host-file>`) keeps named,
+persistent browser profiles on its computer for `horizon-browser mcp --connect`
+clients. There, `browser_create` needs a profile name as `target` and takes no
+`backend`; `browser_duplicate` opens your page again in the same profile. As for
+any target, a second `browser_create` needs `allow_additional: true`. The pages
+of one profile share its cookies and sign-ins with every agent of the host, but
+`browser_list` shows only your own pages. One agent holds at most 4 pages, and a
+page with no action for 60 minutes closes. Close each page when the task ends;
+the profile and its sign-ins stay. A profile host refuses `browser_screenshot`
+and the other device viewer requests.
+
 ## Actions, attachments, and screenshots
 
 `browser_act` operations are `click`, `fill`, `press`, `scroll`, `reload`, `back`,
