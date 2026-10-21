@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote input check</title>
+<style>
+body { font: 18px sans-serif; margin: 16px; }
+button, input { font: inherit; padding: 12px; margin: 8px 0; display: block; }
+#increment { width: 186.671875px; }
+#hidden { display: none; }
+</style>
+<h1 id="count">Count: 0</h1>
+<button id="increment">Increment</button>
+<h2 id="trust">Trusted: none</h2>
+<label for="entry">Sample text</label>
+<input id="entry">
+<h2 id="echo">Entered: empty</h2>
+<button id="disabled" disabled>Disabled</button>
+<button id="hidden">Hidden</button>
+<script>
+var count = 0;
+document.getElementById('increment').onclick = function (event) {
+    count++;
+    document.getElementById('count').textContent = 'Count: ' + count;
+    document.getElementById('trust').textContent = 'Trusted: ' + event.isTrusted;
+};
+document.getElementById('entry').oninput = function () {
+    document.getElementById('echo').textContent = 'Entered: ' + this.value;
+};
+</script>
+</html>
