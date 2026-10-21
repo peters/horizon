@@ -30,7 +30,7 @@ pub(crate) fn start(
     resources: &mut Vec<Lease>,
 ) -> Result<(Uuid, BTreeMap<String, String>)> {
     let mut ports = BTreeMap::new();
-    for (name, declaration) in &contract.tunnel.ports {
+    for (name, declaration) in contract.ports() {
         let port = match declaration {
             Port::Fixed(port) => *port,
             Port::Managed(backend) => {
