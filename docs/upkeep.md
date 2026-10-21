@@ -308,7 +308,10 @@ started also starts agents for the repositories that did not change.
   (`.github/workflows/claude-review.yml`), a pull request gets at most 2 review
   rounds. Round 1 starts when a pull request from a branch of the repository opens.
   On a bot pull request that the agent pushed to, or when round 1 did not start, the
-  agent adds the label `claude-review` after its push. It requests round 2 the same
+  agent adds the label `claude-review` after its push. Round 1 did not start when the
+  workflow shows no run for the head, or only runs that failed or were skipped. While
+  a run is queued or in progress, the agent waits for its summary and does not add
+  the label. It requests round 2 the same
   way, after it pushed every fix of round 1. It fixes each valid finding and answers
   an invalid one on its thread. It merges a pull request with commits that it pushed
   only when no review thread is open and the latest review of the head has no

@@ -302,13 +302,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
   Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
   Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
-- Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill:
-  1. Run the GitHub Copilot CLI review with the prompt in the skill. The prompt asks for concrete inputs and wrong results.
-  2. Fix the findings.
+- Always review the full diff yourself before you open a PR. Then do this local review loop before you push:
+  1. Start one independent local review of the full diff: a new agent that is not a fork of you and starts without your conversation. Ask it for concrete inputs and wrong results.
+  2. Fix each finding, or answer it with the evidence.
   3. Run `localci` for the jobs that the change affects.
-  4. Review again. Stop when a round finds nothing actionable.
+  4. Review the fixes yourself. When you changed more than the findings asked, start one more independent review; at most 2 local reviews for each push.
 
-  Do not start a separate review agent. The local Copilot review and the Claude review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+  Never request a Copilot review, neither a local Copilot CLI review nor one on the PR. The independent local review and the Claude review on the PR are the independent reviews. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
 - If two review rounds find related bugs, examine the affected design and transitions before another push.
   Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
