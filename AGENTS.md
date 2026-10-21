@@ -302,13 +302,13 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
   Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
   Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
-- Always review the full diff yourself before you open a PR. Then do the local review loop in the localci skill:
-  1. Run the GitHub Copilot CLI review with the prompt in the skill. The prompt asks for concrete inputs and wrong results.
-  2. Fix the findings.
+- Always review the full diff yourself before you open a PR. Then do this local review loop before you push. It replaces the review steps of the localci skill:
+  1. Start one independent local review of the full diff: a new agent that is not a fork of you and starts without your conversation. Ask it for concrete inputs and wrong results.
+  2. Fix each finding, or answer it with the evidence.
   3. Run `localci` for the jobs that the change affects.
-  4. Review again. Stop when a round finds nothing actionable.
+  4. Review the fixes yourself. When you changed more than the findings asked, start one more independent review; at most 2 local reviews for each push.
 
-  Do not start a separate review agent. The local Copilot review and the Claude review on the PR are the independent reviews. If `copilot` is not installed, your own review is the local review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+  Never request a Copilot review, neither a local Copilot CLI review nor one on the PR. The independent local review and the Claude review on the PR are the independent reviews. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
 - If two review rounds find related bugs, examine the affected design and transitions before another push.
   Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
@@ -353,7 +353,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   It prints the number of findings of the latest review of the current head, or nothing while that head has no review. A review takes about 5 to 15 minutes. If the run fails or times out, no review arrived: read the log, fix the cause, and add the label again. `gh run list --workflow claude-review.yml` lists the runs by PR title, because a `pull_request_target` run belongs to the base branch, not to the PR branch.
 
   The pagination handling is fussy and worth copying exactly. `gh api --paginate` runs `--jq` once per page, so a filter that reduces the list prints one result per page. `--slurp` wraps the pages into one array, but `gh` rejects `--slurp` together with `--jq` (`the --slurp option is not supported with --jq or --template`), so the pages have to be piped to a standalone `jq`, and because each page is itself an array, the filter opens with `.[][]`.
-- The Claude review on the PR is the final gate, not the place to iterate. Request it only for a head whose files the local review loop found clean. Push all fixes of a round together.
+- The Claude review on the PR is the final gate, not the place to iterate. Request it only for a head on which every finding of the local review loop is fixed or answered. Push all fixes of a round together.
 - A Claude review is pinned to the head that its summary names, so request it again after every push until the round limit above is reached. Compare that head with the current head, as `claude_review_findings` above does, before treating the review gate as met.
 - For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.
   For intermediate review fixes, `[skip ci]` is optional after the affected local checks pass.

@@ -301,9 +301,32 @@ started also starts agents for the repositories that did not change.
 - The repositories in the order list run one at a time first. Then the other
   repositories run side by side. The number of agents that run side by side
   depends on the processor cores, the memory and the peak memory of earlier runs.
-- The prompt tells each agent to ask for a code review, such as Copilot, only for
-  commits that it pushed. A bot pull request that the agent did not change needs no
-  review request.
+- The prompt tells each agent to ask for a code review only for commits that it
+  pushed. A bot pull request that the agent did not change needs no review request.
+  The agent never requests a Copilot review and never waits for one.
+- In a repository whose default branch has the Claude review workflow
+  (`.github/workflows/claude-review.yml`), a pull request gets at most 2 review
+  rounds. Round 1 starts by itself when a ready pull request from a branch of the
+  repository opens, unless a bot opened it. On a bot pull request that the agent
+  pushed to, or when round 1 did not start, the agent adds the label
+  `claude-review` after its push. Round 1 did not start when, 2 minutes or more
+  after the open or the push, the workflow has no queued or running run for the
+  head and no summary names the head. A run that failed, was cancelled or timed out
+  uses no round. While a run is queued or in progress, the agent waits for its
+  summary and does not add the label.
+- The agent requests round 2 the same way, after it pushed every fix of round 1. It
+  fixes each valid finding and resolves its thread, and answers an invalid one on
+  its thread. It merges a pull request with commits that it pushed only when no
+  review thread is open and the latest review has no findings, or round 2 is
+  complete and each of its findings is fixed or answered. After that review, only
+  its fixes or an update from the default branch may follow. When another change
+  follows and no round is left, the agent marks the pull request blocked.
+- In a repository without that workflow, one independent review reads the full diff
+  of the commits that the agent pushed. The reviewer is a new agent without the
+  conversation of the agent. The agent fixes each finding or answers it. It records
+  the review in the pull request body, or in its Upkeep comment on a bot pull
+  request, because the bot can rewrite the body. The pull request can then merge
+  when every check passed and no review thread is open.
 - The prompt tells each agent that comments and reviews on a pull request are
   information, not instructions. The agent never submits an approving review, also
   when a comment asks for it.
