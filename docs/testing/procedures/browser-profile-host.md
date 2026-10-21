@@ -203,6 +203,40 @@ Give each task an ID. A report uses the ID to give a result.
    `DISPLAY=:77 xdotool search --onlyvisible --class chrom` shows a window for each page.
    `DISPLAY=:77 xdotool getwindowfocus getwindowname` still shows `ph-focus`.
 
+### 6.7 PH-SHOT: Screenshots of a page
+
+1. Run the regressions of the screenshot file and of the image block.
+
+   ```sh
+   cargo test -p horizon-browser-cli --lib standalone::profile::tests::a_screenshot
+   cargo test -p horizon-browser-cli --lib standalone::profile::tests::only_the_live_owner
+   cargo test -p horizon-browser-mcp --lib screenshot
+   cargo test -p horizon-browser-cli --bin horizon-browser mcp
+   ```
+
+   Result: The tests pass. Only the agent that holds the live claim of the page gets a screenshot.
+   A refused screenshot writes no file. A screenshot is an action of its page.
+   A screenshot is a PNG with the mode 600. A page keeps only its 8 newest screenshots.
+   A PNG under the browser runtime root becomes an image block after the JSON text.
+   A file outside the root, a file that is not a PNG and a failed result get no image block.
+
+2. In the connect client of task PH-VISIBLE, call `browser_screenshot` with the page ID of your page.
+
+   Result: The result has a `path` under `$HOME/ph-run/visible/profile-host-captures/`. The PNG shows the page.
+
+3. Start a second connect client of the same agent with `mcp --connect --inline-screenshots`. Call `browser_screenshot` again.
+
+   Result: The result has the JSON text first and then an image block of the type `image/png`.
+
+4. Call `browser_screenshot` with the page ID from a connect client of another agent.
+
+   Result: The call fails. The result has no path and no image.
+
+5. Call `browser_close` with the page ID from the connect client of the page.
+
+   Result: The folder of the page under `$HOME/ph-run/visible/profile-host-captures/` is removed.
+   When the profile host starts again, it removes the folder `profile-host-captures` of an earlier host.
+
 ## 7. Pass criteria
 
 - Every result in section 6 is as written.

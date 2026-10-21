@@ -17,6 +17,7 @@
 //! interrupt or a termination signal closes every page and keeps every
 //! profile: the host never deletes a profile.
 
+mod capture;
 mod config;
 mod host;
 mod instance;

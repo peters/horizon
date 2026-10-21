@@ -21,6 +21,7 @@ horizon-browser = { workspace = true, features = ["video-capture"] }
 horizon-browser-control.workspace = true
 horizon-browser-mcp.workspace = true
 horizon-browser-protocol.workspace = true
+png.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 serde.workspace = true
 serde_json.workspace = true

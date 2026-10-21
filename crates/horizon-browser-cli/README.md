@@ -373,7 +373,15 @@ name as `target`:
   pages run, and at most 4 of one actor; the 16th page goes only to an actor
   with no page, so busy clients never lock out a new one
   (`page_limit_reached`). A page with no action for 60 minutes closes.
-- Device viewer requests, `browser_screenshot` among them, are refused.
+- `browser_screenshot` writes the newest frame of a page as a private PNG
+  under `<root>/profile-host-captures/` (at most 8 for each page, removed
+  when the page closes) and returns its path. A client whose agent runs on
+  another computer starts `horizon-browser mcp --connect --inline-screenshots`:
+  the result then also holds the PNG (at most 8 MiB) as an MCP image block.
+  The flag reads only a PNG under the runtime root, so the screenshots of a
+  Horizon host stay a path. A screenshot counts as an action of the page.
+  `copy_to_clipboard` has no effect, and `clipboard_requested` is `false`.
+  Other device viewer requests are refused.
 - With `--visible`, each page is a window on the display of the host
   process (`$WAYLAND_DISPLAY` when it is set, else `$DISPLAY`); without it,
   the browsers are headless. A visible Chromium starts with no window of its

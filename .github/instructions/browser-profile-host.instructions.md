@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-cli/src/standalone/profile.rs,crates/horizon-browser-cli/src/standalone/profile/**,crates/horizon-browser-cli/tests/standalone_profile.rs"
+applyTo: "crates/horizon-browser-cli/src/standalone/profile.rs,crates/horizon-browser-cli/src/standalone/profile/**,crates/horizon-browser-cli/tests/standalone_profile.rs,crates/horizon-browser-mcp/src/screenshot.rs,crates/horizon-browser-mcp/src/screenshot/**"
 ---
 
 # Trust boundary of the profile host
@@ -34,6 +34,12 @@ private coordination files of the browser runtime root.
 - One actor holds at most 4 pages. The host runs at most 16 pages, and only an
   actor with no page gets the 16th page.
 - A page with no action for 60 minutes closes.
+- A screenshot goes only to the actor that holds the live claim of the page.
+  The host writes it as a PNG of mode 600 under the browser runtime root and
+  keeps at most 8 for each page.
+- `mcp --connect --inline-screenshots` reads the file that a screenshot result
+  names only when it is a `.png` under the browser runtime root, of at most
+  8 MiB. It adds no image for any other path.
 
 ## Not protected
 

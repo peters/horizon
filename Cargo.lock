@@ -2463,6 +2463,7 @@ dependencies = [
  "horizon-browser-mcp",
  "horizon-browser-protocol",
  "horizon-process-time",
+ "png",
  "rmcp",
  "serde",
  "serde_json",
@@ -2500,6 +2501,7 @@ dependencies = [
 name = "horizon-browser-mcp"
 version = "0.2.7"
 dependencies = [
+ "base64 0.23.1",
  "horizon-browser",
  "horizon-browser-control",
  "rmcp",

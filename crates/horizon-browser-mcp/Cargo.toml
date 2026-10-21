@@ -17,6 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+base64.workspace = true
 horizon-browser = { workspace = true, features = ["video-capture"] }
 horizon-browser-control.workspace = true
 rmcp.workspace = true

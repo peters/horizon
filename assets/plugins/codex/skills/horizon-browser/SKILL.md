@@ -331,8 +331,10 @@ any target, a second `browser_create` needs `allow_additional: true`. The pages
 of one profile share its cookies and sign-ins with every agent of the host, but
 `browser_list` shows only your own pages. One agent holds at most 4 pages, and a
 page with no action for 60 minutes closes. Close each page when the task ends;
-the profile and its sign-ins stay. A profile host refuses `browser_screenshot`
-and the other device viewer requests.
+the profile and its sign-ins stay. `browser_screenshot` returns the path of a
+private PNG on the host's computer; a client started with
+`mcp --connect --inline-screenshots` also gets the PNG as an image block. A
+screenshot counts as an action of the page.
 
 ## Actions, attachments, and screenshots
 
@@ -372,7 +374,7 @@ person answers, so use `set_files` on the input instead of clicking the button.
 
 `browser_screenshot` returns retained viewport pixels as a private PNG path and
 original dimensions. It requires a ready panel and a live supporting Horizon
-host. It takes no fresh navigation or full-page capture. Optional
+host or profile host. It takes no fresh navigation or full-page capture. Optional
 `copy_to_clipboard` defaults false; `clipboard_requested` proves host dispatch,
 not OS acknowledgement. Capture claims ownership and refuses another live owner,
 human steering, or pending handoff. It changes no focus, visibility, or canvas.

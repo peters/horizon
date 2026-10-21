@@ -33,6 +33,7 @@ const DEFAULT_QUERY_RESULTS: u32 = 50;
 pub struct HorizonBrowserMcp {
     controller: BrowserController,
     network_watch: NetworkWatchState,
+    inline_screenshots: bool,
     tool_router: ToolRouter<Self>,
 }
 
@@ -55,8 +56,16 @@ impl HorizonBrowserMcp {
         Self {
             controller,
             network_watch: NetworkWatchState::default(),
+            inline_screenshots: false,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Also return the PNG of each `browser_screenshot` as an image block.
+    #[must_use]
+    pub fn with_inline_screenshots(mut self) -> Self {
+        self.inline_screenshots = true;
+        self
     }
 }
 
@@ -89,7 +98,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_screenshot",
-        description = "Capture the latest decoded viewport pixels of a ready browser panel in the calling agent's Horizon workspace. Returns a private PNG path and its original dimensions; this is a retained frame, not a fresh navigation or a full-page screenshot. Optional copy_to_clipboard (default false) also requests an image copy on the Horizon host clipboard; clipboard_requested reports dispatch, not OS acknowledgement. Requires a live Horizon host, not a standalone browser. Acquires or renews the caller's browser claim and rechecks it at host dispatch and result delivery. Refuses another live owner, active human steering and pending handoff. Does not change focus, viewport, visibility or canvas. Keep sensitive screenshots private. The latest eight exports per panel survive until panel close or host exit."
+        description = "Capture the latest decoded viewport pixels of a ready browser panel in the calling agent's Horizon workspace. Returns a private PNG path and its original dimensions; this is a retained frame, not a fresh navigation or a full-page screenshot. Optional copy_to_clipboard (default false) also requests an image copy on the Horizon host clipboard; clipboard_requested reports dispatch, not OS acknowledgement. Requires a live Horizon host or a profile host, not a standalone browser. Acquires or renews the caller's browser claim and rechecks it at host dispatch and result delivery. Refuses another live owner, active human steering and pending handoff. Does not change focus, viewport, visibility or canvas. Keep sensitive screenshots private. The latest eight exports per panel survive until panel close or host exit."
     )]
     async fn browser_screenshot(
         &self,
@@ -757,9 +766,16 @@ impl ServerHandler for HorizonBrowserMcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        self.tool_router
+        let screenshot = self.inline_screenshots && request.name == "browser_screenshot";
+        let response = self
+            .tool_router
             .call(ToolCallContext::new(self, request, context))
-            .await
+            .await?;
+        if screenshot {
+            let root = horizon_browser_control::BrowserRuntimePaths::resolve();
+            return Ok(crate::screenshot::inline(response, root.root()));
+        }
+        Ok(response)
     }
 
     fn list_tools(

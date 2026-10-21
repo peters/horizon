@@ -140,7 +140,7 @@ pub fn idle(last: SystemTime, now: SystemTime, limit: Duration) -> bool {
 }
 
 /// The IDs of the ready pages under `root` with no action within `limit`:
-/// each ID with the time that its page opened.
+/// each ID with the time that its page opened, or of its last screenshot.
 #[must_use]
 pub fn idle_pages<'a>(
     root: &Path,
@@ -154,7 +154,15 @@ pub fn idle_pages<'a>(
         .collect()
 }
 
-/// The time of the last line of the audit journal of a page, or its opening.
+/// The last action of a page that its audit journal does not show: its
+/// opening, or its last screenshot when that is later.
+#[must_use]
+pub fn host_action(opened: SystemTime, screenshot: Option<SystemTime>) -> SystemTime {
+    screenshot.map_or(opened, |at| at.max(opened))
+}
+
+/// The time of the last line of the audit journal of a page, or the time
+/// that the host gave, if that is later.
 fn last_action(root: &Path, id: &str, opened: SystemTime) -> SystemTime {
     std::fs::metadata(manifest::audit_path_for_root(root, id))
         .and_then(|metadata| metadata.modified())

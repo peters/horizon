@@ -97,7 +97,10 @@ shell commands, files, or other MCP servers.
   retained pixels, not full-page captures or a forced fresh frame. No focus,
   visibility, viewport or canvas change is required. Captures reject another
   live owner's panel; browser capture acquires or renews the caller's claim and requires it at dispatch and result delivery. Active human steering and handoff remain protected. A live Horizon host
-  is required; standalone browser hosts cannot provide this route. Exports
+  or a profile host (`horizon-browser host`) is required; other standalone
+  browser hosts cannot provide this route. A profile host ignores
+  `copy_to_clipboard`, and `mcp --connect --inline-screenshots` also returns
+  the PNG of a profile host as an image block. Exports
   use private temporary storage, retain the latest eight captures per panel,
   survive browser theme/backend cache resets, and are deleted on panel close or
   normal host exit. Copy a returned file elsewhere before its retention ends.
