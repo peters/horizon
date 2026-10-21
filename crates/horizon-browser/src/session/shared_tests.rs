@@ -420,6 +420,7 @@ fn shared_process_pins_profile_and_launch_settings_across_restarts() {
         headless: true,
         extra_args: Vec::new(),
         automation_disclosure: crate::AutomationDisclosurePolicy::default(),
+        background_windows: false,
     };
     assert!(group.pin_launch(&launch, false).is_ok());
     assert!(
@@ -438,8 +439,35 @@ fn shared_process_pins_profile_and_launch_settings_across_restarts() {
         "a stopped group still identifies its original profile"
     );
     launch.profile_dir = std::path::PathBuf::from("profile-a");
+    launch.background_windows = true;
+    assert!(
+        group.pin_launch(&launch, false).is_ok(),
+        "a headless browser ignores background windows"
+    );
+    launch.background_windows = false;
     launch.headless = false;
     assert!(group.pin_launch(&launch, false).is_err());
+}
+
+#[test]
+fn a_headed_shared_process_pins_its_background_windows() {
+    let group = SharedBrowserSession::new("profile".into());
+    let mut launch = crate::process::ChromeLaunch {
+        command: "browser-fixture".into(),
+        profile_dir: std::path::PathBuf::from("profile-a"),
+        width: 800,
+        height: 600,
+        headless: false,
+        extra_args: Vec::new(),
+        automation_disclosure: crate::AutomationDisclosurePolicy::default(),
+        background_windows: true,
+    };
+    assert!(group.pin_launch(&launch, false).is_ok());
+    launch.background_windows = false;
+    assert!(
+        group.pin_launch(&launch, false).is_err(),
+        "background windows belong to a headed process"
+    );
 }
 
 #[test]
@@ -450,36 +478,49 @@ fn initial_target_identity_is_page_specific() {
     assert!(right.registered_target().is_none());
 }
 
-#[test]
-fn initial_target_claim_preserves_empty_startup_fallback() {
+/// The initial target of an empty startup, and each command that its claim sent.
+fn claim_empty_startup(background: bool) -> (Option<String>, Vec<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture");
     let address = listener.local_addr().expect("address");
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().expect("connect");
         stream.set_read_timeout(Some(Duration::from_secs(3))).expect("timeout");
         let mut socket = tungstenite::accept(stream).expect("handshake");
-        let mut methods = Vec::new();
+        let mut commands = Vec::new();
         for result in [json!({"targetInfos": []}), json!({"targetId": "created-initial"})] {
             let Message::Text(text) = socket.read().expect("command") else {
                 panic!("text command");
             };
             let command: Value = serde_json::from_str(&text).expect("json");
-            methods.push(command["method"].as_str().expect("method").to_owned());
+            commands.push(command.clone());
             socket
                 .send(Message::Text(
                     json!({"id": command["id"], "result": result}).to_string().into(),
                 ))
                 .expect("reply");
         }
-        methods
+        commands
     });
+    let target = claim_initial_target(&format!("ws://{address}/"), &AtomicBool::new(false), background);
+    (target, server.join().expect("server"))
+}
+
+#[test]
+fn initial_target_claim_preserves_empty_startup_fallback() {
+    let (target, commands) = claim_empty_startup(false);
+    assert_eq!(target.as_deref(), Some("created-initial"));
+    let methods: Vec<_> = commands.iter().map(|command| command["method"].clone()).collect();
+    assert_eq!(methods, ["Target.getTargets", "Target.createTarget"]);
+    assert_eq!(commands[1]["params"], json!({"url": "about:blank"}));
+}
+
+#[test]
+fn a_background_claim_opens_the_page_in_its_own_window_that_takes_no_focus() {
+    let (target, commands) = claim_empty_startup(true);
+    assert_eq!(target.as_deref(), Some("created-initial"));
     assert_eq!(
-        claim_initial_target(&format!("ws://{address}/"), &AtomicBool::new(false)).as_deref(),
-        Some("created-initial")
-    );
-    assert_eq!(
-        server.join().expect("server"),
-        ["Target.getTargets", "Target.createTarget"]
+        commands[1]["params"],
+        json!({"url": "about:blank", "newWindow": true, "background": true})
     );
 }
 
