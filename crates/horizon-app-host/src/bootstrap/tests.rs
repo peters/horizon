@@ -40,6 +40,8 @@ pub(crate) fn state_snapshot(root: &Path) -> BTreeMap<PathBuf, StateEntry> {
     entries
 }
 
+const TUNNEL_CONTRACT: &str = "```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  apps:\n    ios:\n      build: [build]\n      artifact: App.ipa\n      bundle_id: com.example.app\n  tunnel:\n    ports: {backend: 8080}\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```";
+
 fn configuration(root: &Path) -> serde_json::Value {
     serde_json::json!({"version":1,"owner":Uuid::new_v4(),"project":root,"state":root,
         "provider":"browserstack","tunnel_binary":"/synthetic/BrowserStackLocal","tunnel_sha256":"a".repeat(64)})
@@ -339,4 +341,33 @@ fn credential_files_refuse_shared_foreign_linked_oversized_missing_and_extra_fil
     let path = root.join("client.json");
     private_file(&path, relative.to_string().as_bytes());
     assert!(client(&path).is_err());
+}
+
+#[test]
+fn client_with_tunnel_ports_needs_a_tunnel_binary_and_both_pin_fields() {
+    use horizon_app_testing::contract::Contract;
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let pinned: Client = serde_json::from_value(configuration(&root)).unwrap();
+    let mut value = configuration(&root);
+    let fields = value.as_object_mut().unwrap();
+    fields.remove("tunnel_binary");
+    fields.remove("tunnel_sha256");
+    let unpinned: Client = serde_json::from_value(value.clone()).unwrap();
+    let ports = Contract::from_agents(TUNNEL_CONTRACT).unwrap();
+    assert!(tunnel_pin(&pinned, &ports).unwrap().is_some());
+    assert!(matches!(tunnel_pin(&unpinned, &ports), Err(Error::TunnelUnconfigured)));
+
+    let path = root.join("client.json");
+    private_file(&path, value.to_string().as_bytes());
+    client(&path).unwrap();
+    for (field, half) in [
+        ("tunnel_binary", "/synthetic/BrowserStackLocal".to_owned()),
+        ("tunnel_sha256", "a".repeat(64)),
+    ] {
+        let mut one = value.clone();
+        one[field] = half.into();
+        private_file(&path, one.to_string().as_bytes());
+        assert!(client(&path).is_err());
+    }
 }

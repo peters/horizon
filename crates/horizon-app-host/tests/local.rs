@@ -102,8 +102,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Workspace>, Local) {
         Configuration {
             process_worker: worker.into(),
             tunnel_worker: worker.into(),
-            tunnel_binary: root.join("unused"),
-            tunnel_sha256: "a".repeat(64),
+            tunnel: None,
             state,
         },
     )
@@ -267,8 +266,7 @@ if start=='start\n':print(json.dumps({'phase':'complete','success':True}),flush=
         Configuration {
             process_worker: worker.clone(),
             tunnel_worker: worker,
-            tunnel_binary: root.path().join("unused"),
-            tunnel_sha256: "a".repeat(64),
+            tunnel: None,
             state,
         },
     )

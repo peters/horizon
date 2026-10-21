@@ -19,8 +19,11 @@ struct Client {
     project: PathBuf,
     state: PathBuf,
     provider: String,
-    tunnel_binary: PathBuf,
-    tunnel_sha256: String,
+    /// The pinned tunnel executable: both or neither. Without them, the project declares no tunnel.
+    #[serde(default)]
+    tunnel_binary: Option<PathBuf>,
+    #[serde(default)]
+    tunnel_sha256: Option<String>,
     /// One absolute private file for each authentication reference of the provider, as in the
     /// `horizon-browser` host file. With it, the host never opens the OS credential store.
     #[serde(default)]
@@ -61,7 +64,11 @@ fn client(path: &Path) -> Result<Client> {
         || client.provider.len() > 128
         || !client.project.is_absolute()
         || !client.state.is_absolute()
-        || !client.tunnel_binary.is_absolute()
+        || client.tunnel_binary.is_some() != client.tunnel_sha256.is_some()
+        || client
+            .tunnel_binary
+            .as_ref()
+            .is_some_and(|binary| !binary.is_absolute())
         || client.project.canonicalize().map_err(|_| Error::Unavailable)? != client.project
         || client
             .credential_files
@@ -155,6 +162,22 @@ fn account(
     )?)
 }
 
+/// The tunnel pin of the client for its contract: a contract with tunnel ports needs a pinned binary.
+#[cfg(unix)]
+fn tunnel_pin(
+    client: &Client,
+    contract: &horizon_app_testing::contract::Contract,
+) -> Result<Option<crate::local::TunnelPin>> {
+    match (&client.tunnel_binary, &client.tunnel_sha256) {
+        (Some(binary), Some(sha256)) => Ok(Some(crate::local::TunnelPin {
+            binary: binary.clone(),
+            sha256: sha256.clone(),
+        })),
+        _ if !contract.ports().is_empty() => Err(Error::TunnelUnconfigured),
+        _ => Ok(None),
+    }
+}
+
 #[cfg(unix)]
 fn child(root: &horizon_app_process::storage::Directory, name: &str) -> Result<()> {
     if root.child(name).is_err() {
@@ -217,7 +240,9 @@ fn selected_with(
     use horizon_core::{Config, remote_browser_credential::KeyringCredentialStore};
     let client = client(path)?;
     horizon_app_process::storage::Directory::open(&client.state)?;
-    horizon_app_provider::tunnel::VerifiedBinary::capture(&client.tunnel_binary, &client.tunnel_sha256)?;
+    if let (Some(binary), Some(sha256)) = (&client.tunnel_binary, &client.tunnel_sha256) {
+        horizon_app_provider::tunnel::VerifiedBinary::capture(binary, sha256)?;
+    }
     let config_path = Config::resolve_path(None).ok_or(Error::Unavailable)?;
     let text = std::fs::read_to_string(config_path).map_err(|_| Error::Unavailable)?;
     let config = Config::from_yaml(&text).map_err(|_| Error::Unavailable)?;
@@ -256,6 +281,7 @@ pub fn open(path: &Path) -> Result<Host> {
     child(&owner_state, reports_name)?;
     let agents = crate::project::read(&workspace.root_directory()?, Path::new("AGENTS.md"))?;
     let contract = Contract::from_agents(&agents)?;
+    let tunnel = tunnel_pin(&client, &contract)?;
     let worker = std::env::current_exe().map_err(|_| Error::Unavailable)?;
     let local = Arc::new(Local::new(
         Arc::clone(&workspace),
@@ -264,8 +290,7 @@ pub fn open(path: &Path) -> Result<Host> {
         Configuration {
             process_worker: worker.clone(),
             tunnel_worker: worker,
-            tunnel_binary: client.tunnel_binary,
-            tunnel_sha256: client.tunnel_sha256,
+            tunnel,
             state: owner_path.join(local_name),
         },
     )?);
