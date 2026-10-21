@@ -310,7 +310,19 @@ fn one_host_holds_a_root_and_keeps_its_instance_over_a_restart() {
     }
     let instance = first.host_instance().to_owned();
     drop(first);
-    let again = Claim::take(root.path()).unwrap_or_else(|error| panic!("second claim: {error}"));
+    // A process that another test starts right now keeps a copy of the closed
+    // lock file, and with it the lock, until it runs its program. Wait for the
+    // release.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let again = loop {
+        match Claim::take(root.path()) {
+            Ok(claim) => break claim,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("second claim: {error}"),
+        }
+    };
     assert_eq!(again.host_instance(), instance);
 }
 
