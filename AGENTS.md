@@ -293,10 +293,10 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - When correctness depends on real inputs, such as real repositories, devices or providers, run the real-input check on the first reviewable head and again on the final head, not only at the end. For the setup agent, that is the real-repository [setup gate](docs/testing/procedures/cloud-setup-gate.md).
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
-- Keep local and agent self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the repository-mandated independent review below.
+- Keep self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the Claude review of the PR below.
 - Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Use the size thresholds above to check whether a split is practical. Split independent subsystems or separately testable outcomes; keep necessary larger outcomes together with the explanation required above.
 - Put purely mechanical module moves in a separate prerequisite PR.
-- Request cross-machine smoke testing only after local review is complete and CI has stabilized on the candidate head.
+- Request cross-machine smoke testing only after your self-review of the diff is complete and CI has stabilized on the candidate head.
 
 ### Pull Request Review and Merge Strategy
 
@@ -304,19 +304,23 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
   Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
   Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
-- Always review the full diff yourself before you open a PR. Then do this local review loop before you push. It replaces the review steps of the localci skill:
-  1. Start one independent local review of the full diff: a new agent that is not a fork of you and starts without your conversation. Ask it for concrete inputs and wrong results.
-  2. Fix each finding, or answer it with the evidence.
+- Always review the full diff yourself before you open a PR, and show that diff to `peters`.
+  There is no separate local review agent and no local Copilot or Claude review: your own review is the local review. It replaces the review steps of the localci skill.
+  Do this before each push:
+  1. Read the complete diff (`git diff origin/main...HEAD`) hunk by hunk yourself. Look for concrete inputs and wrong results, not style.
+  2. Fix each finding, or record why it is not a defect.
   3. Run `localci` for the jobs that the change affects.
-  4. Review the fixes yourself. When you changed more than the findings asked, start one more independent review; at most 2 local reviews for each push.
+  4. Read the diff of your fixes again before you push. When you changed more than the findings asked, review the whole diff once more.
 
-  Never request a Copilot review, neither a local Copilot CLI review nor one on the PR. The independent local review and the Claude review on the PR are the independent reviews. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
+  Show the diff with `git diff --stat origin/main...HEAD` for the whole change, and the hunks of the parts that can be wrong.
+  Report the findings you fixed together with the diff. Do not start a review agent or a Copilot CLI review for this step.
+  Never request a Copilot review on the PR either. The Claude review of the PR is the only external review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
 - If two review rounds find related bugs, examine the affected design and transitions before another push.
   Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
   This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
 - Request at most five Claude reviews of a PR without external commits, that is, commits from a contributor other than `peters` (see [External Contributions](#external-contributions)). A round is a Claude review that arrived for a pushed head; a request that produced no review does not count.
   Fix the findings of each round, or record why one is out of scope as a follow-up candidate.
-  If the fifth review still has findings, fix them, run the local review loop and the affected checks on the fixed head, and stop requesting reviews. Report the fixes and the remaining risk to `peters`. For that head, the explicit permission of `peters` replaces the Claude review gate below.
+  If the fifth review still has findings, fix them, review the full diff yourself again and run the affected checks on the fixed head, then stop requesting reviews. Report the fixes and the remaining risk to `peters`. For that head, the explicit permission of `peters` replaces the Claude review gate below.
   More than three rounds is a sign that the PR is too large: reassess its scope with the rules above before the next round.
 - Before you open a PR, write its title and body, then run the readiness check:
 
@@ -355,7 +359,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
   It prints the number of findings of the latest review of the current head, or nothing while that head has no review. A review takes about 5 to 15 minutes. If the run fails or times out, no review arrived: read the log, fix the cause, and add the label again. `gh run list --workflow claude-review.yml` lists the runs by PR title, because a `pull_request_target` run belongs to the base branch, not to the PR branch.
 
   The pagination handling is fussy and worth copying exactly. `gh api --paginate` runs `--jq` once per page, so a filter that reduces the list prints one result per page. `--slurp` wraps the pages into one array, but `gh` rejects `--slurp` together with `--jq` (`the --slurp option is not supported with --jq or --template`), so the pages have to be piped to a standalone `jq`, and because each page is itself an array, the filter opens with `.[][]`.
-- The Claude review on the PR is the final gate, not the place to iterate. Request it only for a head on which every finding of the local review loop is fixed or answered. Push all fixes of a round together.
+- The Claude review on the PR is the final gate, not the place to iterate. Request it only for a head on which every finding of your own review is fixed or answered. Push all fixes of a round together.
 - A Claude review is pinned to the head that its summary names, so request it again after every push until the round limit above is reached. Compare that head with the current head, as `claude_review_findings` above does, before treating the review gate as met.
 - For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.
   For intermediate review fixes, `[skip ci]` is optional after the affected local checks pass.
@@ -380,7 +384,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
 - The Claude review gate is met when the latest Claude review of the exact head reports `findings=0`. When you answer a finding with the reason that it is not a defect, reply on its thread and request a new review: the review does not report a finding again that a reply from `peters` explained, unless the code changes.
 
-  A new commit message or an empty commit does not change the files. The local loop does not run again for it. Claude must still review that exact head.
+  A new commit message or an empty commit does not change the files. You do not review the diff again for it. Claude must still review that exact head.
 - For an unchanged bot dependency PR, a `Safety review: safe` verdict for the exact head, as the company Dependabot procedure describes, meets the Claude review gate. After a push by anyone other than the bot, the PR is changed and the Claude review gate above applies.
 - Branch protection does not require a PR branch to be up to date with `main`. Do not rebase only to catch up with `main`. Rebase when the PR has a conflict, or when `main` gained a change that the PR depends on or that touches the same code paths. Then run the affected checks again on the new head.
 - Main CI runs once for each merge, also when merges land close together. When main CI fails because of a merged PR, fix or revert that PR at once, before other merges continue.
