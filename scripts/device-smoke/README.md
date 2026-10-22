@@ -88,6 +88,18 @@ and heartbeat labels still mention noVNC even in native mode; those labels do
 not establish which viewer is running. Verify the flag, manifest and owned
 processes when collecting evidence.
 
+`--presets FILE` sets the New Workspace presets of the fixture from a JSON list
+with the fields of `presets:` in the configuration, for example two presets of
+one agent with different `args`. Leave it out to keep the default menu of
+Horizon. The fixture replaces only the menu: it does not add a login, a
+credential or another program.
+
+The fixture checks the file before it starts Horizon. A preset without a `name`
+or `kind`, and a `resume` value other than `fresh`, `last` or `session`, stop the
+fixture with an error. Horizon itself starts with its own defaults when a
+configuration does not load, and an unchecked file would then show an empty
+board instead of the presets of the test.
+
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The
 agent must be launched inside a supporting Horizon host. Read the endpoint from
