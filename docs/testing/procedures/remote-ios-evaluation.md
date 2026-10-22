@@ -49,7 +49,18 @@ bound covers the whole evaluation.
 
 ## 5. Setup
 
-1. Start the standalone remote host of the candidate.
+1. Run the page-script check.
+
+   ```bash
+   node --test scripts/browser-smoke/evaluation_handshake.test.cjs
+   ```
+
+   Result: The ten checks pass. The expression runs once, a rejection reason
+   that cannot be printed is still reported, an await without the kept promise
+   reports a lost document, and a page that keeps the promise global gives a
+   typed failure.
+
+2. Start the standalone remote host of the candidate.
 
    ```bash
    horizon-browser mcp --standalone --config <host file>
@@ -90,28 +101,34 @@ bound covers the whole evaluation.
    Result: The action fails with `javascript_error`, and the message contains
    `promise rejected: synthetic rejection`.
 
-7. Call `browser_evaluate` with
+7. Call `browser_evaluate` with `Promise.reject(Object.create(null))`.
+
+   Result: The action fails with `javascript_error` and not with
+   `evaluation_timeout`. The rejection reason cannot be printed, so the message
+   names an unprintable value.
+
+8. Call `browser_evaluate` with
    `new Promise(r => setTimeout(() => r(7), 800))`.
 
    Result: The result is `7`.
 
-8. Call `browser_evaluate` with `new Promise(() => {})` and
+9. Call `browser_evaluate` with `new Promise(() => {})` and
    `timeout_millis: 4000`.
 
    Result: The action fails with `evaluation_timeout` after about 4000 ms. The
    message names the 4000 ms bound.
 
-9. Call `browser_evaluate` with
-   `new Promise(r => setTimeout(() => r(7), 6000))` and `timeout_millis: 3000`.
+10. Call `browser_evaluate` with
+    `new Promise(r => setTimeout(() => r(7), 6000))` and `timeout_millis: 3000`.
 
    Result: The action fails with `evaluation_timeout` after about 3000 ms. It
    does not wait for the 6000 ms promise.
 
-10. Call `browser_close`, then `browser_remote_allocations` with `operation: list`.
+11. Call `browser_close`, then `browser_remote_allocations` with `operation: list`.
 
     Result: The allocation of this session is not `in_use`.
 
-11. Do steps 1 to 10 again with the iOS Chrome target.
+12. Do steps 1 to 11 again with the iOS Chrome target.
 
     Result: Every result is the same.
 
@@ -121,10 +138,10 @@ bound covers the whole evaluation.
 
    Result: The provider confirms a physical device.
 
-2. Do steps 2 to 7 of RIE-IOS.
+2. Do steps 2 to 8 of RIE-IOS.
 
-   Result: Every result is the same. The rejection in step 6 comes from the
-   driver as `javascript_error`.
+   Result: Every result is the same. The rejections in steps 6 and 7 come from
+   the driver as `javascript_error`.
 
 3. Call `browser_close`, then `browser_remote_allocations` with `operation: list`.
 
@@ -141,7 +158,7 @@ bound covers the whole evaluation.
    Result: The tests pass. `a_reported_script_bound_keeps_the_plain_sync_script`
    passes, so a driver that reports its bound gets the unchanged script.
 
-2. Do steps 2 to 7 of RIE-IOS on one local panel with `browser_evaluate`.
+2. Do steps 2 to 8 of RIE-IOS on one local panel with `browser_evaluate`.
 
    Result: Every result is the same.
 

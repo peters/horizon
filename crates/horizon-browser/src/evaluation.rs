@@ -70,7 +70,9 @@ enum ScriptBaseline {
 impl ScriptBaseline {
     fn read(response: &Value) -> Self {
         match response.pointer("/value/script") {
-            Some(script) if script.is_number() => Self::Reported(script.clone()),
+            // `null` is the `WebDriver` setting for "no limit", so it is a
+            // reported value that goes back as it came.
+            Some(script) if script.is_number() || script.is_null() => Self::Reported(script.clone()),
             _ => Self::Unreported,
         }
     }
@@ -105,6 +107,16 @@ impl ScriptBaseline {
 /// `execute/sync` call to the `execute/async` call that awaits it.
 const PENDING_PROMISE_GLOBAL: &str = "__horizonPendingPromise";
 
+/// The expression placeholder of the page scripts below.
+const EXPRESSION_PLACEHOLDER: &str = "__HORIZON_EXPRESSION__";
+
+/// `execute/sync` script that keeps a returned thenable for the await call.
+/// `scripts/browser-smoke/evaluation_handshake.test.cjs` runs it in a page.
+const SYNC_SCRIPT: &str = include_str!("evaluation_sync.js");
+
+/// `execute/async` script that settles the promise the sync call kept.
+const AWAIT_SCRIPT: &str = include_str!("evaluation_await.js");
+
 /// What one evaluation answer carries. The page wraps its answer so a pending
 /// promise cannot be mistaken for an empty object.
 enum EvaluationAnswer {
@@ -115,8 +127,12 @@ enum EvaluationAnswer {
 }
 
 fn evaluation_answer(value: &Value) -> Result<EvaluationAnswer, BrowserControlFailure> {
-    if let Some(settled) = value.get("horizonValue") {
-        return Ok(EvaluationAnswer::Settled(settled.clone()));
+    // The marker, not the value, says that the page settled: a driver that drops
+    // a `null` member must not turn a settled `undefined` into a failure.
+    if value.get("horizonSettled").is_some_and(Value::is_boolean) {
+        return Ok(EvaluationAnswer::Settled(
+            value.get("horizonValue").cloned().unwrap_or(Value::Null),
+        ));
     }
     if value.get("horizonPending").is_some_and(Value::is_boolean) {
         return Ok(EvaluationAnswer::Pending);
@@ -128,6 +144,12 @@ fn evaluation_answer(value: &Value) -> Result<EvaluationAnswer, BrowserControlFa
     }
     if value.get("horizonLost").is_some_and(Value::is_boolean) {
         return Ok(EvaluationAnswer::Lost);
+    }
+    if value.get("horizonUnstorable").is_some_and(Value::is_boolean) {
+        return Err(BrowserControlFailure::new(
+            "javascript_error",
+            "the page kept its own promise global, so the evaluation promise could not be kept",
+        ));
     }
     Err(BrowserControlFailure::new(
         "invalid_result",
@@ -143,33 +165,7 @@ fn sync_script(expression: &str, handshake: bool) -> String {
     if !handshake {
         return format!("return ({expression});");
     }
-    format!(
-        "const value = ({expression});\
-         if (value && typeof value.then === 'function') {{\
-           window.{PENDING_PROMISE_GLOBAL} = value;\
-           return {{horizonPending: true}};\
-         }}\
-         return {{horizonValue: value === undefined ? null : value}};"
-    )
-}
-
-/// `execute/async` script that settles the promise the `execute/sync` call kept.
-/// The driver bounds it with the session script timeout this evaluation set, so
-/// the caller deadline governs it too.
-fn async_script() -> String {
-    format!(
-        "const done = arguments[arguments.length - 1];\
-         const pending = window.{PENDING_PROMISE_GLOBAL};\
-         delete window.{PENDING_PROMISE_GLOBAL};\
-         if (pending === undefined) {{\
-           done({{horizonLost: true}});\
-           return;\
-         }}\
-         Promise.resolve(pending).then(\
-           (value) => done({{horizonValue: value === undefined ? null : value}}),\
-           (error) => done({{horizonRejected: String(error && error.message ? error.message : error)}})\
-         );"
-    )
+    SYNC_SCRIPT.replace(EXPRESSION_PLACEHOLDER, expression)
 }
 
 /// One evaluation under the session's bound, with the promise handshake when
@@ -196,7 +192,7 @@ fn evaluate_with_handshake(
     }
     let awaited = command(
         "execute/async",
-        Some(&json!({"script": async_script(), "args": []})),
+        Some(&json!({"script": AWAIT_SCRIPT, "args": []})),
         deadline.remaining()?,
     )?;
     let settled = awaited.get("value").cloned().ok_or_else(missing)?;
@@ -407,20 +403,54 @@ mod tests {
     }
 
     #[test]
-    fn only_a_reported_number_is_restored() {
-        assert!(matches!(
-            ScriptBaseline::read(&json!({"value":{"script":30_000}})),
-            ScriptBaseline::Reported(_)
-        ));
+    fn only_a_reported_number_or_null_is_restored() {
+        for reported in [
+            json!({"value":{"script":30_000}}),
+            json!({"value":{"script":30_000.0}}),
+            // `null` is the `WebDriver` setting for "no limit".
+            json!({"value":{"script":null}}),
+        ] {
+            assert!(matches!(ScriptBaseline::read(&reported), ScriptBaseline::Reported(_)));
+        }
         for unreported in [
             json!({"value":{"command":60,"implicit":0}}),
-            json!({"value":{"script":null}}),
             json!({"value":{"script":"30000"}}),
+            json!({"value":{"script":false}}),
             json!({"value":null}),
             json!({}),
         ] {
             assert!(matches!(ScriptBaseline::read(&unreported), ScriptBaseline::Unreported));
         }
+    }
+
+    #[test]
+    fn a_reported_null_bound_is_restored_as_null() {
+        let deadline = EvaluationDeadline::new(&request(), Some(20_000));
+        let mut calls = Vec::new();
+        let value = evaluate_classic(
+            |path, body, _| {
+                calls.push((path.to_string(), body.cloned()));
+                Ok(if body.is_none() {
+                    json!({"value":{"script":null}})
+                } else if path == "execute/sync" {
+                    json!({"value":"plain"})
+                } else {
+                    json!({"value":null})
+                })
+            },
+            "true",
+            &deadline,
+        )
+        .expect("evaluated");
+        assert_eq!(value, json!("plain"));
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[2].0, "execute/sync");
+        assert_eq!(
+            calls[2].1.as_ref().expect("body")["script"].as_str().expect("script"),
+            "return (true);",
+            "a driver that reports a bound keeps the plain script"
+        );
+        assert_eq!(calls[3].1, Some(json!({"script":null})));
     }
 
     #[test]
@@ -434,7 +464,7 @@ mod tests {
                     // The answer `Appium`'s base driver gives: no `script`.
                     json!({"value":{"command":60,"implicit":0}})
                 } else if path == "execute/sync" {
-                    json!({"value":{"horizonValue":{"answer":42}}})
+                    json!({"value":{"horizonSettled":true,"horizonValue":{"answer":42}}})
                 } else {
                     json!({"value":null})
                 })
@@ -497,7 +527,7 @@ mod tests {
                 } else if path == "execute/sync" {
                     json!({"value":{"horizonPending":true}})
                 } else if path == "execute/async" {
-                    json!({"value":{"horizonValue":7}})
+                    json!({"value":{"horizonSettled":true,"horizonValue":7}})
                 } else {
                     json!({"value":null})
                 })
@@ -525,6 +555,51 @@ mod tests {
             Some(json!({"script": ESTABLISHED_SCRIPT_TIMEOUT_MILLIS})),
             "the session bound is established after the await too"
         );
+    }
+
+    #[test]
+    fn a_settled_answer_does_not_need_a_value_member() {
+        let deadline = EvaluationDeadline::new(&request(), Some(20_000));
+        let value = evaluate_classic(
+            |path, body, _| {
+                Ok(if body.is_none() {
+                    json!({"value":{"command":60,"implicit":0}})
+                } else if path == "execute/sync" {
+                    // A driver that drops the `null` member still settled the answer.
+                    json!({"value":{"horizonSettled":true}})
+                } else {
+                    json!({"value":null})
+                })
+            },
+            "undefined",
+            &deadline,
+        )
+        .expect("a settled answer");
+        assert_eq!(value, Value::Null);
+    }
+
+    #[test]
+    fn a_page_that_keeps_the_promise_global_fails_typed() {
+        let deadline = EvaluationDeadline::new(&request(), Some(20_000));
+        let mut calls = Vec::new();
+        let error = evaluate_classic(
+            |path, body, _| {
+                calls.push(path.to_string());
+                Ok(if body.is_none() {
+                    json!({"value":{"command":60,"implicit":0}})
+                } else if path == "execute/sync" {
+                    json!({"value":{"horizonUnstorable":true}})
+                } else {
+                    json!({"value":null})
+                })
+            },
+            "Promise.resolve(5)",
+            &deadline,
+        )
+        .expect_err("the promise could not be kept");
+        assert_eq!(error.code, "javascript_error");
+        assert!(error.message.contains("promise"));
+        assert!(!calls.contains(&"execute/async".to_string()), "nothing was awaited");
     }
 
     #[test]
@@ -610,7 +685,7 @@ mod tests {
                 if body.is_none() {
                     Ok(json!({"value":{"command":60,"implicit":0}}))
                 } else if path == "execute/sync" {
-                    Ok(json!({"value":{"horizonValue":42}}))
+                    Ok(json!({"value":{"horizonSettled":true,"horizonValue":42}}))
                 } else if body == Some(&json!({"script": ESTABLISHED_SCRIPT_TIMEOUT_MILLIS})) {
                     Err(BrowserControlFailure::new("javascript_error", "write failed"))
                 } else {
