@@ -233,7 +233,7 @@ mod tests {
             let value = match (method, suffix) {
                 ("GET", "timeouts") => json!({"command":60,"implicit":0}),
                 ("POST", "execute/sync") => json!({"horizonPending":true}),
-                ("POST", "execute/async") => json!({"horizonValue":42}),
+                ("POST", "execute/async") => json!({"horizonSettled":true,"horizonValue":42}),
                 ("POST", "timeouts") => Value::Null,
                 _ => return Err(HttpError::InvalidResponse(format!("unscripted {method} {path}"))),
             };

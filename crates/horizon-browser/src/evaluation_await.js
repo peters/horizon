@@ -1,7 +1,7 @@
 const done = arguments[arguments.length - 1];
-const pending = window.__horizonPendingPromise;
+const pending = window.__HORIZON_GLOBAL__;
 try {
-  delete window.__horizonPendingPromise;
+  delete window.__HORIZON_GLOBAL__;
 } catch (_) {
   // The answer is below either way.
 }

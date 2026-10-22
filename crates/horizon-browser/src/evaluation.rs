@@ -110,12 +110,25 @@ const PENDING_PROMISE_GLOBAL: &str = "__horizonPendingPromise";
 /// The expression placeholder of the page scripts below.
 const EXPRESSION_PLACEHOLDER: &str = "__HORIZON_EXPRESSION__";
 
+/// The promise-global placeholder of the page scripts below.
+const GLOBAL_PLACEHOLDER: &str = "__HORIZON_GLOBAL__";
+
 /// `execute/sync` script that keeps a returned thenable for the await call.
 /// `scripts/browser-smoke/evaluation_handshake.test.cjs` runs it in a page.
 const SYNC_SCRIPT: &str = include_str!("evaluation_sync.js");
 
 /// `execute/async` script that settles the promise the sync call kept.
 const AWAIT_SCRIPT: &str = include_str!("evaluation_await.js");
+
+/// Names the page global that the promise handshake uses.
+fn page_global(script: &str) -> String {
+    script.replace(GLOBAL_PLACEHOLDER, PENDING_PROMISE_GLOBAL)
+}
+
+/// The `execute/async` script with its placeholder named.
+fn await_script() -> String {
+    page_global(AWAIT_SCRIPT)
+}
 
 /// What one evaluation answer carries. The page wraps its answer so a pending
 /// promise cannot be mistaken for an empty object.
@@ -165,7 +178,7 @@ fn sync_script(expression: &str, handshake: bool) -> String {
     if !handshake {
         return format!("return ({expression});");
     }
-    SYNC_SCRIPT.replace(EXPRESSION_PLACEHOLDER, expression)
+    page_global(&SYNC_SCRIPT.replace(EXPRESSION_PLACEHOLDER, expression))
 }
 
 /// One evaluation under the session's bound, with the promise handshake when
@@ -192,7 +205,7 @@ fn evaluate_with_handshake(
     }
     let awaited = command(
         "execute/async",
-        Some(&json!({"script": AWAIT_SCRIPT, "args": []})),
+        Some(&json!({"script": await_script(), "args": []})),
         deadline.remaining()?,
     )?;
     let settled = awaited.get("value").cloned().ok_or_else(missing)?;

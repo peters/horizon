@@ -1,5 +1,5 @@
 try {
-  delete window.__horizonPendingPromise;
+  delete window.__HORIZON_GLOBAL__;
 } catch (_) {
   // A page cannot keep an older promise for this evaluation.
 }

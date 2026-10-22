@@ -8,6 +8,7 @@ const source = path.join(__dirname, '../../crates/horizon-browser/src');
 const syncTemplate = fs.readFileSync(path.join(source, 'evaluation_sync.js'), 'utf8');
 const awaitScript = fs.readFileSync(path.join(source, 'evaluation_await.js'), 'utf8');
 const placeholder = '__HORIZON_EXPRESSION__';
+const globalPlaceholder = '__HORIZON_GLOBAL__';
 
 function plain(value) {
     return JSON.parse(JSON.stringify(value));
@@ -21,12 +22,15 @@ function page(extra = {}) {
         window,
         window_global: () => window[globalName],
         evaluate(expression) {
-            const script = syncTemplate.replace(placeholder, expression);
+            const script = syncTemplate
+                .replace(placeholder, expression)
+                .replaceAll(globalPlaceholder, globalName);
             const run = vm.runInNewContext(`(function () {${script}})`, sandbox);
             return run();
         },
         async settle(waited) {
-            const run = vm.runInNewContext(`(function () {${awaitScript}})`, sandbox);
+            const script = awaitScript.replaceAll(globalPlaceholder, globalName);
+            const run = vm.runInNewContext(`(function () {${script}})`, sandbox);
             let answer;
             await run((value) => {
                 answer = value;
@@ -112,7 +116,7 @@ test('the scripts keep the page global the Rust side names', () => {
     const rust = fs.readFileSync(path.join(source, 'evaluation.rs'), 'utf8');
     const declared = rust.match(/const PENDING_PROMISE_GLOBAL: &str = "([^"]+)";/)[1];
     assert.equal(declared, globalName);
-    assert.ok(syncTemplate.includes(globalName));
-    assert.ok(awaitScript.includes(globalName));
+    assert.ok(syncTemplate.includes(globalPlaceholder));
+    assert.ok(awaitScript.includes(globalPlaceholder));
     assert.ok(syncTemplate.includes(placeholder), 'the sync script keeps its expression placeholder');
 });
