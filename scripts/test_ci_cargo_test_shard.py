@@ -17,6 +17,8 @@ FEATURES = (
     "horizon-cloud/exposure-firewall,horizon-core/one-service-gateway,"
     "horizon-core/cloud-exposure,horizon-chromecast/encoder"
 )
+# The shipped horizon-cloud build, without an opt-in feature.
+DEFAULT_CLOUD = "cargo test --locked -p horizon-cloud"
 BUILD = f"cargo test --locked --workspace --exclude horizon-ui --no-run --features {FEATURES}"
 WORKSPACE = f"cargo test --locked --workspace --exclude horizon-ui --features {FEATURES}"
 EXAMPLE = (
@@ -62,7 +64,7 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(ui.returncode, 0, ui.stderr)
         self.assertEqual(libs.returncode, 0, libs.stderr)
         self.assertEqual(ui.stdout.splitlines(), ["cargo test --locked -p horizon-ui"])
-        self.assertEqual(libs.stdout.splitlines(), [BUILD, WORKSPACE, EXAMPLE])
+        self.assertEqual(libs.stdout.splitlines(), [DEFAULT_CLOUD, BUILD, WORKSPACE, EXAMPLE])
 
     def test_cloud_gateway_and_encoder_features_build_once_on_each_platform(self):
         for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
@@ -77,6 +79,17 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertNotIn("-p horizon-core --lib --features", result.stdout)
                 self.assertNotIn("-p horizon-cloud --features", result.stdout)
                 self.assertNotIn("-p horizon-chromecast --features", result.stdout)
+
+    def test_shipped_horizon_cloud_build_keeps_its_own_run(self):
+        # One horizon-cloud test asserts the default-build behaviour that
+        # exposure-firewall changes, so the feature build cannot replace it.
+        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
+            with self.subTest(shard=shard, runner_os=runner_os):
+                result = shard_commands(shard, runner_os)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.splitlines()
+                self.assertEqual(lines.count(DEFAULT_CLOUD), 1)
+                self.assertLess(lines.index(DEFAULT_CLOUD), lines.index(BUILD))
 
     def test_cloud_deploy_example_runs_once_on_each_platform(self):
         command = "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths"
@@ -202,12 +215,18 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
                     result.stdout.splitlines(),
-                    [BUILD, WORKSPACE, EXAMPLE, "cargo test --locked -p horizon-ui --features speech"],
+                    [
+                        DEFAULT_CLOUD,
+                        BUILD,
+                        WORKSPACE,
+                        EXAMPLE,
+                        "cargo test --locked -p horizon-ui --features speech",
+                    ],
                 )
 
     def test_all_runs_every_shard_and_fails_when_one_fails(self):
         for failing_flag in [
-            "--exclude horizon-ui --no-run",
+            "-p horizon-cloud",
             f"--exclude horizon-ui --features {FEATURES}",
             "--example cloud_deploy",
         ]:
@@ -235,6 +254,7 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(
                     calls,
                     [
+                        DEFAULT_CLOUD.removeprefix("cargo "),
                         BUILD.removeprefix("cargo "),
                         WORKSPACE.removeprefix("cargo "),
                         EXAMPLE.removeprefix("cargo "),

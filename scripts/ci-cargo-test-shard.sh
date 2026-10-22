@@ -29,6 +29,9 @@ run_ui() {
 # The opt-in features that change no behaviour of another lane, so one build
 # covers each of those lanes. exposure-gate is not here: two
 # trusted_tcp_producer tests fail when it is on, so its lane keeps its build.
+# exposure-firewall is here for the feature build; the default build of
+# horizon-cloud also keeps its own run, because one test asserts the behaviour
+# that the feature changes.
 libs_features() {
     printf '%s' "horizon-cloud/exposure-firewall,horizon-core/one-service-gateway,horizon-core/cloud-exposure,horizon-chromecast/encoder"
 }
@@ -38,14 +41,17 @@ libs_features() {
 run_libs() {
     local status=0 features
     features="$(libs_features)"
-    # One build for the cloud, gateway and encoder lanes. Their own builds used
-    # to rebuild horizon-core and its dependents for each lane, which cost more
-    # than the tests themselves. Every later invocation repeats this package
-    # selection and this feature list: cargo resolves features per selection, so
-    # a `-p` selection after a `--workspace` build rebuilds every crate.
+    # The shipped configuration first, with no opt-in feature. One horizon-cloud
+    # test asserts that the default build accepts an unknown firewall attachment
+    # field, and that assertion cannot run in the feature build below.
+    run_cargo test --locked -p horizon-cloud || status=$?
+    # One build for the gateway and encoder lanes, plus the exposure-firewall
+    # lane of horizon-cloud. Their own builds used to rebuild horizon-core and
+    # its dependents for each lane, which cost more than the tests themselves.
+    # Every later invocation repeats this package selection and this feature
+    # list: cargo resolves features per selection, so a `-p` selection after a
+    # `--workspace` build rebuilds every crate.
     run_cargo test --locked --workspace --exclude horizon-ui --no-run --features "$features" || status=$?
-    # This run covers the exposure-firewall, gateway, owner-custody and encoder
-    # tests, which each had a lane of their own.
     run_cargo test --locked --workspace --exclude horizon-ui --features "$features" || status=$?
     # The original Unix/FD producer is a default-off Linux Worker component. Its
     # two lanes keep their own builds, because exposure-gate changes the
