@@ -12,6 +12,26 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci-cargo-test-shard.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
+# The opt-in features of the cloud, gateway and encoder lanes build together.
+FEATURES = (
+    "horizon-cloud/exposure-firewall,horizon-core/one-service-gateway,"
+    "horizon-core/cloud-exposure,horizon-chromecast/encoder"
+)
+BUILD = f"cargo test --locked --workspace --exclude horizon-ui --no-run --features {FEATURES}"
+WORKSPACE = f"cargo test --locked --workspace --exclude horizon-ui --features {FEATURES}"
+EXAMPLE = (
+    "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
+    "tests::malformed_selection_arguments_never_create_cloud_paths"
+)
+PRODUCER = (
+    "cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer "
+    "trusted_tcp_producer::"
+)
+GATE = (
+    "cargo test --locked -p horizon-cloud-worker --features trusted-exposure-gate "
+    "exposure_gate::"
+)
+
 
 def shard_commands(shard, runner_os, *, ref="", cache_hit=""):
     env = os.environ.copy()
@@ -42,41 +62,21 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(ui.returncode, 0, ui.stderr)
         self.assertEqual(libs.returncode, 0, libs.stderr)
         self.assertEqual(ui.stdout.splitlines(), ["cargo test --locked -p horizon-ui"])
-        self.assertEqual(
-            libs.stdout.splitlines(),
-            [
-                "cargo test --locked -p horizon-cloud --features exposure-firewall",
-                "cargo test --locked --workspace --exclude horizon-ui",
-                "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
-                "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
-                "cargo test --locked -p horizon-chromecast --features encoder",
-                "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
-            ],
-        )
+        self.assertEqual(libs.stdout.splitlines(), [BUILD, WORKSPACE, EXAMPLE])
 
-    def test_enabled_firewall_sdk_runs_once_on_each_platform(self):
-        command = "cargo test --locked -p horizon-cloud --features exposure-firewall"
+    def test_cloud_gateway_and_encoder_features_build_once_on_each_platform(self):
         for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines().count(command), 1)
-
-    def test_enabled_gateway_contract_runs_once_on_each_platform(self):
-        command = "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::"
-        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
-            with self.subTest(shard=shard, runner_os=runner_os):
-                result = shard_commands(shard, runner_os)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines().count(command), 1)
-
-    def test_enabled_owner_custody_runs_once_on_each_platform(self):
-        command = "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::"
-        for shard, runner_os in [("libs", "Linux"), ("all", "macOS"), ("libs", "Windows")]:
-            with self.subTest(shard=shard, runner_os=runner_os):
-                result = shard_commands(shard, runner_os)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines().count(command), 1)
+                lines = result.stdout.splitlines()
+                self.assertEqual(lines.count(BUILD), 1)
+                self.assertEqual(lines.count(WORKSPACE), 1)
+                # A per-lane build of one package would rebuild every crate, so
+                # no lane may name these features outside the workspace run.
+                self.assertNotIn("-p horizon-core --lib --features", result.stdout)
+                self.assertNotIn("-p horizon-cloud --features", result.stdout)
+                self.assertNotIn("-p horizon-chromecast --features", result.stdout)
 
     def test_cloud_deploy_example_runs_once_on_each_platform(self):
         command = "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths"
@@ -120,8 +120,9 @@ class ShardCommandTests(unittest.TestCase):
         self.assertIn("Failed CI test shards: libs", result.stderr)
         self.assertEqual(calls.count("test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer::"), 1)
         self.assertEqual(calls[-3:], [
-            "test --locked -p horizon-chromecast --features encoder",
-            "test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
+            "test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate::",
+            "test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
+            "tests::malformed_selection_arguments_never_create_cloud_paths",
             "test --locked -p horizon-ui --features speech",
         ])
 
@@ -157,8 +158,7 @@ class ShardCommandTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Failed CI test shards: libs", result.stderr)
         self.assertEqual(calls.count("test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate::"), 1)
-        self.assertEqual(calls[-3:], [
-            "test --locked -p horizon-chromecast --features encoder",
+        self.assertEqual(calls[-2:], [
             "test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
             "tests::malformed_selection_arguments_never_create_cloud_paths",
             "test --locked -p horizon-ui --features speech",
@@ -202,23 +202,13 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
                     result.stdout.splitlines(),
-                    [
-                        "cargo test --locked -p horizon-cloud --features exposure-firewall",
-                        "cargo test --locked --workspace --exclude horizon-ui",
-                        "cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
-                        "cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
-                        "cargo test --locked -p horizon-chromecast --features encoder",
-                        "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
-                        "cargo test --locked -p horizon-ui --features speech",
-                    ],
+                    [BUILD, WORKSPACE, EXAMPLE, "cargo test --locked -p horizon-ui --features speech"],
                 )
 
     def test_all_runs_every_shard_and_fails_when_one_fails(self):
         for failing_flag in [
-            "--features exposure-firewall",
-            "--exclude horizon-ui",
-            "--features one-service-gateway cloud_runtime::local_network::",
-            "--features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
+            "--exclude horizon-ui --no-run",
+            f"--exclude horizon-ui --features {FEATURES}",
             "--example cloud_deploy",
         ]:
             with self.subTest(failing_flag=failing_flag):
@@ -245,12 +235,9 @@ class ShardCommandTests(unittest.TestCase):
                 self.assertEqual(
                     calls,
                     [
-                        "test --locked -p horizon-cloud --features exposure-firewall",
-                        "test --locked --workspace --exclude horizon-ui",
-                        "test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network::",
-                        "test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody::",
-                        "test --locked -p horizon-chromecast --features encoder",
-                        "test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths",
+                        BUILD.removeprefix("cargo "),
+                        WORKSPACE.removeprefix("cargo "),
+                        EXAMPLE.removeprefix("cargo "),
                         "test --locked -p horizon-ui --features speech",
                     ],
                 )
