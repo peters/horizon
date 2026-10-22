@@ -111,6 +111,8 @@ crates/
 ### Validation by changed inputs
 
 - During development, run the regression tests and checks that the change affects. Fix related findings together before another push.
+- Run one crate and one module while you develop: `python3 scripts/test-focus.py` derives that selection from the changed paths, and `--print` shows the commands without running them. A whole workspace run builds the UI stack and runs every test in the workspace, which takes minutes; keep it for the candidate head.
+- Keep a test fast enough for that loop. `scripts/test-focus.py` uses `cargo nextest` when it is installed (`cargo install cargo-nextest --locked`), and `.config/nextest.toml` names every test above 20 seconds. nextest runs the focused suites about three times faster than libtest and lists the slow tests, so a named slow test is a finding for its author, not a property of the machine.
 - Before the PR opens, run the full local matrix below once on the stable candidate, except for documentation-only changes.
 - For documentation-only changes, run the applicable repository and documentation checks. Rust tests, Clippy and UI smoke are unnecessary for prose-only edits.
   Examine changed examples and commands separately. Test them when the edit changes their behavior.
