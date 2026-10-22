@@ -233,12 +233,16 @@ PATH_ATTRIBUTE = re.compile(
 )
 
 
-def declaring_module(crate: Path, path: Path) -> str | None:
+def declaring_module(crate: Path, path: Path, depth: int = 0) -> str | None:
     """Return the filter of a module that a `#[path]` attribute declares.
 
     The declaring file is a neighbour of the changed file or of one of its
     ancestor directories, which is where a `tests/` tree keeps its siblings.
+    A declaring file can itself be loaded through `#[path]`, so its own name is
+    resolved the same way before the declared name is appended.
     """
+    if depth > 4:
+        return None
     source = crate / "src"
     directory = path.parent
     while source == directory or source in directory.parents:
@@ -252,9 +256,12 @@ def declaring_module(crate: Path, path: Path) -> str | None:
             for relative, name in PATH_ATTRIBUTE.findall(text):
                 if (candidate.parent / relative).resolve() != path.resolve():
                     continue
-                module = module_filter(candidate.relative_to(crate))
-                if module is not None:
-                    return f"{module}{name}::"
+                outer = declaring_module(crate, candidate, depth + 1)
+                if outer is None:
+                    # None also means a crate root, which declares a
+                    # top-level module.
+                    outer = module_filter(candidate.relative_to(crate)) or ""
+                return f"{outer}{name}::"
         if directory == source:
             return None
         directory = directory.parent

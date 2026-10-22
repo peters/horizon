@@ -257,12 +257,16 @@ class PathAttributeTests(unittest.TestCase):
                 "src/endpoint/tests/tailnet.rs",
                 "src/relay.rs",
                 "src/tests/unix_relay.rs",
+                "src/tests/budgets.rs",
+                "src/tests/graceful.rs",
+                "src/moved.rs",
                 "src/board/mod.rs",
             ],
         )
         source = self.crate / "src"
         (source / "lib.rs").write_text(
-            "pub mod endpoint;\npub mod board;\n", encoding="utf-8"
+            'pub mod endpoint;\npub mod board;\n#[path = "moved.rs"]\nmod video;\n',
+            encoding="utf-8",
         )
         (source / "endpoint.rs").write_text("pub mod tailnet;\n", encoding="utf-8")
         (source / "endpoint" / "tailnet.rs").write_text(
@@ -270,7 +274,12 @@ class PathAttributeTests(unittest.TestCase):
             encoding="utf-8",
         )
         (source / "relay.rs").write_text(
-            '#[path = "tests/unix_relay.rs"]\nmod unix_tests;\n', encoding="utf-8"
+            '#[path = "tests/unix_relay.rs"]\nmod unix_tests;\n'
+            '#[path = "tests/budgets.rs"]\nmod tests;\n',
+            encoding="utf-8",
+        )
+        (source / "tests" / "budgets.rs").write_text(
+            '#[path = "graceful.rs"]\nmod graceful;\n', encoding="utf-8"
         )
 
     def tearDown(self):
@@ -289,6 +298,18 @@ class PathAttributeTests(unittest.TestCase):
         self.assertEqual(
             self.select("crates/demo/src/tests/unix_relay.rs"),
             focus.Selection("demo", ("lib", None), ("relay::unix_tests::",)),
+        )
+
+    def test_a_path_attribute_in_a_crate_root_names_a_top_level_module(self):
+        self.assertEqual(
+            self.select("crates/demo/src/moved.rs"),
+            focus.Selection("demo", ("lib", None), ("video::",)),
+        )
+
+    def test_a_chain_of_path_attributes_keeps_every_declaring_module(self):
+        self.assertEqual(
+            self.select("crates/demo/src/tests/graceful.rs"),
+            focus.Selection("demo", ("lib", None), ("relay::tests::graceful::",)),
         )
 
     def test_a_file_without_a_path_attribute_keeps_its_place(self):
