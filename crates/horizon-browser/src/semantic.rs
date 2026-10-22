@@ -368,7 +368,7 @@ fn valid_bounds(bounds: &BrowserBounds) -> bool {
         && bounds.height >= 0.0
 }
 
-fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
+pub(crate) fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value;
     }

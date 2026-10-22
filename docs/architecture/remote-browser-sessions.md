@@ -444,6 +444,48 @@ iOS, where the screenshot is the whole screen. The offset is calibrated once
 per session from a known element rect and re-derived after orientation or
 keyboard changes. The physical device is never resized because the panel is.
 
+## Evaluation contract
+
+`browser_evaluate` sends one caller bound to both the page and the transport.
+The bound covers queue time, every command and the time a returned promise
+needs to settle. Expiry is the typed `evaluation_timeout`.
+
+Classic `WebDriver` bounds a returned promise with the session script timeout,
+so one evaluation sets that timeout to its own remaining bound. The setting of
+the session afterwards depends on what the driver reports:
+
+- A driver that reports `script` in `GET timeouts` is the normal case. The prior
+  value goes back after the evaluation, including `null`, which is the
+  `WebDriver` setting for no limit.
+- Some drivers report no script timeout. `Appium`'s base driver answers with
+  only `command` and `implicit`, and the iOS driver supports setting the value
+  but not reading it. Horizon does not guess or claim to restore a value it did
+  not read. It establishes the `WebDriver` default of 30 s for that session
+  after each evaluation. A failed write is `evaluation_restore_failed` when the
+  evaluation itself succeeded; after a failed evaluation the write failure is
+  appended to that typed failure, which keeps its own code.
+- The same drivers do not await a returned promise in `execute/sync`: they
+  serialize the pending promise as an empty object. For those sessions the page
+  keeps the returned promise under one private global, the `execute/sync` call
+  answers with a pending marker, and one bounded `execute/async` call settles it.
+  The expression runs once, in its own statement, so it still sees the page's own
+  globals and its own `this`. A rejection is the typed `javascript_error` with the
+  rejection text; a document that is replaced before the promise settles is a
+  typed `javascript_error`; a promise that does not settle ends as
+  `evaluation_timeout`. Every answer carries a settled marker, so a driver that
+  drops a `null` member does not turn a settled `undefined` into a failure.
+
+A driver that reports a script timeout keeps the plain `execute/sync` script,
+because it awaits the promise itself. Page content, page globals and script
+results are untrusted input: Horizon never interprets a page value as an
+instruction. Each evaluation removes the private global before it runs the
+expression and after it settles, and a page that keeps that name for itself
+gives a typed `javascript_error` instead of another promise.
+
+The permanent [test procedure](../testing/procedures/remote-ios-evaluation.md)
+covers the promise cases, the deadlines, the cleanup and the desktop and Android
+regressions.
+
 ## Failure outcomes
 
 Every user-facing failure is typed and redacted:
