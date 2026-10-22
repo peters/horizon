@@ -39,11 +39,21 @@ class PresetsConfigTests(unittest.TestCase):
     def test_a_resume_mode_horizon_rejects_stops_the_fixture_before_it_starts(self):
         # Horizon starts with its own defaults when its config does not load, so the
         # fixture must not hand it a file whose presets it refuses.
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'presets.json'
-            path.write_text(json.dumps([{**PI_AND_VARIANT[0], 'resume': 'default'}]))
-            with self.assertRaisesRegex(ValueError, 'resume must be one of'):
-                serve.load_presets(path)
+        for resume in ('default', 'session', {'session': 'abc'}, {'session': {}}):
+            with self.subTest(resume=resume), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'presets.json'
+                path.write_text(json.dumps([{**PI_AND_VARIANT[0], 'resume': resume}]))
+                with self.assertRaises(ValueError):
+                    serve.load_presets(path)
+
+    def test_the_resume_modes_horizon_reads_are_accepted(self):
+        # `fresh` and `last` are the renamed unit variants; `session` keeps a session id
+        # and needs the map form.
+        for resume in ('fresh', 'last', {'session': {'session_id': 'abc'}}):
+            with self.subTest(resume=resume), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'presets.json'
+                path.write_text(json.dumps([{**PI_AND_VARIANT[0], 'resume': resume}]))
+                self.assertEqual(len(serve.load_presets(path)), 1)
 
     def test_a_checked_list_is_returned_unchanged(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -95,10 +95,12 @@ Horizon. The fixture replaces only the menu: it does not add a login, a
 credential or another program.
 
 The fixture checks the file before it starts Horizon. A preset without a `name`
-or `kind`, and a `resume` value other than `fresh`, `last` or `session`, stop the
-fixture with an error. Horizon itself starts with its own defaults when a
-configuration does not load, and an unchecked file would then show an empty
-board instead of the presets of the test.
+or `kind` stops the fixture with an error. So does a `resume` value that Horizon
+does not read: it accepts `fresh`, `last`, or the map form
+`{"session": {"session_id": "<id>"}}`, and not the plain string `session`.
+Horizon itself starts with its own defaults when a configuration does not load,
+and an unchecked file would then show an empty board instead of the presets of
+the test.
 
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The

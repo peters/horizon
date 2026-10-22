@@ -39,7 +39,28 @@ with socket.socket() as listener:
 """
 
 
-PRESET_RESUME_MODES = ('fresh', 'last', 'session')
+PRESET_RESUME_MODES = ('fresh', 'last')
+
+
+def presets_resume_error(index, resume):
+    """Why a `resume` value of a preset is not one that Horizon reads, or None.
+
+    `PanelResume` renames its unit variants to `fresh` and `last`, and its `session`
+    variant keeps a session id, so only the map form `{"session": {"session_id": …}}`
+    loads.
+    """
+    if resume is None or resume in PRESET_RESUME_MODES:
+        return None
+    if isinstance(resume, dict) and list(resume) == ['session']:
+        session = resume['session']
+        session_id = session.get('session_id') if isinstance(session, dict) else None
+        if isinstance(session_id, str) and session_id:
+            return None
+        return f'presets[{index}].resume.session needs a session_id'
+    modes = ', '.join(PRESET_RESUME_MODES)
+    return (
+        f'presets[{index}].resume must be {modes}, or '
+        f'{{"session": {{"session_id": "<id>"}}}}; received {resume!r}')
 
 
 def load_presets(path):
@@ -51,15 +72,12 @@ def load_presets(path):
     presets = json.loads(path.read_text())
     if not isinstance(presets, list):
         raise ValueError(f'{path}: the presets must be a JSON list of presets')
-    modes = ', '.join(PRESET_RESUME_MODES)
     for index, preset in enumerate(presets):
         if not isinstance(preset, dict) or not preset.get('name') or not preset.get('kind'):
             raise ValueError(f'{path}: presets[{index}] needs a name and a kind')
-        resume = preset.get('resume')
-        if resume is not None and resume not in PRESET_RESUME_MODES:
-            raise ValueError(
-                f'{path}: presets[{index}].resume must be one of '
-                f'{modes}; received {resume!r}')
+        problem = presets_resume_error(index, preset.get('resume'))
+        if problem:
+            raise ValueError(f'{path}: {problem}')
     return presets
 
 

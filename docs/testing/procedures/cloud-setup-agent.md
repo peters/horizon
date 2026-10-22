@@ -637,9 +637,9 @@ checked on the cloud card, and an agent panel in the same workspace.
    [fixture guide](../../../scripts/device-smoke/README.md) shows.
 
    The fixture stops with an error when a preset has no name or kind, or when a
-   `resume` value is not `fresh`, `last` or `session`. An empty board with
-   **Workspace 1** in place of the fixture workspace means that Horizon did not
-   load the configuration; correct the file and start again.
+   `resume` value is not `fresh`, `last` or `{"session": {"session_id": "<id>"}}`.
+   An empty board with **Workspace 1** in place of the fixture workspace means
+   that Horizon did not load the configuration; correct the file and start again.
 
    Result: Horizon opens with a New Workspace menu that holds both presets.
 
