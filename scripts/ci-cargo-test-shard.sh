@@ -26,24 +26,40 @@ run_ui() {
     run_cargo test --locked -p horizon-ui
 }
 
+# The opt-in features that change no behaviour of another lane, so one build
+# covers each of those lanes. exposure-gate is not here: two
+# trusted_tcp_producer tests fail when it is on, so its lane keeps its build.
+# exposure-firewall is here for the feature build; the default build of
+# horizon-cloud also keeps its own run, because one test asserts the behaviour
+# that the feature changes.
+libs_features() {
+    printf '%s' "horizon-cloud/exposure-firewall,horizon-core/one-service-gateway,horizon-core/cloud-exposure,horizon-chromecast/encoder"
+}
+
 # Each step returns its own status: `all` calls these with `||`, which turns
 # off `set -e` inside them.
 run_libs() {
-    local status=0
-    # The SDK manager is opt-in; cover its complete provider regression suite.
-    run_cargo test --locked -p horizon-cloud --features exposure-firewall || status=$?
-    run_cargo test --locked --workspace --exclude horizon-ui || status=$?
-    # The private gateway stays opt-in; compile and test its platform contract.
-    run_cargo test --locked -p horizon-core --lib --features one-service-gateway cloud_runtime::local_network:: || status=$?
-    # Original owner custody also checks passive sibling records.
-    run_cargo test --locked -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::owner_custody:: || status=$?
-    # The original Unix/FD producer is a default-off Linux Worker component.
+    local status=0 features
+    features="$(libs_features)"
+    # The shipped configuration first, with no opt-in feature. One horizon-cloud
+    # test asserts that the default build accepts an unknown firewall attachment
+    # field, and that assertion cannot run in the feature build below.
+    run_cargo test --locked -p horizon-cloud || status=$?
+    # One build for the gateway and encoder lanes, plus the exposure-firewall
+    # lane of horizon-cloud. Their own builds used to rebuild horizon-core and
+    # its dependents for each lane, which cost more than the tests themselves.
+    # Every later invocation repeats this package selection and this feature
+    # list: cargo resolves features per selection, so a `-p` selection after a
+    # `--workspace` build rebuilds every crate.
+    run_cargo test --locked --workspace --exclude horizon-ui --no-run --features "$features" || status=$?
+    run_cargo test --locked --workspace --exclude horizon-ui --features "$features" || status=$?
+    # The original Unix/FD producer is a default-off Linux Worker component. Its
+    # two lanes keep their own builds, because exposure-gate changes the
+    # behaviour that the trusted_tcp_producer tests assert.
     if [[ "${RUNNER_OS:?RUNNER_OS is required}" == "Linux" ]]; then
         run_cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer:: || status=$?
         run_cargo test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate:: || status=$?
     fi
-    # The shared-encoder sink is opt-in, so the workspace run does not build it.
-    run_cargo test --locked -p horizon-chromecast --features encoder || status=$?
     # Selection and inventory tests also cover the unsupported Windows state path.
     run_cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths || status=$?
     return "$status"
