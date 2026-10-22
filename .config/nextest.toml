@@ -1,0 +1,13 @@
+# Test-runner settings for `cargo nextest`, which `scripts/test-focus.py` uses
+# when it is installed. No CI job runs nextest, so this file only changes a run
+# that someone starts by hand.
+#
+# libtest prints one total for the whole target. nextest names every test that
+# exceeds the period below, so a slow test is visible and can be fixed instead
+# of hiding inside the total.
+[profile.default]
+slow-timeout = { period = "20s" }
+
+# A focused run is short. Report every failure of one run instead of stopping
+# at the first, which costs another build to see the rest.
+fail-fast = false
