@@ -26,7 +26,8 @@ function page(extra = {}) {
                 .replace(placeholder, expression)
                 .replaceAll(globalPlaceholder, globalName);
             const run = vm.runInNewContext(`(function () {${script}})`, sandbox);
-            return run();
+            // `WebDriver` calls the script with the page as its receiver.
+            return run.call(window);
         },
         async settle(waited) {
             const script = awaitScript.replaceAll(globalPlaceholder, globalName);
@@ -90,6 +91,20 @@ test('a rejection reason that cannot be printed is still reported', async () => 
         assert.equal(typeof answer.horizonRejected, 'string', expression);
         assert.ok(answer.horizonRejected.length > 0, expression);
     }
+});
+
+test('the expression sees the page, not the wrapper', () => {
+    const target = page({value: 5, result: 'page'});
+    assert.deepEqual(plain(target.evaluate('value * 2')), {horizonSettled: true, horizonValue: 10});
+    assert.deepEqual(plain(target.evaluate('result')), {horizonSettled: true, horizonValue: 'page'});
+    assert.deepEqual(plain(target.evaluate('this === window')), {
+        horizonSettled: true,
+        horizonValue: true,
+    });
+});
+
+test('an expression that throws reaches the driver as a thrown error', () => {
+    assert.throws(() => page().evaluate("(() => { throw new Error('boom'); })()"), /boom/);
 });
 
 test('a page that pins the promise global fails typed instead of awaiting it', () => {

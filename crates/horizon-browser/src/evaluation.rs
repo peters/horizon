@@ -577,17 +577,19 @@ mod tests {
 
     #[test]
     fn a_caller_expression_is_never_rewritten_by_the_handshake() {
+        let plain = sync_script("1+1", true);
+        assert_eq!(plain.matches("1+1").count(), 1);
+        assert!(!plain.contains(GLOBAL_PLACEHOLDER));
+        assert!(plain.contains(PENDING_PROMISE_GLOBAL));
+
         let expression = "typeof window.__HORIZON_GLOBAL__";
         let script = sync_script(expression, true);
-        assert!(
-            script.contains(&format!("const value = ({expression});")),
+        assert_eq!(
+            script.matches(expression).count(),
+            1,
             "the expression runs as the caller wrote it: {script}"
         );
-        assert_eq!(
-            script.matches(PENDING_PROMISE_GLOBAL).count(),
-            2,
-            "only the two page global uses are named: {script}"
-        );
+        assert!(script.contains(PENDING_PROMISE_GLOBAL));
     }
 
     #[test]

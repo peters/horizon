@@ -468,7 +468,8 @@ the session afterwards depends on what the driver reports:
   serialize the pending promise as an empty object. For those sessions the page
   keeps the returned promise under one private global, the `execute/sync` call
   answers with a pending marker, and one bounded `execute/async` call settles it.
-  The expression runs once. A rejection is the typed `javascript_error` with the
+  The expression runs once, in its own statement, so it still sees the page's own
+  globals and its own `this`. A rejection is the typed `javascript_error` with the
   rejection text; a document that is replaced before the promise settles is a
   typed `javascript_error`; a promise that does not settle ends as
   `evaluation_timeout`. Every answer carries a settled marker, so a driver that
