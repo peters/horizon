@@ -107,28 +107,33 @@ bound covers the whole evaluation.
    `evaluation_timeout`. The rejection reason cannot be printed, so the message
    names an unprintable value.
 
-8. Call `browser_evaluate` with
+8. Call `browser_evaluate` with `undefined`.
+
+   Result: The action succeeds and its value is `null`. It does not fail with
+   `invalid_result`.
+
+9. Call `browser_evaluate` with
    `new Promise(r => setTimeout(() => r(7), 800))`.
 
    Result: The result is `7`.
 
-9. Call `browser_evaluate` with `new Promise(() => {})` and
-   `timeout_millis: 4000`.
+10. Call `browser_evaluate` with `new Promise(() => {})` and
+    `timeout_millis: 4000`.
 
    Result: The action fails with `evaluation_timeout` after about 4000 ms. The
    message names the 4000 ms bound.
 
-10. Call `browser_evaluate` with
+11. Call `browser_evaluate` with
     `new Promise(r => setTimeout(() => r(7), 6000))` and `timeout_millis: 3000`.
 
    Result: The action fails with `evaluation_timeout` after about 3000 ms. It
    does not wait for the 6000 ms promise.
 
-11. Call `browser_close`, then `browser_remote_allocations` with `operation: list`.
+12. Call `browser_close`, then `browser_remote_allocations` with `operation: list`.
 
     Result: The allocation of this session is not `in_use`.
 
-12. Do steps 1 to 11 again with the iOS Chrome target.
+13. Do steps 1 to 12 again with the iOS Chrome target.
 
     Result: Every result is the same.
 
@@ -138,7 +143,7 @@ bound covers the whole evaluation.
 
    Result: The provider confirms a physical device.
 
-2. Do steps 2 to 8 of RIE-IOS.
+2. Do steps 2 to 9 of RIE-IOS.
 
    Result: Every result is the same. The rejections in steps 6 and 7 come from
    the driver as `javascript_error`.
@@ -158,7 +163,7 @@ bound covers the whole evaluation.
    Result: The tests pass. `a_reported_script_bound_keeps_the_plain_sync_script`
    passes, so a driver that reports its bound gets the unchanged script.
 
-2. Do steps 2 to 8 of RIE-IOS on one local panel with `browser_evaluate`.
+2. Do steps 2 to 9 of RIE-IOS on one local panel with `browser_evaluate`.
 
    Result: Every result is the same.
 
