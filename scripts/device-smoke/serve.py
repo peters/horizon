@@ -51,6 +51,7 @@ def load_presets(path):
     presets = json.loads(path.read_text())
     if not isinstance(presets, list):
         raise ValueError(f'{path}: the presets must be a JSON list of presets')
+    modes = ', '.join(PRESET_RESUME_MODES)
     for index, preset in enumerate(presets):
         if not isinstance(preset, dict) or not preset.get('name') or not preset.get('kind'):
             raise ValueError(f'{path}: presets[{index}] needs a name and a kind')
@@ -58,7 +59,7 @@ def load_presets(path):
         if resume is not None and resume not in PRESET_RESUME_MODES:
             raise ValueError(
                 f'{path}: presets[{index}].resume must be one of '
-                f'{', '.join(PRESET_RESUME_MODES)}; received {resume!r}')
+                f'{modes}; received {resume!r}')
     return presets
 
 
