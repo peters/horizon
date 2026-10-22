@@ -225,6 +225,42 @@ def module_filter(relative: Path) -> str | None:
     return "::".join(modules) + "::"
 
 
+# `#[cfg(test)] #[path = "tests/tailnet.rs"] mod tests;` gives a test module a
+# name that its own path does not spell out.
+PATH_ATTRIBUTE = re.compile(
+    r'#\[path\s*=\s*"([^"]+)"\]\s*(?:#\[[^\]]*\]\s*)*'
+    r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;"
+)
+
+
+def declaring_module(crate: Path, path: Path) -> str | None:
+    """Return the filter of a module that a `#[path]` attribute declares.
+
+    The declaring file is a neighbour of the changed file or of one of its
+    ancestor directories, which is where a `tests/` tree keeps its siblings.
+    """
+    source = crate / "src"
+    directory = path.parent
+    while source == directory or source in directory.parents:
+        for candidate in sorted(directory.glob("*.rs")):
+            if candidate == path:
+                continue
+            try:
+                text = candidate.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for relative, name in PATH_ATTRIBUTE.findall(text):
+                if (candidate.parent / relative).resolve() != path.resolve():
+                    continue
+                module = module_filter(candidate.relative_to(crate))
+                if module is not None:
+                    return f"{module}{name}::"
+        if directory == source:
+            return None
+        directory = directory.parent
+    return None
+
+
 def selection_for(path: Path, crate: Path) -> Selection | str:
     """Return the selection for one file, or a note when it covers no test."""
     name = crate_name(crate)
@@ -263,6 +299,10 @@ def selection_for(path: Path, crate: Path) -> Selection | str:
     filter_ = module_filter(inner)
     if filter_ is None:
         return Selection(name, target)
+    declared = declaring_module(crate, path)
+    if declared is not None:
+        owner = module_owner(crate, declared.split("::")[0])
+        return Selection(name, owner or target, (declared,))
     owner = module_owner(crate, filter_.split("::")[0])
     return Selection(name, owner or target, (filter_,))
 

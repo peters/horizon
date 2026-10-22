@@ -239,6 +239,65 @@ class MixedCrateTests(unittest.TestCase):
         )
 
 
+class PathAttributeTests(unittest.TestCase):
+    """A `#[path]` module takes its name from the module that declares it."""
+
+    def setUp(self):
+        self.hold = tempfile.TemporaryDirectory()
+        self.root = Path(self.hold.name)
+        (self.root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+        self.crate = write_crate(
+            self.root,
+            "crates/demo",
+            "demo",
+            [
+                "src/lib.rs",
+                "src/endpoint.rs",
+                "src/endpoint/tailnet.rs",
+                "src/endpoint/tests/tailnet.rs",
+                "src/relay.rs",
+                "src/tests/unix_relay.rs",
+                "src/board/mod.rs",
+            ],
+        )
+        source = self.crate / "src"
+        (source / "lib.rs").write_text(
+            "pub mod endpoint;\npub mod board;\n", encoding="utf-8"
+        )
+        (source / "endpoint.rs").write_text("pub mod tailnet;\n", encoding="utf-8")
+        (source / "endpoint" / "tailnet.rs").write_text(
+            '#[cfg(test)]\n#[path = "tests/tailnet.rs"]\nmod tests;\n',
+            encoding="utf-8",
+        )
+        (source / "relay.rs").write_text(
+            '#[path = "tests/unix_relay.rs"]\nmod unix_tests;\n', encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.hold.cleanup()
+
+    def select(self, entry):
+        return focus.selection_for(self.root / entry, self.crate)
+
+    def test_a_path_attribute_in_a_neighbour_file_names_the_module(self):
+        self.assertEqual(
+            self.select("crates/demo/src/endpoint/tests/tailnet.rs"),
+            focus.Selection("demo", ("lib", None), ("endpoint::tailnet::tests::",)),
+        )
+
+    def test_a_path_attribute_from_the_source_root_names_the_module(self):
+        self.assertEqual(
+            self.select("crates/demo/src/tests/unix_relay.rs"),
+            focus.Selection("demo", ("lib", None), ("relay::unix_tests::",)),
+        )
+
+    def test_a_file_without_a_path_attribute_keeps_its_place(self):
+        self.assertEqual(
+            self.select("crates/demo/src/board/mod.rs"),
+            focus.Selection("demo", ("lib", None), ("board::",)),
+        )
+
+
 class PlanTests(unittest.TestCase):
     """A plan groups the change by crate and target."""
 
