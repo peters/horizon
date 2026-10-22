@@ -319,6 +319,58 @@ class PathAttributeTests(unittest.TestCase):
         )
 
 
+class NestedDeclarationTests(unittest.TestCase):
+    """A plain child of a `#[path]` module keeps the declared parent name."""
+
+    def setUp(self):
+        self.hold = tempfile.TemporaryDirectory()
+        self.root = Path(self.hold.name)
+        (self.root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+        self.crate = write_crate(
+            self.root,
+            "crates/ui",
+            "ui",
+            [
+                "src/lib.rs",
+                "src/app.rs",
+                "src/app/lifecycle.rs",
+                "src/app/lifecycle/startup_organization_tests.rs",
+                "src/app/lifecycle/startup_organization_tests/mod.rs",
+                "src/app/lifecycle/startup_organization_tests/layout.rs",
+            ],
+        )
+        source = self.crate / "src"
+        (source / "lib.rs").write_text("pub mod app;\n", encoding="utf-8")
+        (source / "app.rs").write_text("pub mod lifecycle;\n", encoding="utf-8")
+        (source / "app" / "lifecycle.rs").write_text(
+            "mod startup_organization_tests;\n", encoding="utf-8"
+        )
+        (source / "app" / "lifecycle" / "startup_organization_tests.rs").write_text(
+            '#[path = "startup_organization_tests/mod.rs"]\nmod tests;\n',
+            encoding="utf-8",
+        )
+        (
+            source / "app" / "lifecycle" / "startup_organization_tests" / "mod.rs"
+        ).write_text("mod layout;\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.hold.cleanup()
+
+    def test_a_plain_child_keeps_the_declared_parent_name(self):
+        self.assertEqual(
+            focus.selection_for(
+                self.root
+                / "crates/ui/src/app/lifecycle/startup_organization_tests/layout.rs",
+                self.crate,
+            ),
+            focus.Selection(
+                "ui",
+                ("lib", None),
+                ("app::lifecycle::startup_organization_tests::tests::layout::",),
+            ),
+        )
+
+
 class PlanTests(unittest.TestCase):
     """A plan groups the change by crate and target."""
 

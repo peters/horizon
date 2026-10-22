@@ -268,6 +268,55 @@ def declaring_module(crate: Path, path: Path, depth: int = 0) -> str | None:
     return None
 
 
+def declaring_candidates(crate: Path, path: Path) -> list[Path]:
+    """Return the files that can declare the module in `path`.
+
+    A module file is declared by the `mod.rs` of its directory or by the file
+    beside that directory. `mod.rs` is declared by the directory's own file.
+    """
+    if path.name == "mod.rs":
+        parent = path.parent.parent
+        return [
+            candidate
+            for candidate in (parent / f"{path.parent.name}.rs", parent / "mod.rs")
+            if candidate.is_file() and candidate != path
+        ]
+    parent = path.parent.parent
+    return [
+        candidate
+        for candidate in (path.parent / "mod.rs", parent / f"{path.parent.name}.rs")
+        if candidate.is_file() and candidate != path
+    ]
+
+
+def module_path(crate: Path, path: Path, depth: int = 0) -> str | None:
+    """Return the module path that the declarations give a source file.
+
+    A `#[path]` attribute can name a file anything, and a plain `mod child;`
+    below such a file keeps that name. The path a file sits at is only the
+    fallback when no declaration names it.
+    """
+    if depth > 8:
+        return None
+    declared = declaring_module(crate, path, depth)
+    if declared is not None:
+        return declared
+    relative = path.relative_to(crate)
+    if relative in (Path("src/lib.rs"), Path("src/main.rs")):
+        return ""
+    if any(relative == root.relative_to(crate) for root, _ in bin_targets(crate)):
+        return ""
+    name = path.parent.name if path.name == "mod.rs" else path.stem
+    for candidate in declaring_candidates(crate, path):
+        if not declares_module(candidate, name):
+            continue
+        parent = module_path(crate, candidate, depth + 1)
+        if parent is None:
+            return None
+        return f"{parent}{name}::"
+    return None
+
+
 def selection_for(path: Path, crate: Path) -> Selection | str:
     """Return the selection for one file, or a note when it covers no test."""
     name = crate_name(crate)
@@ -306,12 +355,11 @@ def selection_for(path: Path, crate: Path) -> Selection | str:
     filter_ = module_filter(inner)
     if filter_ is None:
         return Selection(name, target)
-    declared = declaring_module(crate, path)
-    if declared is not None:
-        owner = module_owner(crate, declared.split("::")[0])
-        return Selection(name, owner or target, (declared,))
-    owner = module_owner(crate, filter_.split("::")[0])
-    return Selection(name, owner or target, (filter_,))
+    resolved = module_path(crate, path)
+    if resolved is None:
+        resolved = filter_
+    owner = module_owner(crate, resolved.split("::")[0])
+    return Selection(name, owner or target, (resolved,))
 
 
 def build_plan(paths: list[str], root: Path = ROOT) -> Plan:
