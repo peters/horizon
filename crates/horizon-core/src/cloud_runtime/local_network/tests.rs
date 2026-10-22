@@ -9,6 +9,27 @@ use std::{
     },
 };
 
+/// An address where nothing listens, for a test that needs a refused dial. These named services
+/// sit below the range that `bind(0)` hands out, so a port that another test frees cannot come
+/// back as a listener here. The probe is bounded, and Windows reports a refusal late.
+pub(super) fn closed_loopback_address() -> SocketAddr {
+    let mut tried = Vec::new();
+    for port in [1_u16, 7, 9] {
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let refused = std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500))
+            .err()
+            .map(|error| error.kind());
+        // Only Windows reports a refused loopback dial late, with a timeout of its own.
+        if matches!(refused, Some(io::ErrorKind::ConnectionRefused))
+            || (cfg!(windows) && refused == Some(io::ErrorKind::TimedOut))
+        {
+            return address;
+        }
+        tried.push((address, refused));
+    }
+    panic!("no closed loopback port among 1, 7 and 9: {tried:?}");
+}
+
 /// Answers every request with a refusal and announces no sources; the session tests that use
 /// it need a Unix shell.
 #[cfg(unix)]

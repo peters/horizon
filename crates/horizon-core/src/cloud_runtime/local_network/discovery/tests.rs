@@ -1,5 +1,5 @@
 use super::*;
-use crate::cloud_runtime::local_network::scope;
+use crate::cloud_runtime::local_network::{scope, tests::closed_loopback_address};
 use horizon_cloud_protocol::local_network::discovery::DEFAULT_PROBE_PORTS;
 use simple_dns::{
     CLASS, Label, Name, Packet, PacketFlag, ResourceRecord,
@@ -699,10 +699,7 @@ fn the_real_connect_tells_open_from_refused_and_stops_with_the_bridge() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let idle = Cancellation::default();
     assert!(probe::connect(listener.local_addr().unwrap(), Duration::from_secs(5), &idle).is_ok());
-    let closed = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+    let closed = closed_loopback_address();
     let refused = probe::connect(closed, Duration::from_secs(5), &idle)
         .unwrap_err()
         .kind();

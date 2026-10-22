@@ -1,4 +1,5 @@
 use super::*;
+use crate::cloud_runtime::local_network::tests::closed_loopback_address;
 use std::net::TcpListener;
 
 /// Admits configured loopback fixtures, which the real scope never allows, and names
@@ -213,14 +214,11 @@ fn ipv6_and_literal_addresses_in_name_form_are_checked_as_addresses() {
 fn a_refused_destination_is_never_dialled_and_a_closed_port_is_refused_by_the_device() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    // Held until the proxy has its own port, so the proxy cannot be given this one.
-    let reserved = TcpListener::bind("127.0.0.1:0").unwrap();
-    let closed_port = reserved.local_addr().unwrap();
+    let closed_port = closed_loopback_address();
     let (proxy, _) = proxy(FixtureGate {
         allowed: vec![closed_port],
         ..FixtureGate::default()
     });
-    drop(reserved);
     let mut socket = client(&proxy);
     greet(&mut socket);
     socket.write_all(&ipv4_request(closed_port)).unwrap();
