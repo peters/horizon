@@ -247,9 +247,6 @@ try:
                                           'horizon-worker-github-api', 'horizon-worker-github-api-rest',
                                           'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy',
                                           'horizon-worker-github-tasks', 'horizon-worker-github-mcp',
-                                          'horizon-worker-github-upkeep', 'horizon-worker-github-upkeep-loop',
-                                          'horizon-worker-github-packages',
-                                          'horizon-worker-github-api-upkeep', 'horizon-worker-github-git-upkeep',
                                           'horizon-worker-gh-repository'))
                 and os.access(beside.with_name('horizon-worker-git-auth'), os.X_OK)
                 and shutil.which('openssl')

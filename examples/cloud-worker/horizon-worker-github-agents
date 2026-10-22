@@ -84,7 +84,7 @@ class Book:
                 'task_grants': [grant for grant in grants if tasks.valid(grant)] if isinstance(grants, list) else []}
 
     def lock(self):
-        """The book's lock: every change of the book, and of the Upkeep policy, holds it."""
+        """The book's lock: every change of the book holds it."""
         return common.locked(self.runtime, 'access-requests.lock')
 
     @contextlib.contextmanager
@@ -426,7 +426,6 @@ MESSAGES = {
     'token_invalid': 'GitHub refused the access token.',
     'forbidden': 'GitHub refused access to this repository.',
     'unreachable': 'GitHub could not be reached; try again.',
-    'not_listed': 'This request is not one that the Upkeep of this worker allows by itself.',
 }
 
 
@@ -434,12 +433,10 @@ def failure(identifier, code):
     return {'ok': False, 'id': identifier, 'error': code, 'message': MESSAGES[code]}
 
 
-def decide(store, book, identifier, decision, now=time.time, check=reachable, proc=tasks.PROC, admit=None):
+def decide(store, book, identifier, decision, now=time.time, check=reachable, proc=tasks.PROC):
     """The person's decision on one request. A failed check leaves the request pending. A
     repository allowed for the cloud joins the cloud's grants, so every agent session of the
-    cloud gets it; one allowed for the task reaches only the session that asked, until it ends.
-    `admit`, when given, must accept the record under the book's lock: the worker's own
-    decisions for its Upkeep (horizon-worker-github-upkeep) use it."""
+    cloud gets it; one allowed for the task reaches only the session that asked, until it ends."""
     if decision not in DECISIONS:
         raise ValueError('Unknown decision')
     with book.edit() as data:
@@ -452,8 +449,6 @@ def decide(store, book, identifier, decision, now=time.time, check=reachable, pr
             return failure(identifier, 'unknown_request')
         if record['status'] != 'pending':
             return dict(failure(identifier, 'not_pending'), status=record['status'])
-        if admit is not None and not admit(record):
-            return failure(identifier, 'not_listed')
         result = {'ok': True, 'id': identifier, 'decision': decision, 'repository': record['repository'],
                   'access': record['access']}
         if decision == 'deny':

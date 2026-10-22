@@ -143,7 +143,6 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
-            upkeep: super::upkeep::State::default(),
             speech: speech::SpeechSystem::from_config(&config.features.speech),
             speech_global_hotkeys: None, speech_global_hotkeys_tried: false, speech_global_hotkeys_suspended: false, speech_global_events_pending: Vec::new(),
             speech_held_bindings: Vec::new(),

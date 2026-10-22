@@ -1,11 +1,11 @@
 ---
 name: horizon-cloud
-description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, see or propose changes to its Upkeep of Dependabot pull requests, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
+description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
 ---
 
 # Horizon cloud MCP
 
-Use this skill for cloud offers, the cloud list of your workspace, Upkeep, companion workers,
+Use this skill for cloud offers, the cloud list of your workspace, companion workers,
 a worker's Local Network Bridge, and GitHub access on a cloud worker.
 Read [the cloud reference](references/cloud.md) for the server and operation you need.
 Use tools from the connected server and their current schemas. Do not substitute
@@ -201,40 +201,6 @@ Cancel clears automatic close intent and restores its panels. A provider deletio
 that already started can still finish. A Ready connection watch permits explicit
 Remove from Horizon anyway after deletion fails; a busy operation still refuses it.
 This UI close dialog does not grant lifecycle authorization through MCP.
-
-An Upkeep is a cloud that Menu > New Upkeep starts for the person: an always-on
-Hetzner worker on which one Codex loop reviews, fixes and merges the pull requests of
-chosen bots in chosen repositories, with a board beside its card. It costs money while
-its worker runs and needs a GitHub sign-in, a Hetzner project and a Codex login in Cloud
-settings. Only the person starts one in the dialog. Horizon allows the loop's GitHub
-access for the chosen repositories without asking; every other request still waits on
-the card. On a current worker image, the worker also does this by itself while no Horizon
-runs, and starts the loop again after a container restart. Once a day, after the repositories' agents, the loop runs one daily maintenance
-agent for the whole Upkeep that does the "Daily maintenance" tasks of the shared
-instructions the repositories' AGENTS.md link; its read request for that shared
-repository waits on the card too. Pull requests that Upkeep agents open use an
-`upkeep/` branch and the `upkeep` label; the loop finds them and carries them through
-the same gates. The default instructions ask for the checks that each repository's
-`AGENTS.md` makes apply to a change, and no more. Instructions that the person kept
-as the default follow a newer default of Horizon with the next exchange; changed
-instructions stay as written. See `docs/upkeep.md` for its limits
-and trust boundaries. From an agent panel in its workspace, `cloud_upkeep` reads the
-Upkeep, proposes repositories or a new Upkeep for the person to confirm, and removes,
-pauses, resumes or runs it (see the Upkeep section of [the cloud reference](references/cloud.md)).
-
-The board of an Upkeep has **Run now**, **Pause** / **Resume** and **Repositories**.
-They are the person's controls in the Horizon UI: Run now and Pause go to the worker
-with the next exchange, and Repositories saves only the repositories that the person
-added or removed. A board that a config file opens has no buttons. Agents reach the same
-actions through `cloud_upkeep`; the board shows each agent change below its title.
-
-For a UI check that a repository's rules require, an Upkeep cloud declares one companion
-for each of its repositories whose checkout on this computer commits a `ui-acceptance`
-profile. The person creates that cloud with New cloud in the Upkeep's workspace and
-checks it on the Upkeep card. The Upkeep agent starts and stops it through its worker's
-exchange, not through the companion tools, and Horizon stops it when the run ends; it
-needs the person's Horizon running. See "UI acceptance on companion clouds" in
-`docs/upkeep.md`.
 
 Browser provider catalogs and browser sessions use `horizon-browser`.
 This skill does not install servers, start resources, or enable network access on load.

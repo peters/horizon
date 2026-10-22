@@ -60,7 +60,6 @@ pub enum PanelKind {
     Editor,
     GitChanges,
     Usage,
-    Upkeep,
     Browser,
     Device,
     /// The setup board: every repository whose cloud setup agent works on this computer.
@@ -78,10 +77,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(
-            self,
-            Self::GitChanges | Self::Usage | Self::Upkeep | Self::Device | Self::SetupBoard
-        )
+        !matches!(self, Self::GitChanges | Self::Usage | Self::Device | Self::SetupBoard)
     }
 
     #[must_use]
@@ -107,7 +103,6 @@ impl PanelKind {
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
-            Self::Upkeep => "Upkeep",
             Self::SetupBoard => "Setup board",
             Self::Browser => "Browser",
             Self::Device => "Device",
@@ -682,7 +677,6 @@ impl Panel {
             PanelContent::Editor(editor) => editor.save_if_dirty(),
             PanelContent::GitChanges(_)
             | PanelContent::Usage(_)
-            | PanelContent::Upkeep(_)
             | PanelContent::SetupBoard(_)
             | PanelContent::Device(_)
             | PanelContent::Parked(_) => {}
@@ -711,7 +705,6 @@ impl Panel {
             }
             PanelContent::GitChanges(_)
             | PanelContent::Usage(_)
-            | PanelContent::Upkeep(_)
             | PanelContent::SetupBoard(_)
             | PanelContent::Device(_)
             | PanelContent::Parked(_) => true,
@@ -729,7 +722,6 @@ impl Panel {
             }
             PanelContent::GitChanges(_)
             | PanelContent::Usage(_)
-            | PanelContent::Upkeep(_)
             | PanelContent::SetupBoard(_)
             | PanelContent::Device(_)
             | PanelContent::Parked(_) => true,
@@ -1059,12 +1051,7 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [
-            PanelKind::GitChanges,
-            PanelKind::Usage,
-            PanelKind::Upkeep,
-            PanelKind::SetupBoard,
-        ] {
+        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::SetupBoard] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }

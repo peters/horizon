@@ -420,3 +420,29 @@ fn a_transient_panel_is_not_saved() {
         .collect();
     assert_eq!(saved, [board.panel(kept).expect("kept panel").local_id.clone()]);
 }
+
+#[test]
+fn a_saved_board_that_still_names_a_removed_panel_kind_keeps_its_other_panels() {
+    let yaml = "\
+version: 3
+workspaces:
+- name: Work
+  panels:
+  - name: Upkeep
+    kind: upkeep
+  - name: Shell
+    kind: shell
+";
+    let state = RuntimeState::from_yaml(yaml).expect("a removed panel kind must not refuse the whole board");
+
+    assert_eq!(state.workspaces.len(), 1, "the workspace stays");
+    assert_eq!(
+        state.workspaces[0]
+            .panels
+            .iter()
+            .map(|panel| (panel.name.as_str(), panel.kind))
+            .collect::<Vec<_>>(),
+        vec![("Shell", PanelKind::Shell)],
+        "the panel of the removed kind goes; the other panel stays"
+    );
+}

@@ -168,15 +168,6 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_usage(seed))
         }
-        PanelKind::Upkeep => {
-            let status = opts
-                .command
-                .take()
-                .filter(|path| !path.trim().is_empty())
-                .map(PathBuf::from);
-            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
-            Ok(spawn_upkeep(seed, status))
-        }
         PanelKind::SetupBoard => {
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_setup_board(seed))
@@ -346,21 +337,6 @@ fn spawn_git_changes(mut seed: StaticPanelSeed, cwd: Option<PathBuf>) -> Panel {
     )
 }
 
-fn spawn_upkeep(mut seed: StaticPanelSeed, status: Option<PathBuf>) -> Panel {
-    let (title, has_custom_name) = seed.take_title(|| "Upkeep".to_string());
-    tracing::info!("created upkeep panel '{}' (id={})", title, seed.id.0);
-    let board = crate::UpkeepBoard::new(status);
-    let command = board.path().display().to_string();
-    seed.into_panel(
-        title,
-        PanelKind::Upkeep,
-        PanelContent::Upkeep(board),
-        Some(command),
-        None,
-        has_custom_name,
-    )
-}
-
 fn spawn_setup_board(mut seed: StaticPanelSeed) -> Panel {
     let (title, has_custom_name) = seed.take_title(|| "Setup board".to_string());
     tracing::info!("created setup board panel '{}' (id={})", title, seed.id.0);
@@ -466,7 +442,6 @@ pub(super) fn resolve_launch_command(
         PanelKind::Editor
         | PanelKind::GitChanges
         | PanelKind::Usage
-        | PanelKind::Upkeep
         | PanelKind::Browser
         | PanelKind::Device
         | PanelKind::SetupBoard => (String::new(), Vec::new()),
@@ -765,7 +740,6 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
             PanelKind::Editor
             | PanelKind::GitChanges
             | PanelKind::Usage
-            | PanelKind::Upkeep
             | PanelKind::Browser
             | PanelKind::Device
             | PanelKind::SetupBoard => 0,

@@ -25,7 +25,6 @@ mod image_destination;
 pub(crate) mod provider_usage;
 mod recovery;
 mod tailnet_credential;
-pub(crate) mod upkeep;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);

@@ -30,8 +30,7 @@ toolbar in a narrow window.
   - A build or computer where cloud workspaces are not ready. Then
     **+ New cloud** is dimmed, or not in a build without cloud workspaces. The
     dimmed button takes no click and no keyboard focus, and its tooltip says why.
-    **Add cloud here** and **New Upkeep** in the Menu are dimmed too and say why
-    on hover. The unit tests of the toolbar and the Menu cover it.
+    **Add cloud here** in the Menu is dimmed too and says why on hover. The unit tests of the toolbar and the Menu cover it.
   - **New Cloud** and **New Workspace** on the empty canvas. The canvas shows
     them only on a board without workspaces, and the fixture always has a
     workspace. The unit tests of the empty canvas cover them.
@@ -96,14 +95,12 @@ Give each result to the report with the task ID.
    Result: A menu opens under the button. It shows these captions and rows, each
    row with a one-line description:
    - **GO TO**: **Quick Nav**, **Sessions** and **Remote Hosts**.
-   - **CLOUD**: **Add cloud here**, **New Upkeep**, **Cloud settings** and
-     **Fit all clouds**.
+   - **CLOUD**: **Add cloud here**, **Cloud settings** and **Fit all clouds**.
    - **HORIZON**: **Settings**.
 
    The rows of Quick Nav, Sessions, Remote Hosts and Settings show their
    keyboard shortcut at the right. **Fit all clouds** is dimmed when the board
-   has no cloud. Task UPK-08 of the [Upkeep procedure](upkeep.md) tests
-   **New Upkeep**.
+   has no cloud.
 
 2. Click **Quick Nav**.
 

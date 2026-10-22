@@ -16,7 +16,6 @@ use std::{
 use zeroize::Zeroizing;
 
 mod api;
-mod search;
 pub use api::{User, valid_repository};
 #[cfg(test)]
 mod tests;
@@ -531,7 +530,7 @@ fn safe_https_url(url: &str) -> bool {
 
 /// The manifest for an app that can read and write repository contents and pull
 /// requests as its user, read check runs and commit statuses, re-run workflow runs, and
-/// change workflow files: Dependabot updates to GitHub Actions edit them, and Upkeep
+/// change workflow files: Dependabot updates to GitHub Actions edit them, and a worker
 /// reads failed checks before it fixes them. It is public because a private app
 /// installs only on the account that owns it, never on an organization; public only
 /// lets another account install it, and it reaches nothing until installed. GitHub

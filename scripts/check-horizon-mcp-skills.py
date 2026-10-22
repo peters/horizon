@@ -19,7 +19,6 @@ OPERATIONS = [
     ('crates/horizon-browser-control/src/manifest/device.rs', 'Operation', 'horizon-device', {'BrowserScreenshot'}, 'device_panel'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set(), 'device_panel video'),
     ('crates/horizon-browser-control/src/manifest/cloud_list.rs', 'CloudListOperation', 'horizon-cloud', {'Stop'}, 'cloud_list'),
-    ('crates/horizon-browser-control/src/manifest/upkeep.rs', 'UpkeepOperation', 'horizon-cloud', set(), 'cloud_upkeep'),
     ('crates/horizon-browser-control/src/manifest/tailnet_credential.rs', 'CredentialOperation', 'horizon-cloud', set(), 'tailnet_api_credential'),
     ('crates/horizon-browser-mcp/src/model.rs', 'ActKind', 'horizon-browser', set(), 'browser_act'),
     ('crates/horizon-browser-mcp/src/model/network.rs', 'NetworkOperation', 'horizon-browser', set(), 'browser_network'),

@@ -1,6 +1,6 @@
 //! The setup board: one panel that lists the repositories whose cloud setup agents work
 //! on this computer. The app fills its rows each frame from the setup runs; the panel
-//! only draws them and asks the app to act, as the Upkeep board does.
+//! only draws them and asks the app to act.
 
 use crate::PanelId;
 

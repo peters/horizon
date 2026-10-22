@@ -42,8 +42,6 @@ common = load_common()
 auth = common.auth
 agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_github_agents')
 relay = common.load_sibling('horizon-worker-github-http', 'horizon_worker_github_http')
-upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
-checks = common.load_sibling('horizon-worker-github-git-upkeep', 'horizon_worker_github_git_upkeep')
 
 ADDRESS = ('127.0.0.1', auth.PROXY_PORT)
 # The authority Git trusts for github.com; public, so every account can read it.
@@ -306,7 +304,7 @@ def new_record(request):
 OUTCOMES = ('relayed', 'refused', 'unreachable', 'client-gone', 'github-cut', 'failed')
 
 
-class Exchange(checks.Checks):
+class Exchange:
     """One Git request inside one tunnel. It updates `record` in place, so the log keeps what
     happened also when the connection ends early."""
 
@@ -357,13 +355,7 @@ class Exchange(checks.Checks):
         if chosen.token is not None:
             secrets = (chosen.token, credential(chosen.token).split(' ', 1)[1])
             fields.append(('Authorization', credential(chosen.token)))
-        if kind == 'git' and access == 'push' and request.method == 'POST' \
-                and upkeep.load(self.store, common) is not None:
-            checked = self.checked_push(request, repository, chosen)
-            if checked is None:
-                return
-            pieces, length = checked
-        elif data is None:
+        if data is None:
             relay.continue_if_asked(request, self.output)
             # A failed read from the client is ClientGone, never a failure to reach GitHub.
             pieces, length = relay.from_client(relay.body(request)), request.length

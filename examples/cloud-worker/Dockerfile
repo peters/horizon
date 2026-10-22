@@ -126,11 +126,6 @@ COPY horizon-worker-tailnet \
     horizon-worker-github-graphql-policy \
     horizon-worker-github-tasks \
     horizon-worker-github-mcp \
-    horizon-worker-github-upkeep \
-    horizon-worker-github-api-upkeep \
-    horizon-worker-github-git-upkeep \
-    horizon-worker-github-upkeep-loop \
-    horizon-worker-github-packages \
     horizon-worker-gh-repository \
     horizon-worker-browserstack /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \

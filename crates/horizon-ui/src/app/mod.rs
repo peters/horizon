@@ -55,7 +55,6 @@ mod startup_session;
 mod tailnets;
 #[cfg(test)]
 mod test_support;
-mod upkeep;
 pub(crate) mod util;
 mod view;
 mod work_resume;
@@ -299,7 +298,6 @@ pub struct HorizonApp {
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
-    upkeep: upkeep::State,
     shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
@@ -438,14 +436,7 @@ impl HorizonApp {
         }
         self.render_active_view(ui, block_root_interaction);
         #[cfg(feature = "cloud-workspaces")]
-        self.render_upkeep_dialog(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        self.render_upkeep_editor(ctx);
-        self.apply_upkeep_requests(ctx);
-        #[cfg(feature = "cloud-workspaces")]
         self.apply_setup_board_requests(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        self.answer_upkeep_requests(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }

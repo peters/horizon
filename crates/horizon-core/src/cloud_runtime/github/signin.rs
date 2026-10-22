@@ -53,15 +53,6 @@ pub enum Prompt {
     },
     /// The publishing sign-in ended; `allowed` when Horizon may now publish images.
     Published { allowed: bool },
-    /// Let this cloud's agents read packages: enter `user_code` at `verification_uri`.
-    /// Asked once per cloud, for `read:packages` only, right after its GitHub access.
-    Packages {
-        user_code: String,
-        verification_uri: String,
-        expires_at: SystemTime,
-    },
-    /// The package sign-in ended; `allowed` when the worker got package read access.
-    PackagesEnded { allowed: bool },
 }
 
 /// Clouds whose person chose to continue without GitHub access.

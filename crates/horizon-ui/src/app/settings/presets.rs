@@ -3,7 +3,7 @@ use horizon_core::{Config, PanelKind, PanelResume, PresetConfig};
 
 use crate::theme;
 
-const ALL_KINDS: [PanelKind; 16] = [
+const ALL_KINDS: [PanelKind; 15] = [
     PanelKind::Shell,
     PanelKind::Ssh,
     PanelKind::Codex,
@@ -17,7 +17,6 @@ const ALL_KINDS: [PanelKind; 16] = [
     PanelKind::Editor,
     PanelKind::GitChanges,
     PanelKind::Usage,
-    PanelKind::Upkeep,
     PanelKind::Browser,
     PanelKind::Device,
 ];
@@ -141,11 +140,11 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
             ui.horizontal(|ui| {
                 let before = preset.kind;
                 changed |= render_kind_combo(ui, index, &mut preset.kind);
-                // A device address and an Upkeep status path mean nothing to another kind.
+                // A device address means nothing to another kind.
                 if preset.kind != before
                     && [before, preset.kind]
                         .iter()
-                        .any(|kind| matches!(kind, PanelKind::Device | PanelKind::Upkeep))
+                        .any(|kind| matches!(kind, PanelKind::Device))
                 {
                     preset.command = None;
                 }

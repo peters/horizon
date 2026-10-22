@@ -6,7 +6,6 @@ pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
 pub use super::image_destination::{Action as ImageDestinationAction, ImageDestinationRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 pub use super::tailnet_credential::{CredentialOperation, CredentialRequest};
-pub use super::upkeep::{UpkeepOperation, UpkeepRequest};
 use super::{AgentIdentity, ManifestLock};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 use serde::{Deserialize, Serialize};
@@ -42,9 +41,6 @@ pub struct UsageRequest {
     /// A cloud list request, answered by the host for the caller's workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_list: Option<CloudListRequest>,
-    /// An Upkeep request, answered by the host for the caller's workspace.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upkeep: Option<UpkeepRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<CredentialRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,9 +65,6 @@ pub struct UsageResult {
     /// The host's answer to a cloud list request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_list: Option<serde_json::Value>,
-    /// The host's answer to an Upkeep request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upkeep: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,7 +84,6 @@ impl UsageRequest {
             offers: None,
             companion: None,
             cloud_list: None,
-            upkeep: None,
             tailnet_credential: None,
             image_destination: None,
             error,
@@ -251,30 +243,6 @@ fn enqueue_cloud_list_at(
     )
 }
 
-/// Queues an Upkeep request for the live host, which answers for the Upkeep in the
-/// caller's workspace.
-/// # Errors
-/// Invalid host identity, malformed request, a full queue or unavailable private storage.
-pub fn enqueue_upkeep(identity: AgentIdentity<'_>, request: UpkeepRequest) -> std::io::Result<String> {
-    enqueue_upkeep_at(BrowserRuntimePaths::resolve().root(), identity, request)
-}
-
-fn enqueue_upkeep_at(root: &Path, identity: AgentIdentity<'_>, request: UpkeepRequest) -> std::io::Result<String> {
-    if !request.valid() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Invalid Upkeep request",
-        ));
-    }
-    enqueue_request_at(
-        root,
-        identity,
-        Ask {
-            upkeep: Some(request),
-            ..Ask::default()
-        },
-    )
-}
 /// Queue only a request for an owner decision; never accepts credential bytes.
 /// # Errors
 /// Invalid metadata, missing live host identity or unavailable bounded queue.
@@ -347,7 +315,6 @@ struct Ask {
     cloud_offers: Option<serde_json::Value>,
     cloud_companion: Option<CompanionRequest>,
     cloud_list: Option<CloudListRequest>,
-    upkeep: Option<UpkeepRequest>,
     tailnet_credential: Option<CredentialRequest>,
     image_destination: Option<ImageDestinationRequest>,
 }
@@ -359,7 +326,6 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_offers,
         cloud_companion,
         cloud_list,
-        upkeep,
         tailnet_credential,
         image_destination,
     } = ask;
@@ -407,7 +373,6 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_offers,
         cloud_companion,
         cloud_list,
-        upkeep,
         tailnet_credential,
         image_destination,
     };
@@ -717,34 +682,6 @@ mod tests {
             cloud: None,
         };
         assert!(enqueue_cloud_list_at(root.path(), AgentIdentity::new("horizon:agent", None), list).is_err());
-    }
-
-    #[test]
-    fn upkeep_requests_reach_only_their_host_and_answer_only_their_actor() {
-        let root = tempfile::tempdir().unwrap();
-        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
-        let request = UpkeepRequest {
-            operation: UpkeepOperation::Add,
-            repositories: vec!["acme/web".into()],
-            ..UpkeepRequest::default()
-        };
-        let id = enqueue_upkeep_at(root.path(), identity, request.clone()).unwrap();
-        assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
-        let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
-        assert_eq!(claimed.upkeep.as_ref(), Some(&request));
-        let mut result = claimed.result(Vec::new(), None);
-        result.upkeep = Some(serde_json::json!({"added": 1}));
-        complete_at(root.path(), &result).unwrap();
-        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
-        assert_eq!(
-            take_at(root.path(), identity, &id).unwrap().unwrap().upkeep,
-            Some(serde_json::json!({"added": 1}))
-        );
-        let invalid = UpkeepRequest {
-            operation: UpkeepOperation::Add,
-            ..UpkeepRequest::default()
-        };
-        assert!(enqueue_upkeep_at(root.path(), identity, invalid).is_err());
     }
 
     #[test]

@@ -152,7 +152,7 @@ scope request cancellation. Remote/SSH panels and expired requests refuse.
 Keep CLI plan and stdio MCP behavior, both bundled guides and coverage in sync.
 
 The desktop destination adapter refuses any agent panel owned by a cloud group,
-including worker and Upkeep panels whose local metadata has no SSH connection.
+including worker panels whose local metadata has no SSH connection.
 Admission and retained-operation polling must check both saved board membership
 and live cloud groups. Cover the session-restore interval before live membership
 is copied. A local launch directory alone does not establish desktop ownership.

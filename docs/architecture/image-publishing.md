@@ -401,7 +401,7 @@ Cancellation does not revoke authorization already completed at the issuer or
 prove that an in-flight write was rolled back. List saved state after uncertainty.
 
 The desktop destination adapter refuses any agent panel owned by a cloud group,
-including worker and Upkeep panels whose local metadata has no SSH connection.
+including worker panels whose local metadata has no SSH connection.
 Both admission and retained-operation polling check saved board membership as
 well as live cloud groups: session restoration can expose the saved membership
 before live cloud state is copied. A local launch directory alone does not

@@ -435,8 +435,8 @@ fn refused_host_only(request: &horizon_browser_control::manifest::provider_usage
     true
 }
 
-/// The refusal of a request that only a Horizon host answers. An agent on the worker, the
-/// Upkeep agent included, must never change desktop-owned state.
+/// The refusal of a request that only a Horizon host answers. An agent on the worker
+/// must never change desktop-owned state.
 fn host_only_refusal(
     request: &horizon_browser_control::manifest::provider_usage::UsageRequest,
 ) -> Option<&'static str> {
@@ -446,8 +446,6 @@ fn host_only_refusal(
         Some("tailnet_credential_unavailable: requires the desktop owner")
     } else if request.image_destination.is_some() {
         Some("image_destination_unavailable: requires a Horizon agent panel on the person's computer")
-    } else if request.upkeep.is_some() {
-        Some("upkeep_unavailable: requires a Horizon agent panel on the person's computer")
     } else {
         None
     }
@@ -475,8 +473,6 @@ mod tests {
         assert!(
             host_only_refusal(&credential).is_some_and(|error| error.starts_with("tailnet_credential_unavailable"))
         );
-        let upkeep = request(serde_json::json!({"upkeep": {"operation": "add", "repositories": ["acme/web"]}}));
-        assert!(host_only_refusal(&upkeep).is_some_and(|error| error.starts_with("upkeep_unavailable")));
         let image = request(serde_json::json!({
             "provider":"configured-browser-account",
             "image_destination":{"operation_id":"27d497e2-1f54-4bc4-b746-ab2a3d9efad5","profile":"cpu","action":{"operation":"list"}}

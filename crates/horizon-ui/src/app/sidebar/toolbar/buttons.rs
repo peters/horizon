@@ -1,5 +1,5 @@
 //! The toolbar's controls: the primary New cloud button and the Menu that holds
-//! Quick Nav, Remote Hosts, Cloud, Upkeep, Sessions and Settings.
+//! Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
 use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
@@ -18,8 +18,6 @@ enum MenuChoice {
     Action(ToolbarAction),
     #[cfg(feature = "cloud-workspaces")]
     NewCloud,
-    #[cfg(feature = "cloud-workspaces")]
-    NewUpkeep,
     #[cfg(feature = "cloud-workspaces")]
     SetupBoard,
     #[cfg(feature = "cloud-workspaces")]
@@ -65,14 +63,6 @@ const MENU: &[MenuEntry] = &[
         detail: "Start a cloud worker in the current workspace",
         action: None,
         choice: MenuChoice::NewCloud,
-    },
-    #[cfg(feature = "cloud-workspaces")]
-    MenuEntry {
-        group: None,
-        title: "New Upkeep",
-        detail: "An agent fixes and merges dependency updates on a schedule",
-        action: None,
-        choice: MenuChoice::NewUpkeep,
     },
     #[cfg(feature = "cloud-workspaces")]
     MenuEntry {
@@ -199,7 +189,7 @@ impl HorizonApp {
     fn menu_entry_enabled(&self, choice: MenuChoice) -> bool {
         match choice {
             #[cfg(feature = "cloud-workspaces")]
-            MenuChoice::NewCloud | MenuChoice::NewUpkeep => self.cloud_launch_ready(),
+            MenuChoice::NewCloud => self.cloud_launch_ready(),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => !self.cloud_prototype.groups.0.is_empty(),
             _ => true,
@@ -214,9 +204,6 @@ impl HorizonApp {
                 let workspace = self.board.ensure_workspace();
                 self.open_cloud_for_workspace(ctx, workspace);
             }
-            // New Upkeep makes its workspace once its cloud starts.
-            #[cfg(feature = "cloud-workspaces")]
-            MenuChoice::NewUpkeep => self.open_upkeep_dialog(ctx),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::SetupBoard => self.open_setup_board(ctx, true),
             #[cfg(feature = "cloud-workspaces")]
@@ -243,7 +230,7 @@ impl HorizonApp {
 fn disabled_reason(choice: MenuChoice) -> Option<&'static str> {
     match choice {
         #[cfg(feature = "cloud-workspaces")]
-        MenuChoice::NewCloud | MenuChoice::NewUpkeep => Some(super::super::NEW_CLOUD_NOT_READY),
+        MenuChoice::NewCloud => Some(super::super::NEW_CLOUD_NOT_READY),
         _ => None,
     }
 }

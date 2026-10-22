@@ -79,10 +79,6 @@ impl HorizonApp {
                 self.queue_cloud_list(request);
                 continue;
             }
-            if request.upkeep.is_some() {
-                self.queue_upkeep(request);
-                continue;
-            }
             if request.cloud_offers.is_some() {
                 self.browser_create_host.cloud_offers.push(request);
                 continue;
@@ -207,26 +203,6 @@ impl HorizonApp {
     #[cfg(feature = "cloud-workspaces")]
     fn queue_cloud_list(&mut self, request: UsageRequest) {
         self.queue_cloud_list_request(request);
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_upkeep(&mut self, request: UsageRequest) {
-        self.queue_upkeep_request(request);
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
-    fn queue_upkeep(&mut self, request: UsageRequest) {
-        let result = request.result(
-            Vec::new(),
-            Some("upkeep_unavailable: this Horizon build has no cloud support".into()),
-        );
-        // The answer is a file write: never on the UI thread.
-        std::thread::spawn(move || {
-            if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-                tracing::warn!(kind = ?error.kind(), "could not answer an Upkeep request");
-            }
-        });
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
