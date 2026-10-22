@@ -131,20 +131,39 @@ def crate_name(directory: Path) -> str | None:
     return name if isinstance(name, str) else None
 
 
-def bin_names(crate: Path) -> list[str]:
-    """Return the binary target names that a crate declares."""
+def bin_targets(crate: Path) -> list[tuple[Path, str]]:
+    """Return the binary roots of a crate as (source path, target name).
+
+    A crate declares binaries in `[[bin]]`, in `src/bin/*.rs`, or in `src/main.rs`
+    under the package name. The root file is what declares which modules belong
+    to the binary instead of the library.
+    """
+    roots: list[tuple[Path, str]] = []
     try:
         document = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
-        return []
-    declared = document.get("bin") or []
-    names = [entry["name"] for entry in declared if isinstance(entry, dict) and "name" in entry]
-    if names:
-        return names
-    if (crate / "src" / "main.rs").is_file():
+        document = {}
+    for entry in document.get("bin") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            continue
+        name = entry["name"]
+        path = crate / entry.get("path", f"src/bin/{name}.rs")
+        if path.is_file():
+            roots.append((path, name))
+    for candidate in sorted((crate / "src" / "bin").glob("*.rs")):
+        if all(candidate != known for known, _ in roots):
+            roots.append((candidate, candidate.stem))
+    main = crate / "src" / "main.rs"
+    if main.is_file() and all(candidate != main for candidate, _ in roots):
         name = crate_name(crate)
-        return [name] if name else []
-    return []
+        if name is not None:
+            roots.append((main, name))
+    return roots
+
+
+def bin_names(crate: Path) -> list[str]:
+    """Return the binary target names that a crate declares."""
+    return [name for _, name in bin_targets(crate)]
 
 
 def default_target(crate: Path) -> tuple[str, str | None]:
@@ -157,6 +176,31 @@ def default_target(crate: Path) -> tuple[str, str | None]:
     if names:
         return ("bins", None)
     return ("lib", None)
+
+
+def declares_module(root: Path, name: str) -> bool:
+    """Return whether a source root declares the top-level module `name`."""
+    try:
+        text = root.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    pattern = rf"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+{re.escape(name)}\s*;"
+    return re.search(pattern, text, re.MULTILINE) is not None
+
+
+def module_owner(crate: Path, top: str) -> tuple[str, str | None] | None:
+    """Return the target that declares the top-level module `top`, or None.
+
+    A crate with both a library and a binary declares different modules in
+    `lib.rs` and `main.rs`, so the filter has to follow the declaration.
+    """
+    library = crate / "src" / "lib.rs"
+    if library.is_file() and declares_module(library, top):
+        return ("lib", None)
+    for root, name in bin_targets(crate):
+        if declares_module(root, top):
+            return ("bin", name)
+    return None
 
 
 def module_filter(relative: Path) -> str | None:
@@ -209,12 +253,18 @@ def selection_for(path: Path, crate: Path) -> Selection | str:
         return Selection(name, target)
     if parts[0] != "src":
         return f"`{inner}` belongs to no test target"
+    if inner == Path("src/lib.rs"):
+        return Selection(name, ("lib", None))
+    for root, target_name in bin_targets(crate):
+        if inner == root.relative_to(crate):
+            return Selection(name, ("bin", target_name))
     if len(parts) == 3 and parts[1] == "bin":
         return Selection(name, ("bin", Path(parts[2]).stem))
     filter_ = module_filter(inner)
     if filter_ is None:
         return Selection(name, target)
-    return Selection(name, target, (filter_,))
+    owner = module_owner(crate, filter_.split("::")[0])
+    return Selection(name, owner or target, (filter_,))
 
 
 def build_plan(paths: list[str], root: Path = ROOT) -> Plan:
@@ -282,15 +332,23 @@ def nextest_available() -> bool:
 def has_tests(output: str) -> bool:
     """Return whether a test run selected at least one test.
 
-    libtest answers `test result: ok. 0 passed; ... filtered out` and nextest
-    fails with `no tests to run`. Both mean the filter missed, which is not a
-    test failure.
+    A run of several test binaries prints one result line per binary, so one
+    empty binary does not mean the run was empty. libtest answers
+    `test result: ok. 0 passed; ... filtered out` and nextest answers
+    `no tests to run`.
     """
+    results = re.findall(r"^test result: .*?(\d+) passed", output, re.MULTILINE)
+    if results:
+        return any(int(count) > 0 for count in results)
     if "no tests to run" in output:
         return False
-    if re.search(r"^test result: .*\b0 passed; 0 failed\b", output, re.MULTILINE):
-        return False
-    return not re.search(r"\d+ tests run: 0 passed", output)
+    summary = re.search(r"\d+ tests run: (\d+) passed", output)
+    return summary is None or int(summary.group(1)) > 0
+
+
+def reports_no_tests(output: str) -> bool:
+    """Return whether the runner refused the run because nothing matched."""
+    return "no tests to run" in output
 
 
 def report(plan: Plan) -> None:
@@ -350,7 +408,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
-        if not has_tests(result.stdout + result.stderr):
+        output = result.stdout + result.stderr
+        if result.returncode != 0 and not reports_no_tests(output):
+            status = result.returncode
+            if not arguments.keep_going:
+                return status
+            continue
+        if not has_tests(output):
             print(
                 f"warning: the filter selected no test in {selection.crate}. "
                 f"If the module is behind a cargo feature, pass it with "
@@ -358,11 +422,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             continue
-        if result.returncode == 0:
-            continue
-        status = result.returncode
-        if not arguments.keep_going:
-            return status
     return status
 
 

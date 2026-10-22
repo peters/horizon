@@ -33,6 +33,7 @@ def write_crate(root, directory, name, files, bins=()):
     manifest = f'[package]\nname = "{name}"\nversion = "0.1.0"\n'
     for binary in bins:
         manifest += f'\n[[bin]]\nname = "{binary}"\npath = "src/{binary}.rs"\n'
+        files = [*files, f"src/{binary}.rs"]
     (crate / "Cargo.toml").write_text(manifest, encoding="utf-8")
     for entry in files:
         target = crate / entry
@@ -176,11 +177,65 @@ class SelectionTests(unittest.TestCase):
 
     def test_binary_only_crate_with_several_binaries_selects_all(self):
         crate = write_crate(
-            self.root, "crates/tools", "tools", [], bins=["one", "two"]
+            self.root, "crates/tools", "tools", ["src/shared.rs"], bins=["one", "two"]
         )
         self.assertEqual(
-            focus.selection_for(self.root / "crates/tools/src/lib.rs", crate),
-            focus.Selection("tools", ("bins", None)),
+            focus.selection_for(self.root / "crates/tools/src/shared.rs", crate),
+            focus.Selection("tools", ("bins", None), ("shared::",)),
+        )
+
+    def test_a_binary_root_selects_its_whole_binary(self):
+        crate = write_crate(self.root, "crates/tool", "tool", [], bins=["tool"])
+        self.assertEqual(
+            focus.selection_for(self.root / "crates/tool/src/tool.rs", crate),
+            focus.Selection("tool", ("bin", "tool")),
+        )
+
+
+class MixedCrateTests(unittest.TestCase):
+    """A filter follows the root that declares the module."""
+
+    def setUp(self):
+        self.hold = tempfile.TemporaryDirectory()
+        self.root = Path(self.hold.name)
+        (self.root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+        self.crate = write_crate(
+            self.root,
+            "crates/mixed",
+            "mixed",
+            ["src/lib.rs", "src/main.rs", "src/shared.rs", "src/onlybin.rs"],
+        )
+        (self.crate / "src" / "lib.rs").write_text("pub mod shared;\n", encoding="utf-8")
+        (self.crate / "src" / "main.rs").write_text("mod onlybin;\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.hold.cleanup()
+
+    def select(self, entry):
+        return focus.selection_for(self.root / entry, self.crate)
+
+    def test_a_library_module_filters_the_library(self):
+        self.assertEqual(
+            self.select("crates/mixed/src/shared.rs"),
+            focus.Selection("mixed", ("lib", None), ("shared::",)),
+        )
+
+    def test_a_binary_module_filters_the_binary(self):
+        self.assertEqual(
+            self.select("crates/mixed/src/onlybin.rs"),
+            focus.Selection("mixed", ("bin", "mixed"), ("onlybin::",)),
+        )
+
+    def test_the_main_root_selects_the_whole_binary(self):
+        self.assertEqual(
+            self.select("crates/mixed/src/main.rs"),
+            focus.Selection("mixed", ("bin", "mixed")),
+        )
+
+    def test_the_library_root_selects_the_whole_library(self):
+        self.assertEqual(
+            self.select("crates/mixed/src/lib.rs"),
+            focus.Selection("mixed", ("lib", None)),
         )
 
 
@@ -329,6 +384,17 @@ class NoTestDetectionTests(unittest.TestCase):
     def test_a_compile_error_is_not_an_empty_selection(self):
         self.assertTrue(focus.has_tests("error[E0308]: mismatched types"))
 
+    def test_one_empty_binary_does_not_empty_a_multi_binary_run(self):
+        output = (
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 ignored out\n"
+            "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
+        )
+        self.assertTrue(focus.has_tests(output))
+
+    def test_a_refused_run_is_reported_as_no_tests(self):
+        self.assertTrue(focus.reports_no_tests("error: no tests to run"))
+        self.assertFalse(focus.reports_no_tests("test result: FAILED. 1 passed; 1 failed"))
+
 
 class CommandLineTests(unittest.TestCase):
     """The script prints commands for a real repository path."""
@@ -376,6 +442,13 @@ if args[:2] == ["nextest", "--version"]:
 mode = os.environ.get("FAKE_CARGO_MODE", "pass")
 if mode == "fail":
     print("error[E0308]: mismatched types")
+    sys.exit(101)
+if mode == "mixed":
+    print("running 0 tests")
+    print()
+    print("test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 ignored out")
+    print()
+    print("test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out")
     sys.exit(101)
 if mode == "none":
     print("running 0 tests")
@@ -480,6 +553,11 @@ class RunLoopTests(unittest.TestCase):
         result = self.run_script([self.board, self.panel, "--keep-going"], mode="fail")
         self.assertEqual(result.returncode, 101)
         self.assertEqual(len(self.invocations()), 2)
+
+    def test_an_empty_binary_beside_a_failure_reports_the_failure(self):
+        result = self.run_script([self.board], mode="mixed")
+        self.assertEqual(result.returncode, 101, result.stderr)
+        self.assertNotIn("selected no test", result.stderr)
 
     def test_a_filter_without_tests_warns_and_exits_zero(self):
         result = self.run_script([self.board], mode="none")
