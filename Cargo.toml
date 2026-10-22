@@ -180,7 +180,7 @@ atspi = { version = "0.30.0", default-features = false, features = ["connection"
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
 axuielement = { version = "0.10.0", default-features = false, features = ["async"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "libc"] }
-global-hotkey = "0.8.0"
+global-hotkey = "0.9.0"
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.
