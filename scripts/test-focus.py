@@ -317,7 +317,21 @@ def module_path(crate: Path, path: Path, depth: int = 0) -> str | None:
     return None
 
 
-def selection_for(path: Path, crate: Path) -> Selection | str:
+def build_input_selections(name: str, crate: Path, inner: Path) -> list[Selection] | str:
+    """Return the targets that compile a file no test target owns.
+
+    A build script and an integration test can load such a file through
+    `#[path]`, which compiles it only when its target runs.
+    """
+    if inner.suffix != ".rs":
+        return f"`{inner}` belongs to no test target: run the full matrix"
+    selections = [Selection(name, default_target(crate))]
+    if (crate / "tests").is_dir():
+        selections.append(Selection(name, ("tests", None)))
+    return selections
+
+
+def selection_for(path: Path, crate: Path) -> Selection | list[Selection] | str:
     """Return the selection for one file, or a note when it covers no test."""
     name = crate_name(crate)
     if name is None:
@@ -342,9 +356,9 @@ def selection_for(path: Path, crate: Path) -> Selection | str:
             return Selection(name, ("example", parts[1]))
         return Selection(name, ("examples", None))
     if inner.name == "build.rs":
-        return Selection(name, target)
+        return build_input_selections(name, crate, inner)
     if parts[0] != "src":
-        return f"`{inner}` belongs to no test target"
+        return build_input_selections(name, crate, inner)
     if inner == Path("src/lib.rs"):
         return Selection(name, ("lib", None))
     for root, target_name in bin_targets(crate):
@@ -378,6 +392,9 @@ def build_plan(paths: list[str], root: Path = ROOT) -> Plan:
         outcome = selection_for(path, crate)
         if isinstance(outcome, str):
             plan.unselected.append((entry, outcome))
+        elif isinstance(outcome, list):
+            for selection in outcome:
+                plan.add(selection)
         else:
             plan.add(outcome)
     return plan

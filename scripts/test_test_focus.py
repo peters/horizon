@@ -143,11 +143,38 @@ class SelectionTests(unittest.TestCase):
             focus.Selection("demo", ("example", "cloud_deploy")),
         )
 
-    def test_build_script_runs_the_whole_default_target(self):
-        self.assertEqual(
-            self.select("crates/demo/build.rs"),
-            focus.Selection("demo", ("lib", None)),
+    def test_build_script_runs_the_default_target_and_the_tests(self):
+        crate = write_crate(
+            self.root, "crates/built", "built", ["src/lib.rs", "build.rs", "tests/one.rs"]
         )
+        self.assertEqual(
+            focus.selection_for(self.root / "crates/built/build.rs", crate),
+            [
+                focus.Selection("built", ("lib", None)),
+                focus.Selection("built", ("tests", None)),
+            ],
+        )
+
+    def test_a_build_input_file_runs_the_targets_that_compile_it(self):
+        crate = write_crate(
+            self.root,
+            "crates/built",
+            "built",
+            ["src/lib.rs", "build/fonts.rs", "tests/fonts.rs"],
+        )
+        self.assertEqual(
+            focus.selection_for(self.root / "crates/built/build/fonts.rs", crate),
+            [
+                focus.Selection("built", ("lib", None)),
+                focus.Selection("built", ("tests", None)),
+            ],
+        )
+
+    def test_a_document_inside_a_crate_names_the_full_matrix(self):
+        crate = write_crate(self.root, "crates/doc", "doc", ["src/lib.rs", "README.md"])
+        outcome = focus.selection_for(self.root / "crates/doc/README.md", crate)
+        self.assertIsInstance(outcome, str)
+        self.assertIn("full matrix", outcome)
 
     def test_explicit_binary_source_is_its_own_target(self):
         crate = write_crate(self.root, "crates/many", "many", ["src/lib.rs"])
@@ -166,7 +193,7 @@ class SelectionTests(unittest.TestCase):
     def test_file_without_a_test_target_is_a_note(self):
         outcome = self.select("crates/demo/README.md")
         self.assertIsInstance(outcome, str)
-        self.assertIn("no test target", outcome)
+        self.assertIn("full matrix", outcome)
 
     def test_binary_only_crate_selects_its_one_binary(self):
         crate = write_crate(self.root, "crates/app", "app-ui", [], bins=["app"])
