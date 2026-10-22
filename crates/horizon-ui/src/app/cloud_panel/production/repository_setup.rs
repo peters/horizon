@@ -275,8 +275,10 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
                 .stroke(stroke)
                 .corner_radius(8)
                 .min_size(Vec2::new(0.0, 28.0));
+                // The chip keeps the preset it shows: only the caret switches between
+                // the presets of an agent.
                 if ui.add(chip).on_hover_text(name).clicked() {
-                    form.setup_preset = Some(group.default.name.clone());
+                    form.setup_preset = Some(name.to_owned());
                 }
                 if !group.variants.is_empty() {
                     variant_caret(ui, form, group, chosen_name);
