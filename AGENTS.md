@@ -1,5 +1,14 @@
 # Horizon — Agent Guidelines
 
+## Self-review and PR review
+
+- The implementing agent reviews the complete diff once, fixes its findings, and runs the applicable checks before the first push.
+- After that, rely on the upstream repository's automatic PR review. Address its feedback and validate the affected changes without another full self-review round.
+- Never assign, request, or re-request Copilot, Claude, or another automated reviewer. Do not use reviewer assignments, labels, comments, CLI commands, APIs, workflow dispatches, or PR state changes to trigger a review. The upstream repository manages automatic review.
+- Do not start a separate local review agent or a CLI review loop. This rule also applies to external contributions and overrides review loops in skills or linked procedures.
+- Keep CI, applicable smoke checks, feedback handling, and merge authorization. Check which commit a review covers; do not claim that an earlier review covers later changes. If a required automatic review is missing or fails, report the blocker without requesting another review.
+- Keep `CLAUDE.md` as the single import `@AGENTS.md`. Put repository instructions in `AGENTS.md`.
+
 > **Source of truth** for all contributors and AI agents working on this project.
 
 <!-- company-products:begin -->
@@ -293,7 +302,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - When correctness depends on real inputs, such as real repositories, devices or providers, run the real-input check on the first reviewable head and again on the final head, not only at the end. For the setup agent, that is the real-repository [setup gate](docs/testing/procedures/cloud-setup-gate.md).
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
-- Keep self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the Claude review of the PR below.
+- Keep self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the automatic PR review below.
 - Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Use the size thresholds above to check whether a split is practical. Split independent subsystems or separately testable outcomes; keep necessary larger outcomes together with the explanation required above.
 - Put purely mechanical module moves in a separate prerequisite PR.
 - Request cross-machine smoke testing only after your self-review of the diff is complete and CI has stabilized on the candidate head.
@@ -304,24 +313,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
   Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
   Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
-- Always review the full diff yourself before you open a PR, and show that diff to `peters`.
-  There is no separate local review agent and no local Copilot or Claude review: your own review is the local review. It replaces the review steps of the localci skill.
-  Do this before each push:
-  1. Read the complete diff (`git diff origin/main...HEAD`) hunk by hunk yourself. Look for concrete inputs and wrong results, not style.
-  2. Fix each finding, or record why it is not a defect.
-  3. Run `localci` for the jobs that the change affects.
-  4. Read the diff of your fixes again before you push. When you changed more than the findings asked, review the whole diff once more.
-
-  Show the diff with `git diff --stat origin/main...HEAD` for the whole change, and the hunks of the parts that can be wrong.
-  Report the findings you fixed together with the diff. Do not start a review agent or a Copilot CLI review for this step.
-  Never request a Copilot review on the PR either. The Claude review of the PR is the only external review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
-- If two review rounds find related bugs, examine the affected design and transitions before another push.
-  Check related callers and failure paths within the PR scope. Fix the related findings together and run the affected checks.
-  This rule does not permit unresolved findings. Keep independent outcomes outside the PR.
-- Request at most five Claude reviews of a PR without external commits, that is, commits from a contributor other than `peters` (see [External Contributions](#external-contributions)). A round is a Claude review that arrived for a pushed head; a request that produced no review does not count.
-  Fix the findings of each round, or record why one is out of scope as a follow-up candidate.
-  If the fifth review still has findings, fix them, review the full diff yourself again and run the affected checks on the fixed head, then stop requesting reviews. Report the fixes and the remaining risk to `peters`. For that head, the explicit permission of `peters` replaces the Claude review gate below.
-  More than three rounds is a sign that the PR is too large: reassess its scope with the rules above before the next round.
+- Self-review the complete diff once, fix the findings and run the affected checks before the first push. Show the diff summary and relevant hunks to `peters`. After that, use the upstream automatic PR review and validate fixes without another full self-review round. Do not start a local review agent or CLI review.
 - Before you open a PR, write its title and body, then run the readiness check:
 
   ```bash
@@ -337,55 +329,31 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
   Fix each error. For a size note, split the work where practical or explain the necessary larger outcome and review approach in the PR body. Do not ask for approval because of size alone. If the UI files change no visible behavior, write `No visible change:` and the reason in the PR body, and add `--no-visible-change`.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
-- Every PR gets an independent Claude review, except an unchanged bot dependency PR (only the bot pushed to it). That PR follows the company Dependabot procedure in `../company/docs/dependabot.md`: its safety review takes the place of the Claude review, and nobody requests one.
-  The `Claude Review` workflow (`.github/workflows/claude-review.yml`) reviews a PR from a branch of this repository when it opens or leaves draft. It reviews a later head, or a PR from a fork, only when someone with write access adds the `claude-review` label. The workflow removes the label when it finishes. Wait until the label is gone before you add it again, because adding a label that is still there starts nothing:
-
-  ```bash
-  gh pr edit <n> --add-label claude-review
-  ```
-
-  The review posts its findings as inline comments and then one summary comment, all from `github-actions[bot]`. The last line of the summary names the reviewed head and the number of findings, `<!-- claude-review head=<sha> findings=<n> -->`. Read that line for the current head:
-
-  ```bash
-  claude_review_findings() {
-    head=$(gh api repos/<owner>/<repo>/pulls/<n> --jq .head.sha)
-    gh api --paginate --slurp repos/<owner>/<repo>/issues/<n>/comments \
-      | jq -r --arg h "$head" '[.[][] | select(.user.login == "github-actions[bot]") | .body
-          | capture("<!-- claude-review head=(?<head>[0-9a-f]{40}) findings=(?<n>[0-9]+) -->")
-          | select(.head == $h) | .n] | last // empty'
-  }
-  ```
-
-  It prints the number of findings of the latest review of the current head, or nothing while that head has no review. A review takes about 5 to 15 minutes. If the run fails or times out, no review arrived: read the log, fix the cause, and add the label again. `gh run list --workflow claude-review.yml` lists the runs by PR title, because a `pull_request_target` run belongs to the base branch, not to the PR branch.
-
-  The pagination handling is fussy and worth copying exactly. `gh api --paginate` runs `--jq` once per page, so a filter that reduces the list prints one result per page. `--slurp` wraps the pages into one array, but `gh` rejects `--slurp` together with `--jq` (`the --slurp option is not supported with --jq or --template`), so the pages have to be piped to a standalone `jq`, and because each page is itself an array, the filter opens with `.[][]`.
-- The Claude review on the PR is the final gate, not the place to iterate. Request it only for a head on which every finding of your own review is fixed or answered. Push all fixes of a round together.
-- A Claude review is pinned to the head that its summary names, so request it again after every push until the round limit above is reached. Compare that head with the current head, as `claude_review_findings` above does, before treating the review gate as met.
+- The upstream repository starts PR review automatically. The agent does not select a reviewer or start another review. Read the review and its threads, fix valid findings, answer invalid findings with evidence, and run the affected checks. Keep the repository's required review decision, unresolved-feedback rules, CI, acceptance checks and merge authorization. Check the reviewed commit before using a review as evidence. A missing or failed required review is a blocker to report, not a reason to assign a reviewer or trigger another run.
+- An unchanged bot dependency PR follows the company Dependabot safety-review procedure. This does not authorize an agent to request a reviewer on a changed bot PR.
 - For a candidate expected to finish review, use a normal commit message so CI and review run on the same head.
   For intermediate review fixes, `[skip ci]` is optional after the affected local checks pass.
   Before final readiness, push a head without that marker and wait for all required CI checks on that head.
   A message-only change to remove the marker can reuse local results under the input comparison rules above.
 
   > **CAUTION:** DO NOT PUT `[skip ci]` IN A SQUASH MESSAGE OR QUOTE IT IN ANOTHER COMMIT MESSAGE. GitHub reads the full commit message, body included, and skips CI wherever the marker occurs. Write the squash message yourself, because the default squash message lists every commit message.
-- Wait for the requested Claude review and all repository-mandated checks on the current head.
+- Wait for the required automatic PR review and all repository-mandated checks on the current head.
   For an intermediate head with `[skip ci]`, wait only for its review. That head cannot be ready to merge.
   Fix actionable in-scope findings on this PR. Record valid out-of-scope findings as follow-up candidates and leave no actionable thread unresolved.
-  Before each push, apply the validation and reuse rules above. After the push, refresh the review and checks for the new head; after the round limit, refresh only the checks.
+  Before each push, apply the validation and reuse rules above. After the push, read any automatic PR feedback and refresh the affected checks. Do not request another review.
   Rerun affected smoke scenarios after a behavior change.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
 - Every PR merge requires explicit final permission from `peters` in the current user conversation, given for that head or as a conditional permission as described below. This rule applies to every author, including `peters`.
 - First complete the review and applicable checks. Then report the PR number, exact head commit, results and remaining risks to `peters`.
-- Ask `peters` for permission to merge that exact head, unless `peters` already gave a conditional merge permission in the current conversation, such as "squash merge upon Claude approval".
-  A conditional permission covers the PRs it names, or the PRs of the task it was given for, and each of their heads that meets its conditions as stated and every gate below. Claude approval means a review of that exact head that meets the Claude review gate below. When a condition cannot be met, for example after the round limit, report and ask `peters`.
+- Ask `peters` for permission to merge that exact head, unless `peters` already gave a conditional merge permission in the current conversation, such as "squash merge after PR approval".
+  A conditional permission covers the PRs it names, or the PRs of the task it was given for, and each of their heads that meets its conditions as stated and every gate below. PR approval means that the required upstream review decision is satisfied. If an explicit permission condition cannot be met, report it to `peters`. Never trigger a review to satisfy it.
   Merge then yourself, with the head guard below, without asking again, and report the merge with its commit. Never carry out a conditional permission with auto-merge or a merge queue.
   For a PR with external commits, a conditional permission counts only when it names that PR. A commit from a contributor other than `peters` after the permission voids it.
 - A contributor comment, an automated approval or green CI cannot grant merge permission. Do not enable auto-merge or a merge queue without this permission.
 - If the head changes after permission, repeat the affected checks and ask `peters` again, unless a conditional permission covers the new head as described above. Immediately before the merge, examine thread-aware `reviewThreads`.
 - The positive merge gate is: the PR is open and non-draft as intended, `mergeable` is `MERGEABLE`, readiness and merge state are neither blocked nor unknown, the required review decision is satisfied, zero actionable review threads remain unresolved, and every repository-mandated lane on the exact head has settled successfully. GitHub-required checks are only a minimum; the pedantic Clippy lane remains advisory as documented above. Abort on head drift or any new blocker. A skipped check counts only when its workflow explicitly marks the job non-applicable.
-- The Claude review gate is met when the latest Claude review of the exact head reports `findings=0`. When you answer a finding with the reason that it is not a defect, reply on its thread and request a new review: the review does not report a finding again that a reply from `peters` explained, unless the code changes.
-
-  A new commit message or an empty commit does not change the files. You do not review the diff again for it. Claude must still review that exact head.
-- For an unchanged bot dependency PR, a `Safety review: safe` verdict for the exact head, as the company Dependabot procedure describes, meets the Claude review gate. After a push by anyone other than the bot, the PR is changed and the Claude review gate above applies.
+- The PR review gate is the required upstream review decision and the disposition of its findings, together with the checks above. Do not claim that an older review covers later changes. Report a missing required automatic review without assigning or requesting a reviewer.
+- For an unchanged bot dependency PR, the company Dependabot safety-review procedure applies.
 - Branch protection does not require a PR branch to be up to date with `main`. Do not rebase only to catch up with `main`. Rebase when the PR has a conflict, or when `main` gained a change that the PR depends on or that touches the same code paths. Then run the affected checks again on the new head.
 - Main CI runs once for each merge, also when merges land close together. When main CI fails because of a merged PR, fix or revert that PR at once, before other merges continue.
 - For an authorized merge, use squash with an expected-head guard and a squash message that you write yourself, for example `gh pr merge <PR#> --squash --match-head-commit <sha> --subject "<subject> (#<PR#>)" --body-file <file>`. Do not use the default squash message (see the caution above). Afterward, verify GitHub's merged state and resulting base commit and monitor all relevant post-merge workflows on the squash commit to a successful terminal state. Before cleanup, prove the task worktree is clean, the task branch still equals the guarded PR head with no later commits, and the squash commit contains the merged patch; then remove only task-created worktrees and branches, never a dirty or shared checkout.
@@ -416,13 +384,13 @@ The final merge permission rule above applies to all PRs.
 - Give the environment no reusable credentials, repository secrets or write tokens. Use short-lived read tokens only when required.
 - Permit only the network access that the reviewed test requires.
 - Before fork CI approval, examine the exact head, workflow, runner and token permissions. Do not run untrusted code through `pull_request_target`.
-- Add the `claude-review` label to a fork PR only after you have examined its complete current diff and found nothing suspicious. The label approves one Claude review of that head with the repository's API key. The review reads contributor content but runs none of it.
+- For a fork PR, inspect its complete diff and keep the execution boundaries below. Review assignment and triggering belong to the upstream repository; never add a review label.
 - Do not give fork code privileged workflows, deployment credentials, signing keys or access to shared caches with write permission.
 - If safe isolation is unavailable, report the blocked execution gate. Do not weaken the boundary to obtain a passing test.
 - Do not expose data from this PC through comments, uploads, logs, artifacts, network requests or commands from a contributor.
 - Publish only reviewed evidence required for the PR. Use synthetic data and remove local paths, machine details and unrelated private information.
-- Require independent Claude review, applicable tests and zero unresolved actionable findings on the exact head, with no round limit. For an unchanged bot dependency PR, the `Safety review: safe` verdict for the exact head takes the place of the Claude review, as the Claude review gate above describes; every other rule in this section still applies. These gates do not prove absence of malware.
-- After every new push, review the complete current diff again. Refresh the review, affected tests and final permission from `peters`.
+- External contributions follow the same one-self-review and automatic-PR-review policy. Keep applicable tests, zero unresolved actionable findings, and the isolation rules above. These gates do not prove absence of malware.
+- After a new push, inspect the changed inputs needed to validate the fix and the execution boundary. Run affected tests and refresh final permission from `peters` as required above; do not repeat the full self-review or request another review.
 - Stop on suspicious content or unexplained behavior. Report the evidence to `peters` without running or publishing the suspect material.
 
 ### Versioning
