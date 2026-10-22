@@ -13,10 +13,14 @@ try {
   delete window.__HORIZON_GLOBAL__;
   throw horizonExpressionFailure;
 }
-const horizonKept = window.__HORIZON_GLOBAL__;
-delete window.__HORIZON_GLOBAL__;
-if (horizonKept && typeof horizonKept.then === 'function') {
-  window.__HORIZON_GLOBAL__ = horizonKept;
+if (window.__HORIZON_GLOBAL__ && typeof window.__HORIZON_GLOBAL__.then === 'function') {
   return {horizonPending: true};
 }
-return {horizonSettled: true, horizonValue: horizonKept === undefined ? null : horizonKept};
+return {
+  horizonSettled: true,
+  horizonValue: (function () {
+    const horizonAnswer = window.__HORIZON_GLOBAL__;
+    delete window.__HORIZON_GLOBAL__;
+    return horizonAnswer === undefined ? null : horizonAnswer;
+  })(),
+};

@@ -94,12 +94,21 @@ test('a rejection reason that cannot be printed is still reported', async () => 
 });
 
 test('the expression sees the page, not the wrapper', () => {
-    const target = page({value: 5, result: 'page'});
+    const target = page({value: 5, result: 'page', horizonAnswer: 'page'});
     assert.deepEqual(plain(target.evaluate('value * 2')), {horizonSettled: true, horizonValue: 10});
     assert.deepEqual(plain(target.evaluate('result')), {horizonSettled: true, horizonValue: 'page'});
     assert.deepEqual(plain(target.evaluate('this === window')), {
         horizonSettled: true,
         horizonValue: true,
+    });
+    // No wrapper binding is visible to the expression, not even a Horizon name.
+    assert.deepEqual(plain(target.evaluate('horizonAnswer')), {
+        horizonSettled: true,
+        horizonValue: 'page',
+    });
+    assert.deepEqual(plain(target.evaluate("typeof window[Symbol.for('none')]")), {
+        horizonSettled: true,
+        horizonValue: 'undefined',
     });
 });
 
