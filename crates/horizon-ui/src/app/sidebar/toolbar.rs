@@ -87,7 +87,6 @@ impl HorizonApp {
                     match *item {
                         ToolbarItem::FpsMeter => self.render_toolbar_fps_meter(ui),
                         ToolbarItem::NewCloud { compact } => self.render_toolbar_new_cloud(ui, compact),
-                        ToolbarItem::NewWorkspace => self.render_toolbar_new_workspace(ui),
                         ToolbarItem::Menu => self.render_toolbar_menu(ui),
                     }
                 }

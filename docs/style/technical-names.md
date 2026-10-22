@@ -70,7 +70,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts, the cloud actions and Settings. | More menu, overflow menu, Cloud menu |
 | New cloud button | The accent **+ New cloud** button in the toolbar. It makes a workspace and opens New cloud for it. | Cloud ▾, place menu |
-| New workspace button | The **+ Workspace** button in the toolbar. It makes an empty workspace on this computer. | New menu |
+| New workspace button | The **New** button in the sidebar header next to **Workspaces**. It makes an empty workspace on this computer. | New menu, + Workspace |
 | idle period | The value of `idle_stop_minutes` in a profile. It has no effect now. | idle timeout, idle limit |
 | idle stop | The stop of a RunPod worker by itself after an idle period without agent activity. Only a worker created before the agent stop, on an image from before it, does this. Horizon does not stop an idle cloud. | auto stop, auto-stop |
 | stop request | The file `/run/horizon-worker/stop-request.json` on a worker without a stop credential. The stop service writes it for an agent's stop, and `horizon-worker-stopd --take` gives it to Horizon. | — |

@@ -1,11 +1,11 @@
-//! The toolbar's controls: the primary New cloud button, the New workspace button and the
-//! Menu that holds Quick Nav, Remote Hosts, Cloud, Upkeep, Sessions and Settings.
+//! The toolbar's controls: the primary New cloud button and the Menu that holds
+//! Quick Nav, Remote Hosts, Cloud, Upkeep, Sessions and Settings.
 use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
 use crate::app::root_chrome::{
     ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
-    ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH, ToolbarAction,
+    ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ToolbarAction,
 };
 use crate::app::sidebar::new_workspace::NewWorkspace;
 use crate::app::sidebar::rich_menu;
@@ -147,30 +147,6 @@ impl HorizonApp {
         });
         if button.clicked() {
             self.create_new_workspace(ui.ctx(), NewWorkspace::Cloud, None);
-        }
-    }
-
-    /// "+ Workspace" makes an empty workspace on this computer at once.
-    pub(super) fn render_toolbar_new_workspace(&mut self, ui: &mut Ui) {
-        let (rect, button) = ui.allocate_exact_size(
-            Vec2::new(ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH, ROOT_TOOLBAR_BUTTON_HEIGHT),
-            Sense::click(),
-        );
-        let button = button
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text("A new empty workspace. Terminals and agents run on this computer.");
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New workspace"));
-        paint_framed_button(ui.painter(), rect, &button, |painter, ink| {
-            painter.text(
-                Pos2::new(rect.min.x + 14.0, rect.center().y),
-                Align2::LEFT_CENTER,
-                "+  Workspace",
-                FontId::proportional(12.5),
-                ink,
-            );
-        });
-        if button.clicked() {
-            self.create_new_workspace(ui.ctx(), NewWorkspace::ThisPc, None);
         }
     }
 

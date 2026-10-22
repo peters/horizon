@@ -268,8 +268,8 @@ The toolbar has two buttons that make a workspace:
   that this computer can deploy to. A repository with its own profile can ask for a
   larger machine. **New cloud** then shows that machine and its price. In a narrow
   window, the button shows **+ Cloud**.
-- **+ Workspace** makes an empty workspace on this computer. No dialog opens.
-  **New** in the sidebar does the same.
+- **New** in the sidebar header makes an empty workspace on this computer. No
+  dialog opens. The toolbar has no button for it.
 
 The empty canvas shows **New Cloud** and **New Workspace**, which do the same.
 **Menu › Add cloud here** starts a cloud in the current workspace.

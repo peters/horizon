@@ -53,22 +53,26 @@ fn new_in_the_sidebar_makes_an_empty_workspace_on_this_pc_without_a_menu() {
 }
 
 #[test]
-fn the_toolbar_has_one_button_for_a_cloud_and_one_for_an_empty_workspace() {
+fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
     let (_temp, ctx, mut app, workspaces) = ready_app();
     ctx.enable_accesskit();
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let cloud = label_position(&output, "+  New cloud");
-    let workspace = label_position(&output, "+  Workspace");
     let labels = spoken(&output);
-    for label in ["New cloud", "New workspace", "Menu"] {
+    for label in ["New cloud", "Menu"] {
         assert!(
             labels.iter().any(|(spoken, disabled)| spoken == label && !disabled),
             "{label}: {labels:?}"
         );
     }
     assert!(
-        workspace.x > cloud.x && (workspace.y - cloud.y).abs() < 1.0,
-        "+ Workspace follows + New cloud"
+        !labels.iter().any(|(spoken, _)| spoken == "New workspace"),
+        "New workspace lives in the sidebar header only: {labels:?}"
+    );
+    let menu = label_position(&output, "Menu");
+    assert!(
+        menu.x > cloud.x && (menu.y - cloud.y).abs() < 1.0,
+        "Menu follows + New cloud"
     );
 
     // The tooltip of + New cloud shows the machine and its price; the tests reach no
@@ -93,11 +97,6 @@ fn the_toolbar_has_one_button_for_a_cloud_and_one_for_an_empty_workspace() {
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     assert!(!app.cloud_creation_open());
     assert_eq!(app.board.workspaces.len(), workspaces, "the cancelled workspace goes");
-
-    // + Workspace makes an empty workspace on this computer without a dialog or a menu.
-    click(&ctx, &mut app, workspace);
-    assert!(!app.cloud_prototype.production.creating, "+ Workspace opens no dialog");
-    assert_eq!(app.board.workspaces.len(), workspaces + 1);
 }
 
 #[test]
@@ -120,9 +119,6 @@ fn without_cloud_workspaces_new_cloud_is_dimmed_and_does_nothing() {
         "no New cloud without cloud workspaces"
     );
     assert_eq!(app.board.workspaces.len(), workspaces);
-
-    click(&ctx, &mut app, label_position(&output, "+  Workspace"));
-    assert_eq!(app.board.workspaces.len(), workspaces + 1, "a This PC workspace");
 }
 
 #[test]

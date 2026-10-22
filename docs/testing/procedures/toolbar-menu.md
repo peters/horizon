@@ -1,6 +1,6 @@
 ---
 procedure: toolbar-menu
-feature: The toolbar New cloud and New workspace buttons and Menu
+feature: The toolbar New cloud button and Menu
 platforms: [linux]
 cost: none
 destructive: no
@@ -8,15 +8,15 @@ secrets: none
 owner: peters
 ---
 
-# Toolbar New cloud, New workspace and Menu test procedure
+# Toolbar New cloud and Menu test procedure
 
 ## 1. Purpose
 
-This procedure makes sure that the toolbar shows three controls at the right:
-**+ New cloud**, **+ Workspace** and **Menu**. It also makes sure that each
-button does one action without a menu, that each Menu row shows a title and a
-one-line description, that each row does its action, and that the controls stay
-in the toolbar in a narrow window.
+This procedure makes sure that the toolbar shows two controls at the right:
+**+ New cloud** and **Menu**. It also makes sure that each control does its
+action without a menu, that each Menu row shows a title and a one-line
+description, that each row does its action, and that the controls stay in the
+toolbar in a narrow window.
 
 ## 2. Applicability
 
@@ -59,7 +59,7 @@ in the toolbar in a narrow window.
 
    Result: The Device panel shows the fixture desktop. The Horizon window shows
    the toolbar with **Horizon**, the search field, the FPS meter,
-   **+ New cloud**, **+ Workspace** and **Menu**.
+   **+ New cloud** and **Menu**.
 
 2. Set the Horizon window to 1600 × 1000 pixels or the size of the fixture
    desktop.
@@ -71,7 +71,6 @@ in the toolbar in a narrow window.
 Give each result to the report with the task ID.
 
 ### 6.1 NEW — New cloud and New workspace
-
 1. Move the pointer onto **+ New cloud**.
 
    Result: The button becomes lighter. A tooltip says that the new workspace
@@ -85,19 +84,10 @@ Give each result to the report with the task ID.
 
    Result: The dialog closes and the new workspace goes again.
 
-4. Move the pointer onto **+ Workspace**.
-
-   Result: The button becomes lighter. A tooltip says that the new workspace is
-   empty and runs on this computer.
-
-5. Click **+ Workspace**.
-
-   Result: No menu and no dialog open. A new empty workspace shows in the
-   sidebar under **This PC**.
-
-6. Click **New** in the sidebar header.
+4. Click **New** in the sidebar header.
 
    Result: No menu opens. One more empty workspace shows under **This PC**.
+   The toolbar has no button for an empty workspace.
 
 ### 6.2 MENU — The toolbar Menu
 
@@ -142,15 +132,15 @@ Give each result to the report with the task ID.
 
 ### 6.3 NARROW — A narrow window
 
-1. Set the Horizon window to 800 × 900 pixels.
+1. Set the Horizon window to its minimum width of 800 pixels.
 
    ```sh
    DISPLAY=<display> xdotool search --pid <child-pid> --name '^Horizon$' windowsize %1 800 900
    ```
 
-   Result: The tagline goes. The FPS meter, **+ New cloud**, **+ Workspace**
-   and **Menu** stay. The search field stays between the brand and the controls. No control
-   overlaps the search field.
+   Result: The tagline stays after **Horizon**. The FPS meter, **+ New cloud**
+   and **Menu** stay. The search field gets narrower and cuts its placeholder
+   text. No control overlaps the search field.
 
 2. Open **Menu**.
 
@@ -172,13 +162,9 @@ Give each result to the report with the task ID.
 
 3. Press Tab.
 
-   Result: The focus ring moves to **+ Workspace** only.
-
-4. Press Tab.
-
    Result: The focus ring moves to **Menu**.
 
-5. Press Enter.
+4. Press Enter.
 
    Result: The Menu opens. Press Escape.
 
@@ -187,7 +173,7 @@ Give each result to the report with the task ID.
 1. Open **Menu › Settings**. Under **Appearance**, choose **Light**.
 
    Result: The board uses the light theme. The text on **+ New cloud** stays
-   readable on the accent color. The text on **+ Workspace** is readable.
+   readable on the accent color.
 
 2. Open **Menu**.
 
@@ -201,15 +187,14 @@ Give each result to the report with the task ID.
 ## 7. Pass criteria
 
 - NEW opens New cloud for a new workspace from **+ New cloud**, and makes an
-  empty workspace on this computer from **+ Workspace** and from **New** in the
-  sidebar. No button opens a menu.
+  empty workspace on this computer from **New** in the sidebar. No control
+  opens a menu.
 - MENU opens each action from its row and shows the captions, descriptions and
   shortcuts as written.
-- KEYS moves a focus ring over each button and **Menu**, and Enter opens the
+- KEYS moves a focus ring over **+ New cloud** and **Menu**, and Enter opens the
   Menu.
 - LIGHT shows readable controls and menus in the light theme.
-- NARROW keeps **+ New cloud**, **+ Workspace** and **Menu** in the toolbar in
-  a narrow window.
+- NARROW keeps **+ New cloud** and **Menu** in the toolbar in a narrow window.
 
 ## 8. Cleanup
 
