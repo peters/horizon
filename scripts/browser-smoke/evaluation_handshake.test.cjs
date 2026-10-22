@@ -67,12 +67,13 @@ test('the expression runs once, not once per call', async () => {
     const target = page({
         count: () => {
             runs += 1;
-            return runs;
+            return Promise.resolve(runs);
         },
     });
-    target.evaluate('count()');
-    await target.settle();
-    assert.equal(runs, 1);
+    assert.equal(target.evaluate('count()').horizonPending, true);
+    assert.deepEqual(plain(await target.settle()), {horizonSettled: true, horizonValue: 1});
+    assert.equal(runs, 1, 'a thenable result is not evaluated again');
+    assert.ok(!awaitScript.includes(placeholder), 'the await script runs no expression');
 });
 
 test('a rejection carries its message and never a thrown reason', async () => {

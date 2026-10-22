@@ -6,7 +6,7 @@ try {
 const value = (__HORIZON_EXPRESSION__);
 if (value && typeof value.then === 'function') {
   try {
-    Object.defineProperty(window, '__horizonPendingPromise', {
+    Object.defineProperty(window, '__HORIZON_GLOBAL__', {
       value,
       configurable: true,
       writable: true,

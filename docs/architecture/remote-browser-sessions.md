@@ -461,7 +461,9 @@ the session afterwards depends on what the driver reports:
   only `command` and `implicit`, and the iOS driver supports setting the value
   but not reading it. Horizon does not guess or claim to restore a value it did
   not read. It establishes the `WebDriver` default of 30 s for that session
-  after each evaluation and reports a failed write as `evaluation_restore_failed`.
+  after each evaluation. A failed write is `evaluation_restore_failed` when the
+  evaluation itself succeeded; after a failed evaluation the write failure is
+  appended to that typed failure, which keeps its own code.
 - The same drivers do not await a returned promise in `execute/sync`: they
   serialize the pending promise as an empty object. For those sessions the page
   keeps the returned promise under one private global, the `execute/sync` call

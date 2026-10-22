@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::navigation::{PendingNavigation, now_millis};
+use crate::semantic::truncate_utf8;
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 pub(crate) struct EvaluationDeadline {
@@ -110,6 +111,9 @@ const PENDING_PROMISE_GLOBAL: &str = "__horizonPendingPromise";
 /// The expression placeholder of the page scripts below.
 const EXPRESSION_PLACEHOLDER: &str = "__HORIZON_EXPRESSION__";
 
+/// Longest page-supplied rejection text that a failure message carries.
+const MAX_REJECTION_TEXT_BYTES: usize = 2 * 1024;
+
 /// The promise-global placeholder of the page scripts below.
 const GLOBAL_PLACEHOLDER: &str = "__HORIZON_GLOBAL__";
 
@@ -178,7 +182,8 @@ fn sync_script(expression: &str, handshake: bool) -> String {
     if !handshake {
         return format!("return ({expression});");
     }
-    page_global(&SYNC_SCRIPT.replace(EXPRESSION_PLACEHOLDER, expression))
+    // The expression goes in last, so a caller's own text is never rewritten.
+    page_global(SYNC_SCRIPT).replace(EXPRESSION_PLACEHOLDER, expression)
 }
 
 /// One evaluation under the session's bound, with the promise handshake when
@@ -217,7 +222,7 @@ fn settle(answer: EvaluationAnswer) -> Result<Value, BrowserControlFailure> {
         EvaluationAnswer::Settled(value) => Ok(value),
         EvaluationAnswer::Rejected(reason) => Err(BrowserControlFailure::new(
             "javascript_error",
-            format!("promise rejected: {reason}"),
+            format!("promise rejected: {}", truncate_utf8(reason, MAX_REJECTION_TEXT_BYTES)),
         )),
         EvaluationAnswer::Lost => Err(BrowserControlFailure::new(
             "javascript_error",
@@ -568,6 +573,45 @@ mod tests {
             Some(json!({"script": ESTABLISHED_SCRIPT_TIMEOUT_MILLIS})),
             "the session bound is established after the await too"
         );
+    }
+
+    #[test]
+    fn a_caller_expression_is_never_rewritten_by_the_handshake() {
+        let expression = "typeof window.__HORIZON_GLOBAL__";
+        let script = sync_script(expression, true);
+        assert!(
+            script.contains(&format!("const value = ({expression});")),
+            "the expression runs as the caller wrote it: {script}"
+        );
+        assert_eq!(
+            script.matches(PENDING_PROMISE_GLOBAL).count(),
+            2,
+            "only the two page global uses are named: {script}"
+        );
+    }
+
+    #[test]
+    fn a_long_rejection_text_is_bounded() {
+        let deadline = EvaluationDeadline::new(&request(), Some(20_000));
+        let long = "x".repeat(50_000);
+        let error = evaluate_classic(
+            |path, body, _| {
+                Ok(if body.is_none() {
+                    json!({"value":{"command":60,"implicit":0}})
+                } else if path == "execute/sync" {
+                    json!({"value":{"horizonPending":true}})
+                } else if path == "execute/async" {
+                    json!({"value":{"horizonRejected":long}})
+                } else {
+                    json!({"value":null})
+                })
+            },
+            "Promise.reject(new Error('long'))",
+            &deadline,
+        )
+        .expect_err("rejected");
+        assert_eq!(error.code, "javascript_error");
+        assert!(error.message.len() < 3_000, "message is {} bytes", error.message.len());
     }
 
     #[test]
