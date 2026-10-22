@@ -127,12 +127,12 @@ time = { version = "0.3.55", features = ["formatting", "parsing"] }
 rmcp = { version = "3.5.0", default-features = false, features = ["macros", "server", "transport-io"] }
 schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
-eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-egui = "0.36.1"
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui = "0.37.0"
 # Feature-only dependency: eframe/egui-wgpu keep using wgpu 30, so Horizon must
 # unify the native backend features here when eframe default features are disabled.
 wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
-egui_commonmark = { version = "0.25.0", default-features = false, features = ["pulldown_cmark"] }
+egui_commonmark = { version = "0.26.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
 # XInput 2.4 supplies Linux trackpad pinch events missing from winit 0.30.
 x11rb = { version = "0.14.0", features = ["xinput"] }
