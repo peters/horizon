@@ -31,7 +31,7 @@ impl HorizonApp {
             let Some(text) = self.cloud_ownership_label(panel.id) else {
                 continue;
             };
-            egui::Area::new(Id::new(("cloud-owner", panel.id.0)))
+            egui::Area::new(Id::unique(("cloud-owner", panel.id.0)))
                 .order(Order::Middle)
                 .fixed_pos(Pos2::from(panel.layout.position) - Vec2::new(0.0, 22.0))
                 .constrain(false)

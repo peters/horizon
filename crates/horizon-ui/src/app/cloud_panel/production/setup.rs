@@ -452,7 +452,7 @@ impl HorizonApp {
         let mut footer = Footer::default();
         let mut registry_action = None;
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
-        let id = Id::new("cloud-accounts");
+        let id = Id::unique("cloud-accounts");
         // Measure on the opening frame, before the dialog is drawn, so a size remembered from a
         // window of another size cannot place the first visible frame.
         let sizing_pass = !std::mem::replace(&mut state.measured, true);

@@ -454,7 +454,7 @@ impl HorizonApp {
     /// The overview controls and the minimap, which a fitted cloud must not go under.
     pub(super) fn cloud_overlays(&self, ctx: &egui::Context, canvas: egui::Rect) -> (egui::Rect, Option<egui::Rect>) {
         let controls = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("cloud-controls")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("cloud-controls")))
             .unwrap_or_else(|| egui::Rect::from_min_size(canvas.min + egui::vec2(24.0, 20.0), egui::vec2(370.0, 58.0)));
         (controls, self.minimap_overlay_rect(ctx))
     }
@@ -658,7 +658,7 @@ mod tests {
                 ..Default::default()
             });
             let controls = app.canvas_rect(&ctx).min + egui::vec2(24.0, 20.0);
-            egui::Area::new(egui::Id::new("cloud-controls"))
+            egui::Area::new(egui::Id::unique("cloud-controls"))
                 .fixed_pos(controls)
                 .show(&ctx, |ui| {
                     ui.allocate_space(egui::vec2(370.0, 58.0));
@@ -674,7 +674,7 @@ mod tests {
                 assert!(!bounds.intersects(overlay), "cloud must not hide behind minimap");
                 assert!(canvas.contains_rect(bounds), "fitted cloud must remain on canvas");
                 let controls = ctx
-                    .memory(|memory| memory.area_rect(egui::Id::new("cloud-controls")))
+                    .memory(|memory| memory.area_rect(egui::Id::unique("cloud-controls")))
                     .unwrap();
                 assert!(
                     !bounds.intersects(controls),

@@ -204,6 +204,7 @@ mod tests {
     fn causes(ctx: &egui::Context, app: &mut HorizonApp, narrow: egui::Rect) -> Vec<Drawn> {
         let away = egui::Pos2::new(2900.0, 2100.0);
         let wheel = |y| egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, y),
             phase: egui::TouchPhase::Move,

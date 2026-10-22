@@ -9,7 +9,7 @@ impl HorizonApp {
         let width = (viewport.width() - 24.0).max(0.0);
         let mut dismissed = false;
         // The toolbar is outside every valid capture source; notices never cover a cast image.
-        egui::Area::new(egui::Id::new("cast_notification"))
+        egui::Area::new(egui::Id::unique("cast_notification"))
             .fixed_pos(viewport.min + egui::vec2(12.0, 8.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
@@ -54,7 +54,7 @@ mod tests {
             .run_ui(input, |ui| app.render_cast_notification(ui.ctx()))
             .discard_textures();
         let area = ctx
-            .memory(|m| m.area_rect(egui::Id::new("cast_notification")))
+            .memory(|m| m.area_rect(egui::Id::unique("cast_notification")))
             .expect("notice shown");
         assert!(
             area.bottom() <= TOOLBAR_HEIGHT,

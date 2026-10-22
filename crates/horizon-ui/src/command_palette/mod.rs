@@ -120,7 +120,7 @@ impl CommandPalette {
 
     fn show_backdrop(&self, ctx: &Context, screen_rect: Rect) -> bool {
         let mut cancelled = false;
-        egui::Area::new(Id::new("palette_backdrop"))
+        egui::Area::new(Id::unique("palette_backdrop"))
             .fixed_pos(screen_rect.min)
             .constrain(false)
             .order(Order::Foreground)
@@ -145,7 +145,7 @@ impl CommandPalette {
     ) -> PaletteAction {
         let mut action = PaletteAction::None;
 
-        egui::Area::new(Id::new("palette_modal"))
+        egui::Area::new(Id::unique("palette_modal"))
             .fixed_pos(layout.card.min)
             .constrain(true)
             .order(Order::Debug)

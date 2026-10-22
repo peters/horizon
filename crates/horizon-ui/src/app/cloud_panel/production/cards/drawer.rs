@@ -203,8 +203,8 @@ fn tabs(ui: &mut egui::Ui, active: Tab, context: &Context<'_>) -> Option<Tab> {
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     for (&tab, local) in shown.iter().zip(layout) {
         let rect = local.translate(row.min.to_vec2());
-        let response = ui.interact(rect, ui.id().with(("drawer-tab", tab as u8)), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, tab == active, tab.label()));
+        let response = ui.interact(rect, ui.scope_id().with(("drawer-tab", tab as u8)), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, tab == active, tab.label()));
         if tab == active {
             ui.painter().rect_filled(rect, 8, theme::alpha(theme::ACCENT(), 45));
         } else if response.hovered() {

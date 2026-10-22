@@ -9,6 +9,7 @@ fn suppressed_or_fullscreen_frames_discard_pending_pan_and_zoom() {
         input
             .events
             .extend([Modifiers::NONE, Modifiers::CTRL].map(|modifiers| Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: MouseWheelUnit::Line,
                 delta: Vec2::new(0.0, -1.0),
                 phase: TouchPhase::Move,

@@ -186,6 +186,7 @@ fn a_new_terminal_app_gesture_receives_input_before_the_canvas_tail_moves_it() {
     let pan = app.canvas_view.pan_offset;
     let mut input = scroll_frame(1.016, body.center(), Vec2::new(0.0, -7.0), TouchPhase::End);
     input.events.push(Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Start,

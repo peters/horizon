@@ -122,10 +122,10 @@ fn start_speech(speech: &mut SpeechSystem, target: SpeechSink, profile: usize, e
 /// remaining case.
 fn clear_stale_hotkey_capture(ctx: &Context, settings_speech_tab_open: bool) -> bool {
     let mut capturing_hotkey: bool = ctx
-        .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+        .data(|data| data.get_temp(egui::Id::unique("speech_hotkey_capturing")))
         .unwrap_or(false);
     if capturing_hotkey && !settings_speech_tab_open {
-        ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_hotkey_capturing"), false));
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique("speech_hotkey_capturing"), false));
         capturing_hotkey = false;
     }
     capturing_hotkey
@@ -510,7 +510,7 @@ impl HorizonApp {
         if !root_focused_now {
             ctx.data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("speech_captured_key"),
+                    egui::Id::unique("speech_captured_key"),
                     None::<super::super::settings::PendingCapture>,
                 );
             });
@@ -521,7 +521,7 @@ impl HorizonApp {
         }
 
         if self.speech.is_none() {
-            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::unique("speech_active_backend")));
             self.reset_speech_input_state(horizon_focused);
             return;
         }
@@ -621,7 +621,7 @@ impl HorizonApp {
     /// normal input processing.
     pub(in crate::app) fn poll_speech_runtime(&mut self, ctx: &Context, mut events: Vec<SpeechEvent>) {
         let Some(speech) = self.speech.as_mut() else {
-            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::unique("speech_active_backend")));
             self.inject_speech_events(ctx, events);
             return;
         };
@@ -640,10 +640,10 @@ impl HorizonApp {
 
         match active_backend {
             Some(backend) => {
-                ctx.data_mut(|data| data.insert_temp(egui::Id::new("speech_active_backend"), backend));
+                ctx.data_mut(|data| data.insert_temp(egui::Id::unique("speech_active_backend"), backend));
             }
             None => {
-                ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("speech_active_backend")));
+                ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::unique("speech_active_backend")));
             }
         }
         if recording_finished {
@@ -655,7 +655,9 @@ impl HorizonApp {
     /// Deliver transcripts into their target panels (mirrors
     /// `poll_primary_selection_paste`); errors are logged.
     fn inject_speech_events(&mut self, ctx: &Context, mut events: Vec<SpeechEvent>) {
-        if let Some(message) = ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new(DESKTOP_INSERT_ERROR_ID))) {
+        let insert_error_id = egui::Id::unique(DESKTOP_INSERT_ERROR_ID);
+        let insert_pending_id = egui::Id::unique(DESKTOP_INSERT_PENDING_ID);
+        if let Some(message) = ctx.data_mut(|data| data.remove_temp::<String>(insert_error_id)) {
             events.push(SpeechEvent::Error(message));
         }
         let mut desktop_text_dispatched = false;
@@ -677,7 +679,7 @@ impl HorizonApp {
                                 tracing::info!("desktop dictation discarded; Horizon is focused but has no text panel");
                                 ctx.data_mut(|data| {
                                     data.insert_temp(
-                                        egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                        insert_error_id,
                                         "could not insert transcript (Horizon is focused but has no text panel); clipboard was not used".to_owned(),
                                     );
                                 });
@@ -691,7 +693,7 @@ impl HorizonApp {
                             tracing::info!("desktop dictation discarded; X11 focus window was not observable");
                             ctx.data_mut(|data| {
                                 data.insert_temp(
-                                    egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                    insert_error_id,
                                     "could not insert transcript (focused window was not observable); clipboard was not used".to_owned(),
                                 );
                             });
@@ -701,17 +703,17 @@ impl HorizonApp {
                         let payload = format!("{text} ");
                         let result_ctx = ctx.clone();
                         ctx.data_mut(|data| {
-                            data.insert_temp(egui::Id::new(DESKTOP_INSERT_PENDING_ID), true);
+                            data.insert_temp(insert_pending_id, true);
                         });
                         if std::thread::Builder::new()
                             .name("horizon-speech-direct-insert".to_owned())
                             .spawn(move || {
                                 let result = inject_desktop_transcript(&payload, expected_window);
                                 result_ctx.data_mut(|data| {
-                                    data.remove_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID));
+                                    data.remove_temp::<bool>(insert_pending_id);
                                     if let Err(error) = result {
                                         data.insert_temp(
-                                            egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                            insert_error_id,
                                             format!("could not insert transcript ({error}); clipboard was not used"),
                                         );
                                     }
@@ -721,7 +723,7 @@ impl HorizonApp {
                             .is_err()
                         {
                             ctx.data_mut(|data| {
-                                data.remove_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID));
+                                data.remove_temp::<bool>(insert_pending_id);
                             });
                             release_desktop_target();
                             let error = horizon_cursor::InjectError::Failed("failed to start desktop insertion");
@@ -748,10 +750,7 @@ impl HorizonApp {
             }
         }
         let desktop_active = self.speech.as_ref().and_then(SpeechSystem::active_sink) == Some(SpeechSink::Desktop);
-        let desktop_insert_pending = ctx.data(|data| {
-            data.get_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID))
-                .unwrap_or(false)
-        });
+        let desktop_insert_pending = ctx.data(|data| data.get_temp::<bool>(insert_pending_id).unwrap_or(false));
         if should_release_desktop_target(desktop_text_dispatched, desktop_active, desktop_insert_pending) {
             release_desktop_target();
         }
@@ -786,7 +785,7 @@ impl HorizonApp {
             ("🎤", theme::FG())
         };
         let max_width = (ctx.content_rect().width() - NOTICE_VIEWPORT_MARGIN).clamp(1.0, NOTICE_MAX_WIDTH);
-        egui::Area::new(egui::Id::new("speech_notice_overlay"))
+        egui::Area::new(egui::Id::unique("speech_notice_overlay"))
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .order(egui::Order::Foreground)
             .interactable(false)

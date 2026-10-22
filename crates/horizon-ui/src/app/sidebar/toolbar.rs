@@ -16,7 +16,7 @@ impl HorizonApp {
         let viewport = util::viewport_local_rect(ctx);
         let layout = root_toolbar_layout(viewport);
 
-        egui::Area::new(Id::new("toolbar"))
+        egui::Area::new(Id::unique("toolbar"))
             .fixed_pos(viewport.min)
             .constrain(false)
             .order(Order::Tooltip)

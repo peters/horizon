@@ -58,7 +58,7 @@ fn inputs(ui: &mut Ui, state: &mut State, root: &Path) {
     let field = ui.add_sized(
         [ui.available_width(), 34.0],
         TextEdit::singleline(&mut state.secret)
-            .id(Id::new("cloud-account-key"))
+            .id(Id::unique("cloud-account-key"))
             .password(true)
             .margin(Vec2::new(12.0, 8.0))
             .hint_text(if state.hetzner {

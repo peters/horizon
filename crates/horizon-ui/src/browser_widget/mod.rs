@@ -139,7 +139,7 @@ impl BrowserUiState {
         panel: horizon_core::PanelId,
         handle: &horizon_core::browser::file_chooser::FileChooserHandle,
     ) -> bool {
-        file_chooser::show(ctx, egui::Id::new(panel), handle, &mut self.file_picker)
+        file_chooser::show(ctx, egui::Id::unique(panel), handle, &mut self.file_picker)
     }
     /// Reset render and input caches when a different backend takes ownership
     /// of this panel. Returns whether a reset occurred.

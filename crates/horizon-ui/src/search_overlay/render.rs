@@ -17,7 +17,7 @@ pub(super) fn toolbar_search_text_edit(query: &mut String, id: Id) -> egui::Text
         .frame(egui::Frame::NONE.inner_margin(TOOLBAR_INPUT_MARGIN))
         .font(egui::FontId::monospace(13.0))
         .text_color(theme::FG())
-        .vertical_align(Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
         .hint_text(
             egui::RichText::new("Search across all terminals...")
                 .color(theme::FG_DIM())
@@ -376,7 +376,7 @@ mod tests {
                             UiBuilder::new()
                                 .max_rect(input_rect)
                                 .layout(Layout::centered_and_justified(Direction::TopDown)),
-                            |ui| toolbar_search_text_edit(&mut query, ui.id()).show(ui),
+                            |ui| toolbar_search_text_edit(&mut query, ui.scope_id()).show(ui),
                         )
                         .inner;
                     response_rect = output.response.rect;

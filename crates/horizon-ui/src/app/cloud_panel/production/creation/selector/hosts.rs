@@ -81,7 +81,7 @@ pub(super) fn card(ui: &mut Ui, card: &Card) -> bool {
     };
     let size = format!("{} vCPU · {} GB", card.size.0, card.size.1);
     let label = format!("{size}, Docker host {}, no rent, {free}, {word}", card.name);
-    let id = ui.id().with(("docker-host-card", &card.name));
+    let id = ui.scope_id().with(("docker-host-card", &card.name));
     let response = ui.add_enabled_ui(card.fits() || card.selected, |ui| {
         cards::framed(ui, id, card.selected, &label, |ui| {
             ui.label(RichText::new(&size).size(15.0).strong().color(theme::FG()));

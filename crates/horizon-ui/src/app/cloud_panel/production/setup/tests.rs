@@ -164,7 +164,7 @@ fn account_dialog_stays_inside_the_viewport_after_shrinking() {
         }
         let output = run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
         let dialog = ctx
-            .memory(|memory| memory.area_rect(Id::new("cloud-accounts")))
+            .memory(|memory| memory.area_rect(Id::unique("cloud-accounts")))
             .unwrap();
         let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]));
         assert!(
@@ -772,7 +772,7 @@ fn settings_open_at_their_final_size_and_position() {
             let mut input = raw_input(size, None);
             input.time = Some(time);
             let output = run_app_frame_with_input(&ctx, app, input);
-            let dialog = ctx.memory(|memory| memory.area_rect(Id::new("cloud-accounts")));
+            let dialog = ctx.memory(|memory| memory.area_rect(Id::unique("cloud-accounts")));
             (
                 text_positions(&output, &chrome),
                 text_positions(&output, &controls),

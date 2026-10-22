@@ -444,7 +444,7 @@ fn render_footer(ui: &mut egui::Ui, snapshot: &UsageSnapshot) {
 fn render_loading(ui: &mut egui::Ui) {
     loading_spinner::show(
         ui,
-        egui::Id::new("usage_loading_spinner"),
+        egui::Id::unique("usage_loading_spinner"),
         Some("Loading usage data\u{2026}"),
     );
 }

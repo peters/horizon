@@ -129,7 +129,7 @@ impl PickerModalState {
 
     fn show_backdrop(&self, ctx: &Context, screen_rect: Rect, id_source: &str) -> bool {
         let mut cancelled = false;
-        egui::Area::new(Id::new((id_source, "backdrop")))
+        egui::Area::new(Id::unique((id_source, "backdrop")))
             .fixed_pos(screen_rect.min)
             .constrain(false)
             .order(Order::Foreground)
@@ -155,7 +155,7 @@ impl PickerModalState {
         footer: &mut impl FnMut(&mut egui::Ui) -> PickerModalAction,
     ) -> PickerModalAction {
         let mut action = PickerModalAction::None;
-        egui::Area::new(Id::new((config.id_source, "modal")))
+        egui::Area::new(Id::unique((config.id_source, "modal")))
             .fixed_pos(layout.card.min)
             .constrain(true)
             .order(Order::Debug)
@@ -235,7 +235,7 @@ impl PickerModalState {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         // The edit's cursor outlives this picker; a seeded or completed query continues at its end.
-        let id = Id::new((config.id_source, "query"));
+        let id = Id::unique((config.id_source, "query"));
         if std::mem::take(&mut self.caret_to_end) {
             let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
             let end = CCursor::new(self.query.chars().count());
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn seeded_and_completed_queries_continue_typing_at_their_end() {
         let ctx = egui::Context::default();
-        let id = Id::new((CONFIG.id_source, "query"));
+        let id = Id::unique((CONFIG.id_source, "query"));
         // An earlier picker session left the shared edit's caret mid-text.
         let mut stale = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
         stale.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(2))));

@@ -63,7 +63,7 @@ impl<'a> GitChangesView<'a> {
 fn render_scanning(ui: &mut egui::Ui) {
     loading_spinner::show(
         ui,
-        egui::Id::new("git_scanning_spinner"),
+        egui::Id::unique("git_scanning_spinner"),
         Some("Scanning repository\u{2026}"),
     );
 }

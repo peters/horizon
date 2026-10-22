@@ -85,7 +85,7 @@ impl<'a> TerminalView<'a> {
 
         #[cfg(target_os = "linux")]
         if interactive && has_terminal_focus {
-            let target_id = egui::Id::new(("native_image_paste_target", ui.ctx().viewport_id()));
+            let target_id = egui::Id::unique(("native_image_paste_target", ui.ctx().viewport_id()));
             ui.ctx()
                 .data_mut(|data| data.insert_temp(target_id, (self.panel.id, interaction.body.id)));
         }

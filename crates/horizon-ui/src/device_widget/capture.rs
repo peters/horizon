@@ -49,8 +49,23 @@ impl DeviceUiState {
         let Some(layout) = self.image_layout() else {
             return;
         };
-        if response.hovered() && ui.input(|input| input.pointer.any_pressed()) {
-            response.request_focus();
+        let press = ui.input(|input| {
+            input
+                .pointer
+                .any_pressed()
+                .then(|| input.pointer.interact_pos())
+                .flatten()
+        });
+        if let Some(position) = press {
+            let local = ui
+                .ctx()
+                .layer_transform_from_global(response.layer_id)
+                .map_or(position, |transform| transform * position);
+            if response.rect.contains(local) && ui.ctx().layer_id_at(position) == Some(response.layer_id) {
+                response.request_focus();
+            } else {
+                response.surrender_focus();
+            }
         }
         let mut events = self.pointer_input(ui, response, &layout);
         // Widget focus survives the window losing OS focus (Alt-Tab), after

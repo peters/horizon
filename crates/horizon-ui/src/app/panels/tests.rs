@@ -32,7 +32,7 @@ fn mic_frame(ctx: &Context, events: Vec<Event>, enabled: bool, request_focus: bo
                     let response = mic_control_response(
                         ui,
                         Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(24.0)),
-                        Id::new("mic_keyboard_test"),
+                        Id::unique("mic_keyboard_test"),
                         enabled,
                         MicState::Idle,
                     );
@@ -106,7 +106,7 @@ fn overlay_click_frame(ctx: &Context, events: Vec<Event>, panel_clip: Rect) -> b
                     egui::Button::new("YAML"),
                 )
                 .clicked();
-            egui::Area::new(Id::new("panel-overlap-test"))
+            egui::Area::new(Id::unique("panel-overlap-test"))
                 .fixed_pos(Pos2::ZERO)
                 .clip_to_canvas(panel_clip)
                 .order(egui::Order::Foreground)
@@ -184,7 +184,7 @@ fn mic_widget_info_reports_button_state_and_label() {
         (MicState::Busy, "Dictation transcription in progress"),
     ] {
         let info = mic_widget_info(state, true);
-        assert_eq!(info.typ, egui::WidgetType::Button);
+        assert_eq!(info.role, egui::Role::Button);
         assert!(info.enabled);
         assert_eq!(info.label.as_deref(), Some(label));
         assert_eq!(info.selected, None);
@@ -219,7 +219,7 @@ fn focused_mic_activates_once_from_enter_or_space() {
     for key in [Key::Enter, Key::Space] {
         let ctx = Context::default();
         assert!(!mic_frame(&ctx, Vec::new(), true, true).0);
-        assert!(ctx.memory(|memory| memory.has_focus(Id::new("mic_keyboard_test"))));
+        assert!(ctx.memory(|memory| memory.has_focus(Id::unique("mic_keyboard_test"))));
         let (clicked, description) = mic_frame(&ctx, vec![key_press(key)], true, false);
         assert!(clicked);
         assert_eq!(description, "Start dictation: button");

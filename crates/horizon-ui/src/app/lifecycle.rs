@@ -599,7 +599,7 @@ mod tests {
                 .is_some_and(super::super::speech::SpeechSystem::has_pending_preloads)
         );
         assert_eq!(
-            ctx.data(|data| data.get_temp::<String>(egui::Id::new("speech_active_backend"))),
+            ctx.data(|data| data.get_temp::<String>(egui::Id::unique("speech_active_backend"))),
             Some("Metal".to_string())
         );
     }

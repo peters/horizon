@@ -452,7 +452,7 @@ impl HorizonApp {
         egui::CentralPanel::default().show(ui, |ui| {
             loading_spinner::show_with_detail(
                 ui,
-                Id::new("session_switch_spinner"),
+                Id::unique("session_switch_spinner"),
                 "Closing current session safely\u{2026}",
                 &detail,
             );
@@ -463,7 +463,7 @@ impl HorizonApp {
 fn render_backdrop(ctx: &Context, opened_at: Instant) -> bool {
     let screen_rect = viewport_local_rect(ctx);
     let mut close_requested = false;
-    egui::Area::new(Id::new("session_manager_backdrop"))
+    egui::Area::new(Id::unique("session_manager_backdrop"))
         .fixed_pos(screen_rect.min)
         .constrain(false)
         .order(egui::Order::Debug)
@@ -492,7 +492,7 @@ fn render_session_manager_window(
     let view_state = SessionManagerViewState::new(state, current_session_id);
 
     egui::Window::new("session_manager_modal")
-        .id(Id::new("session_manager_modal"))
+        .id(Id::unique("session_manager_modal"))
         .title_bar(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .collapsible(false)

@@ -12,7 +12,7 @@ fn modal_blocks_the_tooltip_layer_used_by_root_and_workspace_toolbars() {
                 ..Default::default()
             },
             |ui| {
-                egui::Area::new(Id::new("underlying_toolbar"))
+                egui::Area::new(Id::unique("underlying_toolbar"))
                     .order(egui::Order::Tooltip)
                     .fixed_pos(Pos2::new(20.0, 20.0))
                     .show(&ctx, |ui| {
@@ -229,6 +229,7 @@ fn count_and_paging_include_sessions_beyond_the_first_eight() {
     run(vec![
         Event::PointerMoved(Pos2::new(250.0, 350.0)),
         Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: Vec2::new(0.0, -600.0),
             phase: egui::TouchPhase::Move,
@@ -353,7 +354,7 @@ fn recovery_picker_outlives_parent_menu_and_copy_keeps_it_open() {
     let ctx = Context::default();
     frame(&ctx, Vec::new(), true);
     let visible = frame(&ctx, Vec::new(), false);
-    assert!(!egui::Popup::is_id_open(&ctx, Id::new("recovery_parent_menu")));
+    assert!(!egui::Popup::is_id_open(&ctx, Id::unique("recovery_parent_menu")));
     assert!(text_center(&visible, "Resume a session").is_some());
     assert_eq!(session_picker_panel(&ctx), Some(PanelId(1)));
     let at = text_center(&visible, "Copy ID").expect("copy action visible after parent closed");
@@ -457,7 +458,7 @@ fn every_viewport_reconciles_deleted_bindings_before_offering_resume() {
                 .collect::<Vec<_>>()
         );
         let state = ctx
-            .data(|data| data.get_temp::<SessionPicker>(Id::new(("session_recovery_picker", viewport))))
+            .data(|data| data.get_temp::<SessionPicker>(Id::unique(("session_recovery_picker", viewport))))
             .expect("picker");
         assert_eq!(state.options.as_ref(), std::slice::from_ref(&a));
         assert!(!state.options.iter().any(|binding| binding.session_id == b.session_id));
@@ -610,7 +611,7 @@ fn open_picker_prioritizes_provider_refresh_after_full_scan_failure() {
                     app.session_catalog_refresh.receiver.is_none(),
                     "fresh picker suppresses new full scans"
                 );
-                ctx.data_mut(|data| data.remove::<SessionPicker>(Id::new(("session_recovery_picker", viewport))));
+                ctx.data_mut(|data| data.remove::<SessionPicker>(Id::unique(("session_recovery_picker", viewport))));
                 app.maybe_refresh_session_catalog(&ctx);
                 assert!(
                     app.session_catalog_refresh.receiver.is_some(),

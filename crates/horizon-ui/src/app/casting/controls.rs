@@ -159,13 +159,13 @@ impl HorizonApp {
                 } else {
                     Order::Middle
                 };
-                let response = egui::Area::new(Id::new(("cast_icon", id.0)))
+                let response = egui::Area::new(Id::unique(("cast_icon", id.0)))
                     .order(order)
                     .fixed_pos(position)
                     .show(ctx, |ui| {
                         let (button, response) = ui.allocate_exact_size(Vec2::splat(20.0 * scale), Sense::click());
                         response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cast panel or workspace")
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, "Cast panel or workspace")
                         });
                         let selected = self
                             .casting
@@ -199,7 +199,7 @@ impl HorizonApp {
                         }
                     });
                 ctx.set_sublayer(
-                    egui::LayerId::new(order, Id::new(("panel", id.0))),
+                    egui::LayerId::new(order, Id::unique(("panel", id.0))),
                     response.response.layer_id,
                 );
                 if response.inner.clicked() {
@@ -226,7 +226,7 @@ fn render_application_hint(ui: &mut egui::Ui) {
 
 fn picker_window<'a>(ctx: &Context, canvas: Rect, position: Pos2, open: &'a mut bool) -> egui::Window<'a> {
     egui::Window::new("Cast")
-        .id(Id::new("cast_picker"))
+        .id(Id::unique("cast_picker"))
         .order(Order::Foreground)
         .open(open)
         .collapsible(false)
@@ -397,7 +397,7 @@ fn render_picker_header(ui: &mut egui::Ui, close: &mut bool) {
         ui.label(egui::RichText::new("Cast").size(16.0).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = ui.add(egui::Button::new("×").frame(false));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close cast controls"));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close cast controls"));
             if response.clicked() {
                 *close = true;
             }
@@ -577,8 +577,8 @@ mod tests {
     fn cast_icon_stays_above_panel_after_drag_raises_it() {
         let ctx = Context::default();
         for order in [Order::Middle, Order::Foreground] {
-            let parent = egui::LayerId::new(order, Id::new(("panel", 1)));
-            let icon = egui::LayerId::new(order, Id::new(("cast_icon", 1)));
+            let parent = egui::LayerId::new(order, Id::unique(("panel", 1)));
+            let icon = egui::LayerId::new(order, Id::unique(("cast_icon", 1)));
             let mut button = Rect::NOTHING;
             for _ in 0..4 {
                 let input = egui::RawInput {

@@ -43,7 +43,7 @@ pub(super) fn show_resize_control(
 ) -> Response {
     let rect = handle_rect(panel, zoom);
     let parent = ui.layer_id();
-    let layer = LayerId::new(parent.order, Id::new(("panel_resize_layer", panel_id.0)));
+    let layer = LayerId::new(parent.order, Id::unique(("panel_resize_layer", panel_id.0)));
     let ctx = ui.ctx();
     // Body input also routes raw events by topmost layer, independently of Response.
     ctx.set_sublayer(parent, layer);

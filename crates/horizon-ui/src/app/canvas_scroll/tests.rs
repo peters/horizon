@@ -55,6 +55,7 @@ fn scroll_frame(time: f64, position: Pos2, delta: Vec2, phase: TouchPhase) -> Ra
 
 fn wheel(delta: Vec2, phase: TouchPhase) -> Event {
     Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta,
         phase,
@@ -621,6 +622,7 @@ fn a_claimed_mouse_wheel_notch_is_eased_in_like_egui_scrolls_it() {
     let options = InputOptions::default();
     let mut gesture = ScrollGesture::default();
     let notch = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Move,
@@ -676,6 +678,7 @@ fn a_terminal_is_judged_where_the_frames_earlier_events_leave_it() {
 fn a_move_batched_with_its_end_still_pans_in_full() {
     let options = InputOptions::default();
     let notch = |phase| Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, if phase == TouchPhase::Move { -1.0 } else { 0.0 }),
         phase,
@@ -723,6 +726,7 @@ fn an_idle_relatch_lands_the_previous_notch_in_full() {
     // can still be easing in then; its remainder lands instead of vanishing.
     let options = InputOptions::default();
     let notch = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Move,
@@ -871,6 +875,7 @@ fn pointer_drift_does_not_advance_the_owners_predicted_scrollback() {
             .discard_textures();
         let before = app.canvas_view.pan_offset;
         let down = Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,
@@ -908,6 +913,7 @@ fn a_chaining_frame_applies_the_terminals_earlier_wheel_before_moving_it() {
     let mut input = scroll_frame(1.0, body.center(), Vec2::ZERO, TouchPhase::Start);
     input.events.extend([
         Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,

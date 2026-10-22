@@ -31,7 +31,7 @@ fn frame_with_transform(ctx: &Context, transform: TSTransform, interactive: bool
                 egui::CentralPanel::default().show(ui, |ui| {
                     ctx.set_transform_layer(ui.layer_id(), transform);
                     let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
-                    let body = ui.interact(panel.shrink(4.0), ui.id().with("body"), Sense::click_and_drag());
+                    let body = ui.interact(panel.shrink(4.0), ui.scope_id().with("body"), Sense::click_and_drag());
                     let resize = show_resize_control(ui, panel, transform.scaling, PanelId(1), interactive);
                     let pointer_events = ui.input(|input| input.events.clone());
                     result.raw_body_presses = pointer_events

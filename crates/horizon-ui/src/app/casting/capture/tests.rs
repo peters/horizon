@@ -180,7 +180,7 @@ fn cast_controls_shadow_alone_pauses_a_source() {
     crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
     for menu in [false, true] {
         let layer = if menu {
-            LayerId::new(Order::Foreground, Id::new("cast_shadow_menu"))
+            LayerId::new(Order::Foreground, Id::unique("cast_shadow_menu"))
         } else {
             cast_picker_layer()
         };
@@ -234,7 +234,7 @@ fn cast_controls_pause_only_covered_sources_and_other_overlays_remain_private() 
                     .show(ui.ctx(), |ui| {
                         ui.allocate_space(region.size());
                     });
-                let child = egui::Area::new(Id::new("cast_menu"))
+                let child = egui::Area::new(Id::unique("cast_menu"))
                     .order(Order::Foreground)
                     .fixed_pos(region.min)
                     .show(ui.ctx(), |ui| {
@@ -243,10 +243,10 @@ fn cast_controls_pause_only_covered_sources_and_other_overlays_remain_private() 
                 ui.ctx().set_sublayer(cast_picker_layer(), child.response.layer_id);
                 app.casting.control_menus = Some([
                     child.response.layer_id,
-                    LayerId::new(Order::Foreground, Id::new("second_cast_menu")),
+                    LayerId::new(Order::Foreground, Id::unique("second_cast_menu")),
                 ]);
                 if other_overlay {
-                    egui::Area::new(Id::new("unrelated_overlay"))
+                    egui::Area::new(Id::unique("unrelated_overlay"))
                         .order(Order::Foreground)
                         .fixed_pos(region.min)
                         .show(ui.ctx(), |ui| {
@@ -296,7 +296,7 @@ fn source_authority_and_overlay_privacy_are_checked() {
     );
     let region = Rect::from_min_size(egui::pos2(400.0, 300.0), egui::vec2(200.0, 150.0));
     let _ = ctx.run_ui(raw_input([1600.0, 1000.0], None), |ui| {
-        egui::Area::new(Id::new("synthetic_overlay"))
+        egui::Area::new(Id::unique("synthetic_overlay"))
             .order(Order::Foreground)
             .fixed_pos(region.min)
             .show(ui.ctx(), |ui| {
@@ -624,4 +624,56 @@ mod clouds {
             .expect("the cloud in this workspace is listed");
         assert!(!listed.available);
     }
+}
+
+#[test]
+fn screenshot_callback_preserves_ticket_and_delivers_once() {
+    let ctx = egui::Context::default();
+    let generation = Instant::now();
+    let ticket = super::CaptureTicket {
+        pixels_per_point: 2.0,
+        regions: vec![(
+            "receiver".into(),
+            generation,
+            Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2.0, 2.0)),
+        )],
+    };
+    let receiver = super::request_capture(&ctx, ticket);
+    assert!(matches!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    let output = ctx.run_ui(egui::RawInput::default(), |_| {}).discard_textures();
+    let callback = output.viewport_output[&ViewportId::ROOT]
+        .commands
+        .iter()
+        .find_map(|command| {
+            if let egui::ViewportCommand::Screenshot(callback) = command {
+                Some(callback.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let image = std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::BLACK));
+    callback.clone().complete(image.clone());
+    callback.complete(image.clone());
+    let captured = receiver.try_recv().unwrap();
+    assert_eq!(captured.ticket.pixels_per_point, 2.0);
+    assert_eq!(captured.ticket.regions[0].1, generation);
+    assert!(std::sync::Arc::ptr_eq(&captured.image, &image));
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn pending_capture_is_released_without_streaming_sessions() {
+    let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::default(),
+    });
+    app.casting.pending_capture = Some(super::request_capture(
+        &ctx,
+        super::CaptureTicket {
+            pixels_per_point: 1.0,
+            regions: Vec::new(),
+        },
+    ));
+    app.consume_cast_images(&ctx);
+    assert!(app.casting.pending_capture.is_none());
 }

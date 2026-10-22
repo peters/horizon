@@ -797,7 +797,7 @@ impl HorizonApp {
     /// ends.
     fn close_orphaned_setup_panels(&mut self, ctx: &egui::Context) {
         let current = self.cloud_prototype.production.setup_run_panels();
-        let looked = egui::Id::new("cloud-setup-orphan-scan");
+        let looked = egui::Id::unique("cloud-setup-orphan-scan");
         let now = (
             self.board.panels.len(),
             self.board.panels.last().map(|panel| panel.id),

@@ -47,7 +47,7 @@ pub(super) fn show(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::Deb
     // The label's own elided tooltip would repeat the one below in the cause's red.
     let response = ui.add(egui::Label::new(galley).show_tooltip_when_elided(false));
     // A screen reader hears the whole cause, however it is cut on screen.
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     if elided {
         response.on_hover_text(RichText::new(text).monospace().size(SIZE));
     }
@@ -62,8 +62,8 @@ pub(super) fn show(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::Deb
 /// Where a place keeps its expanded cause, and the key of `text` in `attempt`.
 fn ids(salt: impl std::hash::Hash + std::fmt::Debug, attempt: u64, text: &str) -> (egui::Id, egui::Id) {
     (
-        egui::Id::new(("cloud-failure-cause", salt)),
-        egui::Id::new((attempt, text)),
+        egui::Id::unique(("cloud-failure-cause", salt)),
+        egui::Id::unique((attempt, text)),
     )
 }
 

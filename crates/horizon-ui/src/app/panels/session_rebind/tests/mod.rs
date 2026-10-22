@@ -4,7 +4,7 @@ use egui::{Context, Event, FullOutput, Id, Key, Modifiers, PointerButton, Pos2, 
 use horizon_core::PanelKind;
 
 fn frame(ctx: &Context, events: Vec<Event>, launch: bool) -> FullOutput {
-    let parent_id = Id::new("recovery_parent_menu");
+    let parent_id = Id::unique("recovery_parent_menu");
     if launch {
         egui::Popup::open_id(ctx, parent_id);
     }

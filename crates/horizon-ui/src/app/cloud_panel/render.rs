@@ -53,8 +53,8 @@ impl HorizonApp {
             .clone()
             .find(|group| {
                 layer.is_some_and(|layer| {
-                    layer.id == Id::new(("cloud-drawer", group.issue))
-                        || layer.id == Id::new(("cloud-runtime", group.issue))
+                    layer.id == Id::unique(("cloud-drawer", group.issue))
+                        || layer.id == Id::unique(("cloud-runtime", group.issue))
                 })
             })
             .or_else(|| candidates.next_back())
@@ -103,7 +103,7 @@ impl HorizonApp {
                 .then(|| self.cloud_prototype.production.runtimes.get(&group.issue))
                 .flatten()
                 .and_then(|runtime| runtime.cost_badge(now));
-            let response = egui::Area::new(Id::new(("cloud-header", group.issue)))
+            let response = egui::Area::new(Id::unique(("cloud-header", group.issue)))
                 .order(Order::Middle)
                 .fixed_pos(rect.min)
                 .constrain(false)
@@ -252,7 +252,7 @@ impl HorizonApp {
             return;
         };
         let mut dismissed = false;
-        egui::Area::new(Id::new("cloud-error"))
+        egui::Area::new(Id::unique("cloud-error"))
             .order(Order::Tooltip)
             .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 72.0))
             .show(ctx, |ui| {
@@ -315,8 +315,8 @@ fn cloud_accent(id: u32) -> Color32 {
 
 fn close_button(ui: &egui::Ui, header: Rect) -> bool {
     let close = close_rect(header);
-    let response = ui.interact(close, ui.id().with("close"), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Close cloud"));
+    let response = ui.interact(close, ui.scope_id().with("close"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close cloud"));
     ui.painter().text(
         close.center(),
         Align2::CENTER_CENTER,
@@ -385,13 +385,9 @@ fn title_target(ui: &egui::Ui, group: &CloudGroup, header: Rect, reserved: f32) 
         .size()
         .x;
     let title = Rect::from_min_size(header.min + Vec2::new(64.0, 16.0), Vec2::new(width.min(room), 30.0));
-    let response = ui.interact(title, ui.id().with("title"), Sense::click());
+    let response = ui.interact(title, ui.scope_id().with("title"), Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            format!("Rename {}", group.title),
-        )
+        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Rename {}", group.title))
     });
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
@@ -412,7 +408,7 @@ fn card_hint(drag: egui::Response) -> egui::Response {
 fn drag_area(ui: &egui::Ui, rect: Rect, editing: bool) -> egui::Response {
     ui.interact(
         rect,
-        ui.id().with("drag"),
+        ui.scope_id().with("drag"),
         if editing {
             Sense::hover()
         } else {
@@ -617,7 +613,7 @@ fn empty_group(
     clip: Rect,
     ready: bool,
 ) {
-    egui::Area::new(Id::new(("cloud-empty", group.issue)))
+    egui::Area::new(Id::unique(("cloud-empty", group.issue)))
         .order(Order::Middle)
         .fixed_pos(rect.min + Vec2::new(36.0, group.header_height() + 56.0))
         .constrain(false)
@@ -667,7 +663,7 @@ fn frame_background(
     clip: Rect,
     accent: Color32,
 ) {
-    egui::Area::new(Id::new(("cloud-frame", issue)))
+    egui::Area::new(Id::unique(("cloud-frame", issue)))
         .order(Order::Background)
         .fixed_pos(rect.min)
         .constrain(false)

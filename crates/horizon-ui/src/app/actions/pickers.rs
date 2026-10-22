@@ -13,7 +13,7 @@ use super::support::{preset_picker_heading, render_grouped_preset_rows};
 impl HorizonApp {
     pub(in crate::app) fn preset_picker_rect(&self, ctx: &Context) -> Option<Rect> {
         self.pending_preset_pick?;
-        ctx.memory(|memory| memory.area_rect(Id::new("canvas_preset_picker")))
+        ctx.memory(|memory| memory.area_rect(Id::unique("canvas_preset_picker")))
     }
 
     pub(in crate::app) fn render_dir_picker(&mut self, ctx: &Context) {
@@ -123,7 +123,7 @@ impl HorizonApp {
             return;
         }
 
-        let popup_id = Id::new("canvas_preset_picker");
+        let popup_id = Id::unique("canvas_preset_picker");
         let canvas_rect = self.canvas_rect(ctx);
         let screen_pos = self.canvas_to_screen(canvas_rect, Pos2::new(canvas_pos[0], canvas_pos[1]));
         let (popup_rect, selected_action) =
@@ -307,7 +307,7 @@ mod tests {
                 .run_ui(egui::RawInput::default(), |ui| {
                     app.show_preset_picker_popup(
                         ui.ctx(),
-                        Id::new("canvas_preset_picker"),
+                        Id::unique("canvas_preset_picker"),
                         Pos2::new(400.0, 200.0),
                         Some(workspace),
                         [400.0, 200.0],
@@ -324,6 +324,7 @@ mod tests {
                     events: vec![
                         egui::Event::PointerMoved(position),
                         egui::Event::MouseWheel {
+                            source: egui::MouseWheelSource::Unknown,
                             unit: egui::MouseWheelUnit::Point,
                             delta: egui::vec2(0.0, -80.0),
                             modifiers: egui::Modifiers::NONE,
@@ -380,7 +381,7 @@ mod tests {
                     .run_ui(crate::app::test_support::raw_input([900.0, 700.0], None), |ui| {
                         app.show_preset_picker_popup(
                             ui.ctx(),
-                            Id::new("policy-picker"),
+                            Id::unique("policy-picker"),
                             Pos2::new(100.0, 100.0),
                             target,
                             position,
