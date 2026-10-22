@@ -286,8 +286,11 @@ shell commands, files, or other MCP servers.
 - `browser_evaluate` awaits an explicit size-bounded expression or promise. Its
   `timeout_millis` (1-60000 ms, default 15000) includes queue time; expiry returns
   `evaluation_timeout` naming the bound and elapsed time. Chromium and classic
-  WebDriver use the same caller bound; WebDriver restores its prior script timeout
-  after the action. The CLI plan runner uses this same MCP contract.
+  WebDriver use the same caller bound; WebDriver puts the session's own script
+  timeout back after the action, or, when the driver reports none, leaves the
+  established default bound (see the evaluation contract in
+  `docs/architecture/remote-browser-sessions.md`). The CLI plan runner uses this
+  same MCP contract.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
   capture and returns an explicit private NDJSON path plus connection state,
   frame/byte counts, drops, truncation, and writer health. Start it before

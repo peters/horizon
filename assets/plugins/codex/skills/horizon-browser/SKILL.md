@@ -81,8 +81,9 @@ Use the registered session identity; do not retry an unregistered actor. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
 short-lived `ref` in `browser_act`. Remote iOS clicks and field entry use
 synchronous target checks before trusted native input. Verify the visible result
-after each action. A driver that omits its script timeout can still refuse
-`browser_evaluate`; do not treat working clicks as proof of evaluation support.
+after each action. `browser_evaluate` works on a driver that omits its script
+timeout, and it awaits a returned promise: a rejection is a `javascript_error`
+and an unsettled promise is an `evaluation_timeout`.
 Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
 before an action when the page may have changed.

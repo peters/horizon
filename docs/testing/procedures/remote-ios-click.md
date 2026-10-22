@@ -107,13 +107,13 @@ click dispatch, element reference ownership, device coordinates or evaluation ti
 
    Result: Trusted clicks and field entry still work.
 
-### 3.3 IOS-CLICK-03: Evaluation limitation
+### 3.3 IOS-CLICK-03: Evaluation on the same engine
 
-1. Call `browser_evaluate` with a constant on the iOS session before you close it.
+1. Call `browser_evaluate` with the constant `1+1` on the iOS session before you close it.
 
-   Result: Record the result separately. Some iOS drivers omit the script timeout from
-   their timeout response. The existing `WebDriver returned no script timeout` failure
-   is not fixed by the geometry change and must not be recorded as a passing evaluation.
+   Result: The result is `2`. The evaluation contract has its own procedure,
+   [remote-ios-evaluation](remote-ios-evaluation.md). Do not repeat the promise and
+   deadline checks here.
 
 ## 4. Cleanup and report
 

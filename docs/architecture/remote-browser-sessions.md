@@ -444,6 +444,41 @@ iOS, where the screenshot is the whole screen. The offset is calibrated once
 per session from a known element rect and re-derived after orientation or
 keyboard changes. The physical device is never resized because the panel is.
 
+## Evaluation contract
+
+`browser_evaluate` sends one caller bound to both the page and the transport.
+The bound covers queue time, every command and the time a returned promise
+needs to settle. Expiry is the typed `evaluation_timeout`.
+
+Classic `WebDriver` bounds a returned promise with the session script timeout,
+so one evaluation sets that timeout to its own remaining bound. The setting of
+the session afterwards depends on what the driver reports:
+
+- A driver that reports a numeric `script` in `GET timeouts` is the normal case.
+  The prior value goes back after the evaluation.
+- Some drivers report no script timeout. `Appium`'s base driver answers with
+  only `command` and `implicit`, and the iOS driver supports setting the value
+  but not reading it. Horizon does not guess or claim to restore a value it did
+  not read. It establishes the `WebDriver` default of 30 s for that session
+  after each evaluation and reports a failed write as `evaluation_restore_failed`.
+- The same drivers do not await a returned promise in `execute/sync`: they
+  serialize the pending promise as an empty object. For those sessions the page
+  keeps the returned promise under one private global, the `execute/sync` call
+  answers with a pending marker, and one bounded `execute/async` call settles it.
+  The expression runs once. A rejection is the typed `javascript_error` with the
+  rejection text; a document that is replaced before the promise settles is a
+  typed `javascript_error`; a promise that does not settle ends as
+  `evaluation_timeout`.
+
+A driver that reports a script timeout keeps the plain `execute/sync` script,
+because it awaits the promise itself. Page content, page globals and script
+results are untrusted input: Horizon never interprets a page value as an
+instruction, and it removes the private global at the next await.
+
+The permanent [test procedure](../testing/procedures/remote-ios-evaluation.md)
+covers the promise cases, the deadlines, the cleanup and the desktop and Android
+regressions.
+
 ## Failure outcomes
 
 Every user-facing failure is typed and redacted:

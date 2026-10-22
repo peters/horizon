@@ -204,7 +204,78 @@ const fn is_unreserved(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_path_segment, validate_request_path};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+
+    use super::{ClassicTransport, HttpError, encode_path_segment, validate_request_path};
+
+    /// A driver that omits the script timeout, as `Appium`'s base driver does,
+    /// and answers with the page's own evaluation wrappers.
+    struct AppiumLike {
+        sent: Mutex<Vec<(String, Value)>>,
+    }
+
+    impl ClassicTransport for AppiumLike {
+        fn request(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&Value>,
+            _read_timeout: Duration,
+        ) -> Result<Value, HttpError> {
+            self.sent
+                .lock()
+                .expect("sent")
+                .push((format!("{method} {path}"), body.cloned().unwrap_or(Value::Null)));
+            let suffix = path.strip_prefix("/session/s1/").unwrap_or(path);
+            let value = match (method, suffix) {
+                ("GET", "timeouts") => json!({"command":60,"implicit":0}),
+                ("POST", "execute/sync") => json!({"horizonPending":true}),
+                ("POST", "execute/async") => json!({"horizonValue":42}),
+                ("POST", "timeouts") => Value::Null,
+                _ => return Err(HttpError::InvalidResponse(format!("unscripted {method} {path}"))),
+            };
+            Ok(json!({"value": value}))
+        }
+    }
+
+    #[test]
+    fn the_classic_trait_evaluates_and_awaits_without_a_reported_script_timeout() {
+        let transport = AppiumLike {
+            sent: Mutex::new(Vec::new()),
+        };
+        let request = crate::AgentAction {
+            action_id: "evaluate".into(),
+            actor: "test".into(),
+            requested_at_millis: crate::navigation::now_millis(),
+            action: crate::BrowserControlAction::Evaluate {
+                expression: "Promise.resolve(42)".into(),
+                timeout_millis: Some(9_000),
+            },
+        };
+        let value = transport
+            .evaluate("/session/s1/", "Promise.resolve(42)", &request, Some(9_000))
+            .expect("evaluated on a driver with no reported script timeout");
+        assert_eq!(value, json!(42));
+        let sent = transport.sent.lock().expect("sent").clone();
+        assert_eq!(
+            sent.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
+            [
+                "GET /session/s1/timeouts",
+                "POST /session/s1/timeouts",
+                "POST /session/s1/execute/sync",
+                "POST /session/s1/execute/async",
+                "POST /session/s1/timeouts"
+            ]
+        );
+        assert_eq!(
+            sent[4].1,
+            json!({"script": crate::evaluation::ESTABLISHED_SCRIPT_TIMEOUT_MILLIS}),
+            "the session keeps the bound Horizon established"
+        );
+    }
 
     #[test]
     fn native_script_timeout_is_typed_even_before_the_local_deadline() {
