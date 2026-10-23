@@ -210,3 +210,38 @@ fn initial_grip_press_does_not_resize_by_motion_before_the_press() {
     );
     assert_eq!(drag.delta, Vec2::new(20.0, 12.0));
 }
+
+#[test]
+fn the_terminal_scrollbar_stays_clear_of_the_grip_at_each_zoom() {
+    let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
+    let available = Vec2::new(
+        panel.width() - 2.0 * PANEL_PADDING,
+        panel.height() - PANEL_TITLEBAR_HEIGHT - 2.0 * PANEL_PADDING,
+    );
+    let terminal_origin = panel.min + Vec2::new(PANEL_PADDING, PANEL_TITLEBAR_HEIGHT + PANEL_PADDING);
+    for zoom in [0.5, 1.0, 1.5, 2.0, 4.0] {
+        let clearance = scrollbar_bottom_clearance(panel, zoom);
+        let scrollbar_hit =
+            crate::terminal_widget::scrollbar_hit_rect(available, clearance).translate(terminal_origin.to_vec2());
+        let grip = handle_rect(panel, zoom);
+        assert!(
+            !scrollbar_hit.intersects(grip),
+            "zoom {zoom}: scrollbar hit {scrollbar_hit:?} meets grip {grip:?}"
+        );
+        assert!(scrollbar_hit.height() > 0.0, "zoom {zoom}");
+    }
+}
+
+#[test]
+fn a_zoomed_out_grip_keeps_a_usable_track_rather_than_the_clearance() {
+    let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
+    let available = Vec2::new(
+        panel.width() - 2.0 * PANEL_PADDING,
+        panel.height() - PANEL_TITLEBAR_HEIGHT - 2.0 * PANEL_PADDING,
+    );
+    let zoom = horizon_core::MIN_CANVAS_ZOOM;
+    let scrollbar_hit = crate::terminal_widget::scrollbar_hit_rect(available, scrollbar_bottom_clearance(panel, zoom));
+
+    assert!(scrollbar_hit.height() >= 24.0);
+    assert!(scrollbar_hit.max.y <= available.y);
+}

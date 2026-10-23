@@ -96,7 +96,7 @@ impl PointerHarness {
                     ui.set_clip_rect(ui.clip_rect().intersect(clip));
                 }
                 let metrics = grid_metrics();
-                let layout = terminal_layout(TEST_PANEL_SIZE, CHAR_WIDTH, LINE_HEIGHT);
+                let layout = terminal_layout(TEST_PANEL_SIZE, CHAR_WIDTH, LINE_HEIGHT, 0.0);
                 let interaction = terminal_interaction(ui, layout, self.panel.id.0, true);
                 body_rect = interaction.layout.body;
                 handle_terminal_pointer_input(
