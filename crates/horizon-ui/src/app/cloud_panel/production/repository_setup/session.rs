@@ -536,7 +536,7 @@ impl HorizonApp {
                 if let Some(panel) = self.board.panel_mut(panel_id) {
                     ui.allocate_ui(size, |ui| {
                         ui.set_min_size(size);
-                        crate::terminal_widget::TerminalView::new(panel, None).show(
+                        crate::terminal_widget::TerminalView::new(panel, None, 0.0).show(
                             ui,
                             false,
                             true,

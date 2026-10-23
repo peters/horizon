@@ -206,6 +206,9 @@ struct PanelBodyContext<'a> {
     browser_frame_has_pointer_button: bool,
     browser_fullscreen_active: bool,
     browser_zoom_wheel_owner: crate::browser_widget::ZoomWheelOwner,
+    /// Canvas points at the bottom of the body that the terminal scrollbar
+    /// leaves to a corner resize grip; zero when the panel has no grip.
+    terminal_scrollbar_bottom_clearance: f32,
 }
 
 fn show_panel_body_contents(
@@ -249,7 +252,12 @@ fn show_panel_body_contents(
         _ if panel.parked_screen().is_some() => panel
             .parked_screen()
             .is_some_and(|screen| crate::terminal_widget::parked::show(ui, screen, interactive)),
-        _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
+        _ => TerminalView::new(
+            panel,
+            body_context.terminal_grid_cache,
+            body_context.terminal_scrollbar_bottom_clearance,
+        )
+        .show(
             ui,
             is_focused,
             interactive,
@@ -447,6 +455,7 @@ impl HorizonApp {
                                     browser_frame_has_pointer_button: frame_has_pointer_button,
                                     browser_fullscreen_active: true,
                                     browser_zoom_wheel_owner: crate::browser_widget::ZoomWheelOwner::Page,
+                                    terminal_scrollbar_bottom_clearance: 0.0,
                                 },
                             );
                         }
@@ -777,6 +786,10 @@ impl HorizonApp {
                 // Release the shared board borrow before the mutable borrow below.
                 drop(display_title);
 
+                // The corner grip owns the panel's bottom-right square, so the
+                // terminal scrollbar stops above it and stays reachable.
+                let terminal_scrollbar_bottom_clearance =
+                    resize::scrollbar_bottom_clearance(rects.panel, self.canvas_view.zoom);
                 ui.scope_builder(
                     UiBuilder::new()
                         .max_rect(rects.body)
@@ -834,6 +847,7 @@ impl HorizonApp {
                                     } else {
                                         crate::browser_widget::ZoomWheelOwner::Page
                                     },
+                                    terminal_scrollbar_bottom_clearance,
                                 },
                             ) {
                                 outcome.request_focus();

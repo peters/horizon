@@ -136,7 +136,7 @@ exit 0
             .ctx
             .run_ui(input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    TerminalView::new(&mut self.panel, Some(&mut self.cache)).show(
+                    TerminalView::new(&mut self.panel, Some(&mut self.cache), 0.0).show(
                         ui,
                         true,
                         interactive,
@@ -224,7 +224,7 @@ fn tab_does_not_steal_focus_from_another_text_field() {
         let _ = harness
             .ctx
             .run_ui(input, |ui| {
-                TerminalView::new(&mut harness.panel, Some(&mut harness.cache)).show(
+                TerminalView::new(&mut harness.panel, Some(&mut harness.cache), 0.0).show(
                     ui,
                     true,
                     true,

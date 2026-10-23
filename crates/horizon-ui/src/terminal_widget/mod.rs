@@ -24,6 +24,9 @@ const LINE_HEIGHT_FACTOR: f32 = 1.3;
 pub struct TerminalView<'a> {
     panel: &'a mut Panel,
     grid_cache: Option<&'a mut TerminalGridCache>,
+    /// Canvas points at the bottom of the available area that the scrollbar
+    /// leaves to the panel's corner resize grip.
+    scrollbar_bottom_clearance: f32,
 }
 
 pub struct TerminalKeyboardContext<'a> {
@@ -34,8 +37,16 @@ pub struct TerminalKeyboardContext<'a> {
 }
 
 impl<'a> TerminalView<'a> {
-    pub fn new(panel: &'a mut Panel, grid_cache: Option<&'a mut TerminalGridCache>) -> Self {
-        Self { panel, grid_cache }
+    pub fn new(
+        panel: &'a mut Panel,
+        grid_cache: Option<&'a mut TerminalGridCache>,
+        scrollbar_bottom_clearance: f32,
+    ) -> Self {
+        Self {
+            panel,
+            grid_cache,
+            scrollbar_bottom_clearance,
+        }
     }
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
@@ -51,7 +62,12 @@ impl<'a> TerminalView<'a> {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;
         let line_height = metrics.line_height;
-        let layout = terminal_layout(ui.available_size(), char_width, line_height);
+        let layout = terminal_layout(
+            ui.available_size(),
+            char_width,
+            line_height,
+            self.scrollbar_bottom_clearance,
+        );
         let viewport = terminal_viewport_size(ui.available_size(), char_width, line_height);
         let new_cols = viewport.cols;
         let new_rows = viewport.rows;
@@ -186,6 +202,24 @@ pub(crate) fn wheel_cell_size(ctx: &Context) -> Vec2 {
 pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> layout::TerminalViewportSize {
     let metrics = grid_metrics(ctx);
     terminal_viewport_size(available, metrics.char_width, metrics.line_height)
+}
+
+/// The scrollbar's hit rectangle, in the terminal's own coordinate space, for a
+/// terminal that leaves `scrollbar_bottom_clearance` free at its bottom.
+#[cfg(test)]
+pub(crate) fn scrollbar_hit_rect(available: Vec2, scrollbar_bottom_clearance: f32) -> egui::Rect {
+    let metrics = GridMetrics {
+        char_width: FONT_SIZE * 0.6,
+        line_height: FONT_SIZE * LINE_HEIGHT_FACTOR,
+        font_id: FontId::monospace(FONT_SIZE),
+    };
+    let layout = terminal_layout(
+        available,
+        metrics.char_width,
+        metrics.line_height,
+        scrollbar_bottom_clearance,
+    );
+    layout.scrollbar.expand2(Vec2::splat(layout::SCROLLBAR_HIT_PADDING))
 }
 
 // The regression fixture uses a Unix shell and PTY.

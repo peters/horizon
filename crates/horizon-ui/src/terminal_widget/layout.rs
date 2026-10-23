@@ -5,6 +5,10 @@ use crate::input;
 
 pub(super) const SCROLLBAR_WIDTH: f32 = 12.0;
 pub(super) const SCROLLBAR_GAP: f32 = 8.0;
+/// Padding of the scrollbar response around its painted track.
+pub(super) const SCROLLBAR_HIT_PADDING: f32 = 2.0;
+const SCROLLBAR_EDGE_INSET: f32 = 4.0;
+const SCROLLBAR_MIN_TRACK_HEIGHT: f32 = 24.0;
 
 pub(super) struct GridMetrics {
     pub(super) char_width: f32,
@@ -48,7 +52,15 @@ impl TerminalInteraction {
     }
 }
 
-pub(super) fn terminal_layout(available: Vec2, char_width: f32, line_height: f32) -> TerminalLayout {
+/// `scrollbar_bottom_clearance` is the height, in canvas points, that the
+/// scrollbar keeps free at the bottom of `available`, so another control can own
+/// that corner.
+pub(super) fn terminal_layout(
+    available: Vec2,
+    char_width: f32,
+    line_height: f32,
+    scrollbar_bottom_clearance: f32,
+) -> TerminalLayout {
     let body_size = Vec2::new(
         (available.x - SCROLLBAR_WIDTH - SCROLLBAR_GAP).max(char_width),
         available.y.max(line_height),
@@ -58,16 +70,28 @@ pub(super) fn terminal_layout(available: Vec2, char_width: f32, line_height: f32
         Vec2::new(body_size.x + SCROLLBAR_WIDTH + SCROLLBAR_GAP, body_size.y),
     );
     let body = Rect::from_min_size(outer.min, body_size);
+    let bottom_inset = scrollbar_bottom_inset(outer.height(), scrollbar_bottom_clearance);
+    let scrollbar_height = (outer.height() - SCROLLBAR_EDGE_INSET - bottom_inset).max(0.0);
     let scrollbar = Rect::from_min_size(
-        Pos2::new(body.max.x + SCROLLBAR_GAP, outer.min.y + 4.0),
-        Vec2::new(SCROLLBAR_WIDTH, (outer.height() - 8.0).max(24.0)),
+        Pos2::new(body.max.x + SCROLLBAR_GAP, outer.min.y + SCROLLBAR_EDGE_INSET),
+        Vec2::new(SCROLLBAR_WIDTH, scrollbar_height),
     );
 
     TerminalLayout { outer, body, scrollbar }
 }
 
+/// The scrollbar's bottom inset, including the response padding, so its whole
+/// hit target stays `scrollbar_bottom_clearance` above the bottom edge. A panel
+/// too short for that keeps a minimum track and gives the clearance up instead.
+fn scrollbar_bottom_inset(outer_height: f32, scrollbar_bottom_clearance: f32) -> f32 {
+    let wanted = (scrollbar_bottom_clearance + SCROLLBAR_HIT_PADDING).max(SCROLLBAR_EDGE_INSET);
+    let largest = outer_height - SCROLLBAR_EDGE_INSET - SCROLLBAR_MIN_TRACK_HEIGHT;
+    wanted.min(largest.max(SCROLLBAR_EDGE_INSET))
+}
+
 pub(crate) fn terminal_viewport_size(available: Vec2, char_width: f32, line_height: f32) -> TerminalViewportSize {
-    let layout = terminal_layout(available, char_width, line_height);
+    // Only the body size decides the rows and columns, and no clearance moves it.
+    let layout = terminal_layout(available, char_width, line_height, 0.0);
 
     TerminalViewportSize {
         rows: quantize_dimension(layout.body.height() / line_height).max(1),
@@ -182,8 +206,8 @@ pub(super) fn f32_to_usize(value: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        GridMetrics, SCROLLBAR_GAP, SCROLLBAR_WIDTH, cell_side, grid_point_from_position, quantize_dimension,
-        terminal_layout,
+        GridMetrics, SCROLLBAR_GAP, SCROLLBAR_HIT_PADDING, SCROLLBAR_MIN_TRACK_HEIGHT, SCROLLBAR_WIDTH, cell_side,
+        grid_point_from_position, quantize_dimension, terminal_layout,
     };
     use egui::{FontId, Pos2, Rect, Vec2};
     use horizon_core::TerminalSide;
@@ -198,11 +222,36 @@ mod tests {
 
     #[test]
     fn terminal_layout_reserves_space_for_scrollbar() {
-        let layout = terminal_layout(Vec2::new(400.0, 240.0), 8.0, 16.0);
+        let layout = terminal_layout(Vec2::new(400.0, 240.0), 8.0, 16.0, 0.0);
 
         assert!((layout.body.width() - (400.0 - SCROLLBAR_WIDTH - SCROLLBAR_GAP)).abs() <= f32::EPSILON);
         assert!((layout.outer.width() - 400.0).abs() <= f32::EPSILON);
         assert!(layout.scrollbar.left() >= layout.body.right() + SCROLLBAR_GAP);
+    }
+
+    #[test]
+    fn scrollbar_bottom_clearance_lifts_the_whole_hit_target() {
+        let available = Vec2::new(400.0, 240.0);
+        let clearance = 24.0;
+        let layout = terminal_layout(available, 8.0, 16.0, clearance);
+
+        let hit_bottom = layout.scrollbar.max.y + SCROLLBAR_HIT_PADDING;
+        assert!((hit_bottom - (available.y - clearance)).abs() <= f32::EPSILON);
+        assert!(
+            (layout.scrollbar.min.y - 4.0).abs() <= f32::EPSILON,
+            "the top inset is unchanged"
+        );
+
+        let without_clearance = terminal_layout(available, 8.0, 16.0, 0.0);
+        assert!(without_clearance.scrollbar.height() > layout.scrollbar.height());
+    }
+
+    #[test]
+    fn a_short_panel_keeps_a_usable_track_instead_of_the_clearance() {
+        let layout = terminal_layout(Vec2::new(400.0, 40.0), 8.0, 16.0, 120.0);
+
+        assert!(layout.scrollbar.height() >= SCROLLBAR_MIN_TRACK_HEIGHT);
+        assert!(layout.scrollbar.max.y <= layout.outer.max.y);
     }
 
     #[test]
