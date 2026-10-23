@@ -544,6 +544,7 @@ impl HorizonApp {
                             crate::terminal_widget::TerminalKeyboardContext {
                                 keyboard_events: &events,
                                 primary_selection: &self.primary_selection,
+                                clipboard_images: &self.clipboard_images,
                                 local_ssh_reconnect_enabled: false,
                                 reconnect_requested: &mut reconnect,
                             },

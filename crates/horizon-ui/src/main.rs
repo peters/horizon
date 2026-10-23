@@ -6,6 +6,7 @@ mod app;
 mod badge;
 mod branding;
 mod browser_widget;
+mod clipboard_image;
 mod command_palette;
 mod command_registry;
 mod device_widget;

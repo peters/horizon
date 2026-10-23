@@ -201,6 +201,7 @@ impl HorizonApp {
             git_watchers: HashMap::new(),
             terminal_body_screen_rects: HashMap::new(),
             primary_selection: PrimarySelection::new(),
+            clipboard_images: crate::clipboard_image::ClipboardImages::new(),
             terminal_selection_drag: TerminalSelectionDragState::default(),
             config_last_mtime,
             config_last_check: None,

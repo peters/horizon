@@ -6,6 +6,7 @@ use horizon_core::{Panel, PanelKind, ShortcutBinding, ShortcutKey, ShortcutModif
 
 use super::super::ime::{prepare_terminal_keyboard_events, store_terminal_ime_enabled, terminal_ime_enabled};
 use crate::app::shortcuts::shortcut_event_matches;
+use crate::clipboard_image::ClipboardImages;
 use crate::input::{self, TerminalInputEvent};
 use crate::primary_selection::PrimarySelection;
 
@@ -18,12 +19,14 @@ pub(crate) fn handle_terminal_keyboard_input(
     panel: &mut Panel,
     events: &[TerminalInputEvent],
     primary_selection: &PrimarySelection,
+    clipboard_images: &ClipboardImages,
     local_ssh_reconnect_enabled: bool,
 ) -> bool {
     if local_ssh_reconnect_enabled && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), events) {
         return true;
     }
 
+    let panel_id = panel.id;
     let Some(terminal) = panel.terminal_mut() else {
         return false;
     };
@@ -56,6 +59,11 @@ pub(crate) fn handle_terminal_keyboard_input(
                 let bytes = input::paste_bytes(text, mode, true);
                 terminal.write_input(&bytes);
             }
+            // A terminal takes text, so a clipboard image becomes a private PNG
+            // file and its path is pasted when the worker has written it.
+            egui::Event::PasteImage(image) => {
+                clipboard_images.persist(ui.ctx(), panel_id, image.clone());
+            }
             egui::Event::Copy => {
                 if event.is_plain_ctrl_c_copy_command() {
                     terminal.write_input(&[3]);
@@ -71,10 +79,27 @@ pub(crate) fn handle_terminal_keyboard_input(
                 }
                 terminal.write_input(&[24]);
             }
-            egui::Event::Key { .. } => {
-                let emission = forwarder.on_key(event, mode);
-                if !emission.bytes.is_empty() {
-                    terminal.write_input(&emission.bytes);
+            // A clipboard or scrollback chord belongs to the terminal window,
+            // not to the program in the PTY. Every press, repeat and release of
+            // such a chord is consumed here; a release alone would otherwise
+            // reach the PTY as a modified key sequence.
+            egui::Event::Key {
+                key,
+                physical_key,
+                pressed,
+                repeat,
+                modifiers,
+                ..
+            } => {
+                if let Some(command) = input::terminal_local_command(*key, *physical_key, *modifiers) {
+                    if *pressed && !*repeat {
+                        run_terminal_local_command(ui, terminal, primary_selection, command);
+                    }
+                } else {
+                    let emission = forwarder.on_key(event, mode);
+                    if !emission.bytes.is_empty() {
+                        terminal.write_input(&emission.bytes);
+                    }
                 }
             }
             _ => {}
@@ -89,6 +114,38 @@ pub(crate) fn handle_terminal_keyboard_input(
     store_terminal_ime_enabled(ui, terminal_id, ime_enabled);
 
     false
+}
+
+/// Run a chord that the terminal window owns. Nothing here reaches the PTY.
+fn run_terminal_local_command(
+    ui: &egui::Ui,
+    terminal: &mut horizon_core::Terminal,
+    primary_selection: &PrimarySelection,
+    command: input::TerminalLocalCommand,
+) {
+    match command {
+        input::TerminalLocalCommand::Copy => {
+            if let Some(text) = take_selection_for_copy(terminal) {
+                primary_selection.copy(&text);
+                ui.ctx().copy_text(text);
+            }
+        }
+        // The toolkit reads the desktop clipboard for this viewport, so the text
+        // and the image arrive on the same events as the toolkit's own paste
+        // chord. Applied clipboard images reach the terminal as a file path.
+        input::TerminalLocalCommand::Paste => {
+            super::super::clipboard_paste::request(ui.ctx());
+        }
+        input::TerminalLocalCommand::ScrollLines(lines) => terminal.scroll_scrollback_by(lines),
+        input::TerminalLocalCommand::ScrollPage(pages) => {
+            // The last line of the old page stays visible as the first line of
+            // the new one, as it does in GNOME Terminal.
+            let lines_per_page = i32::from(terminal.rows().saturating_sub(1)).max(1);
+            terminal.scroll_scrollback_by(lines_per_page.saturating_mul(pages));
+        }
+        input::TerminalLocalCommand::ScrollToTop => terminal.set_scrollback(terminal.history_size()),
+        input::TerminalLocalCommand::ScrollToBottom => terminal.set_scrollback(0),
+    }
 }
 
 /// The selected text, ending the selection either way so a drag over blank

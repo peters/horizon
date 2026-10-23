@@ -4,6 +4,7 @@ mod mouse;
 #[cfg(target_os = "linux")]
 mod native_files;
 mod sequence;
+mod terminal_local;
 mod winit_keyboard;
 
 pub(crate) use ime_commit::ImeCommitNormalizer;
@@ -12,6 +13,7 @@ pub use keyboard::{
     translate_key_event_with_physical, translate_text_event,
 };
 pub use mouse::{WheelAction, mouse_button_report, mouse_motion_report, wheel_action};
+pub(crate) use terminal_local::{TerminalLocalCommand, terminal_local_command};
 pub(crate) use winit_keyboard::{FrameKeyEvent, ObservedKeyboardInputs, TerminalInputEvent, terminal_input_events};
 
 #[derive(Clone, Copy)]
