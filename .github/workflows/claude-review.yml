@@ -96,7 +96,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+        uses: anthropics/claude-code-action@e4a6faad497d33dbc7144135c75e41f82f0bf6c0 # v1.0.255
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # The Claude app token exchange rejects this event's OIDC token, so
