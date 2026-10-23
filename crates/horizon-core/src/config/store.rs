@@ -180,23 +180,92 @@ fn a_store_without_its_copy_keeps_working_and_gets_a_new_copy() {
 }
 
 #[test]
-fn an_unreadable_store_is_an_error_and_not_a_default() {
+fn a_damaged_store_is_repaired_from_its_copy() {
     let home = Home::new();
     home.write_copy(FIRST);
     home.load().expect("first load");
     let exported = std::fs::read_to_string(home.config_path()).expect("read");
     std::fs::write(home.store_path(), b"not a database").expect("damage the store");
 
-    let error = home.load().expect_err("a damaged store is not replaced by defaults");
+    let loaded = home.load().expect("a damaged store reads its copy");
 
-    assert!(
-        error.to_string().contains("settings store"),
-        "the error names the store: {error}"
-    );
+    assert_eq!(loaded.window.width, 1010.0, "the copy carries the settings");
     assert_eq!(
         std::fs::read_to_string(home.config_path()).expect("read"),
         exported,
-        "a refused load does not replace the copy with defaults"
+        "the repair changes no byte of the copy"
+    );
+    assert_eq!(
+        ConfigStore::resolve(&home.config_path())
+            .load()
+            .expect("store")
+            .expect("the store exists again")
+            .config
+            .window
+            .width,
+        1010.0,
+        "the store holds the settings again"
+    );
+    assert!(
+        std::fs::read_dir(home.root.path()).expect("home").any(|entry| entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .contains("damaged-")),
+        "the damaged file stays next to the store for a person to examine"
+    );
+}
+
+#[test]
+fn a_damaged_store_without_a_copy_is_an_error_and_not_a_default() {
+    let home = Home::new();
+    home.write_copy(FIRST);
+    home.load().expect("first load");
+    std::fs::remove_file(home.config_path()).expect("remove the copy");
+    std::fs::write(home.store_path(), b"not a database").expect("damage the store");
+
+    let error = home.load().expect_err("nothing carries the settings");
+
+    assert!(
+        error.to_string().contains("settings store") && error.to_string().contains("damaged"),
+        "the error names the store and the reason: {error}"
+    );
+    assert!(
+        std::fs::read_dir(home.root.path()).expect("home").all(|entry| !entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .contains("damaged-")),
+        "a damaged store with no copy is never moved, so a person can examine it"
+    );
+}
+
+#[test]
+fn a_store_of_another_version_is_refused_and_not_replaced_by_its_copy() {
+    let home = Home::new();
+    home.write_copy(FIRST);
+    home.load().expect("first load");
+    let connection = rusqlite::Connection::open(home.store_path()).expect("store");
+    connection
+        .execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', '99') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .expect("write a newer schema version");
+    drop(connection);
+    let store_before = std::fs::read(home.store_path()).expect("read the store");
+
+    let error = home.load().expect_err("another version is refused");
+
+    assert!(
+        error.to_string().contains("schema 99"),
+        "the error names both versions: {error}"
+    );
+    assert_eq!(
+        std::fs::read(home.store_path()).expect("reread the store"),
+        store_before,
+        "a store of another version is never rewritten"
     );
 }
 

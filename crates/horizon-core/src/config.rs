@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
-use crate::config_store::ConfigStore;
+use crate::config_store::{ConfigStore, StoreFault};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelResume};
@@ -344,7 +344,40 @@ impl Config {
 
         let store = ConfigStore::resolve(&resolved);
         let copy = read_config_copy(&resolved)?;
-        let (mut config, copy_migrated, origin) = match store.load()? {
+        let stored = match store.open() {
+            Ok(stored) => stored,
+            // Another Horizon version owns this file. It may hold settings that
+            // this build does not know, so neither the store nor the copy is
+            // read in its place.
+            Err(fault @ StoreFault::OtherVersion(_)) => return Err(store.fault_error(&fault)),
+            // The file is damaged. The copy is the export that Horizon wrote
+            // last, so it carries the same settings: use it, report the store,
+            // and write the store again. Without a copy there is nothing to
+            // carry them, and defaults must not replace them.
+            Err(fault) => {
+                tracing::error!(
+                    "settings store {} is damaged ({fault}); reading {} instead",
+                    store.path().display(),
+                    resolved.display()
+                );
+                if copy.is_none() {
+                    return Err(store.fault_error(&fault));
+                }
+                match store.move_damaged_aside() {
+                    Ok(kept) => tracing::error!(
+                        "settings store moved to {}; it is written again from {}",
+                        kept.display(),
+                        resolved.display()
+                    ),
+                    Err(error) => tracing::error!(
+                        "settings store {} stays damaged, because it cannot be moved: {error}",
+                        store.path().display()
+                    ),
+                }
+                None
+            }
+        };
+        let (mut config, copy_migrated, origin) = match stored {
             Some(stored) => match &copy {
                 Some(text) if stored.mirror_sha256.as_deref() != Some(sha256_hex(text).as_str()) => {
                     tracing::info!(

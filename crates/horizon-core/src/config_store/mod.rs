@@ -45,6 +45,28 @@ pub struct ConfigStore {
     path: PathBuf,
 }
 
+/// Why a store cannot give its settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoreFault {
+    /// The file is not a store that this build can read. The exported copy
+    /// carries the same settings, so a load can use the copy and write the
+    /// store again.
+    Damaged(String),
+    /// Another Horizon version wrote the store. This build must not replace it,
+    /// and it must not use the copy in its place, because the store may hold
+    /// newer settings.
+    OtherVersion(String),
+}
+
+impl std::fmt::Display for StoreFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Damaged(reason) => write!(formatter, "it is damaged: {reason}"),
+            Self::OtherVersion(reason) => write!(formatter, "{reason}"),
+        }
+    }
+}
+
 impl ConfigStore {
     /// The store that holds the settings of `config_path`.
     ///
@@ -80,15 +102,50 @@ impl ConfigStore {
     /// has no settings, because that would replace the settings of a person with
     /// defaults.
     pub fn load(&self) -> Result<Option<StoredSettings>> {
+        self.open().map_err(|fault| self.fault_error(&fault))
+    }
+
+    /// Read the settings, and name why a read failed, so a caller can use the
+    /// exported copy of a damaged store but never of a store of another version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreFault::Damaged`] when the file is not a store that this
+    /// build can read, and [`StoreFault::OtherVersion`] when another Horizon
+    /// version wrote it.
+    pub fn open(&self) -> std::result::Result<Option<StoredSettings>, StoreFault> {
         if !self.path.is_file() {
             return Ok(None);
         }
-        self.read().map(Some).map_err(|reason| {
-            Error::State(format!(
-                "settings store {} cannot be read: {reason}",
-                self.path.display()
-            ))
-        })
+        self.read().map(Some)
+    }
+
+    /// Move a damaged store aside, so a load can write a new one from the copy
+    /// that carries the same settings. The damaged file stays next to the store,
+    /// with a name that says what it is, for a person to examine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be moved.
+    pub fn move_damaged_aside(&self) -> Result<PathBuf> {
+        let name = self
+            .path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or("settings.sqlite");
+        let stamp = unix_millis() / 1000;
+        let target = self.path.with_file_name(format!("{name}.damaged-{stamp}"));
+        std::fs::rename(&self.path, &target)?;
+        Ok(target)
+    }
+
+    /// The error of one store fault, with the path of the store.
+    #[must_use]
+    pub fn fault_error(&self, fault: &StoreFault) -> Error {
+        Error::State(format!(
+            "settings store {} cannot be read: {fault}",
+            self.path.display()
+        ))
     }
 
     /// Write every section of `config` in one transaction.
@@ -135,21 +192,22 @@ impl ConfigStore {
         transaction.commit().map_err(|error| state_error(&error))
     }
 
-    fn read(&self) -> std::result::Result<StoredSettings, String> {
-        let reason = |error: rusqlite::Error| error.to_string();
+    fn read(&self) -> std::result::Result<StoredSettings, StoreFault> {
+        let reason = |error: rusqlite::Error| StoreFault::Damaged(error.to_string());
         let connection = Connection::open_with_flags(
             &self.path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(reason)?;
-        match meta(&connection, META_SCHEMA_VERSION)? {
+        let version = meta(&connection, META_SCHEMA_VERSION)?;
+        match version {
             Some(version) if version == SETTINGS_SCHEMA_VERSION.to_string() => {}
             Some(version) => {
-                return Err(format!(
+                return Err(StoreFault::OtherVersion(format!(
                     "it has schema {version} and this Horizon reads schema {SETTINGS_SCHEMA_VERSION}"
-                ));
+                )));
             }
-            None => return Err("it has no schema version".to_string()),
+            None => return Err(StoreFault::Damaged("it has no schema version".to_string())),
         }
         let mut rows = BTreeMap::new();
         let mut statement = connection
@@ -161,12 +219,12 @@ impl ConfigStore {
             let format: String = row.get(1).map_err(reason)?;
             let data: String = row.get(2).map_err(reason)?;
             if format != sections::FORMAT {
-                return Err(format!("section {section} has format {format}"));
+                return Err(StoreFault::Damaged(format!("section {section} has format {format}")));
             }
             rows.insert(section, data);
         }
         Ok(StoredSettings {
-            config: sections::decode(&rows).map_err(|error| error.to_string())?,
+            config: sections::decode(&rows).map_err(|error| StoreFault::Damaged(error.to_string()))?,
             mirror_sha256: meta(&connection, META_MIRROR_SHA256)?,
         })
     }
@@ -198,13 +256,17 @@ fn store_path_for(config_path: &Path) -> PathBuf {
     config_path.with_file_name(name)
 }
 
-fn meta(connection: &Connection, key: &str) -> std::result::Result<Option<String>, String> {
+fn meta(connection: &Connection, key: &str) -> std::result::Result<Option<String>, StoreFault> {
     let mut statement = connection
         .prepare("SELECT value FROM meta WHERE key = ?1")
-        .map_err(|error| error.to_string())?;
-    let mut rows = statement.query(params![key]).map_err(|error| error.to_string())?;
-    match rows.next().map_err(|error| error.to_string())? {
-        Some(row) => Ok(Some(row.get(0).map_err(|error| error.to_string())?)),
+        .map_err(|error| StoreFault::Damaged(error.to_string()))?;
+    let mut rows = statement
+        .query(params![key])
+        .map_err(|error| StoreFault::Damaged(error.to_string()))?;
+    match rows.next().map_err(|error| StoreFault::Damaged(error.to_string()))? {
+        Some(row) => Ok(Some(
+            row.get(0).map_err(|error| StoreFault::Damaged(error.to_string()))?,
+        )),
         None => Ok(None),
     }
 }

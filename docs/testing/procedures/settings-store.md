@@ -174,7 +174,7 @@ These names apply in the steps:
    Result: The window uses the dark theme, and `<home>/.horizon/config.yaml`
    exists again.
 
-### 6.4 S04 — A damaged store stops the start
+### 6.4 S04 — A damaged store comes back from the copy
 
 > **CAUTION:** THIS STEP DAMAGES THE TEST STORE. Use only the store under
 > `<home>`.
@@ -190,9 +190,10 @@ These names apply in the steps:
    env DISPLAY=<display> HOME=<home> <bin>/horizon --ephemeral > <run>/s04.log 2>&1
    ```
 
-   Result: The output contains `settings store` and the path of the store. No
-   window opens with default settings, and `<home>/.horizon/config.yaml` keeps
-   `theme: dark`.
+   Result: The window opens with the settings of the copy, and the theme is the
+   one of S02. The output contains `settings store` and the path of the damaged
+   file. The file `<home>/.horizon/settings.sqlite.damaged-*` exists and contains
+   the words `not a database`. `<home>/.horizon/config.yaml` is unchanged.
 
 ### 6.5 S05 — Every saved session still opens
 
@@ -247,7 +248,8 @@ These names apply in the steps:
 - The store holds every section in S01.
 - The window and the store hold the edited theme in S02.
 - The copy comes back in S03.
-- S04 reports the damaged store and keeps the copy.
+- S04 reports the damaged store, keeps it under its new name, and brings the
+  settings back from the copy.
 - Every session opens in S05, and the session counts are equal.
 - The kept text and the migrated store agree in S06.
 

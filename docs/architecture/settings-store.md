@@ -62,7 +62,9 @@ Horizon does not delete the settings of a newer one.
 | Condition | Result |
 |---|---|
 | A configuration that a person named does not exist in either place | Horizon reports an error. It does not start with the settings of the user. |
-| The store is damaged, or it comes from another schema | Horizon reports the path and the reason. It does not replace the settings with defaults, and the copy stays as the person wrote it. |
+| The store is damaged and the copy exists | Horizon reports the store, moves the damaged file to `settings.sqlite.damaged-<time>`, and writes a new store from the copy. The settings of the person come back, and the damaged file stays for examination. |
+| The store is damaged and the copy is missing | Horizon reports the path and the reason. It does not use the default settings, and the damaged file stays where it is. |
+| The store has a schema of another Horizon version | Horizon refuses the store and reports both versions. It writes neither the store nor the copy in its place, because the store may hold newer settings. |
 | The copy does not parse | Horizon reports an error. |
 | The copy is missing and the store exists | Horizon writes the copy again from the store. |
 | The copy is missing and the store is missing | Horizon uses the default settings. It writes no file. |
