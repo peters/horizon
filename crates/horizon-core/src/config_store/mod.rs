@@ -61,8 +61,7 @@ pub enum StoreFault {
 impl std::fmt::Display for StoreFault {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Damaged(reason) => write!(formatter, "{reason}"),
-            Self::OtherVersion(reason) => write!(formatter, "{reason}"),
+            Self::Damaged(reason) | Self::OtherVersion(reason) => write!(formatter, "{reason}"),
         }
     }
 }
