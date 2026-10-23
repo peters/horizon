@@ -788,8 +788,9 @@ with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
-again for the same repository. **Close** also ends a live preview that no Device
-panel shows any more, so no desktop runs where nobody watches it.
+again for the same repository. A live preview outlives **Close** while its
+Device panel is open; closing that panel ends the desktop, so no container runs where
+nobody watches it.
 
 Several repositories can be set up at the same time, each with its own agent. Click
 **Close** while a setup works, open **New cloud** again, choose another repository
@@ -956,10 +957,10 @@ takes a screenshot (when the image has ImageMagick's `import`) and opens the
 desktop live in a Device panel beside the agent,
 on this computer's loopback, before anything is rented. A new proof or a new
 preview request replaces the live desktop. **Stop** or **Use this setup**
-removes it, and it also goes when its Device panel closes or when the setup view
-closes without that panel open: a desktop nobody watches keeps no container. The
-setup itself stays ready, and the agent starts a new preview only when it asks for
-one again. The preview of a GPU profile gets this computer's GPU, and it gets
+removes it, and it also goes when its Device panel closes: a desktop nobody watches
+keeps no container. **Close** keeps it while that panel is open. The setup itself
+stays ready, **Use this setup** still commits it, and the agent starts a new preview
+only when it asks for one again. The preview of a GPU profile gets this computer's GPU, and it gets
 `/dev/kvm` when the app asks for it, such as an x86_64 Android emulator. With
 rootless Docker, only the container's root account can open `/dev/kvm`, so that
 preview runs as root, which is your own account. When this computer has no

@@ -733,13 +733,14 @@ This step rents a Hetzner server for some minutes and costs a few cents.
 3. If the setup shows a live preview, close its Device panel.
 
    Result: Within one minute, `docker ps` no longer lists the preview container of
-   that setup. The card keeps its steps, its proof and its summary.
+   that setup. The card keeps its steps, its proof and its summary, and **Use this
+   setup** still commits the setup.
 
 4. Start a new setup of the same repository, wait for the preview to open, and
    click **Close** in the setup view without closing the Device panel.
 
-   Result: The Device panel stays and its desktop stays live; **docker ps** lists
-   the preview container.
+   Result: The Device panel stays on the board and its desktop stays live;
+   **docker ps** lists the preview container.
 
 5. Close that Device panel.
 
