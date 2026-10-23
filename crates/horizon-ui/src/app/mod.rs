@@ -45,6 +45,7 @@ mod root_viewport;
 mod session;
 mod session_manager;
 mod settings;
+mod settings_io;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
@@ -125,6 +126,7 @@ use self::panels::ArrangedPanelDrag;
 use self::session::{StartupBootstrapFailure, StartupBootstrapOutcome};
 use self::session_manager::RuntimeSessionManagerState;
 use self::settings::SettingsEditor;
+use self::settings_io::SettingsIo;
 
 struct ActiveSession {
     session_id: String,
@@ -320,6 +322,10 @@ pub struct HorizonApp {
     last_panel_output_at: Option<Instant>,
     browser_create_host: BrowserCreateHostState,
     settings: Option<SettingsEditor>,
+    /// Saves and reloads of the settings, which never run on the UI thread.
+    settings_io: SettingsIo,
+    /// A reload is in flight, so the window does not ask for another one.
+    settings_reload_pending: bool,
     speech_model_info_cache: settings::SpeechModelInfoCache,
     /// Session-only and OS-store provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
@@ -380,6 +386,7 @@ impl HorizonApp {
         // answered; a finished job wakes this context to apply its outcome.
         self.browser_create_host.io.wake_with(ctx);
         self.apply_browser_host_io();
+        self.apply_settings_io(ctx);
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);

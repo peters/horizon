@@ -12,12 +12,15 @@ mod speech;
 pub(in crate::app) use speech::ClipboardCapture;
 pub(in crate::app) use speech::PendingCapture;
 pub(in crate::app) use speech::SpeechModelInfoCache;
+#[cfg(test)]
+mod tests;
 mod yaml_editor;
 
 use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
 use horizon_core::remote_browser_credential::CredentialWorkbench;
 
+use super::settings_io::SettingsReply;
 use super::util;
 use super::{HorizonApp, resolve_shortcuts};
 use crate::theme;
@@ -69,6 +72,8 @@ impl SettingsTab {
 pub(super) enum SettingsStatus {
     None,
     LivePreview,
+    /// The write runs on the settings thread.
+    Saving,
     Saved,
     Error(String),
 }
@@ -182,7 +187,9 @@ impl HorizonApp {
         }
         if let Some(editor) = self.settings.as_mut() {
             match &parsed {
-                Ok(_) if !matches!(editor.status, SettingsStatus::Saved) => {
+                // A save that is running or finished owns the status line: a
+                // preview must not replace it on the next frame.
+                Ok(_) if !matches!(editor.status, SettingsStatus::Saved | SettingsStatus::Saving) => {
                     editor.status = SettingsStatus::LivePreview;
                 }
                 Err(error) => {
@@ -201,15 +208,15 @@ impl HorizonApp {
         let configuration = editor.active_tab != SettingsTab::Tailnets || has_changes;
         #[cfg(not(feature = "cloud-workspaces"))]
         let configuration = true;
-        let action = bar::render(
-            ui,
-            if configuration { &status_text } else { "" },
+        let config_path = self.config_path.display().to_string();
+        let panel_state = PanelState {
+            config_path: &config_path,
+            status_text: &status_text,
             status_color,
             is_valid,
             has_changes,
             configuration,
-        );
-        self.apply_settings_action(action);
+        };
 
         #[cfg(target_os = "linux")]
         if let Some(editor) = self.settings.as_mut() {
@@ -227,11 +234,10 @@ impl HorizonApp {
                 })
                 .collect();
         }
-        let config_path = self.config_path.display().to_string();
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(
+            let action = render_settings_panel(
                 ui,
-                &config_path,
+                panel_state,
                 editor,
                 &mut self.speech_model_info_cache,
                 &mut self.remote_browser_credentials,
@@ -239,6 +245,8 @@ impl HorizonApp {
                 #[cfg(feature = "cloud-workspaces")]
                 &mut self.browser_create_host.provider_usage.tailnet_credentials,
             );
+            // A press in the bar is applied after the panel drew it.
+            self.apply_settings_action(action);
         }
         #[cfg(target_os = "linux")]
         self.apply_remote_device_action(ui.ctx());
@@ -331,34 +339,88 @@ impl HorizonApp {
     }
 
     fn save_settings(&mut self) {
-        if let Some(parent) = self.config_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         let Some(buffer) = self.settings.as_ref().map(|editor| editor.buffer.clone()) else {
             return;
         };
+        // The text is checked here, in memory; the write waits on the settings
+        // thread, and a reply applies the saved settings in a later frame.
         match Config::from_yaml(&buffer) {
-            Ok(config) => match Config::save_copy(&self.config_path, &buffer) {
-                Ok(saved) => {
-                    self.apply_runtime_config(&config);
-                    if let Some(editor) = self.settings.as_mut() {
-                        editor.adopt_saved_text(saved);
-                    }
-                    tracing::info!("settings saved to {}", self.config_path.display());
+            Ok(config) => {
+                self.apply_runtime_config(&config);
+                self.settings_io.save_text(self.config_path.clone(), buffer);
+                if let Some(editor) = self.settings.as_mut() {
+                    editor.status = SettingsStatus::Saving;
                 }
-                Err(error) => {
-                    if let Some(editor) = self.settings.as_mut() {
-                        editor.status = SettingsStatus::Error(format!("Write error: {error}"));
-                    }
-                    tracing::error!("failed to write config: {error}");
-                }
-            },
+            }
             Err(error) => {
                 if let Some(editor) = self.settings.as_mut() {
                     editor.status = SettingsStatus::Error(error.to_string());
                 }
                 tracing::error!("failed to validate config before save: {error}");
             }
+        }
+    }
+
+    /// Apply what the settings thread finished, in this frame.
+    pub(super) fn apply_settings_io(&mut self, ctx: &egui::Context) {
+        while self.take_settings_reply() {}
+        if self.settings_io.is_busy() {
+            // An answer arrives off the UI thread; keep frames coming until it
+            // reaches this window.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// Apply one finished request. Returns whether there was one.
+    pub(super) fn take_settings_reply(&mut self) -> bool {
+        let Some(reply) = self.settings_io.poll() else {
+            return false;
+        };
+        {
+            match reply {
+                SettingsReply::Saved { path, text, config } => {
+                    self.template_config = *config;
+                    if let Some(editor) = self.settings.as_mut() {
+                        editor.adopt_saved_text(text);
+                    }
+                    // Another window may have reloaded the presets meanwhile.
+                    self.board.sync_workspace_metadata(&self.template_config);
+                    tracing::info!(path = %path.display(), "settings saved");
+                }
+                SettingsReply::Reloaded { path, config } => {
+                    self.settings_reload_pending = false;
+                    if let Some(config) = config {
+                        tracing::info!(path = %path.display(), "settings changed, reloading presets");
+                        self.apply_runtime_config(&config);
+                        self.board.sync_workspace_metadata(&config);
+                    }
+                }
+                SettingsReply::Failed { what, error } => {
+                    if what == "reload" {
+                        self.settings_reload_pending = false;
+                    }
+                    if let Some(editor) = self.settings.as_mut() {
+                        editor.status = SettingsStatus::Error(error.clone());
+                    }
+                    tracing::error!(request = what, "settings request failed: {error}");
+                }
+            }
+        }
+        true
+    }
+
+    /// Wait for every queued settings request, for a test that reads the files
+    /// that a save writes.
+    #[cfg(test)]
+    pub(super) fn wait_for_settings_io(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.settings_io.is_busy() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the settings thread answered nothing"
+            );
+            self.take_settings_reply();
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 
@@ -420,20 +482,33 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     match status {
         SettingsStatus::None => (String::new(), theme::FG_DIM()),
         SettingsStatus::LivePreview => ("Live preview".to_string(), theme::FG_DIM()),
+        SettingsStatus::Saving => ("Saving".to_string(), theme::FG_DIM()),
         SettingsStatus::Saved => ("Saved".to_string(), theme::PALETTE_GREEN()),
         SettingsStatus::Error(message) => (message.clone(), theme::PALETTE_RED()),
     }
 }
 
+/// What the Settings panel shows besides its editor: the status bar and the
+/// path of the configuration that the YAML tab names.
+#[derive(Clone, Copy)]
+struct PanelState<'a> {
+    config_path: &'a str,
+    status_text: &'a str,
+    status_color: Color32,
+    is_valid: bool,
+    has_changes: bool,
+    configuration: bool,
+}
+
 fn render_settings_panel(
     ui: &mut egui::Ui,
-    config_path: &str,
+    panel_state: PanelState<'_>,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
     #[cfg(feature = "cloud-workspaces")] requests: &mut super::tailnets::requests::Requests,
-) {
+) -> SettingsAction {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
 
@@ -448,6 +523,20 @@ fn render_settings_panel(
                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
         )
         .show(ui, |ui| {
+            // The bar belongs to this panel, so the status line and its buttons
+            // sit with the settings instead of under the canvas.
+            let action = bar::render(
+                ui,
+                if panel_state.configuration {
+                    panel_state.status_text
+                } else {
+                    ""
+                },
+                panel_state.status_color,
+                panel_state.is_valid,
+                panel_state.has_changes,
+                panel_state.configuration,
+            );
             ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
             ui.add_space(16.0);
 
@@ -463,7 +552,7 @@ fn render_settings_panel(
                         .show(ui, |ui| editor.tailnets.settings(ui, requests));
                 }
                 SettingsTab::Yaml => {
-                    yaml_editor::render(ui, config_path, &mut editor.buffer, available);
+                    yaml_editor::render(ui, panel_state.config_path, &mut editor.buffer, available);
                 }
                 SettingsTab::RemoteDevices => {
                     #[cfg(target_os = "linux")]
@@ -476,7 +565,9 @@ fn render_settings_panel(
                 }
                 tab => render_gui_tab(ui, tab, editor, model_info_cache, credentials, allocations, available),
             }
-        });
+            action
+        })
+        .inner
 }
 
 fn render_gui_tab(

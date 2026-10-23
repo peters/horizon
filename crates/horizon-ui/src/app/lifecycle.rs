@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{ClipboardTarget, CloudWait, Config, GitWatcher, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{ClipboardTarget, CloudWait, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
 use crate::primary_selection::PrimarySelectionPaste;
@@ -251,13 +251,15 @@ impl HorizonApp {
         if current_mtime == self.config_last_mtime {
             return;
         }
-        self.config_last_mtime = current_mtime;
-
-        if let Ok(config) = Config::load(Some(&self.config_path)) {
-            tracing::info!("config file changed, reloading presets");
-            self.apply_runtime_config(&config);
-            self.board.sync_workspace_metadata(&config);
+        if self.settings_reload_pending {
+            // One read at a time; the reply applies the settings.
+            return;
         }
+        self.config_last_mtime = current_mtime;
+        self.settings_reload_pending = true;
+        // The read waits on the settings thread, and its reply applies the
+        // settings in a later frame.
+        self.settings_io.reload(self.config_path.clone());
     }
 
     pub(super) fn queue_panel_restart(&mut self, panel_id: PanelId) {

@@ -243,6 +243,36 @@ These names apply in the steps:
    person set, and it holds a default for each shortcut that the old file did
    not have.
 
+### 6.7 S07 — The Settings window saves without a stop
+
+1. Keep the candidate of S06 open and open the Settings window.
+
+   Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd>.
+
+   Result: The window shows the text of the configuration copy.
+
+2. Change one value in the text, for example the theme, and press **Save**.
+
+   Result: The status line at the bottom of the window shows `Saved`. The window
+   answers the pointer and the keyboard while it saves. A fast store finishes
+   the write in one frame, so `Saving` can be too short to see; the check of the
+   two files in the next step is the proof of the write.
+
+3. Read the copy and the store.
+
+   ```sh
+   rg theme <home>/.horizon/config.yaml
+   sqlite3 <home>/.horizon/settings.sqlite \
+     "SELECT data FROM settings WHERE section = 'appearance';"
+   ```
+
+   Result: The copy holds the new theme, and the store holds the same value.
+
+4. Press **Save** again without a change.
+
+   Result: The status line shows `Saved` again. The copy and the store keep the
+   same values, and the window does not report an error.
+
 ## 7. Pass criteria
 
 - Each file of the Horizon home in S01 is present after the first start.
@@ -254,6 +284,8 @@ These names apply in the steps:
   settings back from the copy.
 - Every session opens in S05, and the session counts are equal.
 - The kept text and the migrated store agree in S06.
+- The window saves and shows `Saved` in S07, and the copy and the store hold the
+  saved value.
 
 ## 8. Cleanup
 

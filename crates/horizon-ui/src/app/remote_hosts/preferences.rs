@@ -86,21 +86,20 @@ impl HorizonApp {
             Some(text) => Config::from_yaml(&text).map(|parsed| (Some(text), parsed)),
             None => Ok((None, config)),
         };
-        let written = staged.and_then(|(text, parsed)| match text {
-            Some(text) => Config::save_copy(&self.config_path, &text).map(|saved| (saved, parsed)),
-            None => Config::save(&self.config_path, &parsed).map(|saved| (saved, parsed)),
-        });
-        match written {
-            Ok((saved, config)) => {
+        match staged {
+            Ok((text, config)) => {
                 self.apply_runtime_config(&config);
-                if let Some(editor) = self.settings.as_mut() {
-                    editor.adopt_saved_text(saved);
+                // The write waits on the settings thread; its reply moves the
+                // editor onto the saved text.
+                match text {
+                    Some(text) => self.settings_io.save_text(self.config_path.clone(), text),
+                    None => self.settings_io.save_config(self.config_path.clone(), config),
                 }
-                tracing::info!(setting = what, path = %self.config_path.display(), "config updated");
+                tracing::info!(setting = what, path = %self.config_path.display(), "config change queued");
                 true
             }
             Err(error) => {
-                tracing::error!(setting = what, %error, "failed to persist config change");
+                tracing::error!(setting = what, %error, "failed to stage config change");
                 false
             }
         }

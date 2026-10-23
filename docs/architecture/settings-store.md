@@ -57,6 +57,24 @@ Horizon does not delete the settings of a newer one.
 | A store that cannot be read is an error. | Defaults never replace the settings of a person. |
 | The copy of an older Horizon still loads the store and the migrated copy. | A return to an older build loses nothing. |
 
+## When a write happens
+
+A save and a reload run on the settings thread, not on the UI thread. The
+Settings window reads the version, shows `Saving`, and applies the answer in a
+later frame. The reasons are in
+[the UI thread guide](ui-thread.md): a save syncs the copy folder and commits the
+store with `synchronous=FULL`.
+
+| Event | What runs on the settings thread |
+|---|---|
+| Save in the Settings window | Write the copy, write the store, answer with the saved text. |
+| Save of a remote-host preference | Write the copy or the store, answer with the saved text. |
+| Copy or store changed on disk | Read the settings, answer with them. |
+
+A reload is pending from the moment it is asked for until its answer arrives, so
+the window never starts a second one. The bar at the bottom of the Settings
+panel shows `Saving` while a write runs and `Saved` when it ends.
+
 ## Failures
 
 | Condition | Result |

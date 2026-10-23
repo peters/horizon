@@ -195,6 +195,7 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
 
     assert!(app.set_remote_hosts_default_workspace("  Ops  "));
     assert!(!app.set_remote_hosts_default_workspace("   "));
+    app.wait_for_settings_io();
 
     let saved = std::fs::read_to_string(&app.config_path).expect("config written");
     assert!(
@@ -207,6 +208,7 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
         "kept exact"
     );
     assert!(app.set_remote_hosts_default_workspace("Ops"));
+    app.wait_for_settings_io();
     assert_eq!(
         Config::load(Some(&app.config_path))
             .unwrap()
@@ -261,6 +263,7 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
         editor.buffer.clone_from(&editor.original);
     }
     assert!(app.set_remote_hosts_default_workspace("Ops"));
+    app.wait_for_settings_io();
     let editor = app.settings.as_ref().unwrap();
     assert_eq!(editor.buffer, editor.original);
     assert!(editor.buffer.contains("default_workspace: Ops"), "{}", editor.buffer);
@@ -285,6 +288,7 @@ fn setting_the_default_workspace_patches_the_file_text_in_place() {
     std::fs::write(&app.config_path, source).unwrap();
 
     assert!(app.set_remote_hosts_default_workspace("Ops"));
+    app.wait_for_settings_io();
 
     let saved = std::fs::read_to_string(&app.config_path).unwrap();
     assert_eq!(
@@ -320,12 +324,14 @@ fn set_default_never_overwrites_a_file_it_cannot_patch_in_place() {
     std::fs::write(&app.config_path, edited).unwrap();
     assert_eq!(app.template_config.remote_hosts.vnc_port, 5900, "not reloaded yet");
     assert!(app.set_remote_hosts_default_workspace("Ops"));
+    app.wait_for_settings_io();
     assert_eq!(app.template_config.remote_hosts.vnc_port, 5999, "the file's value wins");
     assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
 
     // Only a genuinely absent file is written from the config.
     std::fs::remove_file(&app.config_path).unwrap();
     assert!(app.set_remote_hosts_default_workspace("Fresh"));
+    app.wait_for_settings_io();
     assert!(
         std::fs::read_to_string(&app.config_path)
             .unwrap()
@@ -409,6 +415,7 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
         None
     );
 
+    app.wait_for_settings_io();
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
     assert_eq!(saved.presets.len(), presets_before + 2);
     let vnc = saved
@@ -423,6 +430,7 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
     let mut typed = launch("lab", lab_connection(), RemoteConnectMode::Vnc);
     typed.vnc_port = Some(5999);
     assert_eq!(app.save_remote_host_shortcut(typed), Some("VNC: lab".to_string()));
+    app.wait_for_settings_io();
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
     let vnc = saved
         .presets
@@ -456,6 +464,7 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
         app.save_remote_host_shortcut(launch("lab", as_root.clone(), RemoteConnectMode::Vnc)),
         Some("VNC: lab".to_string())
     );
+    app.wait_for_settings_io();
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
     assert_eq!(saved.presets.len(), presets_before + 2);
     let vnc = saved
@@ -478,6 +487,7 @@ fn saving_a_shortcut_keeps_external_config_edits_and_refuses_a_broken_file() {
         app.save_remote_host_shortcut(launch("lab", lab_connection(), RemoteConnectMode::Vnc)),
         Some("VNC: lab".to_string())
     );
+    app.wait_for_settings_io();
     let saved = Config::load(Some(&app.config_path)).expect("config reloads");
     assert_eq!(saved.remote_hosts.vnc_port, 5999, "the external edit survives");
     let vnc = saved
