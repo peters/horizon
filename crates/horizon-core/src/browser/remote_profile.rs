@@ -16,7 +16,6 @@ use horizon_browser::remote::{ImportSummary, RemoteBrowserConfig, RemoteConfigEr
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::config_migration;
 
 /// File name suggested next to the configuration file.
 pub const PORTABLE_PROFILE_FILE_NAME: &str = "remote-browser-profile.yaml";
@@ -213,17 +212,20 @@ fn normalized(path: &Path) -> PathBuf {
 /// The configuration file parsed, migrated and validated in memory: nothing
 /// is written back, so a caller can fail after this without changing the
 /// file.
+/// Read the settings without writing either file: the store is the authority,
+/// and a store with no copy still holds them.
 fn load_config_in_memory(config_path: &Path) -> Result<Config, RemoteProfileError> {
     let config_error = |error: crate::error::Error| RemoteProfileError::ConfigFile(error.to_string());
-    let contents = std::fs::read_to_string(config_path).map_err(|source| RemoteProfileError::Io {
-        path: config_path.to_path_buf(),
-        source,
-    })?;
-    let mut config: Config =
-        serde_yaml::from_str(&contents).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
-    config_migration::migrate_in_memory(&mut config).map_err(config_error)?;
-    config.validate().map_err(config_error)?;
-    Ok(config)
+    match Config::read(config_path).map_err(config_error)? {
+        Some(config) => Ok(config),
+        None => Err(RemoteProfileError::Io {
+            path: config_path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no settings store and no configuration file",
+            ),
+        }),
+    }
 }
 
 /// Write the portable document for `remote` to `path`, replacing the file
@@ -249,11 +251,9 @@ pub fn import_portable_file_into_config(
 ) -> Result<ImportSummary, RemoteProfileError> {
     refuse_config_path(config_path, profile_path)?;
     let yaml = read_portable_profile(profile_path)?;
-    let mut config = if config_path.exists() {
-        load_config_in_memory(config_path)?
-    } else {
-        Config::default()
-    };
+    let mut config = Config::read(config_path)
+        .map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?
+        .unwrap_or_default();
     let summary = import_portable(&mut config.browser.remote, &yaml)?;
     Config::save(config_path, &config).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
     Ok(summary)

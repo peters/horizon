@@ -256,7 +256,24 @@ fn a_store_of_another_version_is_refused_and_not_replaced_by_its_copy() {
     drop(connection);
     let store_before = std::fs::read(home.store_path()).expect("read the store");
 
-    let error = home.load().expect_err("another version is refused");
+    let loaded = home.load().expect("the copy carries the settings of the person");
+
+    assert_eq!(
+        loaded.window.width, 1010.0,
+        "the start uses the copy, not the default settings"
+    );
+    assert_eq!(
+        std::fs::read(home.store_path()).expect("reread the store"),
+        store_before,
+        "a store of another version is never rewritten"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.config_path()).expect("reread the copy"),
+        FIRST,
+        "the start that refuses the store writes no copy either"
+    );
+
+    let error = Config::save(&home.config_path(), &loaded).expect_err("a save is refused");
 
     assert!(
         error.to_string().contains("schema 99"),
@@ -265,7 +282,12 @@ fn a_store_of_another_version_is_refused_and_not_replaced_by_its_copy() {
     assert_eq!(
         std::fs::read(home.store_path()).expect("reread the store"),
         store_before,
-        "a store of another version is never rewritten"
+        "a refused save leaves the store alone"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.config_path()).expect("reread the copy"),
+        FIRST,
+        "a refused save leaves the copy alone"
     );
 }
 

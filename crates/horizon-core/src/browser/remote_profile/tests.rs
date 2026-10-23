@@ -163,6 +163,50 @@ fn oversized_documents_are_refused_before_parsing() {
 }
 
 #[test]
+fn an_export_reads_a_store_with_no_copy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.yaml");
+    let mut config = Config::default();
+    config.browser.remote = local();
+    Config::save(&config_path, &config).expect("save");
+    std::fs::remove_file(&config_path).expect("remove the copy");
+
+    let exported_path = dir.path().join("out.yaml");
+    let exported = export_portable_file_from_config(&config_path, &exported_path).expect("export");
+
+    assert!(
+        exported.providers.contains_key("grid"),
+        "the store holds the profile even when the copy is gone"
+    );
+}
+
+#[test]
+fn an_import_keeps_the_settings_of_a_store_with_no_copy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.yaml");
+    let mut config = Config {
+        window: crate::config::WindowConfig {
+            width: 1234.0,
+            ..Config::default().window
+        },
+        ..Config::default()
+    };
+    config.browser.remote = local();
+    Config::save(&config_path, &config).expect("save");
+    std::fs::remove_file(&config_path).expect("remove the copy");
+    let profile = dir.path().join("profile.yaml");
+    write_portable_profile(&profile, &local()).expect("profile");
+
+    import_portable_file_into_config(&config_path, &profile).expect("import");
+    let loaded = Config::load(Some(&config_path)).expect("load");
+
+    assert!(
+        (loaded.window.width - 1234.0).abs() < f32::EPSILON,
+        "an import merges into the settings of the store, and does not start from defaults"
+    );
+}
+
+#[test]
 fn profile_files_round_trip_through_a_second_configuration_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let profile_path = dir.path().join("profiles").join("remote-browser-profile.yaml");
