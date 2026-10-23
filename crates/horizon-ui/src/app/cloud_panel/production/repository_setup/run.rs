@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 pub(super) mod board;
 mod crates;
+mod preview_lifecycle;
 mod view;
 pub(super) use view::{readable_rows, render};
 
@@ -586,22 +587,6 @@ impl Run {
     /// The proved setup asks for a GPU; the preview of its image gets this computer's.
     pub(super) fn proved_gpu(&self) -> bool {
         self.proof.as_ref().is_some_and(|proof| proof.gpu)
-    }
-
-    /// The agent named no desktop preview, or Horizon showed the one it named last, or
-    /// skipped it because this computer lacks the hardware it needs: `true` does not
-    /// always mean a live desktop.
-    fn preview_shown_or_none(&self) -> bool {
-        !self.status.preview_invalid
-            && (self.status.preview.is_none()
-                || (self.previewed_request == self.status.preview_request
-                    && self.previewed_spec == self.status.preview
-                    && self.preview.as_ref().is_some_and(|preview| {
-                        matches!(
-                            preview.outcome,
-                            preview::Outcome::Live { .. } | preview::Outcome::Unavailable(_)
-                        )
-                    })))
     }
 
     /// Every step the agent owns is reported done or skipped, and no step failed; the

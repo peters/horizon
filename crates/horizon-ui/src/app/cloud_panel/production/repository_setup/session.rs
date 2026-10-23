@@ -428,15 +428,38 @@ impl HorizonApp {
         self.open_cloud_setup_preview(key);
     }
 
+    /// Stops each live setup preview that no Device panel shows, on Close. The run keeps
+    /// its card, its files and its proof, and a desktop the person closed takes its
+    /// container with it instead of running on unobserved.
+    pub(in crate::app) fn stop_unwatched_cloud_setup_previews(&mut self) {
+        for key in self.cloud_prototype.production.setup_run_panels() {
+            let watched = self
+                .cloud_prototype
+                .production
+                .setup_run(key)
+                .and_then(|run| run.preview_panel)
+                .is_some_and(|panel| self.board.panel(panel).is_some());
+            if watched {
+                continue;
+            }
+            if let Some(run) = self.cloud_prototype.production.setup_run_mut(key) {
+                run.stop_unwatched_preview();
+            }
+        }
+    }
+
     /// Opens each live preview of the run of `key` once, as a Device panel beside its
     /// setup agent. A panel that shows a desktop which ended, or was replaced, closes.
     fn open_cloud_setup_preview(&mut self, key: horizon_core::PanelId) {
         let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
-        // A panel the person closed stays closed for this desktop.
+        // A panel the person closed stays closed for this desktop, and the desktop goes
+        // with it: nobody watches it any more.
         if run.preview_panel.is_some_and(|panel| self.board.panel(panel).is_none()) {
             run.preview_panel = None;
+            run.stop_unwatched_preview();
+            return;
         }
         let endpoint = run.preview.as_ref().and_then(super::preview::Preview::endpoint);
         if run.preview_shown == endpoint {

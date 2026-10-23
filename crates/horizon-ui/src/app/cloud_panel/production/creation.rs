@@ -79,6 +79,9 @@ impl HorizonApp {
     /// board shows it with the others.
     fn close_cloud_creation_to_board(&mut self, ctx: &Context) {
         let setup = super::repository_setup::running_here(&self.cloud_prototype.production);
+        // Close keeps the agent working, but a live desktop the dialog opened and nobody
+        // shows any more goes with it.
+        self.stop_unwatched_cloud_setup_previews();
         self.close_cloud_creation();
         if setup {
             self.open_setup_board(ctx, true);

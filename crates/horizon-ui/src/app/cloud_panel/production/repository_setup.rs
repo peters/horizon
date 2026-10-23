@@ -3,7 +3,7 @@
 use super::{PanelKind, Production};
 use crate::app::cloud_panel::runtime::action_button;
 use crate::theme;
-use egui::{Color32, Frame, RichText, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Frame, Response, RichText, Stroke, Vec2};
 use horizon_core::{
     cloud_panel::Placement,
     cloud_runtime::repository::launch::{Configuration, quick_start},
@@ -246,7 +246,8 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
         for group in &groups {
             // The chip and its caret stay one item, so a long preset name wraps them together.
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+                // No gap: the two halves are one control, joined by a divider.
+                ui.spacing_mut().item_spacing.x = 0.0;
                 // The chip names the variant of this agent that is chosen, else its default.
                 let variant = (chosen_kind == Some(group.default.kind))
                     .then_some(chosen_name)
@@ -275,15 +276,23 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
                 }))
                 .fill(fill)
                 .stroke(stroke)
-                .corner_radius(8)
-                .min_size(Vec2::new(0.0, 28.0));
+                .corner_radius(CornerRadius {
+                    nw: CHIP_RADIUS,
+                    sw: CHIP_RADIUS,
+                    ne: 0,
+                    se: 0,
+                })
+                .min_size(Vec2::new(0.0, CHIP_HEIGHT));
                 // The chip keeps the preset it shows: only the caret switches between
                 // the presets of an agent.
-                if ui.add(chip).on_hover_text(name).clicked() {
+                let chip = ui.add(chip).on_hover_text(name);
+                if chip.clicked() {
                     form.setup_preset = Some(name.to_owned());
                 }
                 if !group.variants.is_empty() {
-                    variant_caret(ui, form, group, chosen_name);
+                    // The two halves take one height, so their outlines meet at the same
+                    // top and bottom edge instead of staggering by a pixel.
+                    variant_caret(ui, form, group, chosen_name, (fill, stroke), chip.rect.height());
                 }
             });
         }
@@ -295,6 +304,15 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
 /// The widest a chip label gets before it is elided, so a long preset name wraps to the
 /// next row instead of squeezing the chip beside it.
 const CHIP_TEXT_WIDTH: f32 = 200.0;
+
+/// The height of a preset chip and of its caret, so the two halves line up.
+const CHIP_HEIGHT: f32 = 28.0;
+
+/// The rounding of the outer corners of a chip; the halves that meet stay square.
+const CHIP_RADIUS: u8 = 8;
+
+/// The width of the caret half of a preset chip.
+const CARET_WIDTH: f32 = 22.0;
 
 /// The label of a chip, elided with an ellipsis when the preset name is long. The full
 /// name stays in the hover text.
@@ -319,16 +337,29 @@ fn chip_label(ui: &egui::Ui, name: &str) -> String {
     "…".to_owned()
 }
 
-/// The caret beside an agent that has more than one preset in the New Workspace menu: it
-/// opens that agent's presets, so a repository starts on the model the person chose for it.
-fn variant_caret(ui: &mut egui::Ui, form: &mut Production, group: &SetupGroup, chosen: Option<&str>) {
+/// The caret of a preset chip: it opens that agent's presets, so a repository starts on
+/// the model the person chose for it. It takes the chip's fill and stroke, and only its
+/// outer corners are rounded, so the pair reads as one split button.
+fn variant_caret(
+    ui: &mut egui::Ui,
+    form: &mut Production,
+    group: &SetupGroup,
+    chosen: Option<&str>,
+    (fill, stroke): (Color32, Stroke),
+    height: f32,
+) -> Response {
     let caret = ui
-        .add(
-            egui::Button::new(RichText::new("\u{25be}").size(10.0).color(theme::FG_SOFT()))
-                .fill(theme::PANEL_BG_ALT())
-                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
-                .corner_radius(8)
-                .min_size(Vec2::new(20.0, 28.0)),
+        .add_sized(
+            Vec2::new(CARET_WIDTH, height),
+            egui::Button::new(RichText::new("\u{25be}").size(12.0).color(theme::FG_SOFT()))
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(CornerRadius {
+                    nw: 0,
+                    sw: 0,
+                    ne: CHIP_RADIUS,
+                    se: CHIP_RADIUS,
+                }),
         )
         .on_hover_text(format!(
             "The {} presets of the New Workspace menu",
@@ -357,6 +388,7 @@ fn variant_caret(ui: &mut egui::Ui, form: &mut Production, group: &SetupGroup, c
         ui.ctx()
             .memory_mut(|memory| memory.areas_mut().set_sublayer(ui.layer_id(), popup_layer));
     }
+    caret
 }
 
 /// One agent in the chooser: the preset its chip chooses, and the agent's other presets.
