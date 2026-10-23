@@ -239,7 +239,9 @@ These names apply in the steps:
    ```
 
    Result: The kept file holds exactly `command_palette: Alt+K`. The store holds
-   `Ctrl+Shift+K` as the binding of the command palette.
+   `Alt+K` for the command palette, because a migration keeps a value that a
+   person set, and it holds a default for each shortcut that the old file did
+   not have.
 
 ## 7. Pass criteria
 

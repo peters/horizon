@@ -61,7 +61,7 @@ pub enum StoreFault {
 impl std::fmt::Display for StoreFault {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Damaged(reason) => write!(formatter, "it is damaged: {reason}"),
+            Self::Damaged(reason) => write!(formatter, "{reason}"),
             Self::OtherVersion(reason) => write!(formatter, "{reason}"),
         }
     }
@@ -142,10 +142,11 @@ impl ConfigStore {
     /// The error of one store fault, with the path of the store.
     #[must_use]
     pub fn fault_error(&self, fault: &StoreFault) -> Error {
-        Error::State(format!(
-            "settings store {} cannot be read: {fault}",
-            self.path.display()
-        ))
+        let what = match fault {
+            StoreFault::Damaged(_) => "is damaged",
+            StoreFault::OtherVersion(_) => "cannot be read",
+        };
+        Error::State(format!("settings store {} {what}: {fault}", self.path.display()))
     }
 
     /// Write every section of `config` in one transaction.

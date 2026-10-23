@@ -356,7 +356,7 @@ impl Config {
             // carry them, and defaults must not replace them.
             Err(fault) => {
                 tracing::error!(
-                    "settings store {} is damaged ({fault}); reading {} instead",
+                    "settings store {} is damaged: {fault}; reading {} instead",
                     store.path().display(),
                     resolved.display()
                 );
