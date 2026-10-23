@@ -666,6 +666,7 @@ checked on the cloud card, and an agent panel in the same workspace.
 
    Result: The setup ends and the dialog shows the choices again. The chip still
    names the preset you chose.
+
 ### 6.25 S25 — Build on a rented builder
 
 This step rents a Hetzner server for some minutes and costs a few cents.
