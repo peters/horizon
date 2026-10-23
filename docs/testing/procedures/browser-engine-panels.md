@@ -53,7 +53,9 @@ engine still needs `allow_additional`.
 
    Result: The file exists.
 
-2. Write this configuration to `<work>/config.yaml`. Use your paths:
+2. Write this configuration to `<work>/config.yaml`. Use your paths. The first
+   start in `<work>` imports this file into `<work>/settings.sqlite` and keeps the
+   file as `config.yaml.imported-<time>`:
 
    ```yaml
    version: 11

@@ -102,7 +102,7 @@ You do not need a config file to start. Launch Horizon, then:
 5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for presets and actions.
 6. Close Horizon. Reopen it tomorrow — the session, layout, canvas pan/zoom, and terminal history are still there.
 
-Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a [Browser panel](#browse-any-website) for any site on this machine or on BrowserStack, a [Device panel](#watch-an-app-over-vnc) for each VNC desktop you want to watch, or Settings (**Ctrl+Shift+,**) to edit `~/.horizon/config.yaml` with the canvas still visible behind it.
+Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a [Browser panel](#browse-any-website) for any site on this machine or on BrowserStack, a [Device panel](#watch-an-app-over-vnc) for each VNC desktop you want to watch, or Settings (**Ctrl+Shift+,**) to change settings in YAML form with the canvas still visible behind it.
 
 ---
 
@@ -182,9 +182,9 @@ A built-in **git status panel** watches the workspace repo. See changed files, i
 
 The **SSH | VNC** switch (or **Tab**) picks what opening a host creates: a terminal over SSH, or a Device panel showing the host's desktop (read-only until you turn **Interact** on in the panel). VNC never crosses the network in the clear: Horizon runs `ssh -W 127.0.0.1:<port>` to the host and pipes that into its native VNC viewer, so the server only has to listen on the host's loopback interface (`remote_hosts.vnc_port`, default 5900). A host whose server listens elsewhere gets its own entry in `remote_hosts.vnc_ports`, keyed by the label the overlay shows or by its SSH host name; typing **:port** at the end of the filter (for example `lab:5901`) uses that port for one session, or for the shortcut being saved.
 
-The **in** picker chooses the workspace that receives the session. It defaults to `remote_hosts.default_workspace` (**Remote Sessions**, created as a grid on first use); pick any other workspace for one session (**Alt+↑/↓** cycles it from the keyboard), or **Set default** (**Alt+D**) to make it the new default in the config file Horizon loaded (`~/.horizon/config.yaml` unless `--config` named another). Set default waits while the Settings editor has unsaved edits, so the two never overwrite each other.
+The **in** picker chooses the workspace that receives the session. It defaults to `remote_hosts.default_workspace` (**Remote Sessions**, created as a grid on first use); pick any other workspace for one session (**Alt+↑/↓** cycles it from the keyboard), or **Set default** (**Alt+D**) to make it the new default in this Horizon's settings store. Set default waits while the Settings editor has unsaved edits, so the two never overwrite each other.
 
-Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut** and **Save VNC shortcut**. A saved shortcut is an ordinary preset (`SSH: <host>` or `VNC: <host>`, with the `user@` override applied) written to the config file, so the command palette and the preset picker can add that host to any workspace later.
+Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut** and **Save VNC shortcut**. A saved shortcut is an ordinary preset (`SSH: <host>` or `VNC: <host>`, with the `user@` override applied) saved to this Horizon's settings store, so the command palette and the preset picker can add that host to any workspace later.
 
 The same viewer also watches loopback VNC servers on this computer, one port per copy of an app. See [Watch an app over VNC](#watch-an-app-over-vnc).
 
@@ -380,7 +380,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 
 ## Configuration
 
-The settings editor writes back to the same file Horizon loaded. By default that is `~/.horizon/config.yaml` (`config.yml` is also accepted), or the same file in [`HORIZON_HOME`](#state-folder) when you set it. You can seed workspaces, panel presets, feature flags, and shortcuts.
+Horizon keeps its settings in one SQLite file, `~/.horizon/settings.sqlite` (in [`HORIZON_HOME`](#state-folder) when you set it). The settings editor reads and writes that store; you never edit a file by hand to change a setting. To read the settings as YAML, or to keep a copy in version control, run `horizon --export-config [<path>]`. Horizon does not read that copy again: change a setting in the Settings window or in the store. You can seed workspaces, panel presets, feature flags, and shortcuts, and the YAML below is the form that the editor shows and that an export writes.
 
 Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys are ignored, so a `panels:` block will not create anything.
 
@@ -489,7 +489,7 @@ features:
 
 `features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as **Ctrl+Shift+A** (sidebar order, left to right) whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles. The default-disabled path does not show this overlay. Changing the setting in the live editor takes effect when a session is next loaded.
 
-`features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features or by setting the flag in `config.yaml`. Like other General feature toggles, the Settings editor applies the change immediately as a live preview; save to persist it, or close/revert without saving to restore the previous value.
+`features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features, or by setting the flag in the YAML of the settings editor. Like other General feature toggles, the Settings editor applies the change immediately as a live preview; save to persist it, or close/revert without saving to restore the previous value.
 
 Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead of punctuation-only shortcut components such as `Ctrl++`.
 
@@ -522,12 +522,13 @@ Provider-backed overview controls and workspace setup remain separate integratio
 
 | Flag | What it does |
 |:-----|:-------------|
-| `--config <path>` / `-c <path>` | Load an explicit config file |
+| `--config <path>` / `-c <path>` | Use an explicit settings location: the store is `settings.sqlite` in that folder, or `<stem>.settings.sqlite` for another name |
+| `--export-config [<path>]` | Write the settings as YAML and exit; the default path is the configuration path of this run |
 | `--ephemeral` | Do not persist this run |
 | `--new-session` | Start a new saved session from the current config |
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
 | `--export-remote-profile <path>` | Write the shareable remote browser profile (providers, targets, credential references; no credential values or bindings) and exit |
-| `--import-remote-profile <path>` | Merge a portable remote browser profile into the config file and exit (one profile command per launch, never the config file itself); credentials are entered afterwards in Settings > Remote browsers, or bound in YAML to environment variable names for unattended launches |
+| `--import-remote-profile <path>` | Merge a portable remote browser profile into the settings store and exit (one profile command per launch); credentials are entered afterwards in Settings > Remote browsers, or bound in YAML to environment variable names for unattended launches |
 
 Machine-local `credential_bindings` name a store, never a secret. `store:
 session` and `store: os_keychain` are entered in Settings > Remote browsers.
@@ -549,14 +550,14 @@ docker run --rm \
 
 ### State folder
 
-Horizon keeps its config, sessions, browser profiles, cloud settings and runtime files in `~/.horizon`. Set `HORIZON_HOME` to an absolute path to keep them in another folder instead, for example to run a second Horizon that cannot touch your usual one:
+Horizon keeps its settings store, sessions, browser profiles, cloud settings and runtime files in `~/.horizon`. Set `HORIZON_HOME` to an absolute path to keep them in another folder instead, for example to run a second Horizon that cannot touch your usual one:
 
 ```bash
 HORIZON_HOME=/path/to/private-horizon horizon
 ```
 
 - If the folder is missing, Horizon creates it, readable only by you (mode `700` on Linux and macOS). Horizon refuses to start when the path is relative, is not a folder or is a symbolic link. On Linux and macOS it also refuses a folder that belongs to another user or whose permission bits let other users in. Horizon does not examine ACLs, so on macOS an ACL can still give other users access.
-- With `HORIZON_HOME` set, Horizon looks for its config only in that folder (`config.yaml` or `config.yml`), never in `~/.horizon`, `$XDG_CONFIG_HOME/horizon` or the working directory. `--config` still wins.
+- With `HORIZON_HOME` set, Horizon uses the settings of that folder only (`settings.sqlite`), never `~/.horizon`, `$XDG_CONFIG_HOME/horizon` or the working directory. `--config` still wins.
 - `HOME` stays the same, so terminals in this Horizon keep your normal home directory. They inherit `HORIZON_HOME`, which is how agents in them find this Horizon's browser panels.
 - Horizon still adds its agent skills to the usual folders of Claude Code, Codex and the other agents in your home directory. To stop that, also set `HORIZON_AGENT_INTEGRATIONS=off`: Horizon then installs no agent skills, plugins or MCP registrations there, and on Linux no desktop entry. It does not remove what an earlier Horizon installed there, so agents can still find those skills. It also skips the Horizon plugin and the work-resume hooks in the state folder, so Claude Code panels in this Horizon have no Horizon browser or device tools and no work resume. Unset or empty means `on`. With any other value than `on` or `off`, the app does not start and exits with code 2.
 - An empty value is the same as an unset one.
@@ -600,7 +601,7 @@ That needs a working desktop. The native window can appear briefly at startup an
 
 The same kind of panel can show a page running on BrowserStack: a desktop browser, or a physical phone. Horizon allocates the session, draws the live page, and releases the device when the panel closes.
 
-Name the account and the targets in `~/.horizon/config.yaml`. The file stores credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
+Name the account and the targets in Settings → **Remote browsers**, or in the `browser` section of the settings YAML that the editor shows. The settings store credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
 
 ```yaml
 browser:

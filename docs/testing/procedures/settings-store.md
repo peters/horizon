@@ -13,19 +13,20 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that Horizon keeps its settings in one SQLite file, that
-it imports `config.yaml` one time, and that it imports an edited
-`config.yaml` at the next start. It also proves that a damaged store stops the
-start instead of replacing the settings of a person with defaults.
+it imports an old `config.yaml` one time, and that it never reads a YAML file
+again. It also proves that an export is not a setting, and that a damaged store
+does not replace the settings of a person with defaults.
 
 ## 2. Applicability
 
-- Candidate: a build that keeps its settings in `settings.sqlite`.
+- Candidate: a build that keeps its settings in `settings.sqlite` and writes no
+  `config.yaml`.
 - Platforms: Linux.
 - Each task runs on a copy of a real Horizon home, so the run shows the
   migration of the settings that a person has today.
 - This procedure does not test these functions:
-  - The changes in the Settings window. Use
-    [the Horizon home procedure](horizon-home.md) for the window.
+  - The changes in the Settings window that a person makes at a normal start.
+    Use [the Horizon home procedure](horizon-home.md) for the window.
   - The migration of an old configuration version. The unit tests of
     `config_migration` examine each version.
 
@@ -60,30 +61,20 @@ These names apply in the steps:
 
    Result: `<run>/home/.horizon` exists.
 
-2. Write a configuration with a value that you can see in the window.
-
-   ```sh
-   cat > <run>/home/.horizon/config.yaml <<'YAML'
-   version: 11
-   appearance:
-     theme: light
-   YAML
-   ```
-
-   Result: The file has two settings.
-
-3. Copy the real Horizon home of this computer into the test home. This is the
+2. Copy the real Horizon home of this computer into the test home. This is the
    instance that the procedure migrates.
 
    ```sh
    cp -a "$HOME/.horizon/sessions" <home>/.horizon/
    cp -a "$HOME/.horizon/config.yaml" <home>/.horizon/config.yaml
+   sed -i 's/^  theme: .*/  theme: light/' <home>/.horizon/config.yaml
    sha256sum <home>/.horizon/config.yaml > <run>/copy.sha256
    ```
 
-   Result: The test home holds the real sessions and the real configuration.
+   Result: The test home holds the real sessions and the real configuration,
+   with the light theme.
 
-4. Start the fixture with the private Horizon home in `<home>` and note the
+3. Start the fixture with the private Horizon home in `<home>` and note the
    display.
 
    ```sh
@@ -97,7 +88,7 @@ These names apply in the steps:
 
 ## 6. Tasks
 
-### 6.1 S01 — The first start imports the configuration
+### 6.1 S01 — The first start imports the configuration one time
 
 1. Look at the files of the Horizon home.
 
@@ -105,14 +96,14 @@ These names apply in the steps:
    ls -A <home>/.horizon
    ```
 
-   Result: The output has `config.yaml`, `settings.sqlite`, and `sessions`. It
-   has no file with `.imported-`, because a start that imports nothing keeps no
-   second copy.
+   Result: The output has `settings.sqlite`, `config.yaml.imported-<time>`, and
+   `sessions`. It has no `config.yaml`, because the start kept the imported file
+   aside.
 
-2. Compare the configuration copy with the copy that you made.
+2. Compare the kept file with the copy that you made.
 
    ```sh
-   sha256sum -c <run>/copy.sha256
+   sed 's|config\.yaml$|config.yaml.imported-*|' <run>/copy.sha256 | sha256sum -c -
    ```
 
    Result: The check passes. The import did not change one byte of the file.
@@ -127,54 +118,75 @@ These names apply in the steps:
    `presets`, `remote_hosts`, `shortcuts`, `version`, `window`, and
    `workspaces`.
 
-### 6.2 S02 — An edited configuration arrives at the next start
+### 6.2 S02 — A YAML file next to the store is not a setting
 
 1. Stop the candidate through its window.
 
    Result: The process ends. The fixture stays.
 
-2. Change the theme in the copy.
+2. Write a configuration file with the dark theme next to the store.
 
    ```sh
-   sed -i 's/theme: light/theme: dark/' <home>/.horizon/config.yaml
+   sed 's/^  theme: .*/  theme: dark/' <home>/.horizon/config.yaml.imported-* \
+     > <home>/.horizon/config.yaml
+   sha256sum <home>/.horizon/config.yaml > <run>/yaml.sha256
    ```
 
-   Result: The copy says `theme: dark`.
+   Result: The home holds a store and a `config.yaml` with the dark theme.
 
-3. Start the candidate again with the same home.
+3. Start the candidate again with the same home, and read the log.
 
    ```sh
    env DISPLAY=<display> HOME=<home> <bin>/horizon --ephemeral > <run>/s02.log 2>&1 &
+   rg 'is not read' <run>/s02.log
    ```
 
-   Result: The window uses the dark theme.
+   Result: The window uses the light theme. The log names the store and the
+   `config.yaml` file.
 
-4. Read the theme in the store.
+4. Prove that Horizon did not change the file.
 
    ```sh
-   sqlite3 <home>/.horizon/settings.sqlite \
-     "SELECT data FROM settings WHERE section = 'appearance';"
+   sha256sum -c <run>/yaml.sha256
    ```
 
-   Result: The row contains `dark`.
+   Result: The check passes. The file stays as you wrote it.
 
-### 6.3 S03 — A missing copy comes back from the store
+### 6.3 S03 — An export is a copy, not a setting
 
 1. Stop the candidate through its window.
 
    Result: The process ends.
 
-2. Remove the copy and start the candidate again.
+2. Write an export and examine it.
 
    ```sh
-   rm <home>/.horizon/config.yaml
+   <bin>/horizon --export-config <run>/export.yaml
+   rg 'theme' <run>/export.yaml
+   ```
+
+   Result: The command reports the path of the store and the path of the export.
+   The export holds `theme: light`.
+
+3. Change the export, start the candidate, and read the theme.
+
+   ```sh
+   sed -i 's/theme: light/theme: dark/' <run>/export.yaml
    env DISPLAY=<display> HOME=<home> <bin>/horizon --ephemeral > <run>/s03.log 2>&1 &
    ```
 
-   Result: The window uses the dark theme, and `<home>/.horizon/config.yaml`
-   exists again.
+   Result: The window uses the light theme, because the export is not a setting.
 
-### 6.4 S04 — A damaged store comes back from the copy
+4. Ask for an export in a home without a store.
+
+   ```sh
+   <bin>/horizon --config <run>/none/config.yaml --export-config <run>/none.yaml
+   ```
+
+   Result: The command reports that there are no settings to export. It writes
+   no file.
+
+### 6.4 S04 — A damaged store comes back from the kept configuration
 
 > **CAUTION:** THIS STEP DAMAGES THE TEST STORE. Use only the store under
 > `<home>`.
@@ -190,10 +202,22 @@ These names apply in the steps:
    env DISPLAY=<display> HOME=<home> <bin>/horizon --ephemeral > <run>/s04.log 2>&1
    ```
 
-   Result: The window opens with the settings of the copy, and the theme is the
-   one of S02. The output contains `settings store` and the path of the damaged
-   file. The file `<home>/.horizon/settings.sqlite.damaged-*` exists and contains
-   the words `not a database`. `<home>/.horizon/config.yaml` is unchanged.
+   Result: The window opens with the settings of the kept configuration, and the
+   theme is light. The output names the store and the path of the damaged file.
+   The file `<home>/.horizon/settings.sqlite.damaged-*` exists and holds the
+   words `not a database`.
+
+3. Damage a store that has no kept file, in a new home.
+
+   ```sh
+   mkdir -p <run>/bare && printf 'not a database' > <run>/bare/settings.sqlite
+   env DISPLAY=<display> HOME=<home> <bin>/horizon --config <run>/bare/config.yaml \
+     --ephemeral > <run>/s04b.log 2>&1; echo $?
+   ```
+
+   Result: Horizon reports the path and the reason, and the command status is
+   not zero. It does not start with the default settings, and
+   `<run>/bare/settings.sqlite` stays where it is.
 
 ### 6.5 S05 — Every saved session still opens
 
@@ -210,14 +234,14 @@ These names apply in the steps:
 
    Result: The two counts are the same.
 
-### 6.6 S06 — A migration keeps the text of the person
+### 6.6 S06 — A migration writes the store and keeps the old text
 
 1. Stop the candidate through its window.
 
    Result: The process ends.
 
-2. Write an older configuration version in a new test home, and start the
-   candidate there.
+2. Write an older configuration version in a new home, and start the candidate
+   there.
 
    ```sh
    mkdir -p <run>/old && printf 'shortcuts:\n  command_palette: Alt+K\n' \
@@ -227,8 +251,7 @@ These names apply in the steps:
    ```
 
    Result: The window opens. `<run>/old/settings.sqlite` exists, and
-   `<run>/old/config.yaml` holds the migrated settings with
-   `version: 11`.
+   `<run>/old/config.yaml.imported-*` holds the old text.
 
 3. Examine the kept text and the store.
 
@@ -243,49 +266,61 @@ These names apply in the steps:
    person set, and it holds a default for each shortcut that the old file did
    not have.
 
-### 6.7 S07 — The Settings window saves without a stop
+4. Prove that the migration wrote no new YAML file.
+
+   ```sh
+   ls <run>/old
+   ```
+
+   Result: The output has `config.yaml.imported-<time>` and `settings.sqlite`.
+
+### 6.7 S07 — The Settings window saves the store only
 
 1. Keep the candidate of S06 open and open the Settings window.
 
    Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd>.
 
-   Result: The window shows the text of the configuration copy.
+   Result: The window shows the settings in YAML form.
 
 2. Change one value in the text, for example the theme, and press **Save**.
 
    Result: The status line at the bottom of the window shows `Saved`. The window
    answers the pointer and the keyboard while it saves. A fast store finishes
    the write in one frame, so `Saving` can be too short to see; the check of the
-   two files in the next step is the proof of the write.
+   store in the next step is the proof of the write.
 
-3. Read the copy and the store.
+3. Read the store, and prove that no YAML file appeared.
 
    ```sh
-   rg theme <home>/.horizon/config.yaml
    sqlite3 <home>/.horizon/settings.sqlite \
      "SELECT data FROM settings WHERE section = 'appearance';"
+   ls <home>/.horizon
    ```
 
-   Result: The copy holds the new theme, and the store holds the same value.
+   Result: The row holds the new theme. The home has no new file, and the
+   `config.yaml` that you wrote in S02 is not there: a save writes no YAML file.
 
 4. Press **Save** again without a change.
 
-   Result: The status line shows `Saved` again. The copy and the store keep the
-   same values, and the window does not report an error.
+   Result: The status line shows `Saved` again. The store keeps the same values,
+   and the window does not report an error.
 
 ## 7. Pass criteria
 
-- Each file of the Horizon home in S01 is present after the first start.
-- The import changes no byte of the configuration copy in S01.
+- The first start keeps the imported file aside, byte for byte, in S01.
 - The store holds every section in S01.
-- The window and the store hold the edited theme in S02.
-- The copy comes back in S03.
+- A `config.yaml` next to the store changes no setting, and keeps its bytes, in
+  S02.
+- An export writes no setting, and a home without a store exports nothing, in
+  S03.
 - S04 reports the damaged store, keeps it under its new name, and brings the
-  settings back from the copy.
+  settings back from the kept file. A damaged store with no kept file stops the
+  start.
 - Every session opens in S05, and the session counts are equal.
-- The kept text and the migrated store agree in S06.
-- The window saves and shows `Saved` in S07, and the copy and the store hold the
-  saved value.
+- The kept text and the migrated store agree in S06, and the migration writes no
+  YAML file.
+- The window saves and shows `Saved` in S07, and only the store holds the saved
+  value.
 
 ## 8. Cleanup
 

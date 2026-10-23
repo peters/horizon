@@ -1,15 +1,17 @@
 # Settings store
 
-Horizon keeps its settings in one SQLite file. `config.yaml` stays the file that
-a person can read and edit, and Horizon exports it. The store is the authority.
+Horizon keeps its settings in one SQLite file, `settings.sqlite`. It is the only
+settings file that Horizon reads and writes. YAML is an export that a person asks
+for, not a file that Horizon reads again.
 
 ## Where the files are
 
-The store is next to the configuration file. It is one file at rest: Horizon
-removes no other file after a save, and the default rollback journal is deleted
-at each commit.
+The store is next to the configuration path that the run resolves. That path
+identifies the instance; it is not a file at rest. The store is one file: the
+default rollback journal is deleted at each commit, and Horizon writes no other
+file after a save.
 
-| Configuration file | Store |
+| Configuration path of the run | Store |
 |---|---|
 | `~/.horizon/config.yaml` | `~/.horizon/settings.sqlite` |
 | `<dir>/horizon.yaml` | `<dir>/settings.sqlite` |
@@ -26,7 +28,7 @@ The store has schema version 1.
 | Table | Rows |
 |---|---|
 | `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `presets`, `workspaces`. |
-| `meta` | `schema_version`, `mirror_sha256` (the hash of the exported copy), and `saved_at`. |
+| `meta` | `schema_version`, `saved_at`, and `mirror_sha256` (the hash of the canonical YAML of the last save). |
 
 Each `settings` row has a `format` column. This build writes `json`. A build that
 reads another format refuses the store.
@@ -37,39 +39,52 @@ Horizon does not delete the settings of a newer one.
 ## What Horizon does at a start
 
 1. Read the store.
-2. Compare the `config.yaml` copy with `mirror_sha256`.
-3. Import the copy when it differs, when the store does not exist, or when the
-   copy does not exist and the store does.
-4. Run the migrations of the configuration version and check the values.
-5. Write what the start must write:
-   - an import writes the store only;
-   - a migration writes the store and the migrated copy;
-   - a start with a store and no copy writes the copy from the store.
+2. Import a `config.yaml` copy **only when the store does not exist**.
+3. Run the migrations of the configuration version and check the values.
+4. Write the store when the start imported a copy or ran a migration.
+5. Keep an imported copy aside as `config.yaml.imported-<time>`.
+
+A start that finds a store does not read a YAML copy. A copy that lies next to a
+store stays exactly as the person left it, and one log line names the file that
+holds the settings. A copy that this start imported is kept as
+`config.yaml.imported-<time>`, with every byte, so it cannot come back as a
+setting.
 
 ## No setting is lost
 
 | Rule | Reason |
 |---|---|
-| An import does not change the copy. The bytes stay as the person wrote them. | A comment, the order of the keys, a key that this build does not model and an unknown section stay in the file. |
-| A migration writes the copy in the canonical form and first keeps the old text as `config.yaml.imported-<time>`. | The migrated copy must show the version that the store holds. The words of the person stay in the kept file. |
-| A save writes the text that a person saved. | The Settings window does not lose a comment either. |
-| The copy is written before the store. | A store that fails leaves a newer copy, and the next start imports it. |
-| A store that cannot be read is an error. | Defaults never replace the settings of a person. |
-| The copy of an older Horizon still loads the store and the migrated copy. | A return to an older build loses nothing. |
+| Only a migration rewrites settings, and it writes the store. | The store is the authority; no other file holds a second version of a setting. |
+| An imported copy keeps every byte in `config.yaml.imported-<time>`. | Comments, key order, a key that this build does not model and an unknown section stay in the file. |
+| A save writes one transaction. | A store that fails leaves the previous settings in place. |
+| A store that cannot be read is never replaced by the defaults. | Defaults must not replace the settings of a person. |
+| A store of another schema is refused, and neither file is written. | The store may hold settings of a newer Horizon. |
+| A build of an older Horizon still reads the store. | `schema_version` decides, not the build date. |
+
+## The export
+
+`horizon --export-config [<path>]` writes the settings as YAML. Without a path it
+writes the configuration path of the run, which is `~/.horizon/config.yaml` by
+default. With `--config <path>` it writes `<path>`.
+
+The export serves a person who reads the settings and a tool that reads them. It
+is not a setting: Horizon never reads it back, and a change in it does nothing. A
+setting changes in the Settings window, in `horizon --config`, or in the store.
+`--export-config` reports an error when the store does not exist, because there
+is then no setting to export.
 
 ## When a write happens
 
 A save and a reload run on the settings thread, not on the UI thread. The
 Settings window reads the version, shows `Saving`, and applies the answer in a
-later frame. The reasons are in
-[the UI thread guide](ui-thread.md): a save syncs the copy folder and commits the
-store with `synchronous=FULL`.
+later frame. The reasons are in [the UI thread guide](ui-thread.md): a save
+commits the store with `synchronous=FULL`.
 
 | Event | What runs on the settings thread |
 |---|---|
-| Save in the Settings window | Write the copy, write the store, answer with the saved text. |
-| Save of a remote-host preference | Write the copy or the store, answer with the saved text. |
-| Copy or store changed on disk | Read the settings, answer with them. |
+| Save in the Settings window | Write the store, answer with the saved settings as YAML. |
+| Save of a remote-host preference | Write the store, answer with the saved settings. |
+| The store changed on disk | Read the settings, answer with them. |
 
 A reload is pending from the moment it is asked for until its answer arrives, so
 the window never starts a second one. The bar at the bottom of the Settings
@@ -79,13 +94,13 @@ panel shows `Saving` while a write runs and `Saved` when it ends.
 
 | Condition | Result |
 |---|---|
-| A configuration that a person named does not exist in either place | Horizon reports an error. It does not start with the settings of the user. |
-| The store is damaged and the copy exists | Horizon reports the store, moves the damaged file to `settings.sqlite.damaged-<time>`, and writes a new store from the copy. The settings of the person come back, and the damaged file stays for examination. |
-| The store is damaged and the copy is missing | Horizon reports the path and the reason. It does not use the default settings, and the damaged file stays where it is. |
-| The store has a schema of another Horizon version | Horizon refuses the store and reports both versions. It writes neither the store nor the copy in its place, because the store may hold newer settings. |
-| The copy does not parse | Horizon reports an error. |
-| The copy is missing and the store exists | Horizon writes the copy again from the store. |
-| The copy is missing and the store is missing | Horizon uses the default settings. It writes no file. |
+| A configuration that a person named exists nowhere | Horizon reports an error. It does not start with the settings of the user. |
+| The store is damaged and a `config.yaml` copy exists | Horizon reports the store, moves the damaged file to `settings.sqlite.damaged-<time>`, and writes a new store from that copy, then keeps the copy aside. |
+| The store is damaged and no copy exists, but a `config.yaml.imported-*` file does | Horizon repairs the store from the newest kept file. The settings of the person come back, and the damaged file stays for examination. |
+| The store is damaged and no copy exists | Horizon reports the path and the reason. It does not use the default settings, and the damaged file stays where it is. |
+| The store has a schema of another Horizon version | Horizon refuses the store and reports both versions. It writes nothing in its place. |
+| A copy that the first start imports does not parse | Horizon reports an error and keeps the copy. |
+| The store does not exist and no copy exists | Horizon uses the default settings. It writes no file until a setting changes. |
 
 ## What is not in the store
 
@@ -104,5 +119,5 @@ one writer:
 
 1. The store has one writer. Clients never open the file.
 2. A save of one section is one transaction.
-3. The copy next to the store is a convenience for one machine. A host on
-   another machine writes the store only, and a client reads the sections.
+3. A host on another machine writes the settings through the host, and a client
+   reads the sections. A file on one machine is never the record.

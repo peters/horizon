@@ -36,7 +36,7 @@ size, global timeout, Horizon user agent.
 ## Configuration contract
 
 Connection profiles, targets and limits live in the existing `browser:` section
-of `~/.horizon/config.yaml` under a new `remote` key. The section is additive
+of the settings store under a new `remote` key. The section is additive
 and optional, so existing files need no migration step and the config version
 stays at 10 until a later phase changes an existing key. Unknown keys are
 rejected.
@@ -184,10 +184,15 @@ docker run --rm \
   -e REMOTE_BROWSER_USERNAME \
   -e REMOTE_BROWSER_ACCESS_KEY \
   -e SECOND_BROWSER_TOKEN \
-  -v "$PWD/config.yaml:/config/config.yaml:ro" \
+  -v "$PWD:/config" \
   example/browser-test-runner \
   --config /config/config.yaml --ephemeral
 ```
+
+Mount the folder, not the one file: the first start reads `/config/config.yaml`,
+keeps it as `/config/config.yaml.imported-<time>`, and writes the settings to
+`/config/settings.sqlite`. A later start reads that store only, so change a
+setting there or start in a new folder.
 
 GitHub Actions placeholder (the secret values stay in the runner's secret
 store; the workflow file contains only names):
@@ -202,6 +207,7 @@ jobs:
       REMOTE_BROWSER_ACCESS_KEY: ${{ secrets.REMOTE_BROWSER_ACCESS_KEY }}
       SECOND_BROWSER_TOKEN: ${{ secrets.SECOND_BROWSER_TOKEN }}
     steps:
+      # The first start imports /config/config.yaml into /config/settings.sqlite.
       - run: horizon --config /config/config.yaml --ephemeral
 ```
 

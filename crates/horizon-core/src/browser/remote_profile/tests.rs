@@ -163,25 +163,24 @@ fn oversized_documents_are_refused_before_parsing() {
 }
 
 #[test]
-fn an_export_reads_a_store_with_no_copy() {
+fn an_export_reads_the_store() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("config.yaml");
     let mut config = Config::default();
     config.browser.remote = local();
     Config::save(&config_path, &config).expect("save");
-    std::fs::remove_file(&config_path).expect("remove the copy");
 
     let exported_path = dir.path().join("out.yaml");
     let exported = export_portable_file_from_config(&config_path, &exported_path).expect("export");
 
     assert!(
         exported.providers.contains_key("grid"),
-        "the store holds the profile even when the copy is gone"
+        "the store holds the profile with no YAML copy on disk"
     );
 }
 
 #[test]
-fn an_import_keeps_the_settings_of_a_store_with_no_copy() {
+fn an_import_keeps_the_settings_of_the_store() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("config.yaml");
     let mut config = Config {
@@ -193,7 +192,6 @@ fn an_import_keeps_the_settings_of_a_store_with_no_copy() {
     };
     config.browser.remote = local();
     Config::save(&config_path, &config).expect("save");
-    std::fs::remove_file(&config_path).expect("remove the copy");
     let profile = dir.path().join("profile.yaml");
     write_portable_profile(&profile, &local()).expect("profile");
 
@@ -219,7 +217,7 @@ fn profile_files_round_trip_through_a_second_configuration_file() {
     let config_path = dir.path().join("second").join("config.yaml");
     let summary = import_portable_file_into_config(&config_path, &profile_path).expect("import");
     assert_eq!(summary.providers_added, vec!["grid".to_string()]);
-    let written = std::fs::read_to_string(&config_path).expect("config");
+    let written = Config::load(Some(&config_path)).expect("load").to_yaml().expect("yaml");
     assert!(!written.contains("credential_bindings"), "{written}");
     let loaded = Config::load(Some(&config_path)).expect("load");
     assert_eq!(loaded.browser.remote.targets["ios_phone"].provider, "grid");

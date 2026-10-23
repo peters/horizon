@@ -57,7 +57,7 @@ pub use board::{
 pub use config::{
     AppearanceConfig, AppearanceTheme, Config, FeaturesConfig, OverlaysConfig, PresetConfig, RemoteHostsConfig,
     ShortcutsConfig, SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig,
-    WindowConfig, WorkspaceConfig, patch_default_workspace_source,
+    WindowConfig, WorkspaceConfig,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};

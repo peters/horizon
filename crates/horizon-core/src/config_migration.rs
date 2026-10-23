@@ -370,7 +370,7 @@ presets:
     }
 
     #[test]
-    fn migration_persists_into_the_store_and_its_copy() {
+    fn migration_persists_into_the_store() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("config.yaml");
         std::fs::write(&path, V1_YAML).expect("write");
@@ -390,11 +390,11 @@ presets:
             stored.config.version, CURRENT_CONFIG_VERSION,
             "the store holds the migrated version"
         );
-        let reloaded = std::fs::read_to_string(&path).expect("read back");
-        assert!(reloaded.contains(&format!("version: {CURRENT_CONFIG_VERSION}")));
-        assert!(reloaded.contains("Ctrl+Shift+K"));
-        assert!(reloaded.contains("zoom_reset: Ctrl+0"));
-        assert!(reloaded.contains("appearance:"));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read the copy"),
+            V1_YAML,
+            "a save writes no YAML, so the copy still says what the person wrote"
+        );
     }
 
     #[test]
