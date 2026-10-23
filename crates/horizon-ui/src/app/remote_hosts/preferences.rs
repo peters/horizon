@@ -2,7 +2,6 @@
 use horizon_core::Config;
 
 use crate::app::HorizonApp;
-use crate::app::util::atomic_write;
 
 impl HorizonApp {
     /// Make `name` the workspace that receives remote sessions by default.
@@ -57,15 +56,16 @@ impl HorizonApp {
             .is_some_and(|editor| editor.buffer != editor.original)
     }
 
-    /// Persist one change the way the settings editor saves: the whole file
-    /// is rewritten atomically and the new config is applied live. Refused
-    /// while the editor holds unsaved edits, since it re-applies its draft
-    /// every frame and a later Save would overwrite the file with it; an open
-    /// editor without edits is moved onto the new text instead.
+    /// Persist one change the way the settings editor saves: the settings
+    /// store and its exported copy are written, and the new config is applied
+    /// live. Refused while the editor holds unsaved edits, since it re-applies
+    /// its draft every frame and a later Save would overwrite them; an open
+    /// editor without edits is moved onto the saved text instead.
     ///
-    /// `source_text` is the file's own text with only the change applied;
-    /// when given it is what gets written, otherwise the mutated config is
-    /// serialized (the same canonical form migrations write).
+    /// `source_text` is the copy's own text with only the change applied; when
+    /// given it is what gets saved, otherwise the mutated in-memory config is.
+    /// Both arrive in the store as the same canonical form, so an applied
+    /// value is exactly a saved value.
     pub(in crate::app) fn persist_config_change(
         &mut self,
         what: &str,
@@ -76,32 +76,30 @@ impl HorizonApp {
             tracing::warn!(setting = what, "config change refused while Settings has unsaved edits");
             return false;
         }
-        // What gets applied is exactly what gets written: the file's patched
-        // text parsed back, or the mutated in-memory config serialized. The
-        // two never mix, so a file edited since the last reload cannot be
-        // applied with stale values from memory.
+        // What gets applied is exactly what gets saved: the copy's patched text
+        // parsed back, or the mutated in-memory config. The two never mix, so a
+        // copy edited since the last reload cannot be applied with stale values
+        // from memory.
         let mut config = self.template_config.clone();
         mutate(&mut config);
         let staged = match source_text {
-            Some(text) => Config::from_yaml(&text).map(|parsed| (text, parsed)),
-            None => config.to_yaml().map(|text| (text, config)),
+            Some(text) => Config::from_yaml(&text).map(|parsed| (Some(text), parsed)),
+            None => Ok((None, config)),
         };
-        let written = staged.and_then(|(yaml, parsed)| {
-            atomic_write(&self.config_path, &yaml)
-                .map(|()| (yaml, parsed))
-                .map_err(|error| horizon_core::Error::Config(error.to_string()))
-        });
-        match written {
-            Ok((yaml, config)) => {
+        match staged {
+            Ok((text, config)) => {
                 self.apply_runtime_config(&config);
-                if let Some(editor) = self.settings.as_mut() {
-                    editor.adopt_saved_text(yaml);
+                // The write waits on the settings thread; its reply moves the
+                // editor onto the saved text.
+                match text {
+                    Some(text) => self.settings_io.save_text(self.config_path.clone(), text),
+                    None => self.settings_io.save_config(self.config_path.clone(), config),
                 }
-                tracing::info!(setting = what, path = %self.config_path.display(), "config updated");
+                tracing::info!(setting = what, path = %self.config_path.display(), "config change queued");
                 true
             }
             Err(error) => {
-                tracing::error!(setting = what, %error, "failed to persist config change");
+                tracing::error!(setting = what, %error, "failed to stage config change");
                 false
             }
         }

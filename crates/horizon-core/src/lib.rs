@@ -11,6 +11,7 @@ pub mod cloud_panel;
 pub mod cloud_runtime;
 mod config;
 mod config_migration;
+pub mod config_store;
 mod device;
 pub mod dir_search;
 mod editor;

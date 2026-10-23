@@ -71,7 +71,7 @@ impl HorizonApp {
         let resolved_theme = theme::resolve_theme(config.appearance.theme, egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 
-        let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
+        let config_last_mtime = super::util::settings_mtime(&config_path);
 
         let bootstrap = AppBootstrap {
             config_path,
@@ -170,14 +170,13 @@ impl HorizonApp {
             remote_hosts_refresh_in_flight: false,
             remote_hosts_last_refresh: None,
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
-            settings: None, remote_browser_credentials: spawn_remote_browser_credentials(config),
+            settings: None, settings_io: super::settings_io::SettingsIo::new(), settings_reload_pending: false,
+            remote_browser_credentials: spawn_remote_browser_credentials(config),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             press_frame: super::press_frame::PressFrame::default(),
-            dir_picker: None,
-            command_palette: None,
-            search_overlay: None,
+            dir_picker: None, command_palette: None, search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
             startup_workspace_organization_pending: false,

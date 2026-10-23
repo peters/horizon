@@ -560,7 +560,7 @@ impl Drop for PanicGuard<'_> {
 /// Writes `bytes` to `path` so that a crash leaves the old file or the new one, both on
 /// disk: a uniquely named temporary file is synced, renamed over `path`, and the folder is
 /// synced.
-pub(super) fn durable_write(path: &Path, bytes: &[u8]) -> StoreResult<()> {
+pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> StoreResult<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;

@@ -1,8 +1,10 @@
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
+use crate::config_store::{ConfigStore, StoreFault, StoredSettings};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelResume};
@@ -313,40 +315,143 @@ fn default_cols() -> u16 {
 }
 
 impl Config {
-    /// Load config from an explicit path, or search standard locations,
-    /// or return a default config with one workspace and one shell.
+    /// Load the settings of `path`, or of the standard locations, or a default
+    /// configuration.
+    ///
+    /// The settings live in a SQLite store next to the configuration file, and
+    /// `config.yaml` is the copy that Horizon exports and that a person may
+    /// edit. A copy that differs from the last export is imported at the next
+    /// load, so an edit with an editor takes effect as it did before. A store
+    /// with no copy keeps working.
     ///
     /// # Errors
     ///
-    /// Returns an error if a discovered config file cannot be read or parsed.
+    /// Returns an error when the settings or the copy cannot be read, when the
+    /// copy does not parse, or when a migrated configuration does not validate.
+    /// A named configuration that exists in neither place is an error: an
+    /// isolated instance must not start with the settings of the user.
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let (mut config, resolved_path) = if let Some(p) = path {
-            let contents = std::fs::read_to_string(p)?;
-            (Self::deserialize_yaml(&contents)?, Some(p.to_path_buf()))
-        } else {
-            let mut found = None;
-            for candidate in config_candidates() {
-                if candidate.exists() {
-                    let contents = std::fs::read_to_string(&candidate)?;
-                    tracing::info!("loaded config from {}", candidate.display());
-                    found = Some((Self::deserialize_yaml(&contents)?, candidate));
-                    break;
-                }
+        let named = path.is_some();
+        let Some(resolved) = path.map(Path::to_path_buf).or_else(|| {
+            config_candidates()
+                .into_iter()
+                .find(|candidate| candidate.exists())
+                .or_else(Self::default_path)
+        }) else {
+            tracing::info!("no config found, using defaults");
+            return Ok(Self::default());
+        };
+
+        let store = ConfigStore::resolve(&resolved);
+        let copy = read_config_copy(&resolved)?;
+        let stored = match store.open() {
+            Ok(stored) => stored,
+            // Another Horizon version owns this store. It may hold settings that
+            // this build does not know, so neither file is written in its place:
+            // the copy carries the settings of the person for this start.
+            Err(fault @ StoreFault::OtherVersion(_)) => {
+                let Some(text) = copy.as_deref() else {
+                    return Err(store.fault_error(&fault));
+                };
+                return start_from_copy_without_writing(&store, &resolved, text, &fault);
             }
-            if let Some((config, path)) = found {
-                (config, Some(path))
-            } else {
-                tracing::info!("no config found, using defaults");
-                (Self::default(), None)
+            // The file is damaged. The copy is the export that Horizon wrote
+            // last, so it carries the same settings: use it and write the store
+            // again. Without a copy there is nothing to carry them, and defaults
+            // must not replace them.
+            Err(fault) => {
+                repair_damaged_store(&store, copy.is_some(), &resolved, &fault)?;
+                None
             }
         };
 
-        if let Some(ref config_path) = resolved_path {
-            config_migration::migrate_if_needed(&mut config, config_path)?;
-        }
-
+        let (mut config, migrated, origin) = start_settings(stored, copy.as_deref(), named, &store, &resolved)?;
+        let migrated = config_migration::migrate_in_memory(&mut config)? || migrated;
         config.validate()?;
+        write_after_load(&store, &resolved, &config, copy.as_deref(), migrated, origin);
         Ok(config)
+    }
+
+    /// Read the settings of `path` without writing either file, or `None` when
+    /// neither the store nor a copy exists.
+    ///
+    /// This is the read for a caller that merges the settings and writes them
+    /// itself, such as a portable profile import. The store comes first, because
+    /// it is the authority: a copy that a person has not saved yet is imported
+    /// by [`Config::load`], not here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store or the copy cannot be read, when the copy
+    /// does not parse, or when the settings do not validate. A damaged store
+    /// falls back to the copy, and a store of another version is an error.
+    pub fn read(path: &Path) -> Result<Option<Self>> {
+        let store = ConfigStore::resolve(path);
+        let copy = read_config_copy(path)?;
+        let mut config = match store.open() {
+            Ok(Some(stored)) => stored.config,
+            Ok(None) => match copy {
+                Some(text) => Config::deserialize_yaml(&text)?,
+                None => return Ok(None),
+            },
+            Err(fault @ StoreFault::OtherVersion(_)) => return Err(store.fault_error(&fault)),
+            Err(fault) => match copy {
+                Some(text) => {
+                    tracing::error!(
+                        "settings store {} is damaged: {fault}; reading {} instead",
+                        store.path().display(),
+                        path.display()
+                    );
+                    Config::deserialize_yaml(&text)?
+                }
+                None => return Err(store.fault_error(&fault)),
+            },
+        };
+        config_migration::migrate_in_memory(&mut config)?;
+        config.validate()?;
+        Ok(Some(config))
+    }
+
+    /// Save `config` to the store of `path` and export the `config.yaml` copy in
+    /// the canonical form.
+    ///
+    /// The copy is written first: when the store then fails, the copy is newer
+    /// than the store and the next load imports it, so no setting is lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the copy or the store cannot be written.
+    pub fn save(path: &Path, config: &Config) -> Result<String> {
+        let store = ConfigStore::resolve(path);
+        // A store of another Horizon version may hold settings that this build
+        // does not know. Refuse before the copy is written, so a save cannot
+        // replace either file with the settings of this build.
+        if let Err(fault @ StoreFault::OtherVersion(_)) = store.open() {
+            return Err(store.fault_error(&fault));
+        }
+        let yaml = config.to_yaml()?;
+        crate::session_store::writer::durable_write(path, yaml.as_bytes())?;
+        store.save(config, Some(&sha256_hex(&yaml)))?;
+        Ok(yaml)
+    }
+
+    /// Save the copy text itself, so the comments, the order and the keys that
+    /// this build does not model stay in the file that a person reads. The store
+    /// gets the sections that the text parses to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text does not parse or validate, or when the
+    /// copy or the store cannot be written.
+    pub fn save_copy(path: &Path, text: &str) -> Result<String> {
+        let store = ConfigStore::resolve(path);
+        if let Err(fault @ StoreFault::OtherVersion(_)) = store.open() {
+            return Err(store.fault_error(&fault));
+        }
+        let (config, _) = import_config_copy(text)?;
+        crate::session_store::writer::durable_write(path, text.as_bytes())?;
+        store.save(&config, Some(&sha256_hex(text)))?;
+        Ok(text.to_owned())
     }
 
     /// Parse and validate config YAML.
@@ -437,6 +542,199 @@ impl Config {
         }
         presets
     }
+}
+
+/// Where the settings of a start come from, so the start knows what to write
+/// afterwards.
+#[derive(Clone, Copy)]
+enum Origin {
+    /// The store gave the settings, and the copy matches it.
+    Stored,
+    /// The copy of a person gave the settings.
+    Imported,
+    /// The store gave the settings, and the copy is missing.
+    Restored,
+    /// No file gave settings.
+    Default,
+}
+
+/// Use the copy for this start because the store belongs to another version.
+fn start_from_copy_without_writing(
+    store: &ConfigStore,
+    resolved: &Path,
+    text: &str,
+    fault: &StoreFault,
+) -> Result<Config> {
+    tracing::error!(
+        "settings store {} cannot be read: {fault}; starting from {} without writing either file",
+        store.path().display(),
+        resolved.display()
+    );
+    import_config_copy(text).map(|(config, _)| config)
+}
+
+/// Move a damaged store aside so it is written again, or stop when no copy can
+/// carry the settings.
+fn repair_damaged_store(store: &ConfigStore, has_copy: bool, resolved: &Path, fault: &StoreFault) -> Result<()> {
+    tracing::error!(
+        "settings store {} is damaged: {fault}; reading {} instead",
+        store.path().display(),
+        resolved.display()
+    );
+    if !has_copy {
+        return Err(store.fault_error(fault));
+    }
+    match store.move_damaged_aside() {
+        Ok(kept) => tracing::error!(
+            "settings store moved to {}; it is written again from {}",
+            kept.display(),
+            resolved.display()
+        ),
+        Err(error) => tracing::error!(
+            "settings store {} stays damaged, because it cannot be moved: {error}",
+            store.path().display()
+        ),
+    }
+    Ok(())
+}
+
+/// The settings of this start, the flag that says whether the copy was of an
+/// older version, and where they came from.
+fn start_settings(
+    stored: Option<StoredSettings>,
+    copy: Option<&str>,
+    named: bool,
+    store: &ConfigStore,
+    resolved: &Path,
+) -> Result<(Config, bool, Origin)> {
+    match stored {
+        Some(stored) => match copy {
+            Some(text) if stored.mirror_sha256.as_deref() != Some(sha256_hex(text).as_str()) => {
+                tracing::info!(
+                    "{} differs from the last export; importing it into {}",
+                    resolved.display(),
+                    store.path().display()
+                );
+                let (config, migrated) = import_config_copy(text)?;
+                Ok((config, migrated, Origin::Imported))
+            }
+            Some(_) => Ok((stored.config, false, Origin::Stored)),
+            None => {
+                tracing::info!(
+                    "{} has no copy; exporting it from {}",
+                    resolved.display(),
+                    store.path().display()
+                );
+                Ok((stored.config, false, Origin::Restored))
+            }
+        },
+        None => match copy {
+            Some(text) => {
+                tracing::info!("importing {} into {}", resolved.display(), store.path().display());
+                let (config, migrated) = import_config_copy(text)?;
+                Ok((config, migrated, Origin::Imported))
+            }
+            None if named => Err(Error::Config(format!(
+                "no settings store or configuration file at {}",
+                resolved.display()
+            ))),
+            None => {
+                tracing::info!("no config found, using defaults");
+                Ok((Config::default(), false, Origin::Default))
+            }
+        },
+    }
+}
+
+/// Write back what the start owes: a migrated text and its backup, an imported
+/// copy in the store, or a store that lost its copy.
+fn write_after_load(
+    store: &ConfigStore,
+    resolved: &Path,
+    config: &Config,
+    copy: Option<&str>,
+    migrated: bool,
+    origin: Origin,
+) {
+    // An import keeps the text of a person exactly as it is, so a comment and a
+    // key that this build does not model survive. Only a migration changes the
+    // text, and then the old text is kept first.
+    match (migrated, origin) {
+        (true, Origin::Stored | Origin::Imported | Origin::Restored) => {
+            if let Some(text) = copy {
+                keep_copy_text(resolved, text);
+            }
+            warn_if_not_saved(Config::save(resolved, config).err(), resolved);
+        }
+        (false, Origin::Imported) => {
+            let hash = copy.map(sha256_hex);
+            warn_if_not_saved(store.save(config, hash.as_deref()).err(), resolved);
+        }
+        (false, Origin::Restored) => {
+            warn_if_not_saved(Config::save(resolved, config).err(), resolved);
+        }
+        (false, Origin::Stored | Origin::Default) | (true, Origin::Default) => {}
+    }
+}
+
+/// The `config.yaml` copy that a person may edit, or `None` when it is absent.
+fn read_config_copy(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::Io(error)),
+    }
+}
+
+/// Read a configuration copy into memory, with the migrations and the checks
+/// that the file itself would get. The flag says whether the text was of an
+/// older version, so the caller can write the migrated text next to the store.
+fn import_config_copy(text: &str) -> Result<(Config, bool)> {
+    let mut config = Config::deserialize_yaml(text)?;
+    let migrated = config_migration::migrate_in_memory(&mut config)?;
+    config.validate()?;
+    Ok((config, migrated))
+}
+
+/// Keep the text of a copy that Horizon is about to replace, so the words of a
+/// person survive a migration. The first backup wins: a second migration keeps
+/// nothing new.
+fn keep_copy_text(path: &Path, text: &str) {
+    let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+        return;
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let backup = path.with_file_name(format!("{name}.imported-{stamp}"));
+    if backup.exists() {
+        return;
+    }
+    if let Err(error) = crate::session_store::writer::durable_write(&backup, text.as_bytes()) {
+        tracing::warn!(%error, "could not keep {}", backup.display());
+        return;
+    }
+    tracing::info!("kept {} before the migration", backup.display());
+}
+
+fn warn_if_not_saved(error: Option<Error>, path: &Path) {
+    if let Some(error) = error {
+        tracing::warn!(%error, "could not save the settings of {}", path.display());
+    }
+}
+
+/// The SHA-256 of the exported copy, as the store records it.
+fn sha256_hex(text: &str) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+
+    let digest = sha2::Sha256::digest(text.as_bytes());
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 /// Add an `SSH: <alias>` preset for each discovered host unless the config
@@ -574,6 +872,9 @@ fn validate_distinct_shortcuts<const N: usize>(bindings: [(&str, ShortcutBinding
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod store;
 
 #[cfg(test)]
 mod tests {

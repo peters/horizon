@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::config::{
     Config, PresetConfig, default_claude_preset, default_codex_preset, default_kilo_preset, default_opencode_preset,
     insert_missing_browser_preset, insert_missing_gemini_presets, insert_missing_grok_presets,
@@ -18,18 +16,6 @@ pub const CURRENT_CONFIG_VERSION: u32 = 11;
 /// # Errors
 ///
 /// Returns an error if an unrecognised config version is encountered.
-pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool> {
-    if !migrate_in_memory(config)? {
-        return Ok(false);
-    }
-
-    if let Err(error) = write_back(config, config_path) {
-        tracing::warn!(%error, "could not write migrated config back to disk");
-    }
-
-    Ok(true)
-}
-
 /// Run any pending migrations on `config` without touching the disk, for
 /// callers that rewrite the file themselves in one atomic step.
 ///
@@ -296,15 +282,6 @@ fn bindings_match(a: &str, b: &str) -> bool {
     }
 }
 
-fn write_back(config: &Config, path: &Path) -> Result<()> {
-    let yaml = config.to_yaml()?;
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, &yaml)?;
-    std::fs::rename(&tmp, path)?;
-    tracing::info!("migrated config to version {CURRENT_CONFIG_VERSION}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     mod remote_development;
@@ -386,25 +363,33 @@ presets:
     #[test]
     fn migration_skips_current_version() {
         let mut config = Config::default();
-        let tmp = tempfile::NamedTempFile::new().expect("temp file");
 
-        let migrated = migrate_if_needed(&mut config, tmp.path()).expect("should succeed");
+        let migrated = migrate_in_memory(&mut config).expect("should succeed");
 
         assert!(!migrated);
     }
 
     #[test]
-    fn migration_writes_back_to_disk() {
+    fn migration_persists_into_the_store_and_its_copy() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("config.yaml");
         std::fs::write(&path, V1_YAML).expect("write");
 
         let mut config: Config = serde_yaml::from_str(V1_YAML).expect("should deserialize");
-        let migrated = migrate_if_needed(&mut config, &path).expect("should succeed");
+        let migrated = migrate_in_memory(&mut config).expect("should succeed");
+        Config::save(&path, &config).expect("save");
 
         assert!(migrated);
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);
 
+        let stored = crate::config_store::ConfigStore::resolve(&path)
+            .load()
+            .expect("store")
+            .expect("the store exists");
+        assert_eq!(
+            stored.config.version, CURRENT_CONFIG_VERSION,
+            "the store holds the migrated version"
+        );
         let reloaded = std::fs::read_to_string(&path).expect("read back");
         assert!(reloaded.contains(&format!("version: {CURRENT_CONFIG_VERSION}")));
         assert!(reloaded.contains("Ctrl+Shift+K"));
@@ -1012,7 +997,7 @@ presets:
     }
 
     #[test]
-    fn migration_from_v6_via_migrate_if_needed_lands_on_codex_preset() {
+    fn migration_from_v6_lands_on_codex_preset() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("config.yaml");
         let v6_yaml = "\
@@ -1029,7 +1014,8 @@ presets:
         std::fs::write(&path, v6_yaml).expect("write");
 
         let mut config: Config = serde_yaml::from_str(v6_yaml).expect("should deserialize");
-        let migrated = migrate_if_needed(&mut config, &path).expect("should succeed");
+        let migrated = migrate_in_memory(&mut config).expect("should succeed");
+        Config::save(&path, &config).expect("save");
 
         assert!(migrated);
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);

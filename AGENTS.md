@@ -241,7 +241,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
 ### Configuration Changes
 
-- When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.horizon/config.yaml`) to match
+- When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local settings to match. The settings live in `~/.horizon/settings.sqlite`, and `~/.horizon/config.yaml` is the copy that Horizon exports and imports again when it differs. Edit the copy and start Horizon once, or write the store, but leave both agreeing. See [the settings store](docs/architecture/settings-store.md).
 
 ### Code Quality Bar
 
