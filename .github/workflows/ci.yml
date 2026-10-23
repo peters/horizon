@@ -316,6 +316,12 @@ jobs:
     # (Verify CI change detection checks this).
     env:
       HORIZON_CI_SKIP_SPEECH: ${{ github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && needs.changes.outputs.speech_inputs == 'false' }}
+      # Test binaries need no debug information. Without it, one union build of
+      # the libs shard takes 148 s instead of 193 s on a four-core runner and
+      # writes 6.3 GB instead of 21 GB, so the cache entry that this job saves
+      # and restores is three times smaller. A failing test still prints its
+      # assertion and its name. Keep debug information for local runs.
+      CARGO_PROFILE_TEST_DEBUG: 0
     strategy:
     # A failing OS releases the other runner instead of holding it to the
     # full timeout; the cancelled sibling keeps its logs and a re-run
