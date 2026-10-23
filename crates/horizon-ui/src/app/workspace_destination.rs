@@ -269,7 +269,7 @@ fn render_menu_search_field(ui: &mut Ui, query: &mut String, id: egui::Id, openi
             .min_size(text_rect.size())
             .font(egui::FontId::proportional(13.0))
             .text_color(theme::FG())
-            .vertical_align(Align::Center)
+            .align(egui::Align2::LEFT_CENTER)
             .margin(egui::Margin::ZERO)
             .hint_text(egui::RichText::new("Search workspaces…").size(12.0)),
     );

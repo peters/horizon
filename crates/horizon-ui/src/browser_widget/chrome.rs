@@ -2,7 +2,7 @@
 //! passkey chip, and the handoff banner.
 
 use egui::{
-    RichText, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo, WidgetType,
+    RichText, Role, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo,
     text::{CCursor, CCursorRange},
     vec2,
 };
@@ -384,7 +384,7 @@ fn nav_button(
 }
 
 fn nav_widget_info(label: &str, enabled: bool) -> WidgetInfo {
-    WidgetInfo::labeled(WidgetType::Button, enabled, label)
+    WidgetInfo::labeled(Role::Button, enabled, label)
 }
 
 fn url_bar(
@@ -772,7 +772,7 @@ mod tests {
     fn navigation_widget_info_names_glyph_only_controls() {
         for label in ["Back", "Forward", "Reload"] {
             let info = nav_widget_info(label, true);
-            assert_eq!(info.typ, egui::WidgetType::Button);
+            assert_eq!(info.role, egui::Role::Button);
             assert!(info.enabled);
             assert_eq!(info.label.as_deref(), Some(label));
         }

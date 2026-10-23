@@ -113,7 +113,9 @@ pub struct Contract {
     pub apps: BTreeMap<Platform, App>,
     #[serde(default)]
     pub launch_arguments: BTreeMap<String, String>,
-    pub tunnel: Tunnel,
+    /// Loopback ports for the app. Leave it out when the app uses only public backends: then no tunnel starts.
+    #[serde(default)]
+    pub tunnel: Option<Tunnel>,
     pub matrix: Vec<MatrixEntry>,
     /// Exact project-relative recipe files. Markdown recipes contain a device-recipe YAML fence.
     pub recipes: Vec<PathBuf>,
@@ -174,8 +176,10 @@ impl Contract {
             || self.recipes.len() > 128
             || !(1..=16).contains(&self.max_parallel)
             || self.launch_arguments.len() > 32
-            || self.tunnel.ports.is_empty()
-            || self.tunnel.ports.len() > 16
+            || self
+                .tunnel
+                .as_ref()
+                .is_some_and(|tunnel| tunnel.ports.is_empty() || tunnel.ports.len() > 16)
         {
             return Err(invalid());
         }
@@ -206,7 +210,7 @@ impl Contract {
             }
         }
         let mut ports = BTreeSet::new();
-        for (name, port) in &self.tunnel.ports {
+        for (name, port) in self.ports() {
             if !identifier(name) {
                 return Err(invalid());
             }
@@ -242,12 +246,18 @@ impl Contract {
         Ok(())
     }
 
+    /// The declared tunnel ports, empty for a project with no tunnel.
+    #[must_use]
+    pub fn ports(&self) -> &BTreeMap<String, Port> {
+        static NONE: BTreeMap<String, Port> = BTreeMap::new();
+        self.tunnel.as_ref().map_or(&NONE, |tunnel| &tunnel.ports)
+    }
+
     /// # Errors
     /// Fixed-port projects can resolve without a managed backend instance.
     pub fn resolve_value(&self, value: &str) -> Result<String> {
         let ports = self
-            .tunnel
-            .ports
+            .ports()
             .iter()
             .map(|(name, spec)| match spec {
                 Port::Fixed(port) => Ok((name.clone(), *port)),
@@ -261,11 +271,11 @@ impl Contract {
     /// Host-only resolution requires every declared nonzero port, no extras, and unchanged fixed bindings.
     pub fn resolve_value_with_ports(&self, value: &str, ports: &BTreeMap<String, u16>) -> Result<String> {
         let _ = self.validate_value(value)?;
-        if ports.len() != self.tunnel.ports.len() {
+        if ports.len() != self.ports().len() {
             return Err(Error::ContractInvalid);
         }
         let mut seen = BTreeSet::new();
-        for (name, spec) in &self.tunnel.ports {
+        for (name, spec) in self.ports() {
             let port = ports.get(name).ok_or(Error::ContractInvalid)?;
             if *port == 0 || !seen.insert(*port) || matches!(spec, Port::Fixed(fixed) if fixed != port) {
                 return Err(Error::ContractInvalid);
@@ -275,7 +285,7 @@ impl Contract {
     }
 
     fn validate_value(&self, value: &str) -> Result<Option<(u16, bool)>> {
-        for (name, spec) in &self.tunnel.ports {
+        for (name, spec) in self.ports() {
             let template = format!("{{tunnel.port.{name}}}");
             if matches!(spec, Port::Managed(_)) && value.contains(&template) {
                 let authority = value
@@ -292,15 +302,14 @@ impl Contract {
         }
         let mut ports = BTreeMap::new();
         let mut used: BTreeSet<u16> = self
-            .tunnel
-            .ports
+            .ports()
             .values()
             .filter_map(|port| match port {
                 Port::Fixed(port) => Some(*port),
                 Port::Managed(_) => None,
             })
             .collect();
-        for (name, spec) in &self.tunnel.ports {
+        for (name, spec) in self.ports() {
             let port = match spec {
                 Port::Fixed(port) => *port,
                 Port::Managed(_) => (1..=u16::MAX)
@@ -314,11 +323,10 @@ impl Contract {
         if let Ok(url) = url::Url::parse(&resolved) {
             let port = url.port_or_known_default().ok_or(Error::ContractInvalid)?;
             let static_binding = self
-                .tunnel
-                .ports
+                .ports()
                 .values()
                 .any(|spec| matches!(spec, Port::Fixed(fixed) if *fixed == port));
-            let managed_template = self.tunnel.ports.iter().any(|(name, spec)| {
+            let managed_template = self.ports().iter().any(|(name, spec)| {
                 matches!(spec, Port::Managed(_))
                     && value.split_once("://").is_some_and(|(_, rest)| {
                         let authority = rest.split(['/', '?', '#']).next().unwrap_or("");

@@ -36,7 +36,7 @@ impl HorizonApp {
             })() else {
                 continue;
             };
-            let response = egui::Area::new(Id::new(("cloud-resize", issue)))
+            let response = egui::Area::new(Id::unique(("cloud-resize", issue)))
                 .order(Order::Foreground)
                 .fixed_pos(corner.min)
                 .constrain(false)
@@ -46,7 +46,7 @@ impl HorizonApp {
                     let (local, _) = ui.allocate_exact_size(corner.size(), Sense::hover());
                     let response = ui.interact(
                         local,
-                        ui.id().with("resize"),
+                        ui.scope_id().with("resize"),
                         if interactive {
                             Sense::click_and_drag()
                         } else {
@@ -204,11 +204,11 @@ mod tests {
         });
         app.render_cloud_resize_handles(&ctx);
         assert!(
-            ctx.memory(|memory| memory.area_rect(Id::new(("cloud-resize", 101u32))))
+            ctx.memory(|memory| memory.area_rect(Id::unique(("cloud-resize", 101u32))))
                 .is_some()
         );
         assert!(
-            ctx.memory(|memory| memory.area_rect(Id::new(("cloud-resize", 102u32))))
+            ctx.memory(|memory| memory.area_rect(Id::unique(("cloud-resize", 102u32))))
                 .is_none()
         );
     }

@@ -249,7 +249,7 @@ fn creation_tab_navigation_never_activates_the_toolbar() {
         if let Some(response) = ctx.memory(egui::Memory::focused).and_then(|id| ctx.read_response(id)) {
             assert_eq!(
                 response.layer_id.id,
-                Id::new("cloud-creation"),
+                Id::unique("cloud-creation"),
                 "modal focus escaped to another layer"
             );
         }
@@ -320,11 +320,11 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     for _ in 0..2 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+    ctx.memory_mut(|memory| memory.request_focus(Id::unique("cloud-title")));
     frame(&ctx, &mut app, vec![Event::Text("Deployment".into())], Modifiers::NONE);
     let repository = temp.path().join("committed-repository");
     std::fs::create_dir_all(repository.join(".git")).unwrap();
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-source")));
+    ctx.memory_mut(|memory| memory.request_focus(Id::unique("cloud-source")));
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     frame(
         &ctx,
@@ -335,7 +335,7 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     // A typed folder is taken once typing stops.
     std::thread::sleep(Duration::from_millis(600));
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+    ctx.memory_mut(|memory| memory.request_focus(Id::unique("cloud-title")));
     frame(&ctx, &mut app, vec![Event::Text(" HEAD".into())], Modifiers::NONE);
     assert_eq!(app.cloud_prototype.production.title, "Deployment HEAD");
     assert_eq!(
@@ -346,7 +346,7 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
         .production
         .source
         .edit_for_test("https://git.invalid/demo-org/demo-atlas");
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-source")));
+    ctx.memory_mut(|memory| memory.request_focus(Id::unique("cloud-source")));
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
     key(&ctx, &mut app, Key::Enter, Modifiers::NONE);

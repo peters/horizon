@@ -564,7 +564,7 @@ mod tests {
                     },
                     |ui| {
                         egui::CentralPanel::default().show(ui, |ui| {
-                            let layer = egui::LayerId::new(ui.layer_id().order, egui::Id::new("chrome-grip"));
+                            let layer = egui::LayerId::new(ui.layer_id().order, egui::Id::unique("chrome-grip"));
                             ctx.set_sublayer(ui.layer_id(), layer);
                             egui::Area::new(layer.id)
                                 .order(layer.order)

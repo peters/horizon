@@ -1,11 +1,11 @@
-//! The toolbar's controls: the primary New cloud button, the New workspace button and the
-//! Menu that holds Quick Nav, Remote Hosts, Cloud, Upkeep, Sessions and Settings.
+//! The toolbar's controls: the primary New cloud button and the Menu that holds
+//! Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
 use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
 use crate::app::root_chrome::{
     ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
-    ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH, ToolbarAction,
+    ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ToolbarAction,
 };
 use crate::app::sidebar::new_workspace::NewWorkspace;
 use crate::app::sidebar::rich_menu;
@@ -18,8 +18,6 @@ enum MenuChoice {
     Action(ToolbarAction),
     #[cfg(feature = "cloud-workspaces")]
     NewCloud,
-    #[cfg(feature = "cloud-workspaces")]
-    NewUpkeep,
     #[cfg(feature = "cloud-workspaces")]
     SetupBoard,
     #[cfg(feature = "cloud-workspaces")]
@@ -65,14 +63,6 @@ const MENU: &[MenuEntry] = &[
         detail: "Start a cloud worker in the current workspace",
         action: None,
         choice: MenuChoice::NewCloud,
-    },
-    #[cfg(feature = "cloud-workspaces")]
-    MenuEntry {
-        group: None,
-        title: "New Upkeep",
-        detail: "An agent fixes and merges dependency updates on a schedule",
-        action: None,
-        choice: MenuChoice::NewUpkeep,
     },
     #[cfg(feature = "cloud-workspaces")]
     MenuEntry {
@@ -126,7 +116,7 @@ impl HorizonApp {
         } else {
             button
         };
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, "New cloud"));
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ready, "New cloud"));
         paint_new_cloud(ui.painter(), rect, &button, compact, ready);
         if !ready {
             button.on_hover_text(super::super::NEW_CLOUD_NOT_READY);
@@ -150,30 +140,6 @@ impl HorizonApp {
         }
     }
 
-    /// "+ Workspace" makes an empty workspace on this computer at once.
-    pub(super) fn render_toolbar_new_workspace(&mut self, ui: &mut Ui) {
-        let (rect, button) = ui.allocate_exact_size(
-            Vec2::new(ROOT_TOOLBAR_NEW_WORKSPACE_WIDTH, ROOT_TOOLBAR_BUTTON_HEIGHT),
-            Sense::click(),
-        );
-        let button = button
-            .on_hover_cursor(CursorIcon::PointingHand)
-            .on_hover_text("A new empty workspace. Terminals and agents run on this computer.");
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New workspace"));
-        paint_framed_button(ui.painter(), rect, &button, |painter, ink| {
-            painter.text(
-                Pos2::new(rect.min.x + 14.0, rect.center().y),
-                Align2::LEFT_CENTER,
-                "+  Workspace",
-                FontId::proportional(12.5),
-                ink,
-            );
-        });
-        if button.clicked() {
-            self.create_new_workspace(ui.ctx(), NewWorkspace::ThisPc, None);
-        }
-    }
-
     /// One menu for everything that used to be its own toolbar button.
     pub(super) fn render_toolbar_menu(&mut self, ui: &mut Ui) {
         let (rect, button) = ui.allocate_exact_size(
@@ -181,7 +147,7 @@ impl HorizonApp {
             Sense::click(),
         );
         let button = button.on_hover_cursor(CursorIcon::PointingHand);
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Menu"));
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Menu"));
         paint_menu_button(ui.painter(), rect, &button);
         let popup = Popup::menu(&button).kind(egui::PopupKind::Tooltip);
         let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
@@ -223,7 +189,7 @@ impl HorizonApp {
     fn menu_entry_enabled(&self, choice: MenuChoice) -> bool {
         match choice {
             #[cfg(feature = "cloud-workspaces")]
-            MenuChoice::NewCloud | MenuChoice::NewUpkeep => self.cloud_launch_ready(),
+            MenuChoice::NewCloud => self.cloud_launch_ready(),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::FitClouds => !self.cloud_prototype.groups.0.is_empty(),
             _ => true,
@@ -238,9 +204,6 @@ impl HorizonApp {
                 let workspace = self.board.ensure_workspace();
                 self.open_cloud_for_workspace(ctx, workspace);
             }
-            // New Upkeep makes its workspace once its cloud starts.
-            #[cfg(feature = "cloud-workspaces")]
-            MenuChoice::NewUpkeep => self.open_upkeep_dialog(ctx),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::SetupBoard => self.open_setup_board(ctx, true),
             #[cfg(feature = "cloud-workspaces")]
@@ -267,7 +230,7 @@ impl HorizonApp {
 fn disabled_reason(choice: MenuChoice) -> Option<&'static str> {
     match choice {
         #[cfg(feature = "cloud-workspaces")]
-        MenuChoice::NewCloud | MenuChoice::NewUpkeep => Some(super::super::NEW_CLOUD_NOT_READY),
+        MenuChoice::NewCloud => Some(super::super::NEW_CLOUD_NOT_READY),
         _ => None,
     }
 }

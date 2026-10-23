@@ -54,6 +54,10 @@ pub enum Error {
     MediaBusy,
     #[error("app_admission_deferred: no native allocation was sent; wait within the original deadline")]
     AdmissionDeferred,
+    #[error("app_tunnel_absent: the project declares no tunnel, so the session has no tunnel")]
+    TunnelAbsent,
+    #[error("app_tunnel_unconfigured: the project declares tunnel ports, but the client file names no tunnel binary")]
+    TunnelUnconfigured,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

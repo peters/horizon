@@ -103,7 +103,7 @@ impl HorizonApp {
         let picking = self.dir_picker.is_some();
         let refocus_repository = self.prepare_cloud_creation(ctx, picking);
         self.sync_cloud_creation_choices(ctx);
-        let id = Id::new("cloud-creation");
+        let id = Id::unique("cloud-creation");
         let sizing_pass = measure_on_open(ctx, id);
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
         let response = egui::Modal::new(id)
@@ -548,7 +548,7 @@ fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> 
     ui.add_sized(
         [ui.available_width(), 38.0],
         TextEdit::singleline(value)
-            .id(Id::new(id))
+            .id(Id::unique(id))
             .font(egui::FontId::proportional(15.0))
             .margin(Vec2::new(12.0, 10.0))
             .hint_text(hint),
@@ -562,7 +562,7 @@ fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
         && ui.is_enabled()
         && !ui.input(|input| input.pointer.any_down() || input.pointer.any_released())
     {
-        ui.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+        ui.memory_mut(|memory| memory.request_focus(Id::unique("cloud-title")));
         form.focus_title_on_open = false;
     }
     let title = field(

@@ -66,8 +66,8 @@ pub(super) fn paint(
         .chain([spend.explanation.as_str()])
         .collect::<Vec<_>>()
         .join(". ");
-    ui.interact(rect, ui.id().with("spend"), Sense::hover())
+    ui.interact(rect, ui.scope_id().with("spend"), Sense::hover())
         .on_hover_text(&spend.explanation)
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.trim_end_matches(['.', ' '])));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken.trim_end_matches(['.', ' '])));
     Some(rect)
 }

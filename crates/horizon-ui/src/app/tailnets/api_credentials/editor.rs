@@ -50,7 +50,7 @@ impl Editor {
 
     pub(super) fn show(&mut self, ui: &mut egui::Ui) -> Option<Action> {
         let mut action = None;
-        let id = egui::Id::new(("tailnet-api", &self.target.id));
+        let id = egui::Id::unique(("tailnet-api", &self.target.id));
         ui.push_id(id, |ui| {
             ui.add_space(8.0);
             ui.add_enabled_ui(self.request.is_none(), |ui| { ui.horizontal_wrapped(|ui| {

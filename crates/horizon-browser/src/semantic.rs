@@ -368,7 +368,7 @@ fn valid_bounds(bounds: &BrowserBounds) -> bool {
         && bounds.height >= 0.0
 }
 
-fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
+pub(crate) fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value;
     }
@@ -561,7 +561,7 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, co
         : { nodes };
 }";
 
-const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
+const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
     let element;
     try { element = document.querySelector(selector); }
     catch (error) { return { error: { code: 'invalid_selector', message: String(error?.message || error).slice(0, 512) } }; }
@@ -574,7 +574,7 @@ const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
     const isDisabled = () => element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true';
     const disabled = { error: { code: 'element_disabled', message: 'target element is disabled' } };
     if (isDisabled()) return disabled;
-    if (clear) {
+    if (clear) return (async () => {
         const isReadOnly = () => element.readOnly || element.getAttribute('aria-readonly') === 'true';
         const notEditable = { error: { code: 'element_not_editable', message: 'target element is not editable' } };
         const notFocused = { error: { code: 'element_not_focused', message: 'target element did not retain focus' } };
@@ -611,7 +611,8 @@ const TARGET_RECT_FUNCTION: &str = r"async function(selector, clear) {
         if (isDisabled()) return disabled;
         if (!isEditable()) return notEditable;
         if (document.activeElement !== element) return notFocused;
-    }
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })();
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }";
 

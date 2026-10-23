@@ -3,7 +3,7 @@ use horizon_core::{Config, PanelKind, PanelResume, PresetConfig};
 
 use crate::theme;
 
-const ALL_KINDS: [PanelKind; 16] = [
+const ALL_KINDS: [PanelKind; 15] = [
     PanelKind::Shell,
     PanelKind::Ssh,
     PanelKind::Codex,
@@ -17,7 +17,6 @@ const ALL_KINDS: [PanelKind; 16] = [
     PanelKind::Editor,
     PanelKind::GitChanges,
     PanelKind::Usage,
-    PanelKind::Upkeep,
     PanelKind::Browser,
     PanelKind::Device,
 ];
@@ -141,11 +140,11 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
             ui.horizontal(|ui| {
                 let before = preset.kind;
                 changed |= render_kind_combo(ui, index, &mut preset.kind);
-                // A device address and an Upkeep status path mean nothing to another kind.
+                // A device address means nothing to another kind.
                 if preset.kind != before
                     && [before, preset.kind]
                         .iter()
-                        .any(|kind| matches!(kind, PanelKind::Device | PanelKind::Upkeep))
+                        .any(|kind| matches!(kind, PanelKind::Device))
                 {
                     preset.command = None;
                 }
@@ -228,7 +227,7 @@ fn preset_has_error(preset: &PresetConfig) -> bool {
 fn render_kind_combo(ui: &mut Ui, index: usize, kind: &mut PanelKind) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Kind").color(theme::FG_DIM()).size(11.0));
-    let kind_id = egui::Id::new("preset_kind").with(index);
+    let kind_id = egui::Id::unique("preset_kind").with(index);
     egui::ComboBox::from_id_salt(kind_id)
         .selected_text(kind.display_name())
         .width(100.0)
@@ -245,7 +244,7 @@ fn render_kind_combo(ui: &mut Ui, index: usize, kind: &mut PanelKind) -> bool {
 fn render_resume_combo(ui: &mut Ui, index: usize, resume: &mut PanelResume) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Resume").color(theme::FG_DIM()).size(11.0));
-    let resume_id = egui::Id::new("preset_resume").with(index);
+    let resume_id = egui::Id::unique("preset_resume").with(index);
     let resume_label = match resume {
         PanelResume::Fresh => "Fresh",
         PanelResume::Last => "Last",

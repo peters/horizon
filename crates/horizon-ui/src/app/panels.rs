@@ -13,7 +13,6 @@ use super::super::terminal_widget::{
     TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView,
 };
 use super::super::theme;
-use super::super::upkeep_widget::UpkeepView;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
@@ -172,7 +171,7 @@ const fn mic_control_enabled(interactive: bool, speech_active: bool, state: MicS
 }
 
 fn mic_widget_info(state: MicState, enabled: bool) -> egui::WidgetInfo {
-    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, mic_accessibility_label(state))
+    egui::WidgetInfo::labeled(egui::Role::Button, enabled, mic_accessibility_label(state))
 }
 
 fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state: MicState) -> egui::Response {
@@ -197,6 +196,7 @@ struct PanelBodyContext<'a> {
     editor_preview_cache: Option<&'a mut MarkdownPreviewCache>,
     local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
+    clipboard_images: &'a crate::clipboard_image::ClipboardImages,
     reconnect_requested: &'a mut bool,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
@@ -207,6 +207,9 @@ struct PanelBodyContext<'a> {
     browser_frame_has_pointer_button: bool,
     browser_fullscreen_active: bool,
     browser_zoom_wheel_owner: crate::browser_widget::ZoomWheelOwner,
+    /// Canvas points at the bottom of the body that the terminal scrollbar
+    /// leaves to a corner resize grip; zero when the panel has no grip.
+    terminal_scrollbar_bottom_clearance: f32,
 }
 
 fn show_panel_body_contents(
@@ -224,7 +227,6 @@ fn show_panel_body_contents(
         ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
-        PanelKind::Upkeep => UpkeepView::new(panel).show(ui, is_focused),
         PanelKind::SetupBoard => SetupBoardView::new(panel).show(ui, is_focused, interactive),
         PanelKind::Device if panel.device().is_some() => {
             if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {
@@ -251,7 +253,12 @@ fn show_panel_body_contents(
         _ if panel.parked_screen().is_some() => panel
             .parked_screen()
             .is_some_and(|screen| crate::terminal_widget::parked::show(ui, screen, interactive)),
-        _ => TerminalView::new(panel, body_context.terminal_grid_cache).show(
+        _ => TerminalView::new(
+            panel,
+            body_context.terminal_grid_cache,
+            body_context.terminal_scrollbar_bottom_clearance,
+        )
+        .show(
             ui,
             is_focused,
             interactive,
@@ -259,6 +266,7 @@ fn show_panel_body_contents(
             TerminalKeyboardContext {
                 keyboard_events: body_context.keyboard_events,
                 primary_selection: body_context.primary_selection,
+                clipboard_images: body_context.clipboard_images,
                 local_ssh_reconnect_enabled: body_context.local_ssh_reconnect_enabled,
                 reconnect_requested: body_context.reconnect_requested,
             },
@@ -439,6 +447,7 @@ impl HorizonApp {
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
+                                    clipboard_images: &self.clipboard_images,
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
@@ -449,6 +458,7 @@ impl HorizonApp {
                                     browser_frame_has_pointer_button: frame_has_pointer_button,
                                     browser_fullscreen_active: true,
                                     browser_zoom_wheel_owner: crate::browser_widget::ZoomWheelOwner::Page,
+                                    terminal_scrollbar_bottom_clearance: 0.0,
                                 },
                             );
                         }
@@ -638,7 +648,7 @@ impl HorizonApp {
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
         // (titlebar drag, close, resize handles) click-through.
-        egui::Area::new(Id::new(("panel", panel_id.0)))
+        egui::Area::new(Id::unique(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
             .clip_to_canvas(canvas_layer_clip)
             .order(if snapshot.is_focused {
@@ -779,6 +789,10 @@ impl HorizonApp {
                 // Release the shared board borrow before the mutable borrow below.
                 drop(display_title);
 
+                // The corner grip owns the panel's bottom-right square, so the
+                // terminal scrollbar stops above it and stays reachable.
+                let terminal_scrollbar_bottom_clearance =
+                    resize::scrollbar_bottom_clearance(rects.panel, self.canvas_view.zoom);
                 ui.scope_builder(
                     UiBuilder::new()
                         .max_rect(rects.body)
@@ -822,6 +836,7 @@ impl HorizonApp {
                                     editor_preview_cache: preview_cache,
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
+                                    clipboard_images: &self.clipboard_images,
                                     reconnect_requested: &mut reconnect_requested,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
@@ -836,6 +851,7 @@ impl HorizonApp {
                                     } else {
                                         crate::browser_widget::ZoomWheelOwner::Page
                                     },
+                                    terminal_scrollbar_bottom_clearance,
                                 },
                             ) {
                                 outcome.request_focus();

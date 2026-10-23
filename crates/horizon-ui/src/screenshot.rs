@@ -1,5 +1,6 @@
 //! Panel pixels only: native clipboard images and bounded private PNG exports.
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -8,10 +9,11 @@ use horizon_core::browser::{BrowserPanelState, BrowserStatus, manifest::device::
 
 const MAX_PIXELS: usize = 8_294_400;
 const MAX_EXPORTS: usize = 8;
+const EXPORT_DIRECTORY: &str = "horizon-screenshots-";
 
 #[derive(Default)]
 pub(crate) struct Screenshots {
-    files: Option<Arc<Mutex<ExportFiles>>>,
+    files: Option<PrivatePngStore>,
     feedback: Option<(String, Instant)>,
 }
 
@@ -33,6 +35,90 @@ fn clear_registry(registry: &Mutex<Vec<Weak<Mutex<ExportFiles>>>>) {
     for files in exports.drain(..).filter_map(|files| files.upgrade()) {
         *files.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = ExportFiles::default();
     }
+}
+
+/// A private directory of PNG files that Horizon keeps for the session and
+/// removes when it exits. A clipboard image is encoded here on a worker
+/// thread, so the store is shared by [`Clone`] and is `Send + Sync`.
+#[derive(Clone)]
+pub(crate) struct PrivatePngStore {
+    files: Arc<Mutex<ExportFiles>>,
+    directory_prefix: &'static str,
+    capacity: usize,
+}
+
+impl PrivatePngStore {
+    pub(crate) fn new(directory_prefix: &'static str, capacity: usize) -> Self {
+        let files = Arc::new(Mutex::new(ExportFiles::default()));
+        let mut exports = EXPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        exports.retain(|files| files.strong_count() > 0);
+        exports.push(Arc::downgrade(&files));
+        Self {
+            files,
+            directory_prefix,
+            capacity,
+        }
+    }
+
+    /// The shared export state, for tests that count or clear stored files.
+    #[cfg(test)]
+    fn handle(&self) -> Arc<Mutex<ExportFiles>> {
+        Arc::clone(&self.files)
+    }
+
+    /// Encode `image` into a new PNG and keep the file until the process exits
+    /// or the store holds more than its capacity.
+    pub(crate) fn write(&self, image: &ColorImage, file_prefix: &str) -> Result<PathBuf, String> {
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if files.directory.is_none() {
+            files.directory = Some(private_directory(self.directory_prefix)?);
+        }
+        let directory = files.directory.as_ref().ok_or("Image directory unavailable")?;
+        let path = write_png(directory.path(), file_prefix, image)?.into_temp_path();
+        let stored = path.to_path_buf();
+        files.exports.push_back(path);
+        while files.exports.len() > self.capacity {
+            files.exports.pop_front();
+        }
+        Ok(stored)
+    }
+}
+
+fn private_directory(prefix: &str) -> Result<tempfile::TempDir, String> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir().map_err(|error| error.to_string())
+}
+
+fn write_png(directory: &Path, file_prefix: &str, image: &ColorImage) -> Result<tempfile::NamedTempFile, String> {
+    let (width, height) = validate(image)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(file_prefix)
+        .suffix(".png")
+        .tempfile_in(directory)
+        .map_err(|error| error.to_string())?;
+    let rgba: Vec<_> = image
+        .pixels
+        .iter()
+        .flat_map(egui::Color32::to_srgba_unmultiplied)
+        .collect();
+    let mut encoder = png::Encoder::new(file.as_file_mut(), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder
+        .write_header()
+        .and_then(|mut writer| {
+            writer.write_image_data(&rgba)?;
+            writer.finish()
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(file)
 }
 
 impl Screenshots {
@@ -75,58 +161,17 @@ impl Screenshots {
         copy_to_clipboard: bool,
     ) -> Result<Screenshot, String> {
         let (width, height) = validate(&image)?;
-        let files = self.files.get_or_insert_with(|| {
-            let files = Arc::new(Mutex::new(ExportFiles::default()));
-            let mut exports = EXPORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            exports.retain(|files| files.strong_count() > 0);
-            exports.push(Arc::downgrade(&files));
-            files
-        });
-        let mut files = files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if files.directory.is_none() {
-            let mut builder = tempfile::Builder::new();
-            builder.prefix("horizon-screenshots-");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                builder.permissions(std::fs::Permissions::from_mode(0o700));
-            }
-            files.directory = Some(builder.tempdir().map_err(|error| error.to_string())?);
-        }
-        let directory = files.directory.as_ref().ok_or("Screenshot directory unavailable")?;
-        let mut file = tempfile::Builder::new()
-            .prefix("capture-")
-            .suffix(".png")
-            .tempfile_in(directory.path())
-            .map_err(|error| error.to_string())?;
-        let rgba: Vec<_> = image
-            .pixels
-            .iter()
-            .flat_map(egui::Color32::to_srgba_unmultiplied)
-            .collect();
-        let mut encoder = png::Encoder::new(file.as_file_mut(), width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
-        encoder
-            .write_header()
-            .and_then(|mut writer| {
-                writer.write_image_data(&rgba)?;
-                writer.finish()
-            })
-            .map_err(|error| error.to_string())?;
-        let path = file.into_temp_path();
+        let files = self
+            .files
+            .get_or_insert_with(|| PrivatePngStore::new(EXPORT_DIRECTORY, MAX_EXPORTS));
+        let path = files.write(&image, "capture-")?;
         let capture = Screenshot {
             panel_id,
-            path: path.to_path_buf(),
+            path,
             width,
             height,
             clipboard_requested: copy_to_clipboard,
         };
-        files.exports.push_back(path);
-        while files.exports.len() > MAX_EXPORTS {
-            files.exports.pop_front();
-        }
         if copy_to_clipboard {
             ctx.copy_image(image);
             ctx.request_repaint();
@@ -225,11 +270,21 @@ mod tests {
                 false,
             )
             .unwrap();
-        let registry = Mutex::new(vec![Arc::downgrade(screenshots.files.as_ref().unwrap())]);
+        let registry = Mutex::new(vec![Arc::downgrade(&screenshots.files.as_ref().unwrap().handle())]);
         clear_registry(&registry);
         assert!(!capture.path.exists());
         assert!(!capture.path.parent().unwrap().exists());
-        assert!(screenshots.files.as_ref().unwrap().lock().unwrap().exports.is_empty());
+        assert!(
+            screenshots
+                .files
+                .as_ref()
+                .unwrap()
+                .handle()
+                .lock()
+                .unwrap()
+                .exports
+                .is_empty()
+        );
     }
 
     #[test]
@@ -318,7 +373,15 @@ mod tests {
         }
         assert!(!first.path.exists());
         assert_eq!(
-            screenshots.files.as_ref().unwrap().lock().unwrap().exports.len(),
+            screenshots
+                .files
+                .as_ref()
+                .unwrap()
+                .handle()
+                .lock()
+                .unwrap()
+                .exports
+                .len(),
             MAX_EXPORTS
         );
         let output = ctx
@@ -330,7 +393,15 @@ mod tests {
             .discard_textures();
         assert!(output.platform_output.commands.is_empty());
         assert_eq!(
-            screenshots.files.as_ref().unwrap().lock().unwrap().exports.len(),
+            screenshots
+                .files
+                .as_ref()
+                .unwrap()
+                .handle()
+                .lock()
+                .unwrap()
+                .exports
+                .len(),
             MAX_EXPORTS
         );
     }

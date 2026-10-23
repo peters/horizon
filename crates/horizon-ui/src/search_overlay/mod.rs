@@ -169,7 +169,7 @@ impl SearchOverlay {
 
         let mut action = SearchAction::None;
 
-        egui::Area::new(Id::new("search_dropdown"))
+        egui::Area::new(Id::unique("search_dropdown"))
             .fixed_pos(dropdown_rect.min)
             .constrain(true)
             .order(Order::Tooltip)

@@ -163,7 +163,7 @@ pub(super) fn paint_workspace_row_contents(
         ui.make_persistent_id(("sidebar_ws_tile", workspace.id.0)),
         Sense::hover(),
     );
-    tile_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
+    tile_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &spoken));
     let tile_response = tile_response.on_hover_text(spoken);
 
     let name_color = if workspace.is_active || has_badge(workspace.row.dot) {
@@ -198,7 +198,7 @@ pub(super) fn paint_workspace_row_contents(
 /// Shows `text` while the pointer is on `rect`, and tells it to a screen reader.
 fn hover_text(ui: &egui::Ui, rect: Rect, id: (&str, u64), text: &str) {
     let response = ui.interact(rect, ui.make_persistent_id(id), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     response.on_hover_text(text);
 }
 

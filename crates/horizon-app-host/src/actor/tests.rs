@@ -350,20 +350,22 @@ print(json.dumps('complete' if tunnel else {'phase':'complete','success':True}),
             Configuration {
                 process_worker: worker.clone(),
                 tunnel_worker: worker.clone(),
-                tunnel_binary: worker,
-                tunnel_sha256: Sha256::digest(script.as_bytes())
-                    .iter()
-                    .fold(String::new(), |mut text, byte| {
-                        let _ = write!(text, "{byte:02x}");
-                        text
-                    }),
+                tunnel: Some(crate::local::TunnelPin {
+                    binary: worker,
+                    sha256: Sha256::digest(script.as_bytes())
+                        .iter()
+                        .fold(String::new(), |mut text, byte| {
+                            let _ = write!(text, "{byte:02x}");
+                            text
+                        }),
+                }),
                 state,
             },
         )
         .unwrap(),
     );
     let mut contract = Contract::from_agents("```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  max_parallel: 2\n  apps:\n    ios:\n      build: [build]\n      artifact: App.ipa\n      bundle_id: com.example.app\n  tunnel:\n    ports: {backend: 8080}\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```").unwrap();
-    contract.tunnel.ports.insert(
+    contract.tunnel.as_mut().unwrap().ports.insert(
         "backend".into(),
         Port::Managed(DeclaredBackend {
             start: vec!["synthetic".into()],
@@ -1026,8 +1028,10 @@ fn provider_retention_uses_legacy_completed_records_after_actor_restart() {
             Configuration {
                 process_worker: worker.clone(),
                 tunnel_worker: worker.clone(),
-                tunnel_binary: worker,
-                tunnel_sha256: digest,
+                tunnel: Some(crate::local::TunnelPin {
+                    binary: worker,
+                    sha256: digest,
+                }),
                 state: path.join("local"),
             },
         )
@@ -1150,7 +1154,12 @@ fn reset_cannot_confirm_cleanup_when_allocated_replacement_handle_is_not_returne
 pub(crate) fn actor_with_fixed_backend(port: u16) -> (Fixture, Actor) {
     let (fixture, original) = actor("http://localhost:{tunnel.port.backend}");
     let mut contract = original.contract.clone();
-    contract.tunnel.ports.insert("backend".into(), Port::Fixed(port));
+    contract
+        .tunnel
+        .as_mut()
+        .unwrap()
+        .ports
+        .insert("backend".into(), Port::Fixed(port));
     contract.matrix.push(contract.matrix[0].clone());
     let mut matrix = original.matrix.clone();
     matrix.push(ResolvedDevice {
@@ -1235,6 +1244,69 @@ fn shutdown_waits_for_the_matrix_lease_before_clearing_upload_handles() {
     received.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
     shutdown.join().unwrap();
     assert_eq!(fixture.fake.upload_deletes.load(Ordering::SeqCst), 1);
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// The fixture with a contract and a host that have no tunnel: no launch argument names a tunnel port.
+pub(crate) fn actor_without_tunnel() -> (Fixture, Actor) {
+    let (fixture, original) = actor("http://localhost:{tunnel.port.backend}");
+    let root = fixture.root.path().canonicalize().unwrap();
+    let state = root.join("local-no-tunnel");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let configuration = Configuration {
+        process_worker: root.join("synthetic-guardian.py"),
+        tunnel_worker: root.join("synthetic-guardian.py"),
+        tunnel: None,
+        state,
+    };
+    let local = Arc::new(Local::new(Arc::clone(&fixture.workspace), &account(), &root, configuration).unwrap());
+    let mut contract = original.contract.clone();
+    contract.tunnel = None;
+    contract.launch_arguments.clear();
+    let matrix = original.matrix.clone();
+    let actor = Actor::from_backend(
+        Arc::clone(&fixture.workspace),
+        fixture.fake.clone(),
+        local,
+        contract,
+        matrix,
+    );
+    (fixture, actor)
+}
+
+#[test]
+fn session_with_no_tunnel_starts_no_tunnel_and_asks_for_no_local_capability() {
+    let (fixture, actor) = actor_without_tunnel();
+    let app = actor.upload(Platform::Ios, Duration::from_secs(30)).unwrap();
+    let session = actor.create(0, app.id, Duration::from_secs(20)).unwrap();
+    let body = fixture
+        .fake
+        .transport
+        .active
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let options = body.pointer("/capabilities/alwaysMatch/bstack:options").unwrap();
+    assert!(options.get("local").is_none());
+    assert!(options.get("localIdentifier").is_none());
+    let local = fixture.root.path().join("local-no-tunnel");
+    assert_eq!(std::fs::read_dir(&local).unwrap().count(), 0);
+    actor.act(session.id, &Action::Home {}).unwrap();
+    actor.snapshot(session.id).unwrap();
+    assert!(matches!(actor.tunnel_status(session.id), Err(Error::TunnelAbsent)));
+    actor.release_upload(app.id).unwrap();
+    actor.close(session.id).unwrap();
     assert!(
         fixture
             .workspace

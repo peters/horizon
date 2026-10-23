@@ -1,19 +1,14 @@
 //! Interact sends the viewer's pointer and keys to the desktop, and only then.
 use super::*;
-use vnc::X11Event;
+use horizon_vnc::{InputEvent, SentInput};
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 800.0);
 
-fn viewer_with_input() -> (
-    egui::Context,
-    DevicePanelState,
-    DeviceUiState,
-    tokio::sync::mpsc::UnboundedReceiver<X11Event>,
-) {
+fn viewer_with_input() -> (egui::Context, DevicePanelState, DeviceUiState, SentInput) {
     let ctx = egui::Context::default();
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let desktop = ColorImage::filled([160, 80], egui::Color32::GREEN);
-    let (session, receiver) = Session::pending_frame_with_input(desktop.clone(), desktop, DeviceViewOptions::default());
+    let (session, receiver) = Session::pending_frame_with_input(desktop.clone(), desktop, ViewOptions::default());
     let state = DeviceUiState {
         initialized: true,
         status: Status::Connected,
@@ -67,30 +62,26 @@ fn image_rect(output: &egui::FullOutput) -> egui::Rect {
         .expect("desktop image")
 }
 
-fn drain(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<X11Event>) -> Vec<X11Event> {
-    let mut events = Vec::new();
-    while let Ok(event) = receiver.try_recv() {
-        events.push(event);
-    }
-    events
+fn drain(receiver: &mut SentInput) -> Vec<InputEvent> {
+    receiver.drain()
 }
 
-fn keys(events: &[X11Event]) -> Vec<(u32, bool)> {
+fn keys(events: &[InputEvent]) -> Vec<(u32, bool)> {
     events
         .iter()
         .filter_map(|event| match event {
-            X11Event::KeyEvent(key) => Some((key.keycode, key.down)),
-            _ => None,
+            InputEvent::Key { keysym, down } => Some((*keysym, *down)),
+            InputEvent::Pointer { .. } => None,
         })
         .collect()
 }
 
-fn pointers(events: &[X11Event]) -> Vec<(u16, u16, u8)> {
+fn pointers(events: &[InputEvent]) -> Vec<(u16, u16, u8)> {
     events
         .iter()
         .filter_map(|event| match event {
-            X11Event::PointerEvent(mouse) => Some((mouse.position_x, mouse.position_y, mouse.bottons)),
-            _ => None,
+            InputEvent::Pointer { x, y, buttons } => Some((*x, *y, *buttons)),
+            InputEvent::Key { .. } => None,
         })
         .collect()
 }
@@ -191,6 +182,7 @@ fn modifiers_and_wheel_reach_the_desktop_and_escape_drops_capture() {
         vec![
             egui::Event::PointerMoved(middle),
             egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -50.0),
                 modifiers: egui::Modifiers::NONE,
@@ -344,7 +336,7 @@ fn a_click_on_ui_covering_the_image_does_not_reach_the_desktop() {
                 },
                 |ui| {
                     state.show(ui, &device, true);
-                    egui::Area::new(egui::Id::new("cover"))
+                    egui::Area::new(egui::Id::unique("cover"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(middle - egui::vec2(40.0, 40.0))
                         .show(ui.ctx(), |ui| {
@@ -391,6 +383,7 @@ fn a_discarded_pass_does_not_send_its_input_twice() {
                 events: vec![
                     egui::Event::PointerMoved(middle),
                     egui::Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
                         unit: egui::MouseWheelUnit::Line,
                         delta: egui::vec2(0.0, -1.0),
                         modifiers: egui::Modifiers::NONE,
@@ -597,6 +590,7 @@ fn wheel_events_go_to_the_image_under_the_pointer_when_they_happened() {
     let middle = image_rect(&output).center();
     let outside = egui::Pos2::new(SCREEN.x - 4.0, SCREEN.y - 4.0);
     let wheel = egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, -1.0),
         modifiers: egui::Modifiers::NONE,
@@ -604,7 +598,7 @@ fn wheel_events_go_to_the_image_under_the_pointer_when_they_happened() {
     };
     frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
     drain(&mut receiver);
-    let notches = |events: Vec<X11Event>| {
+    let notches = |events: Vec<InputEvent>| {
         pointers(&events)
             .iter()
             .filter(|(_, _, buttons)| *buttons == 16)
@@ -647,6 +641,7 @@ fn window_focus_loss_releases_and_the_first_wheel_uses_the_current_pointer() {
         &mut state,
         &device,
         vec![egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -1.0),
             modifiers: egui::Modifiers::NONE,
@@ -711,7 +706,7 @@ fn a_press_on_covering_ui_stays_there_even_if_the_pointer_then_reaches_the_image
                 },
                 |ui| {
                     state.show(ui, &device, true);
-                    egui::Area::new(egui::Id::new("popup"))
+                    egui::Area::new(egui::Id::unique("popup"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(covered_spot - egui::vec2(20.0, 20.0))
                         .show(ui.ctx(), |ui| {
@@ -773,6 +768,7 @@ fn a_wheel_without_a_move_is_sent_at_the_current_pointer() {
         &mut state,
         &device,
         vec![egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
             modifiers: egui::Modifiers::NONE,

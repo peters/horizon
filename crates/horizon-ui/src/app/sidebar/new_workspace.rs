@@ -1,5 +1,5 @@
-//! Where a new workspace runs: **+ New cloud** makes one with a cloud, and **+ Workspace**
-//! makes an empty one on this computer.
+//! Where a new workspace runs: **+ New cloud** makes one with a cloud, and **New** in the
+//! sidebar header makes an empty one on this computer.
 use egui::Context;
 
 use super::super::HorizonApp;

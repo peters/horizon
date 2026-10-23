@@ -53,22 +53,26 @@ fn new_in_the_sidebar_makes_an_empty_workspace_on_this_pc_without_a_menu() {
 }
 
 #[test]
-fn the_toolbar_has_one_button_for_a_cloud_and_one_for_an_empty_workspace() {
+fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
     let (_temp, ctx, mut app, workspaces) = ready_app();
     ctx.enable_accesskit();
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let cloud = label_position(&output, "+  New cloud");
-    let workspace = label_position(&output, "+  Workspace");
     let labels = spoken(&output);
-    for label in ["New cloud", "New workspace", "Menu"] {
+    for label in ["New cloud", "Menu"] {
         assert!(
             labels.iter().any(|(spoken, disabled)| spoken == label && !disabled),
             "{label}: {labels:?}"
         );
     }
     assert!(
-        workspace.x > cloud.x && (workspace.y - cloud.y).abs() < 1.0,
-        "+ Workspace follows + New cloud"
+        !labels.iter().any(|(spoken, _)| spoken == "New workspace"),
+        "New workspace lives in the sidebar header only: {labels:?}"
+    );
+    let menu = label_position(&output, "Menu");
+    assert!(
+        menu.x > cloud.x && (menu.y - cloud.y).abs() < 1.0,
+        "Menu follows + New cloud"
     );
 
     // The tooltip of + New cloud shows the machine and its price; the tests reach no
@@ -93,11 +97,6 @@ fn the_toolbar_has_one_button_for_a_cloud_and_one_for_an_empty_workspace() {
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     assert!(!app.cloud_creation_open());
     assert_eq!(app.board.workspaces.len(), workspaces, "the cancelled workspace goes");
-
-    // + Workspace makes an empty workspace on this computer without a dialog or a menu.
-    click(&ctx, &mut app, workspace);
-    assert!(!app.cloud_prototype.production.creating, "+ Workspace opens no dialog");
-    assert_eq!(app.board.workspaces.len(), workspaces + 1);
 }
 
 #[test]
@@ -120,9 +119,6 @@ fn without_cloud_workspaces_new_cloud_is_dimmed_and_does_nothing() {
         "no New cloud without cloud workspaces"
     );
     assert_eq!(app.board.workspaces.len(), workspaces);
-
-    click(&ctx, &mut app, label_position(&output, "+  Workspace"));
-    assert_eq!(app.board.workspaces.len(), workspaces + 1, "a This PC workspace");
 }
 
 #[test]
@@ -220,75 +216,5 @@ fn a_dimmed_new_cloud_takes_no_focus_and_says_why_on_hover() {
     assert!(
         text_center(&output, crate::app::sidebar::NEW_CLOUD_NOT_READY).is_some(),
         "the hover explains the dimmed button"
-    );
-}
-
-#[test]
-fn new_upkeep_in_the_menu_opens_its_dialog_only_with_cloud_workspaces() {
-    let (_temp, ctx, mut app, workspaces) = ready_app();
-    ctx.enable_accesskit();
-    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
-    // Background setup can make cloud workspaces ready again, so each frame starts from
-    // the readiness under test. Time moves on, so a hover after a click shows its tooltip.
-    let clock = std::cell::Cell::new(0.0);
-    let run = |app: &mut HorizonApp, ready: bool, events: Vec<Event>| {
-        app.cloud_prototype.ready = ready;
-        clock.set(clock.get() + 0.2);
-        let mut input = raw_input([1400.0, 900.0], None);
-        input.time = Some(clock.get());
-        input.events = events;
-        run_app_frame_with_input(&ctx, app, input)
-    };
-    let press = |app: &mut HorizonApp, ready: bool, pos: Pos2| {
-        run(app, ready, vec![Event::PointerMoved(pos)]);
-        for pressed in [true, false] {
-            run(
-                app,
-                ready,
-                vec![Event::PointerButton {
-                    pos,
-                    button: PointerButton::Primary,
-                    pressed,
-                    modifiers: Modifiers::NONE,
-                }],
-            );
-        }
-        run(app, ready, Vec::new())
-    };
-    let upkeep_row = |output: &egui::FullOutput| {
-        spoken(output)
-            .into_iter()
-            .find(|(label, _)| label.starts_with("New Upkeep. "))
-            .expect("a New Upkeep row")
-            .1
-    };
-
-    // Without cloud workspaces the row is dimmed, says why, and does nothing.
-    let output = run(&mut app, false, Vec::new());
-    let output = press(&mut app, false, label_position(&output, "Menu"));
-    assert!(upkeep_row(&output), "dimmed without cloud workspaces");
-    let upkeep = label_position(&output, "New Upkeep");
-    for _ in 0..3 {
-        run(&mut app, false, vec![Event::PointerMoved(upkeep)]);
-    }
-    let hovered = run(&mut app, false, vec![Event::PointerMoved(upkeep)]);
-    assert!(
-        text_center(&hovered, crate::app::sidebar::NEW_CLOUD_NOT_READY).is_some(),
-        "the dimmed row says why"
-    );
-    press(&mut app, false, upkeep);
-    assert!(app.upkeep.form.is_none(), "a dimmed row does nothing");
-    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
-
-    // With them, it opens New Upkeep and makes no workspace yet.
-    let output = run(&mut app, true, Vec::new());
-    let output = press(&mut app, true, label_position(&output, "Menu"));
-    assert!(!upkeep_row(&output));
-    press(&mut app, true, label_position(&output, "New Upkeep"));
-    assert!(app.upkeep.form.is_some(), "New Upkeep opens its dialog");
-    assert_eq!(
-        app.board.workspaces.len(),
-        workspaces,
-        "New Upkeep makes no workspace yet"
     );
 }

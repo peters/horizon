@@ -293,7 +293,7 @@ impl HorizonApp {
             self.board.focused.filter(|id| hits(*id)).or_else(|| {
                 if let Some(layer) = ctx.layer_id_at(position)
                     && let Some((id, _)) = panel_geometry.iter().find(|(id, geometry)| {
-                        layer.id == egui::Id::new(("panel", id.0)) && geometry.screen_rect.contains(position)
+                        layer.id == egui::Id::unique(("panel", id.0)) && geometry.screen_rect.contains(position)
                     })
                 {
                     return Some(*id);
@@ -313,12 +313,12 @@ impl HorizonApp {
             self.cloud_runtime_under_pointer(ctx, position).filter(|issue| {
                 // An open drawer lies over the cloud's own panels, focused or not.
                 ctx.layer_id_at(position)
-                    .is_some_and(|layer| layer.id == egui::Id::new(("cloud-drawer", *issue)))
+                    .is_some_and(|layer| layer.id == egui::Id::unique(("cloud-drawer", *issue)))
                     || !panel_under_pointer.is_some_and(|panel| {
                         self.board.focused == Some(panel)
                             || ctx
                                 .layer_id_at(position)
-                                .is_some_and(|layer| layer.id == egui::Id::new(("panel", panel.0)))
+                                .is_some_and(|layer| layer.id == egui::Id::unique(("panel", panel.0)))
                     })
             })
         });
@@ -465,7 +465,7 @@ impl HorizonApp {
         let capturing = super::super::shortcuts::hotkey_binder_capturing(ctx);
         // A just-captured chord still has its release (and possibly repeats
         // and a text event) in flight after the binder cleared its flag.
-        let captured_key_id = egui::Id::new("speech_captured_key");
+        let captured_key_id = egui::Id::unique("speech_captured_key");
         // This accessor applies the same timeout used by global shortcut
         // dispatch, so neither path can be wedged by a lost release.
         let captured = pending_hotkey_capture(ctx);

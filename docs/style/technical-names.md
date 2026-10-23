@@ -70,7 +70,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts, the cloud actions and Settings. | More menu, overflow menu, Cloud menu |
 | New cloud button | The accent **+ New cloud** button in the toolbar. It makes a workspace and opens New cloud for it. | Cloud ▾, place menu |
-| New workspace button | The **+ Workspace** button in the toolbar. It makes an empty workspace on this computer. | New menu |
+| New workspace button | The **New** button in the sidebar header next to **Workspaces**. It makes an empty workspace on this computer. | New menu, + Workspace |
 | idle period | The value of `idle_stop_minutes` in a profile. It has no effect now. | idle timeout, idle limit |
 | idle stop | The stop of a RunPod worker by itself after an idle period without agent activity. Only a worker created before the agent stop, on an image from before it, does this. Horizon does not stop an idle cloud. | auto stop, auto-stop |
 | stop request | The file `/run/horizon-worker/stop-request.json` on a worker without a stop credential. The stop service writes it for an agent's stop, and `horizon-worker-stopd --take` gives it to Horizon. | — |
@@ -81,6 +81,11 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | control service | The worker service `horizon-cloud-worker serve`. It hosts the browsers of a cloud. With agent isolation, it runs as UID 10001. | browser service, worker service |
 | agent isolation | The worker mode in which agent panels and workspace services run as UID 10001. The stock worker image starts it. | sandbox |
 | browser tools | The `browser_*` MCP tools of an agent. | browser MCP |
+| profile host | The process `horizon-browser host --config <host file>`. It keeps named browser profiles for agents on the same computer. | profile server |
+| background window | A Chromium window that opens without the keyboard focus. A profile host opens each visible page in one. | hidden window |
+| browser profile | A named entry under `browser.profiles` in the host file of a profile host, and the persistent folder of its browser. Its pages share its cookies. | profile (alone) |
+| host file | The YAML file that `--config` gives to a standalone `horizon-browser`. It holds no credential value. | config file |
+| connect client | The process `horizon-browser mcp --connect`. It gives the browser tools of a host to one agent. | MCP proxy |
 | image-only profile | A profile without a `build` section. Horizon uses its image and builds nothing. | — |
 | base image | The public CPU worker image `ghcr.io/peters/horizon-worker-base`. Horizon pins it by digest. | default image, stock image |
 | quick start | The **New cloud** choice that runs a repository without `.horizon/cloud.yml` on the base image, with the built-in profile `quick-start`. | easy start, default cloud |

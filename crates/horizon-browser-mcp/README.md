@@ -97,7 +97,10 @@ shell commands, files, or other MCP servers.
   retained pixels, not full-page captures or a forced fresh frame. No focus,
   visibility, viewport or canvas change is required. Captures reject another
   live owner's panel; browser capture acquires or renews the caller's claim and requires it at dispatch and result delivery. Active human steering and handoff remain protected. A live Horizon host
-  is required; standalone browser hosts cannot provide this route. Exports
+  or a profile host (`horizon-browser host`) is required; other standalone
+  browser hosts cannot provide this route. A profile host ignores
+  `copy_to_clipboard`, and `mcp --connect --inline-screenshots` also returns
+  the PNG of a profile host as an image block. Exports
   use private temporary storage, retain the latest eight captures per panel,
   survive browser theme/backend cache resets, and are deleted on panel close or
   normal host exit. Copy a returned file elsewhere before its retention ends.
@@ -283,8 +286,11 @@ shell commands, files, or other MCP servers.
 - `browser_evaluate` awaits an explicit size-bounded expression or promise. Its
   `timeout_millis` (1-60000 ms, default 15000) includes queue time; expiry returns
   `evaluation_timeout` naming the bound and elapsed time. Chromium and classic
-  WebDriver use the same caller bound; WebDriver restores its prior script timeout
-  after the action. The CLI plan runner uses this same MCP contract.
+  WebDriver use the same caller bound; WebDriver puts the session's own script
+  timeout back after the action, or, when the driver reports none, leaves the
+  established default bound (see the evaluation contract in
+  `docs/architecture/remote-browser-sessions.md`). The CLI plan runner uses this
+  same MCP contract.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
   capture and returns an explicit private NDJSON path plus connection state,
   frame/byte counts, drops, truncation, and writer health. Start it before

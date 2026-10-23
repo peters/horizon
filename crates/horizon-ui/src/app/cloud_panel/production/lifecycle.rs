@@ -104,8 +104,8 @@ impl Runtime {
         }
         match prompt {
             // The package sign-in uses the same one-time box as the publishing sign-in.
-            Prompt::Publish { .. } | Prompt::Packages { .. } => self.publish = Some(prompt),
-            Prompt::Published { .. } | Prompt::PackagesEnded { .. } => self.publish = None,
+            Prompt::Publish { .. } => self.publish = Some(prompt),
+            Prompt::Published { .. } => self.publish = None,
             prompt => self.github = Some(prompt),
         }
     }

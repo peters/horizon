@@ -23,8 +23,7 @@ pub(in crate::app) fn row(
         response
     };
     // A screen reader reads the whole row, as it is painted.
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, spoken(title, detail, shortcut)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, spoken(title, detail, shortcut)));
     let hot = enabled && (response.hovered() || response.has_focus());
     if hot {
         ui.painter().rect_filled(

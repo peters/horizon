@@ -25,6 +25,7 @@ mod opencode_paths;
 mod panel;
 pub mod remote_browser_credential;
 mod remote_hosts;
+mod retired_panel_kinds;
 mod runtime_state;
 pub mod search;
 mod session_store;
@@ -36,7 +37,6 @@ pub mod speech_model;
 mod ssh;
 mod terminal;
 mod transcript;
-pub mod upkeep;
 mod usage_dashboard;
 mod usage_stats;
 mod util;
@@ -44,8 +44,8 @@ mod view;
 mod workspace;
 
 pub use agents::{
-    AgentDefinition, AgentIntegrationKind, AgentResumeMode, AgentSessionValidationMode, AgentStatus, agent_definition,
-    all_agent_kinds, is_agent_working_line,
+    AgentDefinition, AgentIntegrationKind, AgentPromptMode, AgentResumeMode, AgentSessionValidationMode, AgentStatus,
+    agent_definition, all_agent_kinds, is_agent_working_line,
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
@@ -58,9 +58,7 @@ pub use config::{
     ShortcutsConfig, SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig,
     WindowConfig, WorkspaceConfig, patch_default_workspace_source,
 };
-pub use device::{
-    DeviceImageLayout, DeviceInput, DevicePanelState, DeviceViewOptions, DeviceViewTarget, DeviceViewport,
-};
+pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use git_changes::DiffViewer;
@@ -95,7 +93,6 @@ pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifier
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};
 pub use transcript::PanelTranscript;
-pub use upkeep::UpkeepBoard;
 pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use util::truncate_chars;

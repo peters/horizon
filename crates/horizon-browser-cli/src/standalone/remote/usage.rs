@@ -171,8 +171,6 @@ fn host_only_refusal(request: &UsageRequest) -> Option<&'static str> {
         Some("cloud_companion_unavailable: requires a Horizon host")
     } else if request.cloud_list.is_some() {
         Some("cloud_list_unavailable: requires a Horizon agent panel")
-    } else if request.upkeep.is_some() {
-        Some("upkeep_unavailable: requires a Horizon agent panel on the person's computer")
     } else if request.tailnet_credential.is_some() {
         Some("tailnet_credential_unavailable: requires the desktop owner")
     } else if request.image_destination.is_some() {

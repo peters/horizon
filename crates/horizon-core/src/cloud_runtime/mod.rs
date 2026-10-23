@@ -38,6 +38,7 @@ pub mod repository_choice;
 pub mod session_status;
 pub mod settings;
 pub mod setup;
+pub mod setup_builder;
 pub mod siblings;
 pub mod ssh;
 pub mod state;

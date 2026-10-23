@@ -1,11 +1,14 @@
 use egui::{Area, CursorIcon, Id, LayerId, Pos2, Rect, Response, Sense, Ui, Vec2};
 use horizon_core::PanelId;
 
-use super::super::PANEL_TITLEBAR_HEIGHT;
+use super::super::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 use super::CanvasClippedArea;
 use crate::theme;
 
 const HANDLE_SCREEN_SIZE: f32 = 32.0;
+/// Canvas gap between the scrollbar's hit target and the corner hit square, so
+/// their shared edge never belongs to both.
+const SCROLLBAR_GRIP_GAP: f32 = 1.0;
 const GRIP_DOT_RADIUS: f32 = 1.6;
 /// Dot centers in the 32-point handle, measured from its top-left: a triangle of three,
 /// two and one dots that points into the corner.
@@ -28,10 +31,23 @@ pub(super) fn drag_delta(response: &Response) -> Vec2 {
 }
 
 fn handle_rect(panel: Rect, zoom: f32) -> Rect {
-    let span = (HANDLE_SCREEN_SIZE / zoom)
-        .min(panel.width())
-        .min((panel.height() - PANEL_TITLEBAR_HEIGHT).max(0.0));
+    let span = grip_canvas_span(panel, zoom);
     Rect::from_min_size(panel.max - Vec2::splat(span), Vec2::splat(span))
+}
+
+/// The grip's hit square in canvas points: [`HANDLE_SCREEN_SIZE`] screen points,
+/// bounded by the panel extent.
+fn grip_canvas_span(panel: Rect, zoom: f32) -> f32 {
+    (HANDLE_SCREEN_SIZE / zoom)
+        .min(panel.width())
+        .min((panel.height() - PANEL_TITLEBAR_HEIGHT).max(0.0))
+}
+
+/// Canvas points above the terminal's bottom edge that the terminal scrollbar
+/// keeps free, so the corner grip owns its square without covering the foot of
+/// the scrollbar track.
+pub(super) fn scrollbar_bottom_clearance(panel: Rect, zoom: f32) -> f32 {
+    (grip_canvas_span(panel, zoom) - PANEL_PADDING + SCROLLBAR_GRIP_GAP).max(0.0)
 }
 
 pub(super) fn show_resize_control(
@@ -43,7 +59,7 @@ pub(super) fn show_resize_control(
 ) -> Response {
     let rect = handle_rect(panel, zoom);
     let parent = ui.layer_id();
-    let layer = LayerId::new(parent.order, Id::new(("panel_resize_layer", panel_id.0)));
+    let layer = LayerId::new(parent.order, Id::unique(("panel_resize_layer", panel_id.0)));
     let ctx = ui.ctx();
     // Body input also routes raw events by topmost layer, independently of Response.
     ctx.set_sublayer(parent, layer);

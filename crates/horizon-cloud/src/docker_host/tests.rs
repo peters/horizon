@@ -198,6 +198,7 @@ fn host() -> Host {
         access: Access::Ssh,
         address: Some("builder@build-server".into()),
         docker: Some("/usr/local/bin/docker".into()),
+        pinned: None,
     }
 }
 
@@ -577,6 +578,7 @@ fn host_settings_refuse_shell_syntax() {
         access: Access::ThisPc,
         address: address.map(str::to_owned),
         docker: None,
+        pinned: None,
     };
     assert!(this_pc(Some("build-server")).validate().is_err());
     assert_eq!(this_pc(None).proxy_command().unwrap(), None);
@@ -692,6 +694,7 @@ fn a_command_that_outlives_its_time_is_stopped() {
         access: Access::ThisPc,
         address: None,
         docker: Some("/bin/sleep".into()),
+        pinned: None,
     };
     let (cancel, config) = (crate::Cancellation::default(), tempfile::tempdir().unwrap());
     let engine = Engine {
@@ -725,6 +728,7 @@ fn a_host_forwards_its_engine_socket_and_a_loopback_port_over_its_own_ssh() {
         access: Access::Ssh,
         address: Some("me@builder".into()),
         docker: None,
+        pinned: None,
     };
     let socket = args(
         ssh.socket_forward(Path::new("/private/run/docker.sock"))
@@ -764,9 +768,88 @@ fn a_host_forwards_its_engine_socket_and_a_loopback_port_over_its_own_ssh() {
         access: Access::ThisPc,
         address: None,
         docker: None,
+        pinned: None,
     };
     assert!(
         this_pc.socket_forward(Path::new("/x.sock")).unwrap().is_none(),
         "this computer needs no forward"
+    );
+}
+
+// The rented builder serves setups, which run on Linux; its key paths are Unix paths.
+#[cfg(unix)]
+#[test]
+fn a_rented_machine_is_reached_only_with_its_own_key_and_host_key() {
+    let mut rented = Host {
+        name: "setup-builder".into(),
+        access: Access::Ssh,
+        address: Some("root@203.0.113.7".into()),
+        docker: None,
+        pinned: Some(Pinned {
+            identity: "/private/builder/login".into(),
+            known_hosts: "/private/builder/known_hosts".into(),
+        }),
+    };
+    let pinned = [
+        "-F",
+        "none",
+        "IdentityFile=/private/builder/login",
+        "UserKnownHostsFile=/private/builder/known_hosts",
+        "IdentitiesOnly=yes",
+        "IdentityAgent=none",
+        "StrictHostKeyChecking=yes",
+        "GlobalKnownHostsFile=/dev/null",
+    ];
+    for command in [
+        rented.command(&["version".into()], Path::new("/unused")).unwrap(),
+        rented
+            .socket_forward(Path::new("/private/run/docker.sock"))
+            .unwrap()
+            .unwrap(),
+    ] {
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let address = args.iter().position(|arg| arg == "root@203.0.113.7").unwrap();
+        for option in pinned {
+            let at = args.iter().position(|arg| arg == option);
+            assert!(at.is_some_and(|at| at < address), "{option} comes before the address");
+        }
+    }
+    let proxy = rented.proxy_command().unwrap().unwrap();
+    assert!(proxy.contains("-o UserKnownHostsFile=/private/builder/known_hosts"));
+    assert!(proxy.ends_with("-W 127.0.0.1:%p -- 'root@203.0.113.7'"));
+    rented.pinned = Some(Pinned {
+        identity: "relative/login".into(),
+        known_hosts: "/private/builder/known_hosts".into(),
+    });
+    assert!(rented.validate().is_err(), "a relative key path");
+    rented.pinned = Some(Pinned {
+        identity: "/private/my builder/login".into(),
+        known_hosts: "/private/builder/known_hosts".into(),
+    });
+    assert!(rented.validate().is_err(), "a path the proxy command would split");
+    rented.pinned = Some(Pinned {
+        identity: "/private/builder/login".into(),
+        known_hosts: "/private/builder/known_hosts".into(),
+    });
+    rented.access = Access::TailscaleSsh;
+    assert!(rented.validate().is_err(), "Tailscale SSH takes no key");
+    let saved = Host {
+        name: RENTED_BUILDER.into(),
+        access: Access::Ssh,
+        address: Some("me@build-server".into()),
+        docker: None,
+        pinned: None,
+    };
+    assert!(
+        saved.validate().is_err(),
+        "a saved host cannot take the rented builder's name"
+    );
+    let saved = serde_yaml::to_string(&rented).unwrap();
+    assert!(
+        !saved.contains("pinned") && !saved.contains("/private/builder"),
+        "never saved"
     );
 }

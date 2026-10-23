@@ -1,11 +1,11 @@
 use egui::Ui;
-use horizon_core::{DeviceViewOptions, DeviceViewport};
+use horizon_vnc::{Region, ViewOptions};
 
 #[derive(Default)]
 pub(super) struct Controls {
-    pub options: DeviceViewOptions,
+    pub options: ViewOptions,
     pub one_to_one: bool,
-    pub(super) draft: Option<DeviceViewport>,
+    pub(super) draft: Option<Region>,
     error: Option<String>,
 }
 
@@ -55,7 +55,7 @@ impl Controls {
                 }
             });
             if let Some(desktop) = desktop {
-                let draft = self.draft.get_or_insert(DeviceViewport {
+                let draft = self.draft.get_or_insert(Region {
                     x: 0,
                     y: 0,
                     width: desktop[0],
@@ -84,7 +84,7 @@ impl Controls {
                             .prefix("h "),
                     );
                     if ui.button("Apply viewport").clicked() {
-                        let options = DeviceViewOptions {
+                        let options = ViewOptions {
                             viewport: Some(*draft),
                             ..self.options
                         };
@@ -114,14 +114,14 @@ mod tests {
 
     #[test]
     fn shrink_clears_an_outside_crop_and_its_draft() {
-        let viewport = DeviceViewport {
+        let viewport = Region {
             x: 1800,
             y: 900,
             width: 100,
             height: 100,
         };
         let mut controls = Controls {
-            options: DeviceViewOptions {
+            options: ViewOptions {
                 viewport: Some(viewport),
                 ..Default::default()
             },
@@ -141,8 +141,8 @@ mod tests {
     #[test]
     fn an_active_viewport_can_be_cleared_without_desktop_geometry() {
         let mut controls = Controls {
-            options: DeviceViewOptions {
-                viewport: Some(DeviceViewport {
+            options: ViewOptions {
+                viewport: Some(Region {
                     x: 90,
                     y: 70,
                     width: 10,

@@ -112,6 +112,72 @@ An observed replacement entry retains uncertainty and is never removed as the ow
 The standalone development executable uses `horizon-native --mcp --client <file>`.
 MCP arguments cannot replace the configured project or credentials.
 
+### A host with credential files and no tunnel
+
+A server can run `horizon-native` with no OS keyring.
+The client file then names one private file for each authentication reference of the provider.
+The names are the same as in the `credential_files` of the `horizon-browser` host file.
+
+```json
+{
+  "version": 1,
+  "owner": "<fresh UUID for this project client>",
+  "project": "/absolute/path/to/isolated-app-checkout",
+  "state": "/absolute/path/to/private/shared-native-state",
+  "provider": "browserstack",
+  "tunnel_binary": "/absolute/path/to/verified/BrowserStackLocal",
+  "tunnel_sha256": "<approved SHA-256>",
+  "credential_files": {
+    "browserstack-user": "/run/secrets/browserstack-user",
+    "browserstack-key": "/run/secrets/browserstack-key"
+  }
+}
+```
+
+1. Put each credential value in its own file.
+
+   Result: The host reads each file again at each start.
+   It removes one final line break.
+
+2. Make each file a regular file of the user that runs the host, with mode `0600` or stricter.
+
+   Result: The host refuses a link in any part of the path, a file of another owner,
+   a file that the group or other users can read, a file larger than 4 KiB and a value that does not fit the scheme.
+
+3. Name exactly one file for each authentication reference of the provider.
+
+   Result: The host refuses a missing or an extra reference and a relative path.
+
+4. Remove `credential_bindings` from that provider in the Horizon configuration.
+
+   Result: The host refuses a provider with `credential_bindings`, also with bindings to environment variables.
+
+With `credential_files`, the host never opens the OS keyring.
+Without it, the host reads the OS-store bindings as before.
+`horizon --native-catalog` still reads the OS-store bindings.
+
+The checks of the files do not keep a value from a process of the same user.
+The MCP client usually runs as that user.
+On macOS, `/tmp` and `/var` are links. Give a path under `/private` there.
+
+A project whose app uses only public backends needs no tunnel.
+
+5. Leave out `tunnel` in the project contract.
+
+   Result: The host starts no BrowserStack Local and no tunnel guardian.
+   The session asks for no `local` and no `localIdentifier` capability.
+   `app_tunnel_status` returns `app_tunnel_absent`.
+
+6. Leave out `tunnel_binary` and `tunnel_sha256` in the client file.
+
+   Result: The host needs no BrowserStack Local executable.
+   The client file must give both fields or neither.
+   A contract with tunnel ports and a client file with no tunnel binary cause refusal with `app_tunnel_unconfigured`.
+
+With no tunnel, a launch argument cannot be a URL or a `{tunnel.port.*}` value, because a launch URL must use a declared tunnel port.
+Put the address of the public backend in the app build.
+The app reaches only the internet, never a service of the host.
+
 ## 3. Examine the device catalog
 
 1. Run the catalog command.
@@ -184,7 +250,8 @@ remote-device-testing:
 
    Result: The run does not use production snapshots or global database resets.
 
-Declare between one and sixteen tunnel ports. Missing or empty port maps are invalid.
+A tunnel declares between one and sixteen ports. An empty port map is invalid.
+A project with no `tunnel` starts no tunnel; see [A host with credential files and no tunnel](#a-host-with-credential-files-and-no-tunnel).
 Only declared numeric loopback ports enter the tunnel allowlist.
 The adapter changes the loopback launch URL to the exact `bs-local.com:<port>` alias.
 It preserves the URL path.
@@ -332,7 +399,7 @@ The table names all 13 tools.
 | Tool | Result or behavior |
 |---|---|
 | `app_upload` | Uploads one declared platform artifact. Returns an opaque hash/size handle. |
-| `app_session_create` | Starts one matrix entry with its own backend and tunnel. |
+| `app_session_create` | Starts one matrix entry with its own backend, and with its own tunnel when the project declares one. |
 | `app_snapshot` | Returns the native accessibility tree. Redacts secure field values. |
 | `app_act` | Runs a native gesture, element action, assertion or app lifecycle action. |
 | `app_wait` | Waits for an element state within the original deadline. |
@@ -340,7 +407,7 @@ The table names all 13 tools.
 | `app_view` | Opens or reuses that session's read-only native viewer. |
 | `app_video` | Returns recording policy or video. The `stop` operation closes the session before download. |
 | `app_logs` | Returns redacted device, crash, Appium or network logs when available. |
-| `app_tunnel_status` | Returns redacted readiness and ownership state. |
+| `app_tunnel_status` | Returns redacted readiness and ownership state. A project with no tunnel gets `app_tunnel_absent`. |
 | `app_session_close` | Gets exact provider closure acknowledgement, then stops the owned local services. |
 | `app_audit` | Returns receipts with a stream UUID and sequence cursor. |
 | `device_test_run` | Runs the complete declared matrix through the same controller. |

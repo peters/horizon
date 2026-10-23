@@ -24,9 +24,15 @@ pub mod recovery;
 pub struct Configuration {
     pub process_worker: PathBuf,
     pub tunnel_worker: PathBuf,
-    pub tunnel_binary: PathBuf,
-    pub tunnel_sha256: String,
+    /// No pin: the host starts no tunnel.
+    pub tunnel: Option<TunnelPin>,
     pub state: PathBuf,
+}
+
+/// The pinned tunnel executable.
+pub struct TunnelPin {
+    pub binary: PathBuf,
+    pub sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -276,12 +282,13 @@ impl Local {
     /// # Errors
     /// The only forwarded ports are already-resolved declared loopback services.
     pub(crate) fn tunnel(&self, ports: Vec<LocalPort>, lifetime: Duration) -> Result<Lease> {
+        let pin = self.configuration.tunnel.as_ref().ok_or(Error::TunnelUnconfigured)?;
         let (id, deadline, state) = self.operation(Kind::Tunnel, lifetime)?;
         let prepared: Result<TunnelRequest> = (|| {
             Ok(TunnelRequest {
                 worker: self.configuration.tunnel_worker.clone(),
                 state: state.clone(),
-                binary: VerifiedBinary::capture(&self.configuration.tunnel_binary, &self.configuration.tunnel_sha256)?,
+                binary: VerifiedBinary::capture(&pin.binary, &pin.sha256)?,
                 ports,
                 operation: id,
                 lifetime: deadline.saturating_duration_since(Instant::now()),

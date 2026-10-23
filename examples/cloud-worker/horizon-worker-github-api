@@ -3,8 +3,7 @@ request over plain HTTP to the Unix socket /run/horizon-worker/github-api.sock
 (`http_unix_socket`), and gh holds only a placeholder token. The broker reads the caller's user
 ID from the kernel (SO_PEERCRED), checks each request against the REST policy
 (horizon-worker-github-api-rest) or the GraphQL policy (horizon-worker-github-graphql-policy),
-and sends it to GitHub with the token of the grant that covers it, or a package read with the
-package token (horizon-worker-github-packages). A refused request gets a
+and sends it to GitHub with the token of the grant that covers it. A refused request gets a
 reason that gh prints, and never reaches GitHub with a token. Redirects to GitHub's content
 hosts come back through the socket and go out without a token. A module that
 horizon-worker-github loads, not a command."""
@@ -37,9 +36,6 @@ agents = common.load_sibling('horizon-worker-github-agents', 'horizon_worker_git
 relay = common.load_sibling('horizon-worker-github-http', 'horizon_worker_github_http')
 gitproxy = common.load_sibling('horizon-worker-github-git', 'horizon_worker_github_git')
 rest = common.load_sibling('horizon-worker-github-api-rest', 'horizon_worker_github_api_rest')
-upkeep = common.load_sibling('horizon-worker-github-upkeep', 'horizon_worker_github_upkeep')
-checks = common.load_sibling('horizon-worker-github-api-upkeep', 'horizon_worker_github_api_upkeep')
-packages = common.load_sibling('horizon-worker-github-packages', 'horizon_worker_github_packages')
 policy = rest.policy
 graphql = policy.graphql
 
@@ -145,28 +141,15 @@ class Schema:
 class Broker:
     """The broker's shared state: the token store and the schema."""
 
-    def __init__(self, store, environ, static=None, log=None):
+    def __init__(self, store, environ, static=None):
         self.store, self.environ, self.static = store, environ, static
         self.schema = Schema()
-        # Where the refusals of the Upkeep policy go for the board.
-        self.log = log or upkeep.shared_log(upkeep.log_directory(store))
-
-    def policy(self):
-        """The Upkeep policy of the cloud, read for each request, or None."""
-        return upkeep.load(self.store, common)
 
     def candidates(self, pid=None):
         found, problem = candidates(self.store, time.time(), self.static, pid)
         if not any(candidate.usable for candidate in found):
             raise refusal(403, problem or 'this worker has no GitHub sign-in. Connect GitHub in Horizon.')
         return found
-
-    def package_candidate(self, owner):
-        """The package token for a read of the packages of `owner`, or a refusal."""
-        token, reason = packages.token_for(self.store, owner)
-        if token is None:
-            raise refusal(403, reason)
-        return Candidate(token, lambda repository, access: False, 'packages')
 
     def call(self, host, method, target, token, body=None, extra=(), sent=lambda: None):
         """(status, JSON reply) of a request that the broker makes itself, with the `extra`
@@ -213,8 +196,6 @@ def choose(broker, route, pid=None, sent=lambda: None):
     repository ID."""
     if route.kind == 'content':
         return None, None
-    if route.kind == 'package':
-        return broker.package_candidate(route.owner), None
     found = broker.candidates(pid)
     if route.kind == 'plain':
         return next(candidate for candidate in found if candidate.usable), None
@@ -257,7 +238,7 @@ def graphql_refused(output, message):
     relay.refuse(output, 200, message, 'application/json; charset=utf-8', text)
 
 
-class Exchange(checks.Checks):
+class Exchange:
     """One request on one connection; updates `record` in place, so the log keeps what
     happened also when the connection ends early."""
 
@@ -281,55 +262,26 @@ class Exchange(checks.Checks):
         self.record.update(request=route.kind, host=host)
         if route.kind == 'graphql':
             return self.graphql(request)
-        if route.kind == 'package' and (request.chunked or getattr(request, 'length', 0)):
-            raise refusal(400, 'a package read on this worker has no body.')
-        rules = self.broker.policy() if route.kind == 'repository' else None
-        reason = upkeep.rest_refusal(rules, request.method, route.parts)
-        if reason is not None:
-            self.upkeep_refused('api', route.repository, reason)
         candidate, repository = choose(self.broker, route, self.pid, lambda: self.record.update(granted=True))
         self.record['repository'] = repository
         names = list(route.repositories) if route.kind == 'search' else [repository] if repository else []
-        data = None
-        if rules is not None:
-            try:
-                number = checks.merge_number(route.parts, request.method) if repository else None
-            except upkeep.Refused as refused:
-                self.upkeep_refused('merge', repository, str(refused))
-            data = self.upkeep_dispatch(rules, request, route, candidate, repository)
-            if upkeep.reviews(request.method, route.parts):
-                data = self.upkeep_review(request, repository)
-            elif upkeep.pull_edited(request.method, route.parts):
-                data = self.upkeep_pull(request, repository)
-            elif upkeep.branch_written(request.method, route.parts) is not None:
-                data = self.upkeep_branch(request, route, candidate, repository)
-            elif number is not None:
-                data = self.upkeep_merge(rules, request, repository, number, candidate)
-        self.forward(request, route, candidate, names, data)
+        self.forward(request, route, candidate, names)
 
-    def forward(self, request, route, candidate, names=(), data=None):
-        """Relays the request; `data` is its body when the broker read it already."""
-        # A package read sends only plain fields: its reply is examined whole and uncompressed,
-        # so no range, condition or encoding of the client's reaches GitHub.
-        keep = packages.REQUEST_FIELDS if route.kind == 'package' else REQUEST_FIELDS
-        fields = [(name, value) for name, value in request.fields if name in keep]
-        if route.kind == 'package':
-            fields.append(('X-GitHub-Api-Version', packages.API_VERSION))
+    def forward(self, request, route, candidate, names=()):
+        """Relays the request."""
+        fields = [(name, value) for name, value in request.fields if name in REQUEST_FIELDS]
         secrets = ()
         if candidate is not None:
             secrets = (candidate.token,)
             fields.append(('Authorization', 'token ' + candidate.token))
-        if data is None:
-            relay.continue_if_asked(request, self.output)
-            pieces, length = relay.from_client(relay.body(request)), request.length
-        else:
-            pieces, length = [data], len(data)
+        relay.continue_if_asked(request, self.output)
+        pieces, length = relay.from_client(relay.body(request)), request.length
         destination = Destination(route.host, self.broker.environ)
         connection = destination.connect(TIMEOUT)
         try:
             # Checked again just before the token goes out: a task's session can end while the
             # request is read.
-            fresh = self.fresh(candidate, owner=route.owner) if candidate is not None else None
+            fresh = self.fresh(candidate) if candidate is not None else None
             if candidate is not None and fresh is None:
                 raise refusal(503, 'this worker\'s GitHub access changed while the request was read; try again.')
             if candidate is not None and not all(fresh.allowed(name, route.access) for name in names):
@@ -343,18 +295,9 @@ class Exchange(checks.Checks):
                 self.record['outcome'] = 'unreachable'
                 raise refusal(502, 'this worker could not reach GitHub; try again.') from None
             if response.status == 401 and candidate is not None:
-                raise refusal(403, packages.REFUSED if candidate.source == 'packages' else
-                              'GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
-            data, kept = None, REPLY_FIELDS
-            if route.kind == 'package':
-                state, _ = packages.served(self.broker.store)
-                try:
-                    data, kept = packages.checked_reply(response, packages.repositories(state) if state else set(),
-                                                        REPLY_FIELDS, secrets)
-                except packages.Unchecked as unchecked:
-                    raise refusal(502, str(unchecked)) from None
+                raise refusal(403, 'GitHub refused the sign-in of this worker. Connect GitHub again in Horizon.')
             self.started = True
-            relay.relay(self.output, response, kept, secrets, data, request.version == 'HTTP/1.1')
+            relay.relay(self.output, response, REPLY_FIELDS, secrets, None, request.version == 'HTTP/1.1')
             self.record['outcome'] = 'relayed'
         finally:
             connection.close()
@@ -397,17 +340,10 @@ class Exchange(checks.Checks):
         self.record['outcome'] = 'refused'
         return graphql_refused(self.output, str(refused))
 
-    def fresh(self, candidate, refuse=False, owner=None):
+    def fresh(self, candidate, refuse=False):
         """The same token as `candidate`, with the grants of now: a task's session can end and
         the worker can change accounts while a request is read. None, or a GraphQL refusal with
-        `refuse`, when that token no longer serves. The package token serves only while the
-        cloud still grants a repository of `owner` and Horizon did not replace it."""
-        if candidate.source == 'packages':
-            try:
-                again = self.broker.package_candidate(owner)
-            except relay.Refusal:
-                return None
-            return again if again.token == candidate.token else None
+        `refuse`, when that token no longer serves."""
         try:
             found = self.broker.candidates(self.pid)
         except relay.Refusal:
@@ -438,9 +374,6 @@ class Exchange(checks.Checks):
             raise elsewhere(error, named) from None
         if not candidate.usable:
             raise policy.Refused(EXPIRED)
-        rules = self.broker.policy() if plan.mutations else None
-        if rules is not None:
-            self.upkeep_mutations(plan)
         looked = None
         if plan.ids:
             # The ID lookup carries the token too: checked again right before it.
@@ -452,9 +385,7 @@ class Exchange(checks.Checks):
                 policy.check_lookup(looked, plan.ids, candidate.allowed)
             except policy.Refused as error:
                 raise elsewhere(error, policy.lookup_repositories(looked)) from None
-        if rules is not None:
-            self.upkeep_merges(rules, plan, candidate, granted)
-        # Checked again just before the request goes out, after the merge gate asked GitHub: a
+        # Checked again just before the request goes out, after any lookup asked GitHub: a
         # task's session can end meanwhile.
         fresh = self.fresh(candidate, refuse=True)
         policy.plan(schema, body, fresh.allowed)

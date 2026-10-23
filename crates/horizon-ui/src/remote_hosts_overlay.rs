@@ -283,7 +283,7 @@ impl RemoteHostsOverlay {
         let mut cancelled = false;
         // The sidebar lives on the Tooltip layer; a newly shown backdrop on the
         // same layer lands above it, so the whole window dims.
-        egui::Area::new(Id::new("remote_hosts_backdrop"))
+        egui::Area::new(Id::unique("remote_hosts_backdrop"))
             .fixed_pos(screen_rect.min)
             .constrain(false)
             .order(Order::Tooltip)
@@ -308,10 +308,10 @@ impl RemoteHostsOverlay {
         // keeps that order across overlay instances, so the card is registered
         // as the backdrop's sublayer every pass: sublayers are spliced directly
         // above their parent, whatever was raised last.
-        let backdrop_layer = egui::LayerId::new(Order::Tooltip, Id::new("remote_hosts_backdrop"));
-        let modal_layer = egui::LayerId::new(Order::Tooltip, Id::new("remote_hosts_modal"));
+        let backdrop_layer = egui::LayerId::new(Order::Tooltip, Id::unique("remote_hosts_backdrop"));
+        let modal_layer = egui::LayerId::new(Order::Tooltip, Id::unique("remote_hosts_modal"));
         ctx.memory_mut(|memory| memory.areas_mut().set_sublayer(backdrop_layer, modal_layer));
-        egui::Area::new(Id::new("remote_hosts_modal"))
+        egui::Area::new(Id::unique("remote_hosts_modal"))
             .fixed_pos(render.layout.card.min)
             .constrain(true)
             .order(Order::Tooltip)
@@ -955,7 +955,7 @@ mod tests {
         let (_, layer) = show_overlay_probing(&ctx, &mut overlay, &catalog, &workspaces, Vec::new(), Some(save));
         assert_ne!(
             layer.expect("a layer under the menu").id,
-            egui::Id::new("remote_hosts_modal"),
+            egui::Id::unique("remote_hosts_modal"),
             "menu hidden below the card"
         );
 
@@ -1030,7 +1030,7 @@ mod tests {
         let (_, layer) = show_overlay_probing(&ctx, &mut second, &catalog, &workspaces, Vec::new(), Some(row));
         assert_eq!(
             layer.expect("a layer under the card").id,
-            egui::Id::new("remote_hosts_modal"),
+            egui::Id::unique("remote_hosts_modal"),
             "the reopened card must sit above the backdrop"
         );
     }
@@ -1165,12 +1165,12 @@ mod tests {
         let layer = layer.expect("a layer under the popup entry");
         assert_ne!(
             layer.id,
-            egui::Id::new("remote_hosts_modal"),
+            egui::Id::unique("remote_hosts_modal"),
             "popup entry hidden below the card"
         );
         assert_ne!(
             layer.id,
-            egui::Id::new("remote_hosts_backdrop"),
+            egui::Id::unique("remote_hosts_backdrop"),
             "popup entry hidden below the backdrop"
         );
         show_overlay(&ctx, &mut second, &catalog, &workspaces, click_events(ops, true));

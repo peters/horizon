@@ -40,6 +40,8 @@ pub(crate) fn state_snapshot(root: &Path) -> BTreeMap<PathBuf, StateEntry> {
     entries
 }
 
+const TUNNEL_CONTRACT: &str = "```yaml\nremote-device-testing:\n  version: 1\n  provider: browserstack\n  apps:\n    ios:\n      build: [build]\n      artifact: App.ipa\n      bundle_id: com.example.app\n  tunnel:\n    ports: {backend: 8080}\n  matrix: [{platform: ios, form: phone}]\n  recipes: [recipe.md]\n```";
+
 fn configuration(root: &Path) -> serde_json::Value {
     serde_json::json!({"version":1,"owner":Uuid::new_v4(),"project":root,"state":root,
         "provider":"browserstack","tunnel_binary":"/synthetic/BrowserStackLocal","tunnel_sha256":"a".repeat(64)})
@@ -243,4 +245,132 @@ fn normal_reconciliation_can_initialize_but_reboot_reuses_existing_state_without
     assert_eq!(workspace.journal().pending(client.owner).unwrap()[0].id, operation.id);
     drop(workspace);
     assert_eq!(state_snapshot(&root), before);
+}
+
+fn credential_profile() -> horizon_browser::remote::RemoteProviderProfile {
+    use horizon_browser::remote::{
+        ControlEndpoint, CredentialReference, RemoteAdapterKind, RemoteAuthentication, RemoteSessionLimits,
+    };
+    horizon_browser::remote::RemoteProviderProfile {
+        adapter: RemoteAdapterKind::Browserstack,
+        endpoint: ControlEndpoint::parse("https://hub-cloud.browserstack.com/wd/hub").unwrap(),
+        authentication: RemoteAuthentication::Basic {
+            username_ref: CredentialReference::from("user"),
+            password_ref: CredentialReference::from("key"),
+        },
+        credential_bindings: std::collections::BTreeMap::new(),
+        limits: RemoteSessionLimits::default(),
+    }
+}
+
+fn private_file(path: &Path, bytes: &[u8]) {
+    std::fs::write(path, bytes).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn credential_files(root: &Path, names: &[&str]) -> serde_json::Value {
+    names
+        .iter()
+        .map(|name| ((*name).to_owned(), serde_json::json!(root.join(name))))
+        .collect()
+}
+
+#[test]
+fn credential_files_form_the_account_without_opening_the_os_keyring() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    private_file(&root.join("user"), b"synthetic-user\n");
+    private_file(&root.join("key"), b"synthetic-key");
+    let mut value = configuration(&root);
+    value["credential_files"] = credential_files(&root, &["user", "key"]);
+    let path = root.join("client.json");
+    private_file(&path, value.to_string().as_bytes());
+    let selected = client(&path).unwrap();
+    let opened = std::cell::Cell::new(false);
+    let keyring = || {
+        opened.set(true);
+        Err(horizon_app_runtime::Error::CredentialsUnavailable.into())
+    };
+    account(&selected, &credential_profile(), keyring).unwrap();
+    assert!(!opened.get());
+
+    let without: Client = serde_json::from_value(configuration(&root)).unwrap();
+    assert!(account(&without, &credential_profile(), keyring).is_err());
+    assert!(opened.get());
+}
+
+#[test]
+fn credential_files_refuse_shared_foreign_linked_oversized_missing_and_extra_files() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let profile = credential_profile();
+    let owner = rustix::process::geteuid().as_raw();
+    private_file(&root.join("user"), b"synthetic-user");
+    private_file(&root.join("key"), b"synthetic-key");
+    let read = |names: &[&str], owner| {
+        let files = serde_json::from_value(credential_files(&root, names)).unwrap();
+        file_authorization(&profile, &files, owner)
+    };
+    let both = ["user", "key"];
+    let unavailable = Err(Error::Runtime(horizon_app_runtime::Error::CredentialsUnavailable));
+    let invalid = Err(Error::Runtime(horizon_app_runtime::Error::CredentialsInvalid));
+    read(&both, owner).unwrap();
+
+    std::fs::set_permissions(root.join("key"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(read(&both, owner), unavailable);
+    std::fs::set_permissions(root.join("key"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(read(&both, owner + 1), unavailable);
+
+    std::fs::rename(root.join("key"), root.join("target")).unwrap();
+    symlink(root.join("target"), root.join("key")).unwrap();
+    assert_eq!(read(&both, owner), unavailable);
+    std::fs::remove_file(root.join("key")).unwrap();
+    assert_eq!(read(&both, owner), unavailable);
+    private_file(&root.join("key"), &[b'k'; 4097]);
+    assert_eq!(read(&both, owner), unavailable);
+    private_file(&root.join("key"), b"synthetic\x07key");
+    assert_eq!(read(&both, owner), invalid);
+
+    private_file(&root.join("key"), b"synthetic-key");
+    private_file(&root.join("extra"), b"synthetic-extra");
+    assert_eq!(read(&["user"], owner), invalid);
+    assert_eq!(read(&["user", "key", "extra"], owner), invalid);
+
+    let mut relative = configuration(&root);
+    relative["credential_files"] = serde_json::json!({"user": "user", "key": root.join("key")});
+    let path = root.join("client.json");
+    private_file(&path, relative.to_string().as_bytes());
+    assert!(client(&path).is_err());
+}
+
+#[test]
+fn client_with_tunnel_ports_needs_a_tunnel_binary_and_both_pin_fields() {
+    use horizon_app_testing::contract::Contract;
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let pinned: Client = serde_json::from_value(configuration(&root)).unwrap();
+    let mut value = configuration(&root);
+    let fields = value.as_object_mut().unwrap();
+    fields.remove("tunnel_binary");
+    fields.remove("tunnel_sha256");
+    let unpinned: Client = serde_json::from_value(value.clone()).unwrap();
+    let ports = Contract::from_agents(TUNNEL_CONTRACT).unwrap();
+    let mut none = ports.clone();
+    none.tunnel = None;
+    assert!(tunnel_pin(&pinned, &ports).unwrap().is_some());
+    assert!(matches!(tunnel_pin(&unpinned, &ports), Err(Error::TunnelUnconfigured)));
+    assert!(tunnel_pin(&unpinned, &none).unwrap().is_none());
+
+    let path = root.join("client.json");
+    private_file(&path, value.to_string().as_bytes());
+    client(&path).unwrap();
+    for (field, half) in [
+        ("tunnel_binary", "/synthetic/BrowserStackLocal".to_owned()),
+        ("tunnel_sha256", "a".repeat(64)),
+    ] {
+        let mut one = value.clone();
+        one[field] = half.into();
+        private_file(&path, one.to_string().as_bytes());
+        assert!(client(&path).is_err());
+    }
 }

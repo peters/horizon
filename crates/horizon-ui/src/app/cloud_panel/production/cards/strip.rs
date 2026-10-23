@@ -282,10 +282,10 @@ fn status_line(ui: &egui::Ui, header: Rect, status: &Status, reserved: f32) {
     // Painted, so it is registered once as the whole sentence, cut or not.
     ui.interact(
         Rect::from_min_max(pos2(start, y - 9.0), pos2(end, y + 9.0)),
-        ui.id().with("status-line"),
+        ui.scope_id().with("status-line"),
         Sense::hover(),
     )
-    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken(status, meaning.as_deref())));
+    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken(status, meaning.as_deref())));
 }
 
 /// The status as one sentence for a screen reader.
@@ -350,7 +350,7 @@ pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track) {
     }
     let hover = ui.interact(
         rect.expand2(vec2(0.0, 3.0)),
-        ui.id().with("stage-track"),
+        ui.scope_id().with("stage-track"),
         Sense::hover(),
     );
     if let Some(pointer) = hover.hover_pos()
@@ -368,10 +368,10 @@ pub(super) fn paint_track(ui: &egui::Ui, rect: Rect, track: &Track) {
 }
 
 fn expand_button(ui: &egui::Ui, rect: Rect, open: bool) -> bool {
-    let response = ui.interact(rect, ui.id().with("drawer-toggle"), Sense::click());
+    let response = ui.interact(rect, ui.scope_id().with("drawer-toggle"), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             true,
             if open {
                 "Hide cloud details"
@@ -425,8 +425,8 @@ fn button_width(ui: &egui::Ui, label: &str) -> f32 {
 fn primary_button(ui: &egui::Ui, rect: Rect, primary: Primary) -> bool {
     // Keyed by the action: a press begun on Cancel cannot complete as the Retry deploy
     // that replaces it when the operation fails mid-click.
-    let response = ui.interact(rect, ui.id().with(("primary", primary)), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, primary.label()));
+    let response = ui.interact(rect, ui.scope_id().with(("primary", primary)), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, primary.label()));
     let color = if primary.destructive() {
         theme::PALETTE_RED()
     } else if primary.emphasized() {
@@ -603,9 +603,9 @@ fn paint_indicators(ui: &egui::Ui, left_center: Pos2, placed: Vec<Placed>) {
         }
         let rect = Rect::from_min_size(pos2(x, left_center.y - 11.0), vec2(placed.width, 22.0));
         let tip = placed.item.tip;
-        ui.interact(rect, ui.id().with(("indicator", index)), Sense::hover())
+        ui.interact(rect, ui.scope_id().with(("indicator", index)), Sense::hover())
             .on_hover_text(&tip)
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &tip));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &tip));
         x += placed.width;
     }
 }

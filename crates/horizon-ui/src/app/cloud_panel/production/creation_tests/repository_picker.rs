@@ -64,7 +64,7 @@ fn keyboard_chooses_a_folder_result_and_keeps_focus_in_the_field() {
         "a different repository needs its own profiles"
     );
     assert!(
-        ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))),
+        ctx.memory(|memory| memory.has_focus(Id::unique("cloud-source"))),
         "focus stays in the field after choosing"
     );
     app.cloud_prototype
@@ -84,7 +84,7 @@ fn keyboard_chooses_a_folder_result_and_keeps_focus_in_the_field() {
         opened,
         "Tab opens the folder"
     );
-    assert!(ctx.memory(|memory| memory.has_focus(Id::new("cloud-source"))));
+    assert!(ctx.memory(|memory| memory.has_focus(Id::unique("cloud-source"))));
 }
 
 #[test]

@@ -479,11 +479,11 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
-    assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::new("cloud-title")));
-    ctx.memory_mut(|memory| memory.surrender_focus(Id::new("cloud-title")));
+    assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::unique("cloud-title")));
+    ctx.memory_mut(|memory| memory.surrender_focus(Id::unique("cloud-title")));
     dialog_frame(&ctx, &mut app, Vec::new());
     assert_eq!(ctx.memory(egui::Memory::focused), None);
-    ctx.memory_mut(|memory| memory.request_focus(Id::new("cloud-title")));
+    ctx.memory_mut(|memory| memory.request_focus(Id::unique("cloud-title")));
     let press = |app: &mut HorizonApp, key| {
         for pressed in [true, false] {
             dialog_frame(
@@ -508,7 +508,7 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
     assert!(!app.cloud_creation_open());
     app.add_mock_cloud(&ctx);
     dialog_frame(&ctx, &mut app, Vec::new());
-    assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::new("cloud-title")));
+    assert_eq!(ctx.memory(egui::Memory::focused), Some(Id::unique("cloud-title")));
 }
 
 #[test]

@@ -351,6 +351,50 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
    Result: The old native metadata disappears. Ordinary clipboard text does not
    create native metadata or change the local clipboard.
 
+### 6.9 NATIVE-FILES: Credential files and no tunnel
+
+1. Run the regressions of the credential files and of a project with no tunnel.
+
+   ```bash
+   cargo test -p horizon-app-host credential_files
+   cargo test -p horizon-app-host no_tunnel
+   cargo test -p horizon-app-host client_with_tunnel_ports
+   cargo test -p horizon-app-testing no_tunnel
+   ```
+
+   Result: The host reads private credential files and never opens the OS keyring.
+   It refuses a file of mode `0644`, a file of another owner, a link, an oversized file, a missing and an extra reference.
+   A contract with no tunnel validates, its run completes and its session has no `local` capability.
+   Tunnel ports with no tunnel binary cause refusal.
+
+2. Write a client file with dummy credential files of mode `0600` and with no `tunnel_binary` and `tunnel_sha256`.
+   Use a Horizon configuration whose provider has no `credential_bindings`, and a project contract with tunnel ports.
+   Start the host with no network and no D-Bus.
+
+   ```bash
+   env -u DBUS_SESSION_BUS_ADDRESS bwrap --dev-bind / / --unshare-net \
+     horizon-native --mcp --client <file> </dev/null
+   ```
+
+   Result: The host exits with `app_tunnel_unconfigured` and serves no tool.
+   So it read the credential files without the OS keyring.
+
+3. Remove `tunnel` from the project contract and start the host again.
+
+   Result: The host exits with `app_provider_failed` at the device catalog, which it reads before it serves a tool.
+   So the credential files and the contract with no tunnel passed.
+
+4. Give one credential file the mode `0644` and start the host again.
+
+   Result: The host exits with `app_credentials_unavailable` and serves no tool.
+
+> **CAUTION:** THE NEXT STEP ALLOCATES A PAID DEVICE.
+> Use only the approved native quota.
+
+5. With real credential files and a contract with no tunnel, call `device_test_run`.
+
+   Result: The run passes. The provider session shows no BrowserStack Local tunnel.
+
 ## 7. Pass criteria
 
 - All matrix steps pass with real app-to-backend requests.

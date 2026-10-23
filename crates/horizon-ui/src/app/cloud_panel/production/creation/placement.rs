@@ -363,7 +363,7 @@ pub(super) fn chip(ui: &mut Ui, id: &str, region: &str, stock: Option<Stock>, se
     };
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             selected,
             format!("{id}, {region}{stock}"),

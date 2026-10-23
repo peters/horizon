@@ -3,11 +3,56 @@ use super::{Run, STEPS, State};
 use crate::app::cloud_panel::production::repository_setup::proof;
 use horizon_core::setup_board::{Row, RowState, Step};
 
+/// Where a proof runs now: on a Docker host, or on this computer with `None`; or not
+/// yet, while it waits for the rented builder.
+pub(in crate::app::cloud_panel::production::repository_setup) enum ProofPlace {
+    Ready(Option<horizon_core::cloud_runtime::docker_host::Host>),
+    Waiting,
+}
+
 impl Run {
+    /// Where a proof the agent asks for runs now: a saved host, the rented builder once
+    /// it answers (`rented`), or this computer; [`ProofPlace::Waiting`] until then,
+    /// and the run then says why (`waiting`).
+    pub(in crate::app::cloud_panel::production::repository_setup) fn proof_place(
+        &mut self,
+        (rented, waiting): (
+            Option<horizon_core::cloud_runtime::docker_host::Host>,
+            Option<(String, bool)>,
+        ),
+    ) -> ProofPlace {
+        self.builder_wait = None;
+        match &self.build_on {
+            Some(super::super::build_on::Target::Host(host)) => ProofPlace::Ready(Some(host.clone())),
+            Some(super::super::build_on::Target::Rented) if rented.is_some() => ProofPlace::Ready(rented),
+            Some(super::super::build_on::Target::Rented) => {
+                if self.proof_wanted().is_some() {
+                    self.builder_wait = waiting;
+                }
+                ProofPlace::Waiting
+            }
+            None => ProofPlace::Ready(None),
+        }
+    }
+
+    /// The run builds on the rented builder and still needs it: its setup is not ready,
+    /// a proof runs, or its desktop preview starts or runs. A preview that failed or was
+    /// skipped, as one that needs `/dev/kvm`, does not keep the builder.
+    pub(in crate::app::cloud_panel::production::repository_setup) fn wants_rented_builder(&self) -> bool {
+        self.build_on == Some(super::super::build_on::Target::Rented)
+            && !self.stopped
+            && (!self.finished()
+                || self.proof.as_ref().is_some_and(proof::Proof::running)
+                || self
+                    .preview
+                    .as_ref()
+                    .is_some_and(super::super::preview::Preview::uses_engine))
+    }
+
     /// The run as the setup board shows it: its steps, its state and what it does now.
     pub(in crate::app::cloud_panel::production::repository_setup) fn board_row(&self) -> Row {
         let steps = self.steps();
-        let waiting = self.proof.as_ref().is_some_and(|proof| !proof.waiting.is_empty());
+        let waiting = self.builder_wait.is_some() || self.proof.as_ref().is_some_and(|proof| !proof.waiting.is_empty());
         let segments = steps
             .iter()
             .take(STEPS.len())
@@ -82,12 +127,12 @@ impl Run {
                 self.entered.clone()
             },
             agent: self.agent.clone(),
-            build_on: self.build_on.as_ref().map(|host| host.name.clone()),
+            build_on: self.build_on.as_ref().map(|target| target.name().to_owned()),
             steps: segments,
             now,
             state,
             committing,
-            alert: !committing && notice.is_some(),
+            alert: !committing && (notice.is_some() || self.builder_wait.as_ref().is_some_and(|(_, alert)| *alert)),
             agent_open: !self.agent_closed,
         }
     }

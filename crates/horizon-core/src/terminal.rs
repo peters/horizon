@@ -1,7 +1,6 @@
 mod content;
 mod events;
 mod lifecycle;
-mod logical_line;
 mod replay;
 mod resize;
 mod selection;
@@ -35,9 +34,7 @@ use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
-use self::support::{
-    ColorLookup, current_cwd_for_pid, find_file_path_at_column, find_url_at_column, replay_terminal_bytes,
-};
+use self::support::{ColorLookup, current_cwd_for_pid, replay_terminal_bytes};
 
 #[cfg(not(windows))]
 type TerminalPty = tty::Pty;
@@ -228,8 +225,8 @@ mod tests {
     use super::current_cwd_for_pid;
     use super::{
         ClipboardTarget, ClipboardWrite, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions,
-        TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, find_file_path_at_column,
-        find_url_at_column, queue_debounced_pty_resize, replay_terminal_bytes, should_debounce_pty_resize,
+        TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, queue_debounced_pty_resize,
+        replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
@@ -653,99 +650,5 @@ mod tests {
         assert_eq!(terminal.clickable_at_point(4, 30), Some(row_filling_url));
         assert_eq!(terminal.clickable_at_point(5, 3), Some("/tmp/file.rs".to_string()));
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
-    }
-
-    #[test]
-    fn url_detected_at_clicked_column() {
-        let line: Vec<char> = "Created: https://github.com/foo/bar/issues/123".chars().collect();
-        assert_eq!(
-            find_url_at_column(&line, 10),
-            Some("https://github.com/foo/bar/issues/123".to_string()),
-        );
-    }
-
-    #[test]
-    fn click_outside_url_returns_none() {
-        let line: Vec<char> = "Created: https://github.com/foo".chars().collect();
-        assert_eq!(find_url_at_column(&line, 0), None);
-    }
-
-    #[test]
-    fn trailing_punctuation_stripped_from_url() {
-        let line: Vec<char> = "See https://example.com.".chars().collect();
-        assert_eq!(find_url_at_column(&line, 5), Some("https://example.com".to_string()),);
-    }
-
-    #[test]
-    fn http_and_file_schemes_detected() {
-        let line: Vec<char> = "open http://localhost:3000/api".chars().collect();
-        assert_eq!(
-            find_url_at_column(&line, 6),
-            Some("http://localhost:3000/api".to_string()),
-        );
-
-        let line: Vec<char> = "file:///home/user/doc.pdf rest".chars().collect();
-        assert_eq!(
-            find_url_at_column(&line, 0),
-            Some("file:///home/user/doc.pdf".to_string()),
-        );
-    }
-
-    #[test]
-    fn markdown_link_target_strips_unmatched_closing_parenthesis() {
-        let line: Vec<char> = "[YouPark.no](https://youpark.no)".chars().collect();
-        assert_eq!(find_url_at_column(&line, 15), Some("https://youpark.no".to_string()),);
-    }
-
-    #[test]
-    fn balanced_parentheses_preserved_in_url() {
-        let line: Vec<char> = "See https://example.com/a(b)".chars().collect();
-        assert_eq!(
-            find_url_at_column(&line, 10),
-            Some("https://example.com/a(b)".to_string()),
-        );
-    }
-
-    #[test]
-    fn absolute_file_path_detected() {
-        let line: Vec<char> = "error at /home/user/project/src/main.rs rest".chars().collect();
-        assert_eq!(
-            find_file_path_at_column(&line, 10),
-            Some("/home/user/project/src/main.rs".to_string()),
-        );
-    }
-
-    #[test]
-    fn home_relative_path_detected() {
-        let line: Vec<char> = "see ~/project/config.yaml for details".chars().collect();
-        assert_eq!(
-            find_file_path_at_column(&line, 5),
-            Some("~/project/config.yaml".to_string()),
-        );
-    }
-
-    #[test]
-    fn line_col_suffix_stripped_from_path() {
-        let line: Vec<char> = "error: /src/lib.rs:42:15 something".chars().collect();
-        assert_eq!(find_file_path_at_column(&line, 8), Some("/src/lib.rs".to_string()),);
-    }
-
-    #[test]
-    fn click_outside_path_returns_none() {
-        let line: Vec<char> = "error at /home/user/file.rs".chars().collect();
-        assert_eq!(find_file_path_at_column(&line, 0), None);
-    }
-
-    #[test]
-    fn bare_slash_not_detected_as_path() {
-        let line: Vec<char> = "a / b".chars().collect();
-        assert_eq!(find_file_path_at_column(&line, 2), None);
-    }
-
-    #[test]
-    fn url_takes_priority_over_path() {
-        let line: Vec<char> = "see file:///home/user/doc.pdf".chars().collect();
-        // find_url_at_column should match file:// scheme first
-        assert!(find_url_at_column(&line, 5).is_some());
     }
 }

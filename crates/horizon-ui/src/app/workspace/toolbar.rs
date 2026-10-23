@@ -27,7 +27,7 @@ pub(super) fn render_workspace_layout_toolbar(
 ) -> Option<WorkspaceAction> {
     let mut action = None;
 
-    egui::Area::new(Id::new(("workspace_layout_toolbar", workspace.id.0)))
+    egui::Area::new(Id::unique(("workspace_layout_toolbar", workspace.id.0)))
         .fixed_pos(workspace.toolbar_canvas_rect.min)
         .constrain(false)
         .order(egui::Order::Tooltip)
@@ -236,7 +236,7 @@ fn render_cast_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
             ))
             .corner_radius(8),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cast workspace"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cast workspace"));
     let color = if on {
         ui.visuals().selection.stroke.color
     } else if response.hovered() {

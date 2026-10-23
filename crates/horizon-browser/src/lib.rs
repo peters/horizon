@@ -154,6 +154,13 @@ pub struct BrowserConfig {
     /// empty leaves the browser's own `WebAuthn` behavior unchanged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub webauthn_command: Vec<String>,
+    /// Open each page of a headed Chromium in its own window in the
+    /// background, and start Chromium with no window of its own, so that a
+    /// new page never takes the keyboard of a display that a person types on
+    /// (a profile host on a shared display). Ignored when headless and by
+    /// other backends. Not saved.
+    #[serde(skip)]
+    pub background_windows: bool,
 }
 
 impl Default for BrowserConfig {
@@ -175,6 +182,7 @@ impl Default for BrowserConfig {
             video: BrowserVideoCaptureOptions::default(),
             remote: RemoteBrowserConfig::default(),
             webauthn_command: Vec::new(),
+            background_windows: false,
         }
     }
 }

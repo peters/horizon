@@ -88,7 +88,7 @@ impl PointerHarness {
         self.ctx.begin_pass(input);
 
         let mut body_rect = Rect::NOTHING;
-        egui::Area::new(Id::new("terminal_selection_wheel_test"))
+        egui::Area::new(Id::unique("terminal_selection_wheel_test"))
             .fixed_pos(Pos2::new(60.0, 80.0))
             .movable(false)
             .show(&self.ctx, |ui| {
@@ -96,7 +96,7 @@ impl PointerHarness {
                     ui.set_clip_rect(ui.clip_rect().intersect(clip));
                 }
                 let metrics = grid_metrics();
-                let layout = terminal_layout(TEST_PANEL_SIZE, CHAR_WIDTH, LINE_HEIGHT);
+                let layout = terminal_layout(TEST_PANEL_SIZE, CHAR_WIDTH, LINE_HEIGHT, 0.0);
                 let interaction = terminal_interaction(ui, layout, self.panel.id.0, true);
                 body_rect = interaction.layout.body;
                 handle_terminal_pointer_input(
@@ -224,6 +224,7 @@ fn primary_release(position: Pos2) -> Vec<Event> {
 
 fn wheel(vertical_lines: f32) -> Vec<Event> {
     vec![Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, vertical_lines),
         phase: egui::TouchPhase::Move,

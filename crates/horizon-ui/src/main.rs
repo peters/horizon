@@ -6,6 +6,7 @@ mod app;
 mod badge;
 mod branding;
 mod browser_widget;
+mod clipboard_image;
 mod command_palette;
 mod command_registry;
 mod device_widget;
@@ -29,7 +30,6 @@ mod terminal_widget;
 mod test_egui;
 mod text;
 mod theme;
-mod upkeep_widget;
 mod usage_widget;
 
 use std::fmt::Write as _;

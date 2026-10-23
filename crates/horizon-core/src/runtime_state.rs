@@ -119,7 +119,8 @@ impl RuntimeState {
     /// Returns an error if the snapshot cannot be parsed or validated, or its
     /// version is newer than this binary supports.
     pub fn from_yaml(content: &str) -> Result<Self> {
-        serde_yaml::from_str::<Self>(content)
+        let content = crate::retired_panel_kinds::without_retired(content);
+        serde_yaml::from_str::<Self>(content.as_ref())
             .map_err(|error| Error::State(error.to_string()))?
             .into_current()
     }

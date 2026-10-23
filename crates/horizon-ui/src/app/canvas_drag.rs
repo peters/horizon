@@ -28,7 +28,7 @@ pub(super) fn canvas_drag_delta(
     panels: &(impl Iterator<Item = Rect> + Clone),
     events: &[Event],
 ) -> Option<Vec2> {
-    let id = Id::new(("canvas_primary_drag", ctx.viewport_id()));
+    let id = Id::unique(("canvas_primary_drag", ctx.viewport_id()));
     let mut drag = ctx.data(|data| data.get_temp::<CanvasDrag>(id));
     let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
     let mut movement = None;

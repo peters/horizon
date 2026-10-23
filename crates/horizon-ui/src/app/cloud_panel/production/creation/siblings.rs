@@ -356,7 +356,7 @@ pub(super) fn section(ui: &mut Ui, state: &mut State) -> Option<String> {
     let statuses: Vec<Status> = state.rows.iter().map(|row| state.status(row)).collect();
     let mut browse = None;
     for (row, status) in state.rows.iter_mut().zip(statuses) {
-        let id = Id::new(("cloud-sibling", row.alias.as_str()));
+        let id = Id::unique(("cloud-sibling", row.alias.as_str()));
         ui.push_id(id, |ui| {
             if row_ui(ui, row, &status) {
                 browse = Some(row.alias.clone());
@@ -437,7 +437,7 @@ fn choice(ui: &mut Ui, chosen: &mut bool, repository: &str) {
 }
 
 fn path_id(alias: &str) -> Id {
-    Id::new(("cloud-sibling-path", alias))
+    Id::unique(("cloud-sibling-path", alias))
 }
 
 #[cfg(all(test, unix))]

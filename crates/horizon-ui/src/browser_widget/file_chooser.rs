@@ -298,9 +298,9 @@ fn file_row(ui: &mut egui::Ui, width: f32, entry: &DirectoryEntry, focused: bool
     let name = entry.path.file_name().unwrap_or_default().to_string_lossy();
     response.widget_info(|| {
         if entry.directory {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), name.as_ref())
+            egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), name.as_ref())
         } else {
-            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, response.enabled(), selected, name.as_ref())
+            egui::WidgetInfo::selected(egui::Role::CheckBox, response.enabled(), selected, name.as_ref())
         }
     });
     let name_rect = egui::Rect::from_min_max(

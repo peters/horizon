@@ -361,7 +361,8 @@ impl Config {
     }
 
     fn deserialize_yaml(contents: &str) -> Result<Self> {
-        serde_yaml::from_str(contents).map_err(|e| Error::Config(e.to_string()))
+        let contents = crate::retired_panel_kinds::without_retired(contents);
+        serde_yaml::from_str(contents.as_ref()).map_err(|e| Error::Config(e.to_string()))
     }
 
     /// Serialize this config to YAML.
@@ -623,6 +624,46 @@ mod tests {
             presets.len(),
             1,
             "a preset already using the discovered name still wins"
+        );
+    }
+
+    #[test]
+    fn a_config_that_still_names_a_removed_panel_kind_keeps_the_rest() {
+        let yaml = "\
+presets:
+  - name: Upkeep
+    kind: upkeep
+  - name: Shell
+    alias: sh
+    kind: shell
+workspaces:
+  - name: Upkeep
+    terminals:
+      - name: Upkeep
+        kind: upkeep
+  - name: Work
+    terminals:
+      - name: Shell
+        kind: shell
+";
+        let config = Config::from_yaml(yaml).expect("a removed panel kind must not refuse the whole config");
+        assert_eq!(
+            config
+                .presets
+                .iter()
+                .map(|preset| preset.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Shell"],
+            "the preset of the removed kind goes; the others stay"
+        );
+        assert_eq!(
+            config
+                .workspaces
+                .iter()
+                .map(|workspace| (workspace.name.as_str(), workspace.terminals.len()))
+                .collect::<Vec<_>>(),
+            vec![("Upkeep", 0), ("Work", 1)],
+            "the terminal of the removed kind goes; the workspace keeps its other content"
         );
     }
 

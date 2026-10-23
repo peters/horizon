@@ -139,7 +139,7 @@ class DetectionTests(unittest.TestCase):
     def test_pull_request_outside_rust_skips_the_rust_jobs(self):
         for paths in [["docs/plan.md"], ["README.md", "AGENTS.md"],
                       [".github/copilot-instructions.md"], [".github/workflows/release.yml"],
-                      [".github/dependabot.yml", "docs/testing/procedures/upkeep.md"],
+                      [".github/dependabot.yml", "docs/testing/procedures/toolbar-menu.md"],
                       [".claude/settings.json"]]:
             with self.subTest(paths=paths):
                 self.setUp()
@@ -162,14 +162,14 @@ class DetectionTests(unittest.TestCase):
                 self.assertEqual(outputs["rust_inputs"], "true")
 
     def test_moving_a_source_file_into_docs_runs_the_rust_jobs(self):
-        source = self.repo / "crates/horizon-core/src/upkeep.rs"
+        source = self.repo / "crates/horizon-core/src/setup_board.rs"
         source.parent.mkdir(parents=True)
-        source.write_text("pub fn upkeep() {}\n" * 40)
+        source.write_text("pub fn board() {}\n" * 40)
         self.git("add", "-A")
         self.git("commit", "-m", "add source")
         self.base = self.git("rev-parse", "HEAD")
         (self.repo / "docs").mkdir()
-        self.git("mv", "crates/horizon-core/src/upkeep.rs", "docs/upkeep.md")
+        self.git("mv", "crates/horizon-core/src/setup_board.rs", "docs/setup-board.md")
         self.git("commit", "-m", "move source into docs")
         outputs = self.detect(event="pull_request")
         self.assertEqual(outputs["rust_inputs"], "true")

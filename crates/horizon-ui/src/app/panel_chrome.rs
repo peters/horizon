@@ -115,7 +115,6 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         PanelKind::Editor => ("MD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::GitChanges => ("GC", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
         PanelKind::Usage => ("US", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
-        PanelKind::Upkeep => ("UK", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::SetupBoard => ("SB", panel_kind_label_color(theme::ACCENT(), focused)),
         PanelKind::Browser => ("WEB", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
         PanelKind::Device => ("VNC", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
@@ -534,7 +533,7 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
     };
     let animated_ratio =
         ui.ctx()
-            .animate_value_with_time(Id::new(("panel_history_ratio", meter.panel_id.0)), ratio, 0.16);
+            .animate_value_with_time(Id::unique(("panel_history_ratio", meter.panel_id.0)), ratio, 0.16);
     let fill_width = track_rect.width() * animated_ratio.clamp(0.0, 1.0);
     let fill_rect = Rect::from_min_max(
         track_rect.min,

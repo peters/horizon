@@ -41,6 +41,7 @@ pub(super) fn assert_press_reaches_lower_control(
     let top = controls(ctx, layer);
     // Scroll part way down, so a jump in either direction would show.
     let wheel = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta: Vec2::new(0.0, -120.0),
         phase: TouchPhase::Move,
@@ -132,7 +133,7 @@ fn demo_card_press_on_a_lower_control_reaches_it() {
     );
     let body = Pos2::from(group.runtime_bounds().0) + Vec2::new(100.0, 300.0);
     app.cloud_prototype.groups.0.push(group);
-    let layer = LayerId::new(Order::Middle, Id::new(("cloud-runtime", ID)));
+    let layer = LayerId::new(Order::Middle, Id::unique(("cloud-runtime", ID)));
     let mut time = 0.0;
     assert_press_reaches_lower_control(
         &ctx,
@@ -179,11 +180,11 @@ fn new_cloud_dialog_press_on_a_lower_control_reaches_it() {
     };
     frame(&mut app, Pos2::ZERO, Vec::new());
     let body = ctx
-        .read_response(Id::new("cloud-title"))
+        .read_response(Id::unique("cloud-title"))
         .expect("the dialog shows its title field")
         .rect
         .center();
-    let layer = LayerId::new(Order::Tooltip, Id::new("cloud-creation"));
+    let layer = LayerId::new(Order::Tooltip, Id::unique("cloud-creation"));
     assert_press_reaches_lower_control(
         &ctx,
         layer,
@@ -243,7 +244,7 @@ fn cloud_settings_press_on_a_lower_control_reaches_it() {
     }
     let token = label(&frame(&mut app, Pos2::ZERO, Vec::new()), "Paste Hetzner API token")
         .expect("enabling Hetzner shows its token field");
-    let layer = LayerId::new(Order::Tooltip, Id::new("cloud-accounts"));
+    let layer = LayerId::new(Order::Tooltip, Id::unique("cloud-accounts"));
     assert_press_reaches_lower_control(
         &ctx,
         layer,

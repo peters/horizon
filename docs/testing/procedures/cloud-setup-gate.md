@@ -2,7 +2,7 @@
 procedure: cloud-setup-gate
 feature: Setup gate (Horizon's proof and desktop preview of the setup agent on real repositories)
 platforms: [linux]
-cost: none
+cost: rents compute  # G05 only; G01 to G04 and G06 use this computer's Docker or a Docker host of yours
 destructive: yes
 secrets: [the Git login of this computer for private Rust git dependencies, the NuGet credentials of this computer for private .NET packages]
 owner: peters
@@ -23,8 +23,8 @@ not find.
   desktop preview. Run the gate on the first head that is ready for review. Run it again
   on the final head before you ask for permission to merge.
 - Platforms: Linux with Docker.
-- This procedure does not test: the setup agent itself, the **New cloud** dialog, a
-  deploy or a provider. No step rents compute. The
+- This procedure does not test: the setup agent itself, the **New cloud** dialog or a
+  deploy. Only G05 rents compute: a Hetzner server that the gate deletes again. The
   [setup agent procedure](cloud-setup-agent.md) tests the dialog.
 
 ## 3. Safety
@@ -187,6 +187,39 @@ machine.
 
    Result: The commands show nothing. The runner looks for leftovers on this computer
    only, so do this step by hand.
+
+### 6.5 G05: Run the gate on a rented builder
+
+Do this task for a pull request that changes how Horizon rents, reaches or deletes the
+rented builder. It rents a Hetzner server for some minutes.
+
+1. Make a private Horizon home whose `cloud/settings.json` has a Hetzner binding, so the
+   gate does not share the builder of a running Horizon:
+
+   ```bash
+   mkdir -m 700 -p <home>/cloud
+   cp ~/.horizon/cloud/settings.json <home>/cloud/
+   ```
+
+2. Run the gate with one lane and `GATE_DOCKER_HOST=rented-builder`:
+
+   > **CAUTION:** THIS STEP RENTS A HETZNER SERVER, AND HETZNER BILLS IT UNTIL IT IS
+   > DELETED. The gate deletes it at the end and fails when it cannot. If the gate does
+   > not end normally, do step 3 at once and delete a server or SSH key that is left.
+
+   ```bash
+   HORIZON_HOME=<home> GATE_DOCKER_HOST=rented-builder \
+     python3 scripts/setup-gate.py <list> --lanes 1 --only <repo>
+   ```
+
+   Result: The lane log shows `rented builder:` lines with the server type, its
+   location and its price, then the entries pass as in G01. At the end it shows
+   `deleted and proven gone: Ok(true)`.
+
+3. In the Hetzner console, look for servers and SSH keys named
+   `horizon-cloud-setup-builder-<id>`.
+
+   Result: There are none, and `<home>/cloud` has no `setup-builder.json`.
 
 ### 6.6 G06: Prove again in the same run
 

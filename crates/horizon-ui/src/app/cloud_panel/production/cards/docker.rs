@@ -73,7 +73,7 @@ struct Shared(Arc<Mutex<State>>);
 impl Shared {
     fn of(ctx: &egui::Context) -> Self {
         ctx.data_mut(|data| {
-            data.get_temp_mut_or_default::<Self>(egui::Id::new("cloud-docker-restart"))
+            data.get_temp_mut_or_default::<Self>(egui::Id::unique("cloud-docker-restart"))
                 .clone()
         })
     }

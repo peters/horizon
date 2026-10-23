@@ -83,7 +83,7 @@ jobs:
               gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | "\(.status) \(.filename)"'
             } > review-context/diff.patch
           fi
-          gh pr view "$PR" --repo "$REPO" --comments > review-context/conversation.txt
+          gh pr view "$PR" --repo "$REPO" --json title,body,comments,reviews > review-context/conversation.txt
           gh api --paginate "repos/$REPO/pulls/$PR/comments" \
             --jq '.[] | "\(.user.login) on \(.path):\(.line // .original_line) (\(.html_url))\n\(.body)\n"' \
             > review-context/review-comments.txt

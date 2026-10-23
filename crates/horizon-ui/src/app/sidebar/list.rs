@@ -142,7 +142,7 @@ pub(super) fn render_group_header(ui: &mut egui::Ui, group: Group, count: usize,
         if !summary_fits && !summary.is_empty() {
             spoken = format!("{spoken}, {}", summary.join(" · "));
         }
-        egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken)
+        egui::WidgetInfo::labeled(egui::Role::Label, true, spoken)
     });
     if !summary_fits {
         return;
@@ -179,7 +179,7 @@ pub(super) fn render_group_header(ui: &mut egui::Ui, group: Group, count: usize,
         ui.make_persistent_id(("sidebar_group_summary", group.key())),
         egui::Sense::hover(),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &full));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &full));
     response.on_hover_text(full);
 }
 

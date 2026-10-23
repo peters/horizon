@@ -366,6 +366,21 @@ impl HorizonApp {
         did_paste
     }
 
+    /// Paste the path of every clipboard image whose private file is ready.
+    ///
+    /// The path is what the program in the shell can use; Horizon does not send
+    /// image bytes to a terminal stream that cannot carry them. A remote panel
+    /// gets the file first, because a local path names nothing on its host.
+    pub(super) fn apply_clipboard_image_pastes(&mut self) {
+        for paste in self.clipboard_images.take_finished() {
+            let Some(path) = paste.path else { continue };
+            let files = [std::sync::Arc::new(ClipboardFile(path)) as egui::DroppedFileHandle];
+            if !self.maybe_start_ssh_file_drop(paste.panel, &files, paste.viewport) {
+                self.paste_dropped_paths_into_terminal(paste.panel, &files, false);
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(super) fn handle_native_image_pastes(&mut self) {
         for paste in self.observed_keyboard_inputs.take_native_pastes() {
@@ -576,11 +591,9 @@ fn path_needs_windows_quotes(path: &str) -> bool {
             .any(|ch| matches!(ch, ' ' | '\t' | '&' | '|' | '<' | '>' | '^' | '(' | ')' | '%' | '!'))
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct ClipboardFile(std::path::PathBuf);
 
-#[cfg(target_os = "linux")]
 impl egui::DroppedFile for ClipboardFile {
     fn path(&self) -> &Path {
         &self.0
@@ -594,7 +607,7 @@ fn native_file_drop_position(ctx: &Context) -> Option<Pos2> {
     // XWayland's root coordinates do not describe a native Wayland surface.
     #[cfg(target_os = "linux")]
     if ctx
-        .data(|data| data.get_temp::<bool>(egui::Id::new("native_wayland_input")))
+        .data(|data| data.get_temp::<bool>(egui::Id::unique("native_wayland_input")))
         .unwrap_or(false)
     {
         return None;

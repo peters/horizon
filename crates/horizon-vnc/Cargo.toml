@@ -1,0 +1,23 @@
+[package]
+name = "horizon-vnc"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A live VNC client session for any UI: connect, decode into RGBA frames and send pointer and key input"
+
+[features]
+# A connected session without a server, for the tests of a UI that uses it.
+test-support = []
+
+[lints]
+workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "process", "sync"] }
+tracing.workspace = true
+vnc.workspace = true

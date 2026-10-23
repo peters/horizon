@@ -1,6 +1,6 @@
 //! The setup board: one panel that lists the repositories whose cloud setup agents work
 //! on this computer. The app fills its rows each frame from the setup runs; the panel
-//! only draws them and asks the app to act, as the Upkeep board does.
+//! only draws them and asks the app to act.
 
 use crate::PanelId;
 
@@ -11,6 +11,9 @@ pub struct SetupBoard {
     pub rows: Vec<Row>,
     /// What the person pressed while the board was drawn, for the app to carry out.
     pub request: Option<Request>,
+    /// The rented builder, with what it costs, as one line, and whether the line tells of
+    /// a failure; none while setups rent no builder.
+    pub builder: Option<(String, bool)>,
 }
 
 /// One repository being set up.

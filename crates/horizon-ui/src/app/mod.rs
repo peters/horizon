@@ -55,7 +55,6 @@ mod startup_session;
 mod tailnets;
 #[cfg(test)]
 mod test_support;
-mod upkeep;
 pub(crate) mod util;
 mod view;
 mod work_resume;
@@ -276,6 +275,7 @@ pub struct HorizonApp {
     panel_render_order: Vec<(PanelId, usize)>,
     workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
+    clipboard_images: crate::clipboard_image::ClipboardImages,
     terminal_selection_drag: TerminalSelectionDragState,
     panel_render_caches: PanelRenderCaches,
     canvas_grid_cache: CanvasGridCache,
@@ -299,7 +299,6 @@ pub struct HorizonApp {
     config_path: PathBuf,
     transcript_root: Option<PathBuf>,
     template_config: Config,
-    upkeep: upkeep::State,
     shortcuts: AppShortcuts,
     presets: Vec<PresetConfig>,
     window_config: WindowConfig,
@@ -396,6 +395,10 @@ impl HorizonApp {
         let switching_session = self.poll_session_switch(ctx);
         #[cfg(feature = "cloud-workspaces")]
         self.sync_cloud_companion_session(ctx);
+        // Before the session chooser and any session: a billed builder left by a crash.
+        // Never in tests, which must not touch the real cloud root.
+        #[cfg(all(feature = "cloud-workspaces", not(test)))]
+        self.recover_rented_builder(ctx);
         if switching_session {
             self.refresh_active_session_lease();
             self.render_session_switch_overlay(ui);
@@ -438,14 +441,7 @@ impl HorizonApp {
         }
         self.render_active_view(ui, block_root_interaction);
         #[cfg(feature = "cloud-workspaces")]
-        self.render_upkeep_dialog(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        self.render_upkeep_editor(ctx);
-        self.apply_upkeep_requests(ctx);
-        #[cfg(feature = "cloud-workspaces")]
         self.apply_setup_board_requests(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        self.answer_upkeep_requests(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
@@ -490,7 +486,7 @@ impl eframe::App for HorizonApp {
                     std::sync::Arc::new(move |ctx| {
                         let viewport = ctx.viewport_id();
                         let target = ctx.data_mut(|data| {
-                            let id = egui::Id::new(("native_image_paste_target", viewport));
+                            let id = egui::Id::unique(("native_image_paste_target", viewport));
                             let target = data.get_temp::<(PanelId, egui::Id)>(id);
                             data.remove::<(PanelId, egui::Id)>(id);
                             target
@@ -512,12 +508,13 @@ impl eframe::App for HorizonApp {
             }
             ctx.data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("native_wayland_input"),
+                    egui::Id::unique("native_wayland_input"),
                     self.observed_keyboard_inputs.is_wayland_backend(),
                 )
             });
             self.handle_native_image_pastes();
         }
+        self.apply_clipboard_image_pastes();
         if raw_input.viewport_id == egui::ViewportId::ROOT && self.press_frame.split(&mut raw_input.events) {
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }

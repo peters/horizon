@@ -19,8 +19,15 @@ struct Client {
     project: PathBuf,
     state: PathBuf,
     provider: String,
-    tunnel_binary: PathBuf,
-    tunnel_sha256: String,
+    /// The pinned tunnel executable: both or neither. Without them, the project declares no tunnel.
+    #[serde(default)]
+    tunnel_binary: Option<PathBuf>,
+    #[serde(default)]
+    tunnel_sha256: Option<String>,
+    /// One absolute private file for each authentication reference of the provider, as in the
+    /// `horizon-browser` host file. With it, the host never opens the OS credential store.
+    #[serde(default)]
+    credential_files: Option<std::collections::BTreeMap<horizon_browser::remote::CredentialReference, PathBuf>>,
 }
 
 pub struct Host {
@@ -57,12 +64,118 @@ fn client(path: &Path) -> Result<Client> {
         || client.provider.len() > 128
         || !client.project.is_absolute()
         || !client.state.is_absolute()
-        || !client.tunnel_binary.is_absolute()
+        || client.tunnel_binary.is_some() != client.tunnel_sha256.is_some()
+        || client
+            .tunnel_binary
+            .as_ref()
+            .is_some_and(|binary| !binary.is_absolute())
         || client.project.canonicalize().map_err(|_| Error::Unavailable)? != client.project
+        || client
+            .credential_files
+            .iter()
+            .flatten()
+            .any(|(_, path)| !path.is_absolute())
     {
         return Err(Error::Unavailable);
     }
     Ok(client)
+}
+
+/// The largest credential file. Provider user names and keys are far smaller.
+#[cfg(unix)]
+const MAX_CREDENTIAL_FILE_BYTES: usize = 4096;
+
+/// One credential value from a private file of `owner`, without one final line break. The file opens
+/// with no link in any component and must be a regular file with no group or other permission bits.
+#[cfg(unix)]
+fn credential_value(path: &Path, owner: u32) -> Result<zeroize::Zeroizing<String>> {
+    use std::{fs::File, io::Read, os::unix::fs::MetadataExt};
+    let unavailable = || Error::from(horizon_app_runtime::Error::CredentialsUnavailable);
+    let file = crate::project::open(
+        &File::open("/").map_err(|_| unavailable())?,
+        path.strip_prefix("/").map_err(|_| unavailable())?,
+    )
+    .map_err(|_| unavailable())?;
+    let metadata = file.metadata().map_err(|_| unavailable())?;
+    if metadata.uid() != owner || metadata.mode() & 0o077 != 0 {
+        return Err(unavailable());
+    }
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(MAX_CREDENTIAL_FILE_BYTES + 1));
+    file.take(MAX_CREDENTIAL_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| unavailable())?;
+    if bytes.len() > MAX_CREDENTIAL_FILE_BYTES {
+        return Err(unavailable());
+    }
+    let value = bytes
+        .strip_suffix(b"\r\n")
+        .or_else(|| bytes.strip_suffix(b"\n"))
+        .unwrap_or(&bytes);
+    horizon_browser_control::remote_authorization::header_safe_value(value)
+        .map_err(|_| horizon_app_runtime::Error::CredentialsInvalid.into())
+}
+
+/// The authorization header from the credential files of the client file: exactly one file for each
+/// authentication reference of a provider with no OS-store bindings.
+#[cfg(unix)]
+fn file_authorization(
+    profile: &horizon_browser::remote::RemoteProviderProfile,
+    files: &std::collections::BTreeMap<horizon_browser::remote::CredentialReference, PathBuf>,
+    owner: u32,
+) -> Result<zeroize::Zeroizing<String>> {
+    let invalid = || Error::from(horizon_app_runtime::Error::CredentialsInvalid);
+    let required: std::collections::BTreeSet<_> = profile.authentication.references().into_iter().collect();
+    if !profile.credential_bindings.is_empty() || !files.keys().eq(required.iter().copied()) {
+        return Err(invalid());
+    }
+    horizon_browser_control::remote_authorization::authorization_header(
+        &profile.authentication,
+        |reference| credential_value(files.get(reference).ok_or_else(invalid)?, owner),
+        |_, _| invalid(),
+    )?
+    .ok_or_else(invalid)
+}
+
+/// The account of the client: from its credential files when it names them, else from the OS
+/// credential store that `keyring` opens.
+#[cfg(unix)]
+fn account(
+    client: &Client,
+    profile: &horizon_browser::remote::RemoteProviderProfile,
+    keyring: impl FnOnce() -> Result<horizon_core::remote_browser_credential::KeyringCredentialStore>,
+) -> Result<horizon_app_runtime::account::Account> {
+    use horizon_app_runtime::account::Account;
+    use horizon_core::remote_browser_credential::{CredentialStores, SessionCredentialStore};
+    if let Some(files) = &client.credential_files {
+        let header = file_authorization(profile, files, rustix::process::geteuid().as_raw())?;
+        return Ok(Account::authorized(profile, &header)?);
+    }
+    let session = SessionCredentialStore::new();
+    let keyring = keyring()?;
+    Ok(Account::capture(
+        profile,
+        &CredentialStores {
+            session: &session,
+            os_keychain: Some(&keyring),
+            environment: None,
+        },
+    )?)
+}
+
+/// The tunnel pin of the client for its contract: a contract with tunnel ports needs a pinned binary.
+#[cfg(unix)]
+fn tunnel_pin(
+    client: &Client,
+    contract: &horizon_app_testing::contract::Contract,
+) -> Result<Option<crate::local::TunnelPin>> {
+    match (&client.tunnel_binary, &client.tunnel_sha256) {
+        (Some(binary), Some(sha256)) => Ok(Some(crate::local::TunnelPin {
+            binary: binary.clone(),
+            sha256: sha256.clone(),
+        })),
+        _ if !contract.ports().is_empty() => Err(Error::TunnelUnconfigured),
+        _ => Ok(None),
+    }
 }
 
 #[cfg(unix)]
@@ -124,14 +237,12 @@ fn selected_with(
     horizon_app_runtime::account::Account,
     Arc<horizon_app_runtime::journal::Journal>,
 )> {
-    use horizon_app_runtime::account::Account;
-    use horizon_core::{
-        Config,
-        remote_browser_credential::{CredentialStores, KeyringCredentialStore, SessionCredentialStore},
-    };
+    use horizon_core::{Config, remote_browser_credential::KeyringCredentialStore};
     let client = client(path)?;
     horizon_app_process::storage::Directory::open(&client.state)?;
-    horizon_app_provider::tunnel::VerifiedBinary::capture(&client.tunnel_binary, &client.tunnel_sha256)?;
+    if let (Some(binary), Some(sha256)) = (&client.tunnel_binary, &client.tunnel_sha256) {
+        horizon_app_provider::tunnel::VerifiedBinary::capture(binary, sha256)?;
+    }
     let config_path = Config::resolve_path(None).ok_or(Error::Unavailable)?;
     let text = std::fs::read_to_string(config_path).map_err(|_| Error::Unavailable)?;
     let config = Config::from_yaml(&text).map_err(|_| Error::Unavailable)?;
@@ -141,16 +252,9 @@ fn selected_with(
         .providers
         .get(&client.provider)
         .ok_or(Error::Unavailable)?;
-    let session = SessionCredentialStore::new();
-    let keyring = KeyringCredentialStore::open().map_err(|_| horizon_app_runtime::Error::CredentialsUnavailable)?;
-    let account = Account::capture(
-        profile,
-        &CredentialStores {
-            session: &session,
-            os_keychain: Some(&keyring),
-            environment: None,
-        },
-    )?;
+    let account = account(&client, profile, || {
+        KeyringCredentialStore::open().map_err(|_| horizon_app_runtime::Error::CredentialsUnavailable.into())
+    })?;
     let journal = Arc::new(open_journal(&client.state, &account)?);
     Ok((client, account, journal))
 }
@@ -177,6 +281,7 @@ pub fn open(path: &Path) -> Result<Host> {
     child(&owner_state, reports_name)?;
     let agents = crate::project::read(&workspace.root_directory()?, Path::new("AGENTS.md"))?;
     let contract = Contract::from_agents(&agents)?;
+    let tunnel = tunnel_pin(&client, &contract)?;
     let worker = std::env::current_exe().map_err(|_| Error::Unavailable)?;
     let local = Arc::new(Local::new(
         Arc::clone(&workspace),
@@ -185,8 +290,7 @@ pub fn open(path: &Path) -> Result<Host> {
         Configuration {
             process_worker: worker.clone(),
             tunnel_worker: worker,
-            tunnel_binary: client.tunnel_binary,
-            tunnel_sha256: client.tunnel_sha256,
+            tunnel,
             state: owner_path.join(local_name),
         },
     )?);

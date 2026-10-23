@@ -40,6 +40,10 @@ impl<'a> SetupBoardView<'a> {
                 Frame::new().inner_margin(Margin::symmetric(16, 14)).show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
                     request = header(ui, board);
+                    if let Some((line, alert)) = &board.builder {
+                        let color = if *alert { theme::PALETTE_RED() } else { theme::FG_SOFT() };
+                        ui.label(RichText::new(line).size(12.5).color(color));
+                    }
                     ui.add_space(4.0);
                     if board.rows.is_empty() {
                         ui.label(
@@ -78,7 +82,7 @@ fn header(ui: &mut Ui, board: &SetupBoard) -> Option<Request> {
         ui.label(RichText::new(count).size(14.0).strong().color(theme::FG()));
         if working + waiting > 0 {
             let busy = if waiting > 0 {
-                format!("{working} working · {waiting} waiting for a build slot")
+                format!("{working} working · {waiting} waiting")
             } else {
                 format!("{working} working")
             };

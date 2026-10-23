@@ -16,7 +16,6 @@ pub(super) fn configure_git_auth(
     let github = request.settings.github.as_ref();
     let served =
         crate::cloud_runtime::github::configure(github, state, connection, runner, legacy, request.renew_github)?;
-    crate::cloud_runtime::github::packages::configure(github, state, connection, runner, request.renew_github)?;
     match git_auth {
         Some(git_auth) if !served => git_auth.install(connection, runner),
         _ => runner

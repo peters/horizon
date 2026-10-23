@@ -35,32 +35,6 @@ fn operation(action: intent::Action, state: intent::State, phase: Phase) -> Oper
     }
 }
 
-/// An operation of Upkeep `source` that has settled at `phase`, as its job reports it.
-pub(super) fn settled(source: &str, alias: &str, action: intent::Action, phase: Phase) -> Submitted {
-    let state = if phase == Phase::Refused {
-        intent::State::Failed
-    } else {
-        intent::State::Succeeded
-    };
-    Submitted {
-        operation: operation(action, state, phase),
-        context: Context {
-            source: Target {
-                scope: Scope {
-                    session_id: "session".into(),
-                    workspace_id: "workspace".into(),
-                },
-                cloud_id: source.into(),
-                declaration: Declaration::new("example/source", "dev"),
-            },
-            declarations: std::collections::BTreeMap::new(),
-            inventory: Vec::new(),
-        },
-        alias: alias.into(),
-        settings: Err("not read".into()),
-    }
-}
-
 fn deployment() -> Deployment {
     serde_json::from_value(json!({
         "version":1,"cloud_id":"target","repository":"/synthetic","revision":"a".repeat(40),

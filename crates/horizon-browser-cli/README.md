@@ -318,6 +318,84 @@ listener. Both modes share the same private Horizon coordination state and MCP
 tool schemas; the standalone host does not introduce another browser action
 API.
 
+## Profile host
+
+`horizon-browser host --config <host file> [--visible]` keeps named persistent
+profiles for `--connect` clients, for example one signed-in profile for each
+site on a shared browser machine. The host file names each profile:
+
+```yaml
+browser:
+  profiles:
+    mail:
+      backend: chromium
+      args: ["--proxy-server=socks5://proxy.internal:1080"]
+    chat:
+      backend: firefox
+      firefox_prefs:
+        network.proxy.type: 1
+        network.proxy.socks: proxy.internal
+        network.proxy.socks_port: 1080
+```
+
+- A profile name is 1 to 40 of `a-z`, `0-9` and `-`, with a letter or a
+  digit at each end. Its folder is
+  `<root>/browser-profiles/profile-<name>` (mode 700). The host never deletes
+  a profile; remove its folder while no host runs to forget a sign-in.
+- `args` go to the browser process. Arguments that the engine manages (the
+  profile folder, the automation endpoint, headless mode) are refused.
+- `firefox_prefs` (booleans, integers or strings) are written to the
+  `user.js` of a Firefox profile at each start of the host. A preference
+  that the host file no longer names gets its default again.
+- The host file must be a regular file of at most 256 KiB that group and
+  other users cannot write. It holds no credential.
+
+One host runs on each runtime root (`HORIZON_BROWSER_ROOT`). It keeps one
+stable host instance in `<root>/profile-host.json` (mode 600, with
+`host_instance`, `pid` and `started_at`), written when the host is ready, so
+the instance stays the same over each restart. A client sets
+`HORIZON_BROWSER_ROOT`, a `horizon:` identity in `HORIZON_BROWSER_ACTOR` and
+that instance in `HORIZON_BROWSER_HOST_INSTANCE`, runs
+`horizon-browser mcp --connect`, and calls `browser_create` with a profile
+name as `target`:
+
+- The host opens each page in the shared browser of its profile, so the
+  pages of one profile share its cookies and storage. `browser_duplicate`
+  opens the current URL of one of your pages in another page of the same
+  profile. As for any create with a target, a `browser_create` of a client
+  that already holds a page needs `allow_additional: true`.
+- Each page ID is `profile-<name>-` and 12 hex digits. The host stamps each
+  page for the actor that opened it only: `browser_list` of a client shows
+  only its own pages, and a client of another host instance sees none.
+- A create with no target, with a remote target, with a name that the host
+  file does not have, or with a backend is refused (`target_required`,
+  `target_invalid`, `target_unknown`, `unsupported_backend`). At most 16
+  pages run, and at most 4 of one actor; the 16th page goes only to an actor
+  with no page, so busy clients never lock out a new one
+  (`page_limit_reached`). A page with no action for 60 minutes closes.
+- `browser_screenshot` writes the newest frame of a page as a private PNG
+  under `<root>/profile-host-captures/` (at most 8 for each page, removed
+  when the page closes) and returns its path. A client whose agent runs on
+  another computer starts `horizon-browser mcp --connect --inline-screenshots`:
+  the result then also holds the PNG (at most 8 MiB) as an MCP image block.
+  The flag reads only a PNG under the runtime root, so the screenshots of a
+  Horizon host stay a path. A screenshot counts as an action of the page.
+  `copy_to_clipboard` has no effect, and `clipboard_requested` is `false`.
+  Other device viewer requests are refused.
+- With `--visible`, each page is a window on the display of the host
+  process (`$WAYLAND_DISPLAY` when it is set, else `$DISPLAY`); without it,
+  the browsers are headless. A visible Chromium starts with no window of its
+  own and opens each page in its own window in the background, so a new
+  page never takes the keyboard from a person who types on that display
+  (a window manager must also give new windows no focus).
+- An interrupt or a termination signal closes every page, lets each browser
+  write its profile, and keeps every profile.
+
+The profile host runs no MCP server of its own and opens no network
+listener. Its clients reach it only through the private coordination files of
+the runtime root, so each client must run on the same computer, as the same
+user, with the same root.
+
 ## Dependency boundary
 
 The CLI consumes browser coordination and runtime paths through

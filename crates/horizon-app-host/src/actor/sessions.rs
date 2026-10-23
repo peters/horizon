@@ -58,7 +58,7 @@ impl Actor {
                 lane.deadline,
                 &mut lane.resources,
             )?;
-            lane.tunnel = Some(tunnel);
+            lane.tunnel = tunnel;
             let launch = lane
                 .app
                 .lock()
@@ -72,7 +72,7 @@ impl Actor {
                         declaration.clone(),
                         arguments,
                         token.to_owned(),
-                        horizon_app_provider::tunnel::local_identifier(tunnel),
+                        tunnel.map(horizon_app_provider::tunnel::local_identifier),
                         lane.id.to_string(),
                         self.contract.evidence.clone(),
                     )
@@ -293,14 +293,17 @@ impl Actor {
         }
         self.durable_active(lane.id, Kind::Session)?;
         remaining(lane.deadline)?;
-        let tunnel = lane.tunnel.ok_or(Error::SessionUnknown)?;
-        let resource = lane
-            .resources
-            .iter()
-            .find(|resource| resource.id == tunnel)
-            .ok_or(Error::SessionUnknown)?;
-        if !resource.tunnel_status()?.ready {
-            return Err(horizon_app_provider::Error::TunnelStartFailed.into());
+        // A project with no tunnel has no tunnel to check.
+        if self.contract.tunnel.is_some() {
+            let tunnel = lane.tunnel.ok_or(Error::SessionUnknown)?;
+            let resource = lane
+                .resources
+                .iter()
+                .find(|resource| resource.id == tunnel)
+                .ok_or(Error::SessionUnknown)?;
+            if !resource.tunnel_status()?.ready {
+                return Err(horizon_app_provider::Error::TunnelStartFailed.into());
+            }
         }
         let driver = lane.driver.as_mut().ok_or(Error::SessionUnknown)?;
         driver.limit_to_deadline(lane.deadline)?;
@@ -352,6 +355,9 @@ impl Actor {
         }
         self.durable_active(lane.id, Kind::Session)?;
         remaining(lane.deadline)?;
+        if self.contract.tunnel.is_none() {
+            return Err(Error::TunnelAbsent);
+        }
         lane.resources
             .iter()
             .find(|resource| Some(resource.id) == lane.tunnel)

@@ -117,7 +117,7 @@ fn spoken(stage: Stage, mark: &Mark, elapsed: Option<std::time::Duration>) -> St
 
 /// Registers a painted step with assistive technology.
 fn announce(response: &egui::Response, stage: Stage, mark: &Mark, elapsed: Option<std::time::Duration>) {
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken(stage, mark, elapsed)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken(stage, mark, elapsed)));
 }
 
 fn label_color(mark: &Mark) -> Color32 {
@@ -330,7 +330,7 @@ pub(super) fn horizontal(ui: &mut egui::Ui, runtime: &Runtime, status: &Status) 
         let mark = mark(status, index);
         let node = Rect::from_center_size(pos2(center.x, rect.center().y), vec2(step, rect.height()));
         announce(
-            &ui.interact(node, ui.id().with(("step", index)), Sense::hover()),
+            &ui.interact(node, ui.scope_id().with(("step", index)), Sense::hover()),
             *stage,
             &mark,
             runtime.progress.stage_duration(*stage),

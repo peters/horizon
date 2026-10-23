@@ -45,10 +45,26 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   like an SSH panel, in which case the target is the endpoint as seen from that
   host. Restored panels require manual reconnect.
 - Device panel requests are claimed on the UI thread by `app/device_request_pump.rs` when a request file appears. Wayland does not deliver `RedrawRequested` while a frame callback is outstanding and the compositor is not presenting the surface, and it reports neither visibility nor minimization, so the queue cannot wait for `App::ui`.
-- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the pointer and keyboard mapping in `input.rs`; agents never get that path. The creator of a viewer sets `DevicePanelState::input`. RFB cannot report a server that ignores input, so a `ViewOnly` viewer disables Interact and shows the reason. The cloud desktop viewer takes `ViewOnly` from its `DesktopTunnel`. `details` renders
-  labelled connection facts, while core selects and bounds the displayed name. `frame` validates
-  and composites decoded rectangles; `session` owns a cancellable socket/decoder
-  worker and a single latest-frame slot. `session/tunnel.rs` owns one `ssh -W`
+- `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the egui key, button and position mapping in `keys.rs`; agents never get that path. The creator of a viewer sets `DevicePanelState::input`. RFB cannot report a server that ignores input, so a `ViewOnly` viewer disables Interact and shows the reason. The cloud desktop viewer takes `ViewOnly` from its `DesktopTunnel`. `details` renders
+  labelled connection facts, while core selects and bounds the displayed name.
+  `device_widget/session.rs` connects the viewer to a `horizon-vnc` session: it
+  sends the session wakes to the egui viewport of the viewer, and it keeps only
+  the clipboard texts that are native session metadata. `picture.rs` gives the
+  frames to egui without a copy.
+- The `horizon-terminal` crate owns the click targets and the search of a
+  terminal grid, with no PTY and no UI. It must not depend on egui, eframe,
+  wgpu, winit or other Horizon crates, because other applications use it as a
+  Git dependency. `logical_line.rs` assembles the text under a grid point from
+  soft-wrapped rows and from URL rows a program hard-wrapped; its row-shape
+  heuristics are tested under `logical_line/tests/`. `links.rs` finds the OSC 8
+  hyperlink, URL or path at a column, and `search.rs` matches a literal or regex
+  query in lines of text for `search_board` of horizon-core.
+- The `horizon-vnc` crate owns the live session without a UI. It must not
+  depend on egui, eframe, wgpu, winit or other Horizon crates, because other
+  applications use it as a Git dependency. `framebuffer` validates and
+  composites decoded rectangles and records the changed region; `input` turns
+  pointer and key state into VNC input events; `session` owns a cancellable
+  socket/decoder worker and a single latest-frame slot. `session/tunnel.rs` owns one `ssh -W`
   process per tunnelled connection, piped straight into the decoder and killed
   with it, and keeps ssh's last diagnostic lines for the failure message. The completed UI pass reconciles root
   and detached viewer visibility; hidden workers pause frame requests and resume
@@ -208,9 +224,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   creation restores an inert transcript and restart refuses local task fallback.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
-  `terminal/` leaf modules. `terminal/logical_line.rs` assembles the text under
-  a click from soft-wrapped rows and from URL rows a program hard-wrapped; its
-  row-shape heuristics are tested under `terminal/logical_line/tests/`.
+  `terminal/` leaf modules. `terminal/content.rs` maps a viewport cell to a grid
+  point and asks `horizon-terminal` what the cell opens.
   Terminal destruction sends shutdown, then a helper thread joins and destroys
   the PTY. A finished thread handle can still own a PTY that waits for its child.
   The bounded regression for this case lives in `terminal/lifecycle/tests.rs`.
@@ -386,16 +401,19 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 ## File Size Policy
 
 The automated line-limit and `too_many_lines` suppression checks cover
-`horizon-browser-protocol`, `horizon-browser`, `horizon-core`, and
-`horizon-ui`; extracting a new crate is not an escape hatch for oversized
-modules.
+`horizon-device`, `horizon-browser-protocol`, `horizon-browser`, `horizon-core`,
+`horizon-terminal`, `horizon-ui` and `horizon-vnc`; extracting a new crate is
+not an escape hatch for oversized modules.
 
 - Start splitting a Rust source file before it reaches roughly 600 lines.
 - CI fails non-test Rust source files above 1000 lines in:
+  - `crates/horizon-device/src`
   - `crates/horizon-browser-protocol/src`
   - `crates/horizon-browser/src`
   - `crates/horizon-core/src`
+  - `crates/horizon-terminal/src`
   - `crates/horizon-ui/src`
+  - `crates/horizon-vnc/src`
 - Inline `#[cfg(test)]` modules should stay at the end of the file; the line
   limit is measured on the production-code portion before that block.
 - `#[allow(clippy::too_many_lines)]` is not an acceptable substitute for
@@ -488,7 +506,7 @@ The preflight requires visual-viewport evidence. It retains native hit-testing
 for transparent interactive controls and the first client-rectangle convention
 of Element Click; searching later fragments is a separate behavior change.
 
-Device view limits and viewport layout live in `crates/horizon-core/src/device/view.rs`;
+Device view limits and viewport layout are in `crates/horizon-vnc/src/view.rs`;
 `crates/horizon-ui/src/device_widget/controls.rs` collects session-local presentation
 settings while its worker applies the bounded image layout.
 

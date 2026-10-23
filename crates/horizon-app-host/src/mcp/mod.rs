@@ -149,7 +149,7 @@ impl NativeMcp {
     }
     #[tool(
         name = "app_session_create",
-        description = "Create a real native app session for a declared matrix index and owned artifact handle. The host starts distinct managed backends and an exact restricted tunnel for this device before allocation. No endpoint, credential, command, root path, app token or forwarding port is accepted. Lost allocation outcomes are held for reconciliation rather than replayed."
+        description = "Create a real native app session for a declared matrix index and owned artifact handle. The host starts distinct managed backends and, when the project declares a tunnel, an exact restricted tunnel for this device before allocation. No endpoint, credential, command, root path, app token or forwarding port is accepted. Lost allocation outcomes are held for reconciliation rather than replayed."
     )]
     async fn app_session_create(
         &self,
@@ -237,7 +237,7 @@ impl NativeMcp {
     }
     #[tool(
         name = "app_tunnel_status",
-        description = "Observe only the exact owned service lane's tunnel readiness, declared loopback ports and original time remaining. Never returns tunnel credentials, provider session references or arbitrary forwarding configuration."
+        description = "Observe only the exact owned service lane's tunnel readiness, declared loopback ports and original time remaining. A project with no tunnel returns app_tunnel_absent. Never returns tunnel credentials, provider session references or arbitrary forwarding configuration."
     )]
     async fn app_tunnel_status(
         &self,
@@ -248,7 +248,7 @@ impl NativeMcp {
     }
     #[tool(
         name = "app_session_close",
-        description = "Close an owned native session and wait for acknowledgement before stopping its exact tunnel and synthetic backends. Cleanup uncertainty retains that lane until reconciliation or original expiry. Unknown or foreign handles cannot delete a provider resource."
+        description = "Close an owned native session and wait for acknowledgement before stopping its tunnel, if any, and its synthetic backends. Cleanup uncertainty retains that lane until reconciliation or original expiry. Unknown or foreign handles cannot delete a provider resource."
     )]
     async fn app_session_close(
         &self,

@@ -221,7 +221,11 @@ fn a_build_without_a_stored_login_pulls_anonymously() {
     assert!(!signed_in);
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
-    assert_eq!(config, serde_json::json!({ "auths": {} }), "no helper, no login");
+    assert_eq!(
+        config,
+        serde_json::json!({ "auths": { "horizon.invalid": {} } }),
+        "no helper, no login, and an entry so Docker picks no helper itself"
+    );
     assert_eq!(mode(&directory.path().join("config.json")) & 0o077, 0, "private");
     let path = directory.path().to_path_buf();
     drop(directory);
@@ -244,7 +248,11 @@ fn a_build_keeps_the_machines_docker_context_and_plugins_but_none_of_its_credent
         serde_json::from_slice(&std::fs::read(directory.path().join("config.json")).unwrap()).unwrap();
     assert_eq!(config["currentContext"], "rootless");
     assert_eq!(config["cliPluginsExtraDirs"], serde_json::json!(["/opt/plugins"]));
-    assert_eq!(config["auths"], serde_json::json!({}), "the machine's logins stay out");
+    assert_eq!(
+        config["auths"],
+        serde_json::json!({ "horizon.invalid": {} }),
+        "the machine's logins stay out"
+    );
     assert!(config.get("credsStore").is_none(), "and its credential helpers");
     assert!(
         directory.path().join("contexts").is_dir(),

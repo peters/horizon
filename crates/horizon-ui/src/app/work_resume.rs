@@ -75,7 +75,7 @@ impl HorizonApp {
         };
         let mut resume = None;
         let mut reveal = None;
-        egui::Area::new(egui::Id::new("work_resume_banner"))
+        egui::Area::new(egui::Id::unique("work_resume_banner"))
             .fixed_pos(rect.min)
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {

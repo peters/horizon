@@ -237,7 +237,6 @@ mod choice;
 pub(super) mod machine;
 #[cfg(test)]
 mod tests;
-mod upkeep;
 
 impl Intent {
     /// Takes the kept choices once their read finished. False while it still runs.

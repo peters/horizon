@@ -268,8 +268,8 @@ The toolbar has two buttons that make a workspace:
   that this computer can deploy to. A repository with its own profile can ask for a
   larger machine. **New cloud** then shows that machine and its price. In a narrow
   window, the button shows **+ Cloud**.
-- **+ Workspace** makes an empty workspace on this computer. No dialog opens.
-  **New** in the sidebar does the same.
+- **New** in the sidebar header makes an empty workspace on this computer. No
+  dialog opens. The toolbar has no button for it.
 
 The empty canvas shows **New Cloud** and **New Workspace**, which do the same.
 **Menu › Add cloud here** starts a cloud in the current workspace.
@@ -580,82 +580,6 @@ access to it, and install the app only on the repositories that agents may use.
 of running clouds: delete the app on GitHub for that. Deleting the app ends every
 token at once.
 
-### Package read access
-
-GitHub's package API accepts no token of the GitHub App from
-[Connect GitHub](#connect-github). Thus agents on a worker cannot read the
-versions of private packages, for example to make sure that a private NuGet
-version exists and to read its age, unless the cloud has package read access.
-
-When a deployment of an Upkeep's cloud with Connect GitHub reaches the worker,
-Horizon asks the worker whether it has package read access. When it does not, the
-card shows a second code right after the cloud's GitHub access: **Let this cloud's
-agents read packages**. Horizon asks only when the cloud's GitHub access works.
-Other clouds are not asked and keep their flow.
-
-1. Click **Open GitHub**. Horizon copies the code.
-2. Paste the code on GitHub and click **Authorize**. You authorize Horizon's own
-   OAuth app, with your own GitHub account, for the scope `read:packages` only.
-
-Horizon makes sure that GitHub granted exactly `read:packages`. It refuses a
-broader grant: the worker then gets nothing. Horizon gives the token chain to the
-root GitHub service of the worker over SSH standard input, never in a command line,
-a log or the cloud board, and keeps no copy. The worker renews the chain with the
-OAuth app's client ID alone, also while this computer is off. No agent gets the
-token. With the chain, Horizon names the Upkeep's repositories. When you change
-the Upkeep's list, the next exchange with the worker gives it the new list without
-a new code. A repository of a new owner thus opens that owner's NuGet and npm
-packages to the Upkeep's agents, also when you confirm a repository that an agent
-proposed; a worker image that cannot take it gets the list at the next
-deployment, which asks for a new code. **Connect GitHub again** also asks again;
-when you skip it then, the earlier package read access stays. The service adds
-the token only to reads of the NuGet and npm packages of the owners of those
-repositories, never of a repository that an agent asked for, as
-[the trust boundary of the package token](upkeep.md#trust-boundary-of-the-package-token)
-tells. An agent reads them with `gh`, for example
-`gh api /orgs/OWNER/packages/nuget/NAME/versions`.
-
-**Skip: package checks need a person** continues without package read access. The
-deployment output says so, and an agent that needs a package check reports that
-the cloud has no package read access. Horizon saves the skip beside the Upkeep's
-choice (`~/.horizon/upkeep/<cloud>/package-access-skipped`) and does not ask again
-for that Upkeep, also after a restart, until you choose **Give package access** on
-the Upkeep board or **Connect GitHub again** on the card.
-
-While the skip is saved, the Upkeep board shows **Package sign-in skipped: checks of
-private package versions may need a person** with **Give package access**. "May":
-a skip after **Connect GitHub again** keeps an earlier access. The button works when
-the cloud is ready, connected and runs nothing else: Horizon forgets the skip and
-reconnects the cloud. Unless the worker already reads the packages of the Upkeep's
-repositories, that deployment shows the package code again, without a new GitHub
-sign-in. When the cloud is not ready or is busy, the board says so and keeps the
-skip. When the cloud stops being ready while Horizon forgets the skip, the board says
-that the next reconnect asks for the package code.
-
-An organization that limits OAuth apps hides its packages from Horizon's OAuth
-app. Then the deployment output names the organization and the page where an
-owner grants Horizon:
-`https://github.com/organizations/ORG/settings/oauth_application_policy`. Other
-members can ask for it on the app's page,
-`https://github.com/settings/connections/applications/Ov23liPNCPgWraJDo6XM`.
-
-What you grant: the token reads every package that your account can read, of every
-type and owner. The worker limits its use to NuGet and npm package reads of the
-owners of the Upkeep's repositories, and removes other repositories from the
-replies. Only the root service of the worker holds it.
-
-To end the access:
-
-- For one cloud: delete the cloud. The chain goes with its worker. Its refresh
-  token then stays valid on GitHub for up to six months, held by nobody.
-- For every cloud: click **Revoke** for **Horizon** on
-  `https://github.com/settings/connections/applications/Ov23liPNCPgWraJDo6XM`.
-  This ends every token of Horizon's OAuth app for your account, also the one that
-  lets Horizon publish images.
-
-A worker image without package read access does not ask for the code. Rebuild the
-image of such a cloud.
-
 ### Your repositories in New cloud
 
 **Where is your code?** in **New cloud** is one search field:
@@ -837,15 +761,21 @@ yet**. A working copy that is not valid shows its error instead. This is not an 
 
 - **Quick start** starts the repository on the base image. See
   [Quick start](#quick-start).
-- **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
-  settings of the repository. It runs on Linux with a systemd user session:
-  Horizon starts the agent in a systemd user scope, which holds every process the
-  agent starts as its descendant, so it can end them all before it commits. The
-  scope is not a sandbox: the agent runs as you, and a program it hands to another
-  service of yours, such as Docker or your systemd user manager, runs outside it,
-  as any program you start does. What **Use this setup** commits does not rest on
-  the scope: it is the setup Horizon proved, read after the agent ended, with every
-  other change named first. On macOS and Windows the dialog does not offer it, and
+- **Set up from CI** starts a setup agent that prepares the
+  settings of the repository. The chips name the agents of the **New Workspace**
+  menu, each in its default mode, with its own command and arguments. An agent
+  with more than one preset there, for example one preset for each model it
+  runs, keeps one chip with a caret: the label half chooses that agent, the caret
+  half lists the presets of that agent, and the chip then names the preset you
+  chose. The setup starts the agent on the instructions when its command line
+  takes a message, and types them into its prompt otherwise. It runs on Linux
+  with a systemd user session: Horizon starts the agent in a systemd user scope,
+  which holds every process the agent starts as its descendant, so it can end
+  them all before it commits. The scope is not a sandbox: the agent runs as you,
+  and a program it hands to another service of yours, such as Docker or your
+  systemd user manager, runs outside it, as any program you start does. What
+  **Use this setup** commits does not rest on the scope: it is the setup Horizon
+  proved, read after the agent ended, with every other change named first. On macOS and Windows the dialog does not offer it, and
   on Linux without a systemd user session the agent does not start; use
   **Quick start** or write `.horizon` yourself.
 
@@ -858,7 +788,9 @@ with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
-again for the same repository.
+again for the same repository. A live preview outlives **Close** while its
+Device panel is open; closing that panel ends the desktop, so no container runs where
+nobody watches it.
 
 Several repositories can be set up at the same time, each with its own agent. Click
 **Close** while a setup works, open **New cloud** again, choose another repository
@@ -902,6 +834,48 @@ computer through a second SSH forward of its port. A Docker host has build slots
 own. A proof of a GPU profile fails on a Docker host, and a desktop preview that needs
 `/dev/kvm` is skipped there; choose **This computer** for them. The setup board names
 the host of each setup that builds on one.
+
+**Rented builder** shows in **Build on** when Hetzner is connected in Cloud settings.
+Horizon rents one Hetzner server with Docker for the setups that build on it, so a
+laptop runs only the agents. It rents the cheapest server type with at least 8
+cores, 16 GB of memory and 160 GB of disk among the **server types** and locations
+that Cloud settings allows, so you decide which machines Horizon may rent, as for a
+Hetzner cloud worker. A type the project refuses, as when its shared cores are all in
+use, is followed by the next one. Horizon starts renting when the first such setup
+starts, so the builder is usually ready when
+the agent asks for its first proof. Until it is, the setup's **Build image** step says
+**Renting a builder**. The setups share the builder and its build slots, and it is
+reached as a Docker host is, through an SSH forward of its Docker socket.
+
+- Horizon makes a new login key and a new SSH host key for each builder, in a private
+  folder of the Cloud settings folder. The server takes only that login key, and Horizon
+  accepts only that host key, so the first connection already checks the server. Your
+  own SSH keys, agent and configuration are not used, and no secret of yours goes to
+  the builder. Its proofs also pull images without Horizon's ghcr.io login, since that
+  login can publish packages; a setup whose image builds on a private ghcr.io base needs
+  **This computer** or a Docker host of yours.
+- The setup board shows the builder's server type, location, price per hour and how
+  long it runs. A builder that no setup has used for 10 minutes is deleted, and so is
+  the builder as Horizon exits. A setup still uses it while it is not ready, while a
+  proof runs and while its desktop preview starts or runs; a preview that failed or was
+  skipped does not keep it.
+- A journal in the Cloud settings folder names the server from before the create
+  request until Horizon proved it gone. A deletion that fails is tried again every 2
+  minutes, and the setup board says so. If Horizon ends before it could delete the
+  builder, the next start deletes it. Until then the server is billed by Hetzner. The
+  journal keeps a fingerprint of the Hetzner token the builder was rented with, never
+  the token. With another token, such as a new token of the same project, Horizon
+  deletes the builder only if that token lists its server or its key. If it lists
+  neither, as a token of another project does, Horizon keeps the journal and asks you
+  to connect the project the builder was rented in; if you deleted the server and its
+  key yourself, delete `setup-builder.json` in the Cloud settings folder. The journal is
+  written to disk before the create request goes out.
+- One Horizon at a time has a builder for a Cloud settings folder, and only while it
+  has one. A setup of another Horizon that uses the same folder waits, and says so,
+  until that builder is deleted.
+- A renting that failed is tried again every 2 minutes, at most 3 times. After that a
+  new setup with **Rented builder** tries again, also while other setups still wait.
+- The containers, images and volumes of the setups go with the builder.
 
 The agent reads the CI of the repository first, the GitHub Actions workflows in
 `.github/workflows`: the Linux jobs that restore, build and test, the tool versions
@@ -982,8 +956,11 @@ with a virtual desktop on `:99` like the worker's. When a window appears, Horizo
 takes a screenshot (when the image has ImageMagick's `import`) and opens the
 desktop live in a Device panel beside the agent,
 on this computer's loopback, before anything is rented. A new proof or a new
-preview request replaces the live desktop, and **Stop** or **Use this setup**
-removes it. The preview of a GPU profile gets this computer's GPU, and it gets
+preview request replaces the live desktop. **Stop** or **Use this setup**
+removes it, and it also goes when its Device panel closes: a desktop nobody watches
+keeps no container. **Close** keeps it while that panel is open. The setup itself
+stays ready, **Use this setup** still commits it, and the agent starts a new preview
+only when it asks for one again. The preview of a GPU profile gets this computer's GPU, and it gets
 `/dev/kvm` when the app asks for it, such as an x86_64 Android emulator. With
 rootless Docker, only the container's root account can open `/dev/kvm`, so that
 preview runs as root, which is your own account. When this computer has no
@@ -1916,10 +1893,6 @@ the only exception.
 A cloud on the public base image without a `build` section can also rebuild. A quick
 start cloud is an example. Its latest commit must have no `.horizon/cloud.yml`. If it
 has one, Horizon refuses the rebuild, because it never ignores committed settings.
-The cloud of an Upkeep is the exception: New Upkeep starts the `quick-start` profile
-whatever the repository commits, so its rebuild does not read the repository's
-`.horizon/cloud.yml` either, and the output says so. Horizon knows such a cloud by the
-saved choice of its Upkeep, `~/.horizon/upkeep/<cloud>/upkeep.json`.
 The rebuild builds nothing. Horizon switches the worker to the base image that this
 Horizon version pins. Thus after an upgrade that changes the pin, **Rebuild image &
 restart** moves the cloud to the new image. If the cloud has the capabilities of the

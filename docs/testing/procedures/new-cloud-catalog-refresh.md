@@ -187,16 +187,16 @@ fixture opens the candidate window at 1480 × 900 pixels.
 
    Result: The command shows one process ID.
 
-6. Set the candidate window to 800 × 900 pixels. Use the `display` value from
-   the fixture output and the process ID from step 5.
+6. Set the candidate window to its minimum width of 800 pixels. Use the
+   `display` value from the fixture output and the process ID from step 5.
 
    ```sh
    DISPLAY=<display> xdotool search --pid <candidate-pid> --name '^Horizon$' \
      windowsize %1 800 900
    ```
 
-   Result: The window is 800 pixels wide. The toolbar shows **+ New cloud**,
-   **+ Workspace** and **Menu**, without the tagline.
+   Result: The window is 800 pixels wide. The toolbar shows **+ New cloud** and
+   **Menu**, and the tagline stays after **Horizon**.
 
 7. Start a recording of the isolated desktop.
 

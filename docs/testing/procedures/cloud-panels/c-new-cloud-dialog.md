@@ -112,7 +112,7 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 4. Click **Menu** in the toolbar.
 
    Result: The Menu opens. Under the caption **CLOUD**, it shows
-   **Add cloud here**, **New Upkeep**, **Cloud settings** and **Fit all clouds**.
+   **Add cloud here**, **Cloud settings** and **Fit all clouds**.
 
 5. Click **Add cloud here**.
 
@@ -122,14 +122,14 @@ dialog is closed at the start of a task, do steps 1 to 3 of C04 first.
 
    Result: The dialog closes.
 
-7. Set the candidate window to 800 × 900 pixels.
+7. Set the candidate window to its minimum width of 800 pixels.
 
    ```sh
    DISPLAY=<display> xdotool search --pid <child-pid> --name '^Horizon$' windowsize %1 800 900
    ```
 
-   Result: The toolbar shows **+ New cloud**, **+ Workspace** and **Menu**. The tagline
-   after **Horizon** is not shown.
+   Result: The toolbar shows **+ New cloud** and **Menu**. The tagline after
+   **Horizon** stays, and the search field cuts its placeholder text.
 
 8. Open **Menu › Add cloud here**.
 
@@ -1003,9 +1003,9 @@ This task starts no cloud. `<local>` is a new repository whose committed
    `from €0.0088/h · 2 vCPU · 4 GB · Hetzner`. The price is the cheapest offer that
    **New cloud** shows for a quick start.
 
-3. Click **+ Workspace** in the toolbar.
+3. Click **New** in the sidebar header.
 
-   Result: A new empty workspace shows. No dialog opens.
+   Result: A new empty workspace shows under **This PC**. No dialog opens.
 
 4. Click **+ New cloud**. Then click **Cancel** in **New cloud**.
 

@@ -259,6 +259,7 @@ fn ease_scroll_backlog(backlog: &mut Vec2, dt: f32) -> Vec2 {
 fn wheel_steps(events: &[Event]) -> impl Iterator<Item = (WheelStep, TouchPhase)> + '_ {
     events.iter().filter_map(|event| match event {
         Event::MouseWheel {
+            source: _,
             unit,
             delta,
             phase,
@@ -334,7 +335,7 @@ pub(super) fn route_canvas_scroll(
     allowed: bool,
     mut exhausted: impl FnMut(PanelId, WheelStep) -> bool,
 ) -> ScrollRouting {
-    let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
+    let id = Id::unique(("canvas_scroll_gesture", ctx.viewport_id()));
     let mut gesture = ctx.data_mut(|data| data.get_temp::<ScrollGesture>(id).unwrap_or_default());
     let options = ctx.options(|options| options.input_options);
     let routing = ctx.input(|input| gesture.route(input, &options, target, allowed, &mut exhausted));
@@ -352,10 +353,10 @@ pub(super) fn reset_canvas_scroll(ctx: &Context) {
     let viewport = ctx.viewport_id();
     let boundary = ctx.input(|input| last_wheel_boundary(&input.raw.events));
     ctx.data_mut(|data| {
-        data.remove::<PanelWheelScroll>(Id::new(("panel_wheel_scroll", viewport)));
-        data.get_temp_mut_or_default::<ScrollGesture>(Id::new(("canvas_scroll_gesture", viewport)))
+        data.remove::<PanelWheelScroll>(Id::unique(("panel_wheel_scroll", viewport)));
+        data.get_temp_mut_or_default::<ScrollGesture>(Id::unique(("canvas_scroll_gesture", viewport)))
             .reject_contact(boundary);
-        let zoom = data.get_temp_mut_or_default::<WheelZoom>(Id::new(("canvas_wheel_zoom", viewport)));
+        let zoom = data.get_temp_mut_or_default::<WheelZoom>(Id::unique(("canvas_wheel_zoom", viewport)));
         zoom.reject_contact();
         match boundary {
             Some(TouchPhase::Start) => zoom.contact = ZoomContact::Rejected,
@@ -399,7 +400,7 @@ impl WheelZoom {
 /// canvas nothing queues and any easing step is dropped, so a notch over the
 /// sidebar never zooms the canvas once the pointer moves onto it.
 pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
-    let id = Id::new(("canvas_wheel_zoom", ctx.viewport_id()));
+    let id = Id::unique(("canvas_wheel_zoom", ctx.viewport_id()));
     let mut state = ctx.data_mut(|data| data.get_temp::<WheelZoom>(id).unwrap_or_default());
     let options = ctx.options(|options| options.input_options);
     let zoom = ctx.input(|input| {
@@ -413,6 +414,7 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
             match event {
                 Event::Zoom(delta) if delta.is_finite() => factor *= *delta,
                 Event::MouseWheel {
+                    source: _,
                     unit,
                     delta,
                     phase,
@@ -476,7 +478,7 @@ pub(super) fn canvas_zoom_delta(ctx: &Context, over_canvas: bool) -> f32 {
 
 impl ScrollRouting {
     fn panel_scroll_delta(&self, ctx: &Context) -> Option<Vec2> {
-        let id = Id::new(("panel_wheel_scroll", ctx.viewport_id()));
+        let id = Id::unique(("panel_wheel_scroll", ctx.viewport_id()));
         let Some(target) = self.panel_scroll_target else {
             ctx.data_mut(|data| data.remove::<PanelWheelScroll>(id));
             return None;
@@ -527,7 +529,7 @@ impl ScrollRouting {
         if !self.pans_canvas || !has_retained_motion {
             return;
         }
-        let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
+        let id = Id::unique(("canvas_scroll_gesture", ctx.viewport_id()));
         ctx.data_mut(|data| {
             data.get_temp_mut_or_default::<ScrollGesture>(id).deferred_pan += std::mem::take(&mut self.pan);
         });

@@ -12,7 +12,7 @@ const CARD_HEIGHT: f32 = 190.0;
 const SIDE_BY_SIDE: f32 = 640.0;
 
 fn card_id(key: &str) -> Id {
-    Id::new(("cloud-setup-card", key))
+    Id::unique(("cloud-setup-card", key))
 }
 
 pub(super) fn unconfigured(ui: &mut Ui, form: &mut Production) -> Choice {

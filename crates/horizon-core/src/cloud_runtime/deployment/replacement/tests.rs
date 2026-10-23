@@ -139,8 +139,6 @@ struct Script {
     head: Head,
     /// The uncommitted files of the build context.
     uncommitted: Uncommitted,
-    /// Whether the cloud is the cloud of an Upkeep.
-    upkeep: bool,
     /// Each sibling's latest committed revision, or a resolution refusal when `None`.
     sibling_heads: Option<Vec<String>>,
     /// The sibling revisions each build layered.
@@ -168,7 +166,6 @@ impl Script {
                 notes: Vec::new(),
             },
             uncommitted: Uncommitted::default(),
-            upkeep: false,
             sibling_heads: Some(Vec::new()),
             built_siblings: RefCell::default(),
             built: digest('b'),
@@ -233,12 +230,6 @@ impl Recipe for Script {
         Ok(self.head.clone())
     }
 
-    fn revision(&self, repository: &Path) -> Result<String> {
-        assert_eq!(repository, Path::new("/synthetic"));
-        self.log("revision");
-        Ok(self.head.revision.clone())
-    }
-
     fn siblings(&self, state: &Deployment, config: &CloudConfig, _profile: &Profile) -> Result<Vec<String>> {
         assert!(state.siblings.is_some());
         assert_eq!(
@@ -255,10 +246,6 @@ impl Recipe for Script {
             (Path::new("/synthetic"), self.head.revision.as_str())
         );
         Ok(self.uncommitted.clone())
-    }
-
-    fn upkeep(&self, _cloud_id: &str) -> bool {
-        self.upkeep
     }
 }
 

@@ -190,6 +190,7 @@ mod tests {
 
     fn wheel_event() -> Event {
         Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::Y,
             phase: egui::TouchPhase::Move,

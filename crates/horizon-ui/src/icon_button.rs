@@ -4,9 +4,7 @@
 //! Navigation glyphs on the same row stay 13 points. The button label is
 //! the accessibility name. The caller supplies the hover text.
 
-use egui::{
-    Color32, CornerRadius, Painter, Pos2, Rect, Response, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, WidgetType,
-};
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Role, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
 
 use crate::theme;
 
@@ -28,7 +26,7 @@ pub(crate) fn icon_button(
             .corner_radius(6)
             .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
     );
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, response.enabled(), label));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, response.enabled(), label));
     let color = if response.enabled() {
         theme::FG()
     } else {

@@ -290,7 +290,7 @@ fn an_expired_manifest_code_is_a_refusal() {
 }
 
 #[test]
-fn the_manifest_asks_for_what_clouds_and_upkeep_use() {
+fn the_manifest_asks_for_what_clouds_use() {
     let manifest = manifest(
         "Horizon (example)",
         "Gives clouds access.",

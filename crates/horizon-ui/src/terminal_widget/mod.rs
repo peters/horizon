@@ -1,3 +1,4 @@
+mod clipboard_paste;
 mod ime;
 mod input;
 mod layout;
@@ -24,18 +25,31 @@ const LINE_HEIGHT_FACTOR: f32 = 1.3;
 pub struct TerminalView<'a> {
     panel: &'a mut Panel,
     grid_cache: Option<&'a mut TerminalGridCache>,
+    /// Canvas points at the bottom of the available area that the scrollbar
+    /// leaves to the panel's corner resize grip.
+    scrollbar_bottom_clearance: f32,
 }
 
 pub struct TerminalKeyboardContext<'a> {
     pub keyboard_events: &'a [super::input::TerminalInputEvent],
     pub primary_selection: &'a PrimarySelection,
+    /// Clipboard images become a private file whose path the terminal pastes.
+    pub clipboard_images: &'a super::clipboard_image::ClipboardImages,
     pub local_ssh_reconnect_enabled: bool,
     pub reconnect_requested: &'a mut bool,
 }
 
 impl<'a> TerminalView<'a> {
-    pub fn new(panel: &'a mut Panel, grid_cache: Option<&'a mut TerminalGridCache>) -> Self {
-        Self { panel, grid_cache }
+    pub fn new(
+        panel: &'a mut Panel,
+        grid_cache: Option<&'a mut TerminalGridCache>,
+        scrollbar_bottom_clearance: f32,
+    ) -> Self {
+        Self {
+            panel,
+            grid_cache,
+            scrollbar_bottom_clearance,
+        }
     }
 
     /// Renders the terminal panel. Returns `true` if clicked (for focus tracking).
@@ -50,8 +64,14 @@ impl<'a> TerminalView<'a> {
     ) -> bool {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;
+        clipboard_paste::keep_frames(ui.ctx());
         let line_height = metrics.line_height;
-        let layout = terminal_layout(ui.available_size(), char_width, line_height);
+        let layout = terminal_layout(
+            ui.available_size(),
+            char_width,
+            line_height,
+            self.scrollbar_bottom_clearance,
+        );
         let viewport = terminal_viewport_size(ui.available_size(), char_width, line_height);
         let new_cols = viewport.cols;
         let new_rows = viewport.rows;
@@ -83,9 +103,8 @@ impl<'a> TerminalView<'a> {
             window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
         self.panel.set_focused(has_terminal_focus);
 
-        #[cfg(target_os = "linux")]
         if interactive && has_terminal_focus {
-            let target_id = egui::Id::new(("native_image_paste_target", ui.ctx().viewport_id()));
+            let target_id = egui::Id::unique(("native_image_paste_target", ui.ctx().viewport_id()));
             ui.ctx()
                 .data_mut(|data| data.insert_temp(target_id, (self.panel.id, interaction.body.id)));
         }
@@ -157,6 +176,7 @@ impl<'a> TerminalView<'a> {
                 self.panel,
                 keyboard.keyboard_events,
                 keyboard.primary_selection,
+                keyboard.clipboard_images,
                 keyboard.local_ssh_reconnect_enabled,
             );
         }
@@ -186,6 +206,24 @@ pub(crate) fn wheel_cell_size(ctx: &Context) -> Vec2 {
 pub(crate) fn viewport_for_available_space(ctx: &Context, available: Vec2) -> layout::TerminalViewportSize {
     let metrics = grid_metrics(ctx);
     terminal_viewport_size(available, metrics.char_width, metrics.line_height)
+}
+
+/// The scrollbar's hit rectangle, in the terminal's own coordinate space, for a
+/// terminal that leaves `scrollbar_bottom_clearance` free at its bottom.
+#[cfg(test)]
+pub(crate) fn scrollbar_hit_rect(available: Vec2, scrollbar_bottom_clearance: f32) -> egui::Rect {
+    let metrics = GridMetrics {
+        char_width: FONT_SIZE * 0.6,
+        line_height: FONT_SIZE * LINE_HEIGHT_FACTOR,
+        font_id: FontId::monospace(FONT_SIZE),
+    };
+    let layout = terminal_layout(
+        available,
+        metrics.char_width,
+        metrics.line_height,
+        scrollbar_bottom_clearance,
+    );
+    layout.scrollbar.expand2(Vec2::splat(layout::SCROLLBAR_HIT_PADDING))
 }
 
 // The regression fixture uses a Unix shell and PTY.

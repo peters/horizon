@@ -69,7 +69,7 @@ impl HorizonApp {
         } else {
             16.0
         };
-        egui::Area::new(Id::new("canvas_hud"))
+        egui::Area::new(Id::unique("canvas_hud"))
             .anchor(egui::Align2::LEFT_BOTTOM, Vec2::new(hud_left, -16.0))
             .interactable(false)
             .order(Order::Foreground)
@@ -134,7 +134,7 @@ impl HorizonApp {
         let card_size = Vec2::new(540.0, 228.0);
         let card_rect = Rect::from_center_size(self.canvas_rect(ctx).center(), card_size);
 
-        egui::Area::new(Id::new("empty_state_card"))
+        egui::Area::new(Id::unique("empty_state_card"))
             .fixed_pos(card_rect.min)
             .order(Order::Foreground)
             .show(ctx, |ui| {

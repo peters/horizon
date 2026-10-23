@@ -1,0 +1,16 @@
+[package]
+name = "horizon-terminal"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Click targets and search on an alacritty terminal grid, with no PTY and no UI toolkit"
+
+[lints]
+workspace = true
+
+[dependencies]
+alacritty_terminal.workspace = true
+regex.workspace = true

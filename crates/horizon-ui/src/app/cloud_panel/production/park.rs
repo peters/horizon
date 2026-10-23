@@ -448,7 +448,7 @@ impl HorizonApp {
             // canvas coordinates can lie far outside the screen rectangle.
             let painter = egui::Painter::new(
                 ctx.clone(),
-                egui::LayerId::new(order, egui::Id::new(("panel", id.0))),
+                egui::LayerId::new(order, egui::Id::unique(("panel", id.0))),
                 body,
             );
             let strip =

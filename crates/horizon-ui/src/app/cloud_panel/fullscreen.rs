@@ -141,7 +141,7 @@ impl HorizonApp {
             self.render_production_runtimes(ui.ctx());
         }
         let mut exit = false;
-        egui::Area::new(Id::new("cloud-fullscreen-navigation"))
+        egui::Area::new(Id::unique("cloud-fullscreen-navigation"))
             .order(Order::Tooltip)
             .fixed_pos(egui::pos2(24.0, 18.0))
             .show(ui.ctx(), |ui| {

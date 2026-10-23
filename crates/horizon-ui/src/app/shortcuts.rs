@@ -27,12 +27,12 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
 /// narrow form so its broad key/text swallow does not consume the captured
 /// chord's release before the pending-key branch clears it.
 pub(crate) fn hotkey_binder_capturing(ctx: &egui::Context) -> bool {
-    ctx.data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+    ctx.data(|data| data.get_temp(egui::Id::unique("speech_hotkey_capturing")))
         .unwrap_or(false)
 }
 
 pub(in crate::app) fn mark_captured_clipboard_event(ctx: &egui::Context) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new(CAPTURED_CLIPBOARD_EVENT_ID), true));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(CAPTURED_CLIPBOARD_EVENT_ID), true));
 }
 
 /// Consume the one-frame marker set when the hotkey binder saw an egui
@@ -40,7 +40,7 @@ pub(in crate::app) fn mark_captured_clipboard_event(ctx: &egui::Context) {
 /// so the raw capture flag has already been cleared by the time this runs.
 pub(in crate::app) fn take_captured_clipboard_event(ctx: &egui::Context) -> bool {
     ctx.data_mut(|data| {
-        let id = egui::Id::new(CAPTURED_CLIPBOARD_EVENT_ID);
+        let id = egui::Id::unique(CAPTURED_CLIPBOARD_EVENT_ID);
         let captured = data.get_temp(id).unwrap_or(false);
         data.remove_temp::<bool>(id);
         captured
@@ -59,7 +59,7 @@ const PENDING_CAPTURE_TIMEOUT: f64 = 3.0;
 /// Return the pending captured chord after expiring stale state. Global
 /// shortcut dispatch and terminal filtering must share this cleanup path.
 pub(in crate::app) fn pending_hotkey_capture(ctx: &egui::Context) -> Option<super::settings::PendingCapture> {
-    let pending_id = egui::Id::new("speech_captured_key");
+    let pending_id = egui::Id::unique("speech_captured_key");
     let pending = ctx
         .data(|data| data.get_temp::<Option<super::settings::PendingCapture>>(pending_id))
         .flatten();
@@ -359,7 +359,7 @@ mod tests {
 
         ctx.data_mut(|data| {
             data.insert_temp(
-                egui::Id::new("speech_captured_key"),
+                egui::Id::unique("speech_captured_key"),
                 Some(crate::app::settings::PendingCapture {
                     key: Key::F11,
                     physical_key: Some(Key::F11),
@@ -380,7 +380,7 @@ mod tests {
             time: Some(5.0),
             ..RawInput::default()
         });
-        let pending_id = egui::Id::new("speech_captured_key");
+        let pending_id = egui::Id::unique("speech_captured_key");
         ctx.data_mut(|data| {
             data.insert_temp(
                 pending_id,

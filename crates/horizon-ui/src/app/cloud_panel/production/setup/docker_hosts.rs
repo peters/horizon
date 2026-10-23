@@ -67,6 +67,7 @@ impl Editor {
             access: self.access,
             address: (self.access != Access::ThisPc).then(|| text(&self.address)).flatten(),
             docker: text(&self.docker),
+            pinned: None,
         }
     }
 
@@ -539,6 +540,7 @@ mod tests {
                 access: Access::ThisPc,
                 address: None,
                 docker: None,
+                pinned: None,
             })
             .collect();
         let mut extra = Editor::new(None);

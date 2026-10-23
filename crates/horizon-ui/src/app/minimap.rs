@@ -57,7 +57,7 @@ impl HorizonApp {
             workspace_bounds,
             self.canvas_rect(ctx),
             MinimapScope::Attached,
-            Id::new("minimap_overlay"),
+            Id::unique("minimap_overlay"),
         );
     }
 

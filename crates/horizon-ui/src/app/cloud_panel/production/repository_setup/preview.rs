@@ -188,6 +188,12 @@ impl Preview {
         }
     }
 
+    /// Whether the preview starts or runs, and so uses its Docker; a failed or skipped one
+    /// does not.
+    pub(super) fn uses_engine(&self) -> bool {
+        matches!(self.outcome, Outcome::Starting | Outcome::Live { .. })
+    }
+
     /// The loopback port of the live desktop.
     pub(super) fn live_port(&self) -> Option<u16> {
         match self.outcome {
@@ -304,6 +310,16 @@ impl Job {
     /// never did, and a private, empty Docker configuration made for this preview.
     fn daemon(&self) -> Result<Docker, String> {
         let daemon = if let Some(daemon) = self.pinned.get() {
+            // The proof's engine on a Docker host it no longer reaches, as a rented builder
+            // deleted since, has no image to show: the next proof makes one where it runs.
+            if let Some(remote) = daemon.remote()
+                && !remote.alive()
+            {
+                return Err(format!(
+                    "the Docker engine on {} that proved this setup is no longer reached, as when the rented builder was deleted; prove the setup again, then ask for the preview",
+                    remote.name()
+                ));
+            }
             daemon.clone()
         } else {
             let daemon = Daemon::resolve()?;

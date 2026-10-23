@@ -6,7 +6,9 @@ The native server is separate from the injected browser MCP.
 Register the packaged executable as `horizon --native-mcp --client <private-client.json>`
 only when server setup is part of the requested task. The client selects the
 project, persistent owner UUID, private state, Horizon configuration, approved
-tunnel executable, and its SHA-256. Tool arguments cannot replace these bindings.
+tunnel executable, and its SHA-256. A project with no `tunnel` needs no tunnel
+executable, and optional `credential_files` replace the OS keyring. Tool arguments
+cannot replace these bindings.
 Use the repository runbook `docs/architecture/remote-device-testing.md` and its
 schema when available; do not invent a client or project contract from this summary.
 
@@ -35,7 +37,7 @@ or production backend use is authorized by a test request.
 | `app_view` | Get the owned session's read-only loopback VNC endpoint. |
 | `app_logs` | Get available device, crash, Appium, or network logs. |
 | `app_video` | Read policy, get video, or close and download with `stop`. |
-| `app_tunnel_status` | Read redacted tunnel readiness and ownership. |
+| `app_tunnel_status` | Read redacted tunnel readiness and ownership. A project with no tunnel returns `app_tunnel_absent`. |
 | `app_audit` | Read bounded receipts with `after_sequence` and `limit`. |
 | `app_session_close` | Get exact closure acknowledgement and clean up owned services. |
 

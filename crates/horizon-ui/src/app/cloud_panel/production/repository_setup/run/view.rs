@@ -9,6 +9,9 @@ use std::time::Duration;
 /// Dialog buttons and the steering field follow the creation dialog's sizes.
 const BUTTON: Vec2 = Vec2::new(120.0, 40.0);
 
+/// The narrowest the file list of a finished setup gets before the row stops shrinking it.
+const FILES_MIN_WIDTH: f32 = 160.0;
+
 /// The progress view in place of the setup choices: the steps and the steering
 /// row in a card, then the agent's own screen in a well that fills the height left.
 /// `output_height` places the output well below the steps; `None` leaves it to a
@@ -151,7 +154,7 @@ fn step_row(ui: &mut Ui, step: &Step, elapsed: Option<Duration>) {
             Some(elapsed) => format!("{}: {state}, {} s", step.title, elapsed.as_secs()),
             None => format!("{}: {state}", step.title),
         };
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken.clone()));
         ui.add_space(6.0);
         let color = match step.state {
             State::Running => theme::FG(),
@@ -419,14 +422,20 @@ fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> O
 fn finished_actions(ui: &mut Ui, run: &Run, inline: bool) -> Option<Action> {
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(run.files.as_deref().unwrap_or_default())
-                .monospace()
-                .size(12.5)
-                .color(theme::FG_SOFT()),
-        );
-        // Use this setup is in the footer beside the terminal; Stop ends a proved setup
-        // the person does not want, in both layouts.
+        // A real repository writes hundreds of names. The list keeps the width the actions
+        // leave and ends in an ellipsis, so the row never grows past the dialog.
+        // Use this setup, Show agent and Stop inline; Stop alone beside the terminal, and
+        // Show live preview wherever a desktop is live.
+        let actions = 1 + 2 * u16::from(inline) + u16::from(run.preview_panel.is_some());
+        let spacing = ui.spacing().item_spacing.x;
+        let reserved = f32::from(actions) * BUTTON.x + f32::from(actions.saturating_sub(1)) * spacing;
+        let width = (ui.max_rect().width() - reserved - spacing).max(FILES_MIN_WIDTH);
+        let files = run.files.as_deref().unwrap_or_default();
+        if !files.is_empty() {
+            let label =
+                egui::Label::new(RichText::new(files).monospace().size(12.5).color(theme::FG_SOFT())).truncate();
+            ui.add_sized(Vec2::new(width, BUTTON.y), label);
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if inline {
                 let primary = egui::Button::new(RichText::new("Use this setup").size(14.0).strong().color(theme::BG()))
@@ -529,4 +538,72 @@ fn chip(ui: &mut Ui, text: &str) {
         .corner_radius(10)
         .inner_margin(egui::Margin::symmetric(8, 2))
         .show(ui, |ui| ui.label(RichText::new(text).size(12.0).color(theme::ACCENT())));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::cloud_panel::production::repository_setup::Mode;
+    use crate::test_egui::DiscardTextures;
+    use horizon_core::{PanelId, PanelKind};
+    use std::path::PathBuf;
+
+    fn run_with_files(files: &str) -> Run {
+        let mut run = Run::new(
+            PanelId(1),
+            PanelKind::Codex,
+            PathBuf::from("."),
+            PathBuf::from("missing.json"),
+            Mode::New,
+        );
+        run.files = Some(files.to_owned());
+        run
+    }
+
+    /// A real repository writes hundreds of names into the status file. The finished row
+    /// must elide them instead of widening the dialog past its window.
+    #[test]
+    fn a_long_file_list_keeps_the_finished_row_inside_the_dialog() {
+        let names = (0..120)
+            .map(|index| format!("nuget/youpark.component{index}.2026.10.1.40632.nupkg new"))
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let run = run_with_files(&names);
+        let ctx = egui::Context::default();
+        let room = 620.0;
+        let mut row = 0.0;
+        let _output = ctx
+            .run_ui(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(room, 200.0));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                        finished_actions(ui, &run, true);
+                        row = ui.min_rect().width();
+                    });
+                });
+            })
+            .discard_textures();
+        assert!(row <= room + 0.5, "the row is {row} wide in a {room} wide dialog");
+    }
+
+    #[test]
+    fn a_short_file_list_stays_inside_the_dialog() {
+        let run = run_with_files(".horizon/Dockerfile \u{b7} .horizon/cloud.yml");
+        let ctx = egui::Context::default();
+        let room = 1200.0;
+        let mut row = 0.0;
+        let _output = ctx
+            .run_ui(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(room, 200.0));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                        finished_actions(ui, &run, true);
+                        row = ui.min_rect().width();
+                    });
+                });
+            })
+            .discard_textures();
+        assert!(row > 0.0, "the row was drawn");
+        assert!(row <= 1200.0, "a short list stays inside the dialog");
+    }
 }

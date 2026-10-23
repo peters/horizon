@@ -93,6 +93,17 @@ pub enum AgentSessionValidationMode {
     ParentThreadRoots,
 }
 
+/// How a caller hands the agent its first task, as the setup agent does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentPromptMode {
+    /// The command line takes the message as its last argument, so the agent starts on
+    /// the task and no keystroke races its first screen.
+    Argument,
+    /// The terminal gets the message pasted into the agent's prompt once its session
+    /// has settled.
+    Paste,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AgentDefinition {
     pub id: &'static str,
@@ -104,6 +115,7 @@ pub struct AgentDefinition {
     pub session_validation: AgentSessionValidationMode,
     pub integration: AgentIntegrationKind,
     pub kitty_keyboard: bool,
+    pub prompt_mode: AgentPromptMode,
 }
 
 impl AgentDefinition {
@@ -131,6 +143,7 @@ const CODEX: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::ParentThreadRoots,
     integration: AgentIntegrationKind::CodexMcp,
     kitty_keyboard: false,
+    prompt_mode: AgentPromptMode::Argument,
 };
 
 const CLAUDE: AgentDefinition = AgentDefinition {
@@ -146,6 +159,7 @@ const CLAUDE: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::ClaudePluginDir,
     kitty_keyboard: true,
+    prompt_mode: AgentPromptMode::Argument,
 };
 
 const OPENCODE: AgentDefinition = AgentDefinition {
@@ -161,6 +175,7 @@ const OPENCODE: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: true,
+    prompt_mode: AgentPromptMode::Paste,
 };
 
 const GEMINI: AgentDefinition = AgentDefinition {
@@ -173,6 +188,7 @@ const GEMINI: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: false,
+    prompt_mode: AgentPromptMode::Paste,
 };
 
 const KILO_CODE: AgentDefinition = AgentDefinition {
@@ -185,6 +201,7 @@ const KILO_CODE: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: true,
+    prompt_mode: AgentPromptMode::Paste,
 };
 
 const PI: AgentDefinition = AgentDefinition {
@@ -200,6 +217,7 @@ const PI: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::None,
     kitty_keyboard: true,
+    prompt_mode: AgentPromptMode::Argument,
 };
 
 /// xAI's Grok Build CLI (`grok`). Resumes by exact session id via
@@ -219,6 +237,7 @@ const GROK: AgentDefinition = AgentDefinition {
     session_validation: AgentSessionValidationMode::None,
     integration: AgentIntegrationKind::GrokMcp,
     kitty_keyboard: false,
+    prompt_mode: AgentPromptMode::Paste,
 };
 
 pub const BUILTIN_AGENT_KINDS: [PanelKind; 7] = [
@@ -252,7 +271,6 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         | PanelKind::Editor
         | PanelKind::GitChanges
         | PanelKind::Usage
-        | PanelKind::Upkeep
         | PanelKind::Browser
         | PanelKind::Device
         | PanelKind::SetupBoard => None,
@@ -261,7 +279,7 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentResumeMode, PanelKind, agent_definition, is_agent_working_line};
+    use super::{AgentPromptMode, AgentResumeMode, PanelKind, agent_definition, is_agent_working_line};
 
     #[test]
     fn exact_session_binding_support_is_reserved_for_catalog_backed_agents() {
@@ -353,6 +371,31 @@ mod tests {
         assert!(!is_agent_working_line("\u{280b} > ready"));
         assert!(!is_agent_working_line("\u{2713} Done"));
         assert!(!is_agent_working_line(""));
+    }
+
+    #[test]
+    fn the_agents_with_a_message_argument_take_their_first_task_on_the_command_line() {
+        // These start on the task from a trailing argument; the others get it pasted into
+        // their prompt once their session settles.
+        for kind in [PanelKind::Codex, PanelKind::Claude, PanelKind::Pi] {
+            assert_eq!(
+                agent_definition(kind).expect("agent").prompt_mode,
+                AgentPromptMode::Argument,
+                "{kind:?}"
+            );
+        }
+        for kind in [
+            PanelKind::OpenCode,
+            PanelKind::Gemini,
+            PanelKind::KiloCode,
+            PanelKind::Grok,
+        ] {
+            assert_eq!(
+                agent_definition(kind).expect("agent").prompt_mode,
+                AgentPromptMode::Paste,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

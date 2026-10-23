@@ -17,9 +17,7 @@ WORKER_SCRIPTS = (
     'horizon-worker-git-auth', 'horizon-worker-github', 'horizon-worker-github-common', 'horizon-worker-github-agents',
     'horizon-worker-github-git', 'horizon-worker-github-http', 'horizon-worker-github-api',
     'horizon-worker-github-api-rest', 'horizon-worker-github-graphql', 'horizon-worker-github-graphql-policy',
-    'horizon-worker-github-tasks', 'horizon-worker-github-mcp', 'horizon-worker-github-upkeep',
-    'horizon-worker-github-api-upkeep', 'horizon-worker-github-git-upkeep', 'horizon-worker-github-upkeep-loop',
-    'horizon-worker-github-packages', 'horizon-worker-gh-repository',
+    'horizon-worker-github-tasks', 'horizon-worker-github-mcp', 'horizon-worker-gh-repository',
     'horizon-worker-browserstack',
 )
 TAILSCALE_INPUTS = ('build.sh', 'collect-notices.py', 'unix-proxy-v1.patch')

@@ -7,6 +7,7 @@ fn zoom_modified_wheels_are_judged_per_event() {
     // `COMMAND` is what egui reports for Cmd on macOS and Ctrl elsewhere.
     for zoom_modifier in [Modifiers::CTRL, Modifiers::COMMAND] {
         let zoom_wheel = Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Point,
             delta: Vec2::new(0.0, -5.0),
             phase: TouchPhase::Move,
@@ -47,6 +48,7 @@ fn a_zoom_modified_start_never_owns_or_chains_the_pan() {
     let options = InputOptions::default();
     for zoom_modifier in [Modifiers::CTRL, Modifiers::COMMAND] {
         let zoom_wheel = |phase: TouchPhase, delta: Vec2| Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Point,
             delta,
             phase,
@@ -98,12 +100,14 @@ fn zoom_modified_gesture_boundaries_end_the_pan_but_stay_zoom_steps() {
     // the gesture. A plain `Start` lands the old motion the same way.
     let options = InputOptions::default();
     let notch = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Move,
         modifiers: Modifiers::NONE,
     };
     let boundary = |phase, modifiers, delta| Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta,
         phase,
@@ -175,6 +179,7 @@ fn zoom_modified_gesture_boundaries_end_the_pan_but_stay_zoom_steps() {
 fn a_frame_mixing_plain_and_zoom_wheels_pans_and_zooms_in_either_order() {
     let plain = wheel(Vec2::new(0.0, -5.0), TouchPhase::Move);
     let zoom = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta: Vec2::new(0.0, -5.0),
         phase: TouchPhase::Move,
@@ -216,6 +221,7 @@ fn zoom_frame(ctx: &Context, time: f64, events: Vec<Event>, over_canvas: bool) -
 
 fn zoom_notch() -> Event {
     Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Move,
@@ -241,6 +247,7 @@ fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
     // The router skips Ctrl and Cmd wheels alike as zoom steps, so a lone
     // Ctrl, which is not `command` on macOS, must zoom here too.
     let ctrl = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta: Vec2::new(0.0, -5.0),
         phase: TouchPhase::Move,
@@ -251,6 +258,7 @@ fn a_zoom_wheel_notch_eases_in_to_exactly_one_line_of_egui_zoom() {
     // A Wayland touchpad gesture opens with a `Start` that already moves;
     // egui drops that delta, the canvas zooms by it.
     let start = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta: Vec2::new(0.0, -5.0),
         phase: TouchPhase::Start,
@@ -285,6 +293,7 @@ fn a_new_zoom_contact_lands_the_previous_notch_in_full() {
         let ctx = Context::default();
         let first = zoom_frame(&ctx, 1.0, vec![zoom_notch()], true);
         let boundary = Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Point,
             delta: Vec2::ZERO,
             phase: TouchPhase::Start,
@@ -303,6 +312,7 @@ fn a_new_zoom_contact_lands_the_previous_notch_in_full() {
 
 fn zoom_contact(phase: TouchPhase, modifiers: Modifiers) -> Event {
     Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Point,
         delta: Vec2::new(0.0, -5.0),
         phase,

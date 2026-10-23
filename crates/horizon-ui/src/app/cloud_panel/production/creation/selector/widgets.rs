@@ -128,6 +128,6 @@ pub(in super::super) fn checkbox(ui: &mut Ui, checked: &mut bool, label: &str) -
         color,
     );
     let checked = *checked;
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, checked, label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, checked, label));
     response
 }

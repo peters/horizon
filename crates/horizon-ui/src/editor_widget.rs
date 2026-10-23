@@ -147,7 +147,7 @@ fn render_body(
 }
 
 fn editor_text_id(panel_id: PanelId) -> Id {
-    Id::new(("horizon_editor_text", panel_id.0))
+    Id::unique(("horizon_editor_text", panel_id.0))
 }
 
 fn sync_text_edit_caret(ctx: &egui::Context, id: Id, caret: usize) {

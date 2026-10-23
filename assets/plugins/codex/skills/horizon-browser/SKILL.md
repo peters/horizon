@@ -79,7 +79,12 @@ worker, your injected actor must match a registered workspace session. For a
 request addressed to the current worker, an actor outside that workspace receives `panel_outside_workspace` before a browser starts.
 Use the registered session identity; do not retry an unregistered actor. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
-short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
+short-lived `ref` in `browser_act`. Remote iOS clicks and field entry use
+synchronous target checks before trusted native input. Verify the visible result
+after each action. `browser_evaluate` works on a driver that omits its script
+timeout, and it awaits a returned promise: a rejection is a `javascript_error`
+and an unsettled promise is an `evaluation_timeout`.
+Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
 before an action when the page may have changed.
 
@@ -319,6 +324,19 @@ the same tools for the remote targets of a host file. It starts no local
 browser, so `browser_create` needs a `target`. Close each session when the task
 ends; the host also releases every session when the MCP client disconnects.
 
+A profile host (`horizon-browser host --config <host-file>`) keeps named,
+persistent browser profiles on its computer for `horizon-browser mcp --connect`
+clients. There, `browser_create` needs a profile name as `target` and takes no
+`backend`; `browser_duplicate` opens your page again in the same profile. As for
+any target, a second `browser_create` needs `allow_additional: true`. The pages
+of one profile share its cookies and sign-ins with every agent of the host, but
+`browser_list` shows only your own pages. One agent holds at most 4 pages, and a
+page with no action for 60 minutes closes. Close each page when the task ends;
+the profile and its sign-ins stay. `browser_screenshot` returns the path of a
+private PNG on the host's computer; a client started with
+`mcp --connect --inline-screenshots` also gets the PNG as an image block. A
+screenshot counts as an action of the page.
+
 ## Actions, attachments, and screenshots
 
 `browser_act` operations are `click`, `fill`, `press`, `scroll`, `reload`, `back`,
@@ -357,7 +375,7 @@ person answers, so use `set_files` on the input instead of clicking the button.
 
 `browser_screenshot` returns retained viewport pixels as a private PNG path and
 original dimensions. It requires a ready panel and a live supporting Horizon
-host. It takes no fresh navigation or full-page capture. Optional
+host or profile host. It takes no fresh navigation or full-page capture. Optional
 `copy_to_clipboard` defaults false; `clipboard_requested` proves host dispatch,
 not OS acknowledgement. Capture claims ownership and refuses another live owner,
 human steering, or pending handoff. It changes no focus, visibility, or canvas.

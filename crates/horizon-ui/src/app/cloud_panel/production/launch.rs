@@ -774,7 +774,7 @@ mod tests {
         };
         app.cloud_prototype.production.title = "Title only".into();
         draw_until_complete(&ctx, &mut app, input);
-        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("cloud-title")));
         let mut event = input();
         event.events.push(egui::Event::Key {
             key: egui::Key::Enter,
@@ -816,7 +816,7 @@ mod tests {
             .production
             .source
             .edit_for_test("github.com/demo-org/other");
-        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("cloud-title")));
         let mut event = input();
         event.events.push(egui::Event::Key {
             key: egui::Key::Enter,
@@ -856,7 +856,7 @@ mod tests {
                 .discard_textures();
         }
         app.cloud_prototype.production.title = "Keep editing".into();
-        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("cloud-title")));
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("cloud-title")));
         let mut event = input();
         event.events.push(egui::Event::Key {
             key: egui::Key::Enter,
@@ -870,7 +870,7 @@ mod tests {
             .discard_textures();
         assert!(!app.cloud_prototype.production.launch.submitted);
         assert!(app.cloud_prototype.production.pending_creation.is_none());
-        assert!(ctx.read_response(egui::Id::new("cloud-title")).unwrap().enabled());
+        assert!(ctx.read_response(egui::Id::unique("cloud-title")).unwrap().enabled());
     }
 
     #[test]

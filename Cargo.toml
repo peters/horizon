@@ -24,7 +24,9 @@ members = [
     "crates/horizon-core",
     "crates/horizon-cursor",
     "crates/horizon-process-time",
+    "crates/horizon-terminal",
     "crates/horizon-ui",
+    "crates/horizon-vnc",
     "crates/horizon-wayland",
     "vendor/smithay-clipboard",
 ]
@@ -72,6 +74,12 @@ ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
 horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.2.7" }
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
 vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "773ec2351241c80bbab88ffedae73f1972e0a4c1" }
+# The live VNC session behind the native Device viewer, usable by any UI.
+horizon-vnc = { path = "crates/horizon-vnc", version = "0.2.7" }
+# The click targets and the search of a terminal grid, usable by any UI or server.
+horizon-terminal = { path = "crates/horizon-terminal", version = "0.2.7" }
+# Zero-copy views of VNC pixels as RGBA bytes and as egui colors.
+bytemuck = { version = "1.25.2", features = ["extern_crate_alloc", "must_cast"] }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
@@ -119,12 +127,15 @@ time = { version = "0.3.55", features = ["formatting", "parsing"] }
 rmcp = { version = "3.5.0", default-features = false, features = ["macros", "server", "transport-io"] }
 schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
-eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-egui = "0.36.1"
+# `clipboard` is not in eframe's feature set when its defaults are off. Without it
+# egui-winit keeps the clipboard inside the process, so no clipboard shortcut ever
+# reads or writes the desktop clipboard.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "wgpu", "x11", "wayland"] }
+egui = "0.37.0"
 # Feature-only dependency: eframe/egui-wgpu keep using wgpu 30, so Horizon must
 # unify the native backend features here when eframe default features are disabled.
 wgpu = { version = "30.0.0", default-features = false, features = ["std", "vulkan", "gles", "metal", "dx12"] }
-egui_commonmark = { version = "0.25.0", default-features = false, features = ["pulldown_cmark"] }
+egui_commonmark = { version = "0.26.0", default-features = false, features = ["pulldown_cmark"] }
 winit = "0.30.13"
 # XInput 2.4 supplies Linux trackpad pinch events missing from winit 0.30.
 x11rb = { version = "0.14.0", features = ["xinput"] }
@@ -172,7 +183,7 @@ atspi = { version = "0.30.0", default-features = false, features = ["connection"
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
 axuielement = { version = "0.10.0", default-features = false, features = ["async"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "libc"] }
-global-hotkey = "0.8.0"
+global-hotkey = "0.9.0"
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.

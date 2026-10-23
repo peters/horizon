@@ -66,6 +66,20 @@ Horizon's exit past its time limit.
 - The SSH forwards (`proof/remote.rs`) end with the daemon value that holds
   them. A forwarded socket is in a private folder of this computer.
 
+## The rented builder
+
+- Horizon rents it (`horizon-core` `cloud_runtime/setup_builder.rs`,
+  `horizon-cloud` `hetzner/builder.rs`) with a login key and an SSH host key
+  that it makes for that builder alone. SSH to it uses `-F none`, only that
+  key, no agent and only that host key (`docker_host::Pinned`). The builder
+  gets the same copies as a Docker host, and no credential of the person.
+- A journal names the server from before the create request until its
+  deletion is proven, and only the process that holds `setup-builder.lock`
+  (`setup_builder::claim`) rents or deletes. A builder that is not deleted is
+  billed, so report a path where the journal goes before the server is gone,
+  where a renting that failed or was cancelled leaves a server, or where a
+  failed deletion is not tried again.
+
 ## Report
 
 - An agent-written file that makes Horizon run code, block, follow a link out

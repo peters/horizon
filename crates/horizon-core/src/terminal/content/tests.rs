@@ -4,11 +4,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::vte::ansi;
 
-use super::{
-    RowJoin, append_cell_text, bottom_row_texts, hyperlink_uri_at_viewport_point, logical_line_at_viewport_point,
-    screen_row_texts,
-};
-use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust, find_url_at_column};
+use super::{append_cell_text, bottom_row_texts, screen_row_texts};
+use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust};
 
 fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
     let mut line = String::new();
@@ -169,57 +166,4 @@ fn screen_row_texts_leave_out_concealed_text() {
     let rows = screen_row_texts(&term, 2, 2);
 
     assert_eq!(rows[0].0, "key        shown");
-}
-
-#[test]
-fn wrapped_url_detection_includes_continuation_rows() {
-    let url = "https://example.com/very/long/path";
-    let mut term = test_term(4, 12);
-    let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
-    parser.advance(&mut term, url.as_bytes());
-
-    let line =
-        logical_line_at_viewport_point(&term, 12, 2, 4, RowJoin::SoftWraps).expect("wrapped line should be present");
-
-    assert_eq!(find_url_at_column(&line.chars, line.column), Some(url.to_string()));
-}
-
-#[test]
-fn osc8_hyperlink_is_detected_at_labeled_cells() {
-    let mut term = test_term(4, 40);
-    let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
-    parser.advance(
-        &mut term,
-        b"Read \x1b]8;;https://x.ai/terms\x07Terms\x1b]8;;\x07 and more",
-    );
-
-    assert_eq!(
-        hyperlink_uri_at_viewport_point(&term, 40, 0, 5),
-        Some("https://x.ai/terms".to_string())
-    );
-    assert_eq!(
-        hyperlink_uri_at_viewport_point(&term, 40, 0, 9),
-        Some("https://x.ai/terms".to_string())
-    );
-    assert_eq!(hyperlink_uri_at_viewport_point(&term, 40, 0, 0), None);
-    assert_eq!(hyperlink_uri_at_viewport_point(&term, 40, 0, 11), None);
-}
-
-#[test]
-fn osc8_hyperlink_takes_priority_over_visible_url_text() {
-    let mut term = test_term(4, 40);
-    let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
-    parser.advance(
-        &mut term,
-        b"\x1b]8;;https://x.ai/terms\x07https://example.com\x1b]8;;\x07",
-    );
-
-    assert_eq!(
-        hyperlink_uri_at_viewport_point(&term, 40, 0, 0),
-        Some("https://x.ai/terms".to_string())
-    );
-    assert_eq!(
-        hyperlink_uri_at_viewport_point(&term, 40, 0, 8),
-        Some("https://x.ai/terms".to_string())
-    );
 }

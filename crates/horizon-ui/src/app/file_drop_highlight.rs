@@ -39,7 +39,7 @@ impl HorizonApp {
             return;
         };
 
-        egui::Area::new(egui::Id::new("file_drop_highlight"))
+        egui::Area::new(egui::Id::unique("file_drop_highlight"))
             .order(Order::Foreground)
             .fixed_pos(rect.min)
             .show(ctx, |ui| {

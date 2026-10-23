@@ -106,7 +106,7 @@ pub(super) fn picks(
 fn card(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize) -> bool {
     let offer = &catalog.offers[index];
     let id = ui
-        .id()
+        .scope_id()
         .with(("worker-card", offer.provider, &offer.id, &offer.location));
     let (name, detail) = title(offer);
     let (stock, color) = stock(catalog, index, form);
@@ -153,7 +153,7 @@ pub(super) fn framed(ui: &mut Ui, id: egui::Id, selected: bool, label: &str, con
     let response = ui
         .interact(frame.response.rect, id, Sense::click())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label));
     ui.add_space(4.0);
     response.clicked()
 }
@@ -336,7 +336,7 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
     paint_price(painter, egui::pos2(at(1.0), y), &price(offer), total.as_deref(), font);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             selected,
             match &total {

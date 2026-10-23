@@ -1264,3 +1264,26 @@ fn failed_progress_sink_does_not_omit_blocked_recipes_from_the_terminal_report()
     assert!(report.devices[0].steps[1..].iter().all(|step| step.blocked));
     assert!(report.devices[0].cleanup_confirmed);
 }
+
+#[test]
+#[cfg(unix)]
+fn run_with_no_tunnel_completes_every_declared_device() {
+    let (fixture, actor) = crate::actor::tests::actor_without_tunnel();
+    let report = run(&actor, &Control::new(Duration::from_secs(30)).unwrap(), capture, |_| {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(report.devices.len(), 1);
+    assert!(report.devices.iter().all(|device| device.error.is_none()
+        && device.cleanup_confirmed
+        && device.steps.iter().all(|step| step.passed)));
+    assert_eq!(fixture.fake.transport.creates.load(Ordering::SeqCst), 1);
+    assert!(
+        fixture
+            .workspace
+            .journal()
+            .pending(fixture.workspace.owner())
+            .unwrap()
+            .is_empty()
+    );
+}

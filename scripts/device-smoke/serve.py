@@ -39,7 +39,49 @@ with socket.socket() as listener:
 """
 
 
-def application_document(cwd, device_address=None, firefox_system_access=False):
+PRESET_RESUME_MODES = ('fresh', 'last')
+
+
+def presets_resume_error(index, resume):
+    """Why a `resume` value of a preset is not one that Horizon reads, or None.
+
+    `PanelResume` renames its unit variants to `fresh` and `last`, and its `session`
+    variant keeps a session id, so only the map form `{"session": {"session_id": …}}`
+    loads.
+    """
+    if resume is None or resume in PRESET_RESUME_MODES:
+        return None
+    if isinstance(resume, dict) and list(resume) == ['session']:
+        session = resume['session']
+        session_id = session.get('session_id') if isinstance(session, dict) else None
+        if isinstance(session_id, str) and session_id:
+            return None
+        return f'presets[{index}].resume.session needs a session_id'
+    modes = ', '.join(PRESET_RESUME_MODES)
+    return (
+        f'presets[{index}].resume must be {modes}, or '
+        f'{{"session": {{"session_id": "<id>"}}}}; received {resume!r}')
+
+
+def load_presets(path):
+    """The New Workspace presets of the fixture file, checked before Horizon reads them.
+
+    Horizon starts with its own defaults when the config does not load, which would show
+    an empty board instead of the presets the procedure tests.
+    """
+    presets = json.loads(path.read_text())
+    if not isinstance(presets, list):
+        raise ValueError(f'{path}: the presets must be a JSON list of presets')
+    for index, preset in enumerate(presets):
+        if not isinstance(preset, dict) or not preset.get('name') or not preset.get('kind'):
+            raise ValueError(f'{path}: presets[{index}] needs a name and a kind')
+        problem = presets_resume_error(index, preset.get('resume'))
+        if problem:
+            raise ValueError(f'{path}: {problem}')
+    return presets
+
+
+def application_document(cwd, device_address=None, firefox_system_access=False, presets=None):
     """Disposable Horizon config. System access stays off unless requested."""
     fixture = {
         'version': 11, 'window': {'width': 1480, 'height': 900},
@@ -70,6 +112,10 @@ def application_document(cwd, device_address=None, firefox_system_access=False):
                  'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
                  'position': [40, 720], 'size': [550, 140]},
             ]
+    if presets is not None:
+        # The New Workspace menu of the fixture, so a procedure can test an agent that
+        # has several presets without changing the real menu of the person.
+        fixture['presets'] = presets
     return fixture
 
 
@@ -86,6 +132,10 @@ def main():
         '--firefox-system-access', action='store_true',
         help='Set browser.firefox_system_access in the fixture config. Firefox disclosure procedure only.')
     parser.add_argument('--state', type=Path, required=True, help='New private evidence directory')
+    parser.add_argument(
+        '--presets',
+        type=Path,
+        help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
     args = parser.parse_args()
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
     args.state = args.state.resolve()
@@ -153,8 +203,9 @@ def main():
         sandbox.wait_for_unix_socket(box.host_socket, children[-1])
         spawn('openbox', ['openbox'])
         config = data / 'horizon.yaml'
+        presets = load_presets(args.presets) if args.presets else None
         fixture = application_document(
-            str(data.resolve()), args.device_address, args.firefox_system_access)
+            str(data.resolve()), args.device_address, args.firefox_system_access, presets)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', [str(app), '--config', str(config), '--ephemeral'])

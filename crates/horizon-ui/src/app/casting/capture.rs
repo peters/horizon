@@ -39,9 +39,28 @@ impl RootGeometry {
 }
 
 #[derive(Clone, Debug)]
-struct CaptureTicket {
+pub(super) struct CaptureTicket {
     pixels_per_point: f32,
     regions: Vec<(String, Instant, Rect)>,
+}
+
+pub(super) struct CapturedImage {
+    ticket: CaptureTicket,
+    image: std::sync::Arc<egui::ColorImage>,
+}
+
+fn request_capture(ctx: &Context, ticket: CaptureTicket) -> std::sync::mpsc::Receiver<CapturedImage> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let repaint = ctx.clone();
+    ctx.send_viewport_cmd_to(
+        ViewportId::ROOT,
+        egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+            if sender.try_send(CapturedImage { ticket, image }).is_ok() {
+                repaint.request_repaint_of(ViewportId::ROOT);
+            }
+        })),
+    );
+    receiver
 }
 
 impl HorizonApp {
@@ -118,11 +137,12 @@ impl HorizonApp {
             self.casting
                 .notify("Casting stopped because its source was hidden or covered".into());
         }
-        if !regions.is_empty() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(CaptureTicket {
+        if !regions.is_empty() && self.casting.pending_capture.is_none() {
+            let ticket = CaptureTicket {
                 pixels_per_point: ctx.pixels_per_point(),
                 regions,
-            })));
+            };
+            self.casting.pending_capture = Some(request_capture(ctx, ticket));
             self.casting.last_capture = Some(capture_slot(self.casting.last_capture, Instant::now()));
         }
     }
@@ -385,10 +405,10 @@ impl HorizonApp {
                 // are part of the picture.
                 let parent = memory.areas().parent_layer(layer);
                 if selected.clone().any(|panel| {
-                    let own = Id::new(("panel", panel.id.0));
+                    let own = Id::unique(("panel", panel.id.0));
                     layer.id == own
-                        || layer.id == Id::new(("cast_icon", panel.id.0))
-                        || layer.id == Id::new(("panel_resize_layer", panel.id.0))
+                        || layer.id == Id::unique(("cast_icon", panel.id.0))
+                        || layer.id == Id::unique(("panel_resize_layer", panel.id.0))
                         || parent.is_some_and(|parent| parent.id == own)
                 }) {
                     return false;
@@ -408,6 +428,7 @@ impl HorizonApp {
             .iter()
             .any(|session| matches!(session.worker.status(), CastStatus::Streaming { .. }))
         {
+            self.casting.pending_capture = None;
             return;
         }
         for session in &self.casting.sessions {
@@ -424,31 +445,25 @@ impl HorizonApp {
                 let _ = session.worker.submit_source(frame.width, frame.height, frame.rgba);
             }
         }
-        let events = ctx.input(|input| input.events.clone());
-        for event in events {
-            let egui::Event::Screenshot {
-                viewport_id,
-                user_data,
-                image,
-            } = event
-            else {
-                continue;
-            };
-            if viewport_id != ViewportId::ROOT {
-                continue;
-            }
-            let Some(ticket) = user_data
-                .data
-                .as_ref()
-                .and_then(|value| value.downcast_ref::<CaptureTicket>())
-            else {
-                continue;
+        let capture = self
+            .casting
+            .pending_capture
+            .as_ref()
+            .and_then(|receiver| match receiver.try_recv() {
+                Ok(capture) => Some(Ok(capture)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(())),
+            });
+        if let Some(capture) = capture {
+            self.casting.pending_capture = None;
+            let Ok(CapturedImage { ticket, image }) = capture else {
+                return;
             };
             if ticket.pixels_per_point.to_bits() != ctx.pixels_per_point().to_bits() {
-                continue;
+                return;
             }
             let (Ok(width), Ok(height)) = (u16::try_from(image.width()), u16::try_from(image.height())) else {
-                continue;
+                return;
             };
             let image_bounds = Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -504,7 +519,7 @@ fn capture_slot(previous: Option<Instant>, now: Instant) -> Instant {
     }
 }
 fn cast_picker_layer() -> LayerId {
-    LayerId::new(Order::Foreground, Id::new("cast_picker"))
+    LayerId::new(Order::Foreground, Id::unique("cast_picker"))
 }
 
 #[cfg(test)]

@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: cargo
     directory: "/"
+    cooldown:
+      default-days: 3
     schedule:
       interval: daily
       time: "04:00"
@@ -53,12 +55,16 @@ updates:
 
   - package-ecosystem: pip
     directory: "/auto/cast"
+    cooldown:
+      default-days: 3
     schedule:
       interval: daily
       time: "04:00"
 
   - package-ecosystem: docker
     directory: "/examples/cloud-worker"
+    cooldown:
+      default-days: 3
     schedule:
       interval: daily
       time: "04:00"
@@ -70,6 +76,8 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    cooldown:
+      default-days: 3
     schedule:
       interval: "daily"
       time: "04:00"
@@ -79,3 +87,10 @@ updates:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: docker
+    directory: "/.horizon"
+    cooldown:
+      default-days: 3
+    schedule:
+      interval: daily
+      time: "04:00"

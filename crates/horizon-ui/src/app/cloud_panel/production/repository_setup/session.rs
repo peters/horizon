@@ -22,7 +22,7 @@ pub(in crate::app::cloud_panel::production) struct Starting {
     /// The repository as the person entered it.
     pub(super) entered: String,
     /// The Docker host its proof builds on; none for this computer.
-    build_on: Option<horizon_core::cloud_runtime::docker_host::Host>,
+    build_on: Option<super::build_on::Target>,
     receiver: std::sync::mpsc::Receiver<Result<Prepared, String>>,
 }
 
@@ -60,8 +60,8 @@ impl HorizonApp {
         if self.cloud_prototype.production.starting_here() {
             return;
         }
-        let presets = super::setup_choices(&self.cloud_prototype.production);
-        let preset = super::chosen_preset(&self.cloud_prototype.production, &presets)
+        let groups = super::setup_groups(&self.cloud_prototype.production);
+        let preset = super::chosen_preset(&self.cloud_prototype.production, &groups)
             .cloned()
             // A machine account's agent without a preset of its own still starts plainly.
             .or_else(|| {
@@ -118,10 +118,7 @@ impl HorizonApp {
     fn prepare_cloud_setup(
         &mut self,
         ctx: &egui::Context,
-        (preset, build_on): (
-            horizon_core::PresetConfig,
-            Option<horizon_core::cloud_runtime::docker_host::Host>,
-        ),
+        (preset, build_on): (horizon_core::PresetConfig, Option<super::build_on::Target>),
         chosen_mode: super::Mode,
         entered: String,
     ) {
@@ -219,15 +216,7 @@ impl HorizonApp {
             return;
         }
         let kind = preset.kind;
-        // Claude and Codex take the instructions as their starting prompt; other agents get
-        // them pasted once their session settles.
-        let mut args = preset.args.clone();
-        let mut pending_prompt = None;
-        if matches!(kind, PanelKind::Claude | PanelKind::Codex) {
-            args.push(instructions);
-        } else {
-            pending_prompt = Some(instructions);
-        }
+        let (args, pending_prompt) = launch_task(&preset, instructions);
         // An agent starts only inside a scope that holds all its descendants: without
         // one, a process it started could leave its group and keep writing while Use
         // reads and commits.
@@ -300,11 +289,32 @@ impl HorizonApp {
             .collect();
     }
 
+    /// Deletes a rented builder an earlier Horizon left, from the first frame on, also
+    /// while the session chooser is open; the work runs on threads. Tests never call it:
+    /// it reads the real cloud root.
+    #[cfg(not(test))]
+    pub(in crate::app) fn recover_rented_builder(&mut self, ctx: &egui::Context) {
+        let builder = &mut self.cloud_prototype.production.setup_builder;
+        if builder.needs_recovery() {
+            let root = horizon_core::HorizonHome::resolve().root().join("cloud");
+            builder.recover(&root, ctx);
+        }
+    }
+
     /// Syncs every setup run, starts the setups whose repository was read, and closes
     /// setup panels that no run follows.
     pub(in crate::app::cloud_panel::production) fn sync_cloud_repository_setup(&mut self, ctx: &egui::Context) {
         self.close_orphaned_setup_panels(ctx);
         self.poll_cloud_setup_start(ctx);
+        let root = self.cloud_prototype.root.clone();
+        let production = &mut self.cloud_prototype.production;
+        let wanting = production
+            .setup_runs
+            .iter()
+            .filter(|run| run.wants_rented_builder())
+            .map(|run| run.panel.0)
+            .collect();
+        production.setup_builder.tick(&wanting, root.as_deref(), ctx);
         for run in self.cloud_prototype.production.setup_run_panels() {
             self.sync_cloud_setup_run(ctx, run);
         }
@@ -318,30 +328,20 @@ impl HorizonApp {
         if self.poll_cloud_setup_use(ctx, key) {
             return;
         }
+        let builder = &self.cloud_prototype.production.setup_builder;
+        let (rented_host, builder_wait) = (builder.host(), builder.waiting());
         let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
         run.poll(ctx);
-        // The finished card's list of changed files, made off the dialog's thread.
-        if run.finished() && run.files.is_none() {
-            if let Some(job) = &run.files_job {
-                if let Ok(files) = job.try_recv() {
-                    run.files = Some(files);
-                    run.files_job = None;
-                }
-            } else {
-                let (sender, receiver) = std::sync::mpsc::channel();
-                let repository = run.repository.clone();
-                let wake = ctx.clone();
-                std::thread::spawn(move || {
-                    let _ = sender.send(changed_files(&repository));
-                    wake.request_repaint();
-                });
-                run.files_job = Some(receiver);
-            }
-        }
-        // The agent asked for a (new) proof: Horizon builds and runs it itself.
-        if let Some((request, spec)) = run.proof_wanted() {
+        list_changed_files(run, ctx);
+        // The agent asked for a (new) proof: Horizon builds and runs it itself, on the
+        // rented builder once it answers. A run stopped meanwhile, as when its agent panel
+        // closed while it waited for the builder, starts none.
+        let place = run.proof_place((rented_host, builder_wait));
+        if !run.stopped
+            && let (Some((request, spec)), run::board::ProofPlace::Ready(build_on)) = (run.proof_wanted(), place)
+        {
             run.proved_request = request;
             run.proof_stale_reported = false;
             run.forget_inputs();
@@ -358,7 +358,7 @@ impl HorizonApp {
             run.previewed_request = 0;
             run.proof = Some(super::proof::Proof::start(
                 (&run.repository, &id, run.identity),
-                run.build_on.clone(),
+                build_on,
                 (request, spec),
                 log,
                 (run.host_restore, run.root_dirty.clone(), access),
@@ -434,9 +434,12 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
-        // A panel the person closed stays closed for this desktop.
+        // A panel the person closed stays closed for this desktop, and the desktop goes
+        // with it: nobody watches it any more.
         if run.preview_panel.is_some_and(|panel| self.board.panel(panel).is_none()) {
             run.preview_panel = None;
+            run.stop_unwatched_preview();
+            return;
         }
         let endpoint = run.preview.as_ref().and_then(super::preview::Preview::endpoint);
         if run.preview_shown == endpoint {
@@ -533,7 +536,7 @@ impl HorizonApp {
                 if let Some(panel) = self.board.panel_mut(panel_id) {
                     ui.allocate_ui(size, |ui| {
                         ui.set_min_size(size);
-                        crate::terminal_widget::TerminalView::new(panel, None).show(
+                        crate::terminal_widget::TerminalView::new(panel, None, 0.0).show(
                             ui,
                             false,
                             true,
@@ -541,6 +544,7 @@ impl HorizonApp {
                             crate::terminal_widget::TerminalKeyboardContext {
                                 keyboard_events: &events,
                                 primary_selection: &self.primary_selection,
+                                clipboard_images: &self.clipboard_images,
                                 local_ssh_reconnect_enabled: false,
                                 reconnect_requested: &mut reconnect,
                             },
@@ -777,6 +781,8 @@ impl HorizonApp {
         super::proof::keep_unremoved();
         // The resources kept on a Docker host are retried with a new forward next time.
         super::proof::close_forwards();
+        // The rented builder goes last: the runs' resources on it go with it.
+        self.cloud_prototype.production.setup_builder.give_back_for_exit();
     }
 
     /// The process the agent's panel started, which leads its own process group.
@@ -797,7 +803,7 @@ impl HorizonApp {
     /// ends.
     fn close_orphaned_setup_panels(&mut self, ctx: &egui::Context) {
         let current = self.cloud_prototype.production.setup_run_panels();
-        let looked = egui::Id::new("cloud-setup-orphan-scan");
+        let looked = egui::Id::unique("cloud-setup-orphan-scan");
         let now = (
             self.board.panels.len(),
             self.board.panels.last().map(|panel| panel.id),
@@ -817,6 +823,21 @@ impl HorizonApp {
         for panel in orphans {
             self.close_panel(panel);
         }
+    }
+}
+
+/// The preset's arguments and the instructions still to paste: an agent whose command
+/// line takes the message starts on its task, and the others get it pasted into their
+/// prompt once their session has settled.
+fn launch_task(preset: &horizon_core::PresetConfig, instructions: String) -> (Vec<String>, Option<String>) {
+    let starts_on_argument = horizon_core::agent_definition(preset.kind)
+        .is_some_and(|definition| definition.prompt_mode == horizon_core::AgentPromptMode::Argument);
+    let mut args = preset.args.clone();
+    if starts_on_argument {
+        args.push(instructions);
+        (args, None)
+    } else {
+        (args, Some(instructions))
     }
 }
 
@@ -901,6 +922,28 @@ fn files_summary(changes: &[String]) -> String {
         shown.push(format!("and {} more", changes.len() - SHOWN_FILES));
     }
     shown.join(" · ")
+}
+
+/// The finished card's list of changed files, made off the dialog's thread.
+fn list_changed_files(run: &mut Run, ctx: &egui::Context) {
+    if !run.finished() || run.files.is_some() {
+        return;
+    }
+    if let Some(job) = &run.files_job {
+        if let Ok(files) = job.try_recv() {
+            run.files = Some(files);
+            run.files_job = None;
+        }
+        return;
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let repository = run.repository.clone();
+    let wake = ctx.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(changed_files(&repository));
+        wake.request_repaint();
+    });
+    run.files_job = Some(receiver);
 }
 
 #[cfg(test)]

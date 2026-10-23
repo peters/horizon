@@ -31,14 +31,16 @@ workspace = true
 [dependencies]
 horizon-app-host.workspace = true
 horizon-browser.workspace = true
-vnc.workspace = true
+horizon-vnc.workspace = true
+bytemuck.workspace = true
 thiserror.workspace = true
 horizon-browser-mcp.workspace = true
 horizon-core.workspace = true
 zeroize.workspace = true
 horizon-cursor.workspace = true
 eframe.workspace = true
-egui.workspace = true
+# `bytemuck` lets VNC pixels become a texture image without a copy.
+egui = { workspace = true, features = ["bytemuck"] }
 winit.workspace = true
 # Pulls the backend feature set into eframe's transitive wgpu dependency.
 wgpu.workspace = true
@@ -63,6 +65,7 @@ cpal = { workspace = true, optional = true }
 
 [dev-dependencies]
 horizon-browser = { workspace = true, features = ["test-support"] }
+horizon-vnc = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
 
 [target.'cfg(unix)'.dependencies]

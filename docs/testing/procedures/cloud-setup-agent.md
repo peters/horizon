@@ -2,7 +2,7 @@
 procedure: cloud-setup-agent
 feature: Set up from CI in New cloud (setup agent and Horizon's proof)
 platforms: [linux]
-cost: none
+cost: rents compute  # S25 only; S01 to S24 and S26 use only this computer
 destructive: yes
 secrets: [the local login of the agent (Codex or Claude)]
 owner: peters
@@ -23,8 +23,9 @@ setup** commits `.horizon` and reads it as the repository profile.
 - Platforms: Linux with Docker. The isolated fixture of
   [area S of the cloud panels procedure](cloud-panels/s-test-fixture.md) is
   recommended.
-- This procedure does not test: a deploy, a provider, or a paid agent API key.
-  No step rents compute.
+- This procedure does not test: a deploy or a paid agent API key. Only S25 rents
+  compute: a Hetzner server that Horizon deletes again. S01 to S24 and S26 use
+  only this computer.
 - For a pull request that changes the setup agent, the proof or the desktop preview,
   also run [the setup gate](cloud-setup-gate.md). It runs the proof on real
   repositories.
@@ -102,7 +103,8 @@ setup** commits `.horizon` and reads it as the repository profile.
 2. Click the **Codex** chip.
 
    Result: The button says **Set up with Codex**. Each agent shows one chip, in
-   its default mode, with no YOLO or Auto variant.
+   its default mode, with no YOLO or Auto variant. An agent that has more than one
+   preset in the **New Workspace** menu shows a small caret beside its chip.
 
 ### 6.2 S02 — Run the setup agent in the dialog
 
@@ -626,9 +628,129 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: Within one minute, `docker ps -a`, `docker images` and `docker volume ls` on
    the host no longer list the resources of the runs.
 
+### 6.24 S24 — Choose a preset of one agent
+
+1. Write the file `<task>/presets.json` with two presets of one agent in the shape
+   of `presets:` in the configuration, for example **Pi** and **Pi DeepSeek**,
+   whose `args` name different models.
+
+2. Start the candidate with the fixture and `--presets <task>/presets.json`, as the
+   [fixture guide](../../../scripts/device-smoke/README.md) shows.
+
+   The fixture stops with an error when a preset has no name or kind, or when a
+   `resume` value is not `fresh`, `last` or `{"session": {"session_id": "<id>"}}`.
+   An empty board with **Workspace 1** in place of the fixture workspace means
+   that Horizon did not load the configuration; correct the file and start again.
+
+   Result: Horizon opens with a New Workspace menu that holds both presets.
+
+3. Open **New cloud** for a copy of the fixture without `.horizon`, then click the
+   caret half of the chip of that agent.
+
+   Result: A menu lists the presets of the agent in menu order, the first one
+   selected, and the chip keeps its name. The label half and the caret half form
+   one button outline, with one divider between them and no gap.
+
+4. Click the second preset.
+
+   Result: The menu closes. The chip names the second preset, it is the only chip
+   of that agent, and the button says **Set up with** and the name of the second
+   preset.
+
+5. Click the button.
+
+   Result: The dialog shows **Set up** and the name of the repository. The agent's
+   terminal starts on the instructions of the setup, and its own footer names the
+   model of the preset. Read CI is the running step.
+
+6. Click **Stop**.
+
+   Result: The setup ends and the dialog shows the choices again. The chip still
+   names the preset you chose.
+
+### 6.25 S25 — Build on a rented builder
+
+This step rents a Hetzner server for some minutes and costs a few cents.
+
+> **CAUTION:** HETZNER BILLS THE RENTED BUILDER UNTIL IT IS DELETED. Do steps 5 and 6
+> to the end, and make sure at the end that the Hetzner console lists no server or SSH
+> key named `horizon-cloud-setup-builder-<id>`. Delete one that is left there by hand.
+
+1. Connect Hetzner in **Cloud settings** and set the **server types** to the types the
+   project may order, for example a type it cannot order first and one it can second.
+
+   Result: **Build on** in **New cloud** shows **Rented builder**.
+
+2. Open **New cloud** for a copy of the fixture without `.horizon`, click **Rented
+   builder** and start the setup agent.
+
+   Result: The setup board shows **Renting a builder** under its header, then the
+   rented server type, its location and its price per hour. The type is one of the
+   types in Cloud settings. When the first type is refused, as when the project's
+   shared cores are in use, the builder is the next type and not a failure. In the
+   Hetzner console a server named `horizon-cloud-setup-builder-<id>` runs.
+
+3. Wait until the proof ends.
+
+   Result: Build image, Run CI in image and Fast rerun pass. On this computer, `docker
+   images` does not list `horizon-setup-ci-app-<hash>-<run>:candidate`.
+
+4. Start a second setup with **Rented builder**.
+
+   Result: It uses the same server. The Hetzner console lists one builder.
+
+5. Click **Stop** on both runs and wait 10 minutes.
+
+   Result: The board says **Deleting the rented builder**, then shows no builder line.
+   The Hetzner console lists neither the server nor the SSH key
+   `horizon-cloud-setup-builder-<id>`, and the Cloud settings folder has no
+   `setup-builder.json`.
+
+6. Start a setup with **Rented builder**, wait until the builder line shows a price,
+   and end Horizon with `kill -9`. Start Horizon again.
+
+   > **CAUTION:** AFTER `kill -9` THE BUILDER STAYS BILLED UNTIL HORIZON STARTS AGAIN.
+   > Start Horizon again at once, with the same Cloud settings folder.
+
+   Result: Within one minute of the start, the Hetzner console lists no builder.
+
+### 6.26 S26 — Read a finished setup and close its live preview
+
+1. Run S24 step 1 to step 5 on a repository that finishes its setup, such as the
+   `gui-app` fixture, and wait for the last step to show **done**.
+
+   Result: This step needs a Docker host, a copy of the repository, and about ten
+   minutes. Nothing is rented.
+
+2. Examine the card of the finished setup.
+
+   Result: The row under the steps shows the files that the setup wrote, in one
+   line that ends with an ellipsis when the list is long. The row stays inside the
+   dialog: **Use this setup**, **Show agent**, **Show live preview** and **Stop**
+   are in view, and no text is drawn over them. Make the window narrower: the list
+   stays one line and does not push the buttons out of the card.
+
+3. If the setup shows a live preview, close its Device panel.
+
+   Result: Within one minute, `docker ps` no longer lists the preview container of
+   that setup. The card keeps its steps, its proof and its summary, and **Use this
+   setup** still commits the setup.
+
+4. Start a new setup of the same repository, wait for the preview to open, and
+   click **Close** in the setup view without closing the Device panel.
+
+   Result: The Device panel stays on the board and its desktop stays live;
+   **docker ps** lists the preview container.
+
+5. Close that Device panel.
+
+   Result: Within one minute, `docker ps` no longer lists the preview container.
+
+6. Run S02 to remove the fixtures, the containers and the folders.
+
 ## 7. Pass criteria
 
-- S01 to S23 give the results above.
+- S01 to S26 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
