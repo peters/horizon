@@ -11,19 +11,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The localci release the proof runs.
-const VERSION: &str = "v0.1.0";
+const VERSION: &str = "v0.2.0";
 
 /// The release asset for each platform a proof's image can have, and its SHA-256.
 const RELEASES: [(&str, &str, &str); 2] = [
     (
         "linux/amd64",
         "localci-x86_64-unknown-linux-musl.tar.gz",
-        "215096651a2af9b1a8d64825d6453b7e090049078ac30525074e9e1f43fdc893",
+        "b8cd25adc22aaef8b502f4bbb2fa899c2dd51b35615e49cc80aec22f0fa98215",
     ),
     (
         "linux/arm64",
         "localci-aarch64-unknown-linux-musl.tar.gz",
-        "c1706804fe8359db98bb8ce594cd20cb5020e217bdc5b0126ec636c4de650365",
+        "690fb683d151ded8b7f50c2b3087b58038ed14e8100318dc69d59e49e36aa7d9",
     ),
 ];
 
