@@ -275,6 +275,7 @@ pub struct HorizonApp {
     panel_render_order: Vec<(PanelId, usize)>,
     workspace_colors: Vec<(WorkspaceId, Color32)>,
     primary_selection: PrimarySelection,
+    clipboard_images: crate::clipboard_image::ClipboardImages,
     terminal_selection_drag: TerminalSelectionDragState,
     panel_render_caches: PanelRenderCaches,
     canvas_grid_cache: CanvasGridCache,
@@ -513,6 +514,7 @@ impl eframe::App for HorizonApp {
             });
             self.handle_native_image_pastes();
         }
+        self.apply_clipboard_image_pastes();
         if raw_input.viewport_id == egui::ViewportId::ROOT && self.press_frame.split(&mut raw_input.events) {
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }

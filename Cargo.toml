@@ -127,7 +127,10 @@ time = { version = "0.3.55", features = ["formatting", "parsing"] }
 rmcp = { version = "3.5.0", default-features = false, features = ["macros", "server", "transport-io"] }
 schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
-eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+# `clipboard` is not in eframe's feature set when its defaults are off. Without it
+# egui-winit keeps the clipboard inside the process, so no clipboard shortcut ever
+# reads or writes the desktop clipboard.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.37.0"
 # Feature-only dependency: eframe/egui-wgpu keep using wgpu 30, so Horizon must
 # unify the native backend features here when eframe default features are disabled.

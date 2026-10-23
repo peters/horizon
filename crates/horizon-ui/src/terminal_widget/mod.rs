@@ -1,3 +1,4 @@
+mod clipboard_paste;
 mod ime;
 mod input;
 mod layout;
@@ -32,6 +33,8 @@ pub struct TerminalView<'a> {
 pub struct TerminalKeyboardContext<'a> {
     pub keyboard_events: &'a [super::input::TerminalInputEvent],
     pub primary_selection: &'a PrimarySelection,
+    /// Clipboard images become a private file whose path the terminal pastes.
+    pub clipboard_images: &'a super::clipboard_image::ClipboardImages,
     pub local_ssh_reconnect_enabled: bool,
     pub reconnect_requested: &'a mut bool,
 }
@@ -61,6 +64,7 @@ impl<'a> TerminalView<'a> {
     ) -> bool {
         let metrics = grid_metrics(ui.ctx());
         let char_width = metrics.char_width;
+        clipboard_paste::keep_frames(ui.ctx());
         let line_height = metrics.line_height;
         let layout = terminal_layout(
             ui.available_size(),
@@ -99,7 +103,6 @@ impl<'a> TerminalView<'a> {
             window_focused && (interaction.body.has_focus() || (is_active_panel && !other_widget_has_focus));
         self.panel.set_focused(has_terminal_focus);
 
-        #[cfg(target_os = "linux")]
         if interactive && has_terminal_focus {
             let target_id = egui::Id::unique(("native_image_paste_target", ui.ctx().viewport_id()));
             ui.ctx()
@@ -173,6 +176,7 @@ impl<'a> TerminalView<'a> {
                 self.panel,
                 keyboard.keyboard_events,
                 keyboard.primary_selection,
+                keyboard.clipboard_images,
                 keyboard.local_ssh_reconnect_enabled,
             );
         }
