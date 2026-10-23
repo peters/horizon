@@ -1,7 +1,7 @@
 ---
 procedure: settings-store
-candidate_commit: 4b09276428aaafd7 (short hash of the saved-settings candidate)
-candidate_sha256: 4b09276428aaafd76c7b40ca45ad53ffb874a8d5a2e16aa360df20afbbe8b859
+candidate_commit: f17f625b4
+candidate_sha256: 544d78f48e750c8a5a2a0e83136debf64b06d8e8466f688ea3ae0e0a50712281
 date: 2026-10-23
 lanes: [linux]
 issue: https://github.com/peters/horizon/pull/1765
@@ -12,8 +12,10 @@ issue: https://github.com/peters/horizon/pull/1765
 ## 1. Summary
 
 All tasks of [the settings store procedure](../procedures/settings-store.md)
-passed on Linux. Two candidates ran: `0bf61be74` for S01 to S06, and
-`4b092764` for S07, which saves from the Settings window on a worker thread. The run used a copy of a real Horizon home: five saved
+passed on Linux. Two candidates ran: `0bf61be74` for S01 to S06, and the frozen
+`544d78f4` for S07, which saves from the Settings window on a worker thread. The
+S07 binary was built from the commit above, and `/proc/<pid>/exe` had its hash.
+The run used a copy of a real Horizon home: five saved
 sessions, 38 workspaces and 71 panels, and the real `config.yaml`. The candidate
 was the frozen debug binary with the hash above, and the probe process had that
 hash at `/proc/<pid>/exe`. The run used an isolated Xvfb desktop viewed through
@@ -29,7 +31,7 @@ a native Device panel. The views in this report are private evidence.
 | S04 | pass | A store that held `not a database` was reported with the path, moved to `settings.sqlite.damaged-1792777277`, and written again from the copy with 10 sections and schema version 1. The copy was unchanged, and the window showed the same board. | — |
 | S05 | pass | The session chooser listed the saved session as 38 workspaces and 71 panels, which equalled the count in the real home. The opened copy session listed the same 38 workspaces and the same panels, and each panel started with the same command. The masked home does not hold `~/.local/bin`, so a panel with a custom command showed the missing file, which is the isolation and not a regression. | — |
 | S06 | pass | A file with only `shortcuts: command_palette: Alt+K` became `version: 11` in the copy. The file `config.yaml.imported-1792777304` held exactly the original two lines, and the store held `Alt+K` plus a default for each shortcut that the file did not have. | — |
-| S07 | pass | The Settings window saved on the candidate `4b092764` and showed `Saved` in the bar at the bottom of the panel. The copy `/tmp/l0f-ev/data/horizon.yaml` held `theme: light`, the store held `{"theme":"light"}` with `schema_version` 1, and `mirror_sha256` equalled the SHA-256 of the copy. The window answered the pointer during the write. `Saving` lasted less than one frame, because the store write of this home is a few milliseconds. | — |
+| S07 | pass | The Settings window of the candidate `544d78f4` saved the theme and showed `Saved` in the bar at the bottom of the panel. The copy `/tmp/l0g-ev/data/horizon.yaml` held `theme: light`, the store held `{"theme":"light"}` with `schema_version` 1, and `mirror_sha256` was `e5555063`, which equalled the SHA-256 of the copy. The window answered the pointer during the write. `Saving` lasted less than one frame, because the store write of this home is a few milliseconds. | — |
 
 ## 3. Defects
 
@@ -52,7 +54,7 @@ a native Device panel. The views in this report are private evidence.
   session stayed untouched.
 - S05 opened the copy of the saved session and compared the counts with the real
   home. It did not click every one of the 38 workspaces.
-- S07 ran on a separate fixture state, `/tmp/l0f-ev`, which the fixture starts
+- S07 ran on a separate fixture state, `/tmp/l0g-ev`, which the fixture starts
   with `--config <state>/data/horizon.yaml`. The copy and the store of that run
   are therefore under `<state>/data`, not under `<state>/data/home/.horizon`.
 - The procedure expects `Saving` before `Saved` in S07. The candidate wrote the
@@ -70,8 +72,8 @@ The recording of S07 shows it.
 ## 5. Cleanup
 
 - The frozen binaries, the private homes, the logs and the fixture states were
-  removed from `/tmp/l0-run`, `/tmp/l0c-run`, `/tmp/l0d-ev`, `/tmp/l0e-ev` and
-  `/tmp/l0f-ev` after the run.
+  removed from `/tmp/l0-run`, `/tmp/l0c-run`, `/tmp/l0d-ev`, `/tmp/l0e-ev`,
+  `/tmp/l0f-ev` and `/tmp/l0g-ev` after the run.
 - The Device panel was closed, and the fixture desktop stopped with the fixture.
 - The real home was not changed: the run wrote only inside the private mount
   namespace.
