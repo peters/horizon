@@ -286,6 +286,24 @@ def session_pids(session):
     return pids
 
 
+def lane_failure(lane, ended):
+    """Why a lane whose entries all ended still fails the gate: its process exited with an
+    error after them, as when the rented builder it rented could not be deleted, or the
+    runner stopped it then. None otherwise, also while an entry has no result, which the
+    summary tells already."""
+    code = lane.process.returncode if lane.process is not None else None
+    if not ended:
+        return None
+    if lane.reason:
+        # Stopped after its last result: it may not have finished deleting what it rented.
+        return (f"lane {lane.number} was stopped after its entries ({lane.reason}), maybe while it deleted "
+                f"the rented builder; see {lane.log_path}")
+    if code in (None, 0):
+        return None
+    return (f"lane {lane.number} exited with code {code} after its entries, as when the rented builder "
+            f"could not be deleted; see {lane.log_path}")
+
+
 def stop_session(process, grace=5):
     """Stops every process of the lane that `process` leads, also those its children
     left behind, by their exact PIDs, then reaps `process`. Until then `process` is at
@@ -512,6 +530,8 @@ class Gate:
         # What entries that ended left behind, what the runner removed for the others and
         # what it could not remove.
         self.leaks, self.removed, self.unremoved = [], [], []
+        # Lanes that failed after all their entries ended.
+        self.lane_failures = []
         self.interrupted = None
 
     def run(self, binary):
@@ -603,6 +623,9 @@ class Gate:
             stop_session(lane.process)
         self.collect()
         ended = all(entry["run"] in self.results for entry in lane.entries)
+        failure = lane_failure(lane, ended)
+        if failure:
+            self.lane_failures.append(failure)
         for entry in lane.entries:
             run = entry["run"]
             if run in self.results:
@@ -636,9 +659,11 @@ class Gate:
         lines += [f"Left behind by an entry that ended, then removed: {leak}" for leak in self.leaks]
         lines += [f"Removed for an entry that did not end: {name}" for name in self.removed]
         lines += [f"NOT REMOVED, remove it by hand: {name}" for name in self.unremoved]
+        lines += [f"FAILED after its entries: {failure}" for failure in self.lane_failures]
         lines.append(f"{passed} passed, {len(rows) - passed} failed"
                      + (f", stopped by {self.interrupted}" if self.interrupted else ""))
-        return "\n".join(lines), passed == len(rows) and not self.leaks and not self.unremoved
+        return "\n".join(lines), (passed == len(rows) and not self.leaks and not self.unremoved
+                                   and not self.lane_failures)
 
 
 def main(argv=None):

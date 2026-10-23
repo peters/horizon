@@ -65,14 +65,17 @@ impl HorizonApp {
             .iter()
             .map(super::run::Run::board_row)
             .collect();
+        let builder = self.cloud_prototype.production.setup_builder.line();
         for board in boards {
             if let Some(content) = self
                 .board
                 .panel_mut(board)
                 .and_then(|panel| panel.content.setup_board_mut())
-                && content.rows != rows
             {
-                content.rows.clone_from(&rows);
+                if content.rows != rows {
+                    content.rows.clone_from(&rows);
+                }
+                content.builder.clone_from(&builder);
             }
         }
     }

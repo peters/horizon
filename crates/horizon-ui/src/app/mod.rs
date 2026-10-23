@@ -394,6 +394,10 @@ impl HorizonApp {
         let switching_session = self.poll_session_switch(ctx);
         #[cfg(feature = "cloud-workspaces")]
         self.sync_cloud_companion_session(ctx);
+        // Before the session chooser and any session: a billed builder left by a crash.
+        // Never in tests, which must not touch the real cloud root.
+        #[cfg(all(feature = "cloud-workspaces", not(test)))]
+        self.recover_rented_builder(ctx);
         if switching_session {
             self.refresh_active_session_lease();
             self.render_session_switch_overlay(ui);

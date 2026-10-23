@@ -323,6 +323,28 @@ impl Hetzner {
     /// # Errors
     /// Requires a private, readable token file.
     pub fn credential(&self) -> Result<Credential> {
+        self.with_token(|token| Credential::new(token.to_owned()).map_err(Error::from))
+    }
+
+    /// The credential with a fingerprint of the same token, from one read of the file:
+    /// the first 16 hex digits of its SHA-256. The fingerprint tells whether a later
+    /// token is still the one a server was made with, without keeping the token.
+    /// # Errors
+    /// Requires a private, readable token file.
+    pub fn credential_with_fingerprint(&self) -> Result<(Credential, String)> {
+        use sha2::{Digest, Sha256};
+        self.with_token(|token| {
+            let digest = Sha256::digest(token.as_bytes());
+            let fingerprint = digest[..8].iter().fold(String::new(), |mut hex, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
+            Ok((Credential::new(token.to_owned())?, fingerprint))
+        })
+    }
+
+    fn with_token<T>(&self, use_token: impl FnOnce(&str) -> Result<T>) -> Result<T> {
         self.validate()?;
         validate_private_key_file(&self.token_file)?;
         // Checked while borrowed, so no copy of the token outlives this call
@@ -334,7 +356,7 @@ impl Hetzner {
         if token.is_empty() || token.bytes().any(|b| b <= 32 || b >= 127) {
             return Err(Error::Invalid("The Hetzner token file must hold one printable token"));
         }
-        Credential::new(token.to_owned()).map_err(Error::from)
+        use_token(token)
     }
 }
 

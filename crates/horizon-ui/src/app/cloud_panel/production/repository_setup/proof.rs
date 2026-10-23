@@ -31,7 +31,7 @@ use needs::distinct_builds;
 pub(super) use needs::uses_nuget;
 pub(super) use remote::{PortForward, close_forwards};
 pub(super) use resources::{
-    Daemon, Pinned, docker_host_of, expect_removal, keep_unremoved, preview_network, remove_now, remove_run_resources,
+    Daemon, Pinned, expect_removal_on, forget_on, keep_unremoved, preview_network, remove_now, remove_run_resources,
     retry_unremoved, run_id, run_names,
 };
 pub(super) use stream::end_group;
@@ -500,10 +500,12 @@ impl Job {
                 Phase::Fast => self.ci(true, &mut log),
             };
             let failed = result.is_err();
-            // A stopped or replaced proof asks GitHub nothing and offers no fix.
+            // A stopped or replaced proof asks GitHub nothing and offers no fix, nor does
+            // one on the rented builder, which pulls without the login a fix would mend.
             if phase == Phase::Build
                 && failed
                 && !self.cancel.is_cancelled()
+                && !self.on_rented_builder()
                 && let Some(fix) = self
                     .tail
                     .borrow()
@@ -578,11 +580,7 @@ impl Job {
         let builds = distinct_builds(&config, |profile| {
             horizon_core::cloud_runtime::image::build_arguments(&profile.capabilities, &releases)
         })?;
-        let _ = self.sender.try_send(Event::Line(if signed_in {
-            "Pulling ghcr.io images with Horizon's GitHub login.".to_owned()
-        } else {
-            "No Horizon GitHub login for ghcr.io; images are pulled anonymously.".to_owned()
-        }));
+        let _ = self.sender.try_send(Event::Line(self.login_line(signed_in)));
         // Every profile can be chosen in New cloud, so each distinct build is built; the
         // CI then runs in the default profile's image.
         let tag = |index: usize| {

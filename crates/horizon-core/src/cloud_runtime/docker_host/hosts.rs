@@ -139,6 +139,7 @@ mod tests {
             access: docker_host::Access::ThisPc,
             address: None,
             docker: None,
+            pinned: None,
         };
         let capacity = Capacity {
             cpus: 8,

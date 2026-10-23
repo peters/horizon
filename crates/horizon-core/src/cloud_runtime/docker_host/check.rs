@@ -187,6 +187,7 @@ mod tests {
             access,
             address: (access != Access::ThisPc).then(|| "deploy@build-box".into()),
             docker: None,
+            pinned: None,
         };
         let mut rows_sent = Vec::new();
         let capacity = rows(&host, &Answers(RefCell::new(answers)), &mut |check| {

@@ -2,7 +2,7 @@
 procedure: cloud-setup-agent
 feature: Set up from CI in New cloud (setup agent and Horizon's proof)
 platforms: [linux]
-cost: none
+cost: rents compute  # S24 only; S01 to S23 use only this computer
 destructive: yes
 secrets: [the local login of the agent (Codex or Claude)]
 owner: peters
@@ -23,8 +23,9 @@ setup** commits `.horizon` and reads it as the repository profile.
 - Platforms: Linux with Docker. The isolated fixture of
   [area S of the cloud panels procedure](cloud-panels/s-test-fixture.md) is
   recommended.
-- This procedure does not test: a deploy, a provider, or a paid agent API key.
-  No step rents compute.
+- This procedure does not test: a deploy or a paid agent API key. Only S24 rents
+  compute: a Hetzner server that Horizon deletes again. S01 to S23 use only this
+  computer.
 - For a pull request that changes the setup agent, the proof or the desktop preview,
   also run [the setup gate](cloud-setup-gate.md). It runs the proof on real
   repositories.
@@ -666,9 +667,55 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: The setup ends and the dialog shows the choices again. The chip still
    names the preset you chose.
 
+### 6.25 S25 — Build on a rented builder
+
+This step rents a Hetzner server for some minutes and costs a few cents.
+
+> **CAUTION:** HETZNER BILLS THE RENTED BUILDER UNTIL IT IS DELETED. Do steps 5 and 6
+> to the end, and make sure at the end that the Hetzner console lists no server or SSH
+> key named `horizon-cloud-setup-builder-<id>`. Delete one that is left there by hand.
+
+1. Connect Hetzner in **Cloud settings** and set the **server types** to the types the
+   project may order, for example a type it cannot order first and one it can second.
+
+   Result: **Build on** in **New cloud** shows **Rented builder**.
+
+2. Open **New cloud** for a copy of the fixture without `.horizon`, click **Rented
+   builder** and start the setup agent.
+
+   Result: The setup board shows **Renting a builder** under its header, then the
+   rented server type, its location and its price per hour. The type is one of the
+   types in Cloud settings. When the first type is refused, as when the project's
+   shared cores are in use, the builder is the next type and not a failure. In the
+   Hetzner console a server named `horizon-cloud-setup-builder-<id>` runs.
+
+3. Wait until the proof ends.
+
+   Result: Build image, Run CI in image and Fast rerun pass. On this computer, `docker
+   images` does not list `horizon-setup-ci-app-<hash>-<run>:candidate`.
+
+4. Start a second setup with **Rented builder**.
+
+   Result: It uses the same server. The Hetzner console lists one builder.
+
+5. Click **Stop** on both runs and wait 10 minutes.
+
+   Result: The board says **Deleting the rented builder**, then shows no builder line.
+   The Hetzner console lists neither the server nor the SSH key
+   `horizon-cloud-setup-builder-<id>`, and the Cloud settings folder has no
+   `setup-builder.json`.
+
+6. Start a setup with **Rented builder**, wait until the builder line shows a price,
+   and end Horizon with `kill -9`. Start Horizon again.
+
+   > **CAUTION:** AFTER `kill -9` THE BUILDER STAYS BILLED UNTIL HORIZON STARTS AGAIN.
+   > Start Horizon again at once, with the same Cloud settings folder.
+
+   Result: Within one minute of the start, the Hetzner console lists no builder.
+
 ## 7. Pass criteria
 
-- S01 to S24 give the results above.
+- S01 to S25 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

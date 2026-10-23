@@ -10,6 +10,8 @@
 //! - `GATE_PREFIX`: the start of the run names of entries without a `run`.
 //! - `GATE_DOCKER_HOST`: the name of a Docker host saved in Cloud settings; when set,
 //!   the proofs and previews run on its Docker, as a setup that builds on it does.
+//!   `rented-builder` rents a builder with the Hetzner binding of Cloud settings for the
+//!   whole gate, one lane only, and deletes it at the end.
 //! - `GATE_PROVE_AGAIN`: when set, a passed proof is followed by a second proof of the
 //!   same commit in the same run, as when the agent proves again, and the result says
 //!   what each checkout sent.
@@ -30,14 +32,71 @@ const PREVIEW_LIMIT: Duration = Duration::from_mins(10);
 /// How often the gate takes what the proof or the preview reported.
 const POLL: Duration = Duration::from_millis(500);
 
+fn cloud_root() -> PathBuf {
+    horizon_core::HorizonHome::resolve().root().join("cloud")
+}
+
+fn settings() -> horizon_core::cloud_runtime::settings::Settings {
+    horizon_core::cloud_runtime::settings::Settings::load(&cloud_root().join("settings.json"))
+        .expect("Cloud settings load")
+}
+
+/// The builder the gate rents for all its entries, deleted when the gate ends, also by a
+/// panic.
+struct Rented {
+    owner: horizon_core::cloud_runtime::setup_builder::Owner,
+    host: horizon_core::cloud_runtime::docker_host::Host,
+}
+
+impl Rented {
+    /// Rents the builder when `GATE_DOCKER_HOST` names it, after deleting one an
+    /// interrupted gate left.
+    fn start() -> Option<Self> {
+        use horizon_core::cloud_runtime::setup_builder;
+        if std::env::var("GATE_DOCKER_HOST").ok().as_deref() != Some(setup_builder::NAME) {
+            return None;
+        }
+        let owner = setup_builder::claim(&cloud_root())
+            .expect("the builder's lock opens")
+            .expect("no other process of this HORIZON_HOME, such as Horizon or a second lane, has the rented builder");
+        let left = setup_builder::give_back(&settings(), &owner, &Cancellation::default());
+        eprintln!("rented builder: one left before was deleted: {left:?}");
+        let started = Instant::now();
+        let builder = setup_builder::rent(&settings(), &owner, &Cancellation::default(), |stage| {
+            eprintln!("rented builder: {stage:?} after {} s", started.elapsed().as_secs());
+        })
+        .expect("the builder is rented");
+        eprintln!(
+            "rented builder: {} in {} at {:?}, EUR {:.4} an hour, ready after {} s",
+            builder.server_type,
+            builder.location,
+            builder.host.address,
+            builder.hourly_eur,
+            started.elapsed().as_secs()
+        );
+        Some(Self {
+            owner,
+            host: builder.host,
+        })
+    }
+}
+
+impl Drop for Rented {
+    fn drop(&mut self) {
+        use horizon_core::cloud_runtime::setup_builder;
+        let deleted = setup_builder::give_back(&settings(), &self.owner, &Cancellation::default());
+        eprintln!("rented builder: deleted and proven gone: {deleted:?}");
+        if !std::thread::panicking() {
+            assert!(matches!(deleted, Ok(true)), "the rented builder is deleted");
+            assert!(!setup_builder::left_behind(&cloud_root()));
+        }
+    }
+}
+
 /// The Docker host `GATE_DOCKER_HOST` names in Cloud settings, if it names one.
 fn docker_host() -> Option<horizon_core::cloud_runtime::docker_host::Host> {
     let name = std::env::var("GATE_DOCKER_HOST").ok().filter(|name| !name.is_empty())?;
-    let path = horizon_core::HorizonHome::resolve()
-        .root()
-        .join("cloud")
-        .join("settings.json");
-    let settings = horizon_core::cloud_runtime::settings::Settings::load(&path).expect("Cloud settings load");
+    let settings = settings();
     let host = settings
         .docker_hosts
         .into_iter()
@@ -108,23 +167,32 @@ fn proves_each_listed_repository() {
     let out = PathBuf::from(std::env::var("GATE_OUT").expect("GATE_OUT names the output folder"));
     let prefix = std::env::var("GATE_PREFIX").unwrap_or_else(|_| "gate".to_owned());
     std::fs::create_dir_all(out.join("logs")).unwrap();
+    let rented = Rented::start();
+    let host = rented
+        .as_ref()
+        .map_or_else(docker_host, |rented| Some(rented.host.clone()));
     for (index, value) in entries.iter().enumerate() {
         let entry = Entry::read(value, &prefix, index);
         append(&out, "started.jsonl", &entry.names());
         let started = Instant::now();
-        let mut result = prove(&entry, &out);
+        let mut result = prove(&entry, &out, host.as_ref());
         result["entry"] = entry.label.clone().into();
         result["run"] = entry.run.clone().into();
         result["seconds"] = started.elapsed().as_secs().into();
         append(&out, "results.jsonl", &result);
     }
-    // No SSH forward to a Docker host outlives the gate.
+    // No SSH forward to a Docker host outlives the gate, and the rented builder goes.
     super::remote::close(true);
+    drop(rented);
 }
 
 /// Proves the entry, starts its preview after a passed proof and removes all the entry's
 /// Docker resources; the entry's result.
-fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
+fn prove(
+    entry: &Entry,
+    out: &Path,
+    host: Option<&horizon_core::cloud_runtime::docker_host::Host>,
+) -> serde_json::Value {
     let Some(spec) = Spec::parse(&entry.spec) else {
         return serde_json::json!({"passed": false, "error": "the spec does not parse"});
     };
@@ -142,7 +210,7 @@ fn prove(entry: &Entry, out: &Path) -> serde_json::Value {
     let start = |request: u64, log: &Path, access: crates::Access| {
         Proof::start(
             (&entry.repository, &entry.run, identity),
-            docker_host(),
+            host.cloned(),
             (request, spec.clone()),
             log.to_owned(),
             (true, root_dirty.clone(), access),
