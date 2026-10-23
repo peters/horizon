@@ -5,7 +5,7 @@ mod model;
 mod runtime_index;
 #[cfg(test)]
 mod tests;
-mod writer;
+pub(crate) mod writer;
 
 use std::fs;
 use std::io::ErrorKind;

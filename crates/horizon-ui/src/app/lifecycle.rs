@@ -246,9 +246,7 @@ impl HorizonApp {
         }
         self.config_last_check = Some(now);
 
-        let current_mtime = std::fs::metadata(&self.config_path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        let current_mtime = super::util::settings_mtime(&self.config_path);
 
         if current_mtime == self.config_last_mtime {
             return;

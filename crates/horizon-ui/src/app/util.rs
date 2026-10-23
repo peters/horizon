@@ -197,17 +197,17 @@ pub(crate) fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
-pub(super) fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    std::fs::create_dir_all(parent)?;
-
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    tmp.write_all(content.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(path).map_err(|error| error.error)?;
-    Ok(())
+/// The newest write time of the settings of `config_path`: the exported copy or
+/// the store, because a save writes the copy first and the store second.
+pub(super) fn settings_mtime(config_path: &std::path::Path) -> Option<std::time::SystemTime> {
+    let store_path = horizon_core::config_store::ConfigStore::resolve(config_path)
+        .path()
+        .to_path_buf();
+    [config_path.to_path_buf(), store_path]
+        .into_iter()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .filter_map(|metadata| metadata.modified().ok())
+        .max()
 }
 
 #[cfg(test)]

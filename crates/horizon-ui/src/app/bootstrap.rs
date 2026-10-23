@@ -71,7 +71,7 @@ impl HorizonApp {
         let resolved_theme = theme::resolve_theme(config.appearance.theme, egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 
-        let config_last_mtime = std::fs::metadata(&config_path).ok().and_then(|m| m.modified().ok());
+        let config_last_mtime = super::util::settings_mtime(&config_path);
 
         let bootstrap = AppBootstrap {
             config_path,

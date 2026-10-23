@@ -355,7 +355,8 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
 }
 
 fn load_config_or_default(config_path: &std::path::Path) -> Config {
-    if !config_path.exists() {
+    let store = horizon_core::config_store::ConfigStore::resolve(config_path);
+    if !config_path.exists() && !store.path().exists() {
         tracing::info!("no config found at {}, using defaults", config_path.display());
         return Config::default();
     }

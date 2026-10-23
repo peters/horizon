@@ -255,11 +255,7 @@ pub fn import_portable_file_into_config(
         Config::default()
     };
     let summary = import_portable(&mut config.browser.remote, &yaml)?;
-    let serialised = config
-        .to_yaml()
-        .map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
-    Config::from_yaml(&serialised).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
-    write_atomically(config_path, &serialised)?;
+    Config::save(config_path, &config).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
     Ok(summary)
 }
 

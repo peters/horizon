@@ -18,7 +18,7 @@ use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
 use horizon_core::remote_browser_credential::CredentialWorkbench;
 
-use super::util::{self, atomic_write};
+use super::util;
 use super::{HorizonApp, resolve_shortcuts};
 use crate::theme;
 
@@ -338,14 +338,13 @@ impl HorizonApp {
             return;
         };
         match Config::from_yaml(&buffer) {
-            Ok(config) => match atomic_write(&self.config_path, &buffer) {
-                Ok(()) => {
+            Ok(config) => match Config::save_copy(&self.config_path, &buffer) {
+                Ok(saved) => {
                     self.apply_runtime_config(&config);
                     if let Some(editor) = self.settings.as_mut() {
-                        editor.original.clone_from(&buffer);
-                        editor.status = SettingsStatus::Saved;
+                        editor.adopt_saved_text(saved);
                     }
-                    tracing::info!("config saved to {}", self.config_path.display());
+                    tracing::info!("settings saved to {}", self.config_path.display());
                 }
                 Err(error) => {
                     if let Some(editor) = self.settings.as_mut() {
