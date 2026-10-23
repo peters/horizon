@@ -172,7 +172,7 @@ impl HorizonApp {
         let mut chosen = None;
         let mut cancelled = false;
         let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
-        let modal = egui::Id::new("cloud-close-confirmation");
+        let modal = egui::Id::unique("cloud-close-confirmation");
         let response = egui::Modal::new(modal)
             .area(egui::Modal::default_area(modal).order(egui::Order::Tooltip))
             .show(ctx, |ui| {

@@ -119,7 +119,7 @@ impl HorizonApp {
             if self.saved_session_deletion_is_running() {
                 loading_spinner::show_with_detail(
                     ui,
-                    egui::Id::new("shutdown_deletion"),
+                    egui::Id::unique("shutdown_deletion"),
                     "Closing Horizon…",
                     "Finishing saved conversation deletion safely…",
                 );
@@ -127,12 +127,16 @@ impl HorizonApp {
             } else if total > 0 {
                 loading_spinner::show_with_detail(
                     ui,
-                    egui::Id::new("shutdown_spinner"),
+                    egui::Id::unique("shutdown_spinner"),
                     "Closing Horizon\u{2026}",
                     &format!("{completed} / {total} panels shut down"),
                 );
             } else {
-                loading_spinner::show(ui, egui::Id::new("shutdown_spinner"), Some("Closing Horizon\u{2026}"));
+                loading_spinner::show(
+                    ui,
+                    egui::Id::unique("shutdown_spinner"),
+                    Some("Closing Horizon\u{2026}"),
+                );
             }
         });
     }

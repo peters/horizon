@@ -41,7 +41,7 @@ fn primary_button_bg() -> Color32 {
 
 pub(super) fn render_backdrop(ctx: &Context) {
     let screen_rect = ctx.input(egui::InputState::viewport_rect);
-    egui::Area::new(Id::new("ssh_upload_backdrop"))
+    egui::Area::new(Id::unique("ssh_upload_backdrop"))
         .fixed_pos(screen_rect.min)
         .order(egui::Order::Foreground)
         .interactable(false)
@@ -56,7 +56,7 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
     let mut actions = Vec::new();
 
     egui::Window::new("ssh_upload_modal")
-        .id(Id::new("ssh_upload_modal"))
+        .id(Id::unique("ssh_upload_modal"))
         .title_bar(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .collapsible(false)
@@ -87,7 +87,7 @@ pub(super) fn render_upload_window(ctx: &Context, flow: &mut SshUploadFlow) -> V
                         ui.add_space(8.0);
                         loading_spinner::show_with_detail(
                             ui,
-                            Id::new("ssh_upload_prepare"),
+                            Id::unique("ssh_upload_prepare"),
                             "Preparing upload...",
                             "Probing remote and detecting transport options",
                         );
@@ -507,7 +507,7 @@ fn render_uploading_state(ui: &mut egui::Ui, flow: &mut SshUploadFlow, actions: 
         render_upload_progress(ui, snapshot, flow.upload_started_at);
     } else {
         ui.add_space(8.0);
-        loading_spinner::show(ui, Id::new("ssh_upload_start"), Some("Starting upload..."));
+        loading_spinner::show(ui, Id::unique("ssh_upload_start"), Some("Starting upload..."));
         ui.add_space(8.0);
     }
 

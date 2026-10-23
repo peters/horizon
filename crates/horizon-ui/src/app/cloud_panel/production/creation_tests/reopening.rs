@@ -44,11 +44,11 @@ fn reopening_keeps_cloud_controls_below_the_modal() {
         }
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
         assert!(app.cloud_creation_open(), "toolbar click must open the dialog");
-        assert_eq!(ctx.layer_id_at(menu).unwrap().id, Id::new("cloud-creation"));
+        assert_eq!(ctx.layer_id_at(menu).unwrap().id, Id::unique("cloud-creation"));
         for _ in 0..16 {
             key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
             if let Some(response) = ctx.memory(egui::Memory::focused).and_then(|id| ctx.read_response(id)) {
-                assert_eq!(response.layer_id.id, Id::new("cloud-creation"));
+                assert_eq!(response.layer_id.id, Id::unique("cloud-creation"));
             }
         }
         let view = app.canvas_view;
@@ -79,7 +79,7 @@ fn creation_dialog_and_actions_fit_after_shrinking_with_scrolling_content() {
             }
             let output = run_app_frame_with_input(&ctx, &mut app, raw_input(size, None));
             let dialog = ctx
-                .memory(|memory| memory.area_rect(Id::new("cloud-creation")))
+                .memory(|memory| memory.area_rect(Id::unique("cloud-creation")))
                 .unwrap();
             let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(size[0], size[1]));
             assert!(
@@ -128,7 +128,7 @@ fn creation_body_fills_the_body_height_in_one_and_two_columns() {
             let mut input = raw_input(size, None);
             input.time = Some(time);
             let output = run_app_frame_with_input(&ctx, app, input);
-            let dialog = ctx.memory(|memory| memory.area_rect(Id::new("cloud-creation")));
+            let dialog = ctx.memory(|memory| memory.area_rect(Id::unique("cloud-creation")));
             (drawn(&output, "Cloud title"), drawn(&output, "Cancel"), dialog)
         };
         for _ in 0..2 {

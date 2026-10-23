@@ -339,7 +339,7 @@ fn foreground_controls_cannot_start_canvas_drag() {
         let output = ctx.run_ui(frame(time, events, Modifiers::NONE), |ctx| {
             let events = ctx.input(|input| input.events.clone());
             active = super::canvas_drag_delta(ctx, canvas, &std::iter::empty(), &events).is_some();
-            egui::Area::new(egui::Id::new("control"))
+            egui::Area::new(egui::Id::unique("control"))
                 .fixed_pos(Pos2::new(20.0, 20.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {

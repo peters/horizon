@@ -481,7 +481,7 @@ impl eframe::App for HorizonApp {
                     std::sync::Arc::new(move |ctx| {
                         let viewport = ctx.viewport_id();
                         let target = ctx.data_mut(|data| {
-                            let id = egui::Id::new(("native_image_paste_target", viewport));
+                            let id = egui::Id::unique(("native_image_paste_target", viewport));
                             let target = data.get_temp::<(PanelId, egui::Id)>(id);
                             data.remove::<(PanelId, egui::Id)>(id);
                             target
@@ -503,7 +503,7 @@ impl eframe::App for HorizonApp {
             }
             ctx.data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new("native_wayland_input"),
+                    egui::Id::unique("native_wayland_input"),
                     self.observed_keyboard_inputs.is_wayland_backend(),
                 )
             });

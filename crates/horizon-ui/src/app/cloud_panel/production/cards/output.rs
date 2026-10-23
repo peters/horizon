@@ -37,7 +37,7 @@ pub(super) fn show(ui: &mut egui::Ui, id: u32, place: &str, runtime: &mut Runtim
             .stick_to_bottom(true)
             .show_viewport(ui, |ui, viewport| paint_log(ui, id, runtime, follows, viewport));
         let max_offset = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
-        if scroll.state.offset.y + 1.0 < max_offset {
+        if scroll.state.unclamped_offset().y + 1.0 < max_offset {
             runtime.unpinned_views |= view_bit(place);
             runtime.verbose_unpinned = true;
         }
@@ -96,7 +96,7 @@ struct HeightCache {
 }
 
 fn height_cache_id(id: u32) -> egui::Id {
-    egui::Id::new(("cloud-log-heights", id))
+    egui::Id::unique(("cloud-log-heights", id))
 }
 
 /// Drop the wrapped-row height cache for a cloud that has left the board.
@@ -702,6 +702,7 @@ mod tests {
                 vec![
                     egui::Event::PointerMoved(hover),
                     egui::Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
                         unit: egui::MouseWheelUnit::Point,
                         delta: egui::vec2(0.0, 400.0),
                         phase: egui::TouchPhase::Move,

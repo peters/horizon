@@ -35,6 +35,7 @@ pub(super) struct CastState {
     notice: Option<String>,
     notification: Option<String>,
     last_capture: Option<Instant>,
+    pending_capture: Option<mpsc::Receiver<capture::CapturedImage>>,
     root_geometry: Option<capture::RootGeometry>,
 }
 struct Session {
@@ -134,6 +135,7 @@ impl CastState {
     }
     pub(super) fn stop_all(&mut self) {
         self.picker = None;
+        self.pending_capture = None;
         for session in self.sessions.iter_mut().chain(&mut self.retiring) {
             session.scaling = None;
             session.worker.stop();

@@ -198,7 +198,7 @@ fn mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid() {
 #[test]
 fn tab_does_not_steal_focus_from_another_text_field() {
     let mut harness = TerminalHarness::new();
-    let field = egui::Id::new("synthetic-pin");
+    let field = egui::Id::unique("synthetic-pin");
     let mut pin = String::new();
     let mut pair_button = None;
     for (frame, events) in [

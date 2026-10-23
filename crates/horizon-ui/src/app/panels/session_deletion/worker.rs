@@ -156,8 +156,11 @@ impl HorizonApp {
         let Some(notice) = self.saved_session_deletion.notice.clone() else {
             return;
         };
-        let acknowledged = egui::Modal::new(egui::Id::new("saved_session_deletion_notice"))
-            .area(egui::Modal::default_area(egui::Id::new("saved_session_deletion_notice")).order(egui::Order::Tooltip))
+        let acknowledged = egui::Modal::new(egui::Id::unique("saved_session_deletion_notice"))
+            .area(
+                egui::Modal::default_area(egui::Id::unique("saved_session_deletion_notice"))
+                    .order(egui::Order::Tooltip),
+            )
             .show(ctx, |ui| {
                 ui.set_max_width(620.0);
                 ui.heading("Saved conversation recovery");

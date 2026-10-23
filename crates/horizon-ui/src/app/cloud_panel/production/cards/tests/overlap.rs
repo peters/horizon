@@ -16,9 +16,9 @@ fn runtime_overlap_respects_foreground_and_persisted_middle_panel_order() {
         let (runtime_min, runtime_max) = app.cloud_prototype.groups.0[0].runtime_bounds();
         let panel_layer = LayerId::new(
             if focused { Order::Foreground } else { Order::Middle },
-            Id::new(("panel", id.0)),
+            Id::unique(("panel", id.0)),
         );
-        let runtime_layer = LayerId::new(Order::Middle, Id::new(("cloud-runtime", 901_u32)));
+        let runtime_layer = LayerId::new(Order::Middle, Id::unique(("cloud-runtime", 901_u32)));
         let mut pointer = Pos2::ZERO;
         for time in [0.0, 0.016, 0.032] {
             let mut input = raw_input([1400.0, 1000.0], None);
@@ -55,6 +55,7 @@ fn runtime_overlap_respects_foreground_and_persisted_middle_panel_order() {
         input.events = vec![
             Event::PointerMoved(pointer),
             Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: MouseWheelUnit::Point,
                 delta: Vec2::new(0.0, -5.0),
                 phase: TouchPhase::Start,
@@ -142,7 +143,7 @@ fn overlapping_unfocused_panels_route_to_the_visible_middle_layer() {
     editor.layout.position = app.board.panels[0].layout.position;
     editor.layout.size = app.board.panels[0].layout.size;
     app.board.panels.push(editor);
-    let terminal_layer = LayerId::new(Order::Middle, Id::new(("panel", terminal.0)));
+    let terminal_layer = LayerId::new(Order::Middle, Id::unique(("panel", terminal.0)));
     let mut pointer = Pos2::ZERO;
     for time in [0.0, 0.016, 0.032] {
         let mut input = raw_input([1400.0, 1000.0], None);
@@ -153,7 +154,7 @@ fn overlapping_unfocused_panels_route_to_the_visible_middle_layer() {
                 let geometry = app.visible_panel_geometry_for_canvas_view(canvas, None);
                 pointer = geometry[0].1.terminal_body_screen_rect.expect("body").center();
                 for (id, geometry) in geometry {
-                    egui::Area::new(Id::new(("panel", id.0)))
+                    egui::Area::new(Id::unique(("panel", id.0)))
                         .order(Order::Middle)
                         .fixed_pos(geometry.screen_rect.min)
                         .show(ui.ctx(), |ui| {
@@ -171,6 +172,7 @@ fn overlapping_unfocused_panels_route_to_the_visible_middle_layer() {
     input.events = vec![
         Event::PointerMoved(pointer),
         Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Point,
             delta: Vec2::new(0.0, -5.0),
             phase: TouchPhase::Start,

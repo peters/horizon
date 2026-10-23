@@ -44,7 +44,7 @@ fn picker_stays_put_across_source_movement_and_zoom() {
     for _ in 0..4 {
         frame(&ctx, &mut app, Vec::new());
     }
-    let original = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let original = ctx.memory(|m| m.area_rect(Id::unique("cast_picker"))).expect("picker");
     let id = app.board.panels[0].id;
     app.canvas_view.zoom = 1.6;
     app.panel_screen_rects.insert(
@@ -55,7 +55,7 @@ fn picker_stays_put_across_source_movement_and_zoom() {
         frame(&ctx, &mut app, Vec::new());
     }
     let moved = ctx
-        .memory(|m| m.area_rect(Id::new("cast_picker")))
+        .memory(|m| m.area_rect(Id::unique("cast_picker")))
         .expect("persistent picker");
     assert_eq!(moved.min, original.min);
     assert!(app.canvas_rect(&ctx).contains_rect(moved));
@@ -68,11 +68,11 @@ fn picker_is_nonmodal_but_excludes_its_own_controls() {
         frame(&ctx, &mut app, Vec::new());
     }
     assert!(!app.host_dialog_open());
-    let popup = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let popup = ctx.memory(|m| m.area_rect(Id::unique("cast_picker"))).expect("picker");
     let exclusions = app.overlay_exclusion_zones(&ctx);
     assert!(exclusions.contains(popup.center()));
     assert!(!exclusions.contains(Pos2::new(1000.0, 700.0)));
-    let menu = egui::LayerId::new(Order::Foreground, Id::new("synthetic-cast-menu"));
+    let menu = egui::LayerId::new(Order::Foreground, Id::unique("synthetic-cast-menu"));
     app.casting.control_menus = Some([menu, menu]);
     for _ in 0..3 {
         let _ = ctx
@@ -137,7 +137,7 @@ fn bottom_edge_keeps_the_picker_and_icon_visible() {
     for _ in 0..4 {
         frame(&ctx, &mut app, Vec::new());
     }
-    let popup = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let popup = ctx.memory(|m| m.area_rect(Id::unique("cast_picker"))).expect("picker");
     assert!(app.canvas_rect(&ctx).contains_rect(popup));
     assert!(!popup.intersects(panel), "{popup:?}, {panel:?}");
 }
@@ -148,7 +148,7 @@ fn picker_wheels_do_not_pan_or_zoom_the_canvas_but_outside_wheels_do() {
     for _ in 0..4 {
         frame(&ctx, &mut app, Vec::new());
     }
-    let popup = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let popup = ctx.memory(|m| m.area_rect(Id::unique("cast_picker"))).expect("picker");
     let pan = app.canvas_view.pan_offset;
     let zoom = app.canvas_view.zoom;
     for modifiers in [egui::Modifiers::NONE, egui::Modifiers::CTRL] {
@@ -156,6 +156,7 @@ fn picker_wheels_do_not_pan_or_zoom_the_canvas_but_outside_wheels_do() {
         input.events = vec![
             egui::Event::PointerMoved(popup.center()),
             egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: Vec2::new(0.0, 50.0),
                 phase: egui::TouchPhase::Start,
@@ -175,6 +176,7 @@ fn picker_wheels_do_not_pan_or_zoom_the_canvas_but_outside_wheels_do() {
     input.events = vec![
         egui::Event::PointerMoved(Pos2::new(1400.0, 800.0)),
         egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: Vec2::new(0.0, -5.0),
             phase: egui::TouchPhase::Start,
@@ -193,7 +195,7 @@ fn dragging_picker_changes_its_persistent_position() {
     for _ in 0..4 {
         frame(&ctx, &mut app, Vec::new());
     }
-    let original = ctx.memory(|m| m.area_rect(Id::new("cast_picker"))).expect("picker");
+    let original = ctx.memory(|m| m.area_rect(Id::unique("cast_picker"))).expect("picker");
     let from = original.min + egui::vec2(150.0, 16.0);
     frame(
         &ctx,
@@ -224,7 +226,7 @@ fn dragging_picker_changes_its_persistent_position() {
         frame(&ctx, &mut app, Vec::new());
     }
     let moved = ctx
-        .memory(|m| m.area_rect(Id::new("cast_picker")))
+        .memory(|m| m.area_rect(Id::unique("cast_picker")))
         .expect("moved picker");
     assert!((moved.min - original.min).length() > 50.0, "{original:?} -> {moved:?}");
     assert_eq!(
@@ -239,7 +241,7 @@ fn icon_drawn(ctx: &Context, id: horizon_core::PanelId) -> bool {
             .areas()
             .visible_layer_ids()
             .iter()
-            .any(|layer| layer.id == Id::new(("cast_icon", id.0)))
+            .any(|layer| layer.id == Id::unique(("cast_icon", id.0)))
     })
 }
 

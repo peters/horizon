@@ -1,6 +1,6 @@
 //! Remote device rotation controls with measured, rather than requested, selection.
 use crate::theme;
-use egui::{Button, Rect, RichText, Stroke, StrokeKind, Ui, WidgetInfo, WidgetType, vec2};
+use egui::{Button, Rect, RichText, Role, Stroke, StrokeKind, Ui, WidgetInfo, vec2};
 use horizon_core::browser::{
     BrowserPanelState, BrowserStatus,
     remote::{OrientationSupport, RemoteOrientation},
@@ -36,7 +36,7 @@ pub(super) fn controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive
                     .corner_radius(6)
                     .selected(selected),
             );
-            response.widget_info(|| WidgetInfo::selected(WidgetType::Button, response.enabled(), selected, label));
+            response.widget_info(|| WidgetInfo::selected(Role::Button, response.enabled(), selected, label));
             let icon_size = match orientation {
                 RemoteOrientation::Portrait => vec2(10.0, 16.0),
                 RemoteOrientation::Landscape => vec2(16.0, 10.0),

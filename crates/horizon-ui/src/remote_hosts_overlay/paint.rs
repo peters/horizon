@@ -196,7 +196,7 @@ fn host_row_layout(ui: &mut Ui, width: f32, columns: &Columns) -> HostRowLayout 
 /// context menu persists across frames, and typing in the filter or a catalog
 /// refresh would otherwise move another host under an open menu.
 pub(super) fn host_row_id(host: &RemoteHost) -> egui::Id {
-    egui::Id::new((
+    egui::Id::unique((
         "remote_host_row",
         host.label.as_str(),
         host.ssh_connection.host.as_str(),

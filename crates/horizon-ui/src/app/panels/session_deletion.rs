@@ -139,7 +139,7 @@ impl SessionDeletionUi {
             let response = ui.checkbox(&mut selected, "Select");
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
-                    egui::WidgetType::Checkbox,
+                    egui::Role::CheckBox,
                     response.enabled(),
                     selected,
                     format!("Select conversation {}", binding.session_id),
@@ -157,7 +157,7 @@ impl SessionDeletionUi {
             let response = ui.small_button(RichText::new("Delete").color(theme::PALETTE_RED()));
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
+                    egui::Role::Button,
                     response.enabled(),
                     format!("Delete conversation {}", binding.session_id),
                 )
@@ -325,11 +325,11 @@ struct DeletionProgress {
 }
 
 fn receipt_id() -> egui::Id {
-    egui::Id::new("saved_conversation_deletion_receipt")
+    egui::Id::unique("saved_conversation_deletion_receipt")
 }
 
 fn job_id() -> egui::Id {
-    egui::Id::new("saved_conversation_deletion_job")
+    egui::Id::unique("saved_conversation_deletion_job")
 }
 
 #[derive(Clone)]
@@ -391,7 +391,7 @@ impl HorizonApp {
                     (panel.id, session, panel.launch_cwd.as_deref())
                 })
         };
-        let cache_id = egui::Id::new(("saved_session_picker_catalog", ctx.viewport_id()));
+        let cache_id = egui::Id::unique(("saved_session_picker_catalog", ctx.viewport_id()));
         if ctx
             .data(|data| data.get_temp::<PickerCatalogCache>(cache_id))
             .is_some_and(|cache| {
@@ -604,7 +604,7 @@ fn failed_deletion_start(
 }
 
 fn request_id() -> egui::Id {
-    egui::Id::new("saved_conversation_deletion_request")
+    egui::Id::unique("saved_conversation_deletion_request")
 }
 pub(super) fn queue_deletion_request(ctx: &egui::Context, sessions: Vec<AgentSessionBinding>) {
     ctx.data_mut(|data| data.insert_temp(request_id(), sessions));

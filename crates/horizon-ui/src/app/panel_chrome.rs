@@ -533,7 +533,7 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
     };
     let animated_ratio =
         ui.ctx()
-            .animate_value_with_time(Id::new(("panel_history_ratio", meter.panel_id.0)), ratio, 0.16);
+            .animate_value_with_time(Id::unique(("panel_history_ratio", meter.panel_id.0)), ratio, 0.16);
     let fill_width = track_rect.width() * animated_ratio.clamp(0.0, 1.0);
     let fill_rect = Rect::from_min_max(
         track_rect.min,

@@ -86,7 +86,7 @@ pub(in crate::app) fn render_loading_view(
             } else {
                 loading_spinner::show(
                     ui,
-                    egui::Id::new("startup_loading_spinner"),
+                    egui::Id::unique("startup_loading_spinner"),
                     Some("Resolving saved sessions\u{2026}"),
                 );
             }

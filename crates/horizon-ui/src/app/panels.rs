@@ -171,7 +171,7 @@ const fn mic_control_enabled(interactive: bool, speech_active: bool, state: MicS
 }
 
 fn mic_widget_info(state: MicState, enabled: bool) -> egui::WidgetInfo {
-    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, mic_accessibility_label(state))
+    egui::WidgetInfo::labeled(egui::Role::Button, enabled, mic_accessibility_label(state))
 }
 
 fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state: MicState) -> egui::Response {
@@ -636,7 +636,7 @@ impl HorizonApp {
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
         // (titlebar drag, close, resize handles) click-through.
-        egui::Area::new(Id::new(("panel", panel_id.0)))
+        egui::Area::new(Id::unique(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
             .clip_to_canvas(canvas_layer_clip)
             .order(if snapshot.is_focused {

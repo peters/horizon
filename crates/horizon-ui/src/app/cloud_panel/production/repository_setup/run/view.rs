@@ -151,7 +151,7 @@ fn step_row(ui: &mut Ui, step: &Step, elapsed: Option<Duration>) {
             Some(elapsed) => format!("{}: {state}, {} s", step.title, elapsed.as_secs()),
             None => format!("{}: {state}", step.title),
         };
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, spoken.clone()));
         ui.add_space(6.0);
         let color = match step.state {
             State::Running => theme::FG(),

@@ -81,7 +81,7 @@ pub(super) fn finish_session_deletion(
     options: Vec<AgentSessionBinding>,
     report: &horizon_core::AgentSessionDeletionReport,
 ) {
-    let id = egui::Id::new(("session_recovery_picker", viewport));
+    let id = egui::Id::unique(("session_recovery_picker", viewport));
     ctx.data_mut(|data| {
         if let Some(mut state) = data
             .get_temp::<SessionPicker>(id)
@@ -96,7 +96,7 @@ pub(super) fn finish_session_deletion(
 }
 
 fn picker_id(ctx: &egui::Context) -> egui::Id {
-    egui::Id::new(("session_recovery_picker", ctx.viewport_id()))
+    egui::Id::unique(("session_recovery_picker", ctx.viewport_id()))
 }
 
 pub(in crate::app) fn session_picker_panel(ctx: &egui::Context) -> Option<PanelId> {
@@ -125,7 +125,7 @@ pub(in crate::app) fn focused_session_picker_panel(ctx: &egui::Context) -> Optio
 }
 
 fn session_picker_panel_in_viewport(ctx: &egui::Context, viewport: egui::ViewportId) -> Option<PanelId> {
-    let id = egui::Id::new(("session_recovery_picker", viewport));
+    let id = egui::Id::unique(("session_recovery_picker", viewport));
     let state = ctx.data(|data| data.get_temp::<SessionPicker>(id))?;
     let frame = ctx.cumulative_frame_nr_for(viewport);
     if frame > state.last_rendered_frame.saturating_add(1) {
@@ -385,7 +385,7 @@ fn render_session_row(
                         );
                         copy.widget_info(|| {
                             egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
+                                egui::Role::Button,
                                 copy.enabled(),
                                 format!("Copy conversation ID {}", binding.session_id),
                             )

@@ -318,7 +318,7 @@ fn sidebar_search_field_is_above_the_sidebar_and_accepts_pointer_input() {
     assert_eq!(layer.order, egui::Order::Tooltip);
     assert_ne!(
         layer.id,
-        egui::Id::new("sidebar"),
+        egui::Id::unique("sidebar"),
         "the search field must be above sidebar chrome"
     );
     for pressed in [true, false] {
@@ -408,7 +408,7 @@ fn menu_search_field_uses_an_inset_well_instead_of_the_selection_stroke() {
 fn tab_moves_focus_into_the_menu_search_text() {
     let ctx = Context::default();
     let mut query = String::new();
-    let id = egui::Id::new("menu-search");
+    let id = egui::Id::unique("menu-search");
     let mut frame = |events| {
         let _ = ctx
             .run_ui(

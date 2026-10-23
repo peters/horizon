@@ -261,7 +261,7 @@ impl HorizonApp {
             &workspace_bounds,
             workspace_id,
             canvas_rect,
-            egui::Id::new(("detached_workspace_minimap", workspace_local_id)),
+            egui::Id::unique(("detached_workspace_minimap", workspace_local_id)),
         );
         if !self.host_dialog_open() && !session_picker_open {
             self.handle_workspace_file_drop(ctx, workspace_id, canvas_rect);
@@ -337,7 +337,7 @@ impl HorizonApp {
             "Show Minimap"
         };
 
-        Panel::top(egui::Id::new(("detached_workspace_toolbar", workspace_local_id))).show(ui, |ui| {
+        Panel::top(egui::Id::unique(("detached_workspace_toolbar", workspace_local_id))).show(ui, |ui| {
             if super::panels::session_picker_panel(ctx).is_some() {
                 ui.disable();
             }
@@ -583,7 +583,7 @@ impl HorizonApp {
 }
 
 fn detached_viewport_id(workspace_local_id: &str) -> ViewportId {
-    ViewportId(egui::Id::new(("detached_workspace", workspace_local_id)))
+    ViewportId(egui::Id::unique(("detached_workspace", workspace_local_id)))
 }
 
 fn consume_detached_position_restore(

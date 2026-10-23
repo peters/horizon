@@ -134,7 +134,7 @@ pub(in crate::app::cloud_panel) fn docker_mark(ctx: &egui::Context) -> Option<eg
     // A process-wide cache: the pixels never change, and every window may draw the mark.
     static PIXELS: std::sync::OnceLock<Option<egui::ColorImage>> = std::sync::OnceLock::new();
     static DECODE: std::sync::Once = std::sync::Once::new();
-    let id = egui::Id::new("cloud-provider-mark-docker");
+    let id = egui::Id::unique("cloud-provider-mark-docker");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }
@@ -158,7 +158,7 @@ pub(in crate::app::cloud_panel) fn docker_mark(ctx: &egui::Context) -> Option<eg
 
 /// The `RunPod` hexagon, cut from the wordmark Horizon already ships.
 fn runpod_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new("cloud-provider-mark-runpod");
+    let id = egui::Id::unique("cloud-provider-mark-runpod");
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return Some(texture);
     }

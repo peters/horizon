@@ -498,7 +498,7 @@ fn body_area(
 ) -> Option<Action> {
     let launch = group.remote.as_ref()?;
     let rect = body_rect(group);
-    let step = egui::Area::new(Id::new(("cloud-runtime", group.issue)))
+    let step = egui::Area::new(Id::unique(("cloud-runtime", group.issue)))
         .order(Order::Middle)
         .fixed_pos(rect.min)
         .constrain(false)
@@ -524,7 +524,7 @@ fn github_area(
     let rect = body_rect(group);
     let cloud_id = group.remote.as_ref().map_or("", |launch| launch.id.as_str());
     let at = rect.right_top() + egui::vec2(-(super::github::REQUESTS_WIDTH + 16.0), 16.0);
-    egui::Area::new(Id::new(("cloud-github-requests", group.issue)))
+    egui::Area::new(Id::unique(("cloud-github-requests", group.issue)))
         .order(Order::Foreground)
         .fixed_pos(at)
         .constrain(false)
@@ -549,7 +549,7 @@ fn drawer_area(
     context: drawer::Context<'_>,
 ) -> drawer::Response {
     let rect = drawer::placement(group);
-    egui::Area::new(Id::new(("cloud-drawer", group.issue)))
+    egui::Area::new(Id::unique(("cloud-drawer", group.issue)))
         .order(Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)

@@ -25,7 +25,7 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
             .strong()
             .color(theme::FG()),
     );
-    let id = Id::new("cloud-source");
+    let id = Id::unique("cloud-source");
     let empty = form.repository.trim().is_empty();
     if form.focus_title_on_open
         && empty
@@ -249,7 +249,7 @@ impl State {
                 let field = ui.add_sized(
                     [ui.available_width(), 36.0],
                     TextEdit::singleline(&mut self.token)
-                        .id(Id::new("cloud-clone-token"))
+                        .id(Id::unique("cloud-clone-token"))
                         .password(true)
                         .margin(Vec2::new(12.0, 9.0))
                         .hint_text("Access token"),

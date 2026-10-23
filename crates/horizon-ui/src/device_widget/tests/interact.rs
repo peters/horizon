@@ -182,6 +182,7 @@ fn modifiers_and_wheel_reach_the_desktop_and_escape_drops_capture() {
         vec![
             egui::Event::PointerMoved(middle),
             egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -50.0),
                 modifiers: egui::Modifiers::NONE,
@@ -335,7 +336,7 @@ fn a_click_on_ui_covering_the_image_does_not_reach_the_desktop() {
                 },
                 |ui| {
                     state.show(ui, &device, true);
-                    egui::Area::new(egui::Id::new("cover"))
+                    egui::Area::new(egui::Id::unique("cover"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(middle - egui::vec2(40.0, 40.0))
                         .show(ui.ctx(), |ui| {
@@ -382,6 +383,7 @@ fn a_discarded_pass_does_not_send_its_input_twice() {
                 events: vec![
                     egui::Event::PointerMoved(middle),
                     egui::Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
                         unit: egui::MouseWheelUnit::Line,
                         delta: egui::vec2(0.0, -1.0),
                         modifiers: egui::Modifiers::NONE,
@@ -588,6 +590,7 @@ fn wheel_events_go_to_the_image_under_the_pointer_when_they_happened() {
     let middle = image_rect(&output).center();
     let outside = egui::Pos2::new(SCREEN.x - 4.0, SCREEN.y - 4.0);
     let wheel = egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, -1.0),
         modifiers: egui::Modifiers::NONE,
@@ -638,6 +641,7 @@ fn window_focus_loss_releases_and_the_first_wheel_uses_the_current_pointer() {
         &mut state,
         &device,
         vec![egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -1.0),
             modifiers: egui::Modifiers::NONE,
@@ -702,7 +706,7 @@ fn a_press_on_covering_ui_stays_there_even_if_the_pointer_then_reaches_the_image
                 },
                 |ui| {
                     state.show(ui, &device, true);
-                    egui::Area::new(egui::Id::new("popup"))
+                    egui::Area::new(egui::Id::unique("popup"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(covered_spot - egui::vec2(20.0, 20.0))
                         .show(ui.ctx(), |ui| {
@@ -764,6 +768,7 @@ fn a_wheel_without_a_move_is_sent_at_the_current_pointer() {
         &mut state,
         &device,
         vec![egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
             modifiers: egui::Modifiers::NONE,

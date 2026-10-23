@@ -105,7 +105,7 @@ impl HorizonApp {
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();
 
-        egui::Area::new(Id::new("sidebar"))
+        egui::Area::new(Id::unique("sidebar"))
             .fixed_pos(sidebar_origin)
             .constrain(false)
             .order(Order::Tooltip)
@@ -293,7 +293,7 @@ impl HorizonApp {
         row_response.widget_info(|| {
             let panels = accordion.then_some(workspace.panels.len());
             let spoken = text::workspace_spoken(&workspace.name, panels, workspace.detached);
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
+            egui::WidgetInfo::labeled(egui::Role::Button, true, spoken)
         });
         // The tile, name and line tooltips go after the row: egui hovers a widget that
         // only senses hover when it lies above the row's click target.
@@ -419,7 +419,7 @@ impl HorizonApp {
                 Sense::click(),
             )
             .on_hover_text("Close panel");
-        close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close panel"));
+        close.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close panel"));
         let row_id = sidebar_panel_row_id(panel.id);
         let row_focused = ui.memory(|memory| memory.has_focus(row_id));
         let close_shows = hovered || panel.is_focused || row_focused || close.hovered() || close.has_focus();
@@ -455,7 +455,7 @@ impl HorizonApp {
         let row_response = ui.interact(row_click_rect, row_id, Sense::click());
         row_response.widget_info(|| {
             let spoken = text::panel_spoken(panel.kind, label, panel.working);
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken)
+            egui::WidgetInfo::labeled(egui::Role::Button, true, spoken)
         });
         // The whole title, when the row cuts it or shows only the agent's task.
         let row_response = if title_elided || *label != panel.title {
@@ -586,7 +586,7 @@ impl HorizonApp {
 /// The widget id of a panel row: global, so that the close button can read the
 /// row's keyboard focus before the row is registered.
 fn sidebar_panel_row_id(panel: PanelId) -> Id {
-    Id::new(("sidebar_panel_click", panel.0))
+    Id::unique(("sidebar_panel_click", panel.0))
 }
 
 fn sidebar_workspace_insert_dock_side(insert: SidebarWorkspaceInsert) -> WorkspaceDockSide {

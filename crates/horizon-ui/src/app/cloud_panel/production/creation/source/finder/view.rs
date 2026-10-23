@@ -244,7 +244,7 @@ fn row_widget(ui: &mut Ui, row: &Row, highlighted: bool) -> egui::Response {
             Kind::Folder { .. } => "folder, Tab opens it",
         };
         let label = format!("{}, {}, {what}", row.title, row.detail);
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, highlighted, label)
+        egui::WidgetInfo::selected(egui::Role::Button, true, highlighted, label)
     });
     if !ui.is_rect_visible(rect) {
         return response;

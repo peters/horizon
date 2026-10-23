@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn page_ime_state_tracks_publish_and_clear() {
         let context = egui::Context::default();
-        let body_id = Id::new("browser-body");
+        let body_id = Id::unique("browser-body");
         let body_rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
 
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {

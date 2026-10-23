@@ -499,7 +499,7 @@ fn frame_new_cloud(screen: egui::Vec2, others: &[Option<[f32; 2]>], destination:
         ..Default::default()
     });
     let controls = app.canvas_rect(&ctx).min + egui::vec2(24.0, 20.0);
-    egui::Area::new(egui::Id::new("cloud-controls"))
+    egui::Area::new(egui::Id::unique("cloud-controls"))
         .fixed_pos(controls)
         .show(&ctx, |ui| {
             ui.allocate_space(egui::vec2(370.0, 58.0));
@@ -531,7 +531,7 @@ fn frame_new_cloud(screen: egui::Vec2, others: &[Option<[f32; 2]>], destination:
         .collect();
     let (position, size) = app.workspace_focus_frame(destination).unwrap();
     let controls = ctx
-        .memory(|memory| memory.area_rect(egui::Id::new("cloud-controls")))
+        .memory(|memory| memory.area_rect(egui::Id::unique("cloud-controls")))
         .unwrap();
     let framed = Framed {
         canvas,

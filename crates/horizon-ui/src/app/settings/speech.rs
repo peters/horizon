@@ -266,7 +266,7 @@ const DEVICE_LIST_ID: &str = "speech_input_devices";
 /// thread (cpal enumeration can block) and cached in egui memory. `None`
 /// while the scan is still running.
 fn input_device_list(ui: &Ui) -> Option<std::sync::Arc<Vec<String>>> {
-    let id = egui::Id::new(DEVICE_LIST_ID);
+    let id = egui::Id::unique(DEVICE_LIST_ID);
     let state: Option<DeviceListState> = ui.data(|data| data.get_temp(id));
     match state {
         Some(DeviceListState::Loaded(devices)) => Some(devices),
@@ -345,7 +345,7 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
             .button(egui::RichText::new("↻").size(12.0))
             .on_hover_text("Re-scan audio input devices");
         if refresh.clicked() {
-            ui.data_mut(|data| data.remove_temp::<DeviceListState>(egui::Id::new(DEVICE_LIST_ID)));
+            ui.data_mut(|data| data.remove_temp::<DeviceListState>(egui::Id::unique(DEVICE_LIST_ID)));
             ui.ctx().request_repaint();
         }
     });
@@ -559,7 +559,7 @@ fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
                 ),
             );
         }
-        let active: Option<String> = ui.data(|data| data.get_temp(egui::Id::new("speech_active_backend")));
+        let active: Option<String> = ui.data(|data| data.get_temp(egui::Id::unique("speech_active_backend")));
         if let Some(active) = active {
             super::dim_label(ui, &format!("active: {active}"));
         }
@@ -602,10 +602,10 @@ fn set_slot_hotkey(config: &mut Config, slot: Option<usize>, hotkey: String) {
 /// hotkey (`None`) or a profile row; all rows share one capture/error state,
 /// scoped by the armed slot so only the row that was clicked captures.
 fn render_hotkey_binder_slot(ui: &mut Ui, config: &mut Config, slot: Option<usize>) -> bool {
-    let capture_id = egui::Id::new("speech_hotkey_capturing");
-    let capture_slot_id = egui::Id::new("speech_hotkey_capture_slot");
-    let error_id = egui::Id::new("speech_hotkey_error");
-    let error_slot_id = egui::Id::new("speech_hotkey_error_slot");
+    let capture_id = egui::Id::unique("speech_hotkey_capturing");
+    let capture_slot_id = egui::Id::unique("speech_hotkey_capture_slot");
+    let error_id = egui::Id::unique("speech_hotkey_error");
+    let error_slot_id = egui::Id::unique("speech_hotkey_error_slot");
     let mut changed = false;
     let capturing_any: bool = ui.data(|data| data.get_temp(capture_id)).unwrap_or(false);
     let armed_slot: Option<usize> = ui.data(|data| data.get_temp(capture_slot_id)).unwrap_or(None);
@@ -733,7 +733,7 @@ fn arm_pending_capture(
     let armed_at = ui.input(|input| input.time);
     ui.data_mut(|data| {
         data.insert_temp(
-            egui::Id::new("speech_captured_key"),
+            egui::Id::unique("speech_captured_key"),
             Some(PendingCapture {
                 key,
                 physical_key,
@@ -918,8 +918,8 @@ mod tests {
             (Event::Paste("text".to_string()), Key::V, ClipboardCapture::Paste),
         ] {
             let ctx = egui::Context::default();
-            let capture_id = egui::Id::new("speech_hotkey_capturing");
-            let error_id = egui::Id::new("speech_hotkey_error");
+            let capture_id = egui::Id::unique("speech_hotkey_capturing");
+            let error_id = egui::Id::unique("speech_hotkey_error");
             ctx.data_mut(|data| data.insert_temp(capture_id, true));
             let mut config = Config::default();
 
@@ -940,7 +940,7 @@ mod tests {
             let capturing: bool = ctx.data(|data| data.get_temp(capture_id)).unwrap_or(false);
             let error: Option<String> = ctx.data(|data| data.get_temp(error_id));
             let pending = ctx
-                .data(|data| data.get_temp::<Option<super::PendingCapture>>(egui::Id::new("speech_captured_key")))
+                .data(|data| data.get_temp::<Option<super::PendingCapture>>(egui::Id::unique("speech_captured_key")))
                 .flatten();
             assert!(!capturing);
             assert_eq!(error.as_deref(), Some(CLIPBOARD_HOTKEY_ERROR));
@@ -986,7 +986,7 @@ mod tests {
         }
 
         let ctx = egui::Context::default();
-        let error_id = egui::Id::new("speech_hotkey_error");
+        let error_id = egui::Id::unique("speech_hotkey_error");
         let mut config = Config::default();
         let baseline = render_panel(&ctx, &mut config);
         ctx.data_mut(|data| data.insert_temp(error_id, CLIPBOARD_HOTKEY_ERROR.to_string()));
@@ -1001,8 +1001,8 @@ mod tests {
     #[test]
     fn key_before_clipboard_pseudo_event_preserves_both_suppression_claims() {
         let ctx = egui::Context::default();
-        let capture_id = egui::Id::new("speech_hotkey_capturing");
-        let pending_id = egui::Id::new("speech_captured_key");
+        let capture_id = egui::Id::unique("speech_hotkey_capturing");
+        let pending_id = egui::Id::unique("speech_captured_key");
         ctx.data_mut(|data| data.insert_temp(capture_id, true));
         let mut config = Config::default();
 
@@ -1134,8 +1134,8 @@ mod tests {
     fn profile_rebind_captures_into_the_armed_profile_only() {
         let ctx = egui::Context::default();
         ctx.data_mut(|data| {
-            data.insert_temp(egui::Id::new("speech_hotkey_capturing"), true);
-            data.insert_temp(egui::Id::new("speech_hotkey_capture_slot"), Some(1_usize));
+            data.insert_temp(egui::Id::unique("speech_hotkey_capturing"), true);
+            data.insert_temp(egui::Id::unique("speech_hotkey_capture_slot"), Some(1_usize));
         });
         let mut config = profiles_config();
 
@@ -1168,7 +1168,7 @@ mod tests {
         assert_eq!(config.features.speech.profiles[0].hotkey, "F1");
         assert_eq!(config.features.speech.profiles[1].hotkey, "F5");
         let capturing: bool = ctx
-            .data(|data| data.get_temp(egui::Id::new("speech_hotkey_capturing")))
+            .data(|data| data.get_temp(egui::Id::unique("speech_hotkey_capturing")))
             .unwrap_or(false);
         assert!(!capturing, "capture must disarm after a successful bind");
     }

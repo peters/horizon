@@ -159,6 +159,7 @@ fn viewport_stabilization_suppresses_raw_root_interaction() {
         modifiers: egui::Modifiers::NONE,
     });
     input.events.push(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Point,
         delta: egui::vec2(30.0, 40.0),
         phase: egui::TouchPhase::Move,

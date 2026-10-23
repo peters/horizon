@@ -227,7 +227,7 @@ fn preset_has_error(preset: &PresetConfig) -> bool {
 fn render_kind_combo(ui: &mut Ui, index: usize, kind: &mut PanelKind) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Kind").color(theme::FG_DIM()).size(11.0));
-    let kind_id = egui::Id::new("preset_kind").with(index);
+    let kind_id = egui::Id::unique("preset_kind").with(index);
     egui::ComboBox::from_id_salt(kind_id)
         .selected_text(kind.display_name())
         .width(100.0)
@@ -244,7 +244,7 @@ fn render_kind_combo(ui: &mut Ui, index: usize, kind: &mut PanelKind) -> bool {
 fn render_resume_combo(ui: &mut Ui, index: usize, resume: &mut PanelResume) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Resume").color(theme::FG_DIM()).size(11.0));
-    let resume_id = egui::Id::new("preset_resume").with(index);
+    let resume_id = egui::Id::unique("preset_resume").with(index);
     let resume_label = match resume {
         PanelResume::Fresh => "Fresh",
         PanelResume::Last => "Last",

@@ -176,7 +176,7 @@ impl HorizonApp {
 
     pub(super) fn render_root_viewport_stabilizing_overlay(ctx: &Context) {
         let viewport = viewport_local_rect(ctx);
-        egui::Area::new(egui::Id::new("root-viewport-stabilizing"))
+        egui::Area::new(egui::Id::unique("root-viewport-stabilizing"))
             .order(egui::Order::Debug)
             .default_size(viewport.size())
             .fade_in(false)

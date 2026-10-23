@@ -21,6 +21,7 @@ fn modified_boundaries_preserve_plain_panel_motion_and_queued_notches() {
                     let _ = scroll_area_frame(&ctx, time, target, Vec::new());
                 }
                 let plain = |unit, delta| Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit,
                     delta: Vec2::new(0.0, delta),
                     phase: TouchPhase::Move,
@@ -29,6 +30,7 @@ fn modified_boundaries_preserve_plain_panel_motion_and_queued_notches() {
                 let before = scroll_area_frame(&ctx, 1.0, target, vec![plain(MouseWheelUnit::Line, -1.0)]).0;
                 let delta = if unit == MouseWheelUnit::Line { -1.0 } else { -5.0 };
                 let boundary = Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: MouseWheelUnit::Point,
                     delta: if modifiers == Modifiers::NONE {
                         Vec2::ZERO
@@ -68,6 +70,7 @@ fn assert_mixed_scroll(zoom_first: bool) {
         // A prior plain notch must keep easing while this frame splits plain
         // and modified wheel input.
         let prior = Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,
@@ -77,6 +80,7 @@ fn assert_mixed_scroll(zoom_first: bool) {
         let _ = scroll_area_frame(&plain_only, 0.984, target, vec![prior]);
         let delta = Vec2::new(0.0, if unit == MouseWheelUnit::Line { -1.0 } else { -5.0 });
         let event = |modifiers| Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit,
             delta,
             phase: TouchPhase::Move,
@@ -135,6 +139,7 @@ fn modified_boundaries_discard_displaced_backlog_but_keep_fresh_panel_motion() {
                     let _ = scroll_area_frame(&ctx, time, ScrollTarget::Panel(PANEL), Vec::new());
                 }
                 let notch = Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: MouseWheelUnit::Line,
                     delta: Vec2::new(0.0, -1.0),
                     phase: TouchPhase::Move,
@@ -142,6 +147,7 @@ fn modified_boundaries_discard_displaced_backlog_but_keep_fresh_panel_motion() {
                 };
                 let before = scroll_area_frame(&ctx, 1.0, ScrollTarget::Panel(PANEL), vec![notch]).0;
                 let mut events = vec![Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: MouseWheelUnit::Point,
                     delta: Vec2::ZERO,
                     phase,
@@ -174,6 +180,7 @@ fn assert_displaced_wheels_stay_with_owner(owner: ScrollTarget) {
     }
     assert!(frame(1.0, owner, vec![wheel(Vec2::new(0.0, 1.0), TouchPhase::Move)]).abs() < f32::EPSILON);
     let notch = Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: MouseWheelUnit::Line,
         delta: Vec2::new(0.0, -1.0),
         phase: TouchPhase::Move,
@@ -249,7 +256,7 @@ fn scroll_area_frame_with_routing(
                     ui.allocate_space(Vec2::new(200.0, 2000.0));
                 })
                 .state
-                .offset
+                .unclamped_offset()
                 .y;
         })
         .discard_textures();
@@ -262,6 +269,7 @@ fn plain_panel_smoothing_matches_native_egui_for_zero_delta_starts() {
     let native = Context::default();
     let target = ScrollTarget::Panel(PANEL);
     let event = |unit, delta, phase| Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit,
         delta: Vec2::new(0.0, delta),
         phase,
@@ -307,6 +315,7 @@ fn panel_start_motion_is_delivered_once_and_modified_starts_are_excluded() {
                 let _ = scroll_area_frame(&ctx, time, target, Vec::new());
             }
             let start = Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit,
                 delta: Vec2::new(0.0, delta),
                 phase: TouchPhase::Start,
@@ -342,12 +351,14 @@ fn a_zoom_modified_start_keeps_plain_panel_moves_precise() {
     }
     let events = vec![
         Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Point,
             delta: Vec2::ZERO,
             phase: TouchPhase::Start,
             modifiers: Modifiers::CTRL,
         },
         Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,
@@ -370,6 +381,7 @@ fn clearing_panel_smoothing_preserves_outside_input_and_fresh_notches() {
             let _ = scroll_area_frame(&fresh, time, target, Vec::new());
         }
         let notch = Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,
@@ -407,6 +419,7 @@ fn a_modified_start_cannot_detach_queued_easing_from_its_panel_owner() {
         1.0,
         target,
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,
@@ -418,6 +431,7 @@ fn a_modified_start_cannot_detach_queued_easing_from_its_panel_owner() {
         1.016,
         target,
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Point,
             delta: Vec2::ZERO,
             phase: TouchPhase::Start,
@@ -438,6 +452,7 @@ fn a_modified_start_cannot_detach_queued_easing_from_its_panel_owner() {
         1.32,
         other,
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -1.0),
             phase: TouchPhase::Move,
@@ -462,12 +477,14 @@ fn a_new_notch_after_a_boundary_keeps_its_target_until_easing_finishes() {
             }
             let events = vec![
                 Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: MouseWheelUnit::Point,
                     delta: Vec2::ZERO,
                     phase,
                     modifiers,
                 },
                 Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: MouseWheelUnit::Line,
                     delta: Vec2::new(0.0, -1.0),
                     phase: TouchPhase::Move,

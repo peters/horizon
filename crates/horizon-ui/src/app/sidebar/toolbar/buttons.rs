@@ -116,7 +116,7 @@ impl HorizonApp {
         } else {
             button
         };
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, "New cloud"));
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ready, "New cloud"));
         paint_new_cloud(ui.painter(), rect, &button, compact, ready);
         if !ready {
             button.on_hover_text(super::super::NEW_CLOUD_NOT_READY);
@@ -147,7 +147,7 @@ impl HorizonApp {
             Sense::click(),
         );
         let button = button.on_hover_cursor(CursorIcon::PointingHand);
-        button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Menu"));
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Menu"));
         paint_menu_button(ui.painter(), rect, &button);
         let popup = Popup::menu(&button).kind(egui::PopupKind::Tooltip);
         let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());

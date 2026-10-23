@@ -122,7 +122,7 @@ impl HorizonApp {
                     launched: !group.panels.is_empty(),
                     ..DemoDeployment::default()
                 });
-            egui::Area::new(Id::new(("cloud-runtime", group.issue)))
+            egui::Area::new(Id::unique(("cloud-runtime", group.issue)))
                 .order(Order::Middle)
                 .fixed_pos(position)
                 .constrain(false)

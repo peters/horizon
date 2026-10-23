@@ -22,6 +22,7 @@ pub(super) fn phased_frame(
             events: vec![
                 Event::PointerMoved(position),
                 Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: MouseWheelUnit::Point,
                     delta: Vec2::new(0.0, delta),
                     phase,

@@ -93,7 +93,7 @@ impl HorizonApp {
         // areas), so it paints above the workspace fill/border but below the
         // `Order::Middle` panels.
         let painter = ctx
-            .layer_painter(LayerId::new(Order::Background, Id::new("browser_connector_lines")))
+            .layer_painter(LayerId::new(Order::Background, Id::unique("browser_connector_lines")))
             .with_clip_rect(canvas_rect);
         for (agent_rect, browser_rect) in links {
             paint_connector(&painter, agent_rect, browser_rect, theme::PALETTE_CYAN());

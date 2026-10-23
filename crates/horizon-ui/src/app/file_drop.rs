@@ -594,7 +594,7 @@ fn native_file_drop_position(ctx: &Context) -> Option<Pos2> {
     // XWayland's root coordinates do not describe a native Wayland surface.
     #[cfg(target_os = "linux")]
     if ctx
-        .data(|data| data.get_temp::<bool>(egui::Id::new("native_wayland_input")))
+        .data(|data| data.get_temp::<bool>(egui::Id::unique("native_wayland_input")))
         .unwrap_or(false)
     {
         return None;

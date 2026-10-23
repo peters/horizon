@@ -133,7 +133,7 @@ fn minimap_target_label(app: &HorizonApp, target: MinimapHitTarget) -> Option<St
 /// it, and name whichever target the pointer is over.
 pub(super) fn minimap_widget_info(target_label: Option<&str>) -> egui::WidgetInfo {
     egui::WidgetInfo::labeled(
-        egui::WidgetType::Other,
+        egui::Role::Unknown,
         true,
         target_label.map_or_else(
             || "Workspace minimap".to_string(),

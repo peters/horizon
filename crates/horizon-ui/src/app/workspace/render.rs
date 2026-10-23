@@ -24,7 +24,7 @@ pub(super) fn render_workspace_visual(
 ) -> WorkspaceInteraction {
     let is_renaming = rename_buffer.is_some();
 
-    egui::Area::new(Id::new(("workspace_bg", workspace.id.0)))
+    egui::Area::new(Id::unique(("workspace_bg", workspace.id.0)))
         .fixed_pos(workspace.canvas_rect.min)
         .constrain(false)
         .interactable(false)
@@ -50,7 +50,7 @@ pub(super) fn render_workspace_visual(
         };
     }
 
-    let mut interaction = egui::Area::new(Id::new(("workspace_label", workspace.id.0)))
+    let mut interaction = egui::Area::new(Id::unique(("workspace_label", workspace.id.0)))
         .fixed_pos(workspace.label_canvas_rect.min)
         .constrain(false)
         .order(egui::Order::Tooltip)

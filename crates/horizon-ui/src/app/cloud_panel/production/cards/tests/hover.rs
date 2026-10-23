@@ -27,7 +27,7 @@ fn management_wheel_scrolls_with_the_complete_canvas_render_path() {
         render(Pos2::ZERO, Vec::new());
     }
     let center = ctx
-        .memory(|memory| memory.area_rect(Id::new(("cloud-drawer", ID))))
+        .memory(|memory| memory.area_rect(Id::unique(("cloud-drawer", ID))))
         .unwrap()
         .center();
     let before = render(center, Vec::new());
@@ -41,6 +41,7 @@ fn management_wheel_scrolls_with_the_complete_canvas_render_path() {
     render(
         center,
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: Vec2::new(0.0, -7.0),
             phase: egui::TouchPhase::Move,
@@ -103,7 +104,7 @@ fn ready_card(zoom: f32) -> (tempfile::TempDir, Context, HorizonApp) {
 fn entering_the_card_scroll_area_keeps_lower_controls_under_the_pointer() {
     for zoom in [1.0_f32, 1.797] {
         let (_temp, ctx, mut app) = ready_card(zoom);
-        let layer = LayerId::new(Order::Foreground, Id::new(("cloud-drawer", ID)));
+        let layer = LayerId::new(Order::Foreground, Id::unique(("cloud-drawer", ID)));
         let mut time = 0.0;
         for _ in 0..3 {
             time += 0.05;
@@ -173,7 +174,7 @@ fn a_stage_segment_shows_its_own_hover_text_over_the_card_hint() {
     for _ in 0..4 {
         render(Some(Pos2::ZERO));
     }
-    let layer = LayerId::new(Order::Middle, Id::new(("cloud-header", ID)));
+    let layer = LayerId::new(Order::Middle, Id::unique(("cloud-header", ID)));
     let header = ctx
         .memory(|memory| memory.area_rect(layer.id))
         .expect("the card header");
@@ -234,7 +235,7 @@ fn a_production_cloud_renames_from_a_click_on_its_title() {
     for _ in 0..4 {
         render(&mut app, Pos2::ZERO, Vec::new());
     }
-    let layer = LayerId::new(Order::Middle, Id::new(("cloud-header", ID)));
+    let layer = LayerId::new(Order::Middle, Id::unique(("cloud-header", ID)));
     let header = ctx
         .memory(|memory| memory.area_rect(layer.id))
         .expect("the card header");

@@ -52,7 +52,7 @@ impl HorizonApp {
             self.cast_clouds(workspace, clouds).all(|group| {
                 let (min, max) = group.bounds();
                 let current = transform * Rect::from_min_max(egui::Pos2::from(min), egui::Pos2::from(max));
-                let layer = LayerId::new(egui::Order::Background, egui::Id::new(("cloud-frame", group.issue)));
+                let layer = LayerId::new(egui::Order::Background, egui::Id::unique(("cloud-frame", group.issue)));
                 ctx.memory(|memory| {
                     memory.area_rect(layer.id).is_some_and(|area| {
                         let drawn = memory.to_global.get(&layer).copied().unwrap_or_default() * area;
@@ -76,9 +76,10 @@ impl HorizonApp {
             self.cast_clouds(workspace, clouds).any(|group| {
                 CLOUD_LAYERS
                     .iter()
-                    .any(|name| layer.id == egui::Id::new((*name, group.issue)))
+                    .any(|name| layer.id == egui::Id::unique((*name, group.issue)))
                     || self.board.panels.iter().any(|panel| {
-                        group.panels.contains(&panel.local_id) && layer.id == egui::Id::new(("cloud-owner", panel.id.0))
+                        group.panels.contains(&panel.local_id)
+                            && layer.id == egui::Id::unique(("cloud-owner", panel.id.0))
                     })
             })
         }
