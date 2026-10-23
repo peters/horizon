@@ -765,17 +765,17 @@ yet**. A working copy that is not valid shows its error instead. This is not an 
   settings of the repository. The chips name the agents of the **New Workspace**
   menu, each in its default mode, with its own command and arguments. An agent
   with more than one preset there, for example one preset for each model it
-  runs, keeps one chip and a caret beside it: the caret lists the presets of that
-  agent, and the chip then names the preset you chose. The setup starts the agent
-  on the instructions when its command line takes a message, and types them into
-  its prompt otherwise. It runs on Linux with a systemd user session:
-  Horizon starts the agent in a systemd user scope, which holds every process the
-  agent starts as its descendant, so it can end them all before it commits. The
-  scope is not a sandbox: the agent runs as you, and a program it hands to another
-  service of yours, such as Docker or your systemd user manager, runs outside it,
-  as any program you start does. What **Use this setup** commits does not rest on
-  the scope: it is the setup Horizon proved, read after the agent ended, with every
-  other change named first. On macOS and Windows the dialog does not offer it, and
+  runs, keeps one chip with a caret: the label half chooses that agent, the caret
+  half lists the presets of that agent, and the chip then names the preset you
+  chose. The setup starts the agent on the instructions when its command line
+  takes a message, and types them into its prompt otherwise. It runs on Linux
+  with a systemd user session: Horizon starts the agent in a systemd user scope,
+  which holds every process the agent starts as its descendant, so it can end
+  them all before it commits. The scope is not a sandbox: the agent runs as you,
+  and a program it hands to another service of yours, such as Docker or your
+  systemd user manager, runs outside it, as any program you start does. What
+  **Use this setup** commits does not rest on the scope: it is the setup Horizon
+  proved, read after the agent ended, with every other change named first. On macOS and Windows the dialog does not offer it, and
   on Linux without a systemd user session the agent does not start; use
   **Quick start** or write `.horizon` yourself.
 
@@ -788,7 +788,9 @@ with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
-again for the same repository.
+again for the same repository. A live preview outlives **Close** while its
+Device panel is open; closing that panel ends the desktop, so no container runs where
+nobody watches it.
 
 Several repositories can be set up at the same time, each with its own agent. Click
 **Close** while a setup works, open **New cloud** again, choose another repository
@@ -954,8 +956,11 @@ with a virtual desktop on `:99` like the worker's. When a window appears, Horizo
 takes a screenshot (when the image has ImageMagick's `import`) and opens the
 desktop live in a Device panel beside the agent,
 on this computer's loopback, before anything is rented. A new proof or a new
-preview request replaces the live desktop, and **Stop** or **Use this setup**
-removes it. The preview of a GPU profile gets this computer's GPU, and it gets
+preview request replaces the live desktop. **Stop** or **Use this setup**
+removes it, and it also goes when its Device panel closes: a desktop nobody watches
+keeps no container. **Close** keeps it while that panel is open. The setup itself
+stays ready, **Use this setup** still commits it, and the agent starts a new preview
+only when it asks for one again. The preview of a GPU profile gets this computer's GPU, and it gets
 `/dev/kvm` when the app asks for it, such as an x86_64 Android emulator. With
 rootless Docker, only the container's root account can open `/dev/kvm`, so that
 preview runs as root, which is your own account. When this computer has no

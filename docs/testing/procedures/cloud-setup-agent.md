@@ -2,7 +2,7 @@
 procedure: cloud-setup-agent
 feature: Set up from CI in New cloud (setup agent and Horizon's proof)
 platforms: [linux]
-cost: rents compute  # S24 only; S01 to S23 use only this computer
+cost: rents compute  # S25 only; S01 to S24 and S26 use only this computer
 destructive: yes
 secrets: [the local login of the agent (Codex or Claude)]
 owner: peters
@@ -23,9 +23,9 @@ setup** commits `.horizon` and reads it as the repository profile.
 - Platforms: Linux with Docker. The isolated fixture of
   [area S of the cloud panels procedure](cloud-panels/s-test-fixture.md) is
   recommended.
-- This procedure does not test: a deploy or a paid agent API key. Only S24 rents
-  compute: a Hetzner server that Horizon deletes again. S01 to S23 use only this
-  computer.
+- This procedure does not test: a deploy or a paid agent API key. Only S25 rents
+  compute: a Hetzner server that Horizon deletes again. S01 to S24 and S26 use
+  only this computer.
 - For a pull request that changes the setup agent, the proof or the desktop preview,
   also run [the setup gate](cloud-setup-gate.md). It runs the proof on real
   repositories.
@@ -645,10 +645,11 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: Horizon opens with a New Workspace menu that holds both presets.
 
 3. Open **New cloud** for a copy of the fixture without `.horizon`, then click the
-   caret beside the chip of that agent.
+   caret half of the chip of that agent.
 
    Result: A menu lists the presets of the agent in menu order, the first one
-   selected, and the chip keeps its name.
+   selected, and the chip keeps its name. The label half and the caret half form
+   one button outline, with one divider between them and no gap.
 
 4. Click the second preset.
 
@@ -713,9 +714,43 @@ This step rents a Hetzner server for some minutes and costs a few cents.
 
    Result: Within one minute of the start, the Hetzner console lists no builder.
 
+### 6.26 S26 — Read a finished setup and close its live preview
+
+1. Run S24 step 1 to step 5 on a repository that finishes its setup, such as the
+   `gui-app` fixture, and wait for the last step to show **done**.
+
+   Result: This step needs a Docker host, a copy of the repository, and about ten
+   minutes. Nothing is rented.
+
+2. Examine the card of the finished setup.
+
+   Result: The row under the steps shows the files that the setup wrote, in one
+   line that ends with an ellipsis when the list is long. The row stays inside the
+   dialog: **Use this setup**, **Show agent**, **Show live preview** and **Stop**
+   are in view, and no text is drawn over them. Make the window narrower: the list
+   stays one line and does not push the buttons out of the card.
+
+3. If the setup shows a live preview, close its Device panel.
+
+   Result: Within one minute, `docker ps` no longer lists the preview container of
+   that setup. The card keeps its steps, its proof and its summary, and **Use this
+   setup** still commits the setup.
+
+4. Start a new setup of the same repository, wait for the preview to open, and
+   click **Close** in the setup view without closing the Device panel.
+
+   Result: The Device panel stays on the board and its desktop stays live;
+   **docker ps** lists the preview container.
+
+5. Close that Device panel.
+
+   Result: Within one minute, `docker ps` no longer lists the preview container.
+
+6. Run S02 to remove the fixtures, the containers and the folders.
+
 ## 7. Pass criteria
 
-- S01 to S25 give the results above.
+- S01 to S26 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is

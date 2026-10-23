@@ -434,9 +434,12 @@ impl HorizonApp {
         let Some(run) = self.cloud_prototype.production.setup_run_mut(key) else {
             return;
         };
-        // A panel the person closed stays closed for this desktop.
+        // A panel the person closed stays closed for this desktop, and the desktop goes
+        // with it: nobody watches it any more.
         if run.preview_panel.is_some_and(|panel| self.board.panel(panel).is_none()) {
             run.preview_panel = None;
+            run.stop_unwatched_preview();
+            return;
         }
         let endpoint = run.preview.as_ref().and_then(super::preview::Preview::endpoint);
         if run.preview_shown == endpoint {
