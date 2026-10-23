@@ -268,7 +268,7 @@ impl HorizonApp {
     /// a refused Start gave.
     fn cloud_creation_footer(&mut self, ui: &mut Ui, actions: &mut Actions, preparing: bool, refused: Option<&str>) {
         if preparing {
-            match super::repository_setup::footer(ui, &self.cloud_prototype.production) {
+            match preparing_footer(ui, &self.cloud_prototype.production, refused) {
                 super::repository_setup::Footer::None => {}
                 super::repository_setup::Footer::Close => actions.cancel = true,
                 super::repository_setup::Footer::Run(action) => {
@@ -726,6 +726,18 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
 
 /// What the revision decides, and what the working copy still decides on the checked-out commit.
 const REVISION_NOTE: &str = "Only committed files are transferred. On the checked-out commit, the settings come from the working copy of .horizon/cloud.yml and update as you save it, and the image builds with the uncommitted files of its recipe, listed under the profile. Another revision uses that commit alone.";
+
+/// The footer of a dialog that prepares its repository: the setup agent's controls, with the
+/// reason a refused Start gave above them. That view replaces the Start button, so the reason
+/// must not go with it.
+pub(super) fn preparing_footer(
+    ui: &mut Ui,
+    form: &Production,
+    refused: Option<&str>,
+) -> super::repository_setup::Footer {
+    checks::refusal(ui, refused);
+    super::repository_setup::footer(ui, form)
+}
 
 /// Why Start is unavailable, for the selector tests; the dialog works it out once per
 /// frame with [`submit_reason_given`].

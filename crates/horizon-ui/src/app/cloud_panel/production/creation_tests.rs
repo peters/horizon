@@ -221,6 +221,38 @@ fn a_refused_start_shows_why_beside_the_start_button() {
 }
 
 #[test]
+fn a_setup_footer_keeps_the_reason_a_refused_start_gave() {
+    // The preparing view replaces the Start button with the agent's own controls, so the reason
+    // has to be painted before them; otherwise a Start refusal that arrives while an agent
+    // prepares the repository disappears with the button that would have shown it.
+    let ctx = egui::Context::default();
+    let refused = "Open a saved session from Sessions before starting a cloud";
+    let texts: Vec<String> = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(1400.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let form = super::Production::default();
+                super::creation::preparing_footer(ui, &form, Some(refused));
+            },
+        )
+        .discard_textures()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|text| text.contains(refused)),
+        "the setup footer hides the refusal: {texts:?}"
+    );
+}
+
+#[test]
 fn start_cloud_says_why_it_is_disabled() {
     let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
