@@ -104,6 +104,17 @@ fn device(ui: &mut egui::Ui, cloud_id: &str, user_code: &str, verification_uri: 
     });
 }
 
+/// What the sign-in box says while it waits: that the browser returns here by itself, and
+/// for how long Horizon waits before the card offers the retry.
+fn wait_caption() -> String {
+    format!(
+        "Horizon opened GitHub in your browser; if it did not, click Open GitHub. If GitHub asks you to \
+         sign in, or to authorize the app the first time, do it there; the page then returns to Horizon \
+         by itself. Horizon waits {} minutes, and Skip continues without GitHub.",
+        horizon_core::cloud_runtime::github::WEB_SIGNIN_WINDOW.as_secs() / 60
+    )
+}
+
 fn web(ui: &mut egui::Ui, cloud_id: &str, url: &str) {
     ui.label(
         RichText::new("Connecting GitHub for this cloud")
@@ -111,15 +122,7 @@ fn web(ui: &mut egui::Ui, cloud_id: &str, url: &str) {
             .strong()
             .color(theme::FG()),
     );
-    ui.label(
-        RichText::new(
-            "Horizon opened GitHub in your browser; if it did not, click Open GitHub. If GitHub asks you \
-             to sign in, or to authorize the app the first time, do it there; the page then returns to \
-             Horizon by itself.",
-        )
-        .size(12.5)
-        .color(theme::FG_DIM()),
-    );
+    ui.label(RichText::new(wait_caption()).size(12.5).color(theme::FG_DIM()));
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         // Also the way back when the browser did not open.
@@ -250,8 +253,17 @@ pub(super) fn renew_button(ui: &mut egui::Ui, runtime: &Runtime) -> Option<egui:
 fn offers_renewal(runtime: &Runtime) -> bool {
     !runtime.busy()
         && !runtime.checking_provider()
+        && !parked(runtime)
         && (runtime.receiver.is_none() || runtime.stage == Some(horizon_core::cloud_runtime::Stage::Ready))
         && renewable(runtime.github.as_ref())
+}
+
+/// Whether the cloud has no running worker a sign-in could reach. A stopped cloud rents
+/// again on its next deployment and a deleted one has no worker at all, so the retry is
+/// not offered there: **Resume** and **Deploy** stay the person's own decisions.
+fn parked(runtime: &Runtime) -> bool {
+    use horizon_core::cloud_runtime::Stage;
+    matches!(runtime.stage, Some(Stage::Stopped | Stage::Stopping | Stage::Deleted))
 }
 
 /// Whether a new sign-in can change this outcome: not for access a worker kept after a
@@ -289,6 +301,7 @@ pub(super) fn summary(runtime: &Runtime) -> Option<(String, bool)> {
 mod tests {
     use super::*;
     use crate::test_egui::DiscardTextures;
+    use egui::epaint::Shape;
 
     #[test]
     fn the_steps_card_names_the_account_or_why_there_is_no_access() {
@@ -391,6 +404,50 @@ mod tests {
         let (_sender, recovery) = std::sync::mpsc::channel();
         runtime.recovery_receiver = Some(recovery);
         assert!(!offers_renewal(&runtime), "not while a provider check runs");
+    }
+
+    #[test]
+    fn a_stopped_or_deleted_cloud_offers_no_sign_in_again() {
+        use horizon_core::cloud_runtime::Stage;
+        let mut runtime = Runtime {
+            github: Some(Prompt::Ended {
+                reason: "GitHub did not finish the sign-in within 15 minutes.".into(),
+                renewable: true,
+            }),
+            ..Runtime::default()
+        };
+        assert!(offers_renewal(&runtime), "a cloud that can still reconnect");
+        // Nothing on a stopped or deleted cloud takes a sign-in: its next deployment rents a
+        // worker again or it has none, so the retry would hide a rental behind one click.
+        for stage in [Stage::Stopping, Stage::Stopped, Stage::Deleted] {
+            runtime.stage = Some(stage);
+            assert!(!offers_renewal(&runtime), "a cloud at {stage:?} offers no retry");
+        }
+    }
+
+    #[test]
+    fn the_sign_in_box_names_the_window_that_horizon_waits() {
+        let texts: Vec<String> = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                web(ui, "cloud-1", "https://github.com/login/oauth/authorize?x=1");
+            })
+            .discard_textures()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        let minutes = horizon_core::cloud_runtime::github::WEB_SIGNIN_WINDOW.as_secs() / 60;
+        assert!(
+            texts.iter().any(|text| text.contains(&format!("{minutes} minutes"))),
+            "the box does not name its window: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("Skip continues without GitHub")),
+            "the box does not say that Skip ends the wait: {texts:?}"
+        );
     }
 
     #[test]
