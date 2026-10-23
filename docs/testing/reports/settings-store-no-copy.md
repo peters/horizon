@@ -4,7 +4,7 @@ candidate_commit: f6ea89074
 candidate_sha256: 4c2655890683a42ee8e0085db9c34b250f8b1bd7c9a38ab6cb267988d9cff47f
 date: 2026-10-23
 lanes: [linux]
-issue: https://github.com/peters/horizon-priv/issues/1
+issue: https://github.com/peters/horizon/pull/1769
 ---
 
 # Settings store test report, store-only candidate, 2026-10-23
