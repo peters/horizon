@@ -88,7 +88,7 @@ fn main() -> eframe::Result {
     }
     #[cfg(target_os = "linux")]
     agent_integrations.install_desktop_entry();
-    let config = load_config_or_default(&resolved_config_path);
+    let config = load_config_or_exit(&resolved_config_path);
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     let startup = prepare_startup(&session_store, &config, &cli_args);
 
@@ -354,16 +354,40 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
     }
 }
 
-fn load_config_or_default(config_path: &std::path::Path) -> Config {
+/// Read the settings of this start, or stop with the reason when they cannot be
+/// read.
+fn load_config_or_exit(config_path: &std::path::Path) -> Config {
+    match load_config(config_path) {
+        Ok(config) => config,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            plugin_install::exit_after_releasing_plugins(2);
+        }
+    }
+}
+
+/// Read the settings of this start, or the defaults when the run has no
+/// settings yet.
+///
+/// # Errors
+///
+/// Returns an error when a setting exists and cannot be read. The defaults never
+/// replace the settings of a person, so the start stops and names the file
+/// instead.
+fn load_config(config_path: &std::path::Path) -> Result<Config, String> {
     let store = horizon_core::config_store::ConfigStore::resolve(config_path);
     if !config_path.exists() && !store.path().exists() {
         tracing::info!("no config found at {}, using defaults", config_path.display());
-        return Config::default();
+        return Ok(Config::default());
     }
 
-    Config::load(Some(config_path)).unwrap_or_else(|error| {
+    Config::load(Some(config_path)).map_err(|error| {
         tracing::error!("failed to load config: {error}");
-        Config::default()
+        format!(
+            "cannot read the settings of {}: {error}\n\
+             Move the file aside to start with the default settings.",
+            config_path.display()
+        )
     })
 }
 
@@ -658,5 +682,39 @@ mod tests {
         });
 
         assert_eq!(summary.matches("same").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod config_start_tests {
+    use super::load_config;
+
+    /// A store that no build can read, and no copy to carry the settings: the
+    /// start must stop instead of running with the defaults.
+    #[test]
+    fn settings_that_cannot_be_read_stop_the_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+        std::fs::write(dir.path().join("settings.sqlite"), b"not a database").expect("write");
+
+        let error = load_config(&path).expect_err("a damaged store with no copy is an error");
+        assert!(error.contains("cannot read the settings of"), "{error}");
+        assert!(error.contains("config.yaml"), "{error}");
+    }
+
+    /// A run with no settings at all starts with the defaults, and writes
+    /// nothing.
+    #[test]
+    fn a_run_with_no_settings_starts_with_the_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+
+        let config = load_config(&path).expect("defaults");
+        assert_eq!(config.version, horizon_core::Config::default().version);
+        assert!(!path.exists(), "the start writes no copy");
+        assert!(
+            !horizon_core::config_store::ConfigStore::resolve(&path).path().exists(),
+            "the start writes no store"
+        );
     }
 }
