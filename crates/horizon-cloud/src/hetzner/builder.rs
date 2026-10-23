@@ -112,7 +112,12 @@ impl Hetzner {
             };
             match self.ensure_server(&server, state, cancel, &mut persist, |_| {}) {
                 Ok(server) => return Ok(server),
-                Err(error @ (CloudError::Capacity(_) | CloudError::Rejected(_))) => refusal = Some(error),
+                // Only a placement that made no server is followed by the next one: a
+                // server the provider made and then failed to finish is bound to the
+                // journal, so its reason is the rent's answer and its cleanup stays.
+                Err(error @ (CloudError::Capacity(_) | CloudError::Rejected(_))) if *state == CreateState::Prepared => {
+                    refusal = Some(error);
+                }
                 Err(error) => return Err(error),
             }
         }

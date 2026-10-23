@@ -81,6 +81,14 @@ fn created_as(id: u64, server_type: &str, location: &str) -> Value {
     json!({"server": server, "action": action(1, "success"), "next_actions": [], "root_password": null})
 }
 
+/// A create response whose server the provider made, and whose create action then failed.
+fn created_whose_action_failed(id: u64, server_type: &str, location: &str) -> Value {
+    let mut created = created_as(id, server_type, location);
+    created["action"] = json!({"id": 1, "command": "create_server", "status": "error",
+        "error": {"code": "action_failed", "message": "create failed"}});
+    created
+}
+
 fn builder_request(placements: &[Placement]) -> Request<'_> {
     Request {
         operation_id: OPERATION,
@@ -178,4 +186,52 @@ fn every_placement_refused_reports_the_last_refusal_and_keeps_no_server() {
     assert_eq!(state, CreateState::Prepared, "no request is left for a server");
     let requests = requests.lock().unwrap();
     assert!(!requests.iter().any(|request| request.starts_with("DELETE")));
+}
+
+#[test]
+fn a_server_the_provider_made_and_then_failed_to_finish_keeps_its_reason() {
+    let placements = [
+        Placement {
+            server_type: "cpx42".into(),
+            location: "fsn1".into(),
+        },
+        Placement {
+            server_type: "ccx33".into(),
+            location: "fsn1".into(),
+        },
+    ];
+    let (hetzner, requests, task) = provider(vec![
+        (200, listing("ssh_keys", json!([]))),
+        (201, json!({"ssh_key": key(5)})),
+        (200, listing("servers", json!([]))),
+        (201, created_whose_action_failed(42, "cpx42", "fsn1")),
+    ]);
+    let mut state = CreateState::Prepared;
+    let error = hetzner
+        .rent_builder(
+            &builder_request(&placements),
+            &mut state,
+            &Cancellation::default(),
+            |_| Ok(()),
+        )
+        .unwrap_err();
+    task.join().unwrap();
+    assert!(
+        matches!(error, CloudError::Rejected(_)),
+        "the reason the create action failed is the rent's answer: {error:?}"
+    );
+    assert_eq!(
+        state,
+        CreateState::Bound { worker_id: "42".into() },
+        "the server the provider made stays bound to the journal, so its cleanup stays too"
+    );
+    let asked: Vec<Value> = posts(&requests)
+        .into_iter()
+        .map(|body| body["server_type"].clone())
+        .collect();
+    assert_eq!(
+        asked,
+        [json!("cpx42")],
+        "a server that was made keeps the rent from asking for another placement"
+    );
 }
