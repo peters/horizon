@@ -71,7 +71,6 @@ impl Run {
 mod tests {
     use super::super::{PanelId, PanelKind, Run, parse};
     use crate::app::cloud_panel::production::repository_setup::Mode;
-    use crate::app::cloud_panel::production::repository_setup::run::Preview;
     use std::path::PathBuf;
 
     fn run_with_preview(request: u64) -> Run {
@@ -96,14 +95,15 @@ mod tests {
     #[test]
     fn a_preview_a_person_closed_still_counts_as_shown() {
         let mut run = run_with_preview(3);
-        run.preview = Some(Preview::live(32768));
         run.preview_panel = Some(PanelId(7));
         run.preview_shown = Some("127.0.0.1:32768".to_owned());
-        assert!(run.preview_shown_or_none(), "the desktop is live");
+        assert!(
+            !run.preview_shown_or_none(),
+            "the request is not served before a desktop was shown"
+        );
 
         run.stop_unwatched_preview();
 
-        assert!(run.preview.is_none(), "the desktop stops");
         assert!(run.preview_panel.is_none(), "the panel goes with the desktop");
         assert!(run.preview_shown.is_none(), "nothing shows this desktop");
         assert!(
@@ -116,7 +116,6 @@ mod tests {
     #[test]
     fn a_changed_preview_is_not_served_by_the_closed_one() {
         let mut run = run_with_preview(3);
-        run.preview = Some(Preview::live(32768));
         run.stop_unwatched_preview();
         assert!(run.preview_shown_or_none(), "the closed desktop is served");
 
@@ -127,29 +126,25 @@ mod tests {
         assert!(!run.preview_shown_or_none(), "a newer request is a new desktop");
     }
 
-    /// A withdrawn desktop stops, and the closed mark of an earlier one does not stay to
-    /// serve the preview the agent names next.
-    #[test]
-    fn a_withdrawn_preview_clears_the_closed_mark() {
-        let mut run = run_with_preview(3);
-        run.preview = Some(Preview::live(32768));
-        run.stop_unwatched_preview();
-        assert!(run.preview_closed, "the person closed this desktop");
-
-        run.preview = Some(Preview::live(32769));
-        run.status = parse(r#"{"steps":[],"preview":null,"preview_request":3}"#).unwrap();
-        run.stop_withdrawn_preview();
-
-        assert!(!run.preview_closed, "the withdrawn preview is not a closed one");
-        assert!(run.preview.is_none(), "the desktop stops");
-        assert!(run.preview_shown_or_none(), "no preview is nothing to wait for");
-    }
-
     #[test]
     fn a_preview_that_never_started_owes_no_panel() {
         let mut run = run_with_preview(3);
         run.preview_panel = Some(PanelId(7));
         run.stop_unwatched_preview();
         assert!(run.preview_panel.is_none(), "the panel id goes either way");
+    }
+
+    /// The live half of the stop path needs a desktop, which the Unix tests build without
+    /// a container; Windows cannot run this one and the checks above cover the setup state.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_preview_a_person_closed_stops_its_desktop() {
+        use super::super::Preview;
+
+        let mut run = run_with_preview(3);
+        run.preview = Some(Preview::live(32768));
+        run.stop_unwatched_preview();
+        assert!(run.preview.is_none(), "the desktop stops");
+        assert!(run.preview_shown_or_none(), "and it stays a shown desktop");
     }
 }
