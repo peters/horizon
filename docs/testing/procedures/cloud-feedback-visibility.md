@@ -2,8 +2,8 @@
 procedure: cloud-feedback-visibility
 feature: Why a cloud does not start, and its GitHub retry, stay readable
 platforms: [linux]
-cost: none
-destructive: no
+cost: rents compute
+destructive: yes
 secrets: [RunPod key in cloud settings, GitHub App sign-in of the test account if you do step 5]
 owner: peters
 ---
@@ -90,6 +90,13 @@ dialog past the window.
      covers this step. It makes the dialog fit a small window with a reason that
      is 30 lines long.
 8. Record a short video of steps 5 to 7 and a screenshot of step 6.
+
+9. Optional: select a setup agent in the same dialog, so that the setup view
+   replaces the Start button, and select **Start cloud** before the agent
+   starts.
+
+   Result: the red sentence shows above the setup agent's controls. It does not
+   go away with the Start button.
 
 ## 6. Lane G: a refused GitHub sign-in shows a full-width retry
 
