@@ -35,11 +35,11 @@ fn request(placements: &[Placement]) -> ServerRequest<'_> {
     }
 }
 
-fn created(id: u64) -> Value {
+pub(super) fn created(id: u64) -> Value {
     json!({"server": server(id), "action": action(1, "success"), "next_actions": [], "root_password": null})
 }
 
-fn posts(requests: &Requests) -> Vec<Value> {
+pub(super) fn posts(requests: &Requests) -> Vec<Value> {
     requests
         .lock()
         .unwrap()

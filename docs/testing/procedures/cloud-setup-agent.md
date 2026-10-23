@@ -675,7 +675,8 @@ This step rents a Hetzner server for some minutes and costs a few cents.
 > to the end, and make sure at the end that the Hetzner console lists no server or SSH
 > key named `horizon-cloud-setup-builder-<id>`. Delete one that is left there by hand.
 
-1. Connect Hetzner in **Cloud settings**.
+1. Connect Hetzner in **Cloud settings** and set the **server types** to the types the
+   project may order, for example a type it cannot order first and one it can second.
 
    Result: **Build on** in **New cloud** shows **Rented builder**.
 
@@ -683,8 +684,10 @@ This step rents a Hetzner server for some minutes and costs a few cents.
    builder** and start the setup agent.
 
    Result: The setup board shows **Renting a builder** under its header, then the
-   rented server type, its location and its price per hour. In the Hetzner console a
-   server named `horizon-cloud-setup-builder-<id>` runs.
+   rented server type, its location and its price per hour. The type is one of the
+   types in Cloud settings. When the first type is refused, as when the project's
+   shared cores are in use, the builder is the next type and not a failure. In the
+   Hetzner console a server named `horizon-cloud-setup-builder-<id>` runs.
 
 3. Wait until the proof ends.
 

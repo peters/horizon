@@ -42,13 +42,58 @@ fn a_builder_is_large_enough_in_an_allowed_place_and_orderable_ones_come_first()
         ipv4_hour_eur: BTreeMap::from([("hel1".into(), 0.001), ("nbg1".into(), 0.001), ("ash".into(), 0.001)]),
         regions: BTreeMap::new(),
     };
-    let (placements, hourly) = placements(&catalog, &["hel1".into(), "nbg1".into()]);
+    let (placements, hourly) = placements(&catalog, &[], &["hel1".into(), "nbg1".into()]);
     let names: Vec<(&str, &str)> = placements
         .iter()
         .map(|placement| (placement.server_type.as_str(), placement.location.as_str()))
         .collect();
     assert_eq!(names, [("cx43", "nbg1"), ("cx53", "hel1"), ("cx43", "hel1")]);
     assert!((hourly[0].1 - 0.017).abs() < 1e-9, "the server and its IPv4 address");
+}
+
+#[test]
+fn the_configured_server_types_decide_which_machines_are_rented() {
+    let catalog = Catalog {
+        offers: vec![
+            offer("cpx42", "fsn1", 8, 16.0, 0.112, true),
+            offer("ccx33", "fsn1", 8, 32.0, 0.190, true),
+            offer("cpx52", "fsn1", 12, 24.0, 0.170, true),
+        ],
+        volume_gb_month_eur: 0.04,
+        ipv4_month_eur: BTreeMap::new(),
+        ipv4_hour_eur: BTreeMap::from([("fsn1".into(), 0.001)]),
+        regions: BTreeMap::new(),
+    };
+    let chosen = |server_types: &[&str]| {
+        placements(
+            &catalog,
+            &server_types.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>(),
+            &["fsn1".into()],
+        )
+        .0
+        .iter()
+        .map(|placement| placement.server_type.clone())
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        chosen(&[]),
+        ["cpx42", "cpx52", "ccx33"],
+        "every type when none is chosen"
+    );
+    assert_eq!(
+        chosen(&["ccx33"]),
+        ["ccx33"],
+        "a project that cannot order the cheapest type rents the one the person chose"
+    );
+    assert_eq!(
+        chosen(&["ccx33", "cpx52"]),
+        ["cpx52", "ccx33"],
+        "cheapest first among the chosen ones"
+    );
+    assert!(
+        chosen(&["cpx22"]).is_empty(),
+        "a type too small for a builder is not rented"
+    );
 }
 
 #[test]

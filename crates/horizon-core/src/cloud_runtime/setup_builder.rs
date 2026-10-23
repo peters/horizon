@@ -169,10 +169,10 @@ pub fn rent(
     // One read of the token, so the journal names the project the server is made in.
     let (credential, binding) = hetzner.credential_with_fingerprint()?;
     let client = Hetzner::new(credential);
-    let (placements, hourly) = placements(&client.catalog(cancel)?, &hetzner.locations);
+    let (placements, hourly) = placements(&client.catalog(cancel)?, &hetzner.server_types, &hetzner.locations);
     if placements.is_empty() {
         return Err(Error::Invalid(
-            "No Hetzner server type with 8 cores, 16 GB and 160 GB is offered in the allowed locations",
+            "No Hetzner server type in Cloud settings has 8 cores, 16 GB and 160 GB in the allowed locations",
         ));
     }
     let folder = root.join(FOLDER);
@@ -309,13 +309,20 @@ fn return_with(
     Ok(true)
 }
 
-/// The placements to try, cheapest first, with each one's price per hour.
-fn placements(catalog: &Catalog, locations: &[String]) -> (Vec<Placement>, Vec<(Placement, f64)>) {
+/// The placements to try, cheapest first, with each one's price per hour. The server types
+/// and locations are the ones the person chose in Cloud settings, as for a Hetzner cloud
+/// worker, so the person decides which machines Horizon may rent.
+fn placements(
+    catalog: &Catalog,
+    server_types: &[String],
+    locations: &[String],
+) -> (Vec<Placement>, Vec<(Placement, f64)>) {
     let mut offers: Vec<(Placement, f64, bool)> = catalog
         .offers
         .iter()
         .filter(|offer| {
-            locations.contains(&offer.location)
+            (server_types.is_empty() || server_types.contains(&offer.server_type))
+                && locations.contains(&offer.location)
                 && offer.cores >= MIN_CORES
                 && offer.memory_gb >= MIN_MEMORY_GB
                 && offer.disk_gb >= MIN_DISK_GB

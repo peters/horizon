@@ -835,9 +835,12 @@ the host of each setup that builds on one.
 
 **Rented builder** shows in **Build on** when Hetzner is connected in Cloud settings.
 Horizon rents one Hetzner server with Docker for the setups that build on it, so a
-laptop runs only the agents. It picks the cheapest x86 server type with at least 8
-cores, 16 GB of memory and 160 GB of disk in the locations Cloud settings allows, and
-starts renting when the first such setup starts, so the builder is usually ready when
+laptop runs only the agents. It rents the cheapest server type with at least 8
+cores, 16 GB of memory and 160 GB of disk among the **server types** and locations
+that Cloud settings allows, so you decide which machines Horizon may rent, as for a
+Hetzner cloud worker. A type the project refuses, as when its shared cores are all in
+use, is followed by the next one. Horizon starts renting when the first such setup
+starts, so the builder is usually ready when
 the agent asks for its first proof. Until it is, the setup's **Build image** step says
 **Renting a builder**. The setups share the builder and its build slots, and it is
 reached as a Docker host is, through an SSH forward of its Docker socket.

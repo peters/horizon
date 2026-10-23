@@ -7,7 +7,7 @@ use super::{
     Hetzner,
     servers::{Placement, Server, ServerRequest},
 };
-use crate::{Cancellation, CloudError, CreateState};
+use crate::{Cancellation, CloudError, CreateState, Reason};
 use serde::Serialize;
 
 /// The Hetzner image with Docker installed.
@@ -81,32 +81,42 @@ impl Hetzner {
     /// Rents the builder of `request.operation_id`, or finds the one it already rented.
     /// `state` and `persist` journal the creation as for a worker, so a server whose
     /// creation was cut off is found and deleted later.
+    ///
+    /// A placement the project refuses, as when its shared cores are all in use, does not
+    /// refuse the rent: the next placement is asked for instead. A person's project can be
+    /// allowed one server type and not another, so a cheaper type that the project cannot
+    /// order must not stop the builder.
     /// # Errors
-    /// As [`Hetzner::ensure_ssh_key`] and [`Hetzner::ensure_server`].
+    /// As [`Hetzner::ensure_ssh_key`] and [`Hetzner::ensure_server`], with the last
+    /// refusal when every placement was refused.
     pub fn rent_builder(
         &self,
         request: &Request<'_>,
         state: &mut CreateState,
         cancel: &Cancellation,
-        persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
+        mut persist: impl FnMut(&CreateState) -> Result<(), CloudError>,
     ) -> Result<Server, CloudError> {
         let user_data = user_data(&request.host_key)?;
         let key = self.ensure_ssh_key(request.operation_id, request.login_key, cancel)?;
-        self.ensure_server(
-            &ServerRequest {
+        let mut refusal = None;
+        for placement in request.placements {
+            let asked = [placement.clone()];
+            let server = ServerRequest {
                 operation_id: request.operation_id,
-                placements: request.placements,
+                placements: &asked,
                 image: IMAGE,
                 user_data: &user_data,
                 volume: None,
                 ssh_key: Some(&key),
                 network: None,
-            },
-            state,
-            cancel,
-            persist,
-            |_| {},
-        )
+            };
+            match self.ensure_server(&server, state, cancel, &mut persist, |_| {}) {
+                Ok(server) => return Ok(server),
+                Err(error @ (CloudError::Capacity(_) | CloudError::Rejected(_))) => refusal = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(refusal.unwrap_or(CloudError::Capacity(Reason::default())))
     }
 
     /// Deletes the builder of `operation_id` and its login key, and proves both gone. A
