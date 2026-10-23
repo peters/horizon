@@ -369,12 +369,15 @@ impl HorizonApp {
     /// Paste the path of every clipboard image whose private file is ready.
     ///
     /// The path is what the program in the shell can use; Horizon does not send
-    /// image bytes to a terminal stream that cannot carry them.
+    /// image bytes to a terminal stream that cannot carry them. A remote panel
+    /// gets the file first, because a local path names nothing on its host.
     pub(super) fn apply_clipboard_image_pastes(&mut self) {
         for paste in self.clipboard_images.take_finished() {
             let Some(path) = paste.path else { continue };
-            let payload = terminal_path_payload(&path);
-            self.paste_native_text_into_terminal(paste.panel, &payload, false);
+            let files = [std::sync::Arc::new(ClipboardFile(path)) as egui::DroppedFileHandle];
+            if !self.maybe_start_ssh_file_drop(paste.panel, &files, paste.viewport) {
+                self.paste_dropped_paths_into_terminal(paste.panel, &files, false);
+            }
         }
     }
 
@@ -548,12 +551,6 @@ fn format_dropped_paths_for_terminal(dropped: &[egui::DroppedFileHandle]) -> Opt
     Some(payload)
 }
 
-/// One quoted path plus the trailing space a terminal paste needs, so the
-/// person can keep typing after the inserted path.
-pub(super) fn terminal_path_payload(path: &Path) -> String {
-    format!("{} ", format_path_for_terminal(path))
-}
-
 fn format_path_for_terminal(path: &Path) -> String {
     let path = path.to_string_lossy();
     if cfg!(windows) {
@@ -594,11 +591,9 @@ fn path_needs_windows_quotes(path: &str) -> bool {
             .any(|ch| matches!(ch, ' ' | '\t' | '&' | '|' | '<' | '>' | '^' | '(' | ')' | '%' | '!'))
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct ClipboardFile(std::path::PathBuf);
 
-#[cfg(target_os = "linux")]
 impl egui::DroppedFile for ClipboardFile {
     fn path(&self) -> &Path {
         &self.0
@@ -720,17 +715,6 @@ mod tests {
                 )
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn a_terminal_path_payload_is_quoted_and_ready_for_more_typing() {
-        assert_eq!(
-            super::terminal_path_payload(std::path::Path::new("/tmp/pasted-0-image.png")),
-            "/tmp/pasted-0-image.png "
-        );
-        let spaced = super::terminal_path_payload(std::path::Path::new("/tmp/with space.png"));
-        let quote = if cfg!(windows) { '"' } else { '\'' };
-        assert_eq!(spaced, format!("{quote}/tmp/with space.png{quote} "));
     }
 
     #[test]

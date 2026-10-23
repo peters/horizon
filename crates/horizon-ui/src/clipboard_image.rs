@@ -25,6 +25,7 @@ const IMAGE_DIRECTORY: &str = "horizon-pasted-images-";
 /// received it. `path` is `None` when the image could not be stored.
 pub(crate) struct PastedImage {
     pub(crate) panel: PanelId,
+    pub(crate) viewport: egui::ViewportId,
     pub(crate) path: Option<PathBuf>,
 }
 
@@ -50,6 +51,7 @@ impl ClipboardImages {
     /// Store `image` for `panel` on a worker thread and wake the UI to paste it.
     pub(crate) fn persist(&self, ctx: &egui::Context, panel: PanelId, image: Arc<ColorImage>) {
         let index = self.next_index.fetch_add(1, Ordering::Relaxed);
+        let viewport = ctx.viewport_id();
         let files = self.files.clone();
         let sender = self.sender.clone();
         let repaint_ctx = ctx.clone();
@@ -62,13 +64,18 @@ impl ClipboardImages {
                 }
                 let _ = sender.send(PastedImage {
                     panel,
+                    viewport,
                     path: result.ok(),
                 });
                 repaint_ctx.request_repaint();
             });
         if let Err(error) = spawned {
             tracing::warn!(%error, "cannot start the clipboard image writer");
-            let _ = self.sender.send(PastedImage { panel, path: None });
+            let _ = self.sender.send(PastedImage {
+                panel,
+                viewport,
+                path: None,
+            });
             ctx.request_repaint();
         }
     }
@@ -90,15 +97,20 @@ mod tests {
         std::sync::Arc::new(ColorImage::filled([2, 1], egui::Color32::RED))
     }
 
-    fn wait_for_paste(images: &ClipboardImages) -> Vec<PastedImage> {
+    fn wait_for_pastes(images: &ClipboardImages, wanted: usize) -> Vec<PastedImage> {
+        let mut finished = Vec::new();
         for _ in 0..500 {
-            let finished = images.take_finished();
-            if !finished.is_empty() {
+            finished.extend(images.take_finished());
+            if finished.len() >= wanted {
                 return finished;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the clipboard image writer did not finish");
+    }
+
+    fn wait_for_paste(images: &ClipboardImages) -> Vec<PastedImage> {
+        wait_for_pastes(images, 1)
     }
 
     #[test]
@@ -129,7 +141,7 @@ mod tests {
         for _ in 0..3 {
             images.persist(&ctx, PanelId(1), image());
         }
-        let finished = wait_for_paste(&images);
+        let finished = wait_for_pastes(&images, 3);
         for paste in &finished {
             assert!(paste.path.as_ref().is_some_and(|path| path.exists()));
         }
