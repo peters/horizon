@@ -60,8 +60,8 @@ impl HorizonApp {
         if self.cloud_prototype.production.starting_here() {
             return;
         }
-        let presets = super::setup_choices(&self.cloud_prototype.production);
-        let preset = super::chosen_preset(&self.cloud_prototype.production, &presets)
+        let groups = super::setup_groups(&self.cloud_prototype.production);
+        let preset = super::chosen_preset(&self.cloud_prototype.production, &groups)
             .cloned()
             // A machine account's agent without a preset of its own still starts plainly.
             .or_else(|| {
@@ -219,15 +219,7 @@ impl HorizonApp {
             return;
         }
         let kind = preset.kind;
-        // Claude and Codex take the instructions as their starting prompt; other agents get
-        // them pasted once their session settles.
-        let mut args = preset.args.clone();
-        let mut pending_prompt = None;
-        if matches!(kind, PanelKind::Claude | PanelKind::Codex) {
-            args.push(instructions);
-        } else {
-            pending_prompt = Some(instructions);
-        }
+        let (args, pending_prompt) = launch_task(&preset, instructions);
         // An agent starts only inside a scope that holds all its descendants: without
         // one, a process it started could leave its group and keep writing while Use
         // reads and commits.
@@ -817,6 +809,21 @@ impl HorizonApp {
         for panel in orphans {
             self.close_panel(panel);
         }
+    }
+}
+
+/// The preset's arguments and the instructions still to paste: an agent whose command
+/// line takes the message starts on its task, and the others get it pasted into their
+/// prompt once their session has settled.
+fn launch_task(preset: &horizon_core::PresetConfig, instructions: String) -> (Vec<String>, Option<String>) {
+    let starts_on_argument = horizon_core::agent_definition(preset.kind)
+        .is_some_and(|definition| definition.prompt_mode == horizon_core::AgentPromptMode::Argument);
+    let mut args = preset.args.clone();
+    if starts_on_argument {
+        args.push(instructions);
+        (args, None)
+    } else {
+        (args, Some(instructions))
     }
 }
 

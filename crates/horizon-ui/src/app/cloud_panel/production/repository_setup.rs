@@ -208,12 +208,16 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
         );
         return Choice::None;
     }
-    let presets = setup_choices(form);
-    // Without a preset the agent that starts is the chosen kind's, so the label names it.
-    let chosen = chosen_preset(form, &presets).map_or_else(
+    let groups = setup_groups(form);
+    let chosen_preset = chosen_preset(form, &groups);
+    // Without a chosen preset the agent that starts is the preferred kind's default, so the
+    // label names that preset.
+    let chosen = chosen_preset.map_or_else(
         || form.setup_agent.unwrap_or(PanelKind::Claude).display_name().to_owned(),
         |preset| preset.name.clone(),
     );
+    let chosen_name = chosen_preset.map(|preset| preset.name.as_str());
+    let chosen_kind = chosen_preset.map(|preset| preset.kind);
     let mut open = false;
     ui.horizontal(|ui| {
         let label = format!("{verb} {chosen}");
@@ -232,86 +236,200 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
             .clicked();
     });
     // The agent presets of the New Workspace menu, as chips: no popup to hide behind the
-    // dialog, and every choice in view.
+    // dialog, and every agent in view. An agent with more than one preset keeps one chip
+    // and a caret, so a repository can run the model the person chose for it.
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-        for preset in &presets {
-            let selected = preset.name == chosen;
-            let fill = if selected {
-                theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.22)
-            } else {
-                theme::PANEL_BG_ALT()
-            };
-            let chip = egui::Button::new(RichText::new(&preset.name).size(12.5).color(if selected {
-                theme::FG()
-            } else {
-                theme::FG_SOFT()
-            }))
-            .fill(fill)
-            .stroke(Stroke::new(
-                1.0,
-                if selected {
-                    theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5)
+        for group in &groups {
+            // The chip and its caret stay one item, so a long preset name wraps them together.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                // The chip names the variant of this agent that is chosen, else its default.
+                let variant = (chosen_kind == Some(group.default.kind))
+                    .then_some(chosen_name)
+                    .flatten();
+                let name = variant.unwrap_or(&group.default.name);
+                let selected = variant.is_some();
+                let fill = if selected {
+                    theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.22)
                 } else {
-                    theme::BORDER_SUBTLE()
-                },
-            ))
-            .corner_radius(8)
-            .min_size(Vec2::new(0.0, 28.0))
-            .truncate();
-            if ui.add(chip).on_hover_text(&preset.name).clicked() {
-                form.setup_preset = Some(preset.name.clone());
-            }
+                    theme::PANEL_BG_ALT()
+                };
+                let stroke = Stroke::new(
+                    1.0,
+                    if selected {
+                        theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5)
+                    } else {
+                        theme::BORDER_SUBTLE()
+                    },
+                );
+                // The label is already elided, so the chip takes its width and the row
+                // wraps it instead of squeezing the chip beside it.
+                let chip = egui::Button::new(RichText::new(chip_label(ui, name)).size(12.5).color(if selected {
+                    theme::FG()
+                } else {
+                    theme::FG_SOFT()
+                }))
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(8)
+                .min_size(Vec2::new(0.0, 28.0));
+                // The chip keeps the preset it shows: only the caret switches between
+                // the presets of an agent.
+                if ui.add(chip).on_hover_text(name).clicked() {
+                    form.setup_preset = Some(name.to_owned());
+                }
+                if !group.variants.is_empty() {
+                    variant_caret(ui, form, group, chosen_name);
+                }
+            });
         }
     });
     form.setup_build_on.show(ui);
     if open { Choice::SetupAgent } else { Choice::None }
 }
 
-/// The agents the setup can run, each once and in its default mode: the agents of
-/// the New Workspace menu's presets, or every built-in agent when there are none.
-/// Preset variants such as permission modes are left out, so the choice is the agent.
-pub(super) fn setup_choices(form: &Production) -> Vec<horizon_core::PresetConfig> {
-    // The first preset of each agent in the New Workspace menu is its default mode; it
-    // keeps its command and arguments. Later variants (YOLO, Auto) are not offered.
-    let mut choices: Vec<horizon_core::PresetConfig> = Vec::new();
-    for preset in &form.setup_presets {
-        if !choices.iter().any(|choice| choice.kind == preset.kind) {
-            choices.push(preset.clone());
+/// The widest a chip label gets before it is elided, so a long preset name wraps to the
+/// next row instead of squeezing the chip beside it.
+const CHIP_TEXT_WIDTH: f32 = 200.0;
+
+/// The label of a chip, elided with an ellipsis when the preset name is long. The full
+/// name stays in the hover text.
+fn chip_label(ui: &egui::Ui, name: &str) -> String {
+    let font = egui::FontId::proportional(12.5);
+    let width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), theme::FG())
+            .size()
+            .x
+    };
+    if width(name) <= CHIP_TEXT_WIDTH {
+        return name.to_owned();
+    }
+    let mut kept = name.to_owned();
+    while kept.pop().is_some() {
+        let candidate = format!("{}…", kept.trim_end());
+        if width(&candidate) <= CHIP_TEXT_WIDTH {
+            return candidate;
         }
     }
-    if !choices.is_empty() {
-        return choices;
+    "…".to_owned()
+}
+
+/// The caret beside an agent that has more than one preset in the New Workspace menu: it
+/// opens that agent's presets, so a repository starts on the model the person chose for it.
+fn variant_caret(ui: &mut egui::Ui, form: &mut Production, group: &SetupGroup, chosen: Option<&str>) {
+    let caret = ui
+        .add(
+            egui::Button::new(RichText::new("\u{25be}").size(10.0).color(theme::FG_SOFT()))
+                .fill(theme::PANEL_BG_ALT())
+                .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
+                .corner_radius(8)
+                .min_size(Vec2::new(20.0, 28.0)),
+        )
+        .on_hover_text(format!(
+            "The {} presets of the New Workspace menu",
+            group.default.kind.display_name()
+        ));
+    // The dialog is a modal on the Tooltip order, so its popup opens on that order too and
+    // is raised above the dialog: a default menu would draw underneath it.
+    let popup = egui::Popup::menu(&caret).width(300.0).kind(egui::PopupKind::Tooltip);
+    let popup_id = popup.get_id();
+    let shown = popup.show(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        for preset in std::iter::once(&group.default).chain(&group.variants) {
+            let selected = chosen == Some(preset.name.as_str());
+            if ui
+                .selectable_label(selected, &preset.name)
+                .on_hover_text(&preset.name)
+                .clicked()
+            {
+                form.setup_preset = Some(preset.name.clone());
+                ui.close();
+            }
+        }
+    });
+    if shown.is_some() {
+        let popup_layer = egui::LayerId::new(egui::PopupKind::Tooltip.order(), popup_id);
+        ui.ctx()
+            .memory_mut(|memory| memory.areas_mut().set_sublayer(ui.layer_id(), popup_layer));
+    }
+}
+
+/// One agent in the chooser: the preset its chip chooses, and the agent's other presets.
+/// The chips are in the order of the New Workspace menu, one for each agent.
+pub(super) struct SetupGroup {
+    pub(super) default: horizon_core::PresetConfig,
+    pub(super) variants: Vec<horizon_core::PresetConfig>,
+}
+
+impl SetupGroup {
+    /// Every preset of this agent, its default first.
+    pub(super) fn presets(&self) -> impl Iterator<Item = &horizon_core::PresetConfig> {
+        std::iter::once(&self.default).chain(&self.variants)
+    }
+}
+
+/// The agents the setup can run, each once, in the order of the New Workspace menu's
+/// presets, or every built-in agent when there are none. The first preset of an agent in
+/// that menu is its default mode and keeps its command and arguments; the agent's other
+/// presets, such as another model of it, are its variants.
+pub(super) fn setup_groups(form: &Production) -> Vec<SetupGroup> {
+    let mut groups: Vec<SetupGroup> = Vec::new();
+    for preset in &form.setup_presets {
+        let Some(group) = groups.iter_mut().find(|group| group.default.kind == preset.kind) else {
+            groups.push(SetupGroup {
+                default: preset.clone(),
+                variants: Vec::new(),
+            });
+            continue;
+        };
+        // The same preset twice, as after a rename, is one entry.
+        if group.presets().any(|known| known.name == preset.name) {
+            continue;
+        }
+        group.variants.push(preset.clone());
+    }
+    if !groups.is_empty() {
+        return groups;
     }
     horizon_core::all_agent_kinds()
         .iter()
-        .map(|kind| horizon_core::PresetConfig {
-            name: kind.display_name().to_owned(),
-            alias: None,
-            kind: *kind,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::default(),
-            ssh_connection: None,
+        .map(|kind| SetupGroup {
+            default: horizon_core::PresetConfig {
+                name: kind.display_name().to_owned(),
+                alias: None,
+                kind: *kind,
+                command: None,
+                args: Vec::new(),
+                resume: horizon_core::PanelResume::default(),
+                ssh_connection: None,
+            },
+            variants: Vec::new(),
         })
         .collect()
 }
 
-/// The chosen preset, else the first one of the machine account's preferred agent,
+/// The chosen preset: the one the person clicked, else the default of the preferred agent,
 /// else the first one.
-pub(super) fn chosen_preset<'a>(
-    form: &Production,
-    presets: &'a [horizon_core::PresetConfig],
-) -> Option<&'a horizon_core::PresetConfig> {
+pub(super) fn chosen_preset<'a>(form: &Production, groups: &'a [SetupGroup]) -> Option<&'a horizon_core::PresetConfig> {
     form.setup_preset
         .as_deref()
-        .and_then(|name| presets.iter().find(|preset| preset.name == name))
+        .and_then(|name| {
+            groups
+                .iter()
+                .flat_map(SetupGroup::presets)
+                .find(|preset| preset.name == name)
+        })
         .or_else(|| {
             let preferred = form.setup_agent.unwrap_or(PanelKind::Claude);
-            presets.iter().find(|preset| preset.kind == preferred)
+            groups
+                .iter()
+                .find(|group| group.default.kind == preferred)
+                .map(|group| &group.default)
         })
-        .or_else(|| presets.first())
+        .or_else(|| groups.first().map(|group| &group.default))
 }
 
 /// What the person asked for under the profiles.
@@ -386,7 +504,7 @@ pub(super) fn set_configuration(form: &mut Production, configuration: Configurat
 mod tests {
     use super::*;
     #[test]
-    fn each_agent_is_offered_once_with_its_default_preset_command_and_arguments() {
+    fn each_agent_is_offered_once_with_its_default_preset_and_its_variants_beside_it() {
         let preset = |name: &str, kind, args: &[&str]| horizon_core::PresetConfig {
             name: name.into(),
             alias: None,
@@ -401,14 +519,85 @@ mod tests {
                 preset("Codex", PanelKind::Codex, &["--no-alt-screen"]),
                 preset("Codex (YOLO)", PanelKind::Codex, &["--yolo"]),
                 preset("Claude Code", PanelKind::Claude, &["--permission-mode", "auto"]),
+                preset("Pi", PanelKind::Pi, &[]),
+                preset("Pi DeepSeek", PanelKind::Pi, &["--model", "deepseek"]),
             ],
             ..Production::default()
         };
-        let choices = setup_choices(&form);
-        assert_eq!(choices.len(), 2, "no YOLO variant");
-        assert_eq!(choices[0].args, ["--no-alt-screen"]);
-        assert_eq!(choices[0].command.as_deref(), Some("/opt/Codex"));
-        assert_eq!(choices[1].args, ["--permission-mode", "auto"]);
+        let groups = setup_groups(&form);
+        assert_eq!(groups.len(), 3, "one chip for each agent");
+        // The chip of an agent keeps its default preset's command and arguments.
+        assert_eq!(groups[0].default.args, ["--no-alt-screen"]);
+        assert_eq!(groups[0].default.command.as_deref(), Some("/opt/Codex"));
+        assert_eq!(groups[1].default.args, ["--permission-mode", "auto"]);
+        // Another model of an agent is a variant of it, not a chip of its own.
+        assert_eq!(groups[0].variants.len(), 1);
+        assert_eq!(
+            groups[2]
+                .presets()
+                .map(|preset| preset.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Pi", "Pi DeepSeek"]
+        );
+    }
+
+    #[test]
+    fn a_variant_of_an_agent_starts_when_the_person_chooses_it() {
+        let pi = |name: &str, args: &[&str]| horizon_core::PresetConfig {
+            name: name.into(),
+            alias: None,
+            kind: PanelKind::Pi,
+            command: None,
+            args: args.iter().map(|&arg| arg.to_owned()).collect(),
+            resume: horizon_core::PanelResume::default(),
+            ssh_connection: None,
+        };
+        let mut form = Production {
+            setup_presets: vec![pi("Pi", &[]), pi("Pi DeepSeek", &["--model", "deepseek"])],
+            ..Production::default()
+        };
+        let groups = setup_groups(&form);
+        assert_eq!(
+            chosen_preset(&form, &groups).map(|preset| preset.name.as_str()),
+            Some("Pi")
+        );
+        form.setup_preset = Some("Pi DeepSeek".into());
+        let chosen = chosen_preset(&form, &groups).expect("the variant the person chose");
+        assert_eq!(chosen.args, ["--model", "deepseek"]);
+    }
+
+    #[test]
+    fn a_preferred_agent_that_only_has_variants_starts_on_its_default() {
+        let form = Production {
+            setup_presets: vec![
+                horizon_core::PresetConfig {
+                    name: "Codex".into(),
+                    alias: None,
+                    kind: PanelKind::Codex,
+                    command: None,
+                    args: Vec::new(),
+                    resume: horizon_core::PanelResume::default(),
+                    ssh_connection: None,
+                },
+                horizon_core::PresetConfig {
+                    name: "Pi Qwen".into(),
+                    alias: None,
+                    kind: PanelKind::Pi,
+                    command: None,
+                    args: vec!["--model".into(), "qwen".into()],
+                    resume: horizon_core::PanelResume::default(),
+                    ssh_connection: None,
+                },
+            ],
+            setup_agent: Some(PanelKind::Pi),
+            ..Production::default()
+        };
+        let groups = setup_groups(&form);
+        assert_eq!(
+            chosen_preset(&form, &groups).map(|preset| preset.name.as_str()),
+            Some("Pi Qwen"),
+            "the preferred agent's own default, which is its first preset"
+        );
     }
 
     #[test]

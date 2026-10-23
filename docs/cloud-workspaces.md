@@ -761,8 +761,14 @@ yet**. A working copy that is not valid shows its error instead. This is not an 
 
 - **Quick start** starts the repository on the base image. See
   [Quick start](#quick-start).
-- **Set up from CI** starts a setup agent, Claude or Codex, that prepares the
-  settings of the repository. It runs on Linux with a systemd user session:
+- **Set up from CI** starts a setup agent that prepares the
+  settings of the repository. The chips name the agents of the **New Workspace**
+  menu, each in its default mode, with its own command and arguments. An agent
+  with more than one preset there, for example one preset for each model it
+  runs, keeps one chip and a caret beside it: the caret lists the presets of that
+  agent, and the chip then names the preset you chose. The setup starts the agent
+  on the instructions when its command line takes a message, and types them into
+  its prompt otherwise. It runs on Linux with a systemd user session:
   Horizon starts the agent in a systemd user scope, which holds every process the
   agent starts as its descendant, so it can end them all before it commits. The
   scope is not a sandbox: the agent runs as you, and a program it hands to another

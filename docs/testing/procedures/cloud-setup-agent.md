@@ -102,7 +102,8 @@ setup** commits `.horizon` and reads it as the repository profile.
 2. Click the **Codex** chip.
 
    Result: The button says **Set up with Codex**. Each agent shows one chip, in
-   its default mode, with no YOLO or Auto variant.
+   its default mode, with no YOLO or Auto variant. An agent that has more than one
+   preset in the **New Workspace** menu shows a small caret beside its chip.
 
 ### 6.2 S02 — Run the setup agent in the dialog
 
@@ -626,9 +627,48 @@ checked on the cloud card, and an agent panel in the same workspace.
    Result: Within one minute, `docker ps -a`, `docker images` and `docker volume ls` on
    the host no longer list the resources of the runs.
 
+### 6.24 S24 — Choose a preset of one agent
+
+1. Write the file `<task>/presets.json` with two presets of one agent in the shape
+   of `presets:` in the configuration, for example **Pi** and **Pi DeepSeek**,
+   whose `args` name different models.
+
+2. Start the candidate with the fixture and `--presets <task>/presets.json`, as the
+   [fixture guide](../../../scripts/device-smoke/README.md) shows.
+
+   The fixture stops with an error when a preset has no name or kind, or when a
+   `resume` value is not `fresh`, `last` or `{"session": {"session_id": "<id>"}}`.
+   An empty board with **Workspace 1** in place of the fixture workspace means
+   that Horizon did not load the configuration; correct the file and start again.
+
+   Result: Horizon opens with a New Workspace menu that holds both presets.
+
+3. Open **New cloud** for a copy of the fixture without `.horizon`, then click the
+   caret beside the chip of that agent.
+
+   Result: A menu lists the presets of the agent in menu order, the first one
+   selected, and the chip keeps its name.
+
+4. Click the second preset.
+
+   Result: The menu closes. The chip names the second preset, it is the only chip
+   of that agent, and the button says **Set up with** and the name of the second
+   preset.
+
+5. Click the button.
+
+   Result: The dialog shows **Set up** and the name of the repository. The agent's
+   terminal starts on the instructions of the setup, and its own footer names the
+   model of the preset. Read CI is the running step.
+
+6. Click **Stop**.
+
+   Result: The setup ends and the dialog shows the choices again. The chip still
+   names the preset you chose.
+
 ## 7. Pass criteria
 
-- S01 to S23 give the results above.
+- S01 to S24 give the results above.
 - The proof ran on this computer. Before you click **Use this setup** in S04,
   `docker images` lists `horizon-setup-ci-app-<hash>-<run>:candidate`. `<hash>` is
   six hexadecimal digits that Horizon derives from the repository's path. `<run>` is
