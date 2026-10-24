@@ -171,7 +171,7 @@ Do the tasks in order. Each task has a stable ID for the report.
 1. Run the UI price tests for Azure.
 
    ```sh
-   cargo test -p horizon-ui --lib -- cloud_panel::production::prices::azure cloud_panel::production::offers
+   cargo test -p horizon-ui --bin horizon -- cloud_panel::production::prices::azure cloud_panel::production::offers
    ```
 
    Result: All tests pass. These tests examine the items that follow:

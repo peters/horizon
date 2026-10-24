@@ -21,16 +21,19 @@ impl HorizonApp {
         let deadline_in = request
             .deadline_at_millis
             .saturating_sub(horizon_core::browser::manifest::now_millis());
-        self.ranked_offers(&requirements, deadline_in, ctx)
+        self.ranked_offers(&requirements, deadline_in, true, ctx)
     }
 
     /// Offers for `requirements` from every provider this machine can deploy to, with their
     /// comparison, an error, or `None` while prices are being fetched and the answer may
-    /// wait `deadline_in` milliseconds more.
+    /// wait `deadline_in` milliseconds more. `include_azure` asks for the Azure catalog too;
+    /// the tooltip of + New cloud passes `false`, because Azure cannot be created there and
+    /// paging every region must not hold its line at `CHECKING`.
     pub(in crate::app) fn ranked_offers(
         &mut self,
         requirements: &horizon_core::cloud_runtime::offers::Requirements,
         deadline_in: i64,
+        include_azure: bool,
         ctx: &egui::Context,
     ) -> Option<Result<serde_json::Value, String>> {
         use horizon_core::cloud_runtime::offers::offers;
@@ -41,7 +44,9 @@ impl HorizonApp {
         prices.poll();
         if !requirements.gpu {
             prices.exchange.request_for_deadline(ctx, deadline_in);
-            prices.azure.request(ctx);
+            if include_azure {
+                prices.azure.request(ctx);
+            }
         }
         // A machine set up for Hetzner alone answers with its other providers, and says
         // why RunPod has no offers.
