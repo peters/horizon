@@ -10,6 +10,10 @@ owner: peters
 
 # Azure described provider test procedure
 
+> Archived on 2026-10-24. Horizon now creates, stops, resumes and deletes Azure
+> clouds, so the refusals that this procedure examines no longer occur. The
+> current procedure is [Azure provisioning](../testing/procedures/azure-provisioning.md).
+
 ## 1. Purpose
 
 This procedure makes sure that Horizon describes Azure as a provider.

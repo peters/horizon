@@ -16,11 +16,15 @@ fixed name and the same tag.
 | VM | `worker` | Ubuntu 24.04. No managed identity, no password login. |
 | OS disk | `worker-os` | Premium SSD, deleted with the VM. A tags resource tags it. |
 
-`offers::AZURE_DEPLOYABLE` stays `false`, so `repository::launch` drops each
-Azure profile, and New cloud, `cloud_deploy deploy`, the quick start and
-companions do not create an Azure worker in this change. `providers::preflight`
-admits an Azure cloud that the settings can make, so a reconnect of an existing
-Azure cloud runs.
+`offers::AZURE_DEPLOYABLE` is `true`. `cloud_deploy deploy`, the quick start and
+companions create an Azure worker for a profile with `provider: azure` when
+`providers::preflight` admits it. The worker is placed by the VM sizes and
+regions of the `azure` settings, in their order; a choice of one Azure offer is
+refused. New cloud does not list Azure until its prices have a binding. A
+repository whose default profile is Azure keeps that default. The dialog's
+account row then fails and tells the person to choose another profile: it names
+the missing `azure` section, or says that New cloud cannot start an Azure profile
+yet. The row never stays pending.
 
 ## Machine settings
 

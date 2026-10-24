@@ -132,11 +132,11 @@ fn region_location_and_max_hourly_filters_and_gpu_requests_yield_no_rows() {
 }
 
 #[test]
-fn the_answer_section_names_azure_usd_and_is_not_deployable() {
+fn the_answer_section_names_azure_usd_and_is_deployable_but_no_offer_is_rentable() {
     let section = azure_section(&catalog(), &requirements(json!({"limit": 2})));
     assert_eq!(section["provider"], "Azure");
     assert_eq!(section["currency"], "USD");
-    assert_eq!(section["deployable"], false);
+    assert_eq!(section["deployable"], true);
     assert_eq!(section["offers"].as_array().map(Vec::len), Some(2));
     assert_eq!(section["offers"][0]["id"], "Standard_F2s_v2");
     assert_eq!(section["offers"][0]["rentable"], false);

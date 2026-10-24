@@ -167,7 +167,7 @@ mod tests {
         state.answered(catalog());
         let sections = state.sections(&requirements, 10_000).unwrap_or_default();
         assert_eq!(sections[0]["provider"], "Azure");
-        assert_eq!(sections[0]["deployable"], false);
+        assert_eq!(sections[0]["deployable"], true);
         assert_eq!(sections[0]["offers"][0]["rentable"], false);
         assert!(sections[0]["observed_at_millis"].is_u64());
 
