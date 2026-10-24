@@ -117,7 +117,7 @@ A caller sees one of these refusals:
 | `cloud_companion` with `ensure_ready` for a new companion cloud on an Azure profile | `The checkout's committed .horizon/cloud.yml has no creatable profile with the companion's profile name` |
 | `cloud_deploy stop`, `resume`, `reconnect` or `delete` on an Azure record | `Horizon cannot manage Azure clouds yet` |
 | `cloud_companion` on a companion cloud with an Azure record | `Horizon cannot manage Azure clouds yet` |
-| `cloud_deploy --worker-choice` with an Azure offer | `This worker cannot run the repository profile` |
+| `cloud_deploy plan-deploy` or `deploy` with `--worker-choice` and an Azure offer | `Worker choice is not currently offered under this machine's policy and repository requirements` |
 
 1. Build the CLI.
 
@@ -281,6 +281,7 @@ A caller sees one of these refusals:
 
     Result: All selected tests pass.
     `an_azure_worker_cannot_be_chosen` gives `This worker cannot run the repository profile` for an Azure worker choice.
+    No command reaches that guard yet: the worker-choice commands stop before it, because no offer catalog lists Azure.
 
 ### 6.5 AZ-05 — Check the deletion rule
 
