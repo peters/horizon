@@ -747,8 +747,6 @@ fn devices(gpu: bool, kvm: Option<&Path>, root: bool) -> Vec<String> {
             use std::os::unix::fs::MetadataExt as _;
             args.extend(["--group-add".to_owned(), meta.gid().to_string()]);
         }
-        #[cfg(not(unix))]
-        let _ = (meta, root);
     }
     args
 }
@@ -1064,8 +1062,6 @@ mod tests {
         // The device's group is added on Unix only.
         #[cfg(unix)]
         assert_eq!(kvm.get(2).map(String::as_str), Some("--group-add"));
-        #[cfg(not(unix))]
-        assert_eq!(kvm.len(), 2);
         assert_eq!(
             devices(false, Some(temp.path()), true),
             ["--device".to_owned(), temp.path().display().to_string()],

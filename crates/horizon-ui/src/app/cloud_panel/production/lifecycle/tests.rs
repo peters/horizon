@@ -363,7 +363,6 @@ fn add_editor(app: &mut HorizonApp, workspace: WorkspaceId) -> PanelId {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
 fn removing_a_cloud_drops_only_its_row_height_cache() {
     let (_temp, ctx, mut app) = live_cloud_app();
     let first = app.board.create_workspace("One");
@@ -410,7 +409,6 @@ fn session_restore_drops_the_row_height_cache_of_a_cloud_that_leaves() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
 fn removing_the_only_cloud_removes_its_workspace_on_the_next_frame() {
     for survivors in [1, 2] {
         for with_member in [false, true] {
@@ -455,7 +453,6 @@ fn removing_the_only_cloud_removes_its_workspace_on_the_next_frame() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
 fn removing_a_cloud_keeps_a_workspace_that_is_still_in_use() {
     for keeper in ["another cloud", "an ordinary panel", "a hidden panel"] {
         let (_temp, ctx, mut app) = live_cloud_app();
@@ -492,7 +489,6 @@ fn removing_a_cloud_keeps_a_workspace_that_is_still_in_use() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "cloud state stores need Unix directory durability")]
 fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
     let (temp, ctx, mut app) = live_cloud_app();
     let frame = |app: &mut HorizonApp, escape: bool| {
@@ -614,10 +610,6 @@ fn delete_after_a_stale_attempt(app: &mut crate::app::HorizonApp, ctx: &egui::Co
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "cloud control requires durable directory updates, which are Unix-only"
-)]
 fn deletion_replaces_a_stale_attempt_and_reports_its_steps_and_total_time() {
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();

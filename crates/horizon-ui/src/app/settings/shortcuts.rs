@@ -187,8 +187,6 @@ fn reconnect_shortcut_note(config: &Config) -> (&'static str, Color32) {
 fn contextual_shortcuts_hint() -> &'static str {
     if cfg!(target_os = "macos") {
         "These shortcuts use macOS clipboard conventions and are shown here for reference; they are not editable."
-    } else if cfg!(target_os = "windows") {
-        "These shortcuts are shown here for reference; they are not editable. Plain Ctrl+C still reaches the terminal, and Windows also accepts Ctrl+Insert / Shift+Insert for copy and paste."
     } else {
         "These shortcuts are shown here for reference; they are not editable. Plain Ctrl+C still reaches the terminal, so copy uses Ctrl+Shift+C."
     }

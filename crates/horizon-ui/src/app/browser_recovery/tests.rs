@@ -23,15 +23,10 @@ fn released_slot(root: &std::path::Path) -> remote_slots::SlotLease {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn host_dispatch_authorizes_waits_and_completes_exact_recovery() {
     let (temp, mut app) = test_app();
     let workspace = app.board.create_workspace("recovery");
-    let (command, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/C".into(), "exit 0".into()])
-    } else {
-        ("/bin/sh", vec!["-c".into(), "exit 0".into()])
-    };
+    let (command, args) = ("/bin/sh", vec!["-c".into(), "exit 0".into()]);
     let agent = app
         .board
         .create_panel(

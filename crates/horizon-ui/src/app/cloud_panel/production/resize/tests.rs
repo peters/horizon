@@ -160,7 +160,6 @@ fn stopped_gpu_and_non_ready_clouds_offer_no_resource_mutation() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn a_preflight_refusal_returns_the_healthy_cloud_to_its_watch_loop() {
     let root = tempfile::tempdir().unwrap();
     let state = ready().state.unwrap();
@@ -186,7 +185,6 @@ fn a_preflight_refusal_returns_the_healthy_cloud_to_its_watch_loop() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn a_resize_that_met_another_stop_reports_the_stopped_cloud_as_readable() {
     let root = tempfile::tempdir().unwrap();
     let mut stopped = ready().state.unwrap();
@@ -214,7 +212,6 @@ fn a_resize_that_met_another_stop_reports_the_stopped_cloud_as_readable() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn disconnected_resize_worker_clears_busy_and_reloads_durable_state() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = ready();

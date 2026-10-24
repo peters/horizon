@@ -291,21 +291,15 @@ fn consume_matching<T>(queue: &mut VecDeque<T>, mut predicate: impl FnMut(&T) ->
 }
 
 fn is_cut_command(modifiers: Modifiers, keycode: Key) -> bool {
-    keycode == Key::Cut
-        || (modifiers.command && keycode == Key::X)
-        || (cfg!(target_os = "windows") && modifiers.shift && keycode == Key::Delete)
+    keycode == Key::Cut || (modifiers.command && keycode == Key::X)
 }
 
 fn is_copy_command(modifiers: Modifiers, keycode: Key) -> bool {
-    keycode == Key::Copy
-        || (modifiers.command && keycode == Key::C)
-        || (cfg!(target_os = "windows") && modifiers.ctrl && keycode == Key::Insert)
+    keycode == Key::Copy || (modifiers.command && keycode == Key::C)
 }
 
 fn is_paste_command(modifiers: Modifiers, keycode: Key) -> bool {
-    keycode == Key::Paste
-        || (modifiers.command && keycode == Key::V)
-        || (cfg!(target_os = "windows") && modifiers.shift && keycode == Key::Insert)
+    keycode == Key::Paste || (modifiers.command && keycode == Key::V)
 }
 
 fn key_from_winit_key(key: &WinitKey) -> Option<Key> {

@@ -356,11 +356,7 @@ mod tests {
     use crate::app::test_support::test_app;
 
     fn agent_options() -> PanelOptions {
-        let (command, args) = if cfg!(windows) {
-            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
-        } else {
-            ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()])
-        };
+        let (command, args) = ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()]);
         PanelOptions {
             command: Some(command.to_string()),
             args,
@@ -388,7 +384,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_claimed_close_removes_the_owned_panel_and_returns_focus_only_when_it_held_it() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");
@@ -437,7 +432,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn refusals_keep_the_panel_and_name_the_reason() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");

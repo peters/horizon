@@ -309,15 +309,6 @@ impl Remote {
             },
         ))
     }
-
-    /// A desktop of a Docker host comes to a Unix socket, so only a Unix computer shows it.
-    #[cfg(not(unix))]
-    pub(in crate::app::cloud_panel::production::repository_setup) fn forward_port(
-        &self,
-        _remote_port: u16,
-    ) -> Result<(u16, PortForward), String> {
-        Err("a preview on a Docker host shows on Linux and macOS only".to_owned())
-    }
 }
 
 /// A desktop port of a Docker host brought to this computer: the SSH forward to a socket

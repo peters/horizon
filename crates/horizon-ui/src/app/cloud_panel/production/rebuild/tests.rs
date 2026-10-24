@@ -217,10 +217,6 @@ fn saved_phase(state_root: &Path) -> Option<ReplacementPhase> {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "cloud control requires durable directory updates, which are Unix-only"
-)]
 fn rebuild_actions_start_their_own_core_operation() {
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();
@@ -367,10 +363,6 @@ fn git(path: &Path, args: &[&str]) {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "cloud control requires durable directory updates, which are Unix-only"
-)]
 fn the_confirmation_reads_what_the_latest_commit_changes_and_only_a_confirmed_rebuild_starts() {
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();
@@ -430,10 +422,6 @@ fn the_confirmation_reads_what_the_latest_commit_changes_and_only_a_confirmed_re
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "the fixture saves a cloud record, which needs durable directory updates (Unix-only)"
-)]
 fn the_saved_profile_follows_the_settings_a_rebuild_bound() {
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();

@@ -53,8 +53,6 @@ pub(in crate::app::cloud_panel::production::repository_setup) fn end_group(leade
     if let Some(group) = i32::try_from(leader).ok().and_then(rustix::process::Pid::from_raw) {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
     }
-    #[cfg(not(unix))]
-    let _ = leader;
 }
 
 /// The most output Horizon keeps from a command whose output it reads, such as a plan.

@@ -345,10 +345,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Durable notice persistence requires Unix; unsaved Windows notice behavior remains covered by panic cleanup"
-    )]
     fn recovery_paths_restore_as_a_blocking_notice_after_restart() {
         let (_temp, mut app) = crate::app::test_support::test_app();
         let report = AgentSessionDeletionReport {
@@ -374,10 +370,6 @@ mod tests {
         assert!(!app.finish_saved_session_deletion_for_shutdown());
     }
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Durable notice persistence requires Unix; unsaved Windows notice behavior remains covered by panic cleanup"
-    )]
     fn transient_write_failure_preserves_unsaved_paths_on_later_success() {
         let (_temp, mut app) = crate::app::test_support::test_app();
         let blocked = app.session_store.home().root().join("runtime/session-deletion");

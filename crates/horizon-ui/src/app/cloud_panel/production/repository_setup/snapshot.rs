@@ -140,8 +140,6 @@ impl Setup {
                 Entry::Folder => {}
                 #[cfg(unix)]
                 Entry::Link(link) => std::os::unix::fs::symlink(link, &target).map_err(|error| error.to_string())?,
-                #[cfg(not(unix))]
-                Entry::Link(_) => return Err(format!("{relative} is a link")),
                 Entry::File { executable, content } => {
                     std::fs::write(&target, content).map_err(|error| error.to_string())?;
                     #[cfg(unix)]
@@ -151,8 +149,6 @@ impl Setup {
                         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))
                             .map_err(|error| error.to_string())?;
                     }
-                    #[cfg(not(unix))]
-                    let _ = executable;
                 }
             }
         }

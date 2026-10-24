@@ -23,10 +23,6 @@ pub(super) fn read_regular(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> 
     options.read(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    #[cfg(not(unix))]
-    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(std::io::Error::other("is a link"));
-    }
     read_open(options.open(path)?, limit)
 }
 
@@ -62,10 +58,6 @@ pub(super) fn link_bytes(target: &Path) -> Vec<u8> {
     {
         use std::os::unix::ffi::OsStrExt as _;
         target.as_os_str().as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        target.to_string_lossy().replace('\\', "/").into_bytes()
     }
 }
 
@@ -114,11 +106,6 @@ pub(super) fn identity(path: &Path) -> Identity {
         std::fs::symlink_metadata(path)
             .ok()
             .map(|metadata| (metadata.dev(), metadata.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        None
     }
 }
 
@@ -200,48 +187,6 @@ pub(super) fn setup_entries(repository: &Path, expected: Identity) -> Result<Vec
                     }
                 }
                 _ => return Err(format!("{relative} is not a file, folder or link")),
-            };
-            budget.add(retained(&relative, &entry))?;
-            entries.push((relative, entry));
-        }
-    }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(entries)
-}
-
-/// The entries of the repository's `.horizon`, by path; without folder handles this is
-/// only as safe as the platform's path checks.
-#[cfg(not(unix))]
-pub(super) fn setup_entries(repository: &Path, _expected: Identity) -> Result<Vec<(String, Entry)>, String> {
-    let root = repository.join(".horizon");
-    let kind = std::fs::symlink_metadata(&root).map_err(|error| format!(".horizon: {error}"))?;
-    if !kind.is_dir() {
-        return Err(".horizon must be a folder, not a link or a file".to_owned());
-    }
-    let mut entries = Vec::new();
-    let mut budget = Budget::default();
-    let mut pending = vec![(".horizon".to_owned(), root)];
-    while let Some((prefix, folder)) = pending.pop() {
-        for item in std::fs::read_dir(&folder).map_err(|error| format!("{prefix}: {error}"))? {
-            let item = item.map_err(|error| format!("{prefix}: {error}"))?;
-            let relative = format!("{prefix}/{}", item.file_name().to_string_lossy());
-            let path = item.path();
-            let kind = std::fs::symlink_metadata(&path)
-                .map_err(|error| format!("{relative}: {error}"))?
-                .file_type();
-            let entry = if kind.is_symlink() {
-                Entry::Link(std::fs::read_link(&path).map_err(|error| format!("{relative}: {error}"))?)
-            } else if kind.is_dir() {
-                pending.push((relative.clone(), path));
-                Entry::Folder
-            } else if kind.is_file() {
-                let content = read_regular(&path, SETUP_FILE_LIMIT).map_err(|error| format!("{relative}: {error}"))?;
-                Entry::File {
-                    executable: false,
-                    content,
-                }
-            } else {
-                return Err(format!("{relative} is not a file, folder or link"));
             };
             budget.add(retained(&relative, &entry))?;
             entries.push((relative, entry));

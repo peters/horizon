@@ -458,12 +458,6 @@ pub(super) fn readable_to_all(target: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Windows has no mode bits to open; Docker Desktop reads the mirror as this user.
-#[cfg(not(unix))]
-pub(super) fn readable_to_all(_target: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
 /// Clones the locked `address` of the approved repository `key` into `target`, or says
 /// why it did not.
 fn clone_from(

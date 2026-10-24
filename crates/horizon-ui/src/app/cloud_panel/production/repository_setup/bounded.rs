@@ -110,8 +110,6 @@ pub(super) fn watch(child: &std::process::Child, limit: Duration) -> Watch {
             if let Some(group) = i32::try_from(id).ok().and_then(rustix::process::Pid::from_raw) {
                 let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
             }
-            #[cfg(not(unix))]
-            let _ = id;
         }
     });
     Watch { done, expired }

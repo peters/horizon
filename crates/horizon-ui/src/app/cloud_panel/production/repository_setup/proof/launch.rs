@@ -226,47 +226,6 @@ fn add_at(
     Ok(())
 }
 
-/// Adds `from` at `inside`, a folder with everything in it.
-#[cfg(not(unix))]
-fn add(builder: &mut tar::Builder<impl std::io::Write>, copy: &Copy, inside: &Path) -> std::io::Result<()> {
-    add_path(builder, &copy.from, inside)
-}
-
-#[cfg(not(unix))]
-fn add_path(builder: &mut tar::Builder<impl std::io::Write>, from: &Path, inside: &Path) -> std::io::Result<()> {
-    let metadata = std::fs::symlink_metadata(from)?;
-    let mtime = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |since| since.as_secs());
-    let kind = metadata.file_type();
-    if kind.is_symlink() {
-        let mut header = header(tar::EntryType::Symlink, 0o777, mtime, 0)?;
-        builder.append_link(&mut header, inside, std::fs::read_link(from)?)?;
-    } else if kind.is_dir() {
-        let mut header = header(tar::EntryType::Directory, 0o755, mtime, 0)?;
-        builder.append_data(&mut header, inside, std::io::empty())?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            add_path(builder, &entry.path(), &inside.join(entry.file_name()))?;
-        }
-    } else if kind.is_file() {
-        let file = std::fs::File::open(from)?;
-        let size = file.metadata()?.len();
-        let mut header = header(tar::EntryType::Regular, 0o644, mtime, size)?;
-        builder.append_data(
-            &mut header,
-            inside,
-            Exact {
-                inner: file,
-                left: size,
-            },
-        )?;
-    }
-    Ok(())
-}
-
 impl Job {
     /// A container of the image as the worker account on the proof's volume, with the
     /// GPU, this computer's packages and Horizon's localci that the proof needs. Horizon's

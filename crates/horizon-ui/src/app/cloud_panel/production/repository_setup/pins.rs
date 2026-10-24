@@ -77,18 +77,6 @@ fn replace_in(repository: &Path, expected: super::untrusted::Identity) -> std::i
     renamed
 }
 
-/// Elsewhere the setup agent does not run; a plain replace by rename is enough.
-#[cfg(not(unix))]
-fn replace_in(repository: &Path, _expected: super::untrusted::Identity) -> std::io::Result<()> {
-    let horizon = repository.join(".horizon");
-    let horizon = horizon.as_path();
-    let mut file = tempfile::Builder::new().prefix(".verify-pins-").tempfile_in(horizon)?;
-    file.write_all(VERIFIER.as_bytes())?;
-    file.persist(horizon.join(FILE))
-        .map(|_| ())
-        .map_err(|error| error.error)
-}
-
 /// The longest the pin check may take; it reads a few small files.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 

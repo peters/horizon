@@ -156,11 +156,6 @@ impl AgentProcess {
                 .is_some_and(|group| rustix::process::test_kill_process_group(group).is_ok())
     }
 
-    #[cfg(not(unix))]
-    fn alive(&self) -> bool {
-        false
-    }
-
     #[cfg(unix)]
     fn kill(&self) {
         if let Some(scope) = &self.scope {
@@ -172,9 +167,6 @@ impl AgentProcess {
             let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
         }
     }
-
-    #[cfg(not(unix))]
-    fn kill(&self) {}
 }
 
 /// What systemd says of the user scope `unit`: running with its cgroup folder, gone when
@@ -296,11 +288,6 @@ fn start_time(id: u32) -> Option<String> {
         let output = run_bounded(ps, SYSTEMD_TIMEOUT)?;
         let started = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         (output.status.success() && !started.is_empty()).then_some(started)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-        None
     }
 }
 
