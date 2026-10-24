@@ -42,6 +42,31 @@ The machine's cloud settings can have an `azure` section:
 - `registry_pull` is optional. It has the same form as the Hetzner pull login.
 - A settings file without the section keeps its encoding.
 
+## The Compute seam
+
+`providers::compute` gives `deployment::azure::Compute` for an Azure cloud when
+the machine has an `azure` section. It provisions through
+`azure::provision` and then waits for SSH readiness, as Hetzner does:
+
+- The cloud's `azure.json` journal, beside `deployment.json`, keeps the group
+  fence and the region. `providers::retained` is true when the group fence is
+  `Requested` or `Bound`.
+- A registry binding of the machine has priority over `registry_pull`, as on
+  Hetzner: its grant must be verified for the exact digest first.
+- While the worker starts, each pass reads the bound VM with
+  `azure::provision::inspect_worker`, which makes the same checks with GET
+  requests only.
+
+These items do not change:
+
+- `providers::preflight` refuses a new Azure cloud before a record is written.
+  `cloud_deploy deploy`, the UI and MCP thus cannot reach the seam.
+- Each lifecycle operation of `providers::azure::Azure` (check, stop, resume,
+  release, delete) refuses. Rebuild is `Rebuild::Unsupported`: `settle` refuses a
+  requested image replacement.
+- Only a direct caller of `deployment::azure::provision`, such as the loopback
+  tests and the ignored live test `live_create`, creates a worker.
+
 ## Creation fences
 
 `azure::provision` creates a worker with two creates. The caller keeps a fence
