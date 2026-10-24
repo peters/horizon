@@ -274,7 +274,7 @@ fn preparation_preserves_pinned_revision_without_reading_a_repository() {
 }
 #[test]
 #[cfg(unix)]
-fn an_azure_cloud_is_refused_before_a_deployment_record_is_written() {
+fn an_azure_cloud_without_azure_settings_is_refused_before_a_deployment_record_is_written() {
     let root = tempfile::tempdir().unwrap();
     let request = Request::new(
         "azure-fixture".into(),
@@ -290,17 +290,12 @@ fn an_azure_cloud_is_refused_before_a_deployment_record_is_written() {
         )
         .unwrap(),
     );
+    let missing = "Add an azure section to the cloud settings before deploying an Azure cloud";
     for refused in [prepare(&request), prepare_image_record(&request)] {
-        assert_eq!(
-            refused.unwrap_err().to_string(),
-            "Horizon cannot create clouds on Azure yet"
-        );
+        assert_eq!(refused.unwrap_err().to_string(), missing);
     }
     let deployed = deploy(&request, &Cancellation::default(), &|_| {}).map(drop);
-    assert_eq!(
-        deployed.unwrap_err().to_string(),
-        "Horizon cannot create clouds on Azure yet"
-    );
+    assert_eq!(deployed.unwrap_err().to_string(), missing);
     assert!(!request.state_root.join("deployment.json").exists());
 }
 #[test]

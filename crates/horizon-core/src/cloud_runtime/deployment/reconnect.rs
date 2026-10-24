@@ -50,12 +50,22 @@ fn admit(store: &Store, state: &Deployment) -> Result<()> {
     match horizon_cloud::provider::Description::of(&state.profile).kind {
         Kind::RunPod | Kind::DockerHost if bound => Ok(()),
         Kind::Hetzner => hetzner_admits(store, bound),
+        Kind::Azure => azure_admits(store, bound),
         Kind::RunPod | Kind::DockerHost => Err(NO_WORKER),
-        Kind::Azure => Err(crate::cloud_runtime::providers::AZURE_REFUSED),
     }
 }
 
 const NO_WORKER: Error = Error::Invalid("The cloud has no worker to reconnect to; deploy it first");
+const DELETING: Error = Error::Invalid("The cloud is being deleted; finish deleting it before reconnecting");
+
+/// An Azure stop keeps the VM and Resume starts it again, so a reconnect needs the
+/// bound VM, as on `RunPod`, and never one whose resource group is being deleted.
+fn azure_admits(store: &Store, bound: bool) -> Result<()> {
+    if super::azure::deleting(store.root())? {
+        return Err(DELETING);
+    }
+    if bound { Ok(()) } else { Err(NO_WORKER) }
+}
 
 /// A Hetzner stop deletes the server and Resume clears its fence, so the reconnect
 /// after it creates the new server. It may do so only on a workspace volume a server
@@ -63,9 +73,7 @@ const NO_WORKER: Error = Error::Invalid("The cloud has no worker to reconnect to
 fn hetzner_admits(store: &Store, bound: bool) -> Result<()> {
     let journal = Journal::load(store.root())?;
     if journal.deleting {
-        return Err(Error::Invalid(
-            "The cloud is being deleted; finish deleting it before reconnecting",
-        ));
+        return Err(DELETING);
     }
     if bound || (matches!(journal.volume, CreateState::Bound { .. }) && !journal.unused) {
         Ok(())
@@ -83,6 +91,8 @@ mod tests {
     };
 
     const HELD: &str = r#"{"volume":{"state":"bound","worker_id":"9"}}"#;
+    const AZURE_GROUP: &str = r#"{"region":"northeurope","group":{"state":"bound","worker_id":"/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-reconnect"}}"#;
+    const AZURE_DELETING: &str = r#"{"region":"northeurope","group":{"state":"bound","worker_id":"/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-reconnect"},"deleting":true}"#;
 
     fn record(provider: &str, stage: &str, operation: &serde_json::Value) -> Deployment {
         let profile = serde_json::json!({"provider":provider,"image":"registry.example/worker","cpu":4,"memory_gb":8});
@@ -121,10 +131,16 @@ mod tests {
         .unwrap()
     }
 
+    /// Saves `state` and its provider's `journal`.
     fn save(root: &Path, state: &Deployment, journal: Option<&str>) -> Vec<u8> {
         Store::lock(root).unwrap().save(state).unwrap();
         if let Some(journal) = journal {
-            std::fs::write(root.join("hetzner.json"), journal).unwrap();
+            let file = if state.profile.provider == "azure" {
+                "azure.json"
+            } else {
+                "hetzner.json"
+            };
+            std::fs::write(root.join(file), journal).unwrap();
         }
         std::fs::read(root.join("deployment.json")).unwrap()
     }
@@ -157,7 +173,13 @@ mod tests {
                 Some(r#"{"volume":{"state":"bound","worker_id":"9"},"deleting":true}"#),
                 "being deleted",
             ),
-            (record("azure", "Ready", &bound()), None, "cannot manage Azure"),
+            (record("azure", "Provision", &prepared), None, "deploy it first"),
+            (record("azure", "Provision", &requested), None, "deploy it first"),
+            (
+                record("azure", "Ready", &bound()),
+                Some(AZURE_DELETING),
+                "being deleted",
+            ),
         ];
         for (index, (state, journal, refusal)) in cases.into_iter().enumerate() {
             let root = temp.path().join(index.to_string());
@@ -197,6 +219,18 @@ mod tests {
             admit(&Store::lock(temp.path()).unwrap(), &state).is_err(),
             "a RunPod resume keeps its worker"
         );
+    }
+
+    #[test]
+    fn a_resumed_azure_cloud_is_admitted_on_its_bound_vm() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = record("azure", "Readiness", &bound());
+        save(temp.path(), &state, Some(AZURE_GROUP));
+        assert!(admit(&Store::lock(temp.path()).unwrap(), &state).is_ok());
+        // A stop keeps the VM, so a stopped cloud must be resumed first.
+        state.stop_requested = true;
+        let error = admit(&Store::lock(temp.path()).unwrap(), &state).unwrap_err();
+        assert!(error.to_string().contains("resume it"), "{error}");
     }
 
     #[test]
