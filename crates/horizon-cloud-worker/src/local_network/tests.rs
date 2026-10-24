@@ -70,6 +70,10 @@ struct Session {
 
 impl Session {
     fn start(paths: &Paths, nonce: &str) -> Self {
+        Self::start_with(paths, nonce, hold::Waits::default())
+    }
+
+    fn start_with(paths: &Paths, nonce: &str, waits: hold::Waits) -> Self {
         let nonce_value = Nonce::parse(nonce).unwrap();
         prepare(paths).unwrap();
         owner_proxy(&paths.bridge(&nonce_value));
@@ -77,7 +81,7 @@ impl Session {
         let (output, ready_writer) = io::pipe().unwrap();
         let helper = {
             let (paths, nonce) = (paths.clone(), nonce.to_owned());
-            thread::spawn(move || hold::run(&paths, &nonce, "192.168.1.0/24", input, ready_writer))
+            thread::spawn(move || hold::run_with(&paths, &nonce, "192.168.1.0/24", input, ready_writer, waits))
         };
         let mut output = BufReader::new(output);
         let Some(line) = read_line(&mut output).unwrap() else {
@@ -333,6 +337,8 @@ fn of_two_sessions_starting_together_exactly_one_holds_the_bridge() {
 
 #[test]
 fn the_helper_refuses_invalid_sessions_and_a_missing_bridge_socket() {
+    // The production wait stays as it is; a change to it fails here.
+    assert_eq!(hold::SOCKET_WAIT, Duration::from_secs(10));
     let (_root, paths) = paths();
     for (nonce, subnet) in [
         ("../../etc", "192.168.1.0/24"),
@@ -342,9 +348,23 @@ fn the_helper_refuses_invalid_sessions_and_a_missing_bridge_socket() {
         let result = hold::run(&paths, nonce, subnet, io::empty(), io::sink());
         assert!(result.is_err(), "{nonce} {subnet}");
     }
+    // The bridge socket never appears, so the helper gives up once its wait is spent.
+    let wait = Duration::from_millis(300);
     let started = Instant::now();
-    assert!(hold::run(&paths, NONCE, "192.168.1.0/24", io::empty(), io::sink()).is_err());
-    assert!(started.elapsed() >= Duration::from_secs(9));
+    let error = hold::run_with(
+        &paths,
+        NONCE,
+        "192.168.1.0/24",
+        io::empty(),
+        io::sink(),
+        hold::Waits {
+            socket: wait,
+            ..hold::Waits::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "The bridge socket did not appear");
+    assert!(started.elapsed() >= wait, "{:?}", started.elapsed());
 }
 
 #[test]
