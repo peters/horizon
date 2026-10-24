@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::{io::Read, time::Duration};
 use ureq::http::HeaderMap;
 
+pub mod catalog;
 pub mod operation;
 pub mod reconcile;
 pub mod resource;

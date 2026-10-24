@@ -18,3 +18,5 @@ Read `docs/architecture/azure-arm-client.md` before review.
   name and `horizon-operation` tag.
 - Do not add credential sources, power actions, run commands or UI, CLI or MCP
   callers as part of this client.
+- `azure/catalog.rs` and `azure/catalog/**` are not part of this client. Review
+  them with `azure-price-catalog.instructions.md`.

@@ -698,6 +698,10 @@ resource id, `azure::resource` decodes the typed group, VM and deployment views,
 `azure::operation` polls an `Azure-AsyncOperation` URL, and `azure::reconcile` finds an operation's resources by name with GET requests only.
 No caller uses it yet. [The ARM client architecture](azure-arm-client.md) states
 its trust boundary.
+`azure::catalog` is separate from the ARM client: it reads the public retail price
+list without a credential, and `offers::azure` makes the Azure offers from it.
+[The Azure price catalog architecture](azure-price-catalog.md) states its trust
+boundary.
 
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
