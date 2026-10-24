@@ -27,7 +27,9 @@ creates an Azure worker in this change.
 - cloud-init updates the package lists and installs Ubuntu's `docker.io`.
 - cloud-init formats the data disk at `/dev/disk/azure/scsi1/lun0` as ext4 only
   when it has no file system. A reboot never formats the workspace.
-- The guard script drops container traffic to `168.63.129.16` and each IPv6
+- The guard script drops container traffic to ports 80 and 32526 of
+  `168.63.129.16` — the WireServer's own ports, not the whole address, because
+  that address is also the region's DNS resolver — and each IPv6
   packet that the host forwards from `docker0`.
 
 A `Platform::Prepared` host, for example a Hetzner host, gets the same user data as before.

@@ -401,11 +401,15 @@ fn an_azure_guard_closes_both_metadata_addresses_and_ipv6_before_every_start() {
         "the link-local rule, IMDS 169.254.169.254 included, stays"
     );
     for rule in [
-        "iptables -C DOCKER-USER -d 168.63.129.16/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 168.63.129.16/32 -j DROP",
+        "iptables -C DOCKER-USER -d 168.63.129.16/32 -p tcp -m multiport --dports 80,32526 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 168.63.129.16/32 -p tcp -m multiport --dports 80,32526 -j DROP",
         "ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i docker0 -j DROP",
     ] {
         assert!(guard.lines().any(|line| line == rule), "{rule}");
     }
+    assert!(
+        !guard.contains("-d 168.63.129.16/32 -j DROP"),
+        "the platform address also serves DNS, so only its own ports are closed"
+    );
     let unit = content(&config, UNIT);
     assert!(unit.find(&format!("ExecStartPre={GUARD}")).unwrap() < unit.find(&format!("ExecStart={START}")).unwrap());
     let start = content(&config, START);

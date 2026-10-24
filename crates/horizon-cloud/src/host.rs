@@ -474,10 +474,12 @@ systemctl enable --now horizon-worker.service
 /// Runs before every container start. The metadata service serves the user data,
 /// including any registry credential, so the container must never reach it or
 /// anything else link-local. On Azure the platform address serves the same custom
-/// data, so it is closed too, and so is every forwarded IPv6 packet from the
-/// container's bridge: the worker has no IPv6 address to use, and a later IPv6
-/// bridge cannot open a path the IPv4 rules do not see. Each rule is checked
-/// before it is added, so a restart adds none twice, and `set -eu` keeps the
+/// data on ports 80 and 32526, so those two ports are closed; the address itself
+/// stays reachable because it is also the region's DNS resolver, and a container
+/// without it resolves no name at all. Every forwarded IPv6 packet from the
+/// container's bridge is closed too: the worker has no IPv6 address to use, and a
+/// later IPv6 bridge cannot open a path the IPv4 rules do not see. Each rule is
+/// checked before it is added, so a restart adds none twice, and `set -eu` keeps the
 /// container stopped when a rule cannot be applied.
 fn guard_script(platform: Platform) -> String {
     let mut script = format!(
@@ -492,7 +494,8 @@ iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOC
     if platform == Platform::Azure {
         let _ = write!(
             script,
-            "iptables -C DOCKER-USER -d {AZURE_WIRESERVER}/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d {AZURE_WIRESERVER}/32 -j DROP
+            "iptables -C DOCKER-USER -d {AZURE_WIRESERVER}/32 -p tcp -m multiport --dports 80,32526 -j DROP 2>/dev/null \
+|| iptables -I DOCKER-USER -d {AZURE_WIRESERVER}/32 -p tcp -m multiport --dports 80,32526 -j DROP
 ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i docker0 -j DROP
 "
         );

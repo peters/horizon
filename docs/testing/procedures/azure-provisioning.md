@@ -92,7 +92,9 @@ Do the tasks in order. Each task has a stable ID for the report.
 
    Result: 1 test passes. This test examines the items that follow:
    - The guard keeps the drop of `169.254.0.0/16`. This range holds the Azure instance metadata service, `169.254.169.254`.
-   - The guard drops container traffic to the Azure platform address, `168.63.129.16`.
+   - The guard drops container traffic to ports 80 and 32526 of the Azure platform
+     address, `168.63.129.16`, and leaves the rest of the address reachable because it
+     also serves DNS.
    - The guard drops each IPv6 packet that the host forwards from `docker0`.
    - The guard runs before the container starts. The start script has none of these addresses.
 
