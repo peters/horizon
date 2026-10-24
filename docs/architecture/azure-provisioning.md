@@ -149,6 +149,30 @@ The journal in `azure.json` records each step before the next:
   only with `deleting`, `swept` and the group id of this operation.
 - `provision` refuses a journal with `deleting`, before a request.
 
+### The release of a VM for a rebuild
+
+`azure::release` deletes only the VM of a cloud and keeps its workspace disk.
+A rebuild on a new VM needs this release. An Azure stop cannot do it, because a
+stop keeps the VM. A delete cannot do it, because a delete removes the group.
+
+- The template gives the OS disk `deleteOption: Delete` and the workspace disk
+  `deleteOption: Detach`. Thus ARM deletes the OS disk with the VM and keeps the
+  workspace disk. The network interface, the static address, the network and
+  the security group are separate resources. The release does not delete them.
+- Before the request, the client reads the VM. It refuses a VM of another
+  instance, a VM without the operation's tag, and a VM that does not hold the
+  group's workspace disk on LUN 0 with `deleteOption: Detach`. Then it sends
+  nothing.
+- The client sends one `DELETE .../virtualMachines/worker`, only while the VM is
+  present and not `Deleting`. A lost answer is reconciled with a `GET` of the VM.
+- The release ends when the VM and the disk `worker-os` answer 404, and the
+  disk `worker-workspace` has the operation's tag and no `managedBy`.
+- If the workspace disk is absent, the release refuses. The template would make
+  a new empty disk, so Horizon does not start a new VM on it.
+- The next deployment of the same template makes a new VM, with a new `vmId`,
+  that attaches the same workspace disk on LUN 0. cloud-init `fs_setup` uses
+  `overwrite: false`, so the disk keeps its file system.
+
 ### The lifecycle of an Azure cloud
 
 `providers::azure::Azure` drives `deployment::azure` for check, stop, resume

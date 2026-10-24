@@ -2,7 +2,7 @@
 procedure: azure-provisioning
 feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
 platforms: [linux]
-cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-17 cost nothing
+cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-18 cost nothing
 destructive: yes      # task AZV-L2 and the cleanup delete the test resource groups
 secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
@@ -17,9 +17,9 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
+- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, `horizon_cloud::azure::release`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-17 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-01 to AZV-18 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
 - Tasks AZV-L1 and AZV-L2 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. Both need the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
@@ -28,7 +28,7 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-17 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-18 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
@@ -40,7 +40,7 @@ Tasks AZV-01 to AZV-17 do not rent compute, delete data, send a secret or change
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-17: no Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-18: no Azure account, Azure credential or provider key.
 - For tasks AZV-L1 and AZV-L2: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
@@ -337,7 +337,25 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The rate text of an Azure cloud says that Azure reports no hourly rate, and that a stop deallocates the VM and ends the compute charge while the disks and the static address bill until the cloud is deleted.
    - In New cloud, an Azure profile does not stay at a pending "Checking the Azure account" row after the settings are read. Without the `azure` section, the row fails with "No Azure settings on this computer yet" and names `token_file`, `subscription_id`, `vm_sizes` and `regions`. With a token that cannot be read, the row fails with the reason. Start stays off in these two cases, and the dialog shows no RunPod or Hetzner key form for the Azure profile. With a readable token and current prices, the row passes with "Azure token is readable and prices are current; Azure checks the token when the cloud starts".
 
-### 6.18 AZV-L1 — Create one live Azure worker
+### 6.18 AZV-18 — Check the release of a VM that keeps its workspace disk
+
+1. Run the recorded release tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::release
+   ```
+
+   Result: 12 tests pass. These tests examine the items that follow:
+   - A release sends one `DELETE .../virtualMachines/worker`. It sends no other write: no disk, address, network or group is deleted. Then the VM and `worker-os` answer 404, and `worker-workspace` has the tag and no `managedBy`.
+   - The release tells its caller just before the `DELETE`, and at no other time. If the caller cannot record the release, the release sends no `DELETE`.
+   - A VM in the state `Deleting` is only read. The release sends no second `DELETE`.
+   - A VM that is gone is proven gone again without a write.
+   - The release waits until `worker-os` is gone and `worker-workspace` is free.
+   - A VM whose data disk has `deleteOption: Delete`, or that has no workspace disk, is not released, and nothing is sent.
+   - A VM of another `vmId`, a VM or a workspace disk of another operation, and an invalid operation id are refused.
+   - A missing workspace disk is refused. Horizon does not start a new VM on an empty disk.
+
+### 6.19 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -461,7 +479,7 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
 13. Keep the worker of `azv-l1-01` and the state in `$AZV`. Task AZV-L2 stops, resumes and deletes them.
 
-### 6.19 AZV-L2 — Stop, resume and delete the live worker
+### 6.20 AZV-L2 — Stop, resume and delete the live worker
 
 Do this task after task AZV-L1, in the same terminal, with `$AZV` and `$SUB` set. Set the variables of the live tests.
 
@@ -591,12 +609,12 @@ export RG=horizon-ws-azv-l1-01
 
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-17 pass and send no request to Azure.
+- Tasks AZV-01 to AZV-18 pass and send no request to Azure.
 - For the live acceptance, each step of tasks AZV-L1 and AZV-L2 gives its result. AZV-L2 proves each group absent.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-17 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
+Tasks AZV-01 to AZV-18 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
 
 1. Examine the tag of each test group that remains. Then delete the group.
 
