@@ -70,8 +70,11 @@ default. With `--config <path>` it writes `<path>`.
 The export serves a person who reads the settings and a tool that reads them. It
 is not a setting: Horizon never reads it back, and a change in it does nothing. A
 setting changes in the Settings window, in `horizon --config`, or in the store.
-`--export-config` reports an error when the store does not exist, because there
-is then no setting to export.
+`--export-config` reads the store only, never a YAML copy, and it reports an
+error when the store does not exist, because there is then no setting to export.
+An export replaces an existing file at its destination, so a hand-written
+`config.yaml` that no start has imported yet is not a destination that an export
+chooses by itself: without a store, the command stops before it writes.
 
 ## When a write happens
 

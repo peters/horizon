@@ -459,6 +459,25 @@ fn edited_to(text: &str, height: f32) -> String {
 }
 
 #[test]
+fn an_export_never_reads_a_copy_before_the_first_start() {
+    let home = Home::new();
+    home.write_copy(FIRST);
+
+    let error = Config::export(&home.config_path(), &home.config_path()).expect_err("no store, no export");
+
+    assert!(error.to_string().contains("no settings to export"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(home.config_path()).expect("read the copy"),
+        FIRST,
+        "the hand-written copy keeps its bytes, comments and unknown keys"
+    );
+    assert!(
+        !ConfigStore::resolve(&home.config_path()).path().exists(),
+        "an export writes no store"
+    );
+}
+
+#[test]
 fn an_export_with_no_settings_is_an_error() {
     let home = Home::new();
     let export = home.root.path().join("exported.yaml");

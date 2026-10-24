@@ -463,18 +463,29 @@ impl Config {
     /// Horizon never reads the file that this writes. A person changes a setting
     /// in the Settings window, or in the YAML tab of that window.
     ///
+    /// The settings come from the store only, never from a YAML copy, so an
+    /// export can never replace a copy before the start that imports it. An
+    /// existing `destination` is replaced, with the usual temp file and rename.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the settings cannot be read, when `path` has no
-    /// settings, or when the file cannot be written.
+    /// Returns an error when the store cannot be read, when `path` has no store,
+    /// or when the file cannot be written.
     pub fn export(path: &Path, destination: &Path) -> Result<()> {
-        let Some(config) = Self::read(path)? else {
-            let store = ConfigStore::resolve(path);
+        // The store is the only source. Reading a copy here would let an export
+        // to the configuration path replace the hand-written file of a person
+        // with the canonical YAML, and the comments and unknown keys would be
+        // lost before the start that imports them.
+        let store = ConfigStore::resolve(path);
+        let Some(stored) = store.open().map_err(|fault| store.fault_error(&fault))? else {
             return Err(Error::Config(format!(
                 "no settings to export: {} does not exist",
                 store.path().display()
             )));
         };
+        let mut config = stored.config;
+        config_migration::migrate_in_memory(&mut config)?;
+        config.validate()?;
         let yaml = config.to_yaml()?;
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent).map_err(Error::Io)?;
