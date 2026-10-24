@@ -2,9 +2,9 @@
 procedure: azure-provisioning
 feature: The Azure worker bootstrap, its ARM deployment and the creation of an Azure worker
 platforms: [linux]
-cost: none
-destructive: no
-secrets: none
+cost: rents compute   # task AZV-L1 only; tasks AZV-01 to AZV-11 cost nothing
+destructive: yes      # task AZV-L1 cleanup deletes the test resource group
+secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
 ---
 
@@ -17,24 +17,31 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, the `azure` cloud settings or the Azure provider arms.
+- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- The tests use synthetic specs only. They need no network and no Azure account.
+- Tasks AZV-01 to AZV-11 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Task AZV-L1 is the live acceptance. It creates one real VM in an Azure subscription and needs the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
-  - A live Azure VM. The ARM template is examined as data only. Recorded ARM answers stand in for Azure.
   - The stop, resume, delete and rebuild of an Azure cloud. They stay refused.
   - Azure in the New cloud dialog. `offers::AZURE_DEPLOYABLE` stays `false`.
 
 ## 3. Safety
 
-No step rents compute, deletes data, sends a secret or changes access.
+Tasks AZV-01 to AZV-11 do not rent compute, delete data, send a secret or change access.
+
+> **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
+
+> **CAUTION:** TASK AZV-L1 SENDS THE ARM BEARER TOKEN TO `management.azure.com`. Keep the token file private (`0600`) and delete it after the run.
+
+> **CAUTION:** THE AZV-L1 CLEANUP DELETES THE RESOURCE GROUP `horizon-ws-<cloud id>`. Examine the group name and its `horizon-operation` tag before you delete it.
 
 ## 4. Equipment and preconditions
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- No Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-11: no Azure account, Azure credential or provider key.
+- For task AZV-L1: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
 
@@ -203,18 +210,190 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The `azure` section needs an absolute private token file, a subscription UUID, and VM sizes and regions from the catalog.
    - A token file that others can read, or with two words, is refused.
    - Without an `azure` section, `cpu_flavors` and `data_centers` refuse. The `RunPod` settings do not answer for an Azure cloud.
-   - With an `azure` section, `cpu_flavors` and `data_centers` give the VM sizes and regions in the settings order.
+   - With an `azure` section, `cpu_flavors` and `data_centers` give the VM sizes and regions in the settings order, and `compute` gives a client without a request.
+   - Without an `azure` section, `compute` gives "Add an azure section to the cloud settings before deploying an Azure cloud". This text is not the preflight refusal.
    - `preflight` still gives "Horizon cannot create clouds on Azure yet", and `offers::AZURE_DEPLOYABLE` is `false`.
    - Each lifecycle operation still refuses with "Horizon cannot manage Azure clouds yet".
+   - `retained` is true when `azure.json` has a group fence at `requested` or `bound`.
+
+### 6.11 AZV-11 — Check the scripted create through the deployment records
+
+1. Run the loopback tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::deployment::azure
+   ```
+
+   Result: 4 tests pass and 1 test (`live_create`) is ignored. These tests examine the items that follow:
+   - A create against a loopback ARM endpoint sends these requests in this order: GET of the group, PUT of the group, PUT of the deployment, GET of the VM, GET of the deployment.
+   - Each mutation is announced only after its fence is durable. The deployment record has the bound `vmId` and the worker, and `azure.json` has the bound group and the region.
+   - After a lost create answer (503), the deployment record keeps `requested`. The next run sends GET requests only and binds the VM.
+   - A transport failure before the first create writes no `azure.json` and retains nothing. A requested worker keeps its fence.
+   - A workspace disk of 3 GB writes no `azure.json`. A spec for another cloud is refused.
+   - A private image of a registry binding needs a verified grant before allocation.
+
+### 6.12 AZV-L1 — Create one live Azure worker
+
+Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
+
+1. Make the token file and the settings file in a new private directory.
+
+   ```sh
+   umask 077
+   export AZV="$HOME/azv-l1"
+   mkdir -p "$AZV/state"
+   az account get-access-token --query accessToken -o tsv > "$AZV/arm-token"
+   export SUB=$(az account show --query id -o tsv)
+   ```
+
+   Result: `$AZV/arm-token` holds one token. `$SUB` is a lowercase UUID.
+
+2. Write `$AZV/settings.json`. Use your SSH identity, which must have a `.pub` file beside it.
+
+   ```sh
+   jq -n --arg token "$AZV/arm-token" --arg sub "$SUB" --arg id "$HOME/.ssh/id_ed25519" '{
+     runpod_key_file: "/nonexistent", ssh_identity_file: $id, docker_config: "/nonexistent",
+     registry_pull_auth_id: null, cpu_flavors: [], gpu_types: [],
+     azure: {token_file: $token, subscription_id: $sub, vm_sizes: ["Standard_D4s_v3"], regions: ["northeurope"]}
+   }' > "$AZV/settings.json"
+   ```
+
+   Result: The file exists. Add `azure.registry_pull` if the image is private.
+
+3. Run the live create.
+
+   ```sh
+   HORIZON_AZURE_LIVE_SETTINGS="$AZV/settings.json" HORIZON_AZURE_LIVE_STATE="$AZV/state" \
+   HORIZON_AZURE_LIVE_CLOUD=azv-l1-01 HORIZON_AZURE_LIVE_IMAGE='<registry>/<worker>@sha256:<digest>' \
+   cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_create --nocapture
+   ```
+
+   Result: The test passes in less than 15 minutes. It prints a worker with `desiredStatus` `RUNNING`, a `publicIp`, `portMappings` `{"22": 22}`, `vcpuCount` 4, `memoryInGb` 16, `containerDiskInGb` 30 and `volumeInGb` 64.
+
+4. Examine the resources and their tags.
+
+   ```sh
+   az resource list -g horizon-ws-azv-l1-01 --query "[].{type:type,name:name,tag:tags.\"horizon-operation\"}" -o table
+   az group show -n horizon-ws-azv-l1-01 --query tags
+   ```
+
+   Result: The list shows the network security group, virtual network, public address, network interface, data disk, OS disk and VM. Each has the tag `azv-l1-01`. The group has the same tag.
+
+5. Examine the network rules and the address.
+
+   ```sh
+   az network nsg rule list -g horizon-ws-azv-l1-01 --nsg-name worker-nsg -o table
+   az network public-ip show -g horizon-ws-azv-l1-01 -n worker-ip --query "{sku:sku.name,method:publicIPAllocationMethod}"
+   ```
+
+   Result: One rule allows TCP 22 inbound. The address is `Standard` and `Static`.
+
+6. Connect to the worker. Use the address of step 3.
+
+   ```sh
+   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$HOME/.ssh/id_ed25519" root@<publicIp> 'findmnt /workspace; echo marker > /workspace/azv-l1; sha256sum /workspace/azv-l1'
+   ```
+
+   Result: The worker container answers on port 22. `/workspace` is a mount. Record the SHA-256.
+
+7. Examine the host from the Azure run command, because host SSH is masked.
+
+   ```sh
+   az vm run-command invoke -g horizon-ws-azv-l1-01 -n worker --command-id RunShellScript --scripts \
+     'ls -l /dev/disk/azure/scsi1/; findmnt /mnt/horizon-volume; iptables -S DOCKER-USER; ip6tables -S FORWARD; wc -c /var/lib/cloud/instance/user-data.txt'
+   ```
+
+   Result: `lun0` exists. `/mnt/horizon-volume` is ext4 on that disk. `DOCKER-USER` drops `169.254.0.0/16` and `168.63.129.16/32`. `FORWARD` drops IPv6 from `docker0`. Record the size of the user data.
+
+8. Make sure that the container cannot reach the metadata addresses.
+
+   ```sh
+   az vm run-command invoke -g horizon-ws-azv-l1-01 -n worker --command-id RunShellScript --scripts \
+     'docker exec horizon-worker sh -c "curl -s -m 5 -H Metadata:true http://169.254.169.254/metadata/instance?api-version=2021-02-01; echo rc=\$?; curl -s -m 5 http://168.63.129.16/?comp=versions; echo rc=\$?"'
+   ```
+
+   Result: Both requests time out (`rc=28`), or `curl` is not in the image. Record which.
+
+9. Restart the container and examine the marker.
+
+   ```sh
+   az vm run-command invoke -g horizon-ws-azv-l1-01 -n worker --command-id RunShellScript --scripts 'systemctl restart horizon-worker'
+   ssh -o BatchMode=yes -i "$HOME/.ssh/id_ed25519" root@<publicIp> 'sha256sum /workspace/azv-l1'
+   ```
+
+   Result: The SHA-256 is the same as in step 6.
+
+10. Run the live create again with the same state.
+
+    ```sh
+    HORIZON_AZURE_LIVE_SETTINGS="$AZV/settings.json" HORIZON_AZURE_LIVE_STATE="$AZV/state" \
+    HORIZON_AZURE_LIVE_CLOUD=azv-l1-01 HORIZON_AZURE_LIVE_IMAGE='<registry>/<worker>@sha256:<digest>' \
+    cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_create --nocapture
+    ```
+
+    Result: The test passes and prints the same worker `id`. It prints no `mutation Pending` line, because a bound worker is only read.
+
+11. Do a lost create with a new cloud id and a new state directory. Start the command below. Stop it with `Ctrl+C` 15 seconds after the second `mutation Pending` line, while the deployment runs. Then start the same command again.
+
+    ```sh
+    HORIZON_AZURE_LIVE_SETTINGS="$AZV/settings.json" HORIZON_AZURE_LIVE_STATE="$AZV/state2" \
+    HORIZON_AZURE_LIVE_CLOUD=azv-l1-02 HORIZON_AZURE_LIVE_IMAGE='<registry>/<worker>@sha256:<digest>' \
+    cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_create --nocapture
+    ```
+
+    Result: After the stop, `$AZV/state2/deployment.json` has the operation `requested`. The second run prints one `mutation Pending` line for the unresolved create, passes and prints a worker.
+    If you stop the first run before ARM gets the PUT, the second run gives "Worker creation is unresolved; no second allocation was attempted". This is also correct: Horizon does not send the create again. Record which result occurred.
+
+12. Count the deployment writes of `azv-l1-02`.
+
+    ```sh
+    az monitor activity-log list -g horizon-ws-azv-l1-02 --offset 1h \
+      --query "[?operationName.value=='Microsoft.Resources/deployments/write' && status.value=='Started'] | length(@)"
+    az vm list -g horizon-ws-azv-l1-02 --query "length(@)"
+    ```
+
+    Result: Both values are `1`. If step 11 gave "Worker creation is unresolved", both values are `0`.
+
+13. Make sure that the card still refuses the lifecycle. Run the provider tests of task AZV-10.
+
+    Result: Stop, resume and delete refuse. Horizon cannot delete the live worker; the cleanup below deletes it.
 
 ## 7. Pass criteria
 
-- All tasks pass.
-- No step sends a request to Azure.
+- Tasks AZV-01 to AZV-11 pass and send no request to Azure.
+- For the live acceptance, each step of task AZV-L1 gives its result, and the cleanup proves each group absent.
 
 ## 8. Cleanup
 
-No cleanup is necessary. The tests make temporary data only.
+Tasks AZV-01 to AZV-11 make temporary data only. After task AZV-L1, do these steps:
+
+1. Examine the tag of each test group. Then delete the group.
+
+   ```sh
+   az group show -n horizon-ws-azv-l1-01 --query tags
+   az group delete -n horizon-ws-azv-l1-01 --yes
+   az group show -n horizon-ws-azv-l1-02 --query tags
+   az group delete -n horizon-ws-azv-l1-02 --yes
+   ```
+
+   Result: Each command ends without an error.
+
+2. Make sure that the groups are absent.
+
+   ```sh
+   az group exists -n horizon-ws-azv-l1-01
+   az group exists -n horizon-ws-azv-l1-02
+   ```
+
+   Result: Each command prints `false`.
+
+3. Delete the token file and the test state.
+
+   ```sh
+   rm -rf "$AZV"
+   ```
+
+   Result: The directory is absent.
 
 ## 9. Record of results
 

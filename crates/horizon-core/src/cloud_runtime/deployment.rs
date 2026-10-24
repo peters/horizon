@@ -1,5 +1,6 @@
 //! Deployment orchestration. Credentials, images and source are ready before allocation.
 mod admission;
+pub(super) mod azure;
 pub use admission::{Problem, problems as admission_problems};
 mod agent_credentials;
 mod compute;

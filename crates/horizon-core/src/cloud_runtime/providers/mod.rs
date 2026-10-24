@@ -70,7 +70,7 @@ pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) 
 pub(super) fn admit(settings: &Settings, profile: &Profile, image: &str, operation: &CreateState) -> Result<()> {
     match kind(profile) {
         Kind::Hetzner => super::deployment::hetzner::admit(settings, image, operation),
-        // Never reached: `preflight` and `compute` refuse an Azure cloud first.
+        // Never reached: `preflight` refuses a new Azure cloud first.
         Kind::DockerHost | Kind::RunPod | Kind::Azure => Ok(()),
     }
 }
@@ -108,7 +108,7 @@ pub(super) fn compute(request: &super::deployment::Request) -> Result<Box<dyn su
             settings: &request.settings,
         }),
         Kind::RunPod => Box::new(horizon_cloud::runpod::RunPod::new(request.settings.credential()?)),
-        Kind::Azure => return Err(azure::NO_CLIENT),
+        Kind::Azure => Box::new(super::deployment::azure::Compute::new(&request.settings)?),
     })
 }
 
@@ -119,8 +119,7 @@ pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
         Kind::Hetzner => hetzner::retained(store),
         Kind::DockerHost => docker_host::retained(store),
         Kind::RunPod => runpod::retained(store, state),
-        // Nothing creates Azure resources yet, so a record cannot hold any.
-        Kind::Azure => Ok(false),
+        Kind::Azure => azure::retained(store),
     }
 }
 
@@ -153,22 +152,28 @@ mod tests {
         .unwrap()
     }
 
+    fn request(settings: &Settings) -> super::super::deployment::Request {
+        super::super::deployment::Request::new(
+            "azure-fixture".into(),
+            "/synthetic/not-mounted".into(),
+            "a".repeat(40),
+            azure(),
+            "/synthetic/state".into(),
+            settings.clone(),
+        )
+    }
+
     #[test]
     fn an_azure_cloud_is_refused_before_anything_is_recorded_or_requested() {
         let (profile, settings) = (azure(), settings());
         assert_eq!(kind(&profile), Kind::Azure);
         let refusal = preflight("azure-fixture", &profile, &settings).unwrap_err().to_string();
         assert_eq!(refusal, "Horizon cannot create clouds on Azure yet");
-        let request = super::super::deployment::Request::new(
-            "azure-fixture".into(),
-            "/synthetic/not-mounted".into(),
-            "a".repeat(40),
-            profile.clone(),
-            "/synthetic/state".into(),
-            settings.clone(),
+        let client = compute(&request(&settings)).err().map(|error| error.to_string());
+        assert_eq!(
+            client.as_deref(),
+            Some("Add an azure section to the cloud settings before deploying an Azure cloud")
         );
-        let client = compute(&request).err().map(|error| error.to_string());
-        assert_eq!(client.as_deref(), Some("Horizon has no Azure deployment client yet"));
         assert_ne!(
             client.as_deref(),
             Some(refusal.as_str()),
@@ -206,16 +211,8 @@ mod tests {
             data_centers(&profile, &settings).unwrap(),
             ["northeurope", "swedencentral"]
         );
-        // Creation is not reachable yet: there is no client, and a normal caller is refused.
-        let request = super::super::deployment::Request::new(
-            "azure-fixture".into(),
-            "/synthetic/not-mounted".into(),
-            "a".repeat(40),
-            profile.clone(),
-            "/synthetic/state".into(),
-            settings.clone(),
-        );
-        assert!(compute(&request).is_err());
+        // The client is made without a request, and a normal caller is still refused.
+        assert!(compute(&request(&settings)).is_ok());
         assert_eq!(
             preflight("azure-fixture", &profile, &settings).unwrap_err().to_string(),
             "Horizon cannot create clouds on Azure yet"
@@ -224,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn an_azure_record_holds_no_provider_resources() {
+    fn an_azure_record_retains_its_resources_once_the_group_is_requested() {
         let temp = tempfile::tempdir().unwrap();
         let store = Store::lock(temp.path()).unwrap();
         let state: Deployment = serde_json::from_value(serde_json::json!({
@@ -234,5 +231,20 @@ mod tests {
         }))
         .unwrap();
         assert!(!retained(&store, &state).unwrap());
+        for (group, kept) in [
+            (serde_json::json!({"state": "prepared"}), false),
+            (serde_json::json!({"state": "requested"}), true),
+            (
+                serde_json::json!({"state": "bound", "worker_id": "/subscriptions/x/resourceGroups/horizon-ws-azure-fixture"}),
+                true,
+            ),
+        ] {
+            std::fs::write(
+                temp.path().join("azure.json"),
+                serde_json::json!({"region": "northeurope", "group": group}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(retained(&store, &state).unwrap(), kept, "{group}");
+        }
     }
 }

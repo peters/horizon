@@ -1,7 +1,8 @@
-//! Azure's place among the providers. The machine's `azure` settings name the VM
-//! sizes and regions from the catalog, but Horizon cannot create, manage or delete an
-//! Azure cloud yet (#1774), so every lifecycle operation refuses before it writes a
-//! record, tells an observer or reaches a provider.
+//! Azure's place among the providers. A worker can be provisioned behind the
+//! `Compute` seam from the catalog's sizes and regions in the machine's `azure`
+//! settings, but `preflight` still refuses a new Azure cloud (#1774), and every
+//! lifecycle operation refuses before it writes a record, tells an observer or
+//! reaches a provider.
 use super::{super::Error, Cancellation, CreateState, Deployment, Event, Lifecycle, Observer, Result, Settings, Store};
 use horizon_cloud::runpod::recovery::Reconciliation;
 
@@ -9,8 +10,6 @@ use horizon_cloud::runpod::recovery::Reconciliation;
 pub(in crate::cloud_runtime) const REFUSED: Error = Error::Invalid("Horizon cannot manage Azure clouds yet");
 /// What a new Azure cloud answers before any record is written.
 pub(super) const NOT_CREATABLE: Error = Error::Invalid("Horizon cannot create clouds on Azure yet");
-/// What asks for an Azure client. Distinct from a missing account, which a key could fix.
-pub(super) const NO_CLIENT: Error = Error::Invalid("Horizon has no Azure deployment client yet");
 
 /// The VM sizes Horizon tries, in order; the spec keeps them as its CPU flavors.
 pub(super) fn cpu_flavors(settings: &Settings) -> Result<Vec<String>> {
@@ -20,6 +19,11 @@ pub(super) fn cpu_flavors(settings: &Settings) -> Result<Vec<String>> {
 /// The regions an Azure cloud may be made in, in order.
 pub(super) fn data_centers(settings: &Settings) -> Result<Vec<String>> {
     Ok(settings.azure_settings()?.regions.clone())
+}
+
+/// The resource group, which is recorded before it is requested.
+pub(super) fn retained(store: &Store) -> Result<bool> {
+    super::super::deployment::azure::retained(store.root())
 }
 
 pub(super) struct Azure;
