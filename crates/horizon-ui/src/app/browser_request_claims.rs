@@ -9,8 +9,9 @@ use horizon_core::browser::manifest::{
 use horizon_core::browser_actor;
 
 use super::HorizonApp;
+use super::browser_create_failure::complete_result;
 use super::browser_host_io::HostIo;
-use super::browser_requests::{actor_panel, complete_result};
+use super::browser_requests::actor_panel;
 
 /// Why a request whose agent left the board since its claim is refused.
 pub(super) const AGENT_GONE: &str = "the requesting agent's panel closed before Horizon could apply the request";

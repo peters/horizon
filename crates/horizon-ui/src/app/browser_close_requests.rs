@@ -352,7 +352,7 @@ mod tests {
     use horizon_core::{Panel, PanelContent, PanelOptions, WorkspaceId};
 
     use super::*;
-    use crate::app::browser_requests::PendingBrowserCreateProbe;
+    use crate::app::browser_create_lifecycle::PendingBrowserCreateProbe;
     use crate::app::test_support::test_app;
 
     fn agent_options() -> PanelOptions {
