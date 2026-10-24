@@ -566,7 +566,11 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   rerun; a repository without GitHub Actions is proved with the commands its README or
   build files give), shows a desktop app live in a Device panel when the agent names
   one, and **Use this setup** commits it. No MCP tool starts a setup: ask the person
-  to open **New cloud** for the repository.
+  to open **New cloud** for the repository. It runs on Linux only. It needs a
+  systemd user session: Horizon starts the agent in a systemd user scope that holds
+  every process the agent starts, so it can end them all before it commits. On macOS
+  the dialog does not offer it and an MCP tool cannot start it. Use **Quick start**
+  or write `.horizon` yourself.
 - Several repositories can be set up at the same time, each with its own setup agent.
   The person clicks **Close** while a setup works, opens **New cloud** again for
   another repository and starts its setup; **New cloud** opened for the first
