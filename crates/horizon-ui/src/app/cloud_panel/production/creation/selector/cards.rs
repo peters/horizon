@@ -1,5 +1,6 @@
 //! The three starting points as cards, and every matching worker as a dense list.
 use super::{Catalog, Production, widgets};
+use crate::app::cloud_panel::production::dialog_hover;
 use crate::theme;
 use egui::{Align2, FontId, Frame, RichText, Sense, Stroke, Ui};
 use horizon_core::cloud_runtime::offers::Offer;
@@ -346,7 +347,7 @@ fn row(ui: &mut Ui, catalog: &Catalog, form: &Production, index: usize, striped:
         )
     });
     let response = if let Some(reason) = reason {
-        response.on_disabled_hover_text(reason)
+        dialog_hover::disabled_text(response, reason)
     } else {
         response
     };

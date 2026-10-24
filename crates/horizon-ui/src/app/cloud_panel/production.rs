@@ -8,6 +8,7 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+mod dialog_hover;
 #[cfg(debug_assertions)]
 mod failure_preview;
 mod first_panel;

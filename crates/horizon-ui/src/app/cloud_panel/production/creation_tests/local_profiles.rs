@@ -3,7 +3,7 @@ use horizon_core::cloud_runtime::repository::launch::{Configuration, quick_start
 
 const CONFIG: &str = "version: 1\ndefault: test-image\nprofiles:\n  test-image:\n    provider: runpod\n    image: example.invalid/worker:test\n    min_cpu: 4\n    min_memory_gb: 8\n    capabilities:\n      agents: []\n      browsers: []\n      desktop: true\n";
 
-fn fixture(path: &std::path::Path) {
+pub(super) fn fixture(path: &std::path::Path) {
     for args in [
         vec!["init", "--quiet"],
         vec![
@@ -33,7 +33,7 @@ fn fixture(path: &std::path::Path) {
     std::fs::write(path.join(".horizon/cloud.yml"), CONFIG).unwrap();
 }
 
-fn finish_read(ctx: &egui::Context, app: &mut HorizonApp) {
+pub(super) fn finish_read(ctx: &egui::Context, app: &mut HorizonApp) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.cloud_prototype.production.launch.loading() {
         assert!(Instant::now() < deadline, "Configuration read did not finish");

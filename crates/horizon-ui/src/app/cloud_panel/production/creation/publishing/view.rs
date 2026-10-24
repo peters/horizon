@@ -1,5 +1,6 @@
 //! Image destination review before a new cloud starts.
 use super::state::State;
+use crate::app::cloud_panel::production::dialog_hover;
 use crate::theme;
 use egui::{RichText, Ui};
 use horizon_core::cloud_runtime::{github::Prompt, publishing::Selection};
@@ -13,7 +14,7 @@ pub(in crate::app::cloud_panel::production) fn section(ui: &mut Ui, state: &mut 
         let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
         if state.busy() && state.prompt.is_none() {
             egui::Spinner::new().paint_at(ui, rect);
-            response.on_hover_text("Preparing image destination");
+            dialog_hover::text(response, "Preparing image destination");
         }
         if let Some(info) = &state.info {
             let label = match info.selection.as_ref() {
@@ -113,7 +114,12 @@ fn choices(ui: &mut Ui, state: &mut State, target: Option<&str>) -> Option<Strin
         {
             state.save(None, ui.ctx());
         }
-        if ui.add_enabled(state.info.is_some(), egui::Button::new("Use another publishing account")).on_disabled_hover_text("Reload image destinations before choosing a publishing account").clicked() {
+        if dialog_hover::disabled_text(
+            ui.add_enabled(state.info.is_some(), egui::Button::new("Use another publishing account")),
+            "Reload image destinations before choosing a publishing account",
+        )
+        .clicked()
+        {
             state.authenticate(true, ui.ctx());
         }
         ui.label(RichText::new("Signing in changes the publishing account on this computer. Other clouds keep their destinations and may need their original account again.").size(12.0).color(theme::FG_DIM()));

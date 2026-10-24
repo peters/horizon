@@ -654,19 +654,26 @@ changes:
 
    Result: You cannot select a row below requirements. Its tooltip gives the reason.
 
-2. Select the profile `runpod-cpu` (4 vCPU, 8 GB).
+2. Rest the pointer on a row that is below the requirements, and hold it still
+   for one second.
+
+   Result: The hover text shows over the dialog content. It is not behind the
+   dialog and not cut at the edge of the dialog. The text names the minimum that
+   the row misses, such as `Below the profile's minimum memory`.
+
+3. Select the profile `runpod-cpu` (4 vCPU, 8 GB).
 
    Result: The list line shows `K below requirements hidden`.
 
-3. Clear **In stock only**.
+4. Clear **In stock only**.
 
    Result: The list line shows `Showing N of M workers · K below requirements hidden`.
 
-4. Count the rows of C12 that have fewer than 4 vCPU or less than 8 GB.
+5. Count the rows of C12 that have fewer than 4 vCPU or less than 8 GB.
 
    Result: The count is the same as `K`.
 
-5. Select `runpod-small` again.
+6. Select `runpod-small` again.
 
    Result: The rows below requirements go away.
 
