@@ -694,7 +694,8 @@ It neither depends on the future exposure owner nor changes public dispatch.
 
 `azure` is the Azure Resource Manager client. `azure.rs` holds the transport and
 the ARM error classification, `azure::url` validates every URL segment and
-resource id, and `azure::resource` decodes the typed resource group view.
+resource id, `azure::resource` decodes the typed group and VM views, and
+`azure::reconcile` finds an operation's resources by name with GET requests only.
 No caller uses it yet. [The ARM client architecture](azure-arm-client.md) states
 its trust boundary.
 
