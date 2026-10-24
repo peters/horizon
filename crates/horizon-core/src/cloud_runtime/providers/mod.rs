@@ -76,25 +76,25 @@ pub(super) fn admit(settings: &Settings, profile: &Profile, image: &str, operati
 }
 
 /// The machine types a worker may run on, in the order they are tried: `RunPod` CPU
-/// flavors, a Hetzner cloud's server types, or a Docker host cloud's saved hosts. Azure
-/// has no catalog yet.
+/// flavors, a Hetzner cloud's server types, an Azure cloud's catalog VM sizes, or a
+/// Docker host cloud's saved hosts.
 pub(super) fn cpu_flavors(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
     match kind(profile) {
         Kind::Hetzner => hetzner::cpu_flavors(settings),
         Kind::DockerHost => docker_host::hosts(settings),
         Kind::RunPod => runpod::cpu_flavors(profile, settings),
-        Kind::Azure => Err(azure::NO_CATALOG),
+        Kind::Azure => azure::cpu_flavors(settings),
     }
 }
 
-/// Where a worker may run: `RunPod` data centers, a Hetzner cloud's locations, or a
-/// Docker host cloud's saved hosts. Azure has no catalog yet.
+/// Where a worker may run: `RunPod` data centers, a Hetzner cloud's locations, an
+/// Azure cloud's catalog regions, or a Docker host cloud's saved hosts.
 pub(super) fn data_centers(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
     match kind(profile) {
         Kind::Hetzner => hetzner::data_centers(settings),
         Kind::DockerHost => docker_host::hosts(settings),
         Kind::RunPod => Ok(settings.data_centers.clone()),
-        Kind::Azure => Err(azure::NO_CATALOG),
+        Kind::Azure => azure::data_centers(settings),
     }
 }
 
@@ -177,6 +177,50 @@ mod tests {
         // The RunPod settings in the fixture must not answer for an Azure cloud.
         assert!(cpu_flavors(&profile, &settings).is_err());
         assert!(data_centers(&profile, &settings).is_err());
+    }
+
+    #[test]
+    fn configured_azure_answers_from_the_catalog_and_new_clouds_stay_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let token = temp.path().join("arm-token");
+        std::fs::write(&token, "synthetic-arm-token").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut settings = settings();
+        settings.azure = Some(
+            serde_json::from_value(serde_json::json!({
+                "token_file": token, "subscription_id": "00000000-0000-4000-8000-000000000001",
+                "vm_sizes": ["Standard_D4s_v3", "Standard_F8s_v2"], "regions": ["northeurope", "swedencentral"]
+            }))
+            .unwrap(),
+        );
+        let profile = azure();
+        assert_eq!(
+            cpu_flavors(&profile, &settings).unwrap(),
+            ["Standard_D4s_v3", "Standard_F8s_v2"]
+        );
+        assert_eq!(
+            data_centers(&profile, &settings).unwrap(),
+            ["northeurope", "swedencentral"]
+        );
+        // Creation is not reachable yet: there is no client, and a normal caller is refused.
+        let request = super::super::deployment::Request::new(
+            "azure-fixture".into(),
+            "/synthetic/not-mounted".into(),
+            "a".repeat(40),
+            profile.clone(),
+            "/synthetic/state".into(),
+            settings.clone(),
+        );
+        assert!(compute(&request).is_err());
+        assert_eq!(
+            preflight("azure-fixture", &profile, &settings).unwrap_err().to_string(),
+            "Horizon cannot create clouds on Azure yet"
+        );
+        const { assert!(!horizon_cloud::offers::AZURE_DEPLOYABLE) };
     }
 
     #[test]

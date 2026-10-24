@@ -19,6 +19,29 @@ fixed name and the same tag.
 `offers::AZURE_DEPLOYABLE` stays `false`, so no Horizon UI, CLI or MCP operation
 creates an Azure worker in this change.
 
+## Machine settings
+
+The machine's cloud settings can have an `azure` section:
+
+```json
+"azure": {
+  "token_file": "/absolute/path/arm-token",
+  "subscription_id": "00000000-0000-4000-8000-000000000001",
+  "vm_sizes": ["Standard_D4s_v3"],
+  "regions": ["northeurope"],
+  "registry_pull": {"server": "example.azurecr.io", "username": "reader", "password_file": "/absolute/path/pull"}
+}
+```
+
+- `token_file` is a private file (`0600`) with one ARM bearer token, for example
+  the token that `az account get-access-token` prints. The token stays on this
+  computer. A later pull request of #1774 replaces this binding.
+- `vm_sizes` and `regions` must be names in `azure::catalog`.
+  `providers::cpu_flavors` and `providers::data_centers` give these lists in
+  this order. Without the section, both refuse.
+- `registry_pull` is optional. It has the same form as the Hetzner pull login.
+- A settings file without the section keeps its encoding.
+
 ## Creation fences
 
 `azure::provision` creates a worker with two creates. The caller keeps a fence
