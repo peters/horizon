@@ -99,6 +99,49 @@ Before the worker is returned, the VM must have the operation's tag, an allowed
 size, the cloud's region and one data disk: the group's workspace disk on LUN 0.
 The public address comes from the deployment output `publicIp`.
 
+## Stop, start and delete
+
+`azure::lifecycle` changes the power of the bound VM and deletes the cloud. Each
+change is proven by what ARM reports after it.
+
+- A stop sends `POST .../virtualMachines/worker/deallocate`. It never sends
+  `powerOff`. A VM that is only powered off keeps its compute allocation, and
+  Azure bills it. The stop ends when the VM reports `PowerState/deallocated`.
+  The disks and the static address stay.
+- A start sends `POST .../virtualMachines/worker/start` to the same VM. It ends
+  when the VM reports `PowerState/running`.
+- Before a power change, the client reads the VM. It refuses a VM that is
+  absent, another instance (another `vmId`) or without the operation's tag. The
+  size and region policy does not apply, so a changed setting cannot block a stop.
+- A change that is still under way is awaited. The request is not sent again.
+- The worker status `EXITED` (stopped) is given only for `PowerState/deallocating`
+  and `PowerState/deallocated`. A VM that is powered off but still allocated gets
+  `STOPPED_ALLOCATED`, which is neither running nor stopped.
+
+A delete removes the resource group, which holds each resource of the worker.
+The journal in `azure.json` records each step before the next:
+
+| Step | Journal | Request |
+|---|---|---|
+| 1 | `deleting: true`, never cleared | none |
+| 2 | none | `DELETE` of the group, only while it is present and not `Deleting` |
+| 3 | `group: Terminated` with the group id | `GET` of the group answers 404 |
+| 4 | `swept: true` | `GET /subscriptions/<id>/resources` with the `horizon-operation` filter lists nothing |
+
+- A group with the name but without the operation's tag is never deleted.
+- A lost answer to the `DELETE` is reconciled with a `GET` of the group.
+- A group whose create answer was lost (`Requested`) is trusted as absent only
+  after a second 404, 30 seconds after the first.
+- The sweep is read again for about 30 seconds, because ARM can list the
+  resources of a deleted group for a short time. A page link (`nextLink`) is not
+  a proof.
+- After the proof, the VM fence goes to `Terminated` with its `vmId`, or to
+  `Prepared` when no VM was bound.
+- `Journal::retains` is true while the group is `Requested` or `Bound`, and
+  after its 404 until the sweep lists nothing. `Journal::proves_absent` is true
+  only with `deleting`, `swept` and the group id of this operation.
+- `provision` refuses a journal with `deleting`, before a request.
+
 ## Host bootstrap
 
 `horizon_cloud::host` renders the same `#cloud-config` for each rented host.

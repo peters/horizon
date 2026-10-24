@@ -30,9 +30,10 @@ The client guarantees these items:
 - A 2xx answer whose `id`, `name` or `vmId` does not fit the request gives
   `IdentityMismatch`. The client never returns a partial view of it.
 - A 409 is never retried and never a definite refusal. A caller must reconcile.
-- The only writes are the PUT of `put_resource_group` and the PUT of
-  `put_deployment`. [Azure provisioning](azure-provisioning.md) says when each
-  one is sent. `reconcile` sends GET requests only. It adopts a group only when the group name is `horizon-ws-<operation id>`
+- The only writes are the PUT of `put_resource_group`, the PUT of
+  `put_deployment`, the POST of `vm_power` (`deallocate` or `start`) and the
+  DELETE of `delete_resource_group`. [Azure provisioning](azure-provisioning.md)
+  says when each one is sent. `reconcile` sends GET requests only. It adopts a group only when the group name is `horizon-ws-<operation id>`
   and its `horizon-operation` tag is that operation id. It never tags, changes or
   deletes a group that it finds.
 

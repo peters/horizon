@@ -105,7 +105,7 @@ impl Azure {
     /// Waits `delay` in slices of at most [`WAIT_SLICE`], checking `cancel` between
     /// them, so a cancelled caller is released within one slice and not after the
     /// whole wait ARM asked for.
-    fn wait(&self, delay: Duration, cancel: &Cancellation) -> Result<(), CloudError> {
+    pub(super) fn wait(&self, delay: Duration, cancel: &Cancellation) -> Result<(), CloudError> {
         let mut left = delay;
         while !left.is_zero() {
             let slice = left.min(WAIT_SLICE);

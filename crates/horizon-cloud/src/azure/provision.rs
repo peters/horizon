@@ -16,6 +16,9 @@ use crate::{Cancellation, CloudError, CreateState, Reason, Worker, WorkerSpec, h
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
+/// The status of a VM that is powered off but still allocated, and so still billed.
+pub const STOPPED_ALLOCATED: &str = "STOPPED_ALLOCATED";
+
 /// What a cloud owns on Azure besides its VM, whose fence is the caller's operation
 /// record. Every change must be durable before the request it guards.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -24,9 +27,17 @@ pub struct Journal {
     /// The region of the resource group, saved with its fence; it fixes where the worker runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
-    /// The fence for the resource group. A bound group records its resource id.
+    /// The fence for the resource group. A bound group records its resource id, which
+    /// a deleted group keeps as `Terminated` once ARM answers 404 for it.
     #[serde(default = "prepared")]
     pub group: CreateState,
+    /// Saved before the first delete request and never cleared, so nothing creates
+    /// in a group that may be going away.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleting: bool,
+    /// The `horizon-operation` tag sweep after the group's 404 listed nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub swept: bool,
 }
 
 fn prepared() -> CreateState {
@@ -38,15 +49,38 @@ impl Default for Journal {
         Self {
             region: None,
             group: CreateState::Prepared,
+            deleting: false,
+            swept: false,
         }
     }
 }
 
 impl Journal {
-    /// Whether the resource group, and so anything in it, may exist on Azure.
+    /// Whether anything the operation made may exist on Azure: a requested or bound
+    /// group, or a deleted one whose tag sweep has not yet listed nothing.
     #[must_use]
     pub fn retains(&self) -> bool {
-        !matches!(self.group, CreateState::Prepared | CreateState::Terminated { .. })
+        match self.group {
+            CreateState::Prepared => false,
+            CreateState::Requested | CreateState::Bound { .. } => true,
+            CreateState::Terminated { .. } => !self.swept,
+        }
+    }
+
+    /// Whether this journal proves that `operation_id` has nothing left on Azure: its
+    /// deletion started, ARM answered 404 for the operation's own group in a
+    /// subscription, and the tag sweep after it listed nothing.
+    #[must_use]
+    pub fn proves_absent(&self, operation_id: &str) -> bool {
+        let CreateState::Terminated { worker_id } = &self.group else {
+            return false;
+        };
+        let subscription = worker_id.split('/').nth(2).unwrap_or_default();
+        self.deleting
+            && self.swept
+            && crate::valid_id(operation_id)
+            && super::url::valid_subscription_id(subscription)
+            && super::url::valid_resource_group_id(worker_id, subscription, &super::resource_group_name(operation_id))
     }
 }
 
@@ -124,6 +158,11 @@ pub fn provision(
         .first()
         .ok_or(CloudError::Invalid("No allowed Azure VM size fits this worker"))?;
     let mut planned = Planned::new(spec, &region, first, login)?;
+    if journal.deleting {
+        return Err(CloudError::Invalid(
+            "The cloud is being deleted; finish deleting it before deploying",
+        ));
+    }
     if matches!(operation, CreateState::Terminated { .. }) || matches!(journal.group, CreateState::Terminated { .. }) {
         return Err(CloudError::WorkerLost);
     }
@@ -209,6 +248,7 @@ fn ensure_group(
     let next = Journal {
         region: Some(planned.region.clone()),
         group: CreateState::Requested,
+        ..journal.clone()
     };
     records.journal(&next)?;
     *journal = next;
@@ -254,6 +294,7 @@ fn bind_group(
         group: CreateState::Bound {
             worker_id: group.id.clone(),
         },
+        ..journal.clone()
     };
     records.journal(&next)?;
     *journal = next;
@@ -412,18 +453,22 @@ fn settle(
             "The Azure VM does not hold this cloud's workspace disk",
         ));
     }
-    let address = client
-        .get_deployment(&group, DEPLOYMENT_NAME, cancel)?
+    let described = worker(vm, address(client, &group, cancel)?, spec)?;
+    described.verify(spec)?;
+    described.verify_resources(spec)?;
+    Ok(described)
+}
+
+/// The static public address the deployment reports for the group's worker.
+pub(super) fn address(client: &Azure, group: &str, cancel: &Cancellation) -> Result<Option<IpAddr>, CloudError> {
+    Ok(client
+        .get_deployment(group, DEPLOYMENT_NAME, cancel)?
         .and_then(|state| {
             state
                 .outputs
                 .get(ADDRESS_OUTPUT)
                 .and_then(|ip| ip.parse::<IpAddr>().ok())
-        });
-    let described = worker(vm, address, spec)?;
-    described.verify(spec)?;
-    described.verify_resources(spec)?;
-    Ok(described)
+        }))
 }
 
 /// Whether the VM's only data disk is the group's workspace disk on LUN 0.
@@ -445,6 +490,9 @@ pub fn holds_workspace(vm: &VirtualMachine, subscription_id: &str, group: &str) 
 /// The VM as a worker. ARM reports the host, not the container, so the image is the
 /// one the custom data pins; the VM's size gives its CPU and memory, and its
 /// `vmId` is the worker id. The rate is left out: Horizon reports no Azure rate yet.
+/// Only a deallocating or deallocated VM is a stopped worker: a VM that is only
+/// powered off keeps its compute allocation, which Azure still bills, so it is
+/// reported as neither running nor stopped.
 /// # Errors
 /// `Invalid` for a size outside the catalog or a VM without an instance id.
 pub fn worker(vm: &VirtualMachine, address: Option<IpAddr>, spec: &WorkerSpec) -> Result<Worker, CloudError> {
@@ -455,10 +503,8 @@ pub fn worker(vm: &VirtualMachine, address: Option<IpAddr>, spec: &WorkerSpec) -
     let id = vm.instance_id.as_deref().ok_or(CloudError::InvalidResponse)?;
     let desired = match (vm.provisioning_state.as_str(), vm.power_state.as_deref()) {
         ("Succeeded", Some("PowerState/running")) => "RUNNING",
-        (
-            _,
-            Some("PowerState/stopping" | "PowerState/stopped" | "PowerState/deallocating" | "PowerState/deallocated"),
-        ) => "EXITED",
+        (_, Some("PowerState/deallocating" | super::lifecycle::DEALLOCATED)) => "EXITED",
+        (_, Some("PowerState/stopping" | "PowerState/stopped")) => STOPPED_ALLOCATED,
         ("Failed", _) => "UNKNOWN",
         _ => "PROVISIONING",
     };

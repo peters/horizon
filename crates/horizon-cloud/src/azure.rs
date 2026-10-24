@@ -7,7 +7,8 @@
 //! answer is untrusted: bodies are size-limited, decoded into small typed views,
 //! checked against the requested identity, and never echoed into errors except as a
 //! sanitized [`Reason`]. A 409 is never retried and never a definite refusal: it is
-//! the signal to reconcile. [`provision`] creates a worker on these calls.
+//! the signal to reconcile. [`provision`] creates a worker on these calls, and
+//! [`lifecycle`] stops, starts and deletes it.
 use crate::{Cancellation, CloudError, Credential, Reason};
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,6 +16,7 @@ use std::{io::Read, time::Duration};
 use ureq::http::HeaderMap;
 
 pub mod catalog;
+pub mod lifecycle;
 pub mod operation;
 pub mod provision;
 pub mod reconcile;
@@ -179,6 +181,8 @@ fn capacity_codes(code: &str, details: &[String]) -> bool {
 pub(crate) enum Method {
     Get,
     Put,
+    Post,
+    Delete,
 }
 
 /// A 2xx answer. A body that is empty or only whitespace is `Value::Null`.
@@ -446,6 +450,22 @@ impl Azure {
                 .build()
                 .header("Authorization", auth.as_str())
                 .send_json(body.unwrap_or(&empty)),
+            Method::Post => self
+                .agent
+                .post(url)
+                .config()
+                .timeout_global(Some(timeout))
+                .build()
+                .header("Authorization", auth.as_str())
+                .send_empty(),
+            Method::Delete => self
+                .agent
+                .delete(url)
+                .config()
+                .timeout_global(Some(timeout))
+                .build()
+                .header("Authorization", auth.as_str())
+                .call(),
         };
         self.answer(response)
     }

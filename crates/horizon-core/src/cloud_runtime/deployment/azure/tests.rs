@@ -274,6 +274,7 @@ fn a_failed_read_or_a_refused_request_leaves_a_resumable_record() {
         &horizon_cloud::azure::provision::Journal {
             region: Some("northeurope".into()),
             group: CreateState::Bound { worker_id: group() },
+            ..Default::default()
         },
         root.path(),
     )
