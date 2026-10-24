@@ -469,17 +469,22 @@ impl HorizonApp {
             .position(|group| group.workspace == local_id)
     }
 
-    /// Where a new panel of this workspace runs: inside its cloud group, so the panel is a
-    /// cloud member that the worker runs, or nowhere special otherwise.
-    pub(in crate::app) fn cloud_member_position(&self, workspace_id: WorkspaceId) -> Option<[f32; 2]> {
-        let index = self.cloud_group_for_workspace(workspace_id)?;
-        Some(self.cloud_prototype.groups.0[index].next_position(&self.board))
+    /// Whether a cloud group takes a panel at this position of the workspace. A collapsed
+    /// group has no body, so it takes no panel until it is open again.
+    pub(in crate::app) fn cloud_takes_panel_at(&self, workspace_id: WorkspaceId, position: [f32; 2]) -> bool {
+        self.cloud_prototype
+            .groups
+            .at_position(&self.board, workspace_id, position)
+            .is_some()
     }
 
-    /// Whether a cloud runs the panels of this workspace. Such a workspace has its checkout
-    /// on the worker, so a local directory picker would offer paths the panel never sees.
-    pub(in crate::app) fn workspace_runs_on_a_worker(&self, workspace_id: WorkspaceId) -> bool {
-        self.cloud_group_for_workspace(workspace_id).is_some()
+    /// Where a new panel of this workspace runs: inside its cloud group, so the worker runs
+    /// the panel, or nowhere special when no cloud runs this workspace. A collapsed cloud
+    /// opens for the panel, because a collapsed group takes no member.
+    pub(in crate::app) fn cloud_member_position(&mut self, workspace_id: WorkspaceId) -> Option<[f32; 2]> {
+        let index = self.cloud_group_for_workspace(workspace_id)?;
+        self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, false);
+        Some(self.cloud_prototype.groups.0[index].next_position(&self.board))
     }
 
     pub(in crate::app) fn cloud_overview(&mut self, ctx: &egui::Context) {
