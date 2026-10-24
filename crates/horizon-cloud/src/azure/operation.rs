@@ -3,7 +3,7 @@
 //! under this client's subscription, and polls it exactly as ARM sent it. The poll
 //! loop is bounded by `ACTION_TIMEOUT`, follows `BACKOFF_MS`, and waits at least as
 //! long as ARM's `Retry-After` asks, so a throttled poll waits instead of failing.
-use super::{ACTION_TIMEOUT, Azure, Failure, Method, resource::text, retry_after};
+use super::{ACTION_TIMEOUT, Azure, Failure, Method, resource::DeploymentState, resource::text, retry_after};
 use crate::{Cancellation, CloudError};
 use std::time::{Duration, Instant};
 use ureq::http::HeaderMap;
@@ -114,6 +114,45 @@ impl Azure {
             cancel.check()?;
         }
         Ok(())
+    }
+
+    /// Reads deployment `name` in `group` until it ends, for a caller that lost the
+    /// operation URL with the answer to its PUT. The waits follow `BACKOFF_MS` within
+    /// `ACTION_TIMEOUT`, as [`Self::await_operation`] does.
+    /// # Errors
+    /// `CreationUnresolved` when the deployment is absent, `Invalid` when it still
+    /// runs at the bound, `Cancelled` within one [`WAIT_SLICE`] of `cancel`, and the
+    /// mapped [`Failure`] of a failed read.
+    pub fn await_deployment(
+        &self,
+        group: &str,
+        name: &str,
+        cancel: &Cancellation,
+    ) -> Result<DeploymentState, CloudError> {
+        let started = Instant::now();
+        let deadline = started + ACTION_TIMEOUT;
+        let mut waited = Duration::ZERO;
+        let steps = BACKOFF_MS
+            .iter()
+            .copied()
+            .chain(BACKOFF_MS.last().copied().into_iter().cycle());
+        for step in steps {
+            let state = self
+                .get_deployment(group, name, cancel)?
+                .ok_or(CloudError::CreationUnresolved)?;
+            if state.is_terminal() {
+                return Ok(state);
+            }
+            let Some(left) = remaining_at(Instant::now().max(started + waited), deadline) else {
+                break;
+            };
+            let delay = Duration::from_millis(step).min(left);
+            self.wait(delay, cancel)?;
+            waited += delay;
+        }
+        Err(CloudError::Invalid(
+            "Provider operation is still running; check again later",
+        ))
     }
 
     /// Polls `operation` until it ends. Each wait is the next `BACKOFF_MS` step, made

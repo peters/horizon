@@ -216,6 +216,7 @@ fn virtual_machine_views_carry_identity_instance_power_and_disks() {
         [DataDisk {
             id: format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Compute/disks/worker-data"),
             lun: Some(0),
+            size_gb: None,
             delete_option: "Detach".into(),
         }]
     );

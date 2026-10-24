@@ -296,7 +296,7 @@ pub fn check_login(login: Option<&host::RegistryLogin>, private: bool, image: &s
 
 /// The registry an image reference pulls from, as Docker resolves it: the first
 /// path component when it names a host, otherwise Docker Hub.
-fn image_registry(image: &str) -> String {
+pub(crate) fn image_registry(image: &str) -> String {
     match image.split_once('/') {
         Some((first, _)) if first.contains(['.', ':']) || first == "localhost" => registry_host(first),
         _ => registry_host("docker.io"),
@@ -305,7 +305,7 @@ fn image_registry(image: &str) -> String {
 
 /// A registry host in one spelling, folding together the Docker Hub aliases the
 /// host configuration stores under Docker Hub's credential key.
-fn registry_host(host: &str) -> String {
+pub(crate) fn registry_host(host: &str) -> String {
     let host = host.to_ascii_lowercase();
     match host.as_str() {
         "index.docker.io" | "registry-1.docker.io" => "docker.io".into(),

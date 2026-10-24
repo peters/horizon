@@ -11,6 +11,7 @@ use ureq::{
 };
 
 mod operation;
+mod provision;
 mod reconcile;
 mod template;
 mod transport;
@@ -27,6 +28,8 @@ struct Exchange {
     method: &'static str,
     url: String,
     request_body: Option<Value>,
+    /// The request body is recorded, not compared: it carries a fresh key.
+    any_body: bool,
     status: u16,
     headers: Vec<(&'static str, String)>,
     body: String,
@@ -37,6 +40,7 @@ fn get(url: String, status: u16, body: impl Into<String>) -> Exchange {
         method: "GET",
         url,
         request_body: None,
+        any_body: false,
         status,
         headers: Vec::new(),
         body: body.into(),
@@ -48,6 +52,7 @@ fn put(url: String, request_body: Value, status: u16, body: impl Into<String>) -
         method: "PUT",
         url,
         request_body: Some(request_body),
+        any_body: false,
         status,
         headers: Vec::new(),
         body: body.into(),
@@ -55,6 +60,12 @@ fn put(url: String, request_body: Value, status: u16, body: impl Into<String>) -
 }
 
 impl Exchange {
+    /// Accepts any JSON body and records it in [`Scripted::bodies`].
+    fn any_body(mut self) -> Self {
+        self.any_body = true;
+        self
+    }
+
     fn header(mut self, name: &'static str, value: impl Into<String>) -> Self {
         self.headers.push((name, value.into()));
         self
@@ -68,9 +79,15 @@ struct Scripted {
     sent: Arc<Mutex<Vec<String>>>,
     sleeps: Arc<Mutex<Vec<Duration>>>,
     queue: Arc<Mutex<VecDeque<Exchange>>>,
+    bodies: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Scripted {
+    /// The bodies of the requests sent with [`Exchange::any_body`].
+    fn bodies(&self) -> Vec<Value> {
+        self.bodies.lock().unwrap().clone()
+    }
+
     fn sent(&self) -> Vec<String> {
         self.sent.lock().unwrap().clone()
     }
@@ -91,7 +108,8 @@ fn scripted(script: Vec<Exchange>) -> Scripted {
     let queue = Arc::new(Mutex::new(VecDeque::from(script)));
     let sent = Arc::new(Mutex::new(Vec::new()));
     let sleeps = Arc::new(Mutex::new(Vec::new()));
-    let (answers, log, waits) = (queue.clone(), sent.clone(), sleeps.clone());
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let (answers, log, waits, recorded) = (queue.clone(), sent.clone(), sleeps.clone(), bodies.clone());
     let agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .max_redirects(0)
@@ -109,6 +127,7 @@ fn scripted(script: Vec<Exchange>) -> Scripted {
             let mut payload = String::new();
             request.into_body().into_reader().read_to_string(&mut payload).unwrap();
             match exchange.request_body {
+                _ if exchange.any_body => recorded.lock().unwrap().push(serde_json::from_str(&payload).unwrap()),
                 Some(expected) => assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), expected),
                 None => assert!(payload.is_empty(), "unexpected body on {line}"),
             }
@@ -128,6 +147,7 @@ fn scripted(script: Vec<Exchange>) -> Scripted {
         sent,
         sleeps,
         queue,
+        bodies,
     }
 }
 
@@ -168,6 +188,7 @@ fn scripted_cancelling(script: Vec<Exchange>, cancel: Cancellation) -> Scripted 
         sent,
         sleeps,
         queue,
+        bodies: Arc::default(),
     }
 }
 
