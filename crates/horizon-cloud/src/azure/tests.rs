@@ -14,6 +14,7 @@ mod lifecycle;
 mod operation;
 mod provision;
 mod reconcile;
+mod release;
 mod template;
 mod transport;
 
