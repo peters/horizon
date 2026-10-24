@@ -191,8 +191,18 @@ fn an_agent_socket_the_caller_cannot_use_is_an_error_not_an_off_bridge() {
 
 #[test]
 fn a_request_that_trickles_in_loses_its_share_after_the_deadline() {
+    // The production deadline stays as it is; a change to it fails here.
+    assert_eq!(hold::REQUEST_TIMEOUT, Duration::from_secs(10));
     let (_root, paths) = paths();
-    let mut session = Session::start(&paths, NONCE);
+    let wait = Duration::from_millis(300);
+    let mut session = Session::start_with(
+        &paths,
+        NONCE,
+        hold::Waits {
+            request: wait,
+            ..hold::Waits::default()
+        },
+    );
     let mut stream = UnixStream::connect(&paths.agent).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     let started = Instant::now();
@@ -201,7 +211,7 @@ fn a_request_that_trickles_in_loses_its_share_after_the_deadline() {
         thread::spawn(move || {
             // One byte at a time, never a whole line, until the helper hangs up.
             while started.elapsed() < Duration::from_secs(20) && stream.write_all(b" ").is_ok() {
-                thread::sleep(Duration::from_millis(500));
+                thread::sleep(Duration::from_millis(20));
             }
         })
     };
@@ -209,10 +219,7 @@ fn a_request_that_trickles_in_loses_its_share_after_the_deadline() {
     let ended = stream.read_to_end(&mut rest);
     assert!(ended.is_ok(), "{ended:?}");
     let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_secs(9) && elapsed < Duration::from_secs(15),
-        "{elapsed:?}"
-    );
+    assert!(elapsed >= wait && elapsed < Duration::from_secs(5), "{elapsed:?}");
     trickle.join().unwrap();
     assert!(status(&paths).unwrap().active);
     session.stop();
