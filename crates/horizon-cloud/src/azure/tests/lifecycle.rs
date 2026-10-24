@@ -484,6 +484,7 @@ fn only_a_complete_journal_of_this_operation_proves_absence() {
         group: CreateState::Terminated { worker_id: group_id() },
         deleting: true,
         swept: true,
+        ..Journal::default()
     };
     assert!(proven.proves_absent(OPERATION_ID));
     assert!(!proven.retains());
