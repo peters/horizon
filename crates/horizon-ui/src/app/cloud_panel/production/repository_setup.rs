@@ -1,6 +1,7 @@
 //! A repository without cloud settings: quick start on the public base image, or a
 //! real local agent prepares the settings, before any allocation.
 use super::{PanelKind, Production};
+use crate::app::cloud_panel::production::dialog_hover;
 use crate::app::cloud_panel::runtime::action_button;
 use crate::theme;
 use egui::{Color32, CornerRadius, Frame, Response, RichText, Stroke, Vec2};
@@ -232,10 +233,7 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
                 if wide { ui.available_width().max(120.0) } else { 120.0 },
                 40.0,
             ));
-        open = ui
-            .add_enabled(!form.repository.trim().is_empty(), primary)
-            .on_hover_text(&label)
-            .clicked();
+        open = dialog_hover::text(ui.add_enabled(!form.repository.trim().is_empty(), primary), &label).clicked();
     });
     // The agent presets of the New Workspace menu, as chips: no popup to hide behind the
     // dialog, and every agent in view. An agent with more than one preset keeps one chip
@@ -285,7 +283,7 @@ fn setup_agent(ui: &mut egui::Ui, form: &mut Production, verb: &str, wide: bool)
                 .min_size(Vec2::new(0.0, CHIP_HEIGHT));
                 // The chip keeps the preset it shows: only the caret switches between
                 // the presets of an agent.
-                let chip = ui.add(chip).on_hover_text(name);
+                let chip = dialog_hover::text(ui.add(chip), name);
                 if chip.clicked() {
                     form.setup_preset = Some(name.to_owned());
                 }
@@ -348,8 +346,8 @@ fn variant_caret(
     (fill, stroke): (Color32, Stroke),
     height: f32,
 ) -> Response {
-    let caret = ui
-        .add_sized(
+    let caret = dialog_hover::text(
+        ui.add_sized(
             Vec2::new(CARET_WIDTH, height),
             egui::Button::new(RichText::new("\u{25be}").size(12.0).color(theme::FG_SOFT()))
                 .fill(fill)
@@ -360,11 +358,12 @@ fn variant_caret(
                     ne: CHIP_RADIUS,
                     se: CHIP_RADIUS,
                 }),
-        )
-        .on_hover_text(format!(
+        ),
+        format!(
             "The {} presets of the New Workspace menu",
             group.default.kind.display_name()
-        ));
+        ),
+    );
     // The dialog is a modal on the Tooltip order, so its popup opens on that order too and
     // is raised above the dialog: a default menu would draw underneath it.
     let popup = egui::Popup::menu(&caret).width(300.0).kind(egui::PopupKind::Tooltip);
@@ -373,11 +372,7 @@ fn variant_caret(
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         for preset in std::iter::once(&group.default).chain(&group.variants) {
             let selected = chosen == Some(preset.name.as_str());
-            if ui
-                .selectable_label(selected, &preset.name)
-                .on_hover_text(&preset.name)
-                .clicked()
-            {
+            if dialog_hover::text(ui.selectable_label(selected, &preset.name), &preset.name).clicked() {
                 form.setup_preset = Some(preset.name.clone());
                 ui.close();
             }
@@ -480,10 +475,11 @@ pub(super) enum Note {
 pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> Note {
     if let Some(note) = quick_start_text(form) {
         ui.label(RichText::new(note).size(12.0).color(theme::FG_SOFT()));
-        let leave = ui
-            .add(action_button("Use .horizon/cloud.yml"))
-            .on_hover_text("Read the repository's own settings, from the working copy on the checked-out commit.")
-            .clicked();
+        let leave = dialog_hover::text(
+            ui.add(action_button("Use .horizon/cloud.yml")),
+            "Read the repository's own settings, from the working copy on the checked-out commit.",
+        )
+        .clicked();
         return if leave { Note::LeaveQuickStart } else { Note::None };
     }
     if form.profiles.is_none() || form.launch.configuration != Configuration::WorkingCopy {
@@ -495,10 +491,11 @@ pub(super) fn quick_start_note(ui: &mut egui::Ui, form: &mut Production) -> Note
         ui.label(RichText::new(PLATFORM_NOTE).size(12.5).color(theme::FG_SOFT()));
         return Note::None;
     }
-    let update = ui
-        .add(action_button("Update setup from CI"))
-        .on_hover_text("An agent checks the image against your CI now and updates .horizon in place.")
-        .clicked();
+    let update = dialog_hover::text(
+        ui.add(action_button("Update setup from CI")),
+        "An agent checks the image against your CI now and updates .horizon in place.",
+    )
+    .clicked();
     if update {
         form.setup_mode = Mode::Update;
         return Note::UpdateFromCi;

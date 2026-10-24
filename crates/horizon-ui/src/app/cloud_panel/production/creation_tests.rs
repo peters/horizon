@@ -5,6 +5,7 @@ use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, epaint::Shape};
 use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
 
+mod hover;
 mod local_profiles;
 mod new_workspace;
 mod profiles;

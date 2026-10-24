@@ -1,6 +1,7 @@
 //! The setup agent's progress view: a card with the steps, their elapsed times and
 //! the actions, and the agent's screen in a log well when it has no column of its own.
 use super::{Action, Fixer, Run, State, Step};
+use crate::app::cloud_panel::production::dialog_hover;
 use crate::app::cloud_panel::runtime::{action_button, danger_button};
 use crate::theme;
 use egui::{Align, Color32, CornerRadius, Frame, Key, Layout, RichText, Sense, Stroke, TextEdit, Ui, Vec2};
@@ -335,26 +336,25 @@ fn callout(ui: &mut Ui, question: &str) {
 fn working_actions(ui: &mut Ui, run: &mut Run, working: bool, inline: bool) -> Option<Action> {
     let mut action = None;
     if working && run.dotnet {
-        ui.checkbox(
-            &mut run.host_restore,
-            RichText::new("Restore private NuGet packages on this computer for the proof").size(13.0),
-        )
-        .on_hover_text(
+        dialog_hover::text(
+            ui.checkbox(
+                &mut run.host_restore,
+                RichText::new("Restore private NuGet packages on this computer for the proof").size(13.0),
+            ),
             "Runs dotnet restore here, with this computer's feed logins and the repository's build files, before the next proof; the container then reads the packages without any credential.",
         );
         ui.add_space(6.0);
     }
     if working && !run.crates.locked.is_empty() {
         let names = run.crates.locked.join(", ");
-        let changed = ui
-            .checkbox(
+        let changed = dialog_hover::text(
+            ui.checkbox(
                 &mut run.crates.allowed,
                 RichText::new("Fetch private Rust git dependencies on this computer for the proof").size(13.0),
-            )
-            .on_hover_text(
-                "Clones the GitHub repositories named below here with this computer's Git login before the next proof, and no other. The container reads each clone read-only, without any credential, and the proof's CI can read all of it. Clearing it stops clones a running proof has not begun.",
-            )
-            .changed();
+            ),
+            "Clones the GitHub repositories named below here with this computer's Git login before the next proof, and no other. The container reads each clone read-only, without any credential, and the proof's CI can read all of it. Clearing it stops clones a running proof has not begun.",
+        )
+        .changed();
         if changed && !run.crates.allowed {
             // A proof that is building now clones nothing more.
             run.crates.live.store(false, std::sync::atomic::Ordering::Relaxed);

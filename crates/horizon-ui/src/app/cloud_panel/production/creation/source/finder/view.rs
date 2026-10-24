@@ -3,7 +3,10 @@
 use super::{Kind, Pick, Row, is_path, pick};
 use crate::{
     app::{
-        cloud_panel::production::creation::{selector::widgets, source::State},
+        cloud_panel::production::{
+            creation::{selector::widgets, source::State},
+            dialog_hover,
+        },
         util::chrome_button,
     },
     theme,
@@ -209,17 +212,18 @@ fn hint_row(ui: &mut Ui, state: &State, path: bool) {
             && account.repositories.is_some()
         {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(
+                if dialog_hover::text(
+                    ui.add(
                         egui::Button::new(
                             RichText::new("Add repositories on GitHub")
                                 .size(11.5)
                                 .color(theme::ACCENT()),
                         )
                         .frame(false),
-                    )
-                    .on_hover_text("Choose which repositories your GitHub App can reach.")
-                    .clicked()
+                    ),
+                    "Choose which repositories your GitHub App can reach.",
+                )
+                .clicked()
                     && let Err(error) = horizon_core::open_url(&account.installation_url())
                 {
                     tracing::warn!(%error, "could not open the GitHub App installation page");

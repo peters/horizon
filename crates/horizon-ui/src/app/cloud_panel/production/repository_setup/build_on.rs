@@ -2,6 +2,7 @@
 //! computer's Docker, a Docker host saved in Cloud settings and reached over SSH, or a
 //! builder Horizon rents from Hetzner. The settings are read on a thread, again every few
 //! seconds while the dialog asks.
+use crate::app::cloud_panel::production::dialog_hover;
 use crate::theme;
 use egui::{RichText, Stroke, Vec2};
 use horizon_core::cloud_runtime::docker_host::{Access, Host};
@@ -233,25 +234,30 @@ impl State {
             ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
             ui.label(RichText::new("Build on").size(12.5).color(theme::FG_SOFT()));
             let mut pick = None;
-            let this = chip(ui, "This computer", self.chosen.is_none())
-                .on_hover_text("The proof builds the image and runs the CI with this computer's Docker.");
+            let this = dialog_hover::text(
+                chip(ui, "This computer", self.chosen.is_none()),
+                "The proof builds the image and runs the CI with this computer's Docker.",
+            );
             if this.clicked() {
                 pick = Some(None);
             }
             for host in &self.hosts {
                 let selected = self.chosen == Some(Choice::Host(host.name.clone()));
                 let address = host.address.as_deref().unwrap_or_default();
-                let picked = chip(ui, &host.name, selected)
-                    .on_hover_text(format!(
+                let picked = dialog_hover::text(
+                    chip(ui, &host.name, selected),
+                    format!(
                         "The proof builds the image and runs the CI with the Docker of {address}, reached over SSH. The agent still runs here."
-                    ))
-                    .clicked();
+                    ),
+                )
+                .clicked();
                 if picked {
                     pick = Some(Some(Choice::Host(host.name.clone())));
                 }
             }
             if self.rentable {
-                let rented = chip(ui, "Rented builder", self.chosen == Some(Choice::Rented)).on_hover_text(
+                let rented = dialog_hover::text(
+                    chip(ui, "Rented builder", self.chosen == Some(Choice::Rented)),
                     "Horizon rents a Hetzner server with Docker for the proof, shares it among the setups that build on it and deletes it 10 minutes after the last one. Its cost shows on the setup board. The agent still runs here.",
                 );
                 if rented.clicked() {
