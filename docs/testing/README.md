@@ -59,7 +59,7 @@ documents that are not yet STE.
 
 | [image-destination-public](procedures/image-destination-public.md) | Host-scoped destination actions through normal CLI plans and stdio MCP | none |
 | [publication-records](procedures/publication-records.md) | Retained image publisher and migration version guards | none |
-| [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 121 tests in 12 area files | rents compute |
+| [cloud-panels](procedures/cloud-panels.md) | Cloud panels end to end: 122 tests in 12 area files | rents compute |
 | [cloud-quick-start](procedures/cloud-quick-start.md) | Quick start on the base image for a repository without `.horizon/cloud.yml` | rents compute |
 | [cloud-settings-replace-key](procedures/cloud-settings-replace-key.md) | Cloud settings saved keys | none |
 | [cloud-setup-gate](procedures/cloud-setup-gate.md) | Setup gate: the proof and the desktop preview of the setup agent on real repositories | none |

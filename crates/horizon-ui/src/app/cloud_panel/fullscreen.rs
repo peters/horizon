@@ -101,6 +101,15 @@ impl HorizonApp {
         ))
     }
 
+    /// Where a new panel of the full screen view goes: the open cloud, which cannot stay
+    /// collapsed because a collapsed group takes no member.
+    pub(in crate::app) fn fullscreen_cloud_panel_target(&mut self) -> Option<(horizon_core::WorkspaceId, [f32; 2])> {
+        let issue = self.cloud_prototype.fullscreen.as_ref()?.id;
+        let index = self.cloud_prototype.groups.0.iter().position(|g| g.issue == issue)?;
+        self.cloud_prototype.groups.0[index].set_collapsed(&mut self.board, false);
+        self.fullscreen_cloud_target()
+    }
+
     pub(in crate::app) fn cloud_panel_is_in_view(&self, local_id: &str) -> bool {
         self.cloud_prototype.fullscreen.as_ref().is_none_or(|view| {
             self.cloud_prototype
