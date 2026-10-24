@@ -151,6 +151,17 @@ impl Fixture {
         let _ = run_app_frame_with_input(&self.ctx, &mut self.app, input);
     }
 
+    /// Puts the panel back where the fixture started it and settles a frame, so the next case
+    /// begins from the same place as the last one. The app itself is expensive to build: it
+    /// loads the fonts and boots the whole shell, so one fixture serves every case.
+    fn reset(&mut self, id: PanelId, home: [f32; 2], zoom: f32, focused: bool) {
+        self.app.canvas_view.zoom = zoom;
+        let _ = self.app.board.move_panel(id, home);
+        self.app.board.focused = focused.then_some(id);
+        self.frame(Vec::new());
+        self.app.pan_target = None;
+    }
+
     fn panels(&self) -> Vec<(PanelId, Rect)> {
         self.app
             .visible_panel_geometry_for_canvas_view(self.app.canvas_rect(&self.ctx), None)
@@ -234,15 +245,16 @@ fn a_titlebar_drag_with_a_frame_per_event_moves_the_panel_in_every_direction_reg
 }
 
 fn titlebar_drags_move_the_panel(delivery: Delivery) {
+    let mut fixture = Fixture::new(vec![panel("only")], None, 1.0);
+    let id = fixture.panels()[0].0;
+    let home = fixture.app.board.panel(id).expect("the only panel").layout.position;
     // The title text starts at the left; the right part of the titlebar is blank.
     for (region, along) in [("title", 0.2), ("blank", 0.6)] {
         for zoom in [0.5, 1.0, 1.5] {
             for focused in [true, false] {
                 for movement in [Vec2::new(0.0, 90.0), Vec2::new(0.0, -70.0), Vec2::new(120.0, 0.0)] {
-                    let mut fixture = Fixture::new(vec![panel("only")], None, zoom);
-                    let (id, before) = fixture.panels()[0];
-                    fixture.app.board.focused = focused.then_some(id);
-                    fixture.frame(Vec::new());
+                    fixture.reset(id, home, zoom, focused);
+                    let before = fixture.screen_rect(id);
                     fixture.drag(titlebar_point(before, zoom, along), movement, delivery);
                     let moved = fixture.screen_rect(id).min - before.min;
                     assert!(
