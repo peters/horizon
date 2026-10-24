@@ -10,6 +10,8 @@ use base64::Engine as _;
 use horizon_cloud::{Cancellation, CreateState, Credential, WorkerSpec, azure::Azure};
 use serde_json::json;
 
+mod lifecycle;
+
 const SUB: &str = "00000000-0000-4000-8000-000000000001";
 const INSTANCE: &str = "3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f";
 
@@ -412,4 +414,74 @@ fn live_create() {
         }
         std::thread::sleep(std::time::Duration::from_secs(10));
     }
+}
+
+/// The live state of task AZV-L1: its settings and its records.
+fn live() -> (crate::cloud_runtime::settings::Settings, std::path::PathBuf) {
+    let variable = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+    let settings =
+        crate::cloud_runtime::settings::Settings::load(variable("HORIZON_AZURE_LIVE_SETTINGS").as_ref()).unwrap();
+    (settings, variable("HORIZON_AZURE_LIVE_STATE").into())
+}
+
+/// Prints what the provider reports for the live cloud, as Check provider does.
+fn live_report(settings: &crate::cloud_runtime::settings::Settings, root: &std::path::Path) -> bool {
+    let reconciled =
+        crate::cloud_runtime::lifecycle::reconcile(root, settings, None, &Cancellation::default()).unwrap();
+    println!(
+        "stage {:?}; stop_requested {}; outcome {:?}; worker {}",
+        reconciled.state.stage,
+        reconciled.state.stop_requested,
+        reconciled.report.outcome,
+        serde_json::to_string_pretty(&reconciled.report.worker).unwrap()
+    );
+    reconciled.confirmed_stopped()
+}
+
+/// The live stop: deallocates the VM of task AZV-L1 through the cloud's lifecycle,
+/// then checks it as Check provider does. The disks and the address stay.
+#[test]
+#[ignore = "stops a live Azure VM; only the live acceptance runs it"]
+fn live_stop() {
+    let (settings, root) = live();
+    crate::cloud_runtime::lifecycle::stop(&root, &settings, &Cancellation::default()).unwrap();
+    assert!(live_report(&settings, &root), "the stop is confirmed");
+}
+
+/// The live resume: starts the same VM again, then reads it until it runs.
+#[test]
+#[ignore = "starts a live Azure VM; only the live acceptance runs it"]
+fn live_resume() {
+    let (settings, root) = live();
+    crate::cloud_runtime::lifecycle::resume(&root, &settings, &Cancellation::default()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_mins(10);
+    loop {
+        let reconciled =
+            crate::cloud_runtime::lifecycle::reconcile(&root, &settings, None, &Cancellation::default()).unwrap();
+        let worker = reconciled.report.worker.clone().unwrap();
+        if worker.status() == horizon_cloud::WorkerStatus::Running || std::time::Instant::now() > deadline {
+            println!("{}", serde_json::to_string_pretty(&worker).unwrap());
+            assert_eq!(worker.status(), horizon_cloud::WorkerStatus::Running);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+}
+
+/// The live delete: deletes the cloud as Delete does and prints its journal, which
+/// must prove the resource group and every tagged resource absent.
+#[test]
+#[ignore = "deletes a live Azure resource group; only the live acceptance runs it"]
+fn live_delete() {
+    let (settings, root) = live();
+    crate::cloud_runtime::deployment::terminate(&root, &settings, &Cancellation::default(), &|event| {
+        eprintln!("{event:?}");
+    })
+    .unwrap();
+    let journal = load(&root).unwrap();
+    println!("{}", serde_json::to_string_pretty(&journal).unwrap());
+    let state = Store::lock(&root).unwrap().load().unwrap().unwrap();
+    assert_eq!(state.stage, crate::cloud_runtime::Stage::Deleted);
+    assert!(journal.proves_absent(&state.cloud_id));
+    assert!(!retained(&root).unwrap());
 }
