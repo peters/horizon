@@ -7,6 +7,21 @@ use no credential and no subscription. `offers::AZURE_DEPLOYABLE` stays `false`,
 each Azure offer has `rentable: false` and the Azure section has
 `deployable: false`.
 
+## Callers
+
+- `cloud_runtime::prices::azure_catalog` fetches the catalog. It reads no
+  settings and no credential.
+- The agents' `cloud_offers` answer in Horizon fetches it on a background
+  thread for a CPU request. The catalog stays current for one hour. A failed
+  fetch is asked again after 30 seconds. The Azure section comes after the
+  Hetzner and Docker host sections in `other_providers`.
+- The CLI plan runner `cloud_deploy offers` fetches it for a CPU request.
+- The New cloud dialog does not ask for it. Azure has no cloud settings yet.
+- A cloud worker does not receive it. A worker lists no Azure offers.
+
+Azure offers alone do not replace a `RunPod` answer. If the `RunPod` fetch
+failed and no other provider has a section, the answer is the `RunPod` error.
+
 ## Source
 
 The catalog sends one GET request for each region in `REGIONS` to

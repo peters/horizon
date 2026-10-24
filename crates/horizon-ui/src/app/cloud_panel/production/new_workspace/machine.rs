@@ -21,7 +21,7 @@ impl HorizonApp {
             limit: Some(1),
             ..Requirements::default()
         };
-        match self.ranked_offers(&requirements, i64::MAX, ctx) {
+        match self.ranked_offers(&requirements, i64::MAX, false, ctx) {
             None => Some(CHECKING.to_owned()),
             Some(Ok(answer)) => line(&answer),
             Some(Err(_)) => None,
@@ -34,15 +34,22 @@ impl HorizonApp {
 /// the tooltip shows none of them.
 pub(super) fn line(answer: &Value) -> Option<String> {
     let comparison = answer.get("comparison")?;
-    let offers = comparison.get("offers")?.as_array()?;
+    // A machine that Horizon cannot create is never the tooltip's offer, also when it is
+    // the cheapest: an Azure row carries `rentable: false` until PR 5 can create one.
+    let offers: Vec<&Value> = comparison
+        .get("offers")?
+        .as_array()?
+        .iter()
+        .filter(|offer| offer.get("rentable").and_then(Value::as_bool) != Some(false))
+        .collect();
     let complete = comparison.get("complete").and_then(Value::as_bool) == Some(true);
     let one_currency = offers
         .windows(2)
         .all(|pair| pair[0].get("currency") == pair[1].get("currency"));
     let offer = if complete {
-        offers.first()?
+        offers.first().copied()?
     } else if one_currency {
-        offers.iter().min_by(|a, b| {
+        offers.iter().copied().min_by(|a, b| {
             let total = |offer: &Value| {
                 offer
                     .get("estimated_total")
@@ -72,6 +79,29 @@ pub(super) fn line(answer: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_line_never_names_a_machine_that_cannot_be_created() {
+        let rentable = json!({
+            "provider": "Hetzner", "currency": "EUR", "vcpu": 4, "memory_gb": 8,
+            "hourly": 0.02, "estimated_total": 0.2, "rentable": true
+        });
+        let azure = json!({
+            "provider": "Azure", "currency": "USD", "vcpu": 4, "memory_gb": 8,
+            "hourly": 0.01, "estimated_total": 0.01, "rentable": false
+        });
+        let answer = json!({"comparison": {"complete": true, "offers": [azure.clone(), rentable]}});
+        assert_eq!(
+            line(&answer).as_deref(),
+            Some("from €0.0200/h · 4 vCPU · 8 GB · Hetzner"),
+            "the cheapest machine that Horizon cannot create is skipped"
+        );
+        assert_eq!(
+            line(&json!({"comparison": {"complete": true, "offers": [azure]}})),
+            None,
+            "an answer of uncreatable machines alone gives no line"
+        );
+    }
 
     #[test]
     fn the_cheapest_compared_offer_gives_the_line() {

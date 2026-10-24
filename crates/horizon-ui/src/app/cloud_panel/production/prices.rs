@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod azure;
 mod exchange;
 pub(super) mod hetzner;
 pub(super) mod hosts;
@@ -61,6 +62,9 @@ pub(super) struct State {
     /// The saved Docker hosts' free capacity, read beside Hetzner's catalog.
     pub hosts: hosts::State,
     pub exchange: exchange::State,
+    /// Azure's retail prices, for agents' offer requests only: New cloud has no Azure
+    /// settings yet.
+    pub azure: azure::State,
     /// A fetch found no `RunPod` API key. Kept through refreshes and expired errors,
     /// and cleared only by a list `RunPod` answered, so a retry never offers `RunPod`
     /// on a machine set up for Hetzner alone.
@@ -269,6 +273,7 @@ impl State {
         self.hetzner.poll();
         self.hosts.poll();
         self.exchange.poll();
+        self.azure.poll();
         if let Some(result) = finished(&mut self.list_job) {
             match result {
                 Ok(fetched) => {
@@ -317,6 +322,7 @@ impl State {
     pub fn refresh(&mut self) {
         self.exchange.refresh();
         self.hetzner.refresh();
+        self.azure.refresh();
         self.refreshed_after = Some(Instant::now());
         self.list_error = None;
         self.list_failed_at = None;

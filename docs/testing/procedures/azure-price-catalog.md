@@ -18,27 +18,30 @@ It also makes sure that each Azure offer includes the disks and the static addre
 ## 2. Applicability
 
 - Candidate: a pull request of #1774 that changes `horizon_cloud::azure::catalog` or `horizon_cloud::offers::azure`.
+  It also applies to a change to the Azure part of a `cloud_offers` answer in the UI or the CLI plan runner.
 - Platform: Linux with the repository Rust toolchain.
 - The unit tests use synthetic price pages only. They need no network and no Azure account.
-- Task AZP-04 reads the live retail price list. It needs HTTPS access to `prices.azure.com` and no credential.
+- Tasks AZP-04 and AZP-06 read the live retail price list. They need HTTPS access to `prices.azure.com` and no credential.
 - The trust boundary of the catalog is in [the Azure price catalog architecture](../../architecture/azure-price-catalog.md).
 - This procedure does not test these items:
   - The creation, stop, resume and delete of an Azure worker.
   - The Azure credential and the ARM client. [The ARM client procedure](azure-arm-client.md) tests the client.
   - The stock of a VM size. The retail price list has no stock data.
-  - Azure in the New cloud dialog. Azure has no cloud settings yet.
+  - Azure in the New cloud dialog. Azure has no cloud settings yet, so the dialog shows no Azure offer.
+  - Azure offers on a cloud worker. A cloud worker lists no Azure offers yet.
 
 ## 3. Safety
 
 No step rents compute, deletes data, sends a secret or changes access.
-Task AZP-04 sends one GET request without a credential to the public retail price list.
+Tasks AZP-04 and AZP-06 send GET requests without a credential to the public retail price list.
+Task AZP-06 uses a temporary settings file that names no credential file that exists.
 
 ## 4. Equipment and preconditions
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
 - A POSIX shell with `curl` and `jq`.
-- HTTPS access to `prices.azure.com` for task AZP-04.
+- HTTPS access to `prices.azure.com` for tasks AZP-04 and AZP-06.
 - No Azure account, Azure credential or provider key.
 
 ## 5. Setup
@@ -163,9 +166,60 @@ Do the tasks in order. Each task has a stable ID for the report.
 
    Result: One line shows `IP Addresses`, `Standard`, a price and `1 Hour`.
 
+### 6.5 AZP-05 — Examine the Azure part of the agents' answer
+
+1. Run the UI price tests for Azure.
+
+   ```sh
+   cargo test -p horizon-ui --bin horizon -- cloud_panel::production::prices::azure cloud_panel::production::offers
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - The `cloud_offers` answer shows the Azure section after the Hetzner section in `other_providers`.
+   - Each Azure offer has `rentable: false`. The comparison shows its total in US dollars without an exchange rate.
+   - A GPU request gets no Azure section.
+   - If the `RunPod` fetch failed and only Azure has offers, the answer is the `RunPod` error.
+   - A machine without a `RunPod` key shows the Azure offers beside the reason.
+   - A failed, pending or refreshed Azure catalog is never shown as current.
+
+### 6.6 AZP-06 — Rank the offers with the CLI plan runner
+
+1. Write a settings file that names no `RunPod` key file that exists.
+
+   ```sh
+   printf '{"runpod_key_file":"%s/no-key","ssh_identity_file":"%s/no-identity","docker_config":"%s/no-docker","registry_pull_auth_id":null,"cpu_flavors":["cpu3c"],"gpu_types":[]}\n' "$AZP_DIR" "$AZP_DIR" "$AZP_DIR" > "$AZP_DIR/settings.json"
+   ```
+
+   Result: `$AZP_DIR/settings.json` exists.
+
+2. Rank the CPU offers for 4 vCPU in northeurope for 10 hours.
+
+   ```sh
+   cargo run -q -p horizon-core --example cloud_deploy -- offers "$AZP_DIR/settings.json" '{"min_vcpu":4,"region":"northeurope","hours":10,"limit":3}' > "$AZP_DIR/offers.json"
+   ```
+
+   Result: The command shows no error.
+
+3. Examine the Azure section.
+
+   ```sh
+   jq -r '.unavailable, (.other_providers[] | select(.provider == "Azure") | .currency, .deployable, (.offers[] | [.id, .location, .hourly, .estimated_total, .stopped_monthly, .rentable] | @tsv))' "$AZP_DIR/offers.json"
+   ```
+
+   Result: The output shows the `RunPod` reason, `USD` and `false`. Then 3 offers in `northeurope` show `false` in the last field.
+
+4. Examine the comparison.
+
+   ```sh
+   jq -r '.comparison.complete, (.comparison.offers[0] | [.provider, .estimated_total_usd] | @tsv)' "$AZP_DIR/offers.json"
+   ```
+
+   Result: The output shows `true`, then `Azure` and the lowest estimated total of the Azure offers.
+
 ## 7. Pass criteria
 
-- AZP-01, AZP-02 and AZP-03 pass.
+- AZP-01, AZP-02, AZP-03 and AZP-05 pass.
+- AZP-06 shows Azure offers in US dollars that are not rentable.
 - AZP-04 shows the envelope fields and the meter names that the catalog reads.
 - If AZP-04 shows a different field or meter name, the run fails. Record the new name in the report.
 

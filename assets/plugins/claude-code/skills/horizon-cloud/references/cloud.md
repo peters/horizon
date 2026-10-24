@@ -91,6 +91,13 @@ An explicit choice fixes its server type and location through stop and resume.
 Changes to fallback preferences do not substitute a different worker. The location
 must remain permitted, and the chosen type must meet the profile requirements.
 
+Azure offers are in US dollars from the public Azure retail price list. They need
+no Azure settings or credential. They are information only: Horizon cannot create
+an Azure cloud yet, so the Azure section has `deployable: false` and each offer has
+`rentable: false`. The estimated total includes the OS disk, the workspace disk and
+the static public address. The stopped cost includes all three, because a
+deallocated VM keeps them. A cloud worker lists no Azure offers.
+
 ## Repository development profiles
 
 Read the repository's `.horizon/cloud.yml` before comparing task workers. Use its

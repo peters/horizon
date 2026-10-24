@@ -603,10 +603,10 @@ fn prepare_image(
 }
 
 /// Ranks offers the way agents' `cloud_offers` does, from prices fetched now: `RunPod`'s
-/// in `offers`, and each other configured provider in `other_providers`, in its own
-/// currency.
+/// in `offers`, and each other configured provider and Azure's informational offers in
+/// `other_providers`, in its own currency.
 fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::Result<()> {
-    use horizon_cloud::offers::{Requirements, hetzner_section, offers};
+    use horizon_cloud::offers::{Requirements, azure_section, hetzner_section, offers};
     let requirements: Requirements = serde_json::from_str(requirements.unwrap_or("{}"))
         .map_err(|_| cloud_runtime::Error::Invalid("Invalid offer requirements"))?;
     requirements.validate().map_err(cloud_runtime::Error::Invalid)?;
@@ -634,9 +634,15 @@ fn offers(path: &std::path::Path, requirements: Option<&str>) -> cloud_runtime::
     } else {
         Vec::new()
     };
+    // Azure needs no credential; a failure is reported beside the other offers.
+    let azure = (!requirements.gpu).then(|| match cloud_runtime::prices::azure_catalog(&cancel) {
+        Ok(catalog) => azure_section(&catalog, &requirements),
+        Err(error) => serde_json::json!({"provider": "Azure", "error": error.to_string()}),
+    });
     let other_providers: Vec<_> = other_providers
         .into_iter()
         .chain(cloud_runtime::docker_host::hosts::section(&hosts, &requirements))
+        .chain(azure)
         .collect();
     let mut answer = match &runpod {
         Some(Ok((list, preferences))) => serde_json::json!({

@@ -700,6 +700,8 @@ No caller uses it yet. [The ARM client architecture](azure-arm-client.md) states
 its trust boundary.
 `azure::catalog` is separate from the ARM client: it reads the public retail price
 list without a credential, and `offers::azure` makes the Azure offers from it.
+The UI keeps the catalog in `cloud_panel::production::prices::azure`, beside the
+other price states, for agents' `cloud_offers` requests only.
 [The Azure price catalog architecture](azure-price-catalog.md) states its trust
 boundary.
 

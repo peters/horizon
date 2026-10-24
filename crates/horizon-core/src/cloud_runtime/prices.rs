@@ -1,6 +1,8 @@
-//! Prices for choosing a worker. [`price_list`] asks `RunPod`, and [`hetzner_catalog`]
-//! asks Hetzner when this machine has a Hetzner binding.
+//! Prices for choosing a worker. [`price_list`] asks `RunPod`, [`hetzner_catalog`]
+//! asks Hetzner when this machine has a Hetzner binding, and [`azure_catalog`] reads
+//! Azure's public retail prices.
 use super::{Cancellation, Result, settings::Settings};
+pub use horizon_cloud::azure::catalog::Catalog as AzureCatalog;
 pub use horizon_cloud::hetzner::catalog::Catalog as HetznerCatalog;
 pub use horizon_cloud::runpod::prices::STORAGE as RUNPOD_STORAGE;
 pub use horizon_cloud::{
@@ -79,6 +81,16 @@ fn restrict_locations(catalog: &mut HetznerCatalog, locations: &[String]) -> Het
         server_types: 0,
         locations: excluded_locations,
     }
+}
+
+/// Azure's VM size, disk and static address prices from the public retail price list.
+/// It reads no credential and no binding, so a machine without Azure settings still
+/// prices Azure. Horizon cannot create an Azure cloud yet, so its offers are not rentable.
+/// # Errors
+/// Fails on transport and provider errors, a page not in US dollars and a malformed
+/// answer.
+pub fn azure_catalog(cancel: &Cancellation) -> Result<AzureCatalog> {
+    Ok(AzureCatalog::fetch(cancel)?)
 }
 
 /// Live stock of the CPU size `profile` asks for.
