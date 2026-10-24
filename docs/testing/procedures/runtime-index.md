@@ -65,8 +65,8 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 1. Make the persistent launcher with S02 steps 1, 2 and 5 of the
    [test fixture area](cloud-panels/s-test-fixture.md#62-s02--start-the-persistent-launcher).
 
-   Result: `<run>/launcher` has a copy of `serve.py` without `--ephemeral`, with
-   the restart branch.
+   Result: `<run>/launcher` has a copy of `serve.py` that starts the candidate with
+   `--saved-session`, with the restart branch.
 
 2. In the restart branch of the copy, add these two lines before `marker.unlink()`.
 

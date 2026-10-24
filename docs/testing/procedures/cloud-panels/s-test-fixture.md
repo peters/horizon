@@ -119,7 +119,8 @@ child is the frozen candidate.
 
    Result: The launcher copy is in a task-owned directory.
 
-2. In the launcher copy, remove `--ephemeral` from the start command of Horizon.
+2. In the launcher copy, start Horizon with `--saved-session` in place of the default
+   ephemeral session.
 
    Result: The candidate keeps its saved session. A cloud needs a saved session.
 

@@ -119,6 +119,17 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
     return fixture
 
 
+def application_command(app, config, saved_session):
+    """The command line of the candidate in the fixture.
+
+    A saved session keeps its session file in the private home of the fixture, which
+    starting a cloud needs: a cloud card belongs to a saved session. The default stays
+    ephemeral, which writes no session file.
+    """
+    session = '--new-session' if saved_session else '--ephemeral'
+    return [str(app), '--config', str(config), session]
+
+
 def main():
     if '--worker-desktop' in sys.argv[1:]:
         import worker_desktop
@@ -132,6 +143,9 @@ def main():
         '--firefox-system-access', action='store_true',
         help='Set browser.firefox_system_access in the fixture config. Firefox disclosure procedure only.')
     parser.add_argument('--state', type=Path, required=True, help='New private evidence directory')
+    parser.add_argument(
+        '--saved-session', action='store_true',
+        help='Keep the session of the fixture in its private home, which starting a cloud needs')
     parser.add_argument(
         '--presets',
         type=Path,
@@ -208,7 +222,7 @@ def main():
             str(data.resolve()), args.device_address, args.firefox_system_access, presets)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
-        application_process = spawn('horizon', [str(app), '--config', str(config), '--ephemeral'])
+        application_process = spawn('horizon', application_command(app, config, args.saved_session))
         vnc = spawn('vnc', ['x11vnc', '-norc', '-no6', '-display', env['DISPLAY'],
                            '-localhost', '-autoport', '40000', '-viewonly', '-forever',
                            '-shared', '-nopw', '-noxdamage', '-noshm'])
@@ -223,6 +237,7 @@ def main():
         manifest = {'display': env['DISPLAY'], 'viewer_url': url,
                     'vnc_address': f'127.0.0.1:{vnc_port}', 'app': str(app),
                     'pids': [p.pid for p in children], 'fixture': 'horizon-debug',
+                    'session': 'saved' if args.saved_session else 'ephemeral',
                     'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))
