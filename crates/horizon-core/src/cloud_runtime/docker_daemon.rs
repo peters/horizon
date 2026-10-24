@@ -145,7 +145,7 @@ impl Target {
         let (context, endpoint) = self.endpoint(inherited);
         let endpoint = endpoint.map(|endpoint| match endpoint {
             Endpoint::Socket(path) => Endpoint::Socket(path.canonicalize().unwrap_or(path)),
-            other => other,
+            other @ Endpoint::Remote(_) => other,
         });
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))

@@ -6,11 +6,10 @@ Windows asset. The Windows build, test and release lanes are gone, and the
 platform gate that chose a Windows code path is gone with them.
 
 Two kinds of Windows value stay. A BrowserStack target device is a remote
-device, not the platform Horizon runs on. A saved `Os::Windows` and a
-named-pipe endpoint in the Docker restart plan, the `windows` data path in the
-OpenCode lookup and the `USERPROFILE` and `APPDATA` fallbacks are values that no
-supported build reaches, because they only apply when `HOME` is unset or when
-the local operating system is Windows.
+device, not the platform Horizon runs on. Horizon also reads `USERPROFILE` when
+`HOME` is unset. A normal Linux or macOS start sets `HOME`, so this fallback
+does not change it. The Docker restart plan and the OpenCode lookup hold no
+Windows value.
 
 This document tells which Horizon functions work on Linux and macOS. It
 describes the code on `main`. It does not give a plan. Each note gives the code,
