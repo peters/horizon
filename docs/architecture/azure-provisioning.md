@@ -61,9 +61,8 @@ These items do not change:
 
 - `providers::preflight` refuses a new Azure cloud before a record is written.
   `cloud_deploy deploy`, the UI and MCP thus cannot reach the seam.
-- Each lifecycle operation of `providers::azure::Azure` (check, stop, resume,
-  release, delete) refuses. Rebuild is `Rebuild::Unsupported`: `settle` refuses a
-  requested image replacement.
+- Release refuses: an Azure profile cannot have hosted devices. Rebuild is
+  `Rebuild::Unsupported`: `settle` refuses a requested image replacement.
 - Only a direct caller of `deployment::azure::provision`, such as the loopback
   tests and the ignored live test `live_create`, creates a worker.
 
@@ -141,6 +140,23 @@ The journal in `azure.json` records each step before the next:
   after its 404 until the sweep lists nothing. `Journal::proves_absent` is true
   only with `deleting`, `swept` and the group id of this operation.
 - `provision` refuses a journal with `deleting`, before a request.
+
+### The lifecycle of an Azure cloud
+
+`providers::azure::Azure` drives `deployment::azure` for check, stop, resume
+and delete, with the VM fence in `deployment.json` and the group in `azure.json`:
+
+- The client is made from the `azure` settings. The settings must name the
+  subscription of the cloud's group, which the group id in `azure.json` names.
+- Check reads the bound VM by ownership only and reports `Found`, `Inactive` or
+  `Missing`. A VM that it finds for a requested worker is bound.
+- Stop follows `RunPod`'s contract (`request_stop`): the stop is saved first,
+  the request is announced, and the stage is `Stopped` only when ARM reports the
+  VM deallocated. A definite refusal rolls the stop back.
+- Resume starts the same VM (`request_resume`). The reconnect after it waits
+  for readiness. A cloud that is being deleted is not resumed.
+- Delete (`deletion::delete_azure`) runs the delete above with an uncancellable
+  token once it starts. The caller then records the cloud as deleted.
 
 ## Host bootstrap
 
