@@ -86,6 +86,7 @@ impl EnrollmentProvider {
             Kind::RunPod => provider::RUNPOD.id,
             Kind::Hetzner => provider::HETZNER.id,
             Kind::DockerHost => provider::DOCKER_HOST.id,
+            Kind::Azure => provider::AZURE.id,
         }
     }
 }
@@ -413,8 +414,10 @@ pub(in crate::cloud_runtime) mod tests {
         }
         assert!(serde_json::from_str::<DeviceId>("123").is_err());
         assert!(serde_json::from_str::<EnrollmentProvider>("\"unsupported\"").is_err());
-        for kind in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost] {
+        assert_eq!(EnrollmentProvider::new(Kind::Azure).as_str(), "azure");
+        for kind in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
             let provider = EnrollmentProvider::new(kind);
+            assert_eq!(EnrollmentProvider::try_from(provider.as_str().to_owned()), Ok(provider));
             assert_eq!(
                 serde_json::from_str::<EnrollmentProvider>(&serde_json::to_string(&provider).unwrap()).unwrap(),
                 provider

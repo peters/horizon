@@ -163,6 +163,7 @@ impl Backend for Live<'_> {
                 horizon_cloud::provider::Kind::RunPod => {
                     self.settings.credential()?;
                 }
+                horizon_cloud::provider::Kind::Azure => return Err(crate::cloud_runtime::providers::AZURE_REFUSED),
             }
             if matches!(
                 decision,

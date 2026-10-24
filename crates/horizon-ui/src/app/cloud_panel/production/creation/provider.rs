@@ -107,24 +107,27 @@ pub(in crate::app::cloud_panel::production) fn mark(ui: &mut egui::Ui, provider:
                 ui.painter().image(texture.id(), rect, uv, crate::theme::FG());
             }
         }
-        provider::Kind::Hetzner => {
-            ui.painter()
-                .rect_filled(rect, 3.0, egui::Color32::from_rgb(0xD5, 0x0C, 0x2D));
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "H",
-                egui::FontId::proportional(size * 0.72),
-                egui::Color32::WHITE,
-            );
-        }
+        provider::Kind::Hetzner => lettered(ui, rect, egui::Color32::from_rgb(0xD5, 0x0C, 0x2D), "H"),
         provider::Kind::DockerHost => {
             if let Some(texture) = docker_mark(ui.ctx()) {
                 let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                 ui.painter().image(texture.id(), rect, uv, egui::Color32::WHITE);
             }
         }
+        provider::Kind::Azure => lettered(ui, rect, egui::Color32::from_rgb(0x00, 0x78, 0xD4), "A"),
     }
+}
+
+/// A drawn mark: `letter` in white on a rounded square of `fill`.
+fn lettered(ui: &egui::Ui, rect: egui::Rect, fill: egui::Color32, letter: &str) {
+    ui.painter().rect_filled(rect, 3.0, fill);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        letter,
+        egui::FontId::proportional(rect.height() * 0.72),
+        egui::Color32::WHITE,
+    );
 }
 
 /// The Docker whale in Docker blue; `assets/docker-mark.svg` names its source and license.

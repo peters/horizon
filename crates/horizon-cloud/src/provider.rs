@@ -32,7 +32,7 @@ pub enum Pricing {
     /// Per vCPU-hour across CPU flavor families, such as compute-optimized; the provider
     /// allocates one of the requested flavors.
     Flavors,
-    /// Per server type and location, with a monthly cap.
+    /// Per server type and location; Hetzner caps it per month.
     ServerTypes,
     /// Nothing: the person's own machine runs the worker.
     NoRent,
@@ -143,6 +143,27 @@ pub const HETZNER: Description = Description {
     ),
 };
 
+/// Microsoft Azure, described so its place among the providers is fixed. Horizon cannot
+/// create, manage or delete an Azure cloud yet. A stop is planned to deallocate the
+/// virtual machine and keep its disks.
+pub const AZURE: Description = Description {
+    kind: Kind::Azure,
+    id: "azure",
+    label: "Azure",
+    currency: "USD",
+    net_of_vat: false,
+    gpu: false,
+    placement: Placement::Locations,
+    pricing: Pricing::ServerTypes,
+    stopped: StoppedCost::WorkerKept,
+    choices: &[],
+    creatable: crate::offers::AZURE_DEPLOYABLE,
+    registry_auth: false,
+    rebuild: Rebuild::Unsupported,
+    site: "azure.microsoft.com",
+    cpu_volume_gb: (4, 32_767),
+};
+
 /// A Docker engine the person already runs: this computer's, or one reached over SSH
 /// or Tailscale SSH. Nothing is rented, and a stop keeps the container and its volume.
 pub const DOCKER_HOST: Description = Description {
@@ -172,10 +193,11 @@ pub enum Kind {
     RunPod,
     Hetzner,
     DockerHost,
+    Azure,
 }
 
 /// Every provider a cloud can run on, in the order they are offered.
-pub const ALL: [&Description; 3] = [&RUNPOD, &HETZNER, &DOCKER_HOST];
+pub const ALL: [&Description; 4] = [&RUNPOD, &HETZNER, &DOCKER_HOST, &AZURE];
 
 /// The provider a profile names.
 #[must_use]
@@ -288,7 +310,12 @@ mod tests {
 
     #[test]
     fn every_provider_a_profile_accepts_is_described() {
-        for id in ["runpod", crate::hetzner::PROVIDER, crate::docker_host::PROVIDER] {
+        for id in [
+            "runpod",
+            crate::hetzner::PROVIDER,
+            crate::docker_host::PROVIDER,
+            AZURE.id,
+        ] {
             assert!(by_id(id).is_some(), "{id}");
         }
     }
@@ -304,6 +331,9 @@ mod tests {
         // Only RunPod stores a pull auth.
         assert_eq!((RUNPOD.registry_auth, HETZNER.registry_auth), (true, false));
         assert_eq!((RUNPOD.site, HETZNER.site), ("runpod.io", "hetzner.com"));
+        profile.provider = "azure".into();
+        assert_eq!(Description::of(&profile), &AZURE);
+        assert_ne!(Description::of(&profile), &RUNPOD);
         // A provider Horizon does not know reads as RunPod, as profiles were before providers.
         profile.provider = "elsewhere".into();
         assert_eq!(Description::of(&profile), &RUNPOD);
@@ -333,5 +363,24 @@ mod tests {
             Description::choices(&cpu, &[&DOCKER_HOST, &RUNPOD]),
             [&RUNPOD, &DOCKER_HOST]
         );
+    }
+
+    #[test]
+    fn an_azure_provider_is_described_but_not_creatable() {
+        assert_eq!(by_id("azure"), Some(&AZURE));
+        assert_eq!(AZURE.kind, Kind::Azure);
+        assert_eq!(AZURE.creatable, crate::offers::AZURE_DEPLOYABLE);
+        const { assert!(!AZURE.creatable, "nothing creates an Azure cloud yet") };
+        // Deallocate keeps the virtual machine and its disks; a stop does not delete it.
+        assert_eq!(AZURE.stopped, StoppedCost::WorkerKept);
+        assert_eq!(
+            (AZURE.placement, AZURE.pricing, AZURE.currency, AZURE.net_of_vat),
+            (Placement::Locations, Pricing::ServerTypes, "USD", false)
+        );
+        assert!(!AZURE.gpu && AZURE.choices.is_empty() && !AZURE.registry_auth);
+        let (cpu, gpu) = (profile(false), profile(true));
+        assert!(AZURE.supports(&cpu) && !AZURE.supports(&gpu));
+        // Offered for comparison only: callers refuse to create on it.
+        assert_eq!(Description::choices(&cpu, &[&AZURE, &RUNPOD]), [&RUNPOD, &AZURE]);
     }
 }

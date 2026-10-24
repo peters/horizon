@@ -274,6 +274,37 @@ fn preparation_preserves_pinned_revision_without_reading_a_repository() {
 }
 #[test]
 #[cfg(unix)]
+fn an_azure_cloud_is_refused_before_a_deployment_record_is_written() {
+    let root = tempfile::tempdir().unwrap();
+    let request = Request::new(
+        "azure-fixture".into(),
+        root.path().join("repository-is-not-mounted"),
+        "a".repeat(40),
+        serde_json::from_value(
+            serde_json::json!({"provider":"azure","image":"registry.example.com/worker","cpu":4,"memory_gb":8}),
+        )
+        .unwrap(),
+        root.path().join("state"),
+        serde_json::from_value(
+            serde_json::json!({"runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused","registry_pull_auth_id":null,"cpu_flavors":[],"gpu_types":[]}),
+        )
+        .unwrap(),
+    );
+    for refused in [prepare(&request), prepare_image_record(&request)] {
+        assert_eq!(
+            refused.unwrap_err().to_string(),
+            "Horizon cannot create clouds on Azure yet"
+        );
+    }
+    let deployed = deploy(&request, &Cancellation::default(), &|_| {}).map(drop);
+    assert_eq!(
+        deployed.unwrap_err().to_string(),
+        "Horizon cannot create clouds on Azure yet"
+    );
+    assert!(!request.state_root.join("deployment.json").exists());
+}
+#[test]
+#[cfg(unix)]
 fn retry_timing_preserves_prior_ready_history_even_after_failed_reconnect() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::lock(root.path()).unwrap();

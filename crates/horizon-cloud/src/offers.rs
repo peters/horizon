@@ -408,6 +408,10 @@ pub use workers::{Workers, workers};
 mod hetzner;
 mod picks;
 pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_catalog, hetzner_section};
+
+/// Whether Horizon can create clouds on Azure. Nothing creates, stops or deletes an Azure
+/// cloud yet (#1774), so it stays false until all of that is wired.
+pub const AZURE_DEPLOYABLE: bool = false;
 pub use picks::{Picks, Place, matches_search, picks, picks_by, picks_matching, places};
 
 #[cfg(test)]

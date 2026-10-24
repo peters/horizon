@@ -85,6 +85,7 @@ pub fn rate_coverage(provider: &Description) -> &'static str {
              VAT. Hetzner bills each started hour, up to a monthly cap, so the run estimate can trail its bill by up \
              to an hour."
         }
+        Kind::Azure => "Horizon cannot rent Azure workers yet, so no Azure rate is reported.",
     }
 }
 

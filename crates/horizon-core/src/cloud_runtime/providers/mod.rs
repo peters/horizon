@@ -3,6 +3,7 @@
 //! deployment record, its lock and what a found or terminated worker means for it.
 //! Adding a provider means one implementation here and its description in
 //! `horizon_cloud::provider`.
+mod azure;
 #[cfg(feature = "tailnet-node-cleanup")]
 mod deletion;
 mod docker_host;
@@ -18,6 +19,7 @@ use super::{
 use horizon_cloud::runpod::recovery::Reconciliation;
 use horizon_cloud::{Profile, provider::Kind};
 
+pub(super) use azure::REFUSED as AZURE_REFUSED;
 #[cfg(feature = "tailnet-node-cleanup")]
 pub(super) use deletion::confirmed as deletion_confirmed;
 
@@ -58,6 +60,8 @@ pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) 
         Kind::Hetzner => super::deployment::hetzner::preflight(cloud_id, profile, settings),
         Kind::DockerHost => docker_host::preflight(profile, settings),
         Kind::RunPod => Ok(()),
+        // The gate for every caller: a deployment record is written only after this.
+        Kind::Azure => Err(azure::NOT_CREATABLE),
     }
 }
 
@@ -66,27 +70,31 @@ pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) 
 pub(super) fn admit(settings: &Settings, profile: &Profile, image: &str, operation: &CreateState) -> Result<()> {
     match kind(profile) {
         Kind::Hetzner => super::deployment::hetzner::admit(settings, image, operation),
-        Kind::DockerHost | Kind::RunPod => Ok(()),
+        // Never reached: `preflight` and `compute` refuse an Azure cloud first.
+        Kind::DockerHost | Kind::RunPod | Kind::Azure => Ok(()),
     }
 }
 
 /// The machine types a worker may run on, in the order they are tried: `RunPod` CPU
-/// flavors, a Hetzner cloud's server types, or a Docker host cloud's saved hosts.
+/// flavors, a Hetzner cloud's server types, or a Docker host cloud's saved hosts. Azure
+/// has no catalog yet.
 pub(super) fn cpu_flavors(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
     match kind(profile) {
         Kind::Hetzner => hetzner::cpu_flavors(settings),
         Kind::DockerHost => docker_host::hosts(settings),
         Kind::RunPod => runpod::cpu_flavors(profile, settings),
+        Kind::Azure => Err(azure::NO_CATALOG),
     }
 }
 
 /// Where a worker may run: `RunPod` data centers, a Hetzner cloud's locations, or a
-/// Docker host cloud's saved hosts.
+/// Docker host cloud's saved hosts. Azure has no catalog yet.
 pub(super) fn data_centers(profile: &Profile, settings: &Settings) -> Result<Vec<String>> {
     match kind(profile) {
         Kind::Hetzner => hetzner::data_centers(settings),
         Kind::DockerHost => docker_host::hosts(settings),
         Kind::RunPod => Ok(settings.data_centers.clone()),
+        Kind::Azure => Err(azure::NO_CATALOG),
     }
 }
 
@@ -100,6 +108,7 @@ pub(super) fn compute(request: &super::deployment::Request) -> Result<Box<dyn su
             settings: &request.settings,
         }),
         Kind::RunPod => Box::new(horizon_cloud::runpod::RunPod::new(request.settings.credential()?)),
+        Kind::Azure => return Err(azure::NO_CLIENT),
     })
 }
 
@@ -110,6 +119,8 @@ pub(super) fn retained(store: &Store, state: &Deployment) -> Result<bool> {
         Kind::Hetzner => hetzner::retained(store),
         Kind::DockerHost => docker_host::retained(store),
         Kind::RunPod => runpod::retained(store, state),
+        // Nothing creates Azure resources yet, so a record cannot hold any.
+        Kind::Azure => Ok(false),
     }
 }
 
@@ -119,5 +130,65 @@ pub(super) fn lifecycle<'a>(state: &Deployment, settings: &'a Settings) -> Box<d
         Kind::Hetzner => Box::new(hetzner::Hetzner { settings }),
         Kind::DockerHost => Box::new(docker_host::DockerHost { settings }),
         Kind::RunPod => Box::new(runpod::RunPod { settings }),
+        Kind::Azure => Box::new(azure::Azure),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn azure() -> Profile {
+        serde_json::from_value(
+            serde_json::json!({"provider":"azure","image":"registry.example/worker","cpu":4,"memory_gb":8}),
+        )
+        .unwrap()
+    }
+
+    fn settings() -> Settings {
+        serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"unused","ssh_identity_file":"unused","docker_config":"unused",
+            "registry_pull_auth_id":null,"cpu_flavors":["cpu3c"],"gpu_types":[],"data_centers":["EU-RO-1"]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_azure_cloud_is_refused_before_anything_is_recorded_or_requested() {
+        let (profile, settings) = (azure(), settings());
+        assert_eq!(kind(&profile), Kind::Azure);
+        let refusal = preflight("azure-fixture", &profile, &settings).unwrap_err().to_string();
+        assert_eq!(refusal, "Horizon cannot create clouds on Azure yet");
+        let request = super::super::deployment::Request::new(
+            "azure-fixture".into(),
+            "/synthetic/not-mounted".into(),
+            "a".repeat(40),
+            profile.clone(),
+            "/synthetic/state".into(),
+            settings.clone(),
+        );
+        let client = compute(&request).err().map(|error| error.to_string());
+        assert_eq!(client.as_deref(), Some("Horizon has no Azure deployment client yet"));
+        assert_ne!(
+            client.as_deref(),
+            Some(refusal.as_str()),
+            "not read as the profile refusal"
+        );
+        // The RunPod settings in the fixture must not answer for an Azure cloud.
+        assert!(cpu_flavors(&profile, &settings).is_err());
+        assert!(data_centers(&profile, &settings).is_err());
+    }
+
+    #[test]
+    fn an_azure_record_holds_no_provider_resources() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::lock(temp.path()).unwrap();
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"azure-fixture","repository":"/synthetic/not-mounted","revision":"a",
+            "profile":azure(),"stage":"Validate","operation":{"state":"prepared"},
+            "spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        assert!(!retained(&store, &state).unwrap());
     }
 }

@@ -51,6 +51,7 @@ fn admit(store: &Store, state: &Deployment) -> Result<()> {
         Kind::RunPod | Kind::DockerHost if bound => Ok(()),
         Kind::Hetzner => hetzner_admits(store, bound),
         Kind::RunPod | Kind::DockerHost => Err(NO_WORKER),
+        Kind::Azure => Err(crate::cloud_runtime::providers::AZURE_REFUSED),
     }
 }
 
@@ -156,6 +157,7 @@ mod tests {
                 Some(r#"{"volume":{"state":"bound","worker_id":"9"},"deleting":true}"#),
                 "being deleted",
             ),
+            (record("azure", "Ready", &bound()), None, "cannot manage Azure"),
         ];
         for (index, (state, journal, refusal)) in cases.into_iter().enumerate() {
             let root = temp.path().join(index.to_string());

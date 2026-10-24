@@ -321,17 +321,22 @@ impl Profile {
         }
         let supported = matches!(
             self.provider.as_str(),
-            "runpod" | crate::hetzner::PROVIDER | crate::docker_host::PROVIDER
+            "runpod" | crate::hetzner::PROVIDER | crate::docker_host::PROVIDER | "azure"
         );
         let fixture = design_fixture && matches!(self.provider.as_str(), "daytona" | "fly");
         if !(supported || fixture) {
             return Err(ProfileError::Invalid(
-                "Supported providers are RunPod, Hetzner and Docker hosts; Daytona and Fly.io are design fixtures",
+                "Supported providers are RunPod, Hetzner, Docker hosts and Azure; Daytona and Fly.io are design fixtures",
             ));
         }
         if self.provider == crate::docker_host::PROVIDER && (self.gpu || self.capabilities.browserstack.is_some()) {
             return Err(ProfileError::Invalid(
                 "A Docker host runs CPU clouds without GPUs or hosted devices",
+            ));
+        }
+        if self.provider == crate::provider::AZURE.id && (self.gpu || self.capabilities.browserstack.is_some()) {
+            return Err(ProfileError::Invalid(
+                "Azure clouds run on CPU workers without hosted devices",
             ));
         }
         if self.provider == crate::hetzner::PROVIDER {
@@ -650,6 +655,27 @@ mod tests {
         assert!(
             profile.validate(false).is_err(),
             "hosted devices are not wired for Hetzner"
+        );
+    }
+
+    #[test]
+    fn an_azure_profile_parses_as_a_cpu_profile_without_hosted_devices() {
+        let mut config = CloudConfig::parse(EXAMPLE).unwrap();
+        config.profiles.retain(|name, _| name == "image-only");
+        config.default = "image-only".into();
+        let yaml = serde_yaml::to_string(&config)
+            .unwrap()
+            .replace("provider: runpod", "provider: azure");
+        let mut profile = CloudConfig::parse(&yaml).unwrap().profiles["image-only"].clone();
+        assert_eq!(profile.provider, crate::provider::AZURE.id);
+        assert!(profile.validate(false).is_ok());
+        profile.gpu = true;
+        assert!(profile.validate(false).is_err(), "Azure GPU clouds are out of scope");
+        profile.gpu = false;
+        profile.capabilities.browserstack = Some(crate::BrowserStack::default());
+        assert!(
+            profile.validate(false).is_err(),
+            "hosted devices are not wired for Azure"
         );
     }
 
