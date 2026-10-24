@@ -127,6 +127,9 @@ impl Drop for ProbeProcess {
     }
 }
 
+const POLL_BACKOFF_START: Duration = Duration::from_micros(50);
+const POLL_BACKOFF_LIMIT: Duration = Duration::from_millis(1);
+
 fn execute(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
     execute_input(command, timeout, Stdio::null())
 }
@@ -151,6 +154,7 @@ fn execute_input(command: &mut Command, timeout: Duration, input: Stdio) -> io::
             .spawn()?,
     );
     let deadline = Instant::now() + timeout;
+    let mut backoff = POLL_BACKOFF_START;
     loop {
         if output.stream_position()? > LIMIT || Instant::now() >= deadline {
             return Err(invalid());
@@ -161,7 +165,8 @@ fn execute_input(command: &mut Command, timeout: Duration, input: Stdio) -> io::
             }
             break;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(POLL_BACKOFF_LIMIT);
     }
     drop(child);
     let length = output.stream_position()?;
