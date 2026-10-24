@@ -58,12 +58,7 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         login,
     };
     let mut operation = state.operation.clone();
-    let mut saved = Saved {
-        store,
-        state: &mut *state,
-        observe,
-        failed: None,
-    };
+    let mut saved = Saved::new(store, &mut *state, observe);
     let worker = cloud::provision(
         &compute.client,
         request,
@@ -160,15 +155,24 @@ fn pull_login(compute: &Compute, spec: &WorkerSpec) -> Result<Option<RegistryLog
 /// The deployment record and `azure.json`, each saved durably. A save that fails is
 /// kept, so the caller reports its cause rather than the provider layer's generic
 /// persistence error.
-struct Saved<'a> {
+pub(super) struct Saved<'a> {
     store: &'a Store,
     state: &'a mut Deployment,
     observe: mutation::Observer<'a>,
     failed: Option<Error>,
 }
 
-impl Saved<'_> {
-    fn finish<T>(self, result: std::result::Result<T, CloudError>) -> Result<T> {
+impl<'a> Saved<'a> {
+    pub(super) fn new(store: &'a Store, state: &'a mut Deployment, observe: mutation::Observer<'a>) -> Self {
+        Self {
+            store,
+            state,
+            observe,
+            failed: None,
+        }
+    }
+
+    pub(super) fn finish<T>(self, result: std::result::Result<T, CloudError>) -> Result<T> {
         result.map_err(|error| match (error, self.failed) {
             (CloudError::Persistence, Some(failed)) => failed,
             (error, _) => error.into(),

@@ -1,15 +1,18 @@
 //! Deployment on Azure: one VM runs the unchanged worker image under Docker and
 //! keeps the workspace on a managed data disk, all inside the cloud's own resource
 //! group. The VM is fenced by the deployment's `operation`; the group and its region
-//! live in this cloud's `azure.json` journal.
+//! live in this cloud's `azure.json` journal. A stop deallocates the VM, Resume
+//! starts it again, and a delete removes the group and proves it absent.
 //!
-//! `providers::preflight` still refuses a new Azure cloud and every lifecycle
-//! operation refuses it (`offers::AZURE_DEPLOYABLE` is `false`), so only a caller
-//! that drives this module directly, such as its loopback tests, creates a worker.
+//! `providers::preflight` still refuses a new Azure cloud
+//! (`offers::AZURE_DEPLOYABLE` is `false`), so only a caller that drives this module
+//! directly, such as its loopback tests, creates a worker.
+mod lifecycle;
 mod provision;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::cloud_runtime) use lifecycle::{check, client, delete, resume, stop};
 pub(super) use provision::{provision, wait};
 
 use super::{Error, Result, Settings};
