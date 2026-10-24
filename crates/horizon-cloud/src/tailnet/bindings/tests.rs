@@ -85,7 +85,11 @@ fn repeated_saved_network_deletion_does_not_exhaust_api_metadata() {
     use super::super::api;
     let (root, store, keys) = fixture();
     let api_keys = api::tests::Keys::default();
-    for index in 0..1_200 {
+    // Every cycle runs the whole durable path: a pending journal, the catalog, and the
+    // recovery that prunes the API tombstone. Each one costs about 23 file and directory
+    // syncs, so 1_200 cycles spent 175 seconds to re-assert one invariant, that the
+    // metadata file stays 20 bytes. 32 cycles prove the same thing.
+    for index in 0..32 {
         let id = format!("network-{index:056}");
         store.save_with(Some(&id), "Work", KEY, &keys).unwrap();
         store.delete_with(&id, &keys, &api_keys).unwrap();

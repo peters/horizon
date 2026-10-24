@@ -1002,7 +1002,11 @@ fn provider_retention_uses_legacy_completed_records_after_actor_restart() {
     let Fixture { workspace, fake, root } = fixture;
     let owner = workspace.owner();
     let path = root.path().canonicalize().unwrap();
-    for index in 0..500 {
+    // The retention window is 32 records, so 64 legacy records of both kinds already
+    // exceeds it and the prune keeps the newest 32. Every record is a durable journal
+    // edit that re-reads and re-serializes the ledger, so the cost of 500 was quadratic
+    // in a history that the assertion never looks at.
+    for index in 0..64 {
         let kind = if index % 2 == 0 { Kind::Upload } else { Kind::Session };
         let record = workspace
             .journal()
