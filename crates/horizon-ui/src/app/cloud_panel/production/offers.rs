@@ -429,7 +429,7 @@ mod tests {
             (azure["provider"].as_str(), azure["currency"].as_str()),
             (Some("Azure"), Some("USD"))
         );
-        assert_eq!(azure["deployable"], false);
+        assert_eq!(azure["deployable"], true);
         assert_eq!(azure["offers"][0]["id"], "Standard_D4s_v3");
         assert_eq!(azure["offers"][0]["rentable"], false);
         let total = azure["offers"][0]["estimated_total"].as_f64().unwrap();

@@ -24,7 +24,7 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
   - The rebuild of an Azure cloud. It stays refused.
-  - Azure in the New cloud dialog. The dialog lists a provider only when its prices are bound, and Azure has no such binding until a later part of #1774. A profile with `provider: azure` stays at "Checking the Azure account", so Start stays off.
+  - Azure in the New cloud dialog, past its checks. Azure has no price binding until a later part of #1774, so the dialog cannot start an Azure profile. AZV-17 examines the check rows that tell the person this.
 
 ## 3. Safety
 
@@ -325,6 +325,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    ```sh
    cargo test -p horizon-cloud --lib -- provider::tests::an_azure offers::azure
    cargo test -p horizon-core --lib -- cloud_panel::selection cloud_runtime::cost::tests::a_stopped_azure
+   cargo test -p horizon-ui --bin horizon -- creation::checks::tests::an_azure
    ```
 
    Result: All tests pass. These tests examine the items that follow:
@@ -332,6 +333,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The Azure section of `cloud_offers` has `deployable: true`. Each Azure offer has `rentable: false`.
    - A worker choice of an Azure offer is refused with "An Azure cloud runs on the VM sizes and regions of the azure cloud settings; start it without a worker choice".
    - The rate text of an Azure cloud says that Azure reports no hourly rate, and that a stop deallocates the VM and ends the compute charge while the disks and the static address bill until the cloud is deleted.
+   - In New cloud, an Azure profile does not stay at a pending "Checking the Azure account" row. When the `azure` settings pass, the row fails with "New cloud cannot start an Azure profile on this machine yet". Without the `azure` section, the row names the missing section. Start stays off, and the dialog shows no RunPod or Hetzner key form for the Azure profile. A Hetzner profile in the same configuration is checked as before.
 
 ### 6.18 AZV-L1 — Create one live Azure worker
 
