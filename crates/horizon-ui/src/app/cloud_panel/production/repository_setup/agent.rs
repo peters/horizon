@@ -251,11 +251,10 @@ fn run_bounded(mut command: std::process::Command, limit: Duration) -> Option<st
 
 /// The command line that starts a program inside a new systemd user scope `unit`, or
 /// none where Horizon cannot make one: everything the program starts is held in it
-/// from its first instruction.
+/// from its first instruction. A setup agent starts on Linux only, where its dialog is
+/// offered, so the probe finds a systemd user manager only where a scope can exist: a
+/// Linux computer without one, or another system, gives none.
 pub(super) fn scope_launcher(unit: &str) -> Option<Vec<String>> {
-    if !cfg!(target_os = "linux") {
-        return None;
-    }
     let mut probe = std::process::Command::new("systemd-run");
     probe.args(["--user", "--scope", "--quiet", "--collect", "true"]);
     let works = run_bounded(probe, SYSTEMD_TIMEOUT).is_some_and(|output| output.status.success());

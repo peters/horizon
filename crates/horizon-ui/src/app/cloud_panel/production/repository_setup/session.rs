@@ -217,10 +217,7 @@ impl HorizonApp {
         }
         let kind = preset.kind;
         let (args, pending_prompt) = launch_task(&preset, instructions);
-        // An agent starts only inside a scope that holds all its descendants: without
-        // one, a process it started could leave its group and keep writing while Use
-        // reads and commits.
-        let Some(launcher) = launcher.or_else(|| (!kind.is_agent()).then(Vec::new)) else {
+        let Some(launcher) = setup_launch_wrapper(kind, launcher) else {
             self.cloud_prototype.production.setup_mode = chosen_mode;
             run::remove_run_folder(&status);
             self.cloud_prototype.error = Some(NO_SCOPE.into());
@@ -826,6 +823,17 @@ impl HorizonApp {
     }
 }
 
+/// The wrapper the setup panel starts under, or none when an agent has no scope to start
+/// in. An agent starts only inside a scope that holds all its descendants: without one, a
+/// process it started could leave its group and keep writing while Use reads and commits.
+/// Every preset the dialog offers is an agent, so a setup that starts from the dialog
+/// always starts in its scope. A panel that runs no agent process starts no process that
+/// could outlive it, so it needs no scope: the start tests follow a setup with such a
+/// panel, which needs no agent login and no systemd user session.
+fn setup_launch_wrapper(kind: horizon_core::PanelKind, scope: Option<Vec<String>>) -> Option<Vec<String>> {
+    scope.or_else(|| (!kind.is_agent()).then(Vec::new))
+}
+
 /// The preset's arguments and the instructions still to paste: an agent whose command
 /// line takes the message starts on its task, and the others get it pasted into their
 /// prompt once their session has settled.
@@ -949,6 +957,26 @@ fn list_changed_files(run: &mut Run, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panel_that_runs_no_agent_process_needs_no_scope() {
+        let scope = Some(vec!["systemd-run".to_owned(), "--scope".to_owned()]);
+        assert_eq!(
+            setup_launch_wrapper(PanelKind::Claude, scope.clone()),
+            scope,
+            "an agent starts inside its scope"
+        );
+        assert_eq!(
+            setup_launch_wrapper(PanelKind::Claude, None),
+            None,
+            "an agent with no scope to start in does not start"
+        );
+        assert_eq!(
+            setup_launch_wrapper(PanelKind::Usage, None),
+            Some(Vec::new()),
+            "a panel that runs no process needs no scope"
+        );
+    }
 
     // The setup agent is offered on Linux only.
     #[cfg(target_os = "linux")]
