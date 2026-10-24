@@ -28,6 +28,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | test tailnet | A tailnet that only tests use. | — |
 | contract marker | A line, for example `horizon-tailnet-contract=4`, that a worker image reports to show a function. | — |
 | nonce | A random value that a run makes one time. A reply that contains it is current. | token |
+| scripted agent | An HTTP agent in a test that answers each request from a list of expected requests and answers. It sends nothing to a network. | mock server |
 | proof | The image build, worker check, CI run and fast rerun that Horizon does for a `.horizon` setup that the setup agent wrote. | - |
 | setup gate | The tool `scripts/setup-gate.py`. It runs the proof and the desktop preview on a list of real repositories. | real-repository harness |
 | gate list | The JSON file that names the repositories of the setup gate, one entry for each repository. | - |
@@ -51,6 +52,8 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | profile | A named entry under `profiles:` in `.horizon/cloud.yml`. | flavor, preset |
 | provider | A compute vendor that Horizon supports, for example RunPod or Hetzner. | vendor, backend |
 | offer | One worker type with a price from a provider catalog. | quote, SKU |
+| ARM | Azure Resource Manager, the management API of Azure. | Azure API, management plane |
+| resource group | An Azure container for resources. Horizon gives each operation one resource group. | RG |
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
 | API credential | A personal API token or OAuth client that the host stores for a saved tailnet. | auth key (for API access) |

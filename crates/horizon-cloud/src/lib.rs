@@ -2,6 +2,7 @@
 //! panel layout, repository preparation and agent execution do not.
 #![forbid(unsafe_code)]
 
+pub mod azure;
 mod capabilities;
 pub mod companions;
 pub mod docker_host;
