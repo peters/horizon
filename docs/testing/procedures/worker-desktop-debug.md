@@ -46,7 +46,7 @@ these items:
 ## 4. Equipment and preconditions
 
 - The [local device smoke fixture](../../../scripts/device-smoke/README.md),
-  started as a persistent launcher without `--ephemeral`, as in
+  started as a persistent launcher with `--saved-session`, as in
   [S02](cloud-panels/s-test-fixture.md#62-s02--start-the-persistent-launcher).
 - A Device panel that shows a live view of the fixture.
 - A client candidate in the fixture, with a cloud settings file that has a

@@ -65,8 +65,9 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 1. Make the persistent launcher with S02 steps 1, 2 and 5 of the
    [test fixture area](cloud-panels/s-test-fixture.md#62-s02--start-the-persistent-launcher).
 
-   Result: `<run>/launcher` has a copy of `serve.py` that starts the candidate with
-   `--saved-session`, with the restart branch.
+   Result: `<run>/launcher` has a copy of `serve.py` with the restart branch. You
+   pass `--saved-session` when you start it, so the candidate keeps a saved
+   session.
 
 2. In the restart branch of the copy, add these two lines before `marker.unlink()`.
 
@@ -91,10 +92,11 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 4. Start the persistent launcher with a new state directory.
 
    ```sh
-   python3 <run>/launcher/serve.py --horizon <run>/bin/horizon --native-view --state <state>
+   python3 <run>/launcher/serve.py --horizon <run>/bin/horizon --native-view --saved-session --state <state>
    ```
 
-   Result: The output shows a `vnc_address`.
+   Result: The output shows a `vnc_address`. `<state>/lab.json` shows `"session":
+   "saved"`.
 
 5. Do [S03](cloud-panels/s-test-fixture.md#63-s03--show-the-fixture-in-a-device-panel)
    and [S04](cloud-panels/s-test-fixture.md#64-s04--make-sure-that-the-frozen-candidate-runs).

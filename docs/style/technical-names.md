@@ -17,7 +17,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
 | run | One execution of a procedure on one candidate. | pass (as a noun for a run), session |
 | evidence | Screenshots, recordings, logs and hashes from a run. Keep private evidence out of the repository. | proof |
-| persistent launcher | A task-owned copy of the fixture that keeps its saved session. It runs the candidate without `--ephemeral`. | persistent fixture |
+| persistent launcher | A task-owned copy of the fixture that keeps its saved session. Start it with `--saved-session`. | persistent fixture |
 | restart marker | The file `restart-request` in the state directory of the persistent launcher. When the candidate stops, the launcher finds the file and starts the candidate again. | restart flag |
 | fixture terminal | A local terminal panel of the candidate that is not in a cloud. Its commands run inside the fixture. | — |
 | worker shell | A Shell panel of a cloud. Its commands run on the worker. | remote terminal |
