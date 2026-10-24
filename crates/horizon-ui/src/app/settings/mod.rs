@@ -516,6 +516,10 @@ fn render_settings_panel(
                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
         )
         .show(ui, |ui| {
+            // The panel is a fraction of the viewport, so its content draws
+            // inside its own rect: a wide child scrolls or clips instead of
+            // painting over the canvas beside it.
+            ui.shrink_clip_rect(ui.max_rect());
             // The bar belongs to this panel, so the status line and its buttons
             // sit with the settings instead of under the canvas.
             let action = bar::render(

@@ -29,14 +29,18 @@ pub(super) fn render(ui: &mut Ui, config_path: &str, buffer: &mut String, availa
         .corner_radius(8)
         .inner_margin(Margin::same(12))
         .show(ui, |ui| {
-            egui::ScrollArea::vertical()
+            // The editor keeps the panel's width and scrolls to the right, so a
+            // long line never makes the panel wider: the panel is a fraction of
+            // the viewport and the canvas draws beside it.
+            let width = (ui.available_width() - ui.spacing().scroll.bar_width).max(1.0);
+            egui::ScrollArea::both()
                 .max_height(available.y - 48.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.add(
                         egui::TextEdit::multiline(buffer)
                             .font(font_id)
-                            .desired_width(available.x)
+                            .desired_width(width)
                             .desired_rows(40)
                             .frame(egui::Frame::NONE)
                             .layouter(&mut layouter),
