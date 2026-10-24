@@ -73,6 +73,28 @@ pub(in crate::cloud_runtime) fn delete_hetzner(
     super::hetzner::lifecycle::delete(store, state, settings, &committed())
 }
 
+/// Deletes an Azure cloud's resource group, which holds its VM, disks, address and
+/// network, and proves the group and every resource tagged with the cloud absent.
+/// # Errors
+/// Reports provider and persistence failures, leaving records a retry resumes from.
+pub(in crate::cloud_runtime) fn delete_azure(
+    store: &Store,
+    state: &mut Deployment,
+    settings: &Settings,
+    cancel: &Cancellation,
+    emit: &dyn Fn(Event),
+) -> Result<()> {
+    let client = super::azure::client(settings, store)?;
+    deletion_step(
+        emit,
+        Stage::DeleteWorker,
+        "Deleting the Azure resource group and confirming its removal",
+    );
+    // Once deletion starts it runs to the end; each step is recorded so it can resume.
+    cancel.check()?;
+    super::azure::delete(&client, store, state, &committed())
+}
+
 /// Terminates a `RunPod` cloud's identity-checked worker, releasing its hosted devices
 /// first, then deletes its managed workspace storage.
 /// # Errors
