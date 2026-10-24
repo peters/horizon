@@ -5,6 +5,10 @@
 //! YAML serialization into files that scripts only read, so none is interpolated
 //! into a shell command. The one number the start script embeds, the shared
 //! memory size, is range-checked first.
+//!
+//! A [`Platform`] says what the host must do itself before the worker starts: a
+//! Hetzner `docker-ce` server has Docker and an ext4 volume already, while a plain
+//! Ubuntu VM on Azure installs Docker and formats its blank data disk once.
 pub mod pull;
 
 use crate::{CloudError, Credential, valid_image};
@@ -28,6 +32,14 @@ const START: &str = "/usr/local/sbin/horizon-worker-start";
 const INGRESS: &str = "/usr/local/sbin/horizon-worker-ingress";
 const UNIT: &str = "/etc/systemd/system/horizon-worker.service";
 const DEVICE_PREFIX: &str = "/dev/disk/by-id/";
+/// The stable path of an Azure VM's data disk on LUN 0, made by the Azure Linux
+/// agent's udev rules from the disk's LUN, so it is known before the VM exists.
+pub const AZURE_DATA_DISK: &str = "/dev/disk/azure/scsi1/lun0";
+/// The ext4 label the host gives a data disk it formats.
+const WORKSPACE_LABEL: &str = "horizon-ws";
+/// Azure's platform address (`WireServer`). It serves the VM's goal state, which
+/// carries the custom data and so any registry login in it.
+pub const AZURE_WIRESERVER: &str = "168.63.129.16";
 
 /// A private registry the host logs in to before pulling the image.
 #[derive(Debug)]
@@ -52,6 +64,20 @@ impl RegistryLogin {
     }
 }
 
+/// What the host image provides before the bootstrap runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Platform {
+    /// Docker is installed and the volume arrives formatted as ext4, as on
+    /// Hetzner's `docker-ce` image. The user data is unchanged by this type.
+    #[default]
+    Prepared,
+    /// A plain Ubuntu VM on Azure: cloud-init installs Docker from Ubuntu, formats
+    /// the data disk at [`AZURE_DATA_DISK`] as ext4 only when it holds no
+    /// filesystem, and the guard also closes Azure's platform address and every
+    /// IPv6 path out of the container.
+    Azure,
+}
+
 #[derive(Debug)]
 pub struct Plan {
     /// An immutable image reference, `name@sha256:<digest>`.
@@ -59,24 +85,43 @@ pub struct Plan {
     /// The container's environment, such as `PUBLIC_KEY` and `HORIZON_CLOUD_OPERATION`.
     pub environment: BTreeMap<String, String>,
     pub registry: Option<RegistryLogin>,
-    /// The attached volume's stable device path under `/dev/disk/by-id/`. The
-    /// provider formats it as ext4; the host never formats a volume.
+    /// The attached volume's stable device path: under `/dev/disk/by-id/` for a
+    /// [`Platform::Prepared`] host, whose provider formats it, or exactly
+    /// [`AZURE_DATA_DISK`] for an Azure host, which formats it once itself.
     pub workspace_device: String,
     /// Size of `/dev/shm` in GB, which Chromium needs beyond Docker's 64 MB default.
     pub shm_gb: u8,
     /// Explicitly requested only when this new host is provisioned.
     pub exposure_ingress: bool,
+    pub platform: Platform,
 }
 
 /// Serialized in field order; `write_files` is last so the registry login can be
 /// appended to that list without passing through the YAML serializer.
 #[derive(Serialize)]
 struct CloudConfig<'a> {
+    // Absent for a prepared host, so its user data keeps its bytes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    package_update: bool,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    packages: &'a [&'a str],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fs_setup: Vec<FsSetup<'a>>,
     ssh_pwauth: bool,
     disable_root: bool,
     mounts: Vec<[&'a str; 6]>,
     runcmd: Vec<Vec<&'a str>>,
     write_files: Vec<WriteFile<'a>>,
+}
+/// cloud-init's `fs_setup` entry. With `overwrite: false` cloud-init leaves a device
+/// that already holds a filesystem as it is, so a reboot never formats the workspace.
+#[derive(Serialize)]
+struct FsSetup<'a> {
+    label: &'a str,
+    filesystem: &'a str,
+    device: &'a str,
+    partition: &'a str,
+    overwrite: bool,
 }
 #[derive(Serialize)]
 struct WriteFile<'a> {
@@ -98,7 +143,7 @@ impl Plan {
         let (image, setup, guard, start, unit) = (
             format!("{}\n", self.image),
             setup_script(),
-            guard_script(),
+            guard_script(self.platform),
             if self.exposure_ingress {
                 format!(
                     "#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} {}\n",
@@ -126,7 +171,21 @@ impl Plan {
         if self.exposure_ingress {
             write_files.push(file(INGRESS, "0700", include_str!("host/ingress.py")));
         }
+        let azure = self.platform == Platform::Azure;
         let config = CloudConfig {
+            package_update: azure,
+            packages: if azure { &["docker.io"] } else { &[] },
+            fs_setup: if azure {
+                vec![FsSetup {
+                    label: WORKSPACE_LABEL,
+                    filesystem: "ext4",
+                    device: &self.workspace_device,
+                    partition: "none",
+                    overwrite: false,
+                }]
+            } else {
+                Vec::new()
+            },
             ssh_pwauth: false,
             disable_root: true,
             write_files,
@@ -183,16 +242,27 @@ impl Plan {
                 "Worker environment names use A-Z, 0-9 and underscores, and values are single-line text",
             ));
         }
-        let device = self.workspace_device.strip_prefix(DEVICE_PREFIX).unwrap_or_default();
-        if device.is_empty()
-            || device.starts_with('.')
-            || !device
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
-        {
-            return Err(CloudError::Invalid(
-                "Workspace device must be a stable path under /dev/disk/by-id/",
-            ));
+        match self.platform {
+            Platform::Prepared => {
+                let device = self.workspace_device.strip_prefix(DEVICE_PREFIX).unwrap_or_default();
+                if device.is_empty()
+                    || device.starts_with('.')
+                    || !device
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+                {
+                    return Err(CloudError::Invalid(
+                        "Workspace device must be a stable path under /dev/disk/by-id/",
+                    ));
+                }
+            }
+            // The host formats this device, so only the one disk Azure attaches is accepted.
+            Platform::Azure if self.workspace_device != AZURE_DATA_DISK => {
+                return Err(CloudError::Invalid(
+                    "An Azure workspace device must be the data disk on LUN 0",
+                ));
+            }
+            Platform::Azure => {}
         }
         if !(1..=64).contains(&self.shm_gb) {
             return Err(CloudError::Invalid("Shared memory must be between 1 and 64 GB"));
@@ -403,9 +473,14 @@ systemctl enable --now horizon-worker.service
 
 /// Runs before every container start. The metadata service serves the user data,
 /// including any registry credential, so the container must never reach it or
-/// anything else link-local.
-fn guard_script() -> String {
-    format!(
+/// anything else link-local. On Azure the platform address serves the same custom
+/// data, so it is closed too, and so is every forwarded IPv6 packet from the
+/// container's bridge: the worker has no IPv6 address to use, and a later IPv6
+/// bridge cannot open a path the IPv4 rules do not see. Each rule is checked
+/// before it is added, so a restart adds none twice, and `set -eu` keeps the
+/// container stopped when a rule cannot be applied.
+fn guard_script(platform: Platform) -> String {
+    let mut script = format!(
         "#!/bin/sh
 set -eu
 command -v docker >/dev/null || {{ echo 'horizon-worker: Docker is not installed on this host' >&2; exit 1; }}
@@ -413,7 +488,16 @@ mountpoint -q {VOLUME_MOUNT} || {{ echo 'horizon-worker: the workspace volume is
 mkdir -p {WORKSPACE}
 iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
 "
-    )
+    );
+    if platform == Platform::Azure {
+        let _ = write!(
+            script,
+            "iptables -C DOCKER-USER -d {AZURE_WIRESERVER}/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d {AZURE_WIRESERVER}/32 -j DROP
+ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i docker0 -j DROP
+"
+        );
+    }
+    script
 }
 
 /// Pulls the image once, retrying, and keeps it cached so restarts need no registry.

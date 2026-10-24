@@ -262,6 +262,7 @@ pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogi
         workspace_device: device.to_owned(),
         shm_gb: shared_memory_gb(spec.profile.memory_gb),
         exposure_ingress: spec.profile.bootstrap.exposure_ingress,
+        platform: host::Platform::Prepared,
     })
 }
 

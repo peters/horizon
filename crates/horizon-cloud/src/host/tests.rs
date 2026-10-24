@@ -19,6 +19,7 @@ fn plan() -> Plan {
         workspace_device: "/dev/disk/by-id/scsi-0HC_Volume_101".into(),
         shm_gb: 2,
         exposure_ingress: false,
+        platform: Platform::Prepared,
     }
 }
 
@@ -324,4 +325,114 @@ fn json_is_written_into_a_fixed_wiped_buffer_or_refused() {
         super::json_in_wiped(&value, 8).is_err(),
         "an oversized value fails without growing the buffer"
     );
+}
+
+fn azure_plan() -> Plan {
+    Plan {
+        workspace_device: AZURE_DATA_DISK.into(),
+        platform: Platform::Azure,
+        ..plan()
+    }
+}
+
+/// The guard every host rendered before Azure existed, byte for byte.
+const PREPARED_GUARD: &str = "#!/bin/sh
+set -eu
+command -v docker >/dev/null || { echo 'horizon-worker: Docker is not installed on this host' >&2; exit 1; }
+mountpoint -q /mnt/horizon-volume || { echo 'horizon-worker: the workspace volume is not mounted' >&2; exit 1; }
+mkdir -p /mnt/horizon-volume/workspace
+iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
+";
+
+#[test]
+fn a_prepared_host_keeps_its_user_data() {
+    let document = plan().cloud_config().unwrap();
+    let config: Value = serde_yaml::from_str(&document).unwrap();
+    let keys: Vec<&str> = config
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .map(|key| key.as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["ssh_pwauth", "disable_root", "mounts", "runcmd", "write_files"]);
+    assert_eq!(content(&config, GUARD), PREPARED_GUARD);
+    for absent in [
+        "package_update",
+        "packages",
+        "fs_setup",
+        "168.63",
+        "ip6tables",
+        "docker.io",
+    ] {
+        assert!(!document.contains(absent), "{absent}");
+    }
+}
+
+#[test]
+fn an_azure_host_installs_docker_and_formats_only_a_blank_data_disk() {
+    let document = azure_plan().cloud_config().unwrap();
+    let config: Value = serde_yaml::from_str(&document).unwrap();
+    assert_eq!(config["package_update"], Value::Bool(true));
+    assert_eq!(config["packages"], serde_yaml::to_value(["docker.io"]).unwrap());
+    assert_eq!(
+        config["fs_setup"],
+        serde_yaml::to_value([serde_json::json!({
+            "label": "horizon-ws", "filesystem": "ext4", "device": AZURE_DATA_DISK,
+            "partition": "none", "overwrite": false
+        })])
+        .unwrap()
+    );
+    assert_eq!(config["mounts"][0][0].as_str(), Some(AZURE_DATA_DISK));
+    assert_eq!(config["mounts"][0][1].as_str(), Some(VOLUME_MOUNT));
+    // Everything else is the prepared host's bootstrap.
+    let prepared = parse(&plan());
+    for path in [ENVIRONMENT_FILE, IMAGE_FILE, SETUP, START, UNIT, REGISTRY_FILE] {
+        assert_eq!(file(&config, path), file(&prepared, path), "{path}");
+    }
+    assert_eq!(config["runcmd"], prepared["runcmd"]);
+}
+
+#[test]
+fn an_azure_guard_closes_both_metadata_addresses_and_ipv6_before_every_start() {
+    let config = parse(&azure_plan());
+    let guard = content(&config, GUARD);
+    assert!(
+        guard.starts_with(PREPARED_GUARD),
+        "the link-local rule, IMDS 169.254.169.254 included, stays"
+    );
+    for rule in [
+        "iptables -C DOCKER-USER -d 168.63.129.16/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 168.63.129.16/32 -j DROP",
+        "ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i docker0 -j DROP",
+    ] {
+        assert!(guard.lines().any(|line| line == rule), "{rule}");
+    }
+    let unit = content(&config, UNIT);
+    assert!(unit.find(&format!("ExecStartPre={GUARD}")).unwrap() < unit.find(&format!("ExecStart={START}")).unwrap());
+    let start = content(&config, START);
+    for address in ["169.254", "168.63", "ip6tables"] {
+        assert!(!start.contains(address), "{address}");
+    }
+}
+
+#[test]
+fn an_azure_host_formats_no_device_but_its_data_disk() {
+    for device in [
+        "/dev/disk/by-id/scsi-0HC_Volume_101",
+        "/dev/sdc",
+        "/dev/disk/azure/scsi1/lun1",
+        "/dev/disk/azure/scsi1/lun0/../../root",
+        "",
+    ] {
+        let plan = Plan {
+            workspace_device: device.into(),
+            ..azure_plan()
+        };
+        assert!(matches!(plan.cloud_config(), Err(CloudError::Invalid(_))), "{device}");
+    }
+    // A prepared host never takes the Azure path, which it would not format.
+    let plan = Plan {
+        workspace_device: AZURE_DATA_DISK.into(),
+        ..plan()
+    };
+    assert!(plan.cloud_config().is_err());
 }
