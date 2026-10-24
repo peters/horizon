@@ -2,8 +2,8 @@
 procedure: azure-provisioning
 feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
 platforms: [linux]
-cost: rents compute   # task AZV-L1 only; tasks AZV-01 to AZV-13 cost nothing
-destructive: yes      # task AZV-L1 cleanup deletes the test resource group
+cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-17 cost nothing
+destructive: yes      # task AZV-L2 and the cleanup delete the test resource groups
 secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
 ---
@@ -19,30 +19,29 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 - Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-13 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
-- Task AZV-L1 is the live acceptance. It creates one real VM in an Azure subscription and needs the Azure CLI.
+- Tasks AZV-01 to AZV-17 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-L1 and AZV-L2 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. Both need the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
-  - The stop, resume and delete of an Azure cloud through its card. They stay refused.
   - The rebuild of an Azure cloud. It stays refused.
-  - Azure in the New cloud dialog. `offers::AZURE_DEPLOYABLE` stays `false`.
+  - Azure in the New cloud dialog, past its checks. Azure has no price binding until a later part of #1774, so the dialog cannot start an Azure profile. AZV-17 examines the check rows that tell the person this.
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-13 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-17 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
 > **CAUTION:** TASK AZV-L1 SENDS THE ARM BEARER TOKEN TO `management.azure.com`. Keep the token file private (`0600`) and delete it after the run.
 
-> **CAUTION:** THE AZV-L1 CLEANUP DELETES THE RESOURCE GROUP `horizon-ws-<cloud id>`. Examine the group name and its `horizon-operation` tag before you delete it.
+> **CAUTION:** TASK AZV-L2 AND THE CLEANUP DELETE THE RESOURCE GROUP `horizon-ws-<cloud id>` AND ALL DATA ON ITS DISKS. Examine the group name and its `horizon-operation` tag before you delete it.
 
 ## 4. Equipment and preconditions
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-13: no Azure account, Azure credential or provider key.
-- For task AZV-L1: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
+- For tasks AZV-01 to AZV-17: no Azure account, Azure credential or provider key.
+- For tasks AZV-L1 and AZV-L2: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
 
@@ -212,9 +211,9 @@ Do the tasks in order. Each task has a stable ID for the report.
    - A token file that others can read, or with two words, is refused.
    - Without an `azure` section, `cpu_flavors` and `data_centers` refuse. The `RunPod` settings do not answer for an Azure cloud.
    - With an `azure` section, `cpu_flavors` and `data_centers` give the VM sizes and regions in the settings order, and `compute` gives a client without a request.
-   - Without an `azure` section, `compute` gives "Add an azure section to the cloud settings before deploying an Azure cloud". This text is not the preflight refusal.
-   - `preflight` still gives "Horizon cannot create clouds on Azure yet", and `offers::AZURE_DEPLOYABLE` is `false`.
-   - Each lifecycle operation still refuses with "Horizon cannot manage Azure clouds yet".
+   - Without an `azure` section, `preflight` and `compute` give "Add an azure section to the cloud settings before deploying an Azure cloud".
+   - With an `azure` section, `preflight` admits the profile. It refuses a workspace disk of 3 GB, a cloud id of 80 characters or with a dot, a profile that no VM size of the settings fits, and an unreadable token file.
+   - Without an `azure` section, check, stop, resume and delete refuse with the same text and write no file. Release refuses with "Azure clouds hold no hosted devices to release".
    - `retained` is true when `azure.json` has a group fence at `requested` or `bound`.
 
 ### 6.11 AZV-11 — Check the scripted create through the deployment records
@@ -269,7 +268,74 @@ Do the tasks in order. Each task has a stable ID for the report.
    - Only a journal with `deleting`, `swept` and the group id of this operation proves absence.
    - `provision` refuses a cloud that is being deleted, before a request.
 
-### 6.14 AZV-L1 — Create one live Azure worker
+### 6.14 AZV-14 — Check the stop, resume and delete through the deployment records
+
+1. Run the loopback lifecycle tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::deployment::azure::tests::lifecycle
+   ```
+
+   Result: 9 tests pass. These tests examine the items that follow:
+   - A stop saves `stop_requested` and the stage `Stopping` before it announces the request. It sends one `POST .../worker/deallocate`. The record then has the stage `Stopped`, the same bound `vmId` and a stopped worker. A check after it gives `Inactive`, and `confirmed_stopped` is true. `retained` stays true.
+   - After a stop request with a lost answer (503), the stop stays recorded and pending. The retry finds the VM deallocated, sends nothing and settles the stop.
+   - A stop that ARM refuses (403) rolls the stop back to `Ready`.
+   - A resume sends one `POST .../worker/start` to the same VM. The record has the stage `Readiness`, no stop and a resume time.
+   - A resume of a cloud that is being deleted, and a stop or resume without a bound VM, are refused before a request.
+   - A check binds a VM that it finds for a requested worker, and gives `Missing` for a bound VM that is gone. A worker hint of another VM is refused.
+   - A delete sends the `GET`, `DELETE`, `GET` (404) of the group and then the tag sweep. Then `azure.json` proves absence, `retained` is false and the VM fence is `terminated`.
+   - A delete that fails keeps `deleting`, the bound VM fence and `retained`.
+   - Settings that name another subscription than the cloud's group are refused.
+
+### 6.15 AZV-15 — Check the deletion proof and the reconnect admission
+
+1. Run the deletion proof, removal and reconnect tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::tailnet::cleanup cloud_runtime::lifecycle::tests::an_azure cloud_runtime::deployment::reconnect cloud_runtime::deployment::tests::an_azure cloud_runtime::deployment::redeploy
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - `providers::deletion` confirms an Azure deletion only from an `azure.json` with `deleting`, `swept` and the group `terminated` with the id of this cloud's group.
+   - The proof is refused for the group of another cloud, a journal without `swept`, a bound group, an unknown field, a bound VM fence, a journal above 1 MiB, and a `docker-host.json`, `hetzner.json` or `workspace-volume.json` beside it. An `azure.json` beside a Docker host journal refuses that proof too.
+   - Tailnet node cleanup of an Azure receipt runs after the proof, and an unsettled `azure.json` stops it before an HTTP request.
+   - `can_remove` is false while the group is bound, and after its 404 until the sweep. It is true after the proof. `can_remove_without_deployment` is false while `azure.json` exists.
+   - A reconnect admits a bound Azure record. It refuses a record without a bound VM, a stopped record and a cloud whose `azure.json` has `deleting`, before a provider request.
+   - A redeploy of a `Deleted` Azure record is refused before a save. The message tells the person to remove the card and create a new cloud. The record and its `azure.json` do not change. A reconnect of that record gets the same message.
+   - Without an `azure` section, a deploy is refused before a deployment record is written.
+
+### 6.16 AZV-16 — Check the companion path and the agent stop
+
+1. Run the companion and agent stop tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::companions::lifecycle::tests::an_azure cloud_runtime::companions::lifecycle::tests::the_live_backend_needs_the_azure cloud_runtime::lifecycle::agent_stop
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - A companion's Ensure Ready on a bound Azure record runs. An `azure.json` with `deleting` refuses it.
+   - An `azure.json` without its deployment record stops a companion before a decision.
+   - Without an `azure` section, the companion's stop, resume and reconnect give "Configure this cloud provider before executing".
+   - Horizon reads an agent's stop request from a ready Azure worker once, as from a Hetzner or Docker host worker.
+
+### 6.17 AZV-17 — Check that Azure is a provider Horizon creates on
+
+1. Run the provider, offer, selection and cost tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- provider::tests::an_azure offers::azure
+   cargo test -p horizon-core --lib -- cloud_panel::selection cloud_runtime::cost::tests::a_stopped_azure
+   cargo test -p horizon-ui --bin horizon -- creation::checks::tests::an_azure
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - `AZURE.creatable` and `offers::AZURE_DEPLOYABLE` are `true`.
+   - The Azure section of `cloud_offers` has `deployable: true`. Each Azure offer has `rentable: false`.
+   - A worker choice of an Azure offer is refused with "An Azure cloud runs on the VM sizes and regions of the azure cloud settings; start it without a worker choice".
+   - The rate text of an Azure cloud says that Azure reports no hourly rate, and that a stop deallocates the VM and ends the compute charge while the disks and the static address bill until the cloud is deleted.
+   - In New cloud, an Azure profile does not stay at a pending "Checking the Azure account" row. When the `azure` settings pass, the row fails with "New cloud cannot start an Azure profile on this machine yet". Without the `azure` section, the row names the missing section. Start stays off, and the dialog shows no RunPod or Hetzner key form for the Azure profile. A Hetzner profile in the same configuration is checked as before.
+
+### 6.18 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -391,20 +457,146 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
     Result: Both values are `1`. If step 11 gave "Worker creation is unresolved", both values are `0`.
 
-13. Make sure that the card still refuses the lifecycle. Run the provider tests of task AZV-10.
+13. Keep the worker of `azv-l1-01` and the state in `$AZV`. Task AZV-L2 stops, resumes and deletes them.
 
-    Result: Stop, resume and delete refuse. Horizon cannot delete the live worker; the cleanup below deletes it.
+### 6.19 AZV-L2 — Stop, resume and delete the live worker
+
+Do this task after task AZV-L1, in the same terminal, with `$AZV` and `$SUB` set. Set the variables of the live tests.
+
+```sh
+export HORIZON_AZURE_LIVE_SETTINGS="$AZV/settings.json" HORIZON_AZURE_LIVE_STATE="$AZV/state"
+export RG=horizon-ws-azv-l1-01
+```
+
+1. Record the VM before the stop.
+
+   ```sh
+   az vm show -d -g "$RG" -n worker --query "{power:powerState,ip:publicIps,vmId:vmId}" -o json
+   date -u +%FT%TZ
+   ```
+
+   Result: `power` is `VM running`. Record `ip`, `vmId` and the time.
+
+2. Stop the cloud.
+
+   > **CAUTION:** THIS STOP ENDS THE PROCESSES IN THE WORKER.
+
+   ```sh
+   cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_stop --nocapture
+   ```
+
+   Result: The test passes in less than 10 minutes. It prints the stage `Stopped`, `stop_requested true`, the outcome `Inactive` and a worker with `desiredStatus` `EXITED` and the same `id`.
+
+3. Make sure that Azure deallocated the VM and kept its address.
+
+   ```sh
+   az vm get-instance-view -g "$RG" -n worker --query "instanceView.statuses[?starts_with(code,'PowerState')].code" -o tsv
+   az vm show -d -g "$RG" -n worker --query "{power:powerState,ip:publicIps,vmId:vmId}" -o json
+   az network public-ip show -g "$RG" -n worker-ip --query "{address:ipAddress,method:publicIPAllocationMethod}" -o json
+   ```
+
+   Result: The first command prints `PowerState/deallocated`. `power` is `VM deallocated`. `ip` and `vmId` are the values of step 1. The address is `Static`.
+
+4. Make sure that Horizon sent a deallocate and no power off.
+
+   ```sh
+   az monitor activity-log list -g "$RG" --offset 1h \
+     --query "[?status.value=='Started'].operationName.value" -o tsv | sort | uniq -c
+   ```
+
+   Result: The list has one `Microsoft.Compute/virtualMachines/deallocate/action`. It has no `Microsoft.Compute/virtualMachines/powerOff/action`.
+
+5. Keep the VM deallocated for 60 minutes. Record the time when you go to the next step.
+
+   Result: The VM stays `VM deallocated`. Azure bills no compute for it in this time. Step 13 examines the bill.
+
+6. Resume the cloud.
+
+   > **CAUTION:** THIS RESUME RENTS THE VM AGAIN.
+
+   ```sh
+   cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_resume --nocapture
+   ```
+
+   Result: The test passes in less than 15 minutes. It prints a worker with `desiredStatus` `RUNNING`, the same `id` and the same `publicIp` as in step 1.
+
+7. Make sure that the same VM runs with the same workspace.
+
+   ```sh
+   az vm show -d -g "$RG" -n worker --query "{power:powerState,ip:publicIps,vmId:vmId}" -o json
+   ssh -o BatchMode=yes -i "$HOME/.ssh/id_ed25519" root@<ip> 'findmnt /workspace; sha256sum /workspace/azv-l1'
+   ```
+
+   Result: `power` is `VM running`, and `ip` and `vmId` are the values of step 1. The SHA-256 is the value of task AZV-L1 step 6.
+
+8. Delete the cloud.
+
+   > **CAUTION:** THIS DELETE REMOVES THE RESOURCE GROUP, THE VM, BOTH DISKS AND THE ADDRESS. THE WORKSPACE FILES ARE LOST.
+
+   ```sh
+   az group show -n "$RG" --query tags
+   cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_delete --nocapture
+   ```
+
+   Result: The tag is `{"horizon-operation": "azv-l1-01"}`. The test passes in less than 15 minutes. It prints a journal with `"deleting": true`, `"swept": true` and the group `terminated` with the id `/subscriptions/<SUB>/resourceGroups/horizon-ws-azv-l1-01`.
+
+9. Make sure that the group and each tagged resource are absent.
+
+   ```sh
+   az group exists -n "$RG"
+   az resource list --tag horizon-operation=azv-l1-01 -o json
+   az disk list --query "[?contains(id,'horizon-ws-azv-l1-01')].id" -o json
+   az network public-ip list --query "[?contains(id,'horizon-ws-azv-l1-01')].id" -o json
+   ```
+
+   Result: The first command prints `false`. The other commands print `[]`.
+
+10. Examine the records.
+
+    ```sh
+    jq '{stage, operation}' "$AZV/state/deployment.json"
+    jq . "$AZV/state/azure.json"
+    ```
+
+    Result: The stage is `Deleted`. The operation is `terminated` with the `vmId` of step 1. `azure.json` has `deleting` and `swept`.
+
+11. Run the delete again with the same state.
+
+    ```sh
+    cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_delete --nocapture
+    ```
+
+    Result: The test passes at once.
+
+12. Delete the cloud of task AZV-L1 step 11 the same way.
+
+    ```sh
+    HORIZON_AZURE_LIVE_STATE="$AZV/state2" cargo test -p horizon-core --lib -- --ignored --exact cloud_runtime::deployment::azure::tests::live_delete --nocapture
+    az group exists -n horizon-ws-azv-l1-02
+    az resource list --tag horizon-operation=azv-l1-02 -o json
+    ```
+
+    Result: The test passes. The commands print `false` and `[]`. If step 11 of task AZV-L1 gave "Worker creation is unresolved", the test also passes.
+
+13. On the next day, examine the bill of the group for the day of the test.
+
+    ```sh
+    az consumption usage list --include-meter-details --start-date <day> --end-date <day> \
+      --query "[?contains(instanceId,'horizon-ws-azv-l1-01')].{meter:meterDetails.meterName,quantity:quantity}" -o table
+    ```
+
+    Result: The quantity of the VM compute meter (`D4s v3`) is less than the hours from step 1 to step 8, by at least the time of step 5. The disk meters and the `Standard IPv4 Static Public IP` meter continue through step 5. No meter of the group has use after step 8. If the command is not available, use Cost analysis in the Azure portal with the scope of the subscription, the daily granularity and the resource group as a filter.
 
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-13 pass and send no request to Azure.
-- For the live acceptance, each step of task AZV-L1 gives its result, and the cleanup proves each group absent.
+- Tasks AZV-01 to AZV-17 pass and send no request to Azure.
+- For the live acceptance, each step of tasks AZV-L1 and AZV-L2 gives its result. AZV-L2 proves each group absent.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-13 make temporary data only. After task AZV-L1, do these steps:
+Tasks AZV-01 to AZV-17 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
 
-1. Examine the tag of each test group. Then delete the group.
+1. Examine the tag of each test group that remains. Then delete the group.
 
    ```sh
    az group show -n horizon-ws-azv-l1-01 --query tags

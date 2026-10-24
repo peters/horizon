@@ -16,8 +16,15 @@ fixed name and the same tag.
 | VM | `worker` | Ubuntu 24.04. No managed identity, no password login. |
 | OS disk | `worker-os` | Premium SSD, deleted with the VM. A tags resource tags it. |
 
-`offers::AZURE_DEPLOYABLE` stays `false`, so no Horizon UI, CLI or MCP operation
-creates an Azure worker in this change.
+`offers::AZURE_DEPLOYABLE` is `true`. `cloud_deploy deploy`, the quick start and
+companions create an Azure worker for a profile with `provider: azure` when
+`providers::preflight` admits it. The worker is placed by the VM sizes and
+regions of the `azure` settings, in their order; a choice of one Azure offer is
+refused. New cloud does not list Azure until its prices have a binding. A
+repository whose default profile is Azure keeps that default. The dialog's
+account row then fails and tells the person to choose another profile: it names
+the missing `azure` section, or says that New cloud cannot start an Azure profile
+yet. The row never stays pending.
 
 ## Machine settings
 
@@ -49,7 +56,7 @@ the machine has an `azure` section. It provisions through
 `azure::provision` and then waits for SSH readiness, as Hetzner does:
 
 - The cloud's `azure.json` journal, beside `deployment.json`, keeps the group
-  fence and the region. `providers::retained` is true when the group fence is
+  fence, the region and the subscription of the group request. `providers::retained` is true when the group fence is
   `Requested` or `Bound`.
 - A registry binding of the machine has priority over `registry_pull`, as on
   Hetzner: its grant must be verified for the exact digest first.
@@ -59,11 +66,11 @@ the machine has an `azure` section. It provisions through
 
 These items do not change:
 
-- `providers::preflight` refuses a new Azure cloud before a record is written.
-  `cloud_deploy deploy`, the UI and MCP thus cannot reach the seam.
-- Each lifecycle operation of `providers::azure::Azure` (check, stop, resume,
-  release, delete) refuses. Rebuild is `Rebuild::Unsupported`: `settle` refuses a
-  requested image replacement.
+- `providers::preflight` checks an Azure cloud before a record is written: a
+  workspace disk from 4 to 32,767 GB, a cloud id that can name its group, a
+  readable token and a VM size of the settings that fits the profile.
+- Release refuses: an Azure profile cannot have hosted devices. Rebuild is
+  `Rebuild::Unsupported`: `settle` refuses a requested image replacement.
 - Only a direct caller of `deployment::azure::provision`, such as the loopback
   tests and the ignored live test `live_create`, creates a worker.
 
@@ -141,6 +148,52 @@ The journal in `azure.json` records each step before the next:
   after its 404 until the sweep lists nothing. `Journal::proves_absent` is true
   only with `deleting`, `swept` and the group id of this operation.
 - `provision` refuses a journal with `deleting`, before a request.
+
+### The lifecycle of an Azure cloud
+
+`providers::azure::Azure` drives `deployment::azure` for check, stop, resume
+and delete, with the VM fence in `deployment.json` and the group in `azure.json`:
+
+- The client is made from the `azure` settings. The settings must name the
+  subscription of the cloud's group. The group id in `azure.json` names it for
+  a bound or deleted group. For a `Requested` group, the journal records the
+  subscription before the group request. If an older journal has a `Requested`
+  group and no subscription, the client refuses: a 404 in another subscription
+  cannot prove that the group is absent.
+- Check reads the bound VM by ownership only and reports `Found`, `Inactive` or
+  `Missing`. A VM that it finds for a requested worker is bound.
+- Stop follows `RunPod`'s contract (`request_stop`): the stop is saved first,
+  the request is announced, and the stage is `Stopped` only when ARM reports the
+  VM deallocated. A definite refusal rolls the stop back.
+- Resume starts the same VM (`request_resume`). The reconnect after it waits
+  for readiness. A cloud that is being deleted is not resumed.
+- Delete (`deletion::delete_azure`) runs the delete above with an uncancellable
+  token once it starts. The caller then records the cloud as deleted.
+
+### The deletion proof for the card
+
+A card is removed only when local records prove that nothing of the cloud can
+still bill. For an Azure cloud, `azure.json` is that record:
+
+- `providers::retained` is `Journal::retains`.
+- `providers::deletion::confirmed` decodes `azure.json` (at most 1 MiB, no unknown
+  field) and requires `Journal::proves_absent` for the cloud id, with the
+  common rules: the stage `Deleted`, a VM fence `Prepared` or `Terminated`.
+- Both journal lists, in `providers::deletion` and in
+  `lifecycle::can_remove_without_deployment`, have `azure.json`. Another
+  provider's journal beside it refuses the proof, and `azure.json` refuses the
+  proof of another provider.
+- A reconnect admits a bound Azure record, as `RunPod`'s, and refuses a cloud
+  whose journal has `deleting`, as Hetzner's. A companion does the same, and an
+  `azure.json` without its deployment record, or in a reserved target, blocks it.
+- `redeploy::reopen` refuses a `Deleted` Azure record before it saves
+  anything, and a reconnect of that record gets the same refusal. The proven
+  `azure.json` keeps `deleting` for good, so a provision under that record
+  could never start. The person removes the card and creates a new cloud,
+  which gets a new cloud id and a new `azure.json`.
+- An Azure host holds no Azure credential, and its worker runs with
+  `HORIZON_WORKER_STOP=horizon`. Horizon thus takes an agent's stop request from
+  a ready Azure worker over SSH and stops (deallocates) the cloud, as for Hetzner.
 
 ## Host bootstrap
 

@@ -39,6 +39,9 @@ impl From<&Offer> for WorkerChoice {
     }
 }
 
+const AZURE_PLACEMENT: &str =
+    "An Azure cloud runs on the VM sizes and regions of the azure cloud settings; start it without a worker choice";
+
 impl WorkerChoice {
     /// Bind the chosen worker, preserving the repository's minimum requirements.
     /// # Errors
@@ -90,8 +93,9 @@ impl WorkerChoice {
                 placement.cpu_types = vec![self.id.clone()];
                 placement.data_centers = vec![location.clone()];
             }
-            // Not `creatable`, so refused above; nothing can place an Azure worker yet.
-            provider::Kind::Azure => return Err(Error::Invalid("This worker cannot run the repository profile")),
+            // Provisioning tries the settings' VM sizes and regions in order and honours
+            // no single offer, so choosing one would promise a placement it may not get.
+            provider::Kind::Azure => return Err(Error::Invalid(AZURE_PLACEMENT)),
         }
         Ok(ChosenWorker {
             provider,
@@ -106,7 +110,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_azure_worker_cannot_be_chosen() {
+    fn an_azure_worker_choice_is_refused_for_the_settings_placement() {
         let cpu: Profile = serde_json::from_value(
             serde_json::json!({"provider":"azure","image":"registry.example/worker","cpu":4,"memory_gb":8}),
         )
@@ -124,6 +128,6 @@ mod tests {
         let Err(error) = choice.for_profile(&cpu) else {
             panic!("an Azure worker was chosen");
         };
-        assert_eq!(error.to_string(), "This worker cannot run the repository profile");
+        assert_eq!(error.to_string(), AZURE_PLACEMENT);
     }
 }
