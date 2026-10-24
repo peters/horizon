@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const SOCKET_WAIT: Duration = Duration::from_secs(10);
+pub(super) const SOCKET_WAIT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(50);
 const MAX_FORWARDS: usize = 16;
 const MAX_REQUESTS: usize = 8;
@@ -34,9 +34,28 @@ const NO_PROBE: &str = "The owner's Horizon does not support probes yet; ask the
 const UNEXPECTED: &str = "The owner's Horizon answered with something else";
 const RETIRE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The whole of one request must arrive within this, however slowly it trickles in.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const PRIVATE: &str = "Only a bridge helper can ask for that";
 const NOTE: &str = "TCP only. Names are resolved on the owner's computer. Every process on this worker, including web pages open in its browsers, can use the proxy and forwards while the bridge is on. Forwards end when the bridge stops or reconnects; check the status and forward again.";
+
+/// The two waits the helper makes on something outside itself. Production takes the defaults;
+/// a test passes a shorter value, so it proves the same shape without the production duration.
+#[derive(Clone, Copy)]
+pub(super) struct Waits {
+    /// How long the bridge socket may take to appear.
+    pub(super) socket: Duration,
+    /// How long one whole request may take to arrive, and one answer to be read.
+    pub(super) request: Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            socket: SOCKET_WAIT,
+            request: REQUEST_TIMEOUT,
+        }
+    }
+}
 
 struct Pinned {
     forward: Forward,
@@ -370,11 +389,22 @@ pub(super) fn run(
     input: impl Read + Send + 'static,
     output: impl Write + Send + 'static,
 ) -> io::Result<()> {
+    run_with(paths, nonce, subnet, input, output, Waits::default())
+}
+
+pub(super) fn run_with(
+    paths: &Paths,
+    nonce: &str,
+    subnet: &str,
+    input: impl Read + Send + 'static,
+    output: impl Write + Send + 'static,
+    waits: Waits,
+) -> io::Result<()> {
     let nonce = Nonce::parse(nonce).ok_or_else(|| io::Error::other("Invalid bridge session"))?;
     let subnet: Subnet = subnet.parse().map_err(io::Error::other)?;
     let bridge = Bridge(paths.bridge(&nonce));
     super::prepare(paths)?;
-    wait_for_socket(&bridge.0)?;
+    wait_for_socket(&bridge.0, waits.socket)?;
     let relays = Arc::new(AtomicUsize::new(0));
     let endpoint = {
         let bridge = bridge.0.clone();
@@ -391,14 +421,14 @@ pub(super) fn run(
     });
     let control = Control::bind(paths)?;
     helper.owner.write(&Ready { proxy: helper.proxy })?;
-    serve(&helper, &control);
+    serve(&helper, &control, waits.request);
     helper.forwards().clear();
     drop(endpoint);
     Ok(())
 }
 
-fn wait_for_socket(path: &Path) -> io::Result<()> {
-    let deadline = Instant::now() + SOCKET_WAIT;
+fn wait_for_socket(path: &Path, wait: Duration) -> io::Result<()> {
+    let deadline = Instant::now() + wait;
     while !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket()) {
         if Instant::now() >= deadline {
             return Err(io::Error::other("The bridge socket did not appear"));
@@ -417,7 +447,7 @@ impl Drop for Pending {
     }
 }
 
-fn serve(helper: &Arc<Helper>, control: &Control) {
+fn serve(helper: &Arc<Helper>, control: &Control, request: Duration) {
     // Each socket has its own budget, so agents cannot crowd out a newer session's helper.
     let (private, agents) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     while helper.owner.alive() && !helper.retired.load(Ordering::Acquire) {
@@ -444,7 +474,7 @@ fn serve(helper: &Arc<Helper>, control: &Control) {
                     .name("local-network-control".into())
                     .spawn(move || {
                         let _share = share;
-                        let _ = handle(&helper, &stream, caller);
+                        let _ = handle(&helper, &stream, caller, request);
                     });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
@@ -492,14 +522,14 @@ impl Write for Deadline<'_> {
     }
 }
 
-fn handle(helper: &Helper, stream: &UnixStream, caller: Caller) -> io::Result<()> {
+fn handle(helper: &Helper, stream: &UnixStream, caller: Caller, request: Duration) -> io::Result<()> {
     stream.set_nonblocking(false)?;
     let mut line = String::new();
-    let request = Deadline {
+    let deadline = Deadline {
         stream,
-        until: Instant::now() + REQUEST_TIMEOUT,
+        until: Instant::now() + request,
     };
-    let count = BufReader::new(request).take(MAX_MESSAGE + 1).read_line(&mut line)?;
+    let count = BufReader::new(deadline).take(MAX_MESSAGE + 1).read_line(&mut line)?;
     let answer = if count as u64 > MAX_MESSAGE {
         Answer::Error("Request too large".into())
     } else {
@@ -511,7 +541,7 @@ fn handle(helper: &Helper, stream: &UnixStream, caller: Caller) -> io::Result<()
     };
     let mut reply = serde_json::to_vec(&answer)?;
     reply.push(b'\n');
-    send(stream, &reply, REQUEST_TIMEOUT)
+    send(stream, &reply, request)
 }
 
 /// Writes the whole answer within `timeout`, so a client that never reads it frees its share.
