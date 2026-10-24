@@ -344,4 +344,29 @@ fn the_settings_must_name_the_subscription_of_the_cloud() {
         .unwrap()
         .to_string();
     assert!(error.contains("another subscription"), "{error}");
+    // A group whose request answer was lost is checked against the subscription the
+    // request went to: a 404 in another one would prove nothing.
+    let other = "00000000-0000-4000-8000-000000000002";
+    let requested = |subscription: Option<&str>| {
+        save(
+            &Journal {
+                region: Some("northeurope".into()),
+                subscription: subscription.map(str::to_owned),
+                group: CreateState::Requested,
+                ..Journal::default()
+            },
+            root.path(),
+        )
+        .unwrap();
+    };
+    requested(Some(SUB));
+    assert!(client(&settings(SUB), &store).is_ok());
+    let error = client(&settings(other), &store).err().unwrap().to_string();
+    assert!(error.contains("another subscription"), "{error}");
+    // An older journal without the subscription is unresolved, never permission to delete.
+    requested(None);
+    for subscription in [SUB, other] {
+        let error = client(&settings(subscription), &store).err().unwrap().to_string();
+        assert!(error.contains("did not record which Azure subscription"), "{error}");
+    }
 }

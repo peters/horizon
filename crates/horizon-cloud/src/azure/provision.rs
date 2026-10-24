@@ -27,6 +27,10 @@ pub struct Journal {
     /// The region of the resource group, saved with its fence; it fixes where the worker runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// The subscription the group request went to, saved with its `Requested` fence.
+    /// A bound or deleted group names its subscription in its resource id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
     /// The fence for the resource group. A bound group records its resource id, which
     /// a deleted group keeps as `Terminated` once ARM answers 404 for it.
     #[serde(default = "prepared")]
@@ -48,6 +52,7 @@ impl Default for Journal {
     fn default() -> Self {
         Self {
             region: None,
+            subscription: None,
             group: CreateState::Prepared,
             deleting: false,
             swept: false,
@@ -247,6 +252,7 @@ fn ensure_group(
     }
     let next = Journal {
         region: Some(planned.region.clone()),
+        subscription: Some(client.subscription_id().to_owned()),
         group: CreateState::Requested,
         ..journal.clone()
     };
