@@ -58,7 +58,7 @@ pub(in crate::cloud_runtime) fn check(
     worker_hint: Option<&str>,
     cancel: &Cancellation,
 ) -> Result<Reconciliation> {
-    // Azure workers are never rebuilt, so a requested replacement is not settled here.
+    // A rebuild's release deletes the VM; only the rebuild settles it.
     state.refuse_unsettled_replacement()?;
     let spec = state.spec.clone().ok_or(Error::Invalid("No worker was requested"))?;
     let hinted = |id: &str| worker_hint.is_none_or(|hint| hint == id);

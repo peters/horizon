@@ -94,8 +94,10 @@ pub enum Rebuild {
     /// The provider switches the same worker to the new image and reports which image
     /// it runs, so the switch can be watched and undone.
     InPlace,
-    /// The provider cannot report a server's image, so the server is released as a
-    /// stop releases it and a new one runs the new image on the same workspace volume.
+    /// The provider cannot report a server's image, so the server is released and a
+    /// new one runs the new image on the same workspace volume. A Hetzner stop already
+    /// deletes the server, so its release is that stop; an Azure stop keeps the VM
+    /// (`StoppedCost::WorkerKept`), so its release deletes the VM and keeps the disk.
     NewServer,
     /// Not offered: a cloud there keeps the image it was created with.
     Unsupported,
@@ -144,7 +146,8 @@ pub const HETZNER: Description = Description {
 };
 
 /// Microsoft Azure: one VM per cloud in its own resource group. A stop deallocates the
-/// virtual machine and keeps its disks and static address.
+/// virtual machine and keeps its disks and static address. A rebuild deletes the VM,
+/// keeps its workspace disk and static address, and starts a new VM on them.
 pub const AZURE: Description = Description {
     kind: Kind::Azure,
     id: "azure",
@@ -158,7 +161,7 @@ pub const AZURE: Description = Description {
     choices: &[],
     creatable: crate::offers::AZURE_DEPLOYABLE,
     registry_auth: false,
-    rebuild: Rebuild::Unsupported,
+    rebuild: Rebuild::NewServer,
     site: "azure.microsoft.com",
     cpu_volume_gb: (4, 32_767),
 };
@@ -371,7 +374,21 @@ mod tests {
         assert_eq!(AZURE.creatable, crate::offers::AZURE_DEPLOYABLE);
         const { assert!(AZURE.creatable, "Horizon creates, stops and deletes Azure clouds") };
         // Deallocate keeps the virtual machine and its disks; a stop does not delete it.
-        assert_eq!(AZURE.stopped, StoppedCost::WorkerKept);
+        // So a rebuild cannot release the VM as a stop does, unlike Hetzner's, whose
+        // stop deletes the server: Azure is the one provider with this pair.
+        assert_eq!(
+            (AZURE.stopped, AZURE.rebuild),
+            (StoppedCost::WorkerKept, Rebuild::NewServer)
+        );
+        assert_eq!(
+            (HETZNER.stopped, HETZNER.rebuild),
+            (StoppedCost::ServerDeleted, Rebuild::NewServer)
+        );
+        assert!(
+            [&RUNPOD, &HETZNER, &DOCKER_HOST]
+                .iter()
+                .all(|other| (other.stopped, other.rebuild) != (AZURE.stopped, AZURE.rebuild))
+        );
         assert_eq!(
             (AZURE.placement, AZURE.pricing, AZURE.currency, AZURE.net_of_vat),
             (Placement::Locations, Pricing::ServerTypes, "USD", false)

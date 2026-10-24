@@ -162,8 +162,9 @@ impl Compute for azure::Compute {
         Ok(())
     }
 
-    /// Azure workers cannot be rebuilt (`Rebuild::Unsupported`), so a requested
-    /// image replacement is refused before anything is placed around it.
+    /// A rebuild deletes the VM (`Rebuild::NewServer`), so a rebuild whose release
+    /// may have begun is finished or cancelled only through the rebuild; a reconnect
+    /// must not place a VM around it.
     fn settle(
         &self,
         _store: &Store,
