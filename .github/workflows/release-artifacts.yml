@@ -1,8 +1,9 @@
 name: Release artifacts
 
 # Builds and packages the release asset of each selected platform, as a check
-# that a release build still compiles and packages. Nothing downloads these
-# artifacts: release.yml builds the published assets with its own caches.
+# that a release build still compiles and packages. The tarball stays on the
+# runner: release.yml builds the published assets with its own caches, so no
+# job consumes a packaged asset from here.
 #
 # Two callers:
 # - ci.yml, on a push to main with release inputs and on a manual dispatch.
@@ -87,7 +88,7 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
-      # The uploaded asset is the horizon binary. The other workspace bins are
+      # The packaged asset is the horizon binary. The other workspace bins are
       # outside its dependency graph, and each one repeated a thin-LTO link.
       - name: Install video assembler
         if: ${{ !env.LOCALCI }}
@@ -101,8 +102,3 @@ jobs:
             --binary "${{ matrix.binary_path }}" \
             --kind "${{ matrix.asset_kind }}" \
             --output "${{ matrix.release_asset }}"
-      - name: Upload release asset
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.release_asset }}
-          path: ${{ matrix.release_asset }}
