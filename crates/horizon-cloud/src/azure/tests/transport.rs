@@ -20,6 +20,8 @@ fn a_production_agent_pins_https_no_redirect_and_the_request_timeout() {
     ));
     let local = Azure::loopback(credential(), SUB, "127.0.0.1:8080".parse().unwrap()).unwrap();
     assert_eq!(local.endpoint, "http://127.0.0.1:8080");
+    assert!(local.owns_operation_url(&format!("http://127.0.0.1:8080/subscriptions/{SUB}/operations/op")));
+    assert!(!local.owns_operation_url(&format!("{MANAGEMENT_ENDPOINT}/subscriptions/{SUB}/operations/op")));
 }
 
 #[test]
@@ -73,6 +75,15 @@ fn a_bad_resource_group_or_name_is_refused_before_any_request() {
             client.azure.get_vm(GROUP, name, &cancel).unwrap_err().into(),
             CloudError::Invalid("Invalid Azure resource name")
         ));
+        assert!(matches!(
+            client.azure.get_deployment(GROUP, name, &cancel).unwrap_err().into(),
+            CloudError::Invalid("Invalid Azure resource name")
+        ));
+        let failure = client
+            .azure
+            .put_deployment(GROUP, name, &json!({}), &json!({}), &cancel)
+            .unwrap_err();
+        assert!(failure.definite());
     }
     assert!(valid_location("northeurope") && valid_location("westus2"));
     for location in ["", "n", "North Europe", "2west", "west-us"] {
@@ -279,6 +290,7 @@ fn vm_resource_ids_are_matched_exactly() {
 
 #[test]
 fn conflicts_are_uncertain_and_throttles_are_definite() {
+    let url = deployment_url("worker-deployment");
     let client = scripted(
         [
             (409, arm_error("Conflict", "conflict")),
@@ -291,11 +303,10 @@ fn conflicts_are_uncertain_and_throttles_are_definite() {
             (503, "<html>busy</html>".to_string()),
         ]
         .into_iter()
-        .map(|(status, body)| get(group_url(GROUP), status, body).header("retry-after", "17"))
+        .map(|(status, body)| put(url.clone(), deployment_request(), status, body).header("retry-after", "17"))
         .collect(),
     );
     let cancel = Cancellation::default();
-    let read = || client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
     for code in [
         "Conflict",
         "AnotherOperationInProgress",
@@ -303,7 +314,7 @@ fn conflicts_are_uncertain_and_throttles_are_definite() {
         "ScopeLocked",
         "",
     ] {
-        let failure = read();
+        let failure = submit(&client, &cancel).unwrap_err();
         assert!(
             failure.conflict() && !failure.definite() && !failure.capacity(),
             "{code:?}"
@@ -311,7 +322,7 @@ fn conflicts_are_uncertain_and_throttles_are_definite() {
         assert!(matches!(failure, Failure::Provider { code: ref seen, .. } if seen == code));
         assert!(matches!(failure.into(), CloudError::Http(409, _)), "{code:?}");
     }
-    let throttled = read();
+    let throttled = submit(&client, &cancel).unwrap_err();
     assert!(throttled.definite() && !throttled.conflict());
     assert!(matches!(
         throttled,
@@ -320,7 +331,7 @@ fn conflicts_are_uncertain_and_throttles_are_definite() {
     let throttled = CloudError::from(throttled);
     assert_eq!(throttled.to_string(), "Provider returned HTTP 429: slow down");
     for _ in 0..2 {
-        let failure = read();
+        let failure = submit(&client, &cancel).unwrap_err();
         assert!(!failure.definite());
         assert!(matches!(failure.into(), CloudError::Transport));
     }
@@ -374,6 +385,7 @@ fn arm_authentication_failures_are_not_rejections() {
 
 #[test]
 fn capacity_codes_are_capacity_and_nothing_was_created() {
+    let url = deployment_url("worker-deployment");
     let nested = json!({ "error": { "code": "InvalidTemplateDeployment", "message": "preflight failed",
         "details": [{ "code": "SkuNotAvailable", "message": "size" }] } })
     .to_string();
@@ -384,19 +396,30 @@ fn capacity_codes_are_capacity_and_nothing_was_created() {
         (409, "AllocationFailed"),
     ]
     .into_iter()
-    .map(|(status, code)| get(group_url(GROUP), status, arm_error(code, "no capacity")))
+    .map(|(status, code)| {
+        put(
+            url.clone(),
+            deployment_request(),
+            status,
+            arm_error(code, "no capacity"),
+        )
+    })
     .collect();
-    script.push(get(group_url(GROUP), 400, nested));
-    script.push(get(group_url(GROUP), 500, arm_error("AllocationFailed", "server side")));
+    script.push(put(url.clone(), deployment_request(), 400, nested));
+    script.push(put(
+        url,
+        deployment_request(),
+        500,
+        arm_error("AllocationFailed", "server side"),
+    ));
     let client = scripted(script);
     let cancel = Cancellation::default();
-    let read = || client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
     for _ in 0..5 {
-        let failure = read();
+        let failure = submit(&client, &cancel).unwrap_err();
         assert!(failure.capacity() && failure.definite() && !failure.conflict());
         assert!(matches!(failure.into(), CloudError::Capacity(_)));
     }
-    let server = read();
+    let server = submit(&client, &cancel).unwrap_err();
     assert!(
         !server.capacity() && !server.definite(),
         "a 5xx is never a capacity proof"
@@ -463,19 +486,111 @@ fn failure_bodies_are_bounded_and_never_echo_the_token() {
 }
 
 #[test]
+fn deployments_are_submitted_incrementally_and_return_their_operation() {
+    let operation = operation_url("deploy-1");
+    let url = deployment_url("worker-deployment");
+    let client = scripted(vec![
+        accepted(&operation, Some("5")),
+        put(url.clone(), deployment_request(), 202, "").header("azure-asyncoperation", operation.clone()),
+        put(
+            url.clone(),
+            deployment_request(),
+            200,
+            deployment_body("worker-deployment", "Succeeded"),
+        ),
+        put(
+            url.clone(),
+            deployment_request(),
+            201,
+            deployment_body("worker-deployment", "Accepted"),
+        ),
+        put(
+            url.clone(),
+            deployment_request(),
+            201,
+            deployment_body("other-deployment", "Accepted"),
+        )
+        .header("azure-asyncoperation", operation.clone()),
+        get(url.clone(), 200, deployment_body("worker-deployment", "Running")),
+        get(url, 404, ""),
+    ]);
+    let cancel = Cancellation::default();
+    let deployed = submit(&client, &cancel).unwrap();
+    assert_eq!(deployed.state.provisioning_state, "Accepted");
+    assert_eq!(deployed.state.outputs["address"], "192.0.2.10");
+    let LongRunning::Accepted(reference) = deployed.operation else {
+        panic!("an accepted deployment has an operation");
+    };
+    assert_eq!(reference.url(), operation, "the URL is kept exactly as ARM sent it");
+    assert_eq!(reference.retry_after(), Some(Duration::from_secs(5)));
+    let bodiless = submit(&client, &cancel).unwrap();
+    assert_eq!(bodiless.state.provisioning_state, "Accepted");
+    assert!(matches!(bodiless.operation, LongRunning::Accepted(_)));
+    let finished = submit(&client, &cancel).unwrap();
+    assert_eq!(finished.operation, LongRunning::Completed);
+    let untracked = submit(&client, &cancel).unwrap_err();
+    assert!(
+        !untracked.definite(),
+        "a running deployment without an operation is unknown"
+    );
+    assert!(matches!(untracked.into(), CloudError::InvalidResponse));
+    assert!(matches!(
+        submit(&client, &cancel).unwrap_err().into(),
+        CloudError::IdentityMismatch
+    ));
+    let state = client
+        .azure
+        .get_deployment(GROUP, "worker-deployment", &cancel)
+        .unwrap()
+        .unwrap();
+    assert!(!state.is_terminal());
+    assert!(
+        client
+            .azure
+            .get_deployment(GROUP, "worker-deployment", &cancel)
+            .unwrap()
+            .is_none()
+    );
+    client.done();
+}
+
+#[test]
 fn a_cancelled_call_sends_nothing() {
     let client = scripted(Vec::new());
     let cancel = Cancellation::default();
     cancel.cancel();
-    let failure = client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
+    let failure = submit(&client, &cancel).unwrap_err();
     assert!(failure.definite());
     assert!(matches!(failure.into(), CloudError::Cancelled));
+    assert!(matches!(
+        client.azure.get_resource_group(GROUP, &cancel).unwrap_err().into(),
+        CloudError::Cancelled
+    ));
     assert!(matches!(
         client.azure.get_vm(GROUP, WORKER_VM_NAME, &cancel).unwrap_err().into(),
         CloudError::Cancelled
     ));
     assert!(matches!(
+        client
+            .azure
+            .get_deployment(GROUP, "worker-deployment", &cancel)
+            .unwrap_err()
+            .into(),
+        CloudError::Cancelled
+    ));
+    assert!(matches!(
         client.azure.reconcile(OPERATION_ID, &cancel),
+        Err(CloudError::Cancelled)
+    ));
+    let reference = crate::azure::operation::operation_ref(
+        &[("azure-asyncoperation", operation_url("deploy-1"))]
+            .into_iter()
+            .map(|(name, value)| (ureq::http::HeaderName::from_static(name), value.parse().unwrap()))
+            .collect(),
+    )
+    .unwrap();
+    assert!(matches!(
+        client.azure.await_operation(&reference, &cancel),
         Err(CloudError::Cancelled)
     ));
     assert_eq!(client.sent(), Vec::<String>::new());

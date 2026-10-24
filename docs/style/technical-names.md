@@ -54,6 +54,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | offer | One worker type with a price from a provider catalog. | quote, SKU |
 | ARM | Azure Resource Manager, the management API of Azure. | Azure API, management plane |
 | resource group | An Azure container for resources. Horizon gives each operation one resource group. | RG |
+| operation URL | The `Azure-AsyncOperation` URL that ARM sends for work that ends later. | status link, LRO URL |
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
 | API credential | A personal API token or OAuth client that the host stores for a saved tailnet. | auth key (for API access) |
@@ -180,6 +181,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | provision | Make a new provider resource, for example a server or a volume. |
 | enroll | Join a worker to a tailnet. |
 | reconcile | Compare the local record with the provider and correct the local record. |
+| poll | Send the same read request at intervals until a state changes. |
 | squash-merge | Merge a pull request as one commit. |
 | freeze | Copy a candidate to a task-owned directory and record its hash. |
 | bind | Make a host path available at a path inside the fixture. |

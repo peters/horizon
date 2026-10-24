@@ -1,6 +1,6 @@
 ---
 procedure: azure-arm-client
-feature: The Azure Resource Manager client and its read-only reconcile
+feature: The Azure Resource Manager client, its operation poll and its read-only reconcile
 platforms: [linux]
 cost: none
 destructive: no
@@ -20,14 +20,14 @@ It also makes sure that the client classifies each ARM answer correctly and that
 - Candidate: a pull request of #1774 that adds to the module `horizon_cloud::azure`.
   The first of these pull requests adds the ARM transport, its error classification and the resource group read.
   The second adds the VM read and the reconcile by name (ARM-04 to ARM-06).
+  The third adds the deployment and the operation poll (ARM-07).
 - Platform: Linux with the repository Rust toolchain.
 - The tests use a scripted agent and synthetic data only.
   They need no network, no socket, no Azure account and no Azure credential.
 - No task makes, changes or deletes an Azure resource.
-- No test sleeps.
+- The tests record each wait of the operation poll. No test sleeps.
 - The trust boundary of the client is in [the ARM client architecture](../../architecture/azure-arm-client.md).
 - This procedure does not test these items. Later pull requests of #1774 add them:
-  - The deployment and the operation poll.
   - The provisioning, stop, resume and delete of an Azure worker.
   - The Azure credential source and its token refresh.
   - The deployment template, the VM size catalog and Azure prices.
@@ -77,7 +77,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    - `loopback` refuses an address that is not a loopback address.
    - A subscription id that is not a lowercase UUID gives `Invalid` before the client exists.
    - A bad resource group or resource name gives `Invalid` and sends no request.
-   - A cancelled call gives `Cancelled` and sends no request. This applies to the reads and reconcile.
+   - A cancelled call gives `Cancelled` and sends no request. This applies to the reads, the deployment, reconcile and the poll.
    - A success body of 4 MiB or more gives `InvalidResponse`.
 
 ### 6.2 ARM-02 — Check the identity of each answer
@@ -108,7 +108,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    | ARM answer | Result | Definite |
    |---|---|---|
    | 409 `Conflict`, `AnotherOperationInProgress`, `ResourceGroupBeingDeleted`, `ScopeLocked` or no body | `Http(409)` | no |
-   | 429 | `Http(429)` with its `Retry-After` | yes |
+   | 429 on a deployment | `Http(429)` with its `Retry-After` | yes |
    | 500 or 503 | `Transport` | no |
    | 401, or 403 `AuthenticationFailed`, `AuthorizationFailed` or `ExpiredAuthenticationToken` | `Unauthorized` | yes |
    | Other 403, other 400 | `Rejected` with the reason | yes |
@@ -161,7 +161,7 @@ Do the tasks in order. Each task has a stable ID for the report.
 
    Result: 1 test passes.
    Reconcile gives `Absent`, `GroupOnly`, `Created`, `IdentityMismatch`, `Http(409)` and `Transport` in six calls.
-   Each of the 8 recorded requests is a GET.
+   Each of the 8 recorded requests is a GET. The poll records no wait.
 
 2. Make sure that the module has no write path.
 
@@ -169,8 +169,29 @@ Do the tasks in order. Each task has a stable ID for the report.
    grep -rn "Method::" crates/horizon-cloud/src/azure.rs crates/horizon-cloud/src/azure/*.rs
    ```
 
-   Result: The output shows only `Method::Get`: the call in `get_json_within` and the arm of `send_within`.
-   The module has no PUT, POST or DELETE request.
+   Result: The output shows the `Method::Get` calls and arm, the `Method::Put` arm of `send_within` and the call in `put_deployment`.
+   The module has no other PUT, and no POST or DELETE request.
+
+### 6.7 ARM-07 — Check the deployment and the operation poll
+
+1. Run the deployment and operation tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::transport::deployments_are_submitted_incrementally_and_return_their_operation azure::tests::operation::
+   ```
+
+   Result: 6 tests pass. These tests examine the items that follow:
+   - The deployment body has `mode: Incremental`, the template and the parameters.
+   - The client keeps the `Azure-AsyncOperation` URL exactly as ARM sent it, also a signed URL of more than 3,000 characters.
+   - A deployment that runs without an operation URL gives `InvalidResponse`. It is not definite.
+   - An operation URL outside the subscription gives `InvalidResponse`. The client does not poll it.
+     This includes dot segments, percent-encoding, backslashes, empty segments, `@`, a fragment, another host, HTTP and a URL above 8,192 characters.
+   - A `Location` header without an `Azure-AsyncOperation` header gives `InvalidResponse`.
+   - The poll waits 0.5, 1 and 2 seconds before its first three requests.
+   - A `Retry-After` makes a wait longer. It never makes a wait shorter.
+   - A 429 poll waits its `Retry-After` and continues.
+   - At ten minutes the poll stops with `Invalid`. The sum of the waits is exactly ten minutes. The last wait sends no request.
+   - `Failed` and `Canceled` give `Rejected` with the reason of ARM. A 404 poll and a status without `status` give `InvalidResponse`.
 
 ## 7. Pass criteria
 
@@ -180,7 +201,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    cargo test -p horizon-cloud --lib -- azure::
    ```
 
-   Result: 16 tests pass.
+   Result: 22 tests pass.
 
 - All tasks pass on the candidate commit.
 - No request leaves the scripted agent. No test sleeps.

@@ -140,5 +140,6 @@ fn reconcile_never_writes() {
         sent.iter().all(|line| line.starts_with("GET ")),
         "every reconcile request is a GET: {sent:?}"
     );
+    assert_eq!(client.sleeps(), Vec::<Duration>::new());
     client.done();
 }
