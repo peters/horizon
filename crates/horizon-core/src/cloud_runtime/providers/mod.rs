@@ -129,7 +129,7 @@ pub(super) fn lifecycle<'a>(state: &Deployment, settings: &'a Settings) -> Box<d
         Kind::Hetzner => Box::new(hetzner::Hetzner { settings }),
         Kind::DockerHost => Box::new(docker_host::DockerHost { settings }),
         Kind::RunPod => Box::new(runpod::RunPod { settings }),
-        Kind::Azure => Box::new(azure::Azure),
+        Kind::Azure => Box::new(azure::Azure { settings }),
     }
 }
 
