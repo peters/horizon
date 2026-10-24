@@ -4,10 +4,9 @@
 //! live in this cloud's `azure.json` journal. A stop deallocates the VM, Resume
 //! starts it again, and a delete removes the group and proves it absent.
 //!
-//! `providers::preflight` admits an Azure cloud that the settings can make, so a
-//! reconnect reaches this module. No new Azure cloud is made yet:
-//! `repository::launch` drops a profile whose provider is not creatable while
-//! `offers::AZURE_DEPLOYABLE` is `false`.
+//! `providers::preflight` admits an Azure cloud that the settings can make, and
+//! `offers::AZURE_DEPLOYABLE` lets every caller create one. A worker is placed by
+//! the settings' VM sizes and regions, never by a single chosen offer.
 mod lifecycle;
 mod provision;
 #[cfg(test)]
