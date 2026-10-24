@@ -194,6 +194,31 @@ cpal = { version = "0.18.2", features = ["pulseaudio"] }
 lto = "thin"
 strip = true
 
+[profile.test]
+# A test build is a debug build, and a test spends its time in work that a debug
+# build leaves unoptimized: egui layout passes, deflate and base64 on a video
+# frame, and one Ed25519 verification for every retained journal operation.
+# Level 1 keeps the compile time of a test build close to the default; level 3 on
+# the crates that do the cryptography is where the rest of the run time is.
+#
+# Measured over the whole workspace, 7146 tests, with the profile off, on and off
+# again: 57.6, 48.1 and 57.6 minutes of test time. A full warm test build grew
+# from 109 s to 168 s for that 9.5 minute saving. See
+# docs/testing/reports/2026-10-24-test-suite-durations.md.
+opt-level = 1
+
+[profile.test.package.curve25519-dalek]
+opt-level = 3
+
+[profile.test.package.ed25519-dalek]
+opt-level = 3
+
+[profile.test.package.ring]
+opt-level = 3
+
+[profile.test.package.sha2]
+opt-level = 3
+
 [profile.profiling]
 inherits = "release"
 debug = 1
