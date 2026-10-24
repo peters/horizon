@@ -123,7 +123,9 @@ local paths.
 9. Push Ctrl+Shift+N.
 
    Result: A **Shell** panel opens in the cloud. It shows the prompt
-   `worker:/workspace$`.
+   `worker:/workspace$`. No directory picker opens: a cloud workspace runs its
+   panels on the worker, so a local directory would name a path the panel never
+   sees.
 
 10. Push Esc.
 

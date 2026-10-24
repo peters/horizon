@@ -255,25 +255,22 @@ impl HorizonApp {
             .map_or((workspace_id, canvas_pos), |(workspace, position)| {
                 (workspace, Some(position))
             });
+        // A new panel of a cloud workspace runs on the worker, whose checkout exists. Let the
+        // cloud place the panel first, and keep the local directory picker away only when the
+        // panel really lands in the group: a position outside the cloud still asks where to
+        // run, because that panel runs on this machine.
+        #[cfg(feature = "cloud-workspaces")]
+        let canvas_pos = canvas_pos.or_else(|| self.cloud_member_position(workspace_id));
+        #[cfg(feature = "cloud-workspaces")]
+        let takes_cloud_panel = canvas_pos.is_some_and(|pos| self.cloud_takes_panel_at(workspace_id, pos));
         let has_directory = workspace_cwd(&self.board, workspace_id).is_some();
         #[cfg(feature = "cloud-workspaces")]
-        let has_directory = has_directory
-            || canvas_pos.is_some_and(|pos| {
-                self.cloud_prototype
-                    .groups
-                    .at_position(&self.board, workspace_id, pos)
-                    .is_some()
-            });
+        let has_directory = has_directory || takes_cloud_panel;
         if has_directory || !preset.requires_workspace_cwd() {
             let mut options = preset.to_panel_options(&self.template_config.browser);
             options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
             #[cfg(feature = "cloud-workspaces")]
-            if canvas_pos.is_some_and(|pos| {
-                self.cloud_prototype
-                    .groups
-                    .at_position(&self.board, workspace_id, pos)
-                    .is_some()
-            }) {
+            if takes_cloud_panel {
                 options.position = canvas_pos;
             }
             match self.create_panel_with_options(options, workspace_id) {
@@ -375,6 +372,98 @@ mod tests {
             args: Vec::new(),
             resume: PanelResume::Fresh,
             ssh_connection: None,
+        }
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    mod cloud_workspace_panels {
+        use crate::app::test_support::test_app_with_startup;
+        use horizon_core::cloud_panel::CloudGroup;
+        use horizon_core::{RuntimeState, StartupDecision};
+
+        use super::shell_preset;
+
+        fn app_with_a_cloud_workspace() -> (
+            tempfile::TempDir,
+            egui::Context,
+            crate::app::HorizonApp,
+            horizon_core::WorkspaceId,
+        ) {
+            let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            });
+            let workspace_id = app.board.create_workspace("cloud");
+            let local_id = app.board.workspace(workspace_id).expect("workspace").local_id.clone();
+            assert!(app.board.workspace(workspace_id).expect("workspace").cwd.is_none());
+            // A real directory, so that a panel which fell back to this machine could
+            // still start there on every platform. The cloud member runs it on the worker.
+            app.cloud_prototype.groups.0.push(CloudGroup::new(
+                101,
+                "cloud".into(),
+                local_id,
+                temp.path().to_path_buf(),
+                [0.0, 0.0],
+            ));
+            (temp, ctx, app, workspace_id)
+        }
+
+        #[test]
+        fn a_new_panel_of_a_cloud_workspace_runs_on_the_worker() {
+            let (_temp, ctx, mut app, workspace_id) = app_with_a_cloud_workspace();
+
+            app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+
+            assert!(
+                app.dir_picker.is_none(),
+                "the worker holds the checkout, so no local directory is requested"
+            );
+            assert_eq!(
+                app.cloud_prototype.groups.0[0].panels.len(),
+                1,
+                "the worker runs the new panel as a cloud member, not this machine"
+            );
+        }
+
+        #[test]
+        fn a_collapsed_cloud_opens_for_the_new_panel() {
+            let (_temp, ctx, mut app, workspace_id) = app_with_a_cloud_workspace();
+            app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+
+            app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+
+            assert!(
+                !app.cloud_prototype.groups.0[0].collapsed,
+                "a collapsed cloud takes no panel, so it opens for the new one"
+            );
+            assert!(
+                app.dir_picker.is_none(),
+                "the panel is a cloud member, so no local directory is requested"
+            );
+            assert_eq!(
+                app.cloud_prototype.groups.0[0].panels.len(),
+                1,
+                "the worker runs the new panel as a cloud member"
+            );
+        }
+
+        #[test]
+        fn a_position_outside_the_cloud_still_asks_for_a_directory() {
+            let (_temp, ctx, mut app, workspace_id) = app_with_a_cloud_workspace();
+
+            app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), Some([9_000.0, 9_000.0]));
+
+            assert!(
+                app.dir_picker.is_some(),
+                "a panel outside the cloud runs on this machine, so it asks where"
+            );
+            assert!(
+                app.board.panels.is_empty(),
+                "the panel waits for the directory instead of running in the default one"
+            );
+            assert!(
+                app.cloud_prototype.groups.0[0].panels.is_empty(),
+                "a panel outside the cloud is no cloud member"
+            );
         }
     }
 
