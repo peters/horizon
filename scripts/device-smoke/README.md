@@ -71,6 +71,16 @@ developer's session bus is not used. The fixture starts and stops its own
 `dbus-daemon`. `LIBGL_ALWAYS_SOFTWARE` does not disable Vulkan, so the debug
 app may use the available GPU.
 
+The harness starts its X server on the host, not inside that namespace, so the
+host `/tmp` must accept writes: Xvfb keeps its keymap files there. A `/tmp` that
+is a tmpfs with a per-user quota can refuse the write even when `df` reports
+free space, because every process of the same user counts against one quota.
+Before it creates its state, the harness writes and removes one probe file in
+`/tmp` and stops with a message that names `/tmp` when that write fails. During
+a run, keep the state directory and any frozen binary on a filesystem with
+space. Remove the binary copies of earlier runs; the harness does not reuse
+them.
+
 Before accepting smoke results, find the actual Horizon child within this
 fixture's owned process tree. The recorded launcher PID may refer to `bwrap`.
 On Linux, verify `/proc/<actual-horizon-pid>/exe` points at the frozen executable

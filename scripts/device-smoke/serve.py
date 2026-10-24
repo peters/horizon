@@ -8,9 +8,14 @@ import shutil
 import signal
 import re
 import sys
+import tempfile
 import time
 
 import sandbox
+
+
+# The directory the host X server keeps its socket and keymap files in.
+TMP_DIR = Path('/tmp')
 
 
 def bound_port(process, path, pattern):
@@ -130,10 +135,35 @@ def application_command(app, config, saved_session):
     return [str(app), '--config', str(config), session]
 
 
+def require_writable_tmp(directory=None):
+    """Stop before the display starts when the host `/tmp` refuses a write.
+
+    The fixture starts its X server on the host, and Xvfb keeps its keymap files in
+    `/tmp`. A full or quota-limited `/tmp` otherwise fails inside xkbcomp with
+    "Cannot close ... (not enough space?)", which reads like an X or keyboard defect.
+    """
+    directory = TMP_DIR if directory is None else Path(directory)
+    try:
+        # An unnamed file: no path stays behind, and a leftover file or symbolic
+        # link under /tmp from another run or user cannot make this fail.
+        with tempfile.TemporaryFile(dir=directory) as probe:
+            # Larger than the keymap the X server compiles there, so a nearly full
+            # filesystem fails here as well as an exhausted quota does.
+            probe.write(b'\0' * (64 * 1024))
+    except OSError as error:
+        raise RuntimeError(
+            f'{directory} refused a write ({error.strerror or error}). The fixture starts its X server '
+            'on the host, and Xvfb keeps its keymap files there, so the display cannot start. '
+            'Free space on that filesystem or check its per-user quota, and keep the fixture '
+            'state and any frozen binary on a filesystem with space.'
+        ) from None
+
+
 def main():
     if '--worker-desktop' in sys.argv[1:]:
         import worker_desktop
         return worker_desktop.main()
+    require_writable_tmp()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--horizon', type=Path, required=True, help='Horizon debug binary for an isolated smoke')
     parser.add_argument('--tools', type=Path, help='Optional unpacked Debian tools root')
