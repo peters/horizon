@@ -1,4 +1,6 @@
-//! Azure Resource Manager (ARM) client for CPU workers.
+//! Azure Resource Manager (ARM) client for CPU workers. Each operation owns one
+//! resource group named from its operation id; a lost answer is reconciled by that
+//! name and the group's `horizon-operation` tag, never by a second create.
 //!
 //! Every URL is built from validated segments with an explicit API version. Every
 //! answer is untrusted: bodies are size-limited, decoded into small typed views,
@@ -11,21 +13,24 @@ use serde_json::Value;
 use std::{io::Read, time::Duration};
 use ureq::http::HeaderMap;
 
+pub mod reconcile;
 pub mod resource;
 pub mod url;
 
 #[cfg(test)]
 mod tests;
 
-pub use resource::Group;
+pub use reconcile::{Found, RESOURCE_GROUP_PREFIX, WORKER_VM_NAME};
+pub use resource::{DataDisk, Group, VirtualMachine};
 
-use resource::group_info;
-use url::{valid_resource_group_name, valid_subscription_id};
+use resource::{group_info, vm_view};
+use url::{valid_resource_group_name, valid_resource_name, valid_subscription_id};
 
 /// The public ARM endpoint.
 pub const MANAGEMENT_ENDPOINT: &str = "https://management.azure.com";
 /// Explicit API versions; ARM never picks one for this client.
 pub const RESOURCE_GROUP_API_VERSION: &str = "2022-09-01";
+pub const COMPUTE_API_VERSION: &str = "2024-03-01";
 /// The profile `provider` value that selects Azure.
 pub const PROVIDER: &str = "azure";
 /// Tag on every resource group this client's callers create, naming the operation
@@ -165,6 +170,12 @@ pub(crate) struct Reply {
     pub(crate) value: Value,
 }
 
+/// The resource group that holds the resources of `operation_id`.
+#[must_use]
+pub fn resource_group_name(operation_id: &str) -> String {
+    format!("{RESOURCE_GROUP_PREFIX}{operation_id}")
+}
+
 impl Azure {
     /// A client for `subscription_id` on the public ARM endpoint, over HTTPS only,
     /// without redirects.
@@ -246,12 +257,37 @@ impl Azure {
             .transpose()
     }
 
+    /// Reads VM `name` in `group` with its instance view.
+    /// # Errors
+    /// `Invalid` for a bad segment (nothing is sent), `IdentityMismatch` for a body
+    /// whose name, resource id or `vmId` does not fit the request, `InvalidResponse`
+    /// for an unusable body, or the provider failure.
+    pub fn get_vm(&self, group: &str, name: &str, cancel: &Cancellation) -> Result<Option<VirtualMachine>, Failure> {
+        let url = self.resource_url(group, "Microsoft.Compute/virtualMachines", name, COMPUTE_API_VERSION)?;
+        self.get_json_within(&format!("{url}&$expand=instanceView"), cancel, None)?
+            .map(|value| vm_view(&value, &self.subscription_id, group, name))
+            .transpose()
+    }
+
     fn group_url(&self, name: &str) -> Result<String, Failure> {
         if !valid_resource_group_name(name) {
             return Err(Failure::Local(CloudError::Invalid("Invalid Azure resource group name")));
         }
         Ok(format!(
             "{}/subscriptions/{}/resourceGroups/{name}?api-version={RESOURCE_GROUP_API_VERSION}",
+            self.endpoint, self.subscription_id
+        ))
+    }
+
+    fn resource_url(&self, group: &str, provider_path: &str, name: &str, api_version: &str) -> Result<String, Failure> {
+        if !valid_resource_group_name(group) {
+            return Err(Failure::Local(CloudError::Invalid("Invalid Azure resource group name")));
+        }
+        if !valid_resource_name(name) {
+            return Err(Failure::Local(CloudError::Invalid("Invalid Azure resource name")));
+        }
+        Ok(format!(
+            "{}/subscriptions/{}/resourceGroups/{group}/providers/{provider_path}/{name}?api-version={api_version}",
             self.endpoint, self.subscription_id
         ))
     }

@@ -61,10 +61,18 @@ fn a_bad_resource_group_or_name_is_refused_before_any_request() {
             failure.into(),
             CloudError::Invalid("Invalid Azure resource group name")
         ));
+        assert!(matches!(
+            client.azure.get_vm(group, WORKER_VM_NAME, &cancel).unwrap_err().into(),
+            CloudError::Invalid("Invalid Azure resource group name")
+        ));
     }
     let long_name = "n".repeat(129);
     for name in ["", "a/b", "a.b", "name?api-version=1", "a%2fb", long_name.as_str()] {
         assert!(!valid_resource_name(name), "{name:?}");
+        assert!(matches!(
+            client.azure.get_vm(GROUP, name, &cancel).unwrap_err().into(),
+            CloudError::Invalid("Invalid Azure resource name")
+        ));
     }
     assert!(valid_location("northeurope") && valid_location("westus2"));
     for location in ["", "n", "North Europe", "2west", "west-us"] {
@@ -153,6 +161,62 @@ fn a_resource_group_body_over_the_limit_is_an_invalid_response() {
     let failure = client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
     assert!(!failure.definite());
     assert!(matches!(failure.into(), CloudError::InvalidResponse));
+    client.done();
+}
+
+#[test]
+fn virtual_machine_views_carry_identity_instance_power_and_disks() {
+    let url = vm_url(GROUP, WORKER_VM_NAME);
+    let client = scripted(vec![
+        get(url.clone(), 200, vm_body(WORKER_VM_NAME, json!(VM_INSTANCE))),
+        get(url.clone(), 200, vm_body(WORKER_VM_NAME, Value::Null)),
+        get(
+            url.clone(),
+            200,
+            vm_body(WORKER_VM_NAME, json!(VM_INSTANCE.to_uppercase())),
+        ),
+        get(url.clone(), 200, vm_body(WORKER_VM_NAME, json!(7))),
+        get(url.clone(), 200, vm_body("other", json!(VM_INSTANCE))),
+        get(url, 404, ""),
+    ]);
+    let cancel = Cancellation::default();
+    let read = || {
+        client
+            .azure
+            .get_vm(GROUP, WORKER_VM_NAME, &cancel)
+            .map_err(CloudError::from)
+    };
+    let vm = read().unwrap().unwrap();
+    assert_eq!(
+        vm.id,
+        format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Compute/virtualMachines/worker")
+    );
+    assert_eq!(vm.instance_id.as_deref(), Some(VM_INSTANCE));
+    assert_eq!(vm.name, WORKER_VM_NAME);
+    assert_eq!(
+        (vm.location.as_str(), vm.vm_size.as_str()),
+        ("northeurope", "Standard_D4s_v5")
+    );
+    assert_eq!(vm.provisioning_state, "Succeeded");
+    assert_eq!(vm.power_state.as_deref(), Some("PowerState/running"));
+    assert_eq!(vm.tags[OPERATION_TAG], OPERATION_ID);
+    assert_eq!(
+        vm.data_disks,
+        [DataDisk {
+            id: format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Compute/disks/worker-data"),
+            lun: Some(0),
+            delete_option: "Detach".into(),
+        }]
+    );
+    assert_eq!(vm.data_disk_count, 2, "a disk without an id is counted, not named");
+    assert_eq!(read().unwrap().unwrap().instance_id, None, "no vmId yet");
+    assert!(matches!(read(), Err(CloudError::IdentityMismatch)), "an uppercase vmId");
+    assert!(
+        matches!(read(), Err(CloudError::IdentityMismatch)),
+        "a vmId that is not a string"
+    );
+    assert!(matches!(read(), Err(CloudError::IdentityMismatch)), "another VM name");
+    assert!(matches!(read(), Ok(None)));
     client.done();
 }
 
@@ -406,5 +470,13 @@ fn a_cancelled_call_sends_nothing() {
     let failure = client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
     assert!(failure.definite());
     assert!(matches!(failure.into(), CloudError::Cancelled));
+    assert!(matches!(
+        client.azure.get_vm(GROUP, WORKER_VM_NAME, &cancel).unwrap_err().into(),
+        CloudError::Cancelled
+    ));
+    assert!(matches!(
+        client.azure.reconcile(OPERATION_ID, &cancel),
+        Err(CloudError::Cancelled)
+    ));
     assert_eq!(client.sent(), Vec::<String>::new());
 }

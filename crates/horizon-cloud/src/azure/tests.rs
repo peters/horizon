@@ -10,6 +10,7 @@ use ureq::{
     middleware::MiddlewareNext,
 };
 
+mod reconcile;
 mod transport;
 
 const SUB: &str = "00000000-0000-4000-8000-000000000001";
@@ -17,6 +18,7 @@ const OTHER_SUB: &str = "00000000-0000-4000-8000-000000000002";
 const TOKEN: &str = "synthetic-arm-token";
 const OPERATION_ID: &str = "op-1";
 const GROUP: &str = "horizon-ws-op-1";
+const VM_INSTANCE: &str = "3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f";
 
 /// One scripted exchange: what the client must send and what ARM answers.
 struct Exchange {
@@ -106,6 +108,12 @@ fn group_url(name: &str) -> String {
     format!("https://management.azure.com/subscriptions/{SUB}/resourceGroups/{name}?api-version=2022-09-01")
 }
 
+fn vm_url(group: &str, name: &str) -> String {
+    format!(
+        "https://management.azure.com/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/{name}?api-version=2024-03-01&$expand=instanceView"
+    )
+}
+
 fn group_body(name: &str, operation: Option<&str>) -> String {
     let tags = operation.map_or_else(|| json!({}), |operation| json!({ OPERATION_TAG: operation, "n": 1 }));
     json!({
@@ -116,6 +124,31 @@ fn group_body(name: &str, operation: Option<&str>) -> String {
         "tags": tags,
     })
     .to_string()
+}
+
+fn vm_body(name: &str, instance: Value) -> String {
+    let mut body = json!({
+        "id": format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Compute/virtualMachines/{name}"),
+        "name": name,
+        "location": "northeurope",
+        "tags": { OPERATION_TAG: OPERATION_ID },
+        "properties": {
+            "provisioningState": "Succeeded",
+            "hardwareProfile": { "vmSize": "Standard_D4s_v5" },
+            "storageProfile": { "dataDisks": [
+                { "lun": 0, "deleteOption": "Detach", "managedDisk": {
+                    "id": format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Compute/disks/worker-data") } },
+                { "lun": 1, "managedDisk": {} }
+            ] },
+            "instanceView": { "statuses": [
+                { "code": "ProvisioningState/succeeded" }, { "code": "PowerState/running" }
+            ] }
+        }
+    });
+    if !instance.is_null() {
+        body["properties"]["vmId"] = instance;
+    }
+    body.to_string()
 }
 
 fn arm_error(code: &str, message: &str) -> String {
