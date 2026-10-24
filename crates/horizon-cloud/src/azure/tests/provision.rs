@@ -194,7 +194,13 @@ fn a_new_cloud_creates_its_group_then_one_deployment_and_binds_the_vm() {
             worker_id: VM_INSTANCE.into()
         }
     );
-    assert_eq!(records.journal, bound_group());
+    assert_eq!(
+        records.journal,
+        Journal {
+            subscription: Some(SUB.into()),
+            ..bound_group()
+        }
+    );
     let bodies = client.bodies();
     assert_eq!(
         bodies[0],
@@ -276,6 +282,23 @@ fn a_lost_create_answer_is_reconciled_and_never_sent_again() {
         client.sleeps().iter().sum::<Duration>(),
         Duration::from_millis(500),
         "one backoff step between the deployment reads"
+    );
+    client.done();
+}
+
+#[test]
+fn a_lost_group_request_records_the_subscription_it_went_to() {
+    let client = scripted(vec![
+        get(group_url(GROUP), 404, ""),
+        put(group_url(GROUP), Value::Null, 503, "").any_body(),
+    ]);
+    let mut records = Recorded::new(CreateState::Prepared, Journal::default());
+    assert!(matches!(run(&client, &mut records, None), Err(CloudError::Transport)));
+    assert_eq!(records.journal.group, CreateState::Requested);
+    assert_eq!(
+        records.journal.subscription.as_deref(),
+        Some(SUB),
+        "a delete must look for the group where it was requested"
     );
     client.done();
 }

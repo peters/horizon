@@ -49,7 +49,7 @@ the machine has an `azure` section. It provisions through
 `azure::provision` and then waits for SSH readiness, as Hetzner does:
 
 - The cloud's `azure.json` journal, beside `deployment.json`, keeps the group
-  fence and the region. `providers::retained` is true when the group fence is
+  fence, the region and the subscription of the group request. `providers::retained` is true when the group fence is
   `Requested` or `Bound`.
 - A registry binding of the machine has priority over `registry_pull`, as on
   Hetzner: its grant must be verified for the exact digest first.
@@ -147,7 +147,11 @@ The journal in `azure.json` records each step before the next:
 and delete, with the VM fence in `deployment.json` and the group in `azure.json`:
 
 - The client is made from the `azure` settings. The settings must name the
-  subscription of the cloud's group, which the group id in `azure.json` names.
+  subscription of the cloud's group. The group id in `azure.json` names it for
+  a bound or deleted group. For a `Requested` group, the journal records the
+  subscription before the group request. If an older journal has a `Requested`
+  group and no subscription, the client refuses: a 404 in another subscription
+  cannot prove that the group is absent.
 - Check reads the bound VM by ownership only and reports `Found`, `Inactive` or
   `Missing`. A VM that it finds for a requested worker is bound.
 - Stop follows `RunPod`'s contract (`request_stop`): the stop is saved first,

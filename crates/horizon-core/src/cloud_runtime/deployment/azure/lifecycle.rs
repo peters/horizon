@@ -21,19 +21,29 @@ use horizon_cloud::{
 };
 
 /// The ARM client for the cloud at `store`. The settings must name the subscription
-/// that the cloud's group was made in.
+/// that the cloud's group was requested or made in, because a delete proves the group
+/// absent only in the client's subscription.
 /// # Errors
-/// Refuses missing settings, an unreadable token and another subscription.
+/// Refuses missing settings, an unreadable token, another subscription, and a
+/// requested group whose journal does not record its subscription.
 pub(in crate::cloud_runtime) fn client(settings: &Settings, store: &Store) -> Result<Azure> {
     let azure = settings.azure_settings()?;
     let client = Azure::new(azure.credential()?, &azure.subscription_id)?;
-    if let CreateState::Bound { worker_id } | CreateState::Terminated { worker_id } = &load(store.root())?.group {
-        let subscription = worker_id.split('/').nth(2).unwrap_or_default();
-        if !subscription.eq_ignore_ascii_case(client.subscription_id()) {
-            return Err(Error::Invalid(
-                "The cloud's Azure resource group is in another subscription than the settings name",
-            ));
+    let journal = load(store.root())?;
+    let subscription = match &journal.group {
+        CreateState::Prepared => return Ok(client),
+        CreateState::Requested => journal.subscription.as_deref().ok_or(Error::Invalid(
+            "Horizon did not record which Azure subscription the cloud's resource group was requested in; \
+             find the group horizon-ws-<cloud id> in the Azure portal and delete it there",
+        ))?,
+        CreateState::Bound { worker_id } | CreateState::Terminated { worker_id } => {
+            worker_id.split('/').nth(2).unwrap_or_default()
         }
+    };
+    if !subscription.eq_ignore_ascii_case(client.subscription_id()) {
+        return Err(Error::Invalid(
+            "The cloud's Azure resource group is in another subscription than the settings name",
+        ));
     }
     Ok(client)
 }
