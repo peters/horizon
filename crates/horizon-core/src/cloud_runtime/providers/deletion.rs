@@ -1,7 +1,7 @@
 //! Read-only durable deletion checks. No provider credential or fresh request.
 use super::{CreateState, Deployment, Result, Store, kind};
 use crate::cloud_runtime::{Stage, deployment::storage};
-use horizon_cloud::{hetzner::cloud::Journal, provider::Kind};
+use horizon_cloud::{azure::provision::Journal as AzureJournal, hetzner::cloud::Journal, provider::Kind};
 
 pub(in crate::cloud_runtime) fn confirmed(store: &Store, state: &Deployment) -> Result<bool> {
     let Some(spec) = &state.spec else { return Ok(false) };
@@ -23,6 +23,7 @@ pub(in crate::cloud_runtime) fn confirmed(store: &Store, state: &Deployment) -> 
         ("docker-host.json", provider == Kind::DockerHost),
         ("workspace-volume.json", provider == Kind::RunPod),
         ("workspace-volume.required", provider == Kind::RunPod),
+        ("azure.json", provider == Kind::Azure),
     ] {
         if !allowed && store.root().join(file).try_exists()? {
             return Ok(false);
@@ -56,9 +57,15 @@ pub(in crate::cloud_runtime) fn confirmed(store: &Store, state: &Deployment) -> 
             Ok(matches!(state.operation, CreateState::Terminated { .. })
                 && journal.as_object().is_some_and(serde_json::Map::is_empty))
         }
-        // Local records cannot prove that no Azure resource exists, so an Azure deletion
-        // is never confirmed.
-        Kind::Azure => Ok(false),
+        Kind::Azure => {
+            let Some(bytes) = read(store, "azure.json")? else {
+                return Ok(false);
+            };
+            // The journal is saved only once ARM answered 404 for the cloud's own group
+            // and the tag sweep after it listed nothing.
+            let journal: AzureJournal = serde_json::from_slice(&bytes).map_err(|_| super::super::Error::Json)?;
+            Ok(journal.proves_absent(&state.cloud_id))
+        }
     }
 }
 

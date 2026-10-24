@@ -77,6 +77,7 @@ pub fn can_remove_without_deployment(store: &Store) -> Result<bool> {
         "docker-host.json",
         "workspace-volume.json",
         "workspace-volume.required",
+        "azure.json",
     ] {
         if store.root().join(file).try_exists()? {
             return Ok(false);
@@ -417,6 +418,40 @@ mod tests {
             !can_remove(&store, &deleted).unwrap(),
             "the registered SSH key may still exist"
         );
+    }
+
+    #[test]
+    fn an_azure_cloud_is_removable_only_once_its_group_is_proven_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let state: Deployment = serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"azure-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":{"provider":"azure","image":"registry.example/worker","cpu":4,"memory_gb":8},
+            "stage":"Deleted","operation":{"state":"terminated","worker_id":"vm"},
+            "spec":null,"worker":null,"sessions":[]
+        }))
+        .unwrap();
+        assert!(
+            can_remove(&store, &state).unwrap(),
+            "nothing on Azure was ever recorded"
+        );
+        let group = "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-azure-cloud";
+        for (journal, removable) in [
+            (serde_json::json!({"group":{"state":"bound","worker_id":group}}), false),
+            (
+                serde_json::json!({"group":{"state":"terminated","worker_id":group},"deleting":true}),
+                false,
+            ),
+            (
+                serde_json::json!({"group":{"state":"terminated","worker_id":group},"deleting":true,"swept":true}),
+                true,
+            ),
+        ] {
+            std::fs::write(root.path().join("azure.json"), journal.to_string()).unwrap();
+            assert_eq!(can_remove(&store, &state).unwrap(), removable, "{journal}");
+            // Without its deployment, the journal alone keeps the folder.
+            assert!(!can_remove_without_deployment(&store).unwrap(), "{journal}");
+        }
     }
 
     fn pending(root: &Path, requested: bool) -> Vec<u8> {

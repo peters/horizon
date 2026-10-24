@@ -60,8 +60,7 @@ pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) 
         Kind::Hetzner => super::deployment::hetzner::preflight(cloud_id, profile, settings),
         Kind::DockerHost => docker_host::preflight(profile, settings),
         Kind::RunPod => Ok(()),
-        // The gate for every caller: a deployment record is written only after this.
-        Kind::Azure => Err(azure::NOT_CREATABLE),
+        Kind::Azure => azure::preflight(cloud_id, profile, settings),
     }
 }
 
@@ -70,7 +69,8 @@ pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) 
 pub(super) fn admit(settings: &Settings, profile: &Profile, image: &str, operation: &CreateState) -> Result<()> {
     match kind(profile) {
         Kind::Hetzner => super::deployment::hetzner::admit(settings, image, operation),
-        // Never reached: `preflight` refuses a new Azure cloud first.
+        // An Azure host logs in itself; `deployment::azure::provision` checks its pull
+        // login before the first request.
         Kind::DockerHost | Kind::RunPod | Kind::Azure => Ok(()),
     }
 }
@@ -164,28 +164,21 @@ mod tests {
     }
 
     #[test]
-    fn an_azure_cloud_is_refused_before_anything_is_recorded_or_requested() {
+    fn an_azure_cloud_without_azure_settings_is_refused_before_anything_is_recorded_or_requested() {
         let (profile, settings) = (azure(), settings());
         assert_eq!(kind(&profile), Kind::Azure);
+        let missing = "Add an azure section to the cloud settings before deploying an Azure cloud";
         let refusal = preflight("azure-fixture", &profile, &settings).unwrap_err().to_string();
-        assert_eq!(refusal, "Horizon cannot create clouds on Azure yet");
+        assert_eq!(refusal, missing);
         let client = compute(&request(&settings)).err().map(|error| error.to_string());
-        assert_eq!(
-            client.as_deref(),
-            Some("Add an azure section to the cloud settings before deploying an Azure cloud")
-        );
-        assert_ne!(
-            client.as_deref(),
-            Some(refusal.as_str()),
-            "not read as the profile refusal"
-        );
+        assert_eq!(client.as_deref(), Some(missing));
         // The RunPod settings in the fixture must not answer for an Azure cloud.
         assert!(cpu_flavors(&profile, &settings).is_err());
         assert!(data_centers(&profile, &settings).is_err());
     }
 
     #[test]
-    fn configured_azure_answers_from_the_catalog_and_new_clouds_stay_refused() {
+    fn configured_azure_answers_from_the_catalog_and_admits_a_cloud_it_can_make() {
         let temp = tempfile::tempdir().unwrap();
         let token = temp.path().join("arm-token");
         std::fs::write(&token, "synthetic-arm-token").unwrap();
@@ -211,13 +204,27 @@ mod tests {
             data_centers(&profile, &settings).unwrap(),
             ["northeurope", "swedencentral"]
         );
-        // The client is made without a request, and a normal caller is still refused.
+        // The client is made without a request, and the preflight admits the cloud.
         assert!(compute(&request(&settings)).is_ok());
-        assert_eq!(
-            preflight("azure-fixture", &profile, &settings).unwrap_err().to_string(),
-            "Horizon cannot create clouds on Azure yet"
+        preflight("azure-fixture", &profile, &settings).unwrap();
+        let mut small = profile.clone();
+        small.storage.volume_gb = 3;
+        let mut large = profile.clone();
+        large.memory_gb = 64;
+        for (cloud, profile, refusal) in [
+            ("azure-fixture", &small, "between 4 and 32,767 GB"),
+            (&"a".repeat(80) as &str, &profile, "at most 79 characters"),
+            ("azure.fixture", &profile, "at most 79 characters"),
+            ("azure-fixture", &large, "No Azure VM size in the settings"),
+        ] {
+            let error = preflight(cloud, profile, &settings).unwrap_err().to_string();
+            assert!(error.contains(refusal), "{cloud}: {error}");
+        }
+        std::fs::remove_file(&token).unwrap();
+        assert!(
+            preflight("azure-fixture", &profile, &settings).is_err(),
+            "an unreadable token"
         );
-        const { assert!(!horizon_cloud::offers::AZURE_DEPLOYABLE) };
     }
 
     #[test]
