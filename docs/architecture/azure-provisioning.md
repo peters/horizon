@@ -19,6 +19,38 @@ fixed name and the same tag.
 `offers::AZURE_DEPLOYABLE` stays `false`, so no Horizon UI, CLI or MCP operation
 creates an Azure worker in this change.
 
+## Creation fences
+
+`azure::provision` creates a worker with two creates. The caller keeps a fence
+for each create and saves it before the request:
+
+| Create | Fence | Saved in |
+|---|---|---|
+| PUT of the resource group | `Journal::group`, with the region | the caller's journal |
+| PUT of the deployment | the operation (`CreateState`) | the caller's deployment record |
+
+Each fence has these rules:
+
+- `Prepared`: the client reads the name first. A group that it finds is bound
+  only with the operation's tag. It is never written. A VM that it finds in a
+  bound group is bound. A deployment that still runs is followed. If nothing is
+  found, the fence goes to `Requested` before the PUT.
+- `Requested`: the answer to the create was lost or did not end. The client
+  sends GET requests only. It binds what it finds. If it finds nothing, it gives
+  `CreationUnresolved` and the fence stays `Requested`. It never sends the
+  create again.
+- A deployment that ARM reports as ended, without a VM, made no VM. Only then
+  does a `Requested` VM fence go back to `Prepared`.
+- An answer that proves that ARM made nothing (`Failure::definite`) puts the
+  fence back to `Prepared`. A capacity refusal moves to the next VM size.
+- A 409, a 5xx or a transport failure keeps the fence at `Requested`.
+- `Bound`: the client reads the VM only. A VM with another `vmId` is
+  `WorkerLost`.
+
+Before the worker is returned, the VM must have the operation's tag, an allowed
+size, the cloud's region and one data disk: the group's workspace disk on LUN 0.
+The public address comes from the deployment output `publicIp`.
+
 ## Host bootstrap
 
 `horizon_cloud::host` renders the same `#cloud-config` for each rented host.

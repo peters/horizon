@@ -17,12 +17,12 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that changes `horizon_cloud::host` or `horizon_cloud::azure::template`.
+- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template` or `horizon_cloud::azure::provision`.
 - Platform: Linux with the repository Rust toolchain.
 - The tests use synthetic specs only. They need no network and no Azure account.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
-  - A live Azure VM. The ARM template is examined as data only.
+  - A live Azure VM. The ARM template is examined as data only. Recorded ARM answers stand in for Azure.
   - The stop, resume, delete and rebuild of an Azure cloud. They stay refused.
   - Azure in the New cloud dialog. `offers::AZURE_DEPLOYABLE` stays `false`.
 
@@ -131,6 +131,65 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The debug text of a plan does not show the custom data or the pull secret.
    - A plan refuses a workspace disk outside 4 to 32,767 GB, a long id, a mutable image, a shared worker and an OS disk above 4,095 GB.
    - VM sizes are used in the order of the settings. Each size must have the CPU and memory of the profile.
+
+### 6.6 AZV-06 — Check a new worker
+
+1. Run the creation test.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::provision::a_new_cloud_creates_its_group_then_one_deployment_and_binds_the_vm
+   ```
+
+   Result: 1 test passes. This test examines the items that follow:
+   - The client reads the group name. Then it saves the group fence and sends one PUT of the group with the tag.
+   - It saves the worker fence and sends one PUT of the deployment. It polls the operation until it succeeds.
+   - It binds the worker to the `vmId` of the VM.
+   - The worker has the address `192.0.2.10:22`, 4 vCPUs, 16 GB, a 30 GB OS disk and a 64 GB workspace disk.
+
+### 6.7 AZV-07 — Check that a lost create is not sent again
+
+1. Run the reconcile tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::provision::a_lost_create_answer_is_reconciled_and_never_sent_again azure::tests::provision::a_conflict_keeps_the_fence_and_an_unfound_create_is_unresolved azure::tests::provision::a_failed_deployment_keeps_the_fence_until_arm_shows_it_made_no_vm
+   ```
+
+   Result: 3 tests pass. These tests examine the items that follow:
+   - After a lost answer (503), the next attempt sends GET requests only. It follows the deployment to its end and binds the VM. The transcript has one deployment PUT.
+   - A 409 keeps the fence at `Requested`. If no VM and no deployment are found, the result is `CreationUnresolved`. The fence stays.
+   - A group whose create answer was lost and that is not found gives `CreationUnresolved`. The group is not created again.
+   - A failed deployment keeps the fence. When ARM reports the deployment as ended without a VM, the fence goes back to `Prepared`.
+
+### 6.8 AZV-08 — Check a bound worker and a found group
+
+1. Run the read tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::provision::a_bound_worker_is_only_read_and_must_be_the_same_instance azure::tests::provision::a_found_group_is_adopted_only_with_the_operation_tag_and_never_written azure::tests::provision::a_waiting_caller_reads_the_bound_worker_with_the_same_checks
+   ```
+
+   Result: 3 tests pass. These tests examine the items that follow:
+   - A bound worker is read. It is never written to.
+   - A deallocated VM is a stopped worker.
+   - A VM with another `vmId`, or no VM, is `WorkerLost`.
+   - A VM with a second data disk, or with the tag of another operation, is refused.
+   - A group with the tag of another operation gives `IdentityMismatch`. The client writes no record and no request.
+   - A group with the operation's tag in another region is refused. The client writes no record.
+   - A group and VM from an attempt whose records were lost are bound without a PUT.
+   - `inspect_worker`, which a caller uses while it waits for the VM, makes the same checks with GET requests only. A VM in another region is refused.
+
+### 6.9 AZV-09 — Check the refusals and the capacity rules
+
+1. Run the refusal tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::provision::a_request_that_cannot_succeed_sends_nothing azure::tests::provision::a_sold_out_size_moves_to_the_next_and_proves_nothing_was_made
+   ```
+
+   Result: 2 tests pass. These tests examine the items that follow:
+   - These requests are refused before the first request, and no record is written: a workspace disk of 3 GB, an unknown VM size, no region, a region that is no longer allowed, a bootstrap above the host limit and a pull login for another registry.
+   - A capacity refusal (`SkuNotAvailable` or `QuotaExceeded`) puts the fence back to `Prepared` and tries the next VM size.
+   - When each size is refused, the result is `Capacity`. The empty group stays bound.
 
 ## 7. Pass criteria
 
