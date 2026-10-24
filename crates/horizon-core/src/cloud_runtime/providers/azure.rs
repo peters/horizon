@@ -2,17 +2,46 @@
 //! records beside the deployment. A worker is provisioned behind the `Compute` seam
 //! from the catalog's sizes and regions in the machine's `azure` settings; a stop
 //! deallocates its VM, Resume starts the same VM, and a delete proves its resource
-//! group absent. `preflight` still refuses a new Azure cloud (#1774).
+//! group absent.
 use super::{
     super::{Error, deployment},
     Cancellation, CreateState, Deployment, Event, Lifecycle, Observer, Result, Settings, Store,
 };
-use horizon_cloud::runpod::recovery::Reconciliation;
+use horizon_cloud::{Profile, azure::catalog::VM_SIZES, runpod::recovery::Reconciliation};
 
-/// What reconnecting an Azure cloud answers until it is admitted as a Hetzner one is.
+/// What a companion's operation on an Azure cloud answers until companions admit it.
 pub(in crate::cloud_runtime) const REFUSED: Error = Error::Invalid("Horizon cannot manage Azure clouds yet");
-/// What a new Azure cloud answers before any record is written.
-pub(super) const NOT_CREATABLE: Error = Error::Invalid("Horizon cannot create clouds on Azure yet");
+
+/// Checks what an Azure cloud needs before any record, build or request: a workspace
+/// disk Azure can make, an id that can name the cloud's resource group, a readable
+/// token, and a VM size in the settings that fits the profile.
+pub(super) fn preflight(cloud_id: &str, profile: &Profile, settings: &Settings) -> Result<()> {
+    let (smallest, largest) = horizon_cloud::provider::AZURE.cpu_volume_gb;
+    if !(smallest..=largest).contains(&u32::from(profile.storage.volume_gb)) {
+        return Err(Error::Invalid(
+            "An Azure workspace disk must be between 4 and 32,767 GB",
+        ));
+    }
+    let group = horizon_cloud::azure::resource_group_name(cloud_id);
+    if !horizon_cloud::valid_id(cloud_id) || !horizon_cloud::azure::url::valid_resource_group_name(&group) {
+        return Err(Error::Invalid(
+            "An Azure cloud needs an ID of letters, digits, hyphens and underscores, at most 79 characters",
+        ));
+    }
+    let azure = settings.azure_settings()?;
+    azure.credential()?;
+    let fits = |name: &String| {
+        VM_SIZES
+            .iter()
+            .any(|size| size.name == name && size.vcpu >= profile.cpu && size.memory_gb >= profile.memory_gb)
+    };
+    if !azure.vm_sizes.iter().any(fits) {
+        return Err(Error::Invalid(
+            "No Azure VM size in the settings has the profile's CPU and memory",
+        ));
+    }
+    Ok(())
+}
 
 /// The VM sizes Horizon tries, in order; the spec keeps them as its CPU flavors.
 pub(super) fn cpu_flavors(settings: &Settings) -> Result<Vec<String>> {

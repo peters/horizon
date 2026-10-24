@@ -4,9 +4,10 @@
 //! live in this cloud's `azure.json` journal. A stop deallocates the VM, Resume
 //! starts it again, and a delete removes the group and proves it absent.
 //!
-//! `providers::preflight` still refuses a new Azure cloud
-//! (`offers::AZURE_DEPLOYABLE` is `false`), so only a caller that drives this module
-//! directly, such as its loopback tests, creates a worker.
+//! `providers::preflight` admits an Azure cloud that the settings can make, so a
+//! reconnect reaches this module. No new Azure cloud is made yet:
+//! `repository::launch` drops a profile whose provider is not creatable while
+//! `offers::AZURE_DEPLOYABLE` is `false`.
 mod lifecycle;
 mod provision;
 #[cfg(test)]
@@ -61,6 +62,11 @@ impl Compute {
 /// Whether the cloud's resource group, and so anything in it, may exist on Azure.
 pub(in crate::cloud_runtime) fn retained(root: &Path) -> Result<bool> {
     Ok(load(root)?.retains())
+}
+
+/// Whether the cloud's deletion has started, so nothing may reconnect or create it.
+pub(in crate::cloud_runtime) fn deleting(root: &Path) -> Result<bool> {
+    Ok(load(root)?.deleting)
 }
 
 /// The journal in the cloud's own `azure.json`, beside its deployment record.
