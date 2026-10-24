@@ -51,11 +51,11 @@ holds the settings. A copy that this start imported is kept as
 setting.
 
 Every reader of the settings goes through the store: the Settings window, the
-YAML tab of that window, `--export-config`, and the headless native App Automate
-modes (`--native-run`, `--native-mcp`, `--native-catalog`). Those modes read
-`Config::read`, which answers from the store, so they also work after the start
-that kept the imported copy aside. No reader parses a copy into a setting that a
-later save writes.
+YAML tab of that window, `--export-config`, the headless native App Automate
+modes (`--native-run`, `--native-mcp`, `--native-catalog`), and a cloud
+`browserstack_credentials` grant. Those readers use `Config::read`, which
+answers from the store, so they also work after the start that kept the imported
+copy aside. No reader parses a copy into a setting that a later save writes.
 
 ## No setting is lost
 

@@ -27,16 +27,33 @@ reason this skill exists.
 
 ## 1. Compare configured device against reality
 
-When `HORIZON_HOME` is set and not empty, Horizon looks for its config only in
-that folder (`config.yaml`, then `config.yml`) and ignores every location
-below. Otherwise it checks, in order, `$HOME/.horizon/`, then
-`$XDG_CONFIG_HOME/horizon/`, then a relative `horizon.yaml`/`horizon.yml` in the
-working directory. Resolution keys off `HOME` on every platform — **Windows
-included**; `USERPROFILE` is never consulted, so a native Windows launch without
-`HOME` set falls back to the relative path. Confirm which file is actually live
-before trusting it, or you may inspect a config Horizon never loaded.
+Horizon keeps its settings in `settings.sqlite`, and a YAML file is an export
+that Horizon never reads back. Do not read `config.yaml` to find a setting: it
+may be absent, because the first start of a build with a store moves it to
+`config.yaml.imported-<time>`, or it may be a stale export.
 
-Read `features.speech` from that file:
+Find the settings path, then export it:
+
+- With `HORIZON_HOME` set and not empty, Horizon uses only that folder and
+  ignores every location below.
+- Otherwise it uses `$HOME/.horizon/`, then `$XDG_CONFIG_HOME/horizon/`, then a
+  relative `horizon.yaml`/`horizon.yml` in the working directory. Resolution
+  keys off `HOME` on every platform — **Windows included**; `USERPROFILE` is
+  never consulted, so a native Windows launch without `HOME` set falls back to
+  the relative path.
+
+The store sits beside that path and has the same name with the extension
+replaced by `.settings.sqlite` (`config.settings.sqlite`, or
+`horizon.settings.sqlite`). Read the settings with:
+
+```bash
+horizon --export-config /tmp/horizon-settings.yaml   # --config <path> for another path
+```
+
+That command fails when the store does not exist yet, which means Horizon has
+not saved a setting on this computer.
+
+Read `features.speech` from the export:
 
 - `input_device: ""` means the system default input is used.
 - A non-empty name is matched case-insensitively: exact, then substring, then a
