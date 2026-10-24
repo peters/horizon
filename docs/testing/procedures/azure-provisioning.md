@@ -17,7 +17,7 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template` or `horizon_cloud::azure::provision`.
+- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, the `azure` cloud settings or the Azure provider arms.
 - Platform: Linux with the repository Rust toolchain.
 - The tests use synthetic specs only. They need no network and no Azure account.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
@@ -190,6 +190,22 @@ Do the tasks in order. Each task has a stable ID for the report.
    - These requests are refused before the first request, and no record is written: a workspace disk of 3 GB, an unknown VM size, no region, a region that is no longer allowed, a bootstrap above the host limit and a pull login for another registry.
    - A capacity refusal (`SkuNotAvailable` or `QuotaExceeded`) puts the fence back to `Prepared` and tries the next VM size.
    - When each size is refused, the result is `Capacity`. The empty group stays bound.
+
+### 6.10 AZV-10 — Check the settings and the provider answers
+
+1. Run the settings and provider tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::settings cloud_runtime::providers
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - The `azure` section needs an absolute private token file, a subscription UUID, and VM sizes and regions from the catalog.
+   - A token file that others can read, or with two words, is refused.
+   - Without an `azure` section, `cpu_flavors` and `data_centers` refuse. The `RunPod` settings do not answer for an Azure cloud.
+   - With an `azure` section, `cpu_flavors` and `data_centers` give the VM sizes and regions in the settings order.
+   - `preflight` still gives "Horizon cannot create clouds on Azure yet", and `offers::AZURE_DEPLOYABLE` is `false`.
+   - Each lifecycle operation still refuses with "Horizon cannot manage Azure clouds yet".
 
 ## 7. Pass criteria
 
