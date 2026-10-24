@@ -180,12 +180,16 @@ still bill. For an Azure cloud, `azure.json` is that record:
   provider's journal beside it refuses the proof, and `azure.json` refuses the
   proof of another provider.
 - A reconnect admits a bound Azure record, as `RunPod`'s, and refuses a cloud
-  whose journal has `deleting`, as Hetzner's.
+  whose journal has `deleting`, as Hetzner's. A companion does the same, and an
+  `azure.json` without its deployment record, or in a reserved target, blocks it.
 - `redeploy::reopen` refuses a `Deleted` Azure record before it saves
   anything, and a reconnect of that record gets the same refusal. The proven
   `azure.json` keeps `deleting` for good, so a provision under that record
   could never start. The person removes the card and creates a new cloud,
   which gets a new cloud id and a new `azure.json`.
+- An Azure host holds no Azure credential, and its worker runs with
+  `HORIZON_WORKER_STOP=horizon`. Horizon thus takes an agent's stop request from
+  a ready Azure worker over SSH and stops (deallocates) the cloud, as for Hetzner.
 
 ## Host bootstrap
 
