@@ -121,8 +121,9 @@ pub struct Offer {
     /// `cpu` or `gpu`.
     pub kind: &'static str,
     /// What to request: for `RunPod`, the CPU size as `cpu-<vCPU>-<GB>` or the GPU type
-    /// ID; for Hetzner, the server type, such as `cx43`, in `location`; for a Docker
-    /// host, its saved name.
+    /// ID; for Hetzner, the server type, such as `cx43`, in `location`; for Azure, the
+    /// VM size, such as `Standard_D4s_v3`, in `location`; for a Docker host, its saved
+    /// name.
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,18 +139,21 @@ pub struct Offer {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flavors: Vec<String>,
     /// Compute for the expected hours plus the workspace storage for that time and, for
-    /// `RunPod`, the container disk.
+    /// `RunPod`, the container disk. Hetzner adds its IPv4 address, and Azure adds its OS
+    /// disk and static address.
     pub estimated_total: f64,
     /// The most the worker's compute is billed in a month, where the provider caps it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monthly: Option<f64>,
-    /// What a stopped cloud of this kind costs per month: its kept workspace storage.
+    /// What a stopped cloud of this kind costs per month: its kept workspace storage
+    /// and, for Azure, the OS disk and static address a deallocated VM keeps.
     pub stopped_monthly: f64,
     /// The location the worker is created in, where the offer is for one location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
     /// `high`, `medium`, `low` or `none` for GPU types, and `checked_at_creation` for
-    /// `RunPod` CPU sizes, whose exact stock is confirmed when a cloud is created. Hetzner
+    /// `RunPod` CPU sizes and Azure VM sizes, whose exact stock is confirmed when a cloud
+    /// is created. Hetzner
     /// offers report `listed` or `unlisted`: Hetzner's own flag, which is advisory, so an
     /// unlisted type can still be created and creation confirms either way. A Docker
     /// host reports `host_capacity`: its free CPU and memory now, which nothing reserves.
@@ -162,7 +166,7 @@ pub struct Offer {
     pub host: &'static str,
     pub interruptible: bool,
     /// Horizon can deploy this now: false for a GPU type out of stock wherever the worker
-    /// may go.
+    /// may go, and for every Azure offer until Horizon can create Azure clouds.
     pub rentable: bool,
 }
 
@@ -405,12 +409,15 @@ pub mod comparison;
 pub mod exchange;
 mod workers;
 pub use workers::{Workers, workers};
+mod azure;
 mod hetzner;
 mod picks;
+pub use azure::{azure, azure_catalog, azure_section};
 pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_catalog, hetzner_section};
 
 /// Whether Horizon can create clouds on Azure. Nothing creates, stops or deletes an Azure
-/// cloud yet (#1774), so it stays false until all of that is wired.
+/// cloud yet (#1774), so it stays false until all of that is wired, and Azure offers are
+/// listed but never rentable.
 pub const AZURE_DEPLOYABLE: bool = false;
 pub use picks::{Picks, Place, matches_search, picks, picks_by, picks_matching, places};
 
