@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that Horizon cloud panels work from the first setup to
-the last deletion. It covers 121 tests in 12 areas. Each test has an ID that a
+the last deletion. It covers 122 tests in 12 areas. Each test has an ID that a
 report uses to give a result.
 
 ## 2. Applicability
@@ -117,7 +117,7 @@ change in the report as a deviation.
 
 | Cloud title | Provider and profile | Tailnet | Tests |
 |---|---|---|---|
-| `smoke-a` | Hetzner, CPU, image-only | test tailnet | C31, D01, D05, E01–E09, A09, T03–T08, T10–T14, G01–G10, G12, N01–N05, L01–L04, L09, O02 |
+| `smoke-a` | Hetzner, CPU, image-only | test tailnet | C31, D01, D05, E01–E11, A09, T03–T08, T10–T14, G01–G10, G12, N01–N05, L01–L04, L09, O02 |
 | `smoke-b` | Hetzner, CPU, image-only | test tailnet | T08, T14 |
 | `smoke-r` | RunPod, CPU, network volume | test tailnet | C31, D02, D04, T09, L06, L10 |
 | `smoke-g` | RunPod, GPU | None | D03 |
@@ -293,7 +293,7 @@ The cleanup of this procedure does X01 to X05.
 | B — Repository configuration | [b-repository-configuration.md](cloud-panels/b-repository-configuration.md) | B01–B05 | none |
 | C — New cloud dialog | [c-new-cloud-dialog.md](cloud-panels/c-new-cloud-dialog.md) | C01–C31 | C08 if the watch starts a cloud, and C31 |
 | D — Deployment | [d-deployment.md](cloud-panels/d-deployment.md) | D01–D08 | rents compute |
-| E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E09 | rents compute |
+| E — Panels in a cloud | [e-panels.md](cloud-panels/e-panels.md) | E01–E11 | rents compute |
 | L — Lifecycle | [l-lifecycle.md](cloud-panels/l-lifecycle.md) | L01–L14 | rents compute |
 | T — Tailnets | [t-tailnets.md](cloud-panels/t-tailnets.md) | T01–T14 | T03–T12 and T14 rent compute |
 | G — Companion repositories | [g-companions.md](cloud-panels/g-companions.md) | G01–G12 | rents compute, also G08 if the provider request is faster than the cancel |

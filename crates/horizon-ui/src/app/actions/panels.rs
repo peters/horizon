@@ -18,17 +18,18 @@ impl HorizonApp {
     pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
         let workspace_id = self.ensure_workspace_visible(ctx);
         #[cfg(feature = "cloud-workspaces")]
-        let (workspace_id, options) =
-            self.fullscreen_cloud_target()
-                .map_or((workspace_id, PanelOptions::default()), |(workspace, position)| {
-                    (
-                        workspace,
-                        PanelOptions {
-                            position: Some(position),
-                            ..PanelOptions::default()
-                        },
-                    )
-                });
+        let (workspace_id, options) = self.fullscreen_cloud_panel_target().map_or(
+            (workspace_id, PanelOptions::default()),
+            |(workspace, position)| {
+                (
+                    workspace,
+                    PanelOptions {
+                        position: Some(position),
+                        ..PanelOptions::default()
+                    },
+                )
+            },
+        );
         #[cfg(not(feature = "cloud-workspaces"))]
         let options = PanelOptions::default();
         match self.create_panel_with_options(options, workspace_id) {
@@ -251,7 +252,7 @@ impl HorizonApp {
     ) {
         #[cfg(feature = "cloud-workspaces")]
         let (workspace_id, canvas_pos) = self
-            .fullscreen_cloud_target()
+            .fullscreen_cloud_panel_target()
             .map_or((workspace_id, canvas_pos), |(workspace, position)| {
                 (workspace, Some(position))
             });
@@ -441,6 +442,73 @@ mod tests {
                 app.cloud_prototype.groups.0[0].panels.len(),
                 1,
                 "the worker runs the new panel as a cloud member"
+            );
+        }
+
+        #[test]
+        fn a_collapsed_cloud_opens_for_the_new_panel_in_full_screen() {
+            let (_temp, ctx, mut app, workspace_id) = app_with_a_cloud_workspace();
+            app.toggle_cloud_fullscreen(&ctx, 101);
+            app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+
+            app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+
+            assert!(
+                !app.cloud_prototype.groups.0[0].collapsed,
+                "the full screen view holds the cloud open for its new panel"
+            );
+            assert!(
+                app.cloud_prototype.fullscreen.is_some(),
+                "a panel that joined the cloud stays in the full screen view"
+            );
+            assert!(
+                app.dir_picker.is_none(),
+                "the panel is a cloud member, so no local directory is requested"
+            );
+            assert_eq!(
+                app.cloud_prototype.groups.0[0].panels.len(),
+                1,
+                "the worker runs the new panel as a cloud member"
+            );
+        }
+
+        #[test]
+        fn a_collapsed_cloud_opens_for_a_new_shell_in_full_screen() {
+            let (_temp, ctx, mut app, _workspace_id) = app_with_a_cloud_workspace();
+            app.toggle_cloud_fullscreen(&ctx, 101);
+            app.cloud_prototype.groups.0[0].set_collapsed(&mut app.board, true);
+
+            app.create_panel(&ctx);
+
+            assert!(
+                !app.cloud_prototype.groups.0[0].collapsed,
+                "the full screen view holds the cloud open for its new shell"
+            );
+            assert!(
+                app.cloud_prototype.fullscreen.is_some(),
+                "a shell that joined the cloud stays in the full screen view"
+            );
+            assert_eq!(
+                app.cloud_prototype.groups.0[0].panels.len(),
+                1,
+                "the worker runs the new shell as a cloud member"
+            );
+        }
+
+        #[test]
+        fn a_workspace_without_a_cloud_still_asks_for_a_directory() {
+            let (_temp, ctx, mut app, _cloud_workspace) = app_with_a_cloud_workspace();
+            let local = app.board.create_workspace("local");
+
+            app.add_panel_to_workspace(&ctx, local, shell_preset(), None);
+
+            assert!(
+                app.dir_picker.is_some(),
+                "a panel outside every cloud runs on this machine, so it asks where"
+            );
+            assert!(
+                app.cloud_prototype.groups.0[0].panels.is_empty(),
+                "the cloud takes no panel of another workspace"
             );
         }
 

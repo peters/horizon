@@ -14,7 +14,7 @@ owner: peters
 
 This area makes sure that the panels in a Ready cloud work. It covers the Shell,
 agent, Browser, desktop viewer, Editor and Usage panels, the cloud layout, the
-worker MCP servers and the SSH route.
+worker MCP servers, the SSH route and a new panel in a collapsed cloud.
 
 ## 2. Applicability
 
@@ -428,6 +428,56 @@ bind the token.
 
    Result: The token file does not exist. The API key file is back if step 1 moved it.
 
+### 6.11 E11 — Add a panel to a collapsed cloud
+
+A collapsed cloud takes no new panel until it opens. This task tests the open on
+the board and in the full screen view.
+
+1. Right-click the header of the frame of `smoke-a`, then click **Collapse**.
+
+   Result: The frame shows only its header. The panels of the cloud are hidden.
+
+2. Press Ctrl+Shift+N.
+
+   ```sh
+   DISPLAY=<display> xdotool key --clearmodifiers ctrl+shift+n
+   ```
+
+   Result: No directory picker opens. The frame opens and holds one more panel.
+
+3. In the new panel, show the user and the directory.
+
+   ```sh
+   id -u; pwd
+   ```
+
+   Result: The output is `10001`, and the directory is below `/workspace`. The
+   panel runs on the worker, not on the PC.
+
+4. Click **Full screen** on the frame. Then collapse the frame as in step 1.
+
+   Result: The cloud fills the window and shows only the header of the frame.
+
+5. Press Ctrl+Shift+N.
+
+   Result: The frame opens and holds one more panel. The cloud keeps the full
+   screen view. No panel opens on the PC.
+
+6. In the new panel, show the user.
+
+   ```sh
+   id -u
+   ```
+
+   Result: The output is `10001`. Another user ID means that the panel runs on the
+   PC.
+
+7. Leave the full screen view with Escape. Activate a workspace that holds no
+   cloud. If the board has none, click **New Workspace** first. Press Ctrl+Shift+N.
+
+   Result: A directory picker opens, because that panel runs on the PC. Click
+   **Cancel**.
+
 ## 7. Pass criteria
 
 - The Shell panel opens at the expected commit as UID 10001.
@@ -437,6 +487,9 @@ bind the token.
 - The Browser panel loads the page and names its controller.
 - The desktop viewer shows the worker desktop, disables **Interact** with the reason and sends no input.
 - The layout buttons, the full screen view, F11, Escape and the resize corner work.
+- A new panel of a collapsed cloud opens the cloud and runs on the worker, on the
+  board and in the full screen view. Outside a cloud, a new panel asks for a
+  directory.
 - `agent-mcp.json` lists the four worker MCP servers.
 - SSH connects with the pinned host key and refuses an unknown host key.
 
