@@ -341,6 +341,21 @@ fn capacity_codes_are_capacity_and_nothing_was_created() {
 }
 
 #[test]
+fn a_409_with_a_nested_capacity_code_is_still_a_conflict() {
+    let nested = json!({ "error": { "code": "AnotherOperationInProgress",
+        "message": "another operation holds the resource",
+        "details": [{ "code": "AllocationFailed", "message": "an earlier operation" }] } })
+    .to_string();
+    let client = scripted(vec![get(group_url(GROUP), 409, nested)]);
+    let cancel = Cancellation::default();
+    let failure = client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
+    assert!(!failure.capacity(), "a nested code cannot prove that ARM made nothing");
+    assert!(failure.conflict() && !failure.definite());
+    assert!(matches!(failure.into(), CloudError::Http(409, _)));
+    client.done();
+}
+
+#[test]
 fn failure_bodies_are_bounded_and_never_echo_the_token() {
     let limit = usize::try_from(FAILURE_BODY_LIMIT).unwrap();
     let sized = |size: usize| {

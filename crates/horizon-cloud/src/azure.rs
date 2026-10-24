@@ -82,11 +82,23 @@ pub enum Failure {
 }
 
 impl Failure {
-    /// ARM refused for lack of capacity or quota, so it made nothing.
+    /// ARM refused for lack of capacity or quota, so it made nothing. Only a 400 may
+    /// match a detail code, because a template deployment reports a capacity refusal
+    /// that way. A 409 must match its own top-level code: a nested code can belong to
+    /// an earlier operation, while the top-level code says another operation still
+    /// holds the resource, so the state is unknown and a caller must reconcile.
     #[must_use]
     pub fn capacity(&self) -> bool {
-        matches!(self, Self::Provider { status: 400 | 409, code, details, .. }
-            if capacity_codes(code, details))
+        match self {
+            Self::Provider {
+                status: 400,
+                code,
+                details,
+                ..
+            } => capacity_codes(code, details),
+            Self::Provider { status: 409, code, .. } => CAPACITY_CODES.contains(&code.as_str()),
+            _ => false,
+        }
     }
 
     /// ARM has no resource at the URL.
@@ -115,15 +127,10 @@ impl Failure {
 
 impl From<Failure> for CloudError {
     fn from(failure: Failure) -> Self {
+        let capacity = failure.capacity();
         match failure {
             Failure::Local(error) => error,
-            Failure::Provider {
-                status: 400 | 409,
-                code,
-                details,
-                reason,
-                ..
-            } if capacity_codes(&code, &details) => Self::Capacity(reason),
+            Failure::Provider { reason, .. } if capacity => Self::Capacity(reason),
             Failure::Provider { status: 401, .. } => Self::Unauthorized,
             Failure::Provider { status: 403, code, .. } if AUTHENTICATION_CODES.contains(&code.as_str()) => {
                 Self::Unauthorized
@@ -139,8 +146,9 @@ impl From<Failure> for CloudError {
     }
 }
 
-/// The error code or one of its detail codes is a capacity refusal; a template
-/// deployment reports one as a detail of `InvalidTemplateDeployment`.
+/// The error code or one of its detail codes is a capacity refusal. Only a 400 is
+/// asked, because a template deployment reports its refusal as a detail of
+/// `InvalidTemplateDeployment`; on a 409 a nested code belongs to another operation.
 fn capacity_codes(code: &str, details: &[String]) -> bool {
     std::iter::once(code)
         .chain(details.iter().map(String::as_str))
