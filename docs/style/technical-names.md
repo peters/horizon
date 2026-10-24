@@ -55,6 +55,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | ARM | Azure Resource Manager, the management API of Azure. | Azure API, management plane |
 | resource group | An Azure container for resources. Horizon gives each operation one resource group. | RG |
 | operation URL | The `Azure-AsyncOperation` URL that ARM sends for work that ends later. | status link, LRO URL |
+| retail price list | The public Azure price list at `prices.azure.com`. It needs no credential. | pricing API, price sheet |
+| VM size | An Azure virtual machine type, for example `Standard_D4s_v3`. | instance type, SKU |
+| meter | One billed item in the retail price list, with one price and one unit. | rate, line item |
 | tailnet | A Tailscale network that Horizon joins with an auth key. | tailscale network, overlay |
 | auth key | A Tailscale key that starts with `tskey-auth-`. It is a secret. | token, join key |
 | API credential | A personal API token or OAuth client that the host stores for a saved tailnet. | auth key (for API access) |
