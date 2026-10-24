@@ -77,7 +77,12 @@ impl Journal {
         {
             return Err(Error::Invalid);
         }
-        self.manifest.validate().map_err(|_| Error::Invalid)?;
+        // A pending request replays the history through `Manifest::next` below, which
+        // starts with the same `Manifest::validate` on the same manifest. Run that
+        // check here only when no pending request runs it there.
+        if self.pending.is_none() {
+            self.manifest.validate().map_err(|_| Error::Invalid)?;
+        }
         let mut projects = std::collections::BTreeSet::new();
         for source in &self.sources {
             source.validate(owner)?;
