@@ -27,7 +27,7 @@ mod stored;
 mod tests;
 mod worker;
 
-pub use signin::{Prompt, skip};
+pub use signin::{Prompt, WEB_SIGNIN_WINDOW, skip};
 
 /// Why a worker whose GitHub service is not running has no GitHub access.
 const SERVICE_DOWN: &str = "The worker's GitHub service is not running, so Git and gh have no GitHub access. \

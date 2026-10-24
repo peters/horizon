@@ -585,3 +585,22 @@ fn a_repository_of_another_account_needs_a_public_app() {
         "{org}"
     );
 }
+
+#[test]
+fn a_browser_sign_in_waits_long_enough_for_a_first_authorization() {
+    // The worker is already rented while this window runs, so it must not be a short give-up:
+    // a first sign-in, a second factor and the app's Authorize click do not fit two minutes.
+    assert!(
+        WEB_SIGNIN_WINDOW >= Duration::from_mins(10),
+        "the window gives up before a person can finish a first authorization: {WEB_SIGNIN_WINDOW:?}"
+    );
+    let reason = signin::timed_out_reason();
+    assert!(
+        reason.contains(&format!("{} minutes", WEB_SIGNIN_WINDOW.as_secs() / 60)),
+        "the card does not name the window it waited: {reason}"
+    );
+    assert!(
+        reason.contains("Connect GitHub again on the cloud card"),
+        "the outcome does not say how to recover: {reason}"
+    );
+}

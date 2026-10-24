@@ -14,8 +14,11 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-/// How long a web sign-in waits for GitHub's redirect.
-const WEB_TIMEOUT: Duration = Duration::from_mins(2);
+/// How long a web sign-in waits for GitHub's redirect. The person may have to sign in,
+/// pass a second factor and authorize the app the first time, while the worker they wait
+/// for is already rented; a two-minute window ended that path halfway. Skip and cancel
+/// still end the wait at once, and the card names this window.
+pub const WEB_SIGNIN_WINDOW: Duration = Duration::from_mins(15);
 /// How often a wait checks for cancellation and a skip.
 const TICK: Duration = Duration::from_millis(200);
 
@@ -179,7 +182,7 @@ fn web(settings: &Settings, cloud_id: &str, client: &Client, runner: &Runner<'_>
     ));
     let url = authorize_url(&settings.client_id, &redirect, &state, &challenge(&verifier));
     (runner.emit)(Event::GitHub(Prompt::Web { url }));
-    let deadline = Instant::now() + WEB_TIMEOUT;
+    let deadline = Instant::now() + WEB_SIGNIN_WINDOW;
     let code = loop {
         match listener.accept() {
             Ok((stream, _)) => match callback(stream, &state) {
@@ -193,9 +196,7 @@ fn web(settings: &Settings, cloud_id: &str, client: &Client, runner: &Runner<'_>
             },
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err(Ended::Reason(
-                        "GitHub did not finish the sign-in in time. Connect GitHub again on the cloud card.".into(),
-                    ));
+                    return Err(Ended::Reason(timed_out_reason()));
                 }
                 wait(TICK, cloud_id, runner)?;
             }
@@ -203,6 +204,14 @@ fn web(settings: &Settings, cloud_id: &str, client: &Client, runner: &Runner<'_>
         }
     };
     Ok(client.exchange_code(&settings.client_id, &secret, &code, &redirect, &verifier)?)
+}
+
+/// What the card says when the browser did not come back inside [`WEB_SIGNIN_WINDOW`].
+pub(super) fn timed_out_reason() -> String {
+    format!(
+        "GitHub did not finish the sign-in within {} minutes. Connect GitHub again on the cloud card.",
+        WEB_SIGNIN_WINDOW.as_secs() / 60
+    )
 }
 
 /// Sleeps `duration` in short steps, ending early on cancellation or a skip.
