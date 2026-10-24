@@ -415,10 +415,10 @@ mod picks;
 pub use azure::{azure, azure_catalog, azure_section};
 pub use hetzner::{DEPLOYABLE as HETZNER_DEPLOYABLE, hetzner, hetzner_catalog, hetzner_section};
 
-/// Whether Horizon can create clouds on Azure. Nothing creates, stops or deletes an Azure
-/// cloud yet (#1774), so it stays false until all of that is wired, and Azure offers are
-/// listed but never rentable.
-pub const AZURE_DEPLOYABLE: bool = false;
+/// Whether Horizon can create clouds on Azure. It creates, stops (deallocates),
+/// resumes and deletes an Azure cloud on the VM sizes and regions of the machine's
+/// `azure` settings (#1774).
+pub const AZURE_DEPLOYABLE: bool = true;
 pub use picks::{Picks, Place, matches_search, picks, picks_by, picks_matching, places};
 
 #[cfg(test)]

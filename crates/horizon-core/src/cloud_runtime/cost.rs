@@ -85,7 +85,12 @@ pub fn rate_coverage(provider: &Description) -> &'static str {
              VAT. Hetzner bills each started hour, up to a monthly cap, so the run estimate can trail its bill by up \
              to an hour."
         }
-        Kind::Azure => "Horizon cannot rent Azure workers yet, so no Azure rate is reported.",
+        Kind::Azure => {
+            "Azure reports no hourly rate to Horizon, so none is shown. A running worker bills, in US dollars \
+             without VAT, for its VM size, its OS and workspace disks and its Standard static IPv4 address. A stop \
+             deallocates the VM, which ends the compute charge; the disks and the address bill until the cloud is \
+             deleted."
+        }
     }
 }
 
@@ -846,5 +851,23 @@ mod tests {
             rate_coverage(&horizon_cloud::provider::RUNPOD),
             "Last reported worker hourly rate. Storage and other provider charges may be additional."
         );
+    }
+
+    #[test]
+    fn a_stopped_azure_cloud_still_bills_for_its_disks_and_address() {
+        let azure = rate_coverage(&horizon_cloud::provider::AZURE);
+        for named in [
+            "no hourly rate",
+            "US dollars",
+            "VM size",
+            "disks",
+            "static IPv4 address",
+            "deallocates",
+            "ends the compute charge",
+            "until the cloud is deleted",
+        ] {
+            assert!(azure.contains(named), "{named}: {azure}");
+        }
+        assert!(!azure.contains("cannot"), "{azure}");
     }
 }
