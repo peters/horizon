@@ -2,7 +2,7 @@
 //! `deploy_locked` drives.
 use super::{
     Cancellation, Connection, Deployment, Error, Mutation, Request, Result, RunPod, Runner, Store, WorkerContract,
-    WorkerSpec, bind_registry, hetzner, mutation, provision, readiness, replacement,
+    WorkerSpec, azure, bind_registry, hetzner, mutation, provision, readiness, replacement,
 };
 use crate::cloud_runtime::state::ImageReplacement;
 
@@ -113,18 +113,8 @@ impl Compute for hetzner::Compute {
         _observe: mutation::Observer<'_>,
     ) -> Result<()> {
         self.verified_pull.replace(None);
-        verify_image(state, registry, cancel)?;
-        let image = state
-            .spec
-            .as_ref()
-            .ok_or(Error::Invalid("Deployment has no image to validate"))?
-            .image_digest
-            .clone();
-        self.verified_pull.replace(Some(hetzner::VerifiedPull {
-            image,
-            login: registry.host_login()?,
-            expires_at: registry.pull_expires_at()?,
-        }));
+        self.verified_pull
+            .replace(Some(verified_pull(state, registry, cancel)?));
         Ok(())
     }
 
@@ -153,6 +143,70 @@ impl Compute for hetzner::Compute {
         hetzner::provision(self, store, state, spec, runner.cancel, runner.emit, observe)?;
         hetzner::wait(request, self, store, runner, state, spec)
     }
+}
+
+impl Compute for azure::Compute {
+    /// The VM's host logs in to the registry itself, so the grant is verified for
+    /// the exact digest and kept for this attempt only; Azure stores none.
+    fn verify_registry(
+        &self,
+        _store: &Store,
+        state: &mut Deployment,
+        registry: &mut crate::cloud_runtime::registry::Prepared,
+        cancel: &Cancellation,
+        _observe: mutation::Observer<'_>,
+    ) -> Result<()> {
+        self.verified_pull.replace(None);
+        self.verified_pull
+            .replace(Some(verified_pull(state, registry, cancel)?));
+        Ok(())
+    }
+
+    /// Azure workers cannot be rebuilt (`Rebuild::Unsupported`), so a requested
+    /// image replacement is refused before anything is placed around it.
+    fn settle(
+        &self,
+        _store: &Store,
+        state: &mut Deployment,
+        _cancel: &Cancellation,
+        _observe: mutation::Observer<'_>,
+    ) -> Result<()> {
+        state.refuse_unsettled_replacement()
+    }
+
+    fn provision_ready(
+        &self,
+        request: &Request,
+        store: &Store,
+        runner: &Runner<'_>,
+        state: &mut Deployment,
+        spec: &WorkerSpec,
+        observe: mutation::Observer<'_>,
+    ) -> Result<(Connection, WorkerContract)> {
+        azure::provision(self, store, state, spec, runner.cancel, observe)?;
+        azure::wait(request, self, store, runner, state, spec)
+    }
+}
+
+/// The pull login of a verified grant for the worker's exact image, for a host
+/// that logs in itself.
+fn verified_pull(
+    state: &Deployment,
+    registry: &mut crate::cloud_runtime::registry::Prepared,
+    cancel: &Cancellation,
+) -> Result<hetzner::VerifiedPull> {
+    verify_image(state, registry, cancel)?;
+    let image = state
+        .spec
+        .as_ref()
+        .ok_or(Error::Invalid("Deployment has no image to validate"))?
+        .image_digest
+        .clone();
+    Ok(hetzner::VerifiedPull {
+        image,
+        login: registry.host_login()?,
+        expires_at: registry.pull_expires_at()?,
+    })
 }
 
 /// Checks that `registry` still serves the worker's exact image digest.

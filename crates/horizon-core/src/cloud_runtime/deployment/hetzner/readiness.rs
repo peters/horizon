@@ -93,7 +93,9 @@ pub(in crate::cloud_runtime::deployment) fn wait(
     }
 }
 
-fn probe(
+/// Probes the worker over SSH with a scratch known-hosts file until its key is
+/// pinned for this worker; `None` while the contract is not served yet.
+pub(in crate::cloud_runtime::deployment) fn probe(
     request: &Request,
     store: &Store,
     runner: &Runner<'_>,
@@ -122,7 +124,7 @@ fn probe(
     Ok(Some((connection, contract)))
 }
 
-fn remaining(deadline: Instant, runner: &Runner<'_>) -> Result<Duration> {
+pub(in crate::cloud_runtime::deployment) fn remaining(deadline: Instant, runner: &Runner<'_>) -> Result<Duration> {
     runner.cancel.check()?;
     deadline
         .checked_duration_since(Instant::now())

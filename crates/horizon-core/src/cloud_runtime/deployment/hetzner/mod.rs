@@ -5,7 +5,7 @@
 //! their records are untouched.
 pub(in crate::cloud_runtime) mod lifecycle;
 mod provision;
-mod readiness;
+pub(super) mod readiness;
 pub(in crate::cloud_runtime) mod rebuild;
 #[cfg(test)]
 pub(in crate::cloud_runtime) mod tests;
