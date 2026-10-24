@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
-use super::{Image, Route, Shared, Status, tunnel::SshTunnel};
+use super::{Image, Route, Shared, Status, host_key::TunnelHost, tunnel::SshTunnel};
 use crate::{Error, Frame, InputEvent, Region, ViewOptions, framebuffer::Framebuffer};
 
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -22,11 +22,12 @@ pub(super) async fn connection(
     input: &mut mpsc::UnboundedReceiver<InputEvent>,
 ) -> Result<(), Error> {
     // The tunnel process lives exactly as long as this connection.
+    let host = route.tunnel_host();
     let (client, mut tunnel) = connect_client(route).await?;
     let result = stream_desktop(client, shared, latest_full, input).await;
     match (result, tunnel.as_mut()) {
         // A forward that dies mid-session ends the stream; ssh says why.
-        (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
+        (Err(error), Some(tunnel)) => Err(tunnel.explain(error, host.as_ref()).await),
         (result, _) => result,
     }
 }
@@ -225,13 +226,25 @@ async fn connect_client(route: Route) -> Result<(vnc::VncClient, Option<SshTunne
             .map_err(|_| Error::Timeout)??;
             Ok((client, None))
         }
-        Route::Tunnel { program, args } => {
+        Route::Tunnel {
+            program,
+            args,
+            host,
+            port,
+        } => {
+            // A failed connect may be ssh refusing the host key, which only a
+            // person can resolve.
+            let host = TunnelHost {
+                program: program.clone(),
+                host,
+                port,
+            };
             let mut tunnel = SshTunnel::spawn(&program, &args)?;
             let stream = tunnel.take_stream()?;
             match tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, handshake(stream)).await {
                 Ok(Ok(client)) => Ok((client, Some(tunnel))),
-                Ok(Err(error)) => Err(tunnel.explain(error).await),
-                Err(_) => Err(tunnel.explain(Error::Timeout).await),
+                Ok(Err(error)) => Err(tunnel.explain(error, Some(&host)).await),
+                Err(_) => Err(tunnel.explain(Error::Timeout, Some(&host)).await),
             }
         }
     }

@@ -257,9 +257,9 @@ pub(super) fn header(
             }
         });
         match status {
-            Status::Disconnected(error) => {
+            Status::Disconnected { message, .. } => {
                 ui.add_space(3.0);
-                ui.add(Label::new(RichText::new(error).size(12.0).color(theme::PALETTE_RED())).wrap());
+                ui.add(Label::new(RichText::new(message).size(12.0).color(theme::PALETTE_RED())).wrap());
             }
             Status::Stopped => {
                 ui.add_space(3.0);
@@ -278,7 +278,7 @@ fn connection_status(ui: &mut Ui, status: &super::session::Status) {
         Status::Stopped => ("Stopped", theme::FG_SOFT()),
         Status::Connecting => ("Connecting…", theme::PALETTE_YELLOW()),
         Status::Connected => ("Connected", theme::PALETTE_GREEN()),
-        Status::Disconnected(_) => ("Disconnected", theme::PALETTE_RED()),
+        Status::Disconnected { .. } => ("Disconnected", theme::PALETTE_RED()),
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;

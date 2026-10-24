@@ -529,6 +529,40 @@ and `port` optional, and labels are limited to letters, digits, `.`, `_`, `-`
 paths and ssh options are never accepted. `list` and `inspect` report `ssh`
 for tunnelled viewers.
 
+An untrusted host is a refusal, not an unreachable host. While `connection` is
+`disconnected`, `connection_failure` types the cause that Horizon can name:
+
+```json
+{"connection":"disconnected",
+ "connection_error":"early end of stream; ssh: No ED25519 host key is known for [lab]:2222 and you have requested strict checking.; Host key verification failed. (…)",
+ "connection_failure":{"code":"host_not_trusted",
+   "ssh_host_key":{"host":"lab","port":2222,
+     "observed":{"key_type":"ssh-ed25519","sha256":"SHA256:uepeq...2PAo"}},
+   "action":"[lab]:2222 is not in known_hosts; the host presented ssh-ed25519 SHA256:uepeq...2PAo; a person verifies that fingerprint with the machine out of band, adds the key with standard ssh tooling, then reconnects"}}
+```
+
+`code` is `host_not_trusted` when ssh holds no `known_hosts` entry for the
+host, and `host_key_changed` when `known_hosts` holds a different key. Both
+need a person, not a retry. `connection_error` keeps the text that a person
+reads. `ssh_host_key.observed` is the key that the host presented to an
+unauthenticated probe (`ssh-keyscan`), and it is absent when that probe could
+not answer, for example when `host` is an SSH config alias that the probe
+cannot resolve. Observing a key is not verification: an impostor answers with
+its own key.
+
+The trust step stays with the person. Read the host key from the machine
+itself, for example through its own control plane or its console, compare it
+with `observed.sha256`, then add it to the Horizon machine's `known_hosts` with
+the standard ssh tooling. `ssh-keyscan` alone does not verify a host. Horizon
+writes nothing to `known_hosts`, accepts no key, fingerprint or ssh option in
+any operation, and no operation trusts a host for an agent. When the person
+reports that the host is trusted, call `reconnect` and inspect again.
+
+A failure that Horizon cannot type, such as an unreachable host or an ssh
+configuration problem, leaves `connection_failure` absent. `connection_error`
+alone stands in that case. A bare `Host key verification failed.` also stays
+untyped, because it can mean an entry that a person changed or revoked.
+
 Creation returns a stable id immediately. Inspect `connection`,
 `image_received`, `image_displayed`, and `frame_sequence` before claiming live
 image evidence. `visible` is the panel's presentation setting; the image can

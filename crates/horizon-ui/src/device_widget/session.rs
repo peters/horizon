@@ -38,6 +38,8 @@ fn route(device: &DevicePanelState) -> Route {
         Some(connection) => Route::Tunnel {
             program: "ssh".into(),
             args: connection.stdio_forward_args(&device.target.address().to_string()),
+            host: connection.host.clone(),
+            port: connection.port,
         },
         None => Route::Direct(device.target.address()),
     }
@@ -261,10 +263,18 @@ mod tests {
             ..Default::default()
         };
         device.ssh_tunnel = Some(connection.clone());
-        let Route::Tunnel { program, args } = route(&device) else {
+        let Route::Tunnel {
+            program,
+            args,
+            host,
+            port,
+        } = route(&device)
+        else {
             panic!("expected a tunnel");
         };
         assert_eq!(program, "ssh");
         assert_eq!(args, connection.stdio_forward_args("127.0.0.1:5901"));
+        assert_eq!(host, "lab.example", "the refusal names the host ssh was given");
+        assert_eq!(port, None, "an unset port stays with the SSH configuration");
     }
 }

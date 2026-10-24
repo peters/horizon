@@ -32,13 +32,26 @@ create: `{ "host": "lab", "user": "deploy", "port": 2222 }` (user and port
 optional). `endpoint` is then the address as seen from that SSH host, typically
 `127.0.0.1:5900`. Horizon runs `ssh -W` with its own SSH configuration and
 keys, with strict host-key checking pinned regardless of `ssh_config`, so the
-host must already be trusted in `known_hosts` (open it over SSH once); never
-pass credentials, key paths or ssh options. Labels may only contain
-letters, digits, `.`, `_`, `-` (and `:` in an IPv6 host), at most 253
-characters for the host and 64 for the user, and are refused otherwise, so
-nothing reaches ssh as an option or a shell fragment. Inspect and list report `ssh` for
-tunnelled viewers, and `connection_error` carries ssh's last lines when the
-tunnel fails.
+host must already be trusted in `known_hosts`; never pass credentials, key
+paths or ssh options. Labels may only contain letters, digits, `.`, `_`, `-`
+(and `:` in an IPv6 host), at most 253 characters for the host and 64 for the
+user, and are refused otherwise, so nothing reaches ssh as an option or a shell
+fragment. Inspect and list report `ssh` for tunnelled viewers, and
+`connection_error` carries ssh's last lines when the tunnel fails.
+
+An untrusted host is a refusal, not an unreachable host. When the tunnel fails
+that way, inspect returns `connection_failure`: `code: "host_not_trusted"` when
+ssh holds no `known_hosts` entry, or `code: "host_key_changed"` when
+`known_hosts` holds a different key. It also carries `ssh_host_key` with the
+`host` and `port`, `ssh_host_key.observed` with the `key_type` and `sha256`
+fingerprint that the host presented to a probe, and `action`, which is what the
+person does. Do not retry either code; they need a person. Report the host, the
+observed fingerprint and the action, and say that a host key must be compared
+with the machine out of band before it is added. Never accept a host key, write
+`known_hosts` yourself, or claim that a probe proves which machine answered.
+When the person reports that the host is trusted, call `reconnect` and inspect
+again. Without a code, `connection_error` alone stands and the failure may be a
+network or ssh configuration problem.
 
 When known, include optional `identity` in create: `machine_name`, `hostname`,
 `ip_addresses` (numeric IPv4/IPv6 list), and `tailscale_name`. These are labels

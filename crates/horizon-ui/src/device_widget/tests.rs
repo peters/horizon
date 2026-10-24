@@ -105,7 +105,7 @@ fn disconnected_viewer() -> (egui::Context, DevicePanelState, DeviceUiState) {
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let state = DeviceUiState {
         initialized: true,
-        status: Status::Disconnected("The VNC client isn't started. Or it is already closed".into()),
+        status: Status::disconnected("The VNC client isn't started. Or it is already closed"),
         ..Default::default()
     };
     (ctx, fixture_device(), state)
@@ -238,7 +238,7 @@ fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
     );
     let _ = output.discard_textures();
     assert!(state.texture.is_none());
-    assert!(matches!(state.status, Status::Disconnected(_)));
+    assert!(matches!(state.status, Status::Disconnected { .. }));
     assert_eq!(state.image.sequence, 0, "rejected images are not uploaded frames");
     assert!(state.image.last_uploaded.is_none());
 }
@@ -630,7 +630,7 @@ fn connection_details_show_supplied_and_observed_values_separately() {
     ] {
         text_center(&output, label);
     }
-    state.status = Status::Disconnected("fixture ended".into());
+    state.status = Status::disconnected("fixture ended");
     let observation = state.observation("fixture".into(), &device, true, "actor");
     assert_eq!(observation.server.name.as_deref(), Some("Fixture desktop"));
     assert_eq!(observation.connection, Connection::Disconnected);
@@ -650,6 +650,76 @@ fn connection_details_show_supplied_and_observed_values_separately() {
     assert_eq!(diagnostics.last_uploaded_age_millis, None);
     assert_eq!(observation.image.frame_sequence, 0);
     assert!(!observation.image.image_displayed);
+}
+
+/// ssh has no `known_hosts` entry for this host: the refusal a person resolves.
+fn untrusted_host_status() -> Status {
+    use horizon_vnc::{HostKeyFailure, HostKeyRefusal, ObservedHostKey};
+    Status::Disconnected {
+        message: "early end of stream; ssh: No ED25519 host key is known for [lab]:2222".into(),
+        host_key: Some(HostKeyFailure {
+            refusal: HostKeyRefusal::NotTrusted,
+            host: "lab".into(),
+            port: Some(2222),
+            observed: Some(ObservedHostKey {
+                key_type: "ssh-ed25519".into(),
+                sha256: "SHA256:ZCf2G4oj6NBiKuZG8dQbSNWd7S0CvUOHYAOPJf5m6o8".into(),
+            }),
+        }),
+    }
+}
+
+#[test]
+fn an_untrusted_ssh_host_is_a_typed_refusal_with_the_key_a_person_compares() {
+    use horizon_core::browser::manifest::device::{ConnectionFailureCode, ObservedSshHostKey};
+
+    let device = fixture_device();
+    let mut state = DeviceUiState {
+        initialized: true,
+        status: untrusted_host_status(),
+        ..Default::default()
+    };
+    let observation = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observation.connection, Connection::Disconnected);
+    assert!(
+        observation
+            .connection_error
+            .as_deref()
+            .is_some_and(|error| error.contains("No ED25519 host key is known")),
+        "the person still reads ssh's own lines"
+    );
+    let failure = observation.connection_failure.expect("a typed refusal");
+    assert_eq!(failure.code, ConnectionFailureCode::HostNotTrusted);
+    let host_key = failure.ssh_host_key.expect("the host whose key was refused");
+    assert_eq!(host_key.host, "lab");
+    assert_eq!(host_key.port, Some(2222));
+    assert_eq!(
+        host_key.observed,
+        Some(ObservedSshHostKey {
+            key_type: "ssh-ed25519".into(),
+            sha256: "SHA256:ZCf2G4oj6NBiKuZG8dQbSNWd7S0CvUOHYAOPJf5m6o8".into()
+        }),
+        "the fingerprint is what a person compares out of band"
+    );
+    assert!(failure.action.contains("standard ssh tooling"), "{}", failure.action);
+    assert!(
+        failure.action.contains("out of band"),
+        "observing a key is not verifying it: {}",
+        failure.action
+    );
+}
+
+#[test]
+fn a_refusal_that_horizon_cannot_type_stays_untyped() {
+    let device = fixture_device();
+    let mut state = DeviceUiState {
+        initialized: true,
+        status: Status::disconnected("ssh: connect to host lab port 22: Connection refused"),
+        ..Default::default()
+    };
+    let observation = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(observation.connection, Connection::Disconnected);
+    assert!(observation.connection_failure.is_none());
 }
 
 pub(super) fn native_metadata() -> horizon_core::browser::manifest::device::NativeSessionMetadata {
@@ -718,7 +788,7 @@ fn native_caption_matches_inspection_without_paint_and_survives_disconnect() {
     );
     state.absorb_updates(&ctx);
     state.session = None;
-    state.status = Status::Disconnected("fixture ended".into());
+    state.status = Status::disconnected("fixture ended");
     let observed = state.observation("fixture".into(), &device, true, "actor");
     assert_eq!(observed.server.native_session.as_ref(), Some(&native));
     let output = ctx

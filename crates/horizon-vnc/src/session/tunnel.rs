@@ -12,6 +12,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+use super::host_key::{HostKeyFailure, TunnelHost};
 use crate::Error;
 
 const STDERR_LINE_CHARS: usize = 200;
@@ -88,8 +89,9 @@ impl SshTunnel {
     }
 
     /// Attach ssh's last diagnostic lines, which name the real failure when
-    /// the forwarded stream simply ended.
-    pub(super) async fn explain(&mut self, error: Error) -> Error {
+    /// the forwarded stream simply ended, and type a refused host key so that
+    /// "a person must trust this host" is not read as "the host is down".
+    pub(super) async fn explain(&mut self, error: Error, host: Option<&TunnelHost>) -> Error {
         let _ = tokio::time::timeout(STDERR_FLUSH_GRACE, &mut self.stderr_reader).await;
         let tail = self
             .stderr_tail
@@ -97,25 +99,35 @@ impl SshTunnel {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .join("; ");
         tracing::debug!(pid = ?self.child.id(), %error, ssh = %tail, "device tunnel ended");
+        let host_key = match host {
+            Some(host) => HostKeyFailure::detect(&tail, host).await,
+            None => None,
+        };
         if tail.is_empty() {
-            error
-        } else if tail.contains("host key is known") {
-            // Only an unknown key can be trusted by connecting once; a changed
-            // key is a verification failure that must stay a failure.
-            Error::Tunnel(format!(
-                "{error}; ssh: {tail} (the tunnel never trusts a first-contact key; open the host over SSH once to trust it)"
-            ))
-        } else if tail.starts_with("ssh: ") {
-            Error::Tunnel(format!("{error}; {tail}"))
-        } else {
-            Error::Tunnel(format!("{error}; ssh: {tail}"))
+            return error;
         }
+        let message = failure_message(&error.to_string(), &tail, host_key.as_ref());
+        Error::Tunnel { message, host_key }
     }
 }
 
 impl Drop for SshTunnel {
     fn drop(&mut self) {
         self.kill_and_reap();
+    }
+}
+
+/// What a viewer shows for a failed tunnel: the failure, ssh's own lines and,
+/// when ssh refused the host key, the person's next step.
+fn failure_message(error: &str, tail: &str, host_key: Option<&HostKeyFailure>) -> String {
+    let ssh = if tail.starts_with("ssh: ") {
+        tail.to_owned()
+    } else {
+        format!("ssh: {tail}")
+    };
+    match host_key {
+        Some(host_key) => format!("{error}; {ssh} ({})", host_key.advice()),
+        None => format!("{error}; {ssh}"),
     }
 }
 
@@ -139,6 +151,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
+    use crate::HostKeyRefusal;
 
     /// Whether the kernel still knows the pid, zombie or not. `kill -0` is
     /// portable across Unix targets, unlike `/proc`, and a zombie still
@@ -185,7 +198,7 @@ mod tests {
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
             let mut stream = tunnel.take_stream().unwrap();
             assert_eq!(stream.read(&mut [0; 1]).await.unwrap(), 0, "the forward ended");
-            let error = tunnel.explain(Error::Frame("early end of stream")).await;
+            let error = tunnel.explain(Error::Frame("early end of stream"), None).await;
             assert_eq!(
                 error.to_string(),
                 "early end of stream; ssh: channel 0: open failed: connect failed: Connection refused; \
@@ -199,7 +212,7 @@ mod tests {
         runtime().block_on(async {
             let script = "echo 'ssh: Could not resolve hostname nowhere.invalid: Name or service not known' >&2";
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
-            let error = tunnel.explain(Error::Timeout).await;
+            let error = tunnel.explain(Error::Timeout, None).await;
             assert_eq!(
                 error.to_string(),
                 "connection timed out; ssh: Could not resolve hostname nowhere.invalid: Name or service not known"
@@ -229,22 +242,60 @@ mod tests {
         assert!(!process_exists(pid), "cancelled tunnel left a process behind");
     }
 
+    /// A host whose ssh program cannot reach a probe: its directory holds no
+    /// `ssh-keyscan`, so no test contacts a network.
+    fn unreachable_host() -> TunnelHost {
+        TunnelHost {
+            program: "/nonexistent/horizon-vnc-test/ssh".into(),
+            host: "lab".into(),
+            port: Some(22),
+        }
+    }
+
     #[test]
-    fn an_unknown_host_key_explains_how_to_trust_it_but_a_changed_key_does_not() {
+    fn an_unknown_host_key_is_typed_but_a_changed_key_is_a_verification_failure() {
         runtime().block_on(async {
             let unknown = "echo 'No ED25519 host key is known for [lab]:22 and you have requested strict checking.' >&2; \
                 echo 'Host key verification failed.' >&2; exit 255";
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), unknown.to_string()]).unwrap();
-            let text = tunnel.explain(Error::Frame("early end of stream")).await.to_string();
+            let error = tunnel.explain(Error::Frame("early end of stream"), Some(&unreachable_host())).await;
+            let text = error.to_string();
             assert!(text.starts_with("early end of stream; ssh: No ED25519 host key is known"), "{text}");
-            assert!(text.contains("open the host over SSH once"), "{text}");
+            assert!(text.contains("[lab]:22 is not in known_hosts"), "{text}");
+            assert!(text.contains("standard ssh tooling"), "{text}");
+            assert_eq!(
+                error.host_key_failure().map(|failure| failure.refusal),
+                Some(HostKeyRefusal::NotTrusted)
+            );
 
             let changed = "echo 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!' >&2; \
                 echo 'Host key verification failed.' >&2; exit 255";
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), changed.to_string()]).unwrap();
-            let text = tunnel.explain(Error::Frame("early end of stream")).await.to_string();
+            let error = tunnel.explain(Error::Frame("early end of stream"), Some(&unreachable_host())).await;
+            let text = error.to_string();
             assert!(text.contains("Host key verification failed."), "{text}");
-            assert!(!text.contains("open the host over SSH once"), "a changed key must not invite a bypass: {text}");
+            assert!(text.contains("verification failure"), "{text}");
+            assert!(!text.contains("adds the key"), "a changed key must not invite a bypass: {text}");
+            assert_eq!(
+                error.host_key_failure().map(|failure| failure.refusal),
+                Some(HostKeyRefusal::Changed)
+            );
+        });
+    }
+
+    #[test]
+    fn a_bare_verification_failure_stays_untyped() {
+        runtime().block_on(async {
+            let script = "echo 'Host key verification failed.' >&2; exit 255";
+            let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), script.to_string()]).unwrap();
+            let error = tunnel
+                .explain(Error::Frame("early end of stream"), Some(&unreachable_host()))
+                .await;
+            assert!(error.host_key_failure().is_none(), "{error}");
+            assert_eq!(
+                error.to_string(),
+                "early end of stream; ssh: Host key verification failed."
+            );
         });
     }
 
@@ -252,7 +303,7 @@ mod tests {
     fn a_silent_failure_keeps_the_original_error() {
         runtime().block_on(async {
             let mut tunnel = SshTunnel::spawn("true", &[]).unwrap();
-            let error = tunnel.explain(Error::Timeout).await;
+            let error = tunnel.explain(Error::Timeout, Some(&unreachable_host())).await;
             assert!(matches!(error, Error::Timeout));
         });
     }
