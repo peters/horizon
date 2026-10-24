@@ -2,7 +2,8 @@
 //! resource group named from its operation id; a lost answer is reconciled by that
 //! name and the group's `horizon-operation` tag, never by a second create.
 //!
-//! Every URL is built from validated segments with an explicit API version. Every
+//! Every URL is built from validated segments with an explicit API version, and an
+//! operation URL from ARM is polled only when it sits under this subscription. Every
 //! answer is untrusted: bodies are size-limited, decoded into small typed views,
 //! checked against the requested identity, and never echoed into errors except as a
 //! sanitized [`Reason`]. A 409 is never retried and never a definite refusal: it is
@@ -13,6 +14,7 @@ use serde_json::Value;
 use std::{io::Read, time::Duration};
 use ureq::http::HeaderMap;
 
+pub mod operation;
 pub mod reconcile;
 pub mod resource;
 pub mod url;
@@ -20,16 +22,19 @@ pub mod url;
 #[cfg(test)]
 mod tests;
 
+pub use operation::{BACKOFF_MS, LongRunning, OperationRef};
 pub use reconcile::{Found, RESOURCE_GROUP_PREFIX, WORKER_VM_NAME};
-pub use resource::{DataDisk, Group, VirtualMachine};
+pub use resource::{DataDisk, Deployed, DeploymentState, Group, VirtualMachine};
 
-use resource::{group_info, vm_view};
+use operation::operation_ref;
+use resource::{deployment_state, group_info, vm_view};
 use url::{valid_resource_group_name, valid_resource_name, valid_subscription_id};
 
 /// The public ARM endpoint.
 pub const MANAGEMENT_ENDPOINT: &str = "https://management.azure.com";
 /// Explicit API versions; ARM never picks one for this client.
 pub const RESOURCE_GROUP_API_VERSION: &str = "2022-09-01";
+pub const DEPLOYMENT_API_VERSION: &str = "2022-09-01";
 pub const COMPUTE_API_VERSION: &str = "2024-03-01";
 /// The profile `provider` value that selects Azure.
 pub const PROVIDER: &str = "azure";
@@ -38,6 +43,8 @@ pub const PROVIDER: &str = "azure";
 pub const OPERATION_TAG: &str = "horizon-operation";
 /// The per-request budget.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest wait for one ARM operation, waits and polls included.
+pub const ACTION_TIMEOUT: Duration = Duration::from_mins(10);
 /// ureq refuses a body that reaches the limit, so the largest body read is one byte less.
 const RESPONSE_LIMIT: u64 = 4 * 1024 * 1024;
 /// Larger error bodies are not provider explanations worth parsing.
@@ -63,6 +70,8 @@ pub struct Azure {
     credential: Credential,
     subscription_id: String,
     endpoint: String,
+    /// How the operation poll waits: a real sleep, or a recorder in tests.
+    sleep: Box<dyn Fn(Duration) + Send + Sync>,
 }
 
 /// A request that failed, keeping ARM's error codes so callers can tell capacity,
@@ -163,10 +172,13 @@ fn capacity_codes(code: &str, details: &[String]) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Method {
     Get,
+    Put,
 }
 
 /// A 2xx answer. A body that is empty or only whitespace is `Value::Null`.
 pub(crate) struct Reply {
+    pub(crate) status: u16,
+    pub(crate) headers: HeaderMap,
     pub(crate) value: Value,
 }
 
@@ -193,7 +205,8 @@ impl Azure {
 
     /// A client for a fake ARM endpoint on this machine, so callers in other crates
     /// can test against scripted answers. Only a loopback address is accepted, so a
-    /// credential can never be sent to another host this way.
+    /// credential can never be sent to another host this way, and operations are
+    /// polled without waits.
     /// # Errors
     /// `Invalid` for an address that is not loopback or a malformed subscription id.
     #[doc(hidden)]
@@ -212,6 +225,7 @@ impl Azure {
             .build();
         let mut client = Self::with_agent(ureq::Agent::new_with_config(config), credential, subscription_id)?;
         client.endpoint = format!("http://{address}");
+        client.sleep = Box::new(|_| {});
         Ok(client)
     }
 
@@ -231,7 +245,17 @@ impl Azure {
             credential,
             subscription_id: subscription_id.to_string(),
             endpoint: MANAGEMENT_ENDPOINT.to_string(),
+            sleep: Box::new(std::thread::sleep),
         })
+    }
+
+    /// This client with its operation-poll waits given to `sleep` in place of a real
+    /// sleep, so a test can record the schedule without waiting it out.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_sleeps(mut self, sleep: impl Fn(Duration) + Send + Sync + 'static) -> Self {
+        self.sleep = Box::new(sleep);
+        self
     }
 
     /// The one subscription every request of this client addresses.
@@ -254,6 +278,58 @@ impl Azure {
         let url = self.group_url(name)?;
         self.get_json_within(&url, cancel, None)?
             .map(|value| group_info(&value, &self.subscription_id, name))
+            .transpose()
+    }
+
+    /// Submits `template` with `parameters` as an incremental deployment `name` in
+    /// `group`. ARM finishes a deployment later; poll [`Deployed::operation`].
+    /// # Errors
+    /// `Invalid` for a bad segment (nothing is sent), `InvalidResponse` for a running
+    /// deployment without an operation URL under this subscription, `IdentityMismatch`
+    /// for a body that names another deployment, or the provider failure. Only a
+    /// [`Failure::definite`] failure proves that ARM made nothing.
+    pub fn put_deployment(
+        &self,
+        group: &str,
+        name: &str,
+        template: &Value,
+        parameters: &Value,
+        cancel: &Cancellation,
+    ) -> Result<Deployed, Failure> {
+        let url = self.resource_url(group, "Microsoft.Resources/deployments", name, DEPLOYMENT_API_VERSION)?;
+        let body = serde_json::json!({
+            "properties": { "mode": "Incremental", "template": template, "parameters": parameters }
+        });
+        let reply = self.send_within(Method::Put, &url, Some(&body), cancel, None)?;
+        // An asynchronous acceptance may carry no deployment body at all.
+        let state = if reply.status == 202 && reply.value.pointer("/properties/provisioningState").is_none() {
+            DeploymentState {
+                provisioning_state: "Accepted".into(),
+                outputs: std::collections::BTreeMap::new(),
+            }
+        } else {
+            deployment_state(&reply.value, &self.subscription_id, group, name)?
+        };
+        let operation = match operation_ref(&reply.headers) {
+            Some(operation) if self.owns_operation_url(operation.url()) => LongRunning::Accepted(operation),
+            None if state.is_terminal() => LongRunning::Completed,
+            _ => return Err(Failure::Local(CloudError::InvalidResponse)),
+        };
+        Ok(Deployed { state, operation })
+    }
+
+    /// Reads deployment `name` in `group`.
+    /// # Errors
+    /// As [`Self::put_deployment`], without the operation URL check.
+    pub fn get_deployment(
+        &self,
+        group: &str,
+        name: &str,
+        cancel: &Cancellation,
+    ) -> Result<Option<DeploymentState>, Failure> {
+        let url = self.resource_url(group, "Microsoft.Resources/deployments", name, DEPLOYMENT_API_VERSION)?;
+        self.get_json_within(&url, cancel, None)?
+            .map(|value| deployment_state(&value, &self.subscription_id, group, name))
             .transpose()
     }
 
@@ -299,7 +375,7 @@ impl Azure {
         cancel: &Cancellation,
         budget: Option<Duration>,
     ) -> Result<Option<Value>, Failure> {
-        match self.send_within(Method::Get, url, cancel, budget) {
+        match self.send_within(Method::Get, url, None, cancel, budget) {
             Ok(reply) => Ok(Some(reply.value)),
             Err(failure) if failure.not_found() => Ok(None),
             Err(failure) => Err(failure),
@@ -312,6 +388,7 @@ impl Azure {
         &self,
         method: Method,
         url: &str,
+        body: Option<&Value>,
         cancel: &Cancellation,
         budget: Option<Duration>,
     ) -> Result<Reply, Failure> {
@@ -321,6 +398,7 @@ impl Azure {
         }
         let timeout = budget.map_or(REQUEST_TIMEOUT, |budget| budget.min(REQUEST_TIMEOUT));
         let auth = zeroize::Zeroizing::new(format!("Bearer {}", self.credential.value()));
+        let empty = Value::Object(serde_json::Map::new());
         let response = match method {
             Method::Get => self
                 .agent
@@ -330,6 +408,14 @@ impl Azure {
                 .build()
                 .header("Authorization", auth.as_str())
                 .call(),
+            Method::Put => self
+                .agent
+                .put(url)
+                .config()
+                .timeout_global(Some(timeout))
+                .build()
+                .header("Authorization", auth.as_str())
+                .send_json(body.unwrap_or(&empty)),
         };
         self.answer(response)
     }
@@ -341,6 +427,7 @@ impl Azure {
         if !(200..=299).contains(&status) {
             return Err(self.failure(status, &mut response));
         }
+        let headers = response.headers().clone();
         let body = response
             .body_mut()
             .with_config()
@@ -355,7 +442,7 @@ impl Azure {
         } else {
             serde_json::from_slice(&body).map_err(|_| Failure::Local(CloudError::InvalidResponse))?
         };
-        Ok(Reply { value })
+        Ok(Reply { status, headers, value })
     }
 
     /// A failed or oversized read yields no reason rather than masking the status.

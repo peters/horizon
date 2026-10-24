@@ -10,6 +10,7 @@ use ureq::{
     middleware::MiddlewareNext,
 };
 
+mod operation;
 mod reconcile;
 mod transport;
 
@@ -41,6 +42,17 @@ fn get(url: String, status: u16, body: impl Into<String>) -> Exchange {
     }
 }
 
+fn put(url: String, request_body: Value, status: u16, body: impl Into<String>) -> Exchange {
+    Exchange {
+        method: "PUT",
+        url,
+        request_body: Some(request_body),
+        status,
+        headers: Vec::new(),
+        body: body.into(),
+    }
+}
+
 impl Exchange {
     fn header(mut self, name: &'static str, value: impl Into<String>) -> Self {
         self.headers.push((name, value.into()));
@@ -48,16 +60,22 @@ impl Exchange {
     }
 }
 
-/// The client under test and the `METHOD url` of every request it sent.
+/// The client under test, the `METHOD url` of every request it sent, and every
+/// wait its poll asked for.
 struct Scripted {
     azure: Azure,
     sent: Arc<Mutex<Vec<String>>>,
+    sleeps: Arc<Mutex<Vec<Duration>>>,
     queue: Arc<Mutex<VecDeque<Exchange>>>,
 }
 
 impl Scripted {
     fn sent(&self) -> Vec<String> {
         self.sent.lock().unwrap().clone()
+    }
+
+    fn sleeps(&self) -> Vec<Duration> {
+        self.sleeps.lock().unwrap().clone()
     }
 
     /// Every scripted exchange was used.
@@ -71,7 +89,8 @@ impl Scripted {
 fn scripted(script: Vec<Exchange>) -> Scripted {
     let queue = Arc::new(Mutex::new(VecDeque::from(script)));
     let sent = Arc::new(Mutex::new(Vec::new()));
-    let (answers, log) = (queue.clone(), sent.clone());
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let (answers, log, waits) = (queue.clone(), sent.clone(), sleeps.clone());
     let agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .max_redirects(0)
@@ -100,8 +119,15 @@ fn scripted(script: Vec<Exchange>) -> Scripted {
         })
         .build()
         .new_agent();
-    let azure = Azure::with_agent(agent, Credential::new(TOKEN.into()).unwrap(), SUB).unwrap();
-    Scripted { azure, sent, queue }
+    let azure = Azure::with_agent(agent, Credential::new(TOKEN.into()).unwrap(), SUB)
+        .unwrap()
+        .with_sleeps(move |wait| waits.lock().unwrap().push(wait));
+    Scripted {
+        azure,
+        sent,
+        sleeps,
+        queue,
+    }
 }
 
 fn group_url(name: &str) -> String {
@@ -111,6 +137,18 @@ fn group_url(name: &str) -> String {
 fn vm_url(group: &str, name: &str) -> String {
     format!(
         "https://management.azure.com/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/{name}?api-version=2024-03-01&$expand=instanceView"
+    )
+}
+
+fn deployment_url(name: &str) -> String {
+    format!(
+        "https://management.azure.com/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Resources/deployments/{name}?api-version=2022-09-01"
+    )
+}
+
+fn operation_url(name: &str) -> String {
+    format!(
+        "https://management.azure.com/subscriptions/{SUB}/providers/Microsoft.Resources/locations/northeurope/operations/{name}?api-version=2022-09-01"
     )
 }
 
@@ -151,6 +189,45 @@ fn vm_body(name: &str, instance: Value) -> String {
     body.to_string()
 }
 
+fn deployment_body(name: &str, state: &str) -> String {
+    json!({
+        "id": format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Resources/deployments/{name}"),
+        "name": name,
+        "properties": { "provisioningState": state, "outputs": { "address": { "type": "String", "value": "192.0.2.10" } } }
+    })
+    .to_string()
+}
+
 fn arm_error(code: &str, message: &str) -> String {
     json!({ "error": { "code": code, "message": message } }).to_string()
+}
+
+fn deployment_request() -> Value {
+    json!({ "properties": { "mode": "Incremental", "template": { "resources": [] }, "parameters": { "size": { "value": "Standard_D4s_v5" } } } })
+}
+
+/// Submits the standard deployment and returns its operation.
+fn submit(client: &Scripted, cancel: &Cancellation) -> Result<Deployed, Failure> {
+    client.azure.put_deployment(
+        GROUP,
+        "worker-deployment",
+        &json!({ "resources": [] }),
+        &json!({ "size": { "value": "Standard_D4s_v5" } }),
+        cancel,
+    )
+}
+
+/// An accepted deployment whose operation is `operation`, with an optional `Retry-After`.
+fn accepted(operation: &str, retry_after: Option<&str>) -> Exchange {
+    let exchange = put(
+        deployment_url("worker-deployment"),
+        deployment_request(),
+        201,
+        deployment_body("worker-deployment", "Accepted"),
+    )
+    .header("azure-asyncoperation", operation);
+    match retry_after {
+        Some(seconds) => exchange.header("retry-after", seconds),
+        None => exchange,
+    }
 }

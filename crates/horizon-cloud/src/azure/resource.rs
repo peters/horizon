@@ -3,7 +3,8 @@
 //! name the requested resource is an `IdentityMismatch`, never a partial view.
 use super::{
     Failure,
-    url::{valid_instance_id, valid_resource_group_id, valid_vm_resource_id},
+    operation::LongRunning,
+    url::{resource_id_parts, valid_instance_id, valid_resource_group_id, valid_vm_resource_id},
 };
 use crate::CloudError;
 use serde_json::Value;
@@ -52,6 +53,28 @@ pub struct DataDisk {
     pub delete_option: String,
 }
 
+/// A template deployment's provisioning state and its string outputs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeploymentState {
+    pub provisioning_state: String,
+    pub outputs: BTreeMap<String, String>,
+}
+
+impl DeploymentState {
+    /// The deployment ended, successfully or not.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.provisioning_state.as_str(), "Succeeded" | "Failed" | "Canceled")
+    }
+}
+
+/// A deployment that ARM accepted, with the operation that reports its end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deployed {
+    pub state: DeploymentState,
+    pub operation: LongRunning,
+}
+
 pub(crate) fn text(value: &Value, pointer: &str) -> Option<String> {
     value.pointer(pointer).and_then(Value::as_str).map(str::to_string)
 }
@@ -82,6 +105,41 @@ pub(crate) fn group_info(value: &Value, subscription_id: &str, expected: &str) -
         location: text(value, "/location").unwrap_or_default(),
         provisioning_state: text(value, "/properties/provisioningState").unwrap_or_default(),
         tags: tags(value),
+    })
+}
+
+/// A deployment body for `name` in `group` of `subscription_id`.
+pub(crate) fn deployment_state(
+    value: &Value,
+    subscription_id: &str,
+    group: &str,
+    name: &str,
+) -> Result<DeploymentState, Failure> {
+    let id = text(value, "/id").ok_or_else(invalid)?;
+    let observed = text(value, "/name").ok_or_else(invalid)?;
+    let owned = resource_id_parts(&id, subscription_id).is_some_and(|parts| {
+        parts.group.eq_ignore_ascii_case(group)
+            && parts.provider.eq_ignore_ascii_case("Microsoft.Resources")
+            && parts.kind.eq_ignore_ascii_case("deployments")
+            && parts.name == name
+    });
+    if !observed.eq_ignore_ascii_case(name) || !owned {
+        return Err(mismatch());
+    }
+    let provisioning_state = text(value, "/properties/provisioningState").ok_or_else(invalid)?;
+    let outputs = value
+        .pointer("/properties/outputs")
+        .and_then(Value::as_object)
+        .map(|outputs| {
+            outputs
+                .iter()
+                .filter_map(|(key, output)| text(output, "/value").map(|value| (key.clone(), value)))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(DeploymentState {
+        provisioning_state,
+        outputs,
     })
 }
 
