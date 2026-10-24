@@ -505,10 +505,10 @@ guarantee that the code gives, and what the code does not guarantee.
 
 ## Follow-up work
 
-- `AGENTS.md` names `.github/` as the home of the review instructions, in the
-  bullet that starts "Before the first review of work that reads untrusted
-  input". It needs one changed sentence, to name `docs/review/`. This change
-  does not make it.
+- Closed: `AGENTS.md` named `.github/` as the home of the review instructions,
+  in the bullet that starts "Before the first review of work that reads
+  untrusted input". That bullet now names `docs/review/` and [`README.md`](README.md),
+  and the review section of `AGENTS.md` points to the same folder.
 - `scripts/test_detect_ci_build_inputs.py` uses `.github/copilot-instructions.md`
   as a non-Rust fixture path. The fixture is synthetic and still passes. A later
   change can use another non-Rust path, as the issue says.
