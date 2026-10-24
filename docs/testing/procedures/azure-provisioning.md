@@ -2,7 +2,7 @@
 procedure: azure-provisioning
 feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
 platforms: [linux]
-cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-16 cost nothing
+cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-17 cost nothing
 destructive: yes      # task AZV-L2 and the cleanup delete the test resource groups
 secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
@@ -19,16 +19,16 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 - Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-16 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-01 to AZV-17 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
 - Tasks AZV-L1 and AZV-L2 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. Both need the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
   - The rebuild of an Azure cloud. It stays refused.
-  - Azure in the New cloud dialog. `offers::AZURE_DEPLOYABLE` stays `false`.
+  - Azure in the New cloud dialog. The dialog lists a provider only when its prices are bound, and Azure has no such binding until a later part of #1774. A profile with `provider: azure` stays at "Checking the Azure account", so Start stays off.
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-16 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-17 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
@@ -40,7 +40,7 @@ Tasks AZV-01 to AZV-16 do not rent compute, delete data, send a secret or change
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-16: no Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-17: no Azure account, Azure credential or provider key.
 - For tasks AZV-L1 and AZV-L2: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
@@ -318,7 +318,22 @@ Do the tasks in order. Each task has a stable ID for the report.
    - Without an `azure` section, the companion's stop, resume and reconnect give "Configure this cloud provider before executing".
    - Horizon reads an agent's stop request from a ready Azure worker once, as from a Hetzner or Docker host worker.
 
-### 6.17 AZV-L1 — Create one live Azure worker
+### 6.17 AZV-17 — Check that Azure is a provider Horizon creates on
+
+1. Run the provider, offer, selection and cost tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- provider::tests::an_azure offers::azure
+   cargo test -p horizon-core --lib -- cloud_panel::selection cloud_runtime::cost::tests::a_stopped_azure
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - `AZURE.creatable` and `offers::AZURE_DEPLOYABLE` are `true`.
+   - The Azure section of `cloud_offers` has `deployable: true`. Each Azure offer has `rentable: false`.
+   - A worker choice of an Azure offer is refused with "An Azure cloud runs on the VM sizes and regions of the azure cloud settings; start it without a worker choice".
+   - The rate text of an Azure cloud says that Azure reports no hourly rate, and that a stop deallocates the VM and ends the compute charge while the disks and the static address bill until the cloud is deleted.
+
+### 6.18 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -442,7 +457,7 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
 13. Keep the worker of `azv-l1-01` and the state in `$AZV`. Task AZV-L2 stops, resumes and deletes them.
 
-### 6.18 AZV-L2 — Stop, resume and delete the live worker
+### 6.19 AZV-L2 — Stop, resume and delete the live worker
 
 Do this task after task AZV-L1, in the same terminal, with `$AZV` and `$SUB` set. Set the variables of the live tests.
 
@@ -572,12 +587,12 @@ export RG=horizon-ws-azv-l1-01
 
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-16 pass and send no request to Azure.
+- Tasks AZV-01 to AZV-17 pass and send no request to Azure.
 - For the live acceptance, each step of tasks AZV-L1 and AZV-L2 gives its result. AZV-L2 proves each group absent.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-16 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
+Tasks AZV-01 to AZV-17 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
 
 1. Examine the tag of each test group that remains. Then delete the group.
 
