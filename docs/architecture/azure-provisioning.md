@@ -173,6 +173,36 @@ stop keeps the VM. A delete cannot do it, because a delete removes the group.
   that attaches the same workspace disk on LUN 0. cloud-init `fs_setup` uses
   `overwrite: false`, so the disk keeps its file system.
 
+### The rebuild records of an Azure cloud
+
+`deployment::azure::rebuild` is the Azure half of a rebuild on a new server
+(`Rebuild::NewServer`). `replacement::live::Released` selects it for an Azure
+cloud and selects `deployment::hetzner::rebuild` for a Hetzner cloud. A Hetzner
+stop deletes the server, so the Hetzner release is that stop. An Azure stop keeps
+the VM, so the Azure release is `azure::release`.
+
+- The release keeps its fence in `azure-release.json`, beside `azure.json`. It
+  does not change `azure.json`.
+- `released` holds the `vmId` of the VM that the rebuild releases. The fence is
+  saved just before the `DELETE`. If the release refuses the VM, nothing is
+  saved. Thus a cancel then keeps the VM, its image and its stage.
+- When the VM is proven gone, the fence is saved too, also if an earlier attempt
+  sent the `DELETE`. Thus `reopen` can always follow a finished release.
+- During the release, the deployment keeps the stage `Replace`, the VM fence
+  `Bound` and no stop. The last worker is kept without an address.
+- `reopen` saves the deployment with the fence `Prepared` and no worker first.
+  Then it clears `released`. A crash between the two saves leaves a `released`
+  that no bound VM matches, so it has no effect.
+- `held` is set with the fence and is never cleared. It records that a VM held
+  the workspace disk and was released. A reconnect of a record without a bound
+  VM is admitted only with `held`. Without it, such a record is a first
+  deployment that did not finish, and a reconnect refuses it.
+- A cloud whose `azure.json` has `deleting` is not released.
+- Before the release, the rebuild checks that the host of the next VM can pull
+  the new image. It uses the machine's registry binding for the image, or else
+  `azure.registry_pull`, as provisioning does. It does not read the `hetzner`
+  section.
+
 ### The lifecycle of an Azure cloud
 
 `providers::azure::Azure` drives `deployment::azure` for check, stop, resume
