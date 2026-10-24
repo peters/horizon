@@ -5,7 +5,7 @@ CPU workers. It sends bounded requests to ARM, classifies each ARM answer, reads
 resource groups, deployments and VMs into typed views, submits one template
 deployment, polls an ARM operation and reconciles an operation by name. It also
 deallocates, starts and deletes a worker. `cloud_deploy` and the cloud lifecycle
-call it; New cloud does not while `offers::AZURE_DEPLOYABLE` is `false`.
+call it.
 
 ## Trust boundary
 

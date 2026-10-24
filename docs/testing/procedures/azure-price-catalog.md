@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that `horizon-cloud` reads Azure prices from the retail price list correctly.
-It also makes sure that each Azure offer includes the disks and the static address, and that no Azure offer is rentable.
+It also makes sure that each Azure offer includes the disks and the static address, and that no single Azure offer is rentable.
 
 ## 2. Applicability
 
@@ -103,10 +103,10 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The stopped cost is both disks and the static address for one month.
    - An offer without a disk or address price is not shown.
    - The region, memory, vCPU and hourly price filters apply. A GPU request gets no Azure offer.
-   - The answer section has `provider: Azure`, `currency: USD` and `deployable: false`. Each offer has `rentable: false`.
+   - The answer section has `provider: Azure`, `currency: USD` and `deployable: true`. Each offer has `rentable: false`, because the `azure` settings place the worker, not one offer.
    - The price uses a minimum of one hour and a maximum of one year.
 
-### 6.3 AZP-03 — Make sure that Azure stays closed
+### 6.3 AZP-03 — Make sure that the other offers do not change
 
 1. Run the other offer tests.
 
@@ -122,7 +122,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    cargo test -p horizon-core --lib -- cloud_runtime::providers
    ```
 
-   Result: All tests pass. Each Azure lifecycle operation refuses and leaves the record unchanged.
+   Result: All tests pass. Without an `azure` section, each Azure lifecycle operation refuses and leaves the record unchanged.
 
 ### 6.4 AZP-04 — Examine the live retail price list
 

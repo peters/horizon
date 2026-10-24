@@ -1,8 +1,9 @@
 //! Azure offers, ranked from its retail price catalog in US dollars. An estimate adds
 //! the managed OS disk, the workspace data disk and the Standard static public address
 //! to the compute. A deallocated cloud keeps both disks and the address, so they make
-//! its stopped cost. Horizon cannot create an Azure cloud yet: the offers are
-//! informational and never rentable.
+//! its stopped cost. Horizon creates an Azure cloud on the VM sizes and regions of
+//! the machine's `azure` settings, in their order, and cannot place one on a single
+//! offer yet, so the section is deployable and each offer is informational.
 use super::{
     AZURE_DEPLOYABLE, DEFAULT_LIMIT, DEFAULT_STORAGE_GB, MAX_HOURS, MAX_LIMIT, MONTH_HOURS, Offer, Requirements,
     normalize,
@@ -22,7 +23,7 @@ pub fn azure(catalog: &Catalog, requirements: &Requirements) -> Vec<Offer> {
     offers
 }
 
-/// The Azure part of a `cloud_offers` answer, in US dollars and not deployable.
+/// The Azure part of a `cloud_offers` answer, in US dollars.
 #[must_use]
 pub fn azure_section(catalog: &Catalog, requirements: &Requirements) -> serde_json::Value {
     serde_json::json!({
@@ -120,7 +121,8 @@ fn priced(
         regions_in_stock: Vec::new(),
         host: "provider_operated",
         interruptible: false,
-        rentable: AZURE_DEPLOYABLE,
+        // `WorkerChoice::for_profile` refuses an exact Azure offer.
+        rentable: false,
     })
 }
 

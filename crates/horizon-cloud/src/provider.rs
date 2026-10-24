@@ -143,9 +143,8 @@ pub const HETZNER: Description = Description {
     ),
 };
 
-/// Microsoft Azure, described so its place among the providers is fixed. Horizon cannot
-/// create, manage or delete an Azure cloud yet. A stop is planned to deallocate the
-/// virtual machine and keep its disks.
+/// Microsoft Azure: one VM per cloud in its own resource group. A stop deallocates the
+/// virtual machine and keeps its disks and static address.
 pub const AZURE: Description = Description {
     kind: Kind::Azure,
     id: "azure",
@@ -366,11 +365,11 @@ mod tests {
     }
 
     #[test]
-    fn an_azure_provider_is_described_but_not_creatable() {
+    fn an_azure_provider_is_described_and_creatable() {
         assert_eq!(by_id("azure"), Some(&AZURE));
         assert_eq!(AZURE.kind, Kind::Azure);
         assert_eq!(AZURE.creatable, crate::offers::AZURE_DEPLOYABLE);
-        const { assert!(!AZURE.creatable, "nothing creates an Azure cloud yet") };
+        const { assert!(AZURE.creatable, "Horizon creates, stops and deletes Azure clouds") };
         // Deallocate keeps the virtual machine and its disks; a stop does not delete it.
         assert_eq!(AZURE.stopped, StoppedCost::WorkerKept);
         assert_eq!(
