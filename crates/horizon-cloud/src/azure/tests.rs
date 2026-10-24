@@ -130,6 +130,46 @@ fn scripted(script: Vec<Exchange>) -> Scripted {
     }
 }
 
+/// Like [`scripted`], but every wait cancels `cancel`, as a caller would while a poll
+/// sleeps.
+fn scripted_cancelling(script: Vec<Exchange>, cancel: Cancellation) -> Scripted {
+    let queue = Arc::new(Mutex::new(VecDeque::from(script)));
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let (answers, log, waits) = (queue.clone(), sent.clone(), sleeps.clone());
+    let agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .middleware(move |request: Request<SendBody>, _: MiddlewareNext| {
+            let line = format!("{} {}", request.method(), request.uri());
+            log.lock().unwrap().push(line.clone());
+            let exchange = answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| panic!("unscripted request {line}"));
+            let mut response = Response::builder().status(exchange.status);
+            for (name, value) in exchange.headers {
+                response = response.header(name, value);
+            }
+            Ok(response.body(Body::builder().data(exchange.body)).unwrap())
+        })
+        .build()
+        .new_agent();
+    let azure = Azure::with_agent(agent, Credential::new(TOKEN.into()).unwrap(), SUB)
+        .unwrap()
+        .with_sleeps(move |wait| {
+            waits.lock().unwrap().push(wait);
+            cancel.cancel();
+        });
+    Scripted {
+        azure,
+        sent,
+        sleeps,
+        queue,
+    }
+}
+
 fn group_url(name: &str) -> String {
     format!("https://management.azure.com/subscriptions/{SUB}/resourceGroups/{name}?api-version=2022-09-01")
 }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::azure::{
-    operation::{operation_ref, remaining_at},
+    RETRY_AFTER_CAP,
+    operation::{WAIT_SLICE, operation_ref, remaining_at},
     retry_after,
 };
 use std::time::Instant;
@@ -19,6 +20,20 @@ fn operation_of(client: &Scripted, cancel: &Cancellation) -> OperationRef {
 
 fn seconds(values: &[f64]) -> Vec<Duration> {
     values.iter().copied().map(Duration::from_secs_f64).collect()
+}
+
+/// The slices a poll wait of each delay is split into, in order.
+fn sliced(values: &[f64]) -> Vec<Duration> {
+    let mut slices = Vec::new();
+    for delay in seconds(values) {
+        let mut left = delay;
+        while !left.is_zero() {
+            let slice = left.min(WAIT_SLICE);
+            slices.push(slice);
+            left = left.saturating_sub(slice);
+        }
+    }
+    slices
 }
 
 #[test]
@@ -101,7 +116,7 @@ fn an_operation_is_polled_until_it_succeeds() {
     let cancel = Cancellation::default();
     let reference = operation_of(&client, &cancel);
     client.azure.await_operation(&reference, &cancel).unwrap();
-    assert_eq!(client.sleeps(), seconds(&[0.5, 1.0, 2.0]));
+    assert_eq!(client.sleeps(), sliced(&[0.5, 1.0, 2.0]));
     assert_eq!(client.sent().len(), 4);
     client.done();
 }
@@ -122,7 +137,7 @@ fn a_throttled_poll_waits_retry_after_and_continues() {
     client.azure.await_operation(&reference, &cancel).unwrap();
     assert_eq!(
         client.sleeps(),
-        seconds(&[7.0, 1.0, 3.0, 40.0, 8.0]),
+        sliced(&[7.0, 1.0, 3.0, 40.0, 8.0]),
         "Retry-After makes a step longer and never shorter"
     );
     client.done();
@@ -132,10 +147,29 @@ fn a_throttled_poll_waits_retry_after_and_continues() {
         map
     };
     assert_eq!(retry_after(&headers(" 12 ")), Some(Duration::from_secs(12)));
+    assert_eq!(
+        retry_after(&headers("600")),
+        Some(RETRY_AFTER_CAP),
+        "an untrusted answer cannot ask for an unbounded wait"
+    );
     assert_eq!(retry_after(&headers("Wed, 21 Oct 2026 07:28:00 GMT")), None);
     assert_eq!(retry_after(&headers("-1")), None);
     assert_eq!(retry_after(&HeaderMap::new()), None);
     assert_eq!(operation_ref(&headers("5")), None, "no operation header");
+}
+
+#[test]
+fn a_cancel_during_a_retry_after_wait_is_seen_within_one_slice() {
+    let operation = operation_url("deploy-1");
+    let cancel = Cancellation::default();
+    // ARM asks for ten minutes. The client caps it, and one slice of the wait is
+    // enough for the cancel to be seen.
+    let client = scripted_cancelling(vec![accepted(&operation, Some("600"))], cancel.clone());
+    let reference = operation_of(&client, &cancel);
+    let ended = client.azure.await_operation(&reference, &cancel);
+    assert!(matches!(ended, Err(CloudError::Cancelled)), "{ended:?}");
+    assert_eq!(client.sleeps(), vec![WAIT_SLICE], "one slice, not ten minutes");
+    assert_eq!(client.sent().len(), 1, "the cancelled poll sends nothing");
 }
 
 #[test]
@@ -161,16 +195,20 @@ fn a_poll_past_its_bound_times_out() {
         ACTION_TIMEOUT,
         "the waits fill the bound exactly"
     );
+    assert!(
+        sleeps.iter().all(|slice| *slice <= WAIT_SLICE),
+        "every wait is sliced, so a cancel is seen inside it"
+    );
     assert_eq!(
-        sleeps.len(),
+        &sleeps[..sliced(&[0.5, 1.0, 2.0]).len()],
+        sliced(&[0.5, 1.0, 2.0]),
+        "the first steps keep their full length in slices"
+    );
+    assert_eq!(
+        client.sent().len(),
         polls + 1,
         "the last wait reaches the bound and sends no poll"
     );
-    assert_eq!(
-        &sleeps[..BACKOFF_MS.len()],
-        seconds(&[0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 30.0, 30.0])
-    );
-    assert_eq!(sleeps[polls], Duration::from_secs_f64(29.5));
     client.done();
     let now = Instant::now();
     assert_eq!(

@@ -14,6 +14,9 @@ pub const BACKOFF_MS: [u64; 9] = [500, 1_000, 2_000, 4_000, 8_000, 15_000, 30_00
 /// Longest operation URL polled. ARM signs its operation URLs with a certificate in
 /// the query string (`c=`) of about 3 KB.
 const OPERATION_URL_LIMIT: usize = 8_192;
+/// The longest single sleep inside a poll wait. A wait is split into slices of this
+/// length, so a cancel is seen within one slice instead of after ARM's `Retry-After`.
+pub const WAIT_SLICE: Duration = Duration::from_millis(250);
 const ASYNC_OPERATION_HEADER: &str = "azure-asyncoperation";
 
 /// How ARM answered a mutation.
@@ -99,6 +102,20 @@ impl Azure {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'=' | b'&'))
     }
 
+    /// Waits `delay` in slices of at most [`WAIT_SLICE`], checking `cancel` between
+    /// them, so a cancelled caller is released within one slice and not after the
+    /// whole wait ARM asked for.
+    fn wait(&self, delay: Duration, cancel: &Cancellation) -> Result<(), CloudError> {
+        let mut left = delay;
+        while !left.is_zero() {
+            let slice = left.min(WAIT_SLICE);
+            (self.sleep)(slice);
+            left = left.saturating_sub(slice);
+            cancel.check()?;
+        }
+        Ok(())
+    }
+
     /// Polls `operation` until it ends. Each wait is the next `BACKOFF_MS` step, made
     /// longer by the last `Retry-After` and shorter by what is left of
     /// `ACTION_TIMEOUT`; each poll gets only what is left as its request budget. A
@@ -107,8 +124,8 @@ impl Azure {
     /// `InvalidResponse` for an operation URL outside this subscription (nothing is
     /// sent), a poll that answers 404, or a status without a `status` field.
     /// `Rejected` with ARM's reason for a `Failed` or `Canceled` operation.
-    /// `Invalid` when the operation still runs at the bound, `Cancelled` when
-    /// `cancel` fires, and the mapped [`Failure`] of any other failed poll.
+    /// `Invalid` when the operation still runs at the bound, `Cancelled` within one
+    /// [`WAIT_SLICE`] of `cancel`, and the mapped [`Failure`] of any other failed poll.
     pub fn await_operation(&self, operation: &OperationRef, cancel: &Cancellation) -> Result<(), CloudError> {
         if !self.owns_operation_url(&operation.url) {
             return Err(CloudError::InvalidResponse);
@@ -130,9 +147,8 @@ impl Azure {
                 break;
             };
             let delay = Duration::from_millis(step).max(retry.unwrap_or_default()).min(left);
-            (self.sleep)(delay);
+            self.wait(delay, cancel)?;
             waited += delay;
-            cancel.check()?;
             let Some(budget) = remaining_at(now(waited), deadline) else {
                 break;
             };

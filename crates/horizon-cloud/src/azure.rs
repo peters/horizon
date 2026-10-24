@@ -43,6 +43,9 @@ pub const PROVIDER: &str = "azure";
 pub const OPERATION_TAG: &str = "horizon-operation";
 /// The per-request budget.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The longest `Retry-After` this client honours. The value arrives in an untrusted
+/// answer, so ARM alone must not decide how long a caller waits.
+pub const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
 /// Longest wait for one ARM operation, waits and polls included.
 pub const ACTION_TIMEOUT: Duration = Duration::from_mins(10);
 /// ureq refuses a body that reaches the limit, so the largest body read is one byte less.
@@ -521,7 +524,7 @@ pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
         .trim()
         .parse::<u64>()
         .ok()
-        .map(Duration::from_secs)
+        .map(|seconds| Duration::from_secs(seconds).min(RETRY_AFTER_CAP))
 }
 
 fn ureq_timed_out(error: &ureq::Error) -> bool {
