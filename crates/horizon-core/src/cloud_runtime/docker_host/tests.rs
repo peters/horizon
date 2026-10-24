@@ -48,14 +48,7 @@ fn missing_requirements_are_blockers_without_attempting_docker() {
     assert!(!report.ready());
     assert_eq!(report.checks.len(), 1);
     assert_eq!(report.checks[0].state, CheckState::Blocked);
-    assert_eq!(
-        report.checks[0].name,
-        if cfg!(windows) {
-            "Controller platform"
-        } else {
-            "SSH identity"
-        }
-    );
+    assert_eq!(report.checks[0].name, "SSH identity");
     assert!(report.checks[0].remedy.is_some());
 }
 

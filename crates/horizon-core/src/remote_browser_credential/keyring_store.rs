@@ -30,9 +30,9 @@ type PresenceProbe = fn(&CredentialStore, &str) -> Result<bool, RemoteCredential
 
 type StoreOpener = fn() -> Result<Arc<CredentialStore>, RemoteCredentialError>;
 
-/// OS credential store adapter: macOS Keychain, Windows Credential Manager,
-/// Linux Secret Service over D-Bus. Items are addressed by endpoint origin
-/// and slot, so a value bound to one endpoint is invisible to another.
+/// OS credential store adapter: macOS Keychain, Linux Secret Service over
+/// D-Bus. Items are addressed by endpoint origin and slot, so a value bound
+/// to one endpoint is invisible to another.
 pub struct KeyringCredentialStore {
     store: Arc<CredentialStore>,
     probe: PresenceProbe,
@@ -268,35 +268,7 @@ mod platform {
     pub(super) use super::search_probe as probe;
 }
 
-#[cfg(windows)]
-mod platform {
-    use keyring_core::Error as KeyringError;
-
-    use super::{Arc, CredentialStore, KEYRING_SERVICE, RemoteCredentialError, map_error};
-
-    pub(super) fn open() -> Result<Arc<CredentialStore>, RemoteCredentialError> {
-        windows_native_keyring_store::Store::new()
-            .map(|store| store as Arc<CredentialStore>)
-            .map_err(|error| map_error(&error))
-    }
-
-    /// Credential Manager has no metadata-only read: `CredReadW` returns the
-    /// whole record in API-owned memory that the store frees at once. Reading
-    /// the attributes of the one target keeps that to this item instead of
-    /// enumerating every credential the user owns.
-    pub(super) fn probe(store: &CredentialStore, user: &str) -> Result<bool, RemoteCredentialError> {
-        let entry = store
-            .build(KEYRING_SERVICE, user, None)
-            .map_err(|error| map_error(&error))?;
-        match entry.get_attributes() {
-            Ok(_) => Ok(true),
-            Err(KeyringError::NoEntry) => Ok(false),
-            Err(error) => Err(map_error(&error)),
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod platform {
     use super::{Arc, CredentialStore, RemoteCredentialError};
 

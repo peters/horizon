@@ -168,11 +168,6 @@ impl Identity {
                 inode: meta.ino(),
             })
         }
-        #[cfg(not(unix))]
-        {
-            let _ = file;
-            Err(Error::Invalid)
-        }
     }
     fn require(&self, file: &File) -> Result<()> {
         if self != &Self::of(file)? {
@@ -213,11 +208,6 @@ fn open(path: &Path, directory: bool) -> Result<File> {
             return Err(Error::Invalid);
         }
         Ok(file)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, directory);
-        Err(Error::Invalid)
     }
 }
 fn fingerprint(

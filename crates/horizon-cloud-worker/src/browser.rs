@@ -528,8 +528,6 @@ fn sync_marker_directory(marker: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("Browser history has no directory"))?;
     #[cfg(unix)]
     std::fs::File::open(parent)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = parent;
     Ok(())
 }
 

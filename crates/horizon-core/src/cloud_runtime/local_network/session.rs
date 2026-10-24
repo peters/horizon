@@ -340,8 +340,6 @@ impl Hold {
                 let flags = rustix::fs::fcntl_getfl(input)?;
                 rustix::fs::fcntl_setfl(input, flags | rustix::fs::OFlags::NONBLOCK)?;
             }
-            #[cfg(not(unix))]
-            return Err(std::io::Error::other("Bounded one-service SSH input requires Unix"));
         }
         let hello = send(&hold.input, &message(&Message::Hello(answers.hello())), true);
         if bounded {

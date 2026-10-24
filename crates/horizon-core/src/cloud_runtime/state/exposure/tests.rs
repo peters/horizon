@@ -387,7 +387,6 @@ fn decoded_finish_and_finish_unknown_cannot_reuse_a_retained_service_operation()
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn original_store_and_paired_migration_retain_uncertainty_without_granting_reopen() {
     let temporary = tempfile::tempdir().unwrap();
     let store = Store::lock(temporary.path()).unwrap();
@@ -443,7 +442,6 @@ fn original_store_and_paired_migration_retain_uncertainty_without_granting_reope
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn exposure_publication_admission_and_enrollment_survive_store_and_paired_migration() {
     use crate::cloud_runtime::{publishing::Publication, tailnet::receipt::tests::populated};
     use horizon_cloud::image_publishing::Destination;
@@ -521,7 +519,6 @@ fn exposure_publication_admission_and_enrollment_survive_store_and_paired_migrat
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn highest_version_exposure_neighbor_preserves_metadata_and_duplicate_worker_fences() {
     use crate::cloud_runtime::{Error, state::migration::MigratedStore};
 

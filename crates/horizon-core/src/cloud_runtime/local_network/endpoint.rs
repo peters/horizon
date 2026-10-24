@@ -335,13 +335,6 @@ impl Gateway {
         Self::start_with(prepared, socks::Proxy::start_private)
     }
 
-    /// # Errors
-    /// Private SSH ingress is unsupported on non-Unix hosts.
-    #[cfg(not(unix))]
-    pub fn start_private(_prepared: Prepared) -> Result<Self, Error> {
-        Err(Error::UnsupportedSource)
-    }
-
     fn start_with(
         prepared: Prepared,
         start: fn(Arc<dyn socks::Gate>) -> std::io::Result<socks::Proxy>,

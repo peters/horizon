@@ -173,10 +173,6 @@ impl SessionStore {
 mod tests {
     use super::*;
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Durable notices require Unix directory synchronization; unsupported Windows preservation is tested separately"
-    )]
     fn recovery_notice_survives_reopen_until_matching_acknowledgement() {
         let root = tempfile::tempdir().expect("home");
         let store = SessionStore::new(
@@ -213,10 +209,6 @@ mod tests {
         }
     }
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Durable notices require Unix directory synchronization; unsupported Windows preservation is tested separately"
-    )]
     fn independent_instances_preserve_each_others_unacknowledged_notices() {
         let root = tempfile::tempdir().expect("home");
         let first = SessionStore::new(
@@ -324,21 +316,5 @@ mod tests {
             .save_session_deletion_notice(&SessionDeletionNotice::new("Recovery path"))
             .expect("independent record");
         assert_eq!(store.deletion_notices().expect("records").len(), 2);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn unsupported_notice_durability_creates_no_partial_record() {
-        let root = tempfile::tempdir().expect("home");
-        let store = SessionStore::new(
-            crate::HorizonHome::from_root(root.path().into()),
-            root.path().join("config.yaml"),
-        );
-        assert!(
-            store
-                .save_session_deletion_notice(&SessionDeletionNotice::new("keep this recovery path"))
-                .is_err()
-        );
-        assert!(!store.deletion_notice_dir().exists());
     }
 }

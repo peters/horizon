@@ -20,7 +20,6 @@ fn record(root: &Path) -> Deployment {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn persisted_publication_cannot_be_downgraded_or_lose_its_version_fence() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::lock(root.path()).unwrap();
@@ -43,7 +42,6 @@ fn persisted_publication_cannot_be_downgraded_or_lose_its_version_fence() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn an_invalid_publication_is_refused_on_read_and_cannot_replace_a_saved_cloud() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::lock(root.path()).unwrap();

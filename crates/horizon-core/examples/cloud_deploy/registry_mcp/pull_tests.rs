@@ -2,10 +2,6 @@ use super::*;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 async fn host_pull_status_uses_the_real_tool_router_without_a_compute_key() {
     let root = tempfile::tempdir().unwrap();
     let settings = root.path().join("settings.json");

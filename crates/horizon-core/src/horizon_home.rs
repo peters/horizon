@@ -240,8 +240,6 @@ fn create_private_dirs(root: &Path) -> std::io::Result<()> {
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         builder
     };
-    #[cfg(not(unix))]
-    let builder = std::fs::DirBuilder::new();
     for path in missing.into_iter().rev() {
         match builder.create(path) {
             Ok(()) => {

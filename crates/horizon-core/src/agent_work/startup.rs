@@ -271,13 +271,6 @@ pub(crate) fn append_seed(kind: PanelKind, args: &mut Vec<String>, brief: &str) 
         return false;
     }
     if args.len() != 2 || args[0] != "-ic" {
-        if cfg!(windows) {
-            if kind == PanelKind::OpenCode {
-                args.push("--prompt".into());
-            }
-            args.push(brief.into());
-            return true;
-        }
         return false;
     }
     args[1].push_str(if kind == PanelKind::OpenCode { " --prompt " } else { " " });

@@ -23,7 +23,6 @@ members = [
     "crates/horizon-browser-routines",
     "crates/horizon-core",
     "crates/horizon-cursor",
-    "crates/horizon-process-time",
     "crates/horizon-terminal",
     "crates/horizon-ui",
     "crates/horizon-vnc",
@@ -119,7 +118,6 @@ secret-service = { version = "5.2.0", default-features = false, features = ["rt-
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Used by the macOS keychain adapter to classify locked-keychain OSStatus values.
 security-framework = "3.7.0"
-windows-native-keyring-store = "1.1.0"
 same-file = "1.0"
 mime_guess = "2.0"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
@@ -154,12 +152,6 @@ tempfile = "3.27.0"
 tar = "0.4.46"
 # Unicode categories for git-lfs pattern validation, matching the worker's Python check.
 unicode-general-category = "1.1.0"
-# Windows-only process-tree ownership for browser and WebDriver service
-# descendants. The wrapper creates the child suspended, assigns it to a Job
-# Object, then resumes it, avoiding PID-based teardown and assignment races.
-process-wrap = { version = "10.0.0", default-features = false, features = ["std", "job-object"] }
-horizon-process-time = { path = "crates/horizon-process-time" }
-# `std::fs::rename` cannot atomically replace an existing file on Windows.
 # Browser manifests need replace-existing semantics without exposing a gap to
 # lock-free readers.
 atomicwrites = "0.4.4"

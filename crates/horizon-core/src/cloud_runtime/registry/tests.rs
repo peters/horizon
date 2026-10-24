@@ -257,10 +257,6 @@ fn secrets_in_source_and_unconfirmed_pull_grants_are_refused() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 fn pull_only_work_does_not_require_a_live_publishing_credential() {
     let (_root, mut settings) = fixture();
     binding(&mut settings).publish.as_mut().unwrap().expires_at = Some("2000-01-01T00:00:00Z".into());
@@ -271,10 +267,6 @@ fn pull_only_work_does_not_require_a_live_publishing_credential() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 fn generation_fences_changed_login_and_survives_reload() {
     let (_root, mut settings) = fixture();
     let mut prepared = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();
@@ -323,10 +315,6 @@ fn rotation_retains_old_handles_and_does_not_change_old_material() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 fn provider_transfer_requires_completed_image_validation() {
     let (_root, settings) = fixture();
     let mut prepared = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();

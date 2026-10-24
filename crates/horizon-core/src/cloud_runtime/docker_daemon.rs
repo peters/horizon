@@ -339,27 +339,14 @@ fn bounded(mut command: Command, timeout: Duration, stop: &dyn Fn() -> bool) -> 
     }
 }
 
-/// Kills the process group, or on Windows the process tree, as an `ssh` that
-/// `docker --host ssh://` starts or a CLI plugin is in it. A child that outlives the
-/// kill, such as the root `systemctl` that `pkexec` starts, is waited for on its own
-/// thread so that the caller never blocks on it.
+/// Kills the process group as an `ssh` that `docker --host ssh://` starts or a CLI
+/// plugin is in it. A child that outlives the kill, such as the root `systemctl` that
+/// `pkexec` starts, is waited for on its own thread so that the caller never blocks
+/// on it.
 fn end(mut child: Child) {
     #[cfg(unix)]
     if let Some(id) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
         let _ = rustix::process::kill_process_group(id, rustix::process::Signal::KILL);
-    }
-    // Before the kill: `taskkill /T` finds the descendants through their living parent.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &child.id().to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
     }
     let _ = child.kill();
     thread::spawn(move || child.wait());

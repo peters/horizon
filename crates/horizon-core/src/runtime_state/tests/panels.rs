@@ -366,8 +366,8 @@ fn board_snapshot_preserves_the_panel_work_policy() {
         .create_panel(
             PanelOptions {
                 kind: PanelKind::Shell,
-                command: Some(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into()),
-                args: vec![if cfg!(windows) { "/C" } else { "-c" }.into(), "exit".into()],
+                command: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "exit".into()],
                 work_resume: crate::agent_work::ResumePolicy {
                     enabled: true,
                     max_downtime_seconds: 60,

@@ -2,10 +2,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-#[cfg(not(windows))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::Result;
@@ -278,13 +276,6 @@ fn current_script_flavor() -> ScriptFlavor {
 }
 
 fn script_program_candidates(path_env: Option<&OsStr>) -> Vec<PathBuf> {
-    #[cfg(windows)]
-    {
-        let _ = path_env;
-        Vec::new()
-    }
-
-    #[cfg(not(windows))]
     {
         let Some(path) = path_env else {
             return Vec::new();
@@ -300,7 +291,6 @@ fn script_program_candidates(path_env: Option<&OsStr>) -> Vec<PathBuf> {
     }
 }
 
-#[cfg(not(windows))]
 fn probe_script_support(script_program: &Path, flavor: ScriptFlavor) -> std::result::Result<(), String> {
     let session_path = probe_session_path();
     let (_, args) = match flavor {
@@ -352,12 +342,6 @@ fn probe_script_support(script_program: &Path, flavor: ScriptFlavor) -> std::res
     Err(detail)
 }
 
-#[cfg(windows)]
-fn probe_script_support(_script_program: &Path, _flavor: ScriptFlavor) -> std::result::Result<(), String> {
-    Err("`script` is unavailable on Windows".to_string())
-}
-
-#[cfg(not(windows))]
 fn probe_session_path() -> PathBuf {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -426,10 +410,8 @@ fn shell_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    #[cfg(not(windows))]
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
-    #[cfg(not(windows))]
     use std::path::PathBuf;
 
     use super::{
@@ -600,7 +582,6 @@ mod tests {
         assert_eq!(wrapped, original);
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn detect_script_support_reports_incompatible_script() {
         let root = temp_script_root("incompatible");
@@ -625,7 +606,6 @@ exit 64
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn detect_script_support_accepts_util_linux_probe_shape() {
         let root = temp_script_root("util-linux");
@@ -655,7 +635,6 @@ exit 0
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn detect_script_support_accepts_bsd_probe_shape() {
         let root = temp_script_root("bsd");
@@ -687,14 +666,12 @@ exit 0
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(not(windows))]
     fn temp_script_root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("horizon-transcript-script-{label}-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("temp script root");
         root
     }
 
-    #[cfg(not(windows))]
     fn write_executable_script(path: &Path, contents: &str) {
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, contents).expect("script body");

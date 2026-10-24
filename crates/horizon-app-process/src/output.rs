@@ -342,23 +342,5 @@ mod unix {
 }
 #[cfg(unix)]
 pub use unix::DiagnosticLog;
-#[cfg(not(unix))]
-#[derive(Clone)]
-pub struct DiagnosticLog;
-#[cfg(not(unix))]
-impl DiagnosticLog {
-    pub(crate) fn capture(
-        _spec: &crate::Spec,
-        _guardian: u32,
-        _directory: crate::storage::Directory,
-    ) -> crate::Result<Self> {
-        Err(crate::Error::StateUnavailable)
-    }
-    /// # Errors
-    /// Native process diagnostics require a supported Unix host.
-    pub fn record(&self, _cause: Cause, _timeout: Duration) -> Result<Retention, DiagnosticError> {
-        Err(DiagnosticError::Unavailable)
-    }
-}
 #[cfg(all(test, unix))]
 mod tests;

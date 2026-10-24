@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 use std::thread;
 use std::time::{Duration, Instant};
 

@@ -86,10 +86,6 @@ fn an_unconfirmed_or_expired_binding_cannot_supply_a_host_login() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 fn verified_expiry_retains_issuer_only_and_the_earlier_known_deadline() {
     for (declared, observed, expected) in [
         (None, Some("2030-01-01T00:00:00Z"), Some("2030-01-01T00:00:00Z")),

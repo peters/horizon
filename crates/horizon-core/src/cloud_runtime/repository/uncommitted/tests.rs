@@ -355,10 +355,6 @@ fn a_path_part_that_is_not_one_plain_name_is_never_read_or_removed() {
     for path in ["../outside.txt", "a/../../outside.txt", "./a", "a//b", ""] {
         assert!(overlay::content(snapshot.path(), path).is_err(), "{path:?}");
     }
-    #[cfg(windows)]
-    for path in ["..\\outside.txt", "C:\\outside.txt", "a\\..\\..\\x"] {
-        assert!(overlay::content(snapshot.path(), path).is_err(), "{path:?}");
-    }
 }
 
 #[test]

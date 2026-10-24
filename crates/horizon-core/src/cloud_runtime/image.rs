@@ -280,9 +280,8 @@ const TRUSTED: &str = "Worker contract: the pinned quick-start image passed this
 const DOCKER_MISSING: &str = "Docker is not installed on this computer or not on its PATH, and this cloud's image needs a local Docker build or check. Install Docker. Quick start on the base image that this Horizon version pins needs none.";
 
 fn require_docker() -> Result<()> {
-    let program = if cfg!(windows) { "docker.exe" } else { "docker" };
     std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|directory| directory.join(program).is_file()))
+        .is_some_and(|path| std::env::split_paths(&path).any(|directory| directory.join("docker").is_file()))
         .then_some(())
         .ok_or(Error::Invalid(DOCKER_MISSING))
 }

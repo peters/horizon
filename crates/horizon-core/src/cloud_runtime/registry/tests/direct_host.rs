@@ -1,7 +1,6 @@
 use super::*;
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn a_direct_host_grant_needs_no_compute_key_and_cannot_create_provider_access() {
     let (root, mut settings) = fixture();
     std::fs::remove_file(&settings.runpod_key_file).unwrap();
@@ -32,7 +31,6 @@ fn a_direct_host_grant_needs_no_compute_key_and_cannot_create_provider_access() 
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn direct_host_and_provider_journals_keep_separate_identity_and_locks() {
     let (root, mut settings) = fixture();
     let direct =
@@ -55,7 +53,6 @@ fn direct_host_and_provider_journals_keep_separate_identity_and_locks() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn the_first_direct_host_use_retains_an_earlier_provider_pull_fingerprint() {
     let (root, mut settings) = fixture();
     let provider = Prepared::for_image(&settings, &image(), None, false).unwrap().unwrap();
@@ -77,7 +74,6 @@ fn the_first_direct_host_use_retains_an_earlier_provider_pull_fingerprint() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn the_first_provider_use_retains_an_earlier_direct_host_pull_fingerprint() {
     let (root, mut settings) = fixture();
     let direct =
@@ -95,7 +91,6 @@ fn the_first_provider_use_retains_an_earlier_direct_host_pull_fingerprint() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn concurrent_first_uses_cannot_pin_different_pull_material_for_one_generation() {
     let (root, first) = fixture();
     let mut second = first.clone();
@@ -128,7 +123,6 @@ fn concurrent_first_uses_cannot_pin_different_pull_material_for_one_generation()
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn concurrent_first_uses_of_the_same_pull_grant_both_succeed() {
     let (_root, settings) = fixture();
     let start = std::sync::Barrier::new(2);
@@ -151,7 +145,6 @@ fn concurrent_first_uses_of_the_same_pull_grant_both_succeed() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn an_already_pinned_grant_does_not_wait_for_another_scopes_first_pin() {
     let (root, settings) = fixture();
     drop(
@@ -182,7 +175,6 @@ fn an_already_pinned_grant_does_not_wait_for_another_scopes_first_pin() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn a_host_journal_cannot_import_provider_mutation_state() {
     let (root, settings) = fixture();
     drop(
@@ -213,7 +205,6 @@ fn a_host_journal_cannot_import_provider_mutation_state() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn an_unreadable_other_scope_cannot_be_ignored_while_pinning_a_generation() {
     let (root, settings) = fixture();
     drop(Prepared::for_image(&settings, &image(), None, false).unwrap());
@@ -226,7 +217,6 @@ fn an_unreadable_other_scope_cannot_be_ignored_while_pinning_a_generation() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn a_host_journal_directory_cannot_be_the_source_checkout_or_resolve_into_it() {
     let (root, settings) = fixture();
     let registry = root.path().join("registry");
@@ -249,7 +239,7 @@ fn a_host_journal_directory_cannot_be_the_source_checkout_or_resolve_into_it() {
         ));
         assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
     }
-    // This case uses the Unix symlink API and cannot compile on Windows.
+    // This case uses the Unix symlink API.
     #[cfg(unix)]
     {
         std::fs::remove_dir(&source).unwrap();
@@ -271,7 +261,6 @@ fn a_host_journal_directory_cannot_be_the_source_checkout_or_resolve_into_it() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Registry journals require Unix directory durability")]
 fn first_host_use_creates_missing_private_ancestors_before_pinning_material() {
     let (root, mut settings) = fixture();
     std::fs::remove_file(&settings.runpod_key_file).unwrap();

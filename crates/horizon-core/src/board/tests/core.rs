@@ -151,13 +151,6 @@ impl ShutdownFixture {
                 ..PanelOptions::default()
             }
         }
-        #[cfg(not(unix))]
-        {
-            PanelOptions {
-                kind,
-                ..shell_panel_options()
-            }
-        }
     }
 
     fn wait_until_ready(&self) {

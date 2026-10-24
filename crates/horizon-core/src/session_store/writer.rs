@@ -576,12 +576,6 @@ pub(super) fn same_file(synced: &fs::Metadata, named: &fs::Metadata) -> bool {
     (synced.dev(), synced.ino()) == (named.dev(), named.ino())
 }
 
-/// Only a Unix host syncs a folder, and a durable wait is refused elsewhere.
-#[cfg(not(unix))]
-pub(super) fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
-    true
-}
-
 /// Syncs `folder` and the folder that names it.
 pub(super) fn sync_folder_and_parent(folder: &Path) -> StoreResult<()> {
     sync_folder(folder)?;
@@ -591,8 +585,6 @@ pub(super) fn sync_folder_and_parent(folder: &Path) -> StoreResult<()> {
 pub(super) fn sync_folder(folder: &Path) -> StoreResult<()> {
     #[cfg(unix)]
     fs::File::open(folder)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = folder;
     Ok(())
 }
 

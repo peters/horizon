@@ -16,16 +16,8 @@ fn chain(access: &str, refresh: &str, access_in: Duration) -> Chain {
 }
 
 fn mode(path: &Path) -> u32 {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        0o600
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
 #[test]

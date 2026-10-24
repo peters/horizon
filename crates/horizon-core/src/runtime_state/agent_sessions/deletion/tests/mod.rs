@@ -28,26 +28,3 @@ mod batch;
 mod identity;
 #[cfg(unix)] // Staging requires durable directory updates, currently supported only on Unix.
 mod staging;
-
-#[cfg(windows)]
-#[test]
-fn unsupported_directory_durability_preserves_windows_history() {
-    let (_temp, projects, transcript, artifacts) = staged_fixture();
-    assert!(!AgentSessionCatalog::supports_saved_session_deletion(PanelKind::Claude));
-    let result = stage_claude_deletion(
-        &projects,
-        &transcript,
-        Some(&artifacts),
-        |_, _| panic!("must not rename"),
-        |_| panic!("must not purge"),
-    );
-    assert!(result.err().expect("unsupported").to_string().contains("Unix"));
-    assert_eq!(
-        std::fs::read_to_string(transcript).expect("transcript"),
-        "original transcript"
-    );
-    assert_eq!(
-        std::fs::read_to_string(artifacts.join("agent.jsonl")).expect("child"),
-        "original child"
-    );
-}

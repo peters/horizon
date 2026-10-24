@@ -111,11 +111,6 @@ fn emit(event: &Event) -> Result<()> {
         .map_err(|_| Error::CleanupUncertain)
 }
 
-#[cfg(not(unix))]
-pub(crate) fn run() -> Result<()> {
-    Err(Error::StartFailed)
-}
-
 #[cfg(unix)]
 pub(crate) fn run() -> Result<()> {
     let (spec, mut input) = read_spec()?;

@@ -775,7 +775,6 @@ fn configure_filter(repo: &Path, marker: &Path) {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "a git content filter is driven by a Unix shell")]
 #[cfg(unix)]
 fn a_repository_configured_filter_never_runs_while_snapshotting() {
     let temp = tempfile::tempdir().unwrap();

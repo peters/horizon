@@ -17,10 +17,6 @@ fn clock_millis(round_up: bool) -> Result<u64> {
         .and_then(|value| value.checked_add(fraction))
         .ok_or(Error::Invalid)
 }
-#[cfg(not(unix))]
-fn clock_millis(_round_up: bool) -> Result<u64> {
-    Err(Error::Invalid)
-}
 
 /// # Errors
 /// Capture a finite deadline before any guardian spawn or durable handshake.

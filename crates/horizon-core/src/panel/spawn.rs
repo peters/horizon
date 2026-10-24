@@ -919,13 +919,8 @@ mod tests {
     fn disconnected_snapshot_launch_command_exits_without_reconnecting() {
         let (program, args) = disconnected_snapshot_launch_command();
 
-        if cfg!(windows) {
-            assert_eq!(program, "cmd.exe");
-            assert_eq!(args, vec!["/C".to_string(), "exit".to_string()]);
-        } else {
-            assert_eq!(program, default_shell());
-            assert_eq!(args, vec!["-c".to_string(), "exit".to_string()]);
-        }
+        assert_eq!(program, default_shell());
+        assert_eq!(args, vec!["-c".to_string(), "exit".to_string()]);
     }
 
     #[test]

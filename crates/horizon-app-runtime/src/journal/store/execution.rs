@@ -34,11 +34,6 @@ impl Identity {
                 inode: metadata.ino(),
             })
         }
-        #[cfg(not(unix))]
-        {
-            let _ = file;
-            Err(Error::JournalUnavailable)
-        }
     }
 }
 

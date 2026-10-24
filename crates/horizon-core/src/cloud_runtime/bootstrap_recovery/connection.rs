@@ -224,8 +224,6 @@ fn read_inner(path: &Path, private: bool, empty: bool) -> Result<(PathBuf, Zeroi
         )
         .map_err(std::io::Error::from)?,
     );
-    #[cfg(not(unix))]
-    let mut file = File::open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || (!empty && metadata.len() == 0) || metadata.len() > 64 * 1024 {
         return Err(Error::Invalid);
@@ -239,8 +237,6 @@ fn read_inner(path: &Path, private: bool, empty: bool) -> Result<(PathBuf, Zeroi
             return Err(Error::Invalid);
         }
     }
-    #[cfg(not(unix))]
-    let _ = private;
     // Fixed storage prevents reallocations from leaving private-key fragments.
     let mut bytes = Zeroizing::new(vec![0; 64 * 1024 + 1]);
     let mut length = 0;

@@ -78,8 +78,6 @@ pub(super) fn prepare(root: &Path, target: &Store, id: OperationId, tailnet: Opt
 fn sync(root: &Path) -> Result<()> {
     #[cfg(unix)]
     std::fs::File::open(root)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = root;
     Ok(())
 }
 

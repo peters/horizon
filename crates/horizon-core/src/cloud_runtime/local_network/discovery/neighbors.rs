@@ -5,9 +5,9 @@ use super::{Cancellation, stopped};
 use std::{io, net::Ipv4Addr};
 
 /// Output read from the system's `arp` command, at most.
-#[cfg(any(test, target_os = "macos", windows))]
+#[cfg(any(test, target_os = "macos"))]
 const MAX_OUTPUT: u64 = 256 * 1024;
-#[cfg(any(test, target_os = "macos", windows))]
+#[cfg(any(test, target_os = "macos"))]
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The neighbors' addresses, or why this system cannot list them.
@@ -26,24 +26,7 @@ pub(super) fn read(cancel: &Cancellation) -> io::Result<Vec<Ipv4Addr>> {
         command.arg("-an").env_clear();
         Ok(bsd(&run(command, cancel)?))
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        /// Keeps a console window from flashing up behind Horizon.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        // Winsock needs `SystemRoot`, the only variable the cleared environment keeps.
-        let root = std::env::var_os("SystemRoot")
-            .filter(|root| std::path::Path::new(root).is_absolute())
-            .unwrap_or_else(|| r"C:\Windows".into());
-        let mut command = std::process::Command::new(std::path::Path::new(&root).join(r"System32\ARP.EXE"));
-        command
-            .arg("-a")
-            .env_clear()
-            .env("SystemRoot", &root)
-            .creation_flags(CREATE_NO_WINDOW);
-        Ok(windows(&run(command, cancel)?))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(io::Error::other("this system has no neighbor table Horizon can read"))
     }
@@ -52,7 +35,7 @@ pub(super) fn read(cancel: &Cancellation) -> io::Result<Vec<Ipv4Addr>> {
 /// Runs the system's `arp`, stopping and reaping it at [`TIMEOUT`] or as soon as the bridge
 /// stops. Output past [`MAX_OUTPUT`] is read and discarded, so a long table still lets `arp`
 /// finish, and only its start is parsed.
-#[cfg(any(test, target_os = "macos", windows))]
+#[cfg(any(test, target_os = "macos"))]
 pub(super) fn run(mut command: std::process::Command, cancel: &Cancellation) -> io::Result<String> {
     use std::{io::Read, process::Stdio, time::Instant};
     let mut child = command
@@ -106,7 +89,7 @@ pub(super) fn run(mut command: std::process::Command, cancel: &Cancellation) -> 
 }
 
 /// A hardware address that stands for a real, resolved device.
-#[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn resolved(hardware: &str) -> bool {
     let digits: Vec<_> = hardware.split([':', '-']).collect();
     digits.len() == 6
@@ -149,17 +132,3 @@ pub(super) fn bsd(table: &str) -> Vec<Ipv4Addr> {
         .collect()
 }
 
-/// Windows `arp -a`: an address, a hardware address and a type per line. The headers and
-/// the type are translated, so lines are recognised by their shape alone.
-#[cfg(any(test, windows))]
-pub(super) fn windows(table: &str) -> Vec<Ipv4Addr> {
-    table
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let address = fields.next()?.parse().ok()?;
-            let hardware = fields.next()?;
-            (fields.next().is_some() && resolved(hardware)).then_some(address)
-        })
-        .collect()
-}

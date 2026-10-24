@@ -48,7 +48,7 @@ fn home_dir() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         return PathBuf::from(home);
     }
-    // Windows has no HOME; use the standard profile directory.
+    // Without HOME, use the standard profile directory.
     if let Ok(profile) = std::env::var("USERPROFILE") {
         return PathBuf::from(profile);
     }
@@ -320,20 +320,6 @@ mod tests {
         assert_eq!(resolve_query_path("~alice/repo"), None);
         assert_eq!(resolve_query_path("repo"), None);
         assert_eq!(resolve_query_path(""), None);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_query_paths_resolve_like_completion() {
-        assert_eq!(resolve_query_path(r"C:\src\repo\"), Some(PathBuf::from(r"C:\src\repo")));
-        assert_eq!(
-            resolve_query_path(r"~\src\repo"),
-            Some(home_dir().join("src").join("repo"))
-        );
-        assert_eq!(
-            resolve_query_path(r"src\repo"),
-            Some(home_dir().join("src").join("repo"))
-        );
     }
 
     #[test]

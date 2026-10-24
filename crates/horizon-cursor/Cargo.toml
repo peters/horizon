@@ -18,9 +18,6 @@ x11rb = { version = "0.14", default-features = false }
 atspi.workspace = true
 tokio.workspace = true
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 axuielement.workspace = true
 core-graphics = "0.25"

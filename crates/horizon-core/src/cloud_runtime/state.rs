@@ -430,20 +430,6 @@ mod tests {
         }
     }
     #[test]
-    #[cfg(not(unix))]
-    fn unsupported_cloud_control_does_not_create_or_modify_state() {
-        let root = tempfile::tempdir().unwrap();
-        let absent = root.path().join("new-state");
-        assert!(Store::lock(&absent).is_err());
-        assert!(!absent.exists());
-        let existing = root.path().join("deployment.json");
-        std::fs::write(&existing, b"preserve existing record").unwrap();
-        assert!(Store::lock(root.path()).is_err());
-        assert_eq!(std::fs::read(existing).unwrap(), b"preserve existing record");
-        assert!(!root.path().join("operation.lock").exists());
-    }
-
-    #[test]
     fn persisted_cloud_ids_cannot_escape_the_state_root() {
         let temp = tempfile::tempdir().unwrap();
         for id in ["", "..", "../outside", "/outside", "C:\\outside", "a/b", "a\\b"] {

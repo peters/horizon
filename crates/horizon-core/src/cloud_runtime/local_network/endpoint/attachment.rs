@@ -166,22 +166,3 @@ impl Answers for NoDiscovery {
 #[cfg(all(test, target_os = "linux"))]
 pub(super) mod tests;
 
-#[cfg(all(test, not(unix)))]
-mod unsupported_tests {
-    use super::*;
-
-    #[test]
-    fn non_unix_engine_remains_available_but_ssh_attachment_is_unsupported() {
-        let gateway = Gateway::start(super::super::tests::prepared("127.0.0.1:8123".parse().unwrap())).unwrap();
-        assert_eq!(gateway.status().state, State::Active);
-        let connection = Connection {
-            host: "192.0.2.1".into(),
-            port: 22,
-            identity: "/unused/key".into(),
-            known_hosts: "/unused/hosts".into(),
-            host_key_alias: "unused-worker".into(),
-            proxy_command: None,
-        };
-        assert!(matches!(gateway.attach(connection), Err(Error::UnsupportedSource)));
-    }
-}

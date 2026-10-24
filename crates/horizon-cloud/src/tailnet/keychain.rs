@@ -49,13 +49,7 @@ fn open() -> Result<Arc<CredentialStore>> {
         .map(|store| store as Arc<CredentialStore>)
         .map_err(|_| Error::Keychain)
 }
-#[cfg(windows)]
-fn open() -> Result<Arc<CredentialStore>> {
-    windows_native_keyring_store::Store::new()
-        .map(|store| store as Arc<CredentialStore>)
-        .map_err(|_| Error::Keychain)
-}
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn open() -> Result<Arc<CredentialStore>> {
     Err(Error::Keychain)
 }

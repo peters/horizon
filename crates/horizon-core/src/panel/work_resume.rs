@@ -280,11 +280,6 @@ fn process_may_be_alive(pid: u32) -> bool {
         .is_none_or(|pid| rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH))
 }
 
-#[cfg(not(unix))]
-fn process_may_be_alive(_pid: u32) -> bool {
-    true
-}
-
 fn saved_claude_history(session_id: &str) -> Option<()> {
     use std::io::{BufRead, BufReader, Read};
 

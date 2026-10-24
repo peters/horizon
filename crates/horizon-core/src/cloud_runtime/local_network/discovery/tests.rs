@@ -222,14 +222,6 @@ raspberrypi.lan (192.168.1.60) at dc:a6:32:1:2:3 on en0 ifscope [ethernet]
 ? (192.168.1.255) at ff:ff:ff:ff:ff:ff on en0 ifscope [ethernet]
 ";
     assert_eq!(neighbors::bsd(bsd), [v4("192.168.1.1"), v4("192.168.1.60")]);
-    let windows = "
-Schnittstelle: 192.168.1.20 --- 0x7
-  Internetadresse       Physische Adresse     Typ
-  192.168.1.1           a4-91-b1-00-11-22     dynamisch
-  192.168.1.255         ff-ff-ff-ff-ff-ff     statisch
-  224.0.0.251           01-00-5e-00-00-fb     statisch
-";
-    assert_eq!(neighbors::windows(windows), [v4("192.168.1.1"), v4("224.0.0.251")]);
 }
 
 fn service(kind: &str, port: Option<u16>) -> Service {
@@ -452,7 +444,7 @@ fn an_ssdp_search_repeats_once_and_ends_with_its_window() {
     )));
 }
 
-/// `arp` on macOS and Windows runs through the same bounded runner.
+/// `arp` on macOS runs through the bounded runner.
 #[cfg(unix)]
 #[test]
 fn the_neighbor_command_reports_failures_and_bounds_its_output_and_time() {
@@ -703,11 +695,7 @@ fn the_real_connect_tells_open_from_refused_and_stops_with_the_bridge() {
     let refused = probe::connect(closed, Duration::from_secs(5), &idle)
         .unwrap_err()
         .kind();
-    // Windows retries a refused loopback connection for about two seconds before it reports.
-    assert!(
-        refused == io::ErrorKind::ConnectionRefused || (cfg!(windows) && refused == io::ErrorKind::TimedOut),
-        "{refused:?}"
-    );
+    assert_eq!(refused, io::ErrorKind::ConnectionRefused);
     // A documentation address never answers; switching the bridge off ends the attempt.
     let cancel = Cancellation::default();
     let stopper = {

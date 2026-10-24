@@ -39,10 +39,6 @@ pub(crate) fn read(root: &File, relative: &Path) -> Result<String> {
     }
     String::from_utf8(bytes).map_err(|_| Error::Unavailable)
 }
-#[cfg(not(unix))]
-pub(crate) fn read(_root: &File, _relative: &Path) -> Result<String> {
-    Err(Error::Unavailable)
-}
 
 #[cfg(all(test, unix))]
 mod tests {

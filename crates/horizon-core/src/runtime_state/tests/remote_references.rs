@@ -29,32 +29,15 @@ fn snapshot(owner: &str) -> RuntimeState {
 }
 
 fn marker_command(path: &Path) -> (String, Vec<String>) {
-    if cfg!(windows) {
-        (
-            "cmd.exe".into(),
-            // Terminal spawns escape arguments the MSVCRT way, which cmd.exe
-            // does not parse, so the redirect target is a separate argument
-            // rather than an embedded quoted string.
-            vec![
-                "/D".into(),
-                "/C".into(),
-                "echo".into(),
-                "unexpected".into(),
-                ">".into(),
-                path.display().to_string(),
-            ],
-        )
-    } else {
-        (
-            "/bin/sh".into(),
-            vec![
-                "-c".into(),
-                ": > \"$1\"".into(),
-                "marker".into(),
-                path.display().to_string(),
-            ],
-        )
-    }
+    (
+        "/bin/sh".into(),
+        vec![
+            "-c".into(),
+            ": > \"$1\"".into(),
+            "marker".into(),
+            path.display().to_string(),
+        ],
+    )
 }
 
 #[test]

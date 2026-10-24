@@ -322,7 +322,7 @@ fn only_a_callback_with_the_expected_state_yields_its_code() {
 }
 
 /// Reads one whole request, its head and its body, so closing the connection never
-/// resets it (Windows sends the body in a separate segment).
+/// resets it.
 /// Reads one request and returns it, head and body.
 pub(in crate::cloud_runtime::github) fn read_request(stream: &mut TcpStream) -> String {
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();

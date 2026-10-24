@@ -101,8 +101,7 @@ pub fn spawn_checkouts() -> Option<mpsc::Receiver<Vec<Checkout>>> {
     Some(receiver)
 }
 
-/// The person's home folder, from `HOME` or, on Windows, `USERPROFILE`; `None` without
-/// either.
+/// The person's home folder, from `HOME` or `USERPROFILE`; `None` without either.
 fn own_home() -> Option<PathBuf> {
     ["HOME", "USERPROFILE"]
         .into_iter()

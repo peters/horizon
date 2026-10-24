@@ -133,11 +133,6 @@ fn trusted(path: &Path, kind: PathKind) -> bool {
     })
 }
 
-#[cfg(not(unix))]
-fn trusted(_: &Path, _: PathKind) -> bool {
-    false
-}
-
 #[derive(serde::Deserialize)]
 struct Status {
     #[serde(rename = "BackendState")]
