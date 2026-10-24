@@ -1,8 +1,8 @@
 ---
 procedure: azure-provisioning
-feature: The Azure worker bootstrap, its ARM deployment and the creation of an Azure worker
+feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
 platforms: [linux]
-cost: rents compute   # task AZV-L1 only; tasks AZV-01 to AZV-11 cost nothing
+cost: rents compute   # task AZV-L1 only; tasks AZV-01 to AZV-13 cost nothing
 destructive: yes      # task AZV-L1 cleanup deletes the test resource group
 secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
@@ -17,18 +17,19 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
+- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-11 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-01 to AZV-13 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
 - Task AZV-L1 is the live acceptance. It creates one real VM in an Azure subscription and needs the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
-  - The stop, resume, delete and rebuild of an Azure cloud. They stay refused.
+  - The stop, resume and delete of an Azure cloud through its card. They stay refused.
+  - The rebuild of an Azure cloud. It stays refused.
   - Azure in the New cloud dialog. `offers::AZURE_DEPLOYABLE` stays `false`.
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-11 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-13 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
@@ -40,7 +41,7 @@ Tasks AZV-01 to AZV-11 do not rent compute, delete data, send a secret or change
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-11: no Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-13: no Azure account, Azure credential or provider key.
 - For task AZV-L1: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
@@ -232,7 +233,43 @@ Do the tasks in order. Each task has a stable ID for the report.
    - A workspace disk of 3 GB writes no `azure.json`. A spec for another cloud is refused.
    - A private image of a registry binding needs a verified grant before allocation.
 
-### 6.12 AZV-L1 — Create one live Azure worker
+### 6.12 AZV-12 — Check the stop and the start of the VM
+
+1. Run the power tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::lifecycle::a_stop azure::tests::lifecycle::a_powered_off azure::tests::lifecycle::a_deallocation azure::tests::lifecycle::a_start azure::tests::lifecycle::a_power_change azure::tests::lifecycle::a_failed_start
+   ```
+
+   Result: 6 tests pass. These tests examine the items that follow:
+   - A stop sends one `POST .../worker/deallocate`, after the reads of the VM and its address. It follows the operation and then reads the VM until it is `PowerState/deallocated`. No request has `powerOff`.
+   - The stopped worker has the same `vmId` and the status `Stopped`. A second stop sends GET requests only and is not announced.
+   - A VM that is powered off but still allocated (`PowerState/stopped`) has the status `STOPPED_ALLOCATED`. It is not a stopped worker, and a stop deallocates it.
+   - A deallocation that is under way is announced and awaited. No request is sent again.
+   - A start sends one `POST .../worker/start` and ends with the same `vmId` running at the same address.
+   - An absent VM, another instance and a VM without the operation's tag are refused before an announcement or a request.
+   - A start that ARM reports as failed is a refusal with ARM's reason.
+
+### 6.13 AZV-13 — Check the delete and its absence proof
+
+1. Run the delete tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::lifecycle::a_delete azure::tests::lifecycle::a_lost_delete azure::tests::lifecycle::a_group_that azure::tests::lifecycle::a_tagged_resource azure::tests::lifecycle::a_group_whose azure::tests::lifecycle::a_cloud_that azure::tests::lifecycle::only_a_complete azure::tests::lifecycle::a_cloud_being
+   ```
+
+   Result: 8 tests pass. These tests examine the items that follow:
+   - The journal records `deleting` before the `DELETE` of the group, the group `terminated` after the 404, and `swept` after an empty tag sweep. The VM fence goes to `terminated` last. There is one `DELETE` request.
+   - A delete of a proven cloud sends nothing.
+   - After a lost `DELETE` answer (503), the retry reads the group, finds it `Deleting` and sends no second `DELETE`.
+   - A group without the operation's tag is not deleted.
+   - A tagged resource that stays after the 404 keeps the cloud retained and not proven. The error does not show the resource id. A page link is not a proof.
+   - A group whose create answer was lost is trusted as absent only after 30 seconds and a second 404.
+   - A failed sweep of a group that was never requested retains nothing.
+   - Only a journal with `deleting`, `swept` and the group id of this operation proves absence.
+   - `provision` refuses a cloud that is being deleted, before a request.
+
+### 6.14 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -360,12 +397,12 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-11 pass and send no request to Azure.
+- Tasks AZV-01 to AZV-13 pass and send no request to Azure.
 - For the live acceptance, each step of task AZV-L1 gives its result, and the cleanup proves each group absent.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-11 make temporary data only. After task AZV-L1, do these steps:
+Tasks AZV-01 to AZV-13 make temporary data only. After task AZV-L1, do these steps:
 
 1. Examine the tag of each test group. Then delete the group.
 
