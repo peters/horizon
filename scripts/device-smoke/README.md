@@ -48,7 +48,12 @@ clients that reach the fixture driver port.
 The harness atomically allocates an
 unused 1600×1000 Xvfb display, disables MIT-SHM and starts its own window manager.
 It launches an ephemeral Horizon with a heartbeat terminal and a plain Bash input
-terminal. A filesystem namespace masks the developer's home with private state
+terminal. Pass `--saved-session` to keep the session of the fixture in its private
+home instead, which starting a cloud needs: a cloud card belongs to a saved
+session, so a lane that rents a worker reports
+`Open a saved session from Sessions before starting a cloud` without the flag.
+The flag changes no file outside the fixture. A filesystem namespace masks the
+developer's home with private state
 for this child; it does not change the real HOME value or existing sessions.
 The harness removes `HORIZON_HOME` from the child environment, so the fixture
 keeps its state in `.horizon` of the masked home.

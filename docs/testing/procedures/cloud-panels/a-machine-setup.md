@@ -260,12 +260,13 @@ Do this task after B02. It needs the synthetic repository.
 
    ```sh
    python3 <run>/launcher/serve.py --horizon <run>/bin/horizon \
-     --native-view --state <run>/fixture-repair [--tools <tools-root>]
+     --native-view --saved-session --state <run>/fixture-repair [--tools <tools-root>]
    ```
 
    Use `--tools <tools-root>` only if S02 step 9 used it.
 
-   Result: A second candidate starts with no cloud settings.
+   Result: A second candidate starts with no cloud settings and a saved session.
+   Step 4 needs the saved session.
 
 2. Open a Device panel for the `vnc_address` of the second fixture.
 

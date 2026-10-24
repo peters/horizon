@@ -119,9 +119,11 @@ child is the frozen candidate.
 
    Result: The launcher copy is in a task-owned directory.
 
-2. In the launcher copy, remove `--ephemeral` from the start command of Horizon.
+2. Pass `--saved-session` to every start of the launcher copy.
 
-   Result: The candidate keeps its saved session. A cloud needs a saved session.
+   Result: The launcher copy starts the candidate with `--new-session`, which keeps
+   a saved session in the private home of the fixture. A cloud needs a saved
+   session. The copy needs no edit for this option. Step 9 gives the start command.
 
 3. In the launcher copy, use a configuration file below the private data of the fixture.
 
@@ -155,7 +157,9 @@ child is the frozen candidate.
    ```
 
    Result: If the file `<state>/restart-request` exists, the launcher deletes it
-   and starts the candidate again. Xvfb, D-Bus, VNC and the private data continue.
+   and starts the candidate again. The new line has no session option, so the
+   candidate resumes the saved session of the fixture. Xvfb, D-Bus, VNC and the
+   private data continue.
    The [persistent launcher notes](../../cloud-workspaces-mvp-smoke.md#persistent-cloud-launcher-for-restart-scenarios)
    give the reasons for this branch.
 
@@ -184,11 +188,12 @@ child is the frozen candidate.
 
    ```sh
    python3 <run>/launcher/serve.py --horizon <run>/bin/horizon \
-     --native-view --state <run>/fixture [--tools <tools-root>]
+     --native-view --saved-session --state <run>/fixture [--tools <tools-root>]
    ```
 
-   Result: The output shows a `vnc_address`. The fixture writes `lab.json` and
-   `target.json` in `<state>`. If the start fails, use a new state directory for the next start.
+   Result: The output shows a `vnc_address`. `<state>/lab.json` shows `"session":
+   "saved"`. The fixture writes `lab.json` and `target.json` in `<state>`. If the
+   start fails, use a new state directory for the next start.
 
 ### 6.3 S03 — Show the fixture in a Device panel
 
@@ -330,7 +335,7 @@ keeps the launcher and its state directory, so it needs no new keyring.
 ## 7. Pass criteria
 
 - `SHA256SUMS` records the four frozen executables.
-- The candidate runs without `--ephemeral` and with a private home.
+- The candidate runs with `--saved-session` and with a private home.
 - Three inspections show a connected Device panel with a `frame_sequence`
   that increases.
 - The SHA-256 of `/proc/<child-pid>/exe` is the same as the frozen SHA-256.
