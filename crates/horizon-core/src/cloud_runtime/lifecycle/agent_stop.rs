@@ -1,5 +1,5 @@
 //! An agent's stop of a cloud whose worker holds no credential that can stop it
-//! (Hetzner, a Docker host). The worker records a checked request
+//! (Hetzner, Azure, a Docker host). The worker records a checked request
 //! (`horizon-worker-stopd`, started with `HORIZON_WORKER_STOP=horizon`); Horizon takes it
 //! over SSH ([`read_stop_request`]) and stops the cloud as Stop does
 //! ([`stop_for_agent`]), keeping the workspace volume. Only a running Horizon can do this.
@@ -88,11 +88,13 @@ fn parse(output: &str, worker: &Worker) -> Result<Requested> {
 }
 
 /// Whether Horizon takes stop requests from the cloud `state` describes: a ready
-/// Hetzner or Docker host cloud on a bound worker, with no stop or image replacement
-/// under way. Its worker, if so.
+/// Hetzner, Azure or Docker host cloud on a bound worker, with no stop or image
+/// replacement under way. Its worker, if so.
 fn watched(state: &Deployment) -> Option<(&str, &Worker)> {
-    let provider = state.profile.provider.as_str();
-    if provider != horizon_cloud::hetzner::PROVIDER && provider != horizon_cloud::docker_host::PROVIDER {
+    if !matches!(
+        state.profile.provider.as_str(),
+        horizon_cloud::hetzner::PROVIDER | horizon_cloud::azure::PROVIDER | horizon_cloud::docker_host::PROVIDER
+    ) {
         return None;
     }
     let CreateState::Bound { worker_id } = &state.operation else {
