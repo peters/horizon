@@ -378,6 +378,7 @@ fn a_deleted_stage_with_unsettled_owned_journals_retains_exact_ids_before_http()
         "workspace-volume.json",
         "docker-host.json",
         "hetzner.json",
+        "azure.json",
     ] {
         let (_directory, store, mut state) = fixture();
         let before = state.tailnet_enrollment.clone();
@@ -446,7 +447,7 @@ fn one_saved_tailnet_confirmation_does_not_claim_the_same_device_in_another_save
 
 #[test]
 fn default_provider_receipts_use_the_same_automatic_cleanup_after_durable_absence() {
-    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost] {
+    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
         let (_directory, store, mut state) = fixture();
         state.profile.provider = provider_id(provider);
         state.spec.as_mut().unwrap().profile = state.profile.clone();
@@ -467,7 +468,16 @@ fn default_provider_receipts_use_the_same_automatic_cleanup_after_durable_absenc
                 std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
             }
             Kind::DockerHost => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
-            Kind::Azure => unreachable!("an Azure deletion is never confirmed"),
+            Kind::Azure => {
+                let group = format!(
+                    "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-{}",
+                    state.cloud_id
+                );
+                let journal = serde_json::json!({
+                    "group": {"state": "terminated", "worker_id": group}, "deleting": true, "swept": true
+                });
+                std::fs::write(store.root().join("azure.json"), journal.to_string()).unwrap();
+            }
         }
         store.save(&state).unwrap();
         let mut calls = 0;

@@ -16,8 +16,11 @@ fixed name and the same tag.
 | VM | `worker` | Ubuntu 24.04. No managed identity, no password login. |
 | OS disk | `worker-os` | Premium SSD, deleted with the VM. A tags resource tags it. |
 
-`offers::AZURE_DEPLOYABLE` stays `false`, so no Horizon UI, CLI or MCP operation
-creates an Azure worker in this change.
+`offers::AZURE_DEPLOYABLE` stays `false`, so `repository::launch` drops each
+Azure profile, and New cloud, `cloud_deploy deploy`, the quick start and
+companions do not create an Azure worker in this change. `providers::preflight`
+admits an Azure cloud that the settings can make, so a reconnect of an existing
+Azure cloud runs.
 
 ## Machine settings
 
@@ -59,8 +62,9 @@ the machine has an `azure` section. It provisions through
 
 These items do not change:
 
-- `providers::preflight` refuses a new Azure cloud before a record is written.
-  `cloud_deploy deploy`, the UI and MCP thus cannot reach the seam.
+- `providers::preflight` checks an Azure cloud before a record is written: a
+  workspace disk from 4 to 32,767 GB, a cloud id that can name its group, a
+  readable token and a VM size of the settings that fits the profile.
 - Release refuses: an Azure profile cannot have hosted devices. Rebuild is
   `Rebuild::Unsupported`: `settle` refuses a requested image replacement.
 - Only a direct caller of `deployment::azure::provision`, such as the loopback
@@ -161,6 +165,27 @@ and delete, with the VM fence in `deployment.json` and the group in `azure.json`
   for readiness. A cloud that is being deleted is not resumed.
 - Delete (`deletion::delete_azure`) runs the delete above with an uncancellable
   token once it starts. The caller then records the cloud as deleted.
+
+### The deletion proof for the card
+
+A card is removed only when local records prove that nothing of the cloud can
+still bill. For an Azure cloud, `azure.json` is that record:
+
+- `providers::retained` is `Journal::retains`.
+- `providers::deletion::confirmed` decodes `azure.json` (at most 1 MiB, no unknown
+  field) and requires `Journal::proves_absent` for the cloud id, with the
+  common rules: the stage `Deleted`, a VM fence `Prepared` or `Terminated`.
+- Both journal lists, in `providers::deletion` and in
+  `lifecycle::can_remove_without_deployment`, have `azure.json`. Another
+  provider's journal beside it refuses the proof, and `azure.json` refuses the
+  proof of another provider.
+- A reconnect admits a bound Azure record, as `RunPod`'s, and refuses a cloud
+  whose journal has `deleting`, as Hetzner's.
+- `redeploy::reopen` refuses a `Deleted` Azure record before it saves
+  anything, and a reconnect of that record gets the same refusal. The proven
+  `azure.json` keeps `deleting` for good, so a provision under that record
+  could never start. The person removes the card and creates a new cloud,
+  which gets a new cloud id and a new `azure.json`.
 
 ## Host bootstrap
 

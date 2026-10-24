@@ -41,7 +41,7 @@ fn managed_record(spec: &WorkerSpec) -> serde_json::Value {
 
 #[test]
 fn each_default_provider_uses_settled_durable_journals_without_credentials() {
-    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost] {
+    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
         let (_temp, store, state) = fixture(provider);
         match provider {
             Kind::RunPod => {
@@ -64,7 +64,11 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
                 std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
             }
             Kind::DockerHost => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
-            Kind::Azure => unreachable!("an Azure deletion is never confirmed"),
+            Kind::Azure => std::fs::write(
+                store.root().join("azure.json"),
+                serde_json::to_vec(&azure_proof("cloud")).unwrap(),
+            )
+            .unwrap(),
         }
         assert!(confirmed(&store, &state).unwrap());
     }
@@ -135,13 +139,57 @@ fn unsettle_or_masked_fields_cannot_replace_a_confirmed_provider_journal() {
     }
 }
 
+/// The journal an Azure delete saves once the group of `cloud` is proven absent.
+fn azure_proof(cloud: &str) -> serde_json::Value {
+    json!({
+        "region": "northeurope",
+        "group": {"state": "terminated",
+            "worker_id": format!("/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-{cloud}")},
+        "deleting": true, "swept": true
+    })
+}
+
 #[test]
-fn an_azure_deletion_is_never_confirmed_from_local_records() {
+fn an_azure_deletion_is_confirmed_only_by_its_own_complete_proof() {
     let (_temp, store, state) = fixture(Kind::Azure);
     // Without journals, as a provider that needs none would be confirmed.
     assert!(!confirmed(&store, &state).unwrap());
-    // A settled journal of another provider does not stand in for one.
+    let write = |journal: &serde_json::Value| {
+        std::fs::write(store.root().join("azure.json"), serde_json::to_vec(journal).unwrap()).unwrap();
+    };
+    write(&azure_proof("cloud"));
+    assert!(confirmed(&store, &state).unwrap());
+    // A settled journal of another provider beside it refuses the proof.
+    for other in ["docker-host.json", "hetzner.json", "workspace-volume.json"] {
+        std::fs::write(store.root().join(other), "{}").unwrap();
+        assert!(!confirmed(&store, &state).unwrap(), "{other}");
+        std::fs::remove_file(store.root().join(other)).unwrap();
+    }
+    let mut unswept = azure_proof("cloud");
+    unswept["swept"] = json!(false);
+    let mut bound = azure_proof("cloud");
+    bound["group"]["state"] = json!("bound");
+    let mut unknown = azure_proof("cloud");
+    unknown["unknown_resource"] = json!("pending");
+    for journal in [azure_proof("other-cloud"), unswept, bound, unknown] {
+        write(&journal);
+        assert!(!confirmed(&store, &state).unwrap_or(false), "{journal}");
+    }
+    // A bound VM fence is not a deletion, whatever the journal says.
+    write(&azure_proof("cloud"));
+    let mut running = state.clone();
+    running.operation = CreateState::Bound {
+        worker_id: "worker".into(),
+    };
+    assert!(!confirmed(&store, &running).unwrap());
+    // An Azure journal does not stand in for another provider's.
+    let (_temp, store, state) = fixture(Kind::DockerHost);
     std::fs::write(store.root().join("docker-host.json"), "{}").unwrap();
+    std::fs::write(
+        store.root().join("azure.json"),
+        serde_json::to_vec(&azure_proof("cloud")).unwrap(),
+    )
+    .unwrap();
     assert!(!confirmed(&store, &state).unwrap());
 }
 
@@ -151,6 +199,7 @@ fn oversized_provider_journals_cannot_confirm_deletion() {
         (Kind::RunPod, "workspace-volume.json"),
         (Kind::Hetzner, "hetzner.json"),
         (Kind::DockerHost, "docker-host.json"),
+        (Kind::Azure, "azure.json"),
     ] {
         let (_temp, store, state) = fixture(provider);
         std::fs::write(store.root().join(path), vec![b' '; 1024 * 1024 + 1]).unwrap();
