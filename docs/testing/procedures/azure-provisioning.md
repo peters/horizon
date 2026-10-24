@@ -1,10 +1,10 @@
 ---
 procedure: azure-provisioning
-feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
+feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, its stop, start and delete, and its rebuild on a new VM
 platforms: [linux]
-cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-19 cost nothing
-destructive: yes      # task AZV-L2 and the cleanup delete the test resource groups
-secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
+cost: rents compute   # tasks AZV-L1, AZV-L2 and AZV-L3 only; tasks AZV-01 to AZV-20 cost nothing
+destructive: yes      # tasks AZV-L2 and AZV-L3 and the cleanup delete the test resource groups
+secrets: [Azure ARM bearer token file, SSH identity of the cloud settings, registry push credential for task AZV-L3]
 owner: peters
 ---
 
@@ -19,16 +19,15 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 - Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, `horizon_cloud::azure::release`, the `azure` cloud settings, the Azure provider arms, the rebuild dispatch in `horizon_core::cloud_runtime::deployment::replacement` or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-19 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
-- Tasks AZV-L1 and AZV-L2 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. Both need the Azure CLI.
+- Tasks AZV-01 to AZV-20 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-L1, AZV-L2 and AZV-L3 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. AZV-L3 creates a cloud from a test repository, rebuilds it on a new VM, cancels and continues rebuilds, and deletes it. They need the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
-  - The rebuild of an Azure cloud. It stays refused.
   - Azure in the New cloud dialog, past its checks. The [Azure New cloud procedure](azure-new-cloud.md) tests the Azure rows, their prices and the start of a cloud. AZV-17 examines the check rows.
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-19 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-20 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
@@ -36,12 +35,15 @@ Tasks AZV-01 to AZV-19 do not rent compute, delete data, send a secret or change
 
 > **CAUTION:** TASK AZV-L2 AND THE CLEANUP DELETE THE RESOURCE GROUP `horizon-ws-<cloud id>` AND ALL DATA ON ITS DISKS. Examine the group name and its `horizon-operation` tag before you delete it.
 
+> **CAUTION:** TASK AZV-L3 RENTS AN AZURE VM, DELETES IT AND RENTS A NEW ONE FOR EACH REBUILD. IT PUSHES IMAGES TO THE TEST REGISTRY. At the end it deletes the resource group `horizon-ws-azv-l3-01` and all data on its disks.
+
 ## 4. Equipment and preconditions
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-19: no Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-20: no Azure account, Azure credential or provider key.
 - For tasks AZV-L1 and AZV-L2: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
+- For task AZV-L3, also: Docker, a test repository `<repo>` and a registry that the VM can pull from. `<repo>` has a committed `.horizon/cloud.yml` with the profile `azure-build`: `provider: azure`, `cpu: 4`, `memory_gb: 16`, `storage: {container_gb: 30, volume_gb: 64}`, an `image` in the test registry and a `build` section whose `Dockerfile` starts `FROM` a worker image. The `docker_config` of the settings holds the push credential of that registry. If the registry is private, the settings have `azure.registry_pull`.
 
 ## 5. Setup
 
@@ -375,7 +377,27 @@ Do the tasks in order. Each task has a stable ID for the report.
    - A reconnect of an Azure record without a bound VM is refused. With `held` in `azure-release.json`, it is admitted. With `deleting` in `azure.json`, it is refused.
    - Before the release, the rebuild checks the pull login of the next VM from the `azure` settings. It does not need a `hetzner` section. A login for another registry than the image's is refused.
 
-### 6.20 AZV-L1 — Create one live Azure worker
+### 6.20 AZV-20 — Check that Azure rebuilds on a new VM
+
+1. Run the provider, flow and card tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- provider::tests::an_azure
+   cargo test -p horizon-core --lib -- cloud_runtime::deployment::replacement::tests::new_server
+   cargo test -p horizon-ui --bin horizon -- cloud_panel::production::cards::rebuild
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - `AZURE.rebuild` is `NewServer` and `AZURE.stopped` is `WorkerKept`. No other provider has this pair. Hetzner has `ServerDeleted` and `NewServer`.
+   - RunPod rebuilds in place, Hetzner and Azure each have their own release, and a Docker host is refused with "A cloud on this provider keeps the image it was created with; Rebuild is not available".
+   - A Docker host is refused before Horizon reads the recipe, and its `deployment.json` does not change. An Azure cloud passes the provider check. Without a recipe it is refused with the recipe refusal, and when it is not ready with the readiness refusal.
+   - An Azure rebuild releases the VM, then commits the new image with the fence `Prepared`, the stage `Readiness` and a session restart. The image is built once.
+   - A rebuild that stops after the build, after the request or after the release continues to the new image without a second build.
+   - A cancel before the release keeps the VM, the image and the stage. A cancel after the release began starts a new VM on the previous image.
+   - While an Azure release is requested, `settle` and Check refuse with "replacement pending", so a reconnect cannot place a VM around it.
+   - On the card of a ready Azure cloud with a recipe, **Rebuild image & restart…** shows. The confirmation says: "The VM is deleted and a new one starts on the same workspace disk, with the same address." It does not say "with a new address". While the rebuild is requested, the card offers Continue and Cancel as for Hetzner.
+
+### 6.21 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -499,7 +521,7 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
 13. Keep the worker of `azv-l1-01` and the state in `$AZV`. Task AZV-L2 stops, resumes and deletes them.
 
-### 6.21 AZV-L2 — Stop, resume and delete the live worker
+### 6.22 AZV-L2 — Stop, resume and delete the live worker
 
 Do this task after task AZV-L1, in the same terminal, with `$AZV` and `$SUB` set. Set the variables of the live tests.
 
@@ -627,14 +649,191 @@ export RG=horizon-ws-azv-l1-01
 
     Result: The quantity of the VM compute meter (`D4s v3`) is less than the hours from step 1 to step 8, by at least the time of step 5. The disk meters and the `Standard IPv4 Static Public IP` meter continue through step 5. No meter of the group has use after step 8. If the command is not available, use Cost analysis in the Azure portal with the scope of the subscription, the daily granularity and the resource group as a filter.
 
+### 6.23 AZV-L3 — Rebuild a live cloud on a new VM
+
+Do this task on the computer that has the Azure subscription. Do steps 1 and 2 of task AZV-L1 first, in the same terminal, so that `$AZV`, `$SUB` and `$AZV/settings.json` exist. Set `docker_config` in the settings to the Docker configuration that holds the push credential of the test registry. Then set the variables of this task.
+
+```sh
+export RB="$AZV/rb" RG=horizon-ws-azv-l3-01 REPO=<repo>
+mkdir -p "$RB"
+cdx() { cargo run -q -p horizon-core --example cloud_deploy -- "$@"; }
+vm() { az vm show -d -g "$RG" -n worker --query "{vmId:vmId,ip:publicIps,power:powerState}" -o json; }
+disk() { az disk show -g "$RG" -n worker-workspace --query "{uniqueId:uniqueId,managedBy:managedBy,state:diskState}" -o json; }
+image() { jq -r .spec.image_digest "$RB/deployment.json"; }
+```
+
+1. Create the cloud from the test repository.
+
+   > **CAUTION:** THIS STEP RENTS AN AZURE VM, TWO DISKS AND A STATIC ADDRESS, AND PUSHES AN IMAGE.
+
+   ```sh
+   cdx plan-deploy "$AZV/settings.json" "$REPO" azure-build "$RB" azv-l3-01
+   cdx deploy "$AZV/settings.json" "$REPO" azure-build "$RB" azv-l3-01 --plan-token <token>
+   ```
+
+   Result: `plan-deploy` prints a token. `deploy` ends without an error. Its last stage line is `Stage: Ready`, and it prints `Ready: worker=<vmId>`.
+
+2. Record the VM, the workspace disk and the image.
+
+   ```sh
+   vm; disk; image
+   ```
+
+   Result: `power` is `VM running`. `managedBy` ends with `/virtualMachines/worker`. Record `vmId`, `ip`, `uniqueId` and the image digest as the values of step 2.
+
+3. Write a marker on the workspace and record the host key of the worker.
+
+   ```sh
+   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$AZV/known_hosts" \
+     -i "$HOME/.ssh/id_ed25519" root@<ip> \
+     'head -c 32 /dev/urandom > /workspace/rebuild-marker; sha256sum /workspace/rebuild-marker'
+   ssh-keygen -F <ip> -f "$AZV/known_hosts"
+   ```
+
+   Result: The command prints one SHA-256. Record it. `ssh-keygen` prints the host key line.
+
+4. Change the image recipe and commit the change.
+
+   ```sh
+   echo 'RUN echo azv-l3-1 > /etc/azv-l3' >> "$REPO/<path of the Dockerfile>"
+   git -C "$REPO" commit -qam "test: azv-l3 rebuild 1"
+   ```
+
+   Result: `git -C "$REPO" log -1 --oneline` shows the commit.
+
+5. Rebuild the cloud.
+
+   > **CAUTION:** THIS STEP DELETES THE VM AND RENTS A NEW ONE. The processes in the container end.
+
+   ```sh
+   cdx plan-rebuild "$AZV/settings.json" "$RB" azure-build
+   cdx rebuild "$AZV/settings.json" "$RB" azure-build <token>
+   ```
+
+   Result: `plan-rebuild` prints a token. `rebuild` ends without an error. In this order, it prints `Stage: Replace image`, `Progress: Releasing the server; the workspace volume stays`, `Stage: Check readiness` and `Stage: Ready`.
+
+6. Make sure that the old VM is gone, that one new VM runs, and that it holds the same disk.
+
+   ```sh
+   vm; disk; image
+   az vm list -g "$RG" --query "length(@)"
+   az disk list -g "$RG" --query "[].name" -o tsv | sort
+   jq . "$RB/azure-release.json"
+   ```
+
+   Result:
+   - `vmId` is not the value of step 2. `ip` is the value of step 2. `power` is `VM running`.
+   - `uniqueId` is the value of step 2, so the workspace disk is the same disk. `managedBy` ends with `/virtualMachines/worker`.
+   - The image digest is not the value of step 2.
+   - The VM count is `1`. The disks are `worker-os` and `worker-workspace`.
+   - `azure-release.json` is `{"held": true}`.
+
+7. Make sure that `/workspace` and the host key stayed.
+
+   ```sh
+   ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$AZV/known_hosts" \
+     -i "$HOME/.ssh/id_ed25519" root@<ip> 'findmnt /workspace; sha256sum /workspace/rebuild-marker; cat /etc/azv-l3'
+   ```
+
+   Result: SSH accepts the host key of step 3. `/workspace` is a mount. The SHA-256 is the value of step 3. The last line is `azv-l3-1`.
+
+8. Make sure that Horizon deleted only the VM and its OS disk.
+
+   ```sh
+   az monitor activity-log list -g "$RG" --offset 1h \
+     --query "[?status.value=='Started'].operationName.value" -o tsv | sort | uniq -c
+   ```
+
+   Result: The list has one `Microsoft.Compute/virtualMachines/delete`. It has no `Microsoft.Compute/disks/delete` for `worker-workspace`, no `Microsoft.Network/publicIPAddresses/delete` and no `Microsoft.Resources/subscriptions/resourceGroups/delete`.
+
+9. Stop a rebuild after the release started, then continue it.
+
+   > **CAUTION:** THIS STEP DELETES THE VM AND RENTS A NEW ONE.
+
+   ```sh
+   echo 'RUN echo azv-l3-2 > /etc/azv-l3' >> "$REPO/<path of the Dockerfile>"
+   git -C "$REPO" commit -qam "test: azv-l3 rebuild 2"
+   cdx plan-rebuild "$AZV/settings.json" "$RB" azure-build
+   cdx rebuild "$AZV/settings.json" "$RB" azure-build <token>
+   ```
+
+   Push `Ctrl+C` 5 seconds after the line `Releasing the server; the workspace volume stays`. Then do these commands:
+
+   ```sh
+   jq '{stage, operation, replacement: .image_replacement.phase}' "$RB/deployment.json"
+   cdx continue-rebuild "$AZV/settings.json" "$RB"
+   vm; disk; image
+   az vm list -g "$RG" --query "length(@)"
+   ```
+
+   Result: After `Ctrl+C`, the stage is `Replace`. `continue-rebuild` ends with `Stage: Ready` and does not build the image again. The VM count is `1`. `uniqueId` is the value of step 2. The image is new.
+
+10. Cancel a rebuild before the release.
+
+    ```sh
+    vm; image
+    echo 'RUN echo azv-l3-3 > /etc/azv-l3' >> "$REPO/<path of the Dockerfile>"
+    git -C "$REPO" commit -qam "test: azv-l3 rebuild 3"
+    cdx plan-rebuild "$AZV/settings.json" "$RB" azure-build
+    cdx rebuild "$AZV/settings.json" "$RB" azure-build <token>
+    ```
+
+    Push `Ctrl+C` while the image builds, before the line `Stage: Replace image`. Then do these commands:
+
+    ```sh
+    cdx cancel-rebuild "$AZV/settings.json" "$RB"
+    vm; image
+    az vm get-instance-view -g "$RG" -n worker --query "instanceView.statuses[?starts_with(code,'ProvisioningState')].time" -o tsv
+    ```
+
+    Result: `cancel-rebuild` ends without an error. `vmId`, `ip` and the image are the values before this step. The VM was not made again: its provisioning time is before this step.
+
+11. Cancel a rebuild after the release started.
+
+    > **CAUTION:** THIS STEP DELETES THE VM AND RENTS A NEW ONE.
+
+    ```sh
+    image
+    cdx plan-rebuild "$AZV/settings.json" "$RB" azure-build
+    cdx rebuild "$AZV/settings.json" "$RB" azure-build <token>
+    ```
+
+    Push `Ctrl+C` 5 seconds after the line `Releasing the server; the workspace volume stays`. Then do these commands:
+
+    ```sh
+    cdx cancel-rebuild "$AZV/settings.json" "$RB"
+    vm; disk; image
+    az vm list -g "$RG" --query "length(@)"
+    ```
+
+    Result: `cancel-rebuild` prints `Image rebuild cancelled; a new server starts on the previous image` and ends with `Stage: Ready`. `vmId` is new. The image is the value before this step. The VM count is `1`. `uniqueId` is the value of step 2.
+
+12. Do step 7 again.
+
+    Result: The SHA-256 is the value of step 3. SSH accepts the host key.
+
+13. Delete the cloud.
+
+    > **CAUTION:** THIS DELETE REMOVES THE RESOURCE GROUP, THE VM, BOTH DISKS AND THE ADDRESS. THE WORKSPACE FILES ARE LOST.
+
+    ```sh
+    az group show -n "$RG" --query tags
+    cdx delete "$AZV/settings.json" "$RB"
+    az group exists -n "$RG"
+    az resource list --tag horizon-operation=azv-l3-01 -o json
+    ```
+
+    Result: The tag is `{"horizon-operation": "azv-l3-01"}`. The delete ends without an error. Then the commands print `false` and `[]`.
+
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-19 pass and send no request to Azure.
-- For the live acceptance, each step of tasks AZV-L1 and AZV-L2 gives its result. AZV-L2 proves each group absent.
+- Tasks AZV-01 to AZV-20 pass and send no request to Azure.
+- For the live acceptance, each step of tasks AZV-L1, AZV-L2 and AZV-L3 gives its result. AZV-L2 and AZV-L3 prove each group absent.
+- In AZV-L3, each rebuild leaves exactly one VM, the workspace disk keeps its `uniqueId`, and the marker keeps its SHA-256.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-19 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
+Tasks AZV-01 to AZV-20 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1, and task AZV-L3 deletes its own group. If a run stopped before AZV-L2 or AZV-L3 ended, do these steps:
 
 1. Examine the tag of each test group that remains. Then delete the group.
 
@@ -643,6 +842,8 @@ Tasks AZV-01 to AZV-19 make temporary data only. Task AZV-L2 deletes the groups 
    az group delete -n horizon-ws-azv-l1-01 --yes
    az group show -n horizon-ws-azv-l1-02 --query tags
    az group delete -n horizon-ws-azv-l1-02 --yes
+   az group show -n horizon-ws-azv-l3-01 --query tags
+   az group delete -n horizon-ws-azv-l3-01 --yes
    ```
 
    Result: Each command ends without an error.
@@ -652,6 +853,7 @@ Tasks AZV-01 to AZV-19 make temporary data only. Task AZV-L2 deletes the groups 
    ```sh
    az group exists -n horizon-ws-azv-l1-01
    az group exists -n horizon-ws-azv-l1-02
+   az group exists -n horizon-ws-azv-l3-01
    ```
 
    Result: Each command prints `false`.
@@ -663,6 +865,15 @@ Tasks AZV-01 to AZV-19 make temporary data only. Task AZV-L2 deletes the groups 
    ```
 
    Result: The directory is absent.
+
+4. Remove the test commits of task AZV-L3 from `<repo>`, if you do not keep them.
+
+   ```sh
+   git -C <repo> log --oneline -4
+   git -C <repo> reset --hard HEAD~3
+   ```
+
+   Result: The log shows no commit `test: azv-l3`. Do not remove other commits. If step 10 or step 11 of AZV-L3 did not run, the count of `test: azv-l3` commits is less than 3: use that count in `HEAD~<count>`.
 
 ## 9. Record of results
 
