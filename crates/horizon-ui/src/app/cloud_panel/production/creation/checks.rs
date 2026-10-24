@@ -183,6 +183,8 @@ fn rows(form: &Production) -> Vec<Row> {
         ),
         // Nothing is rented: there is no account to check and no price to fetch.
         Kind::DockerHost => (true, None),
+        // Never offered: New cloud lists only providers Horizon can create on.
+        Kind::Azure => (false, None),
     };
     rows.push(if let Some(problem) = problem("Provider profile") {
         // What no key can fix: the profile asks for something this provider cannot give.
@@ -238,7 +240,7 @@ fn provider_error(form: &Production) -> Option<&str> {
     match provider::current(form.provider, profile).kind {
         Kind::RunPod => form.prices.list_error.as_deref(),
         Kind::Hetzner => form.prices.hetzner.error(),
-        Kind::DockerHost => None,
+        Kind::DockerHost | Kind::Azure => None,
     }
 }
 

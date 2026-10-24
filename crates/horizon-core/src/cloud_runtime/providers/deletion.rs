@@ -56,6 +56,9 @@ pub(in crate::cloud_runtime) fn confirmed(store: &Store, state: &Deployment) -> 
             Ok(matches!(state.operation, CreateState::Terminated { .. })
                 && journal.as_object().is_some_and(serde_json::Map::is_empty))
         }
+        // Local records cannot prove that no Azure resource exists, so an Azure deletion
+        // is never confirmed.
+        Kind::Azure => Ok(false),
     }
 }
 

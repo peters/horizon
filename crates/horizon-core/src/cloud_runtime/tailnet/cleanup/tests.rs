@@ -467,6 +467,7 @@ fn default_provider_receipts_use_the_same_automatic_cleanup_after_durable_absenc
                 std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
             }
             Kind::DockerHost => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
+            Kind::Azure => unreachable!("an Azure deletion is never confirmed"),
         }
         store.save(&state).unwrap();
         let mut calls = 0;

@@ -64,6 +64,7 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
                 std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
             }
             Kind::DockerHost => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
+            Kind::Azure => unreachable!("an Azure deletion is never confirmed"),
         }
         assert!(confirmed(&store, &state).unwrap());
     }
@@ -71,7 +72,7 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
 
 #[test]
 fn missing_required_owned_journals_and_foreign_provider_records_do_not_confirm_absence() {
-    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost] {
+    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
         let (_temp, store, state) = fixture(provider);
         if provider == Kind::RunPod {
             std::fs::write(store.root().join("workspace-volume.required"), []).unwrap();
@@ -132,6 +133,16 @@ fn unsettle_or_masked_fields_cannot_replace_a_confirmed_provider_journal() {
         std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
         assert!(!confirmed(&store, &state).unwrap());
     }
+}
+
+#[test]
+fn an_azure_deletion_is_never_confirmed_from_local_records() {
+    let (_temp, store, state) = fixture(Kind::Azure);
+    // Without journals, as a provider that needs none would be confirmed.
+    assert!(!confirmed(&store, &state).unwrap());
+    // A settled journal of another provider does not stand in for one.
+    std::fs::write(store.root().join("docker-host.json"), "{}").unwrap();
+    assert!(!confirmed(&store, &state).unwrap());
 }
 
 #[test]

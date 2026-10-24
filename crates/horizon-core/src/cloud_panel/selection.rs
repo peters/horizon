@@ -90,11 +90,40 @@ impl WorkerChoice {
                 placement.cpu_types = vec![self.id.clone()];
                 placement.data_centers = vec![location.clone()];
             }
+            // Not `creatable`, so refused above; nothing can place an Azure worker yet.
+            provider::Kind::Azure => return Err(Error::Invalid("This worker cannot run the repository profile")),
         }
         Ok(ChosenWorker {
             provider,
             size,
             placement,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_azure_worker_cannot_be_chosen() {
+        let cpu: Profile = serde_json::from_value(
+            serde_json::json!({"provider":"azure","image":"registry.example/worker","cpu":4,"memory_gb":8}),
+        )
+        .unwrap();
+        assert!(provider::AZURE.supports(&cpu), "the refusal is not the profile's");
+        let choice = WorkerChoice {
+            provider: provider::AZURE.id.into(),
+            id: "Standard_D4s_v3".into(),
+            kind: "cpu".into(),
+            vcpu: Some(4),
+            memory_gb: Some(16),
+            gpu_memory_gb: None,
+            location: Some("northeurope".into()),
+        };
+        let Err(error) = choice.for_profile(&cpu) else {
+            panic!("an Azure worker was chosen");
+        };
+        assert_eq!(error.to_string(), "This worker cannot run the repository profile");
     }
 }
