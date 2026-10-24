@@ -6,7 +6,7 @@ name: Release artifacts
 #
 # Two callers:
 # - ci.yml, on a push to main with release inputs and on a manual dispatch.
-#   It builds Linux and Windows for every release input change, and macOS only
+#   It builds Linux for every release input change, and macOS only
 #   when the change touches this file or the packaging scripts (see
 #   scripts/detect-ci-build-inputs.sh) and on a manual dispatch.
 # - macos-release-builds.yml, which builds macOS each night against main.
@@ -19,7 +19,7 @@ on:
         description: >-
           Whitespace-separated platform ids from
           scripts/select-release-artifact-platforms.py, for example
-          "linux-x64 windows-x64".
+          "linux-x64 macos-arm64".
         required: true
         type: string
 
@@ -74,10 +74,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: true
-      - name: Keep Defender off the build tree
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/ci-windows-defender.ps1
       - id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:

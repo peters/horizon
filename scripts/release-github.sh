@@ -101,7 +101,6 @@ required_asset_names() {
     horizon-linux-x64.tar.gz \
     horizon-osx-arm64.tar.gz \
     horizon-osx-x64.tar.gz \
-    horizon-windows-x64.exe \
     SHA256SUMS.txt
 }
 

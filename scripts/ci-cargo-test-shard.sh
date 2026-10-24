@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# One platform test shard. On Linux and Windows, ui, libs, and speech run as
-# separate jobs and share the OS cache entry. Only the speech job saves that
-# entry, and only on main. A cold main entry is filled by building the whole
-# workspace in that job before the speech feature, so the saved target is not
-# speech-only.
+# One platform test shard. On Linux, ui, libs, and speech run as separate
+# jobs and share the OS cache entry. Only the speech job saves that entry, and
+# only on main. A cold main entry is filled by building the whole workspace in
+# that job before the speech feature, so the saved target is not speech-only.
 #
 # macOS runs `all`: libs, then speech, on one runner. GitHub-hosted accounts
 # get about five concurrent macOS jobs, so three macOS jobs per run queued
@@ -66,11 +65,7 @@ run_libs() {
 }
 
 run_speech() {
-    if [[ "${RUNNER_OS:?RUNNER_OS is required}" == "Windows" ]]; then
-        run_cargo test --locked -p horizon-ui --features speech --no-run
-    else
-        run_cargo test --locked -p horizon-ui --features speech
-    fi
+    run_cargo test --locked -p horizon-ui --features speech
 }
 
 case "$shard" in

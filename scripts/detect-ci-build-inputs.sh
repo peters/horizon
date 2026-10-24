@@ -11,14 +11,14 @@
 # $GITHUB_OUTPUT. Runs in the current working directory, which must be the
 # repository checkout.
 #
-# `release_inputs` gates the Linux and Windows release builds on main.
+# `release_inputs` gates the Linux release build on main.
 # `macos_release_inputs` is the narrower set that also builds the two macOS
 # release assets at once instead of waiting for the nightly macOS release
 # builds: the files that define how a release asset is built and packaged.
 # Source, manifest, lock file and toolchain changes wait for the nightly run:
 # Dependabot changes Cargo.lock on most days, and the macOS test job on every
 # push still compiles those changes on macOS. Every path in it is also a
-# release input, so main never builds macOS without Linux and Windows.
+# release input, so main never builds macOS without Linux.
 #
 # `rust_inputs` is false only for a pull request whose every changed path is
 # on the short list below of files no Rust build or test reads. Any other

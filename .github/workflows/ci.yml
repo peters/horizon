@@ -18,18 +18,18 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   # Dev and test builds keep line tables only: a panic backtrace still names
-  # its file and line, while the dropped variable and type DWARF (and the
-  # matching Windows PDB payload) cuts link time on every lane and shrinks
-  # what each rust-cache entry stores. Cache size is not cosmetic here - the
-  # repository sits at GitHub's 10 GB budget, where each save evicts main's
-  # entries and leaves the next job to build cold. Local builds are untouched.
+  # its file and line, while the dropped variable and type DWARF cuts link
+  # time on every lane and shrinks what each rust-cache entry stores. Cache
+  # size is not cosmetic here - the repository sits at GitHub's 10 GB budget,
+  # where each save evicts main's entries and leaves the next job to build
+  # cold. Local builds are untouched.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 # Cache policy: every rust-cache step below and in release-artifacts.yml
 # sets `save-if: github.ref == 'refs/heads/main'`. The platform test jobs also
-# require one saver per OS (`matrix.save_cache` on Linux and macOS,
-# `matrix.shard == 'speech'` on Windows), so each OS keeps one entry.
+# require one saver per OS (`matrix.save_cache` on Linux and macOS), so each OS
+# keeps one entry.
 # Pull-request runs restore from main's entry but never write their own.
 # A per-branch copy of each build
 # cache pushed the repository past GitHub's 10 GB budget, and the resulting
@@ -436,62 +436,6 @@ jobs:
             fi
           fi
 
-  # Kept as its own job id so the rust-cache key stays `windows-smoke`.
-  # Renaming the job id or `windows-test-build` starts that cache cold.
-  # Speech is build-only here; a ui or libs failure must not cancel that check.
-  windows-smoke:
-    name: Tests (Windows x64 ${{ matrix.shard }})
-    needs: changes
-    # A pull request that changes only documentation or other workflows skips
-    # this job (see Detect changed inputs). Anything but an explicit false runs
-    # it: when that job fails, its output is empty and this job still runs.
-    if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
-    runs-on: windows-latest
-    # Headroom for a cold cache: a cacheless run passed 15 minutes while
-    # still compiling the vendored speech C++ tree, and a timed-out job
-    # skips the cache save, so the next run starts cold again.
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - shard: ui
-          - shard: libs
-          - shard: speech
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - name: Keep Defender off the build tree
-        shell: pwsh
-        run: ./scripts/ci-windows-defender.ps1
-      - id: rust-cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: windows-test-build
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'speech' }}
-      - name: Report rust-cache status
-        shell: bash
-        run: |
-          if [ "${{ steps.rust-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "rust-cache: HIT ($(du -sh target 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Install video assembler
-        if: ${{ !env.LOCALCI }}
-        shell: bash
-        run: bash scripts/install-ci-video-build-tools.sh
-      # WASAPI capture is advertised on Windows. The speech shard builds it
-      # and does not run the speech tests; those stay off on Windows.
-      - name: Test shard
-        shell: bash
-        env:
-          HORIZON_CI_SHARD: ${{ matrix.shard }}
-          HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
-        run: bash scripts/ci-cargo-test-shard.sh
-
-
   snap-build:
     name: Snap Build
     needs: changes
@@ -516,12 +460,12 @@ jobs:
 
   # Docs/CI-only pushes to main must not pay for release builds, so this job
   # is gated on the paths that can change the binary, as detected by Detect
-  # changed inputs. Linux and Windows build for every such push. macOS builds
+  # changed inputs. Linux builds for every such push. macOS builds
   # each night in macos-release-builds.yml, and here only when the push
   # changes how a release asset is built or packaged: GitHub-hosted accounts
   # get about five concurrent macOS jobs, and two macOS release builds on
   # every merge kept the macOS test job on main queued. A workflow dispatch
-  # always builds all four, even when Detect changed inputs fails, so a
+  # always builds every platform, even when Detect changed inputs fails, so a
   # release build can still be forced on demand.
   rust-artifacts:
     name: Artifacts
@@ -530,5 +474,5 @@ jobs:
     uses: ./.github/workflows/release-artifacts.yml
     with:
       platforms: >-
-        linux-x64 windows-x64
+        linux-x64
         ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.macos_release_inputs == 'true') && 'macos-arm64 macos-x64' || '' }}

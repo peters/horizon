@@ -22,7 +22,6 @@ PRERELEASE_ASSETS = [
     "horizon-linux-x64.tar.gz",
     "horizon-osx-arm64.tar.gz",
     "horizon-osx-x64.tar.gz",
-    "horizon-windows-x64.exe",
     "SHA256SUMS.txt",
 ]
 STABLE_ASSETS = PRERELEASE_ASSETS
@@ -407,11 +406,13 @@ class ReleaseGithubTests(unittest.TestCase):
         self.assertFalse(any(command[:1] == ["tag"] for command in self.commands()))
 
     def test_stable_publish_requires_all_binaries_before_going_public(self):
-        self.write_assets(STABLE_ASSETS[:-2] + ["SHA256SUMS.txt"])
+        self.write_assets(
+            ["horizon-linux-x64.tar.gz", "horizon-osx-arm64.tar.gz", "SHA256SUMS.txt"]
+        )
         self.ensure_pending(tag=STABLE_TAG, prerelease="false")
         self.upload_assets(tag=STABLE_TAG)
         result = self.publish(tag=STABLE_TAG, prerelease="false", expect=1)
-        self.assertIn("horizon-windows-x64.exe", result.stderr)
+        self.assertIn("horizon-osx-x64.tar.gz", result.stderr)
         self.assertTrue(self.release(STABLE_TAG)["isDraft"])
 
         self.write_assets(STABLE_ASSETS)
