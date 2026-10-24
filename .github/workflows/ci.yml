@@ -100,6 +100,8 @@ jobs:
         run: python3 -B scripts/test_ci_cargo_test_shard.py -v
       - name: Verify the test focus helper
         run: python3 -B scripts/test_test_focus.py -v
+      - name: Verify the test duration helper
+        run: python3 -B scripts/test_test_duration_baseline.py -v
       - name: Verify the setup gate runner
         run: python3 -B scripts/test_setup_gate.py -v
 
