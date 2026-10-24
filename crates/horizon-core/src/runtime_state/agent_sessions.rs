@@ -52,7 +52,7 @@ impl AgentSessionCatalog {
             load_claude_sessions,
             || codex::load_sessions(&HashSet::new(), true),
             load_opencode_sessions,
-            load_pi_sessions,
+            || Ok(load_pi_sessions()),
             grok::load_grok_sessions,
         )
     }
@@ -66,7 +66,7 @@ impl AgentSessionCatalog {
             PanelKind::Claude => load_claude_sessions()?,
             PanelKind::Codex => codex::load_sessions(&HashSet::new(), true)?.sessions,
             PanelKind::OpenCode => load_opencode_sessions()?,
-            PanelKind::Pi => load_pi_sessions()?,
+            PanelKind::Pi => load_pi_sessions(),
             PanelKind::Grok => grok::load_grok_sessions()?,
             _ => Vec::new(),
         };
@@ -116,7 +116,7 @@ impl AgentSessionCatalog {
             extend_best_effort(&mut sessions, "OpenCode", load_opencode_sessions());
         }
         if has_pi_panels {
-            extend_best_effort(&mut sessions, "Pi", load_pi_sessions());
+            extend_best_effort(&mut sessions, "Pi", Ok(load_pi_sessions()));
         }
         if has_grok_panels {
             extend_best_effort(&mut sessions, "Grok", grok::load_grok_sessions());
@@ -563,20 +563,20 @@ fn load_opencode_sessions_from_path(sqlite_path: &Path) -> Result<Vec<AgentSessi
     Ok(sessions)
 }
 
-fn load_pi_sessions() -> Result<Vec<AgentSessionRecord>> {
+fn load_pi_sessions() -> Vec<AgentSessionRecord> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let sessions_dir = home.join(".pi/agent/sessions");
     if !sessions_dir.exists() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
     load_pi_sessions_from_dir(&sessions_dir)
 }
 
-fn load_pi_sessions_from_dir(sessions_dir: &Path) -> Result<Vec<AgentSessionRecord>> {
+fn load_pi_sessions_from_dir(sessions_dir: &Path) -> Vec<AgentSessionRecord> {
     let mut session_paths = Vec::new();
-    collect_pi_session_files(sessions_dir, &mut session_paths)?;
+    collect_pi_session_files(sessions_dir, &mut session_paths);
     session_paths.sort_by_key(|(_, updated_at)| Reverse(*updated_at));
     session_paths.truncate(super::MAX_PI_SESSION_FILES);
 
@@ -589,32 +589,43 @@ fn load_pi_sessions_from_dir(sessions_dir: &Path) -> Result<Vec<AgentSessionReco
         }
     }
     sessions.sort_by_key(|session| Reverse(session.updated_at));
-    Ok(sessions)
+    sessions
 }
 
-fn collect_pi_session_files(dir: &Path, files: &mut Vec<(PathBuf, i64)>) -> Result<()> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+/// Collect the conversation files of every project directory.
+///
+/// Pi writes one file per conversation directly inside the project directory
+/// that is named after its cwd, and its `--session` lookup reads that level
+/// only. Files nested below it (subagent artifacts, child runs and forks) carry
+/// no id Pi can resolve, so they must not become catalog entries: a panel bound
+/// to one of them fails to launch with `No session found matching`.
+fn collect_pi_session_files(sessions_dir: &Path, files: &mut Vec<(PathBuf, i64)>) {
+    let projects = match std::fs::read_dir(sessions_dir) {
+        Ok(projects) => projects,
         Err(error) => {
-            tracing::debug!("skipping unreadable Pi session dir {}: {error}", dir.display());
-            return Ok(());
+            tracing::debug!("skipping unreadable Pi session dir {}: {error}", sessions_dir.display());
+            return;
         }
     };
-    for entry in entries {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
+    for project in projects {
+        let Ok(project) = project else { continue };
+        if !project.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(project.path()) else {
             continue;
         };
-        if file_type.is_dir() {
-            collect_pi_session_files(&path, files)?;
-        } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl")
-            && let Ok(updated_at) = file_updated_at_millis(&path)
-        {
-            files.push((path, updated_at));
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            if path.is_file()
+                && path.extension().and_then(std::ffi::OsStr::to_str) == Some("jsonl")
+                && let Ok(updated_at) = file_updated_at_millis(&path)
+            {
+                files.push((path, updated_at));
+            }
         }
     }
-    Ok(())
 }
 
 fn load_pi_session_summary(path: &Path, updated_at: i64) -> Result<Option<AgentSessionRecord>> {
@@ -640,6 +651,7 @@ struct PiSessionSummary {
     cwd: Option<String>,
     last_user_message: Option<String>,
     parent_controlled: bool,
+    artifact_transcript: bool,
 }
 
 impl PiSessionSummary {
@@ -651,6 +663,15 @@ impl PiSessionSummary {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return;
         };
+
+        // A subagent run artifact wraps every record in its own envelope
+        // (`recordType`, `runId`, `agent`, `sourceEventType`) and repeats the
+        // run cwd, so nothing else tells it apart from a conversation. Pi
+        // cannot resume it by id, so it must not become a catalog entry.
+        if value.get("recordType").is_some_and(Value::is_string) {
+            self.artifact_transcript = true;
+            return;
+        }
 
         if value.get("type").and_then(Value::as_str) == Some("session") {
             self.parent_controlled |=
@@ -676,6 +697,10 @@ impl PiSessionSummary {
     }
 
     fn into_record(self, fallback_session_id: &str, fallback_updated_at: i64) -> Option<AgentSessionRecord> {
+        if self.artifact_transcript {
+            return None;
+        }
+
         let session_id = self
             .session_id
             .filter(|value| !value.is_empty())
