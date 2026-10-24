@@ -40,6 +40,15 @@ fn main() {
         };
         std::process::exit(fake_authenticator::run(Path::new(state)));
     }
+    // A test binary has to answer `--list` without side effects. A tool lists
+    // every binary before it runs one, and this binary has no harness to answer
+    // for it, so it answers itself. It used to start both browsers here, which
+    // fails the listing on a machine that has none and takes the whole run
+    // with it.
+    if args.iter().any(|arg| arg == "--list") {
+        println!("webauthn_live: test");
+        return;
+    }
     if !args.iter().any(|arg| arg == "--ignored" || arg == "--include-ignored") {
         println!("webauthn_live: skipped; pass --ignored to run it against local Chromium and Firefox");
         return;
