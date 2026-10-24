@@ -24,7 +24,7 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
   - The rebuild of an Azure cloud. It stays refused.
-  - Azure in the New cloud dialog, past its checks. Azure has no price binding until a later part of #1774, so the dialog cannot start an Azure profile. AZV-17 examines the check rows that tell the person this.
+  - Azure in the New cloud dialog, past its checks. The [Azure New cloud procedure](azure-new-cloud.md) tests the Azure rows, their prices and the start of a cloud. AZV-17 examines the check rows.
 
 ## 3. Safety
 
@@ -335,7 +335,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    - `Workers::add_azure` lists only the Azure VM sizes and regions of the `azure` section. A size that meets the profile is listed with the matching workers, and a smaller size after them. A GPU profile gets no Azure worker.
    - `Settings::for_cloud` narrows the `azure` section to the chosen VM size and region. A placement of another provider leaves the section whole. A chosen size or region that the section does not have is refused before work starts.
    - The rate text of an Azure cloud says that Azure reports no hourly rate, and that a stop deallocates the VM and ends the compute charge while the disks and the static address bill until the cloud is deleted.
-   - In New cloud, an Azure profile does not stay at a pending "Checking the Azure account" row. When the `azure` settings pass, the row fails with "New cloud cannot start an Azure profile on this machine yet". Without the `azure` section, the row names the missing section. Start stays off, and the dialog shows no RunPod or Hetzner key form for the Azure profile. A Hetzner profile in the same configuration is checked as before.
+   - In New cloud, an Azure profile does not stay at a pending "Checking the Azure account" row after the settings are read. Without the `azure` section, the row fails with "No Azure settings on this computer yet" and names `token_file`, `subscription_id`, `vm_sizes` and `regions`. With a token that cannot be read, the row fails with the reason. Start stays off in these two cases, and the dialog shows no RunPod or Hetzner key form for the Azure profile. With a readable token and current prices, the row passes with "Azure token is readable and prices are current; Azure checks the token when the cloud starts".
 
 ### 6.18 AZV-L1 — Create one live Azure worker
 
