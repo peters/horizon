@@ -89,6 +89,31 @@ impl Azure {
         Credential::new(token.to_owned()).map_err(Error::from)
     }
 
+    /// These settings narrowed to the one VM size and region chosen for a cloud, so
+    /// provisioning tries nothing else. A placement that names no VM size from
+    /// Horizon's Azure catalog is another provider's and changes nothing.
+    /// # Errors
+    /// Refuses a chosen size or region that these settings do not allow, before any
+    /// work starts.
+    pub fn narrow(&mut self, placement: &crate::cloud_panel::Placement) -> Result<()> {
+        let sizes = &placement.cpu_types;
+        if sizes.is_empty() || !sizes.iter().all(|name| VM_SIZES.iter().any(|size| size.name == name)) {
+            return Ok(());
+        }
+        let regions = &placement.data_centers;
+        if !sizes.iter().all(|size| self.vm_sizes.contains(size))
+            || regions.is_empty()
+            || !regions.iter().all(|region| self.regions.contains(region))
+        {
+            return Err(Error::Invalid(
+                "The Azure VM size or region chosen for this cloud is not in the azure cloud settings; add it there or choose another",
+            ));
+        }
+        self.vm_sizes.clone_from(sizes);
+        self.regions.clone_from(regions);
+        Ok(())
+    }
+
     /// The pull login for the worker host, when a private image needs one.
     /// # Errors
     /// Requires a private, readable password file.
@@ -158,6 +183,41 @@ mod tests {
                 settings.credential().is_err(),
                 "a token file others can read is refused"
             );
+        }
+    }
+
+    #[test]
+    fn a_chosen_size_and_region_narrow_the_settings_and_one_they_leave_out_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = azure(&root.path().join("arm-token"));
+        let placement = |sizes: &[&str], regions: &[&str]| crate::cloud_panel::Placement {
+            cpu_types: sizes.iter().map(|&name| name.to_owned()).collect(),
+            data_centers: regions.iter().map(|&name| name.to_owned()).collect(),
+            ..crate::cloud_panel::Placement::default()
+        };
+        for other in [
+            placement(&[], &[]),
+            placement(&[], &["EU-RO-1"]),
+            placement(&["cx33"], &["hel1"]),
+        ] {
+            let mut unchanged = settings.clone();
+            unchanged.narrow(&other).unwrap();
+            assert_eq!(unchanged, settings, "another provider's placement changes nothing");
+        }
+        let mut chosen = settings.clone();
+        chosen
+            .narrow(&placement(&["Standard_D8s_v3"], &["northeurope"]))
+            .unwrap();
+        assert_eq!(chosen.vm_sizes, ["Standard_D8s_v3"]);
+        assert_eq!(chosen.regions, ["northeurope"]);
+        for refused in [
+            placement(&["Standard_D2s_v3"], &["northeurope"]),
+            placement(&["Standard_D4s_v3"], &["westeurope"]),
+            placement(&["Standard_D4s_v3"], &[]),
+        ] {
+            let mut candidate = settings.clone();
+            assert!(candidate.narrow(&refused).is_err(), "{refused:?}");
+            assert_eq!(candidate, settings);
         }
     }
 }

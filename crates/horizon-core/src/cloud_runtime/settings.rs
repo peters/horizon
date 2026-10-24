@@ -177,12 +177,15 @@ impl Settings {
 
     /// The machine settings narrowed to one cloud's placement, so every attempt,
     /// retry and redeploy of that cloud asks for the data centers and GPU types
-    /// chosen for it.
+    /// chosen for it, and an Azure cloud for its one VM size and region.
     /// # Errors
-    /// As [`Settings::load`].
+    /// As [`Settings::load`], and [`Azure::narrow`] for an Azure choice.
     pub fn for_cloud(path: &Path, placement: &crate::cloud_panel::Placement) -> Result<Self> {
         let mut settings = Self::load(path)?;
         placement.apply(&mut settings.data_centers, &mut settings.gpu_types);
+        if let Some(azure) = settings.azure.as_mut() {
+            azure.narrow(placement)?;
+        }
         settings.placement = Some(placement.clone());
         Ok(settings)
     }
@@ -484,6 +487,37 @@ mod tests {
         let settings = Settings::for_cloud(&path, &europe).unwrap();
         assert_eq!(settings.data_centers, ["EU-RO-1"]);
         assert_eq!(settings.gpu_types, ["NVIDIA RTX A5000"]);
+
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["azure"] = serde_json::json!({
+            "token_file": absolute("arm-token"), "subscription_id": "00000000-0000-4000-8000-000000000001",
+            "vm_sizes": ["Standard_D4s_v3", "Standard_D8s_v3"], "regions": ["northeurope", "westeurope"],
+        });
+        std::fs::write(&path, value.to_string()).unwrap();
+        let azure = |cpu_type: &str, region: &str| crate::cloud_panel::Placement {
+            cpu_types: vec![cpu_type.into()],
+            data_centers: vec![region.into()],
+            ..crate::cloud_panel::Placement::default()
+        };
+        let chosen = Settings::for_cloud(&path, &azure("Standard_D8s_v3", "westeurope")).unwrap();
+        let chosen = chosen.azure_settings().unwrap();
+        assert_eq!(
+            (chosen.vm_sizes.as_slice(), chosen.regions.as_slice()),
+            (
+                ["Standard_D8s_v3".to_owned()].as_slice(),
+                ["westeurope".to_owned()].as_slice()
+            )
+        );
+        assert_eq!(
+            Settings::for_cloud(&path, &europe)
+                .unwrap()
+                .azure_settings()
+                .unwrap()
+                .regions,
+            ["northeurope", "westeurope"],
+            "another provider's placement leaves the azure section whole"
+        );
+        assert!(Settings::for_cloud(&path, &azure("Standard_D2s_v3", "westeurope")).is_err());
     }
 
     #[test]

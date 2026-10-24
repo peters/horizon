@@ -166,7 +166,7 @@ pub struct Offer {
     pub host: &'static str,
     pub interruptible: bool,
     /// Horizon can deploy this now: false for a GPU type out of stock wherever the worker
-    /// may go, and for every Azure offer until Horizon can create Azure clouds.
+    /// may go, and for every Azure offer, whose places the `azure` settings decide.
     pub rentable: bool,
 }
 
