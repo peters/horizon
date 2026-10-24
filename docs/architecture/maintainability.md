@@ -692,6 +692,12 @@ The Core Hetzner test tree contains a separate ignored original-provider consume
 it uses actual normal Store/settings/journal/pins and calls the SDK directly.
 It neither depends on the future exposure owner nor changes public dispatch.
 
+`azure` is the Azure Resource Manager client. `azure.rs` holds the transport and
+the ARM error classification, `azure::url` validates every URL segment and
+resource id, and `azure::resource` decodes the typed resource group view.
+No caller uses it yet. [The ARM client architecture](azure-arm-client.md) states
+its trust boundary.
+
 `hetzner::cloud::provision` is the provisioning sequence: it validates and renders
 everything before the first request, and hands every record it needs to the
 caller's `Records` before the provider request that record guards.
