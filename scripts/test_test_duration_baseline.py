@@ -56,7 +56,8 @@ class ParseStreamTests(unittest.TestCase):
 
     def test_a_test_keeps_its_own_crate_when_suites_interleave(self):
         # Two suites run at the same time and their events arrive mixed. The
-        # last suite to start is not the suite of the next test.
+        # last suite to start is not the suite of the next test, so neither the
+        # crate nor the kind of a test comes from it.
         results, unattributed = baseline.parse_stream(stream(
             suite_event("horizon-cloud-worker", "horizon_cloud_worker"),
             suite_event("horizon-ui", "horizon", kind="bin"),
@@ -64,9 +65,20 @@ class ParseStreamTests(unittest.TestCase):
             test_event("horizon-cloud-worker::horizon_cloud_worker$bootstrap::init", 2.0),
         ))
         self.assertEqual([r.crate for r in results], ["horizon-ui", "horizon-cloud-worker"])
+        self.assertEqual([r.kind for r in results], ["bin", "lib"])
         self.assertEqual([r.short_name for r in results],
                          ["app::press_frame::moves", "bootstrap::init"])
         self.assertEqual(unattributed, 0)
+
+    def test_kind_of_an_interleaved_test_is_the_kind_of_its_own_binary(self):
+        # A lib suite and a bin suite of the same crate, running together.
+        results, _ = baseline.parse_stream(stream(
+            suite_event("horizon-ui", "horizon_ui", kind="lib"),
+            suite_event("horizon-ui", "horizon", kind="bin"),
+            test_event("horizon-ui::horizon_ui$theme::dark", 1.0),
+            test_event("horizon-ui::horizon$app::press_frame::moves", 2.0),
+        ))
+        self.assertEqual([r.kind for r in results], ["lib", "bin"])
 
     def test_ignores_started_and_ignored_events(self):
         results, _ = baseline.parse_stream(stream(

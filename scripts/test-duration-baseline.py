@@ -151,13 +151,19 @@ def parse_stream(lines) -> tuple[list[TestResult], int]:
     The tests of several suites run at the same time, so their events interleave
     in one stream and the last `suite started` event is not the suite of the
     next test. Each test name names its own crate and binary, which is the only
-    attribution the stream carries that parallelism cannot make wrong. The
-    suite event is a fallback for a binary that names no prefix, for example a
-    test binary with its own harness. The count of those tests is returned too,
+    attribution the stream carries that parallelism cannot make wrong. The kind
+    of a target comes from the suite events, kept per binary for the same reason:
+    a suite event is a fallback for a binary that names no prefix, for example a
+    test binary with its own harness, and it is never read as the kind of a test
+    whose name does name a prefix. The count of fallback tests is returned too,
     because a fallback that runs often makes the report wrong.
     """
     results: list[TestResult] = []
     crate = binary = kind = "unknown"
+    # A test name names its crate and binary but not the kind of its target, so
+    # the kind comes from the suite events. Those interleave too, so they are
+    # kept in a map instead of read from the last event.
+    kinds: dict[tuple[str, str], str] = {}
     unattributed = 0
     for line in lines:
         line = line.strip()
@@ -174,6 +180,7 @@ def parse_stream(lines) -> tuple[list[TestResult], int]:
             crate = nextest.get("crate") or "unknown"
             binary = nextest.get("test_binary") or "unknown"
             kind = nextest.get("kind") or "unknown"
+            kinds[(crate, binary)] = kind
             continue
         if event.get("type") != "test":
             continue
@@ -187,15 +194,16 @@ def parse_stream(lines) -> tuple[list[TestResult], int]:
         match = NAME_PREFIX.match(name)
         if match:
             test_crate, test_binary = match.group("crate"), match.group("binary")
+            test_kind = kinds.get((test_crate, test_binary), "unknown")
         else:
-            test_crate, test_binary = crate, binary
+            test_crate, test_binary, test_kind = crate, binary, kind
             unattributed += 1
         results.append(
             TestResult(
                 name=name,
                 crate=test_crate,
                 binary=test_binary,
-                kind=kind,
+                kind=test_kind,
                 exec_time=float(exec_time),
                 status=str(status),
             )
