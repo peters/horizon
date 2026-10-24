@@ -7,9 +7,8 @@ use uuid::Uuid;
 use super::super::{AgentSessionBinding, PanelState, RuntimeState, WorkspaceState};
 use super::{
     AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary,
-    ExactSessionResolution, PanelKind, PiSessionSummary, codex::CodexSessions, finish_codex_load,
-    load_claude_project_session_summary, load_opencode_sessions_from_path, load_pi_sessions_from_dir,
-    scan_claude_session_reader, scan_pi_session_reader,
+    ExactSessionResolution, PanelKind, codex::CodexSessions, finish_codex_load, load_claude_project_session_summary,
+    load_opencode_sessions_from_path, scan_claude_session_reader,
 };
 use crate::error::Error;
 use crate::panel::PanelResume;
@@ -17,6 +16,7 @@ use cwd::stored_cwd;
 
 mod cwd;
 mod grok;
+mod pi;
 mod provider_scoping;
 
 #[test]
@@ -55,16 +55,6 @@ fn parse_claude_project_session<R: std::io::BufRead>(
 ) -> Option<AgentSessionRecord> {
     let mut summary = ClaudeSessionSummary::default();
     scan_claude_session_reader(reader, None, &mut summary);
-    summary.into_record(fallback_session_id, fallback_updated_at)
-}
-
-fn parse_pi_session<R: std::io::BufRead>(
-    reader: R,
-    fallback_session_id: &str,
-    fallback_updated_at: i64,
-) -> Option<AgentSessionRecord> {
-    let mut summary = PiSessionSummary::default();
-    scan_pi_session_reader(reader, None, &mut summary);
     summary.into_record(fallback_session_id, fallback_updated_at)
 }
 
@@ -911,90 +901,4 @@ INSERT INTO session (id, title, directory, parent_id, time_updated, time_archive
     assert_eq!(sessions[0].cwd, stored_cwd("/other"));
     assert_eq!(sessions[1].session_id, "session-root");
     assert_eq!(sessions[1].cwd, stored_cwd("/repo"));
-}
-
-#[test]
-fn parse_pi_session_uses_header_metadata_and_latest_user_message() {
-    let jsonl = concat!(
-        "{\"type\":\"session\",\"id\":\"pi-session-123\",\"cwd\":\"/repo\"}\n",
-        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"first prompt\"}]}}\n",
-        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"working\"}}\n",
-        "{\"type\":\"user_message\",\"text\":\"latest prompt\"}\n",
-    );
-
-    let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 42).expect("session");
-
-    assert_eq!(session.kind, PanelKind::Pi);
-    assert_eq!(session.session_id, "pi-session-123");
-    assert_eq!(session.cwd, stored_cwd("/repo"));
-    assert_eq!(session.label.as_deref(), Some("latest prompt"));
-    assert_eq!(session.updated_at, 42);
-}
-
-#[test]
-fn parse_pi_session_falls_back_to_filename_id_and_default_label() {
-    let jsonl = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}\n";
-
-    let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
-
-    assert_eq!(session.kind, PanelKind::Pi);
-    assert_eq!(session.session_id, "fallback-id");
-    assert_eq!(session.cwd, None);
-    assert_eq!(session.label.as_deref(), Some("Pi session"));
-    assert_eq!(session.updated_at, 7);
-}
-
-#[test]
-fn parse_pi_session_marks_parent_sessions_noninteractive() {
-    let jsonl = "{\"type\":\"session\",\"id\":\"child\",\"parentSession\":\"/sessions/root.jsonl\"}\n";
-
-    let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
-
-    assert!(!session.interactive);
-}
-
-#[test]
-fn parse_pi_session_keeps_message_tree_parent_ids_interactive() {
-    let jsonl = concat!(
-        "{\"type\":\"session\",\"id\":\"root\",\"cwd\":\"/repo\"}\n",
-        "{\"type\":\"message\",\"id\":\"entry-1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n",
-        "{\"type\":\"message\",\"id\":\"entry-2\",\"parentId\":\"entry-1\",\"message\":{\"role\":\"assistant\",\"content\":\"done\"}}\n",
-    );
-
-    let session = parse_pi_session(Cursor::new(jsonl), "fallback-id", 7).expect("session");
-
-    assert!(session.interactive);
-}
-
-#[test]
-fn load_pi_sessions_recurses_and_filters_by_cwd() {
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let nested = temp_dir.path().join("project/subdir");
-    std::fs::create_dir_all(&nested).expect("create nested session dir");
-    std::fs::write(
-        nested.join("pi-session-123.jsonl"),
-        concat!(
-            "{\"session_id\":\"pi-session-123\",\"metadata\":{\"cwd\":\"/repo\"}}\n",
-            "{\"role\":\"user\",\"content\":\"Fix the build\"}\n",
-        ),
-    )
-    .expect("write pi session");
-    std::fs::write(
-        temp_dir.path().join("pi-session-other.jsonl"),
-        concat!(
-            "{\"session_id\":\"pi-session-other\",\"cwd\":\"/other\"}\n",
-            "{\"role\":\"user\",\"content\":\"Other repo\"}\n",
-        ),
-    )
-    .expect("write other pi session");
-
-    let sessions = load_pi_sessions_from_dir(temp_dir.path()).expect("pi sessions");
-    let catalog = AgentSessionCatalog { sessions };
-    let repo_sessions = catalog.recent_for(PanelKind::Pi, Some("/repo"));
-
-    assert_eq!(repo_sessions.len(), 1);
-    assert_eq!(repo_sessions[0].session_id, "pi-session-123");
-    assert_eq!(repo_sessions[0].label.as_deref(), Some("Fix the build"));
-    assert!(catalog.recent_for(PanelKind::Pi, Some("/missing")).is_empty());
-    assert!(catalog.recent_for(PanelKind::Claude, Some("/repo")).is_empty());
 }
