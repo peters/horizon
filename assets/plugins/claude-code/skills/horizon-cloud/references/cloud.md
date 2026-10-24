@@ -92,11 +92,15 @@ Changes to fallback preferences do not substitute a different worker. The locati
 must remain permitted, and the chosen type must meet the profile requirements.
 
 Azure offers are in US dollars from the public Azure retail price list. They need
-no Azure settings or credential. They are information only: Horizon cannot create
-an Azure cloud yet, so the Azure section has `deployable: false` and each offer has
-`rentable: false`. The estimated total includes the OS disk, the workspace disk and
-the static public address. The stopped cost includes all three, because a
-deallocated VM keeps them. A cloud worker lists no Azure offers.
+no Azure settings or credential, and they are information only: Horizon creates an
+Azure cloud from the `azure` settings section, not from an offer, so each offer has
+`rentable: false` and a worker choice for one is refused. The section reports
+`deployable: true` only when this machine has that settings section. The estimated
+total includes the OS disk, the workspace disk and the static public address. The
+stopped cost includes all three, because a deallocated VM keeps them: a stopped
+Azure cloud still bills for its disks and its address. Creating, stopping,
+resuming and deleting an Azure cloud need the subscription and the machine-local
+token file that section names. A cloud worker lists no Azure offers.
 
 ## Repository development profiles
 
