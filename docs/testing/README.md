@@ -96,6 +96,7 @@ documents that are not yet STE.
 | [tailnet-api-entry](procedures/tailnet-api-entry.md) | Masked owner API entry/replacement with metadata-only CLI/MCP requests | none |
 | [tailnet-api-status](procedures/tailnet-api-status.md) | Nonsecret API credential status in Settings, CLI and cached MCP discovery | none |
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |
+| [device-panel-ssh-trust](procedures/device-panel-ssh-trust.md) | Device panel ssh route: untrusted host refusal, fingerprint comparison, trust and changed key | none |
 | [worker-github-chain](procedures/worker-github-chain.md) | Worker GitHub access with a token chain that refreshes on the worker | none |
 
 ## Reports
