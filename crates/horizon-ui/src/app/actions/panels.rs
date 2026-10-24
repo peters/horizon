@@ -498,6 +498,23 @@ mod tests {
         }
 
         #[test]
+        fn a_workspace_without_a_cloud_still_asks_for_a_directory() {
+            let (_temp, ctx, mut app, _cloud_workspace) = app_with_a_cloud_workspace();
+            let local = app.board.create_workspace("local");
+
+            app.add_panel_to_workspace(&ctx, local, shell_preset(), None);
+
+            assert!(
+                app.dir_picker.is_some(),
+                "a panel outside every cloud runs on this machine, so it asks where"
+            );
+            assert!(
+                app.cloud_prototype.groups.0[0].panels.is_empty(),
+                "the cloud takes no panel of another workspace"
+            );
+        }
+
+        #[test]
         fn a_position_outside_the_cloud_still_asks_for_a_directory() {
             let (_temp, ctx, mut app, workspace_id) = app_with_a_cloud_workspace();
 

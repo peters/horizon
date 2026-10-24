@@ -472,10 +472,10 @@ the board and in the full screen view.
    Result: The output is `10001`. Another user ID means that the panel runs on the
    PC.
 
-7. Leave the full screen view with Escape. With no cloud frame at the pointer,
-   press Ctrl+Shift+N.
+7. Leave the full screen view with Escape. Activate a workspace that holds no
+   cloud. If the board has none, click **New Workspace** first. Press Ctrl+Shift+N.
 
-   Result: A directory picker opens, because this panel runs on the PC. Click
+   Result: A directory picker opens, because that panel runs on the PC. Click
    **Cancel**.
 
 ## 7. Pass criteria
