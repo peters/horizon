@@ -62,12 +62,18 @@ const NO_WORKER: Error = Error::Invalid("The cloud has no worker to reconnect to
 const DELETING: Error = Error::Invalid("The cloud is being deleted; finish deleting it before reconnecting");
 
 /// An Azure stop keeps the VM and Resume starts it again, so a reconnect needs the
-/// bound VM, as on `RunPod`, and never one whose resource group is being deleted.
+/// bound VM, as on `RunPod`, and never one whose resource group is being deleted. A
+/// rebuild deletes the VM and keeps its disk, so after one the reconnect makes the
+/// next VM on that disk, as on Hetzner.
 fn azure_admits(store: &Store, bound: bool) -> Result<()> {
     if super::azure::deleting(store.root())? {
         return Err(DELETING);
     }
-    if bound { Ok(()) } else { Err(NO_WORKER) }
+    if bound || super::azure::rebuild::held(store.root())? {
+        Ok(())
+    } else {
+        Err(NO_WORKER)
+    }
 }
 
 /// A Hetzner stop deletes the server and Resume clears its fence, so the reconnect
@@ -235,6 +241,23 @@ mod tests {
         state.stop_requested = true;
         let error = admit(&Store::lock(temp.path()).unwrap(), &state).unwrap_err();
         assert!(error.to_string().contains("resume it"), "{error}");
+    }
+
+    #[test]
+    fn an_azure_cloud_without_a_vm_is_admitted_only_after_a_rebuild_released_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = record("azure", "Readiness", &serde_json::json!({"state":"prepared"}));
+        save(temp.path(), &state, Some(AZURE_GROUP));
+        // A group without a VM is a first deployment that did not finish.
+        let error = admit(&Store::lock(temp.path()).unwrap(), &state).unwrap_err();
+        assert!(error.to_string().contains("deploy it first"), "{error}");
+        // A rebuild deleted the VM and kept its disk, so the reconnect makes the next VM.
+        std::fs::write(temp.path().join("azure-release.json"), r#"{"held":true}"#).unwrap();
+        assert!(admit(&Store::lock(temp.path()).unwrap(), &state).is_ok());
+        // Never one whose group is being deleted.
+        std::fs::write(temp.path().join("azure.json"), AZURE_DELETING).unwrap();
+        let error = admit(&Store::lock(temp.path()).unwrap(), &state).unwrap_err();
+        assert!(error.to_string().contains("being deleted"), "{error}");
     }
 
     #[test]

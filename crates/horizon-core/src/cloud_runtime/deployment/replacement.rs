@@ -196,7 +196,7 @@ pub fn continue_replacement(request: &Request, cancel: &Cancellation, emit: &dyn
                 resume(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
             }
             Rebuild::NewServer => {
-                let server = live::Released::new(&request.settings, cancel);
+                let server = live::Released::of(&state.profile, &request.settings, cancel)?;
                 new_server::switch(&server, &store, &mut state, emit)?;
             }
             Rebuild::Unsupported => return Err(Error::Invalid(UNSUPPORTED)),
@@ -240,7 +240,7 @@ pub fn cancel_replacement(request: &Request, cancel: &Cancellation, emit: &dyn F
             revert(&live::Pod::new(&provider, &store, cancel), &store, &mut state, emit)?;
         }
         Rebuild::NewServer => {
-            let server = live::Released::new(&request.settings, cancel);
+            let server = live::Released::of(&state.profile, &request.settings, cancel)?;
             if new_server::cancel(&server, &store, &mut state, emit)? == new_server::Cancelled::Untouched {
                 return Ok(state);
             }

@@ -11,6 +11,7 @@ use horizon_cloud::{Cancellation, CreateState, Credential, WorkerSpec, azure::Az
 use serde_json::json;
 
 mod lifecycle;
+mod rebuild;
 
 const SUB: &str = "00000000-0000-4000-8000-000000000001";
 const INSTANCE: &str = "3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f";
