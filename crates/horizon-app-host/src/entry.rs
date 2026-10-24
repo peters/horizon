@@ -1,17 +1,9 @@
 //! Shared headless entry point for the packaged GUI and standalone native host.
 
 fn catalog() -> crate::Result<()> {
-    use horizon_core::Config;
     use horizon_core::remote_browser_credential::{CredentialStores, KeyringCredentialStore, SessionCredentialStore};
-    let path = Config::resolve_path(None).ok_or(crate::Error::Unavailable)?;
-    let text = std::fs::read_to_string(path).map_err(|_| crate::Error::Unavailable)?;
-    let config = Config::from_yaml(&text).map_err(|_| crate::Error::Unavailable)?;
-    let profile = config
-        .browser
-        .remote
-        .providers
-        .get("browserstack")
-        .ok_or(crate::Error::Unavailable)?;
+    let path = crate::settings::settings_path()?;
+    let profile = &crate::settings::provider_at(&path, "browserstack")?;
     let session = SessionCredentialStore::new();
     let keyring = KeyringCredentialStore::open().map_err(|_| horizon_app_runtime::Error::CredentialsUnavailable)?;
     let account = horizon_app_runtime::account::Account::capture(

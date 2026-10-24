@@ -32,8 +32,8 @@ browser:
 | Remote session (for example BrowserStack) | No | The browser keeps its own WebAuthn behavior. |
 
 The `horizon-browser` CLI starts its standalone sessions with the default
-browser configuration. These sessions do not read `~/.horizon/config.yaml`, so
-the bridge is off in them.
+browser configuration. These sessions do not read the settings store of this
+computer, so the bridge is off in them.
 
 ## Data flow
 

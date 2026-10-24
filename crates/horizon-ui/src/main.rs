@@ -82,9 +82,8 @@ fn main() -> eframe::Result {
     };
     let resolved_config_path =
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
-    if let Some(profile_path) = cli_args.remote_profile.as_ref() {
-        let code = run_remote_profile_command(&resolved_config_path, profile_path);
-        plugin_install::exit_after_releasing_plugins(code);
+    if let Some(command) = cli_args.command.as_ref() {
+        run_command(command, &resolved_config_path);
     }
     #[cfg(target_os = "linux")]
     agent_integrations.install_desktop_entry();
@@ -310,6 +309,37 @@ fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
     }
 }
 
+/// `--export-config [PATH]` writes the settings as YAML for a person or a tool.
+/// Horizon never reads that file: a setting changes in the Settings window.
+/// Run the one command of this launch and exit with its status.
+fn run_command(command: &Command, config_path: &std::path::Path) -> ! {
+    let code = match command {
+        Command::ExportConfig(destination) => run_export_config_command(config_path, destination.as_deref()),
+        Command::RemoteProfile(profile) => run_remote_profile_command(config_path, profile),
+    };
+    plugin_install::exit_after_releasing_plugins(code)
+}
+
+fn run_export_config_command(config_path: &std::path::Path, destination: Option<&std::path::Path>) -> i32 {
+    let destination = destination.map_or_else(|| config_path.to_path_buf(), std::path::Path::to_path_buf);
+    let store = horizon_core::config_store::ConfigStore::resolve(config_path);
+    match Config::export(config_path, &destination) {
+        Ok(()) => {
+            println!(
+                "exported the settings of {} to {}\n\
+                 Horizon does not read this file: change a setting in the Settings window.",
+                store.path().display(),
+                destination.display()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("error: could not export the settings: {error}");
+            2
+        }
+    }
+}
+
 /// `--export-remote-profile PATH` writes the shareable half of
 /// `browser.remote` (no credential bindings or values) and
 /// `--import-remote-profile PATH` merges such a file into the configuration
@@ -477,6 +507,7 @@ fn init_tracing() {
 }
 
 const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
+       horizon [--config <path>] --export-config [<path>]
        horizon [--config <path>] --export-remote-profile <path>
        horizon [--config <path>] --import-remote-profile <path>";
 
@@ -491,7 +522,15 @@ struct CliArgs {
     new_session: bool,
     ephemeral: bool,
     blank: bool,
-    remote_profile: Option<RemoteProfileCommand>,
+    command: Option<Command>,
+}
+
+/// A command that finishes without opening a window.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    /// Write the settings as YAML. `None` uses the settings path itself.
+    ExportConfig(Option<PathBuf>),
+    RemoteProfile(RemoteProfileCommand),
 }
 
 /// Parse the launch flags. The remote-profile commands take exactly one
@@ -503,9 +542,9 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
     let mut new_session = false;
     let mut ephemeral = false;
     let mut blank = false;
-    let mut remote_profile: Option<RemoteProfileCommand> = None;
+    let mut command: Option<Command> = None;
 
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
         let mut operand = |flag: &str| -> Result<PathBuf, String> {
             match args.next() {
@@ -515,16 +554,23 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
         };
         match arg.as_str() {
             "--config" | "-c" => config_path = Some(operand(&arg)?),
+            "--export-config" => {
+                // The path is optional: with none, the export replaces the
+                // settings path, which is the file a person expects to read.
+                let path = match args.peek() {
+                    Some(value) if !value.starts_with('-') && !value.is_empty() => args.next().map(PathBuf::from),
+                    _ => None,
+                };
+                set_command(&mut command, Command::ExportConfig(path))?;
+            }
             "--export-remote-profile" | "--import-remote-profile" => {
                 let path = operand(&arg)?;
-                let command = if arg == "--export-remote-profile" {
+                let profile = if arg == "--export-remote-profile" {
                     RemoteProfileCommand::Export(path)
                 } else {
                     RemoteProfileCommand::Import(path)
                 };
-                if remote_profile.replace(command).is_some() {
-                    return Err("give one of --export-remote-profile and --import-remote-profile, once".to_string());
-                }
+                set_command(&mut command, Command::RemoteProfile(profile))?;
             }
             "--new-session" => new_session = true,
             "--ephemeral" => ephemeral = true,
@@ -538,8 +584,19 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
         new_session,
         ephemeral,
         blank,
-        remote_profile,
+        command,
     })
+}
+
+/// Keep one command, so a second one is an error instead of a silent winner.
+fn set_command(command: &mut Option<Command>, next: Command) -> Result<(), String> {
+    if command.replace(next).is_some() {
+        return Err(
+            "give one command only, once: --export-config, --export-remote-profile or --import-remote-profile"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -579,7 +636,7 @@ mod log_filter_tests {
 
 #[cfg(test)]
 mod cli_args_tests {
-    use super::{RemoteProfileCommand, parse_cli_args};
+    use super::{Command, RemoteProfileCommand, parse_cli_args};
 
     fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
         parse_cli_args(args.iter().map(|arg| (*arg).to_string()))
@@ -588,10 +645,16 @@ mod cli_args_tests {
     #[test]
     fn remote_profile_commands_take_one_real_operand_and_exclude_each_other() {
         let args = parse(&["--config", "c.yaml", "--export-remote-profile", "p.yaml"]).expect("export");
-        assert_eq!(args.remote_profile, Some(RemoteProfileCommand::Export("p.yaml".into())));
+        assert_eq!(
+            args.command,
+            Some(Command::RemoteProfile(RemoteProfileCommand::Export("p.yaml".into())))
+        );
         assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.yaml")));
         let args = parse(&["--import-remote-profile", "p.yaml", "--ephemeral"]).expect("import");
-        assert_eq!(args.remote_profile, Some(RemoteProfileCommand::Import("p.yaml".into())));
+        assert_eq!(
+            args.command,
+            Some(Command::RemoteProfile(RemoteProfileCommand::Import("p.yaml".into())))
+        );
         assert!(args.ephemeral);
 
         for bad in [
@@ -607,9 +670,27 @@ mod cli_args_tests {
         assert!(
             parse(&["--blank", "--new-session"])
                 .expect("plain launch")
-                .remote_profile
+                .command
                 .is_none()
         );
+    }
+
+    #[test]
+    fn export_config_takes_an_optional_path_and_runs_alone() {
+        let args = parse(&["--export-config"]).expect("export to the settings path");
+        assert_eq!(args.command, Some(Command::ExportConfig(None)));
+        let args = parse(&["--export-config", "out.yaml"]).expect("export to a path");
+        assert_eq!(args.command, Some(Command::ExportConfig(Some("out.yaml".into()))));
+        let args = parse(&["--config", "c.yaml", "--export-config"]).expect("still one command");
+        assert_eq!(args.command, Some(Command::ExportConfig(None)));
+        assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.yaml")));
+
+        for bad in [
+            &["--export-config", "a.yaml", "--export-remote-profile", "b.yaml"][..],
+            &["--export-config", "a.yaml", "--export-config", "b.yaml"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
     }
 }
 

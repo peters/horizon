@@ -53,7 +53,7 @@ fn v11_removes_only_retired_provider_config_and_is_idempotent() {
 
     let migrated = Config::load(Some(&path)).expect("migration");
     assert_eq!(migrated.to_yaml().unwrap(), expected.to_yaml().unwrap());
-    let saved = std::fs::read_to_string(&path).expect("saved migration");
+    let saved = migrated.to_yaml().unwrap();
     let value: serde_yaml::Value = serde_yaml::from_str(&saved).unwrap();
     assert!(value.get("remote").is_none());
     assert!(value["browser"].get("remote").is_some());
@@ -63,7 +63,16 @@ fn v11_removes_only_retired_provider_config_and_is_idempotent() {
 
     let reloaded = Config::load(Some(&path)).expect("reload migrated config");
     assert_eq!(reloaded.to_yaml().unwrap(), saved);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    let kept = std::fs::read_dir(root.path())
+        .expect("the configuration directory")
+        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("config.yaml.imported-"))
+        .expect("the imported copy is kept");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(kept)).unwrap(),
+        LEGACY,
+        "the copy that the run imported keeps every byte that the person wrote"
+    );
 }
 
 #[test]

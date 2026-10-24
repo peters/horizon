@@ -9,9 +9,13 @@ Two halves, run on two computers:
                          that the file carries no binding, value or local path.
   run      (computer B)  imports that file through `horizon
                          --import-remote-profile` into a fresh configuration,
-                         binds each credential reference to this computer's OS
-                         store (the same binding the Settings > Remote browsers
-                         row adds), enters the credential into that store,
+                         reads the settings back through `horizon
+                         --export-config` (Horizon keeps them in
+                         `settings.sqlite`, not in a YAML file), binds each
+                         credential reference to this computer's OS store (the
+                         same binding the Settings > Remote browsers row adds),
+                         writes that bound copy where the first start imports
+                         it, enters the credential into the OS store,
                          starts Horizon, drives one target through the public
                          MCP tools only, closes it, asks the provider whether
                          the session is released, then removes the stored
@@ -472,13 +476,14 @@ def store_has_items(keychain: str | None) -> bool | None:
 
 # --- computer B ---------------------------------------------------------------
 
-def bind_references(config_path: pathlib.Path) -> dict:
+def bind_references(document: str) -> tuple[str, dict]:
     """Add this computer's bindings under the imported provider, exactly as
     the Settings > Remote browsers row does when "OS credential store" is
     chosen for an unbound reference: `store: os_keychain`, slot
-    `remote-browser/<provider>/<reference>`. The file is the YAML Horizon
-    wrote on import, so the provider block is located by its fixed layout."""
-    lines = config_path.read_text(encoding="utf-8").splitlines()
+    `remote-browser/<provider>/<reference>`. The input is the YAML that
+    `horizon --export-config` writes, so the provider block is located by its
+    fixed layout, and the caller writes it where the next start imports it."""
+    lines = document.splitlines()
     providers_line = lines.index(next(line for line in lines if line.strip() == "providers:"))
     provider_line = next(i for i in range(providers_line + 1, len(lines)) if lines[i].strip() == f"{PROVIDER}:")
     indent = len(lines[provider_line]) - len(lines[provider_line].lstrip()) + 2
@@ -488,8 +493,7 @@ def bind_references(config_path: pathlib.Path) -> dict:
     for reference, slot in BINDINGS.items():
         inserted += [f"{pad}  {reference}:", f"{pad}    store: os_keychain", f"{pad}    slot: {slot}"]
     lines[limits_line:limits_line] = inserted
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"bindings_added": list(BINDINGS), "line": limits_line + 1}
+    return "\n".join(lines) + "\n", {"bindings_added": list(BINDINGS), "line": limits_line + 1}
 
 
 def start_horizon(horizon: pathlib.Path, config: pathlib.Path, root: pathlib.Path, env: dict, log_name: str) -> tuple[subprocess.Popen, str, str]:
@@ -572,21 +576,36 @@ def run(args: argparse.Namespace) -> int:
 
     # 1. A fresh configuration with only the agent panel, then the import.
     #    (The probe may add SHELL to the environment; Horizon gets the result.)
-    config_path = root / "config.yaml"
-    config_path.write_text(json.dumps(base_config(root), indent=2) + "\n", encoding="utf-8")
+    #    The settings live in the store, so the import is checked through an
+    #    export of the settings and never through the bytes of the YAML file.
+    #    The probe has its own path, and its store stays in its own folder.
+    probe_path = root / "probe" / "config.yaml"
+    probe_path.parent.mkdir(parents=True, exist_ok=True)
+    probe_path.write_text(json.dumps(base_config(root), indent=2) + "\n", encoding="utf-8")
     env = dict(os.environ)
-    before = config_path.read_text(encoding="utf-8")
-    imported = horizon_command(horizon, config_path, "--import-remote-profile", str(profile), env=env)
-    after = config_path.read_text(encoding="utf-8")
-    steps.append({"step": "import_profile", **imported, "config_changed": before != after,
-                  "config_has_provider": any(line.strip() == f"{PROVIDER}:" for line in after.splitlines()),
-                  "config_has_bindings": "credential_bindings" in after,
-                  "config_has_targets": all(any(line.strip() == f"{t}:" for line in after.splitlines()) for t in args.targets)})
-    if imported["exit"] != 0:
+    imported = horizon_command(horizon, probe_path, "--import-remote-profile", str(profile), env=env)
+    exported_path = root / "imported.yaml"
+    exported = (
+        horizon_command(horizon, probe_path, "--export-config", str(exported_path), env=env)
+        if imported["exit"] == 0
+        else {"exit": None, "args": [], "stdout": "", "stderr_lines": 0, "ms": 0}
+    )
+    imported_text = exported_path.read_text(encoding="utf-8") if exported_path.exists() else ""
+    exported_lines = [line.strip() for line in imported_text.splitlines()]
+    steps.append({"step": "import_profile", **imported, "export": exported,
+                  "config_has_provider": any(line == f"{PROVIDER}:" for line in exported_lines),
+                  "config_has_bindings": "credential_bindings" in imported_text,
+                  "config_has_targets": all(any(line == f"{t}:" for line in exported_lines) for t in args.targets)})
+    if imported["exit"] != 0 or not imported_text:
         return finish(root, report, args.targets)
 
     # 2. Bind the references on this computer and enter the credential here.
-    steps.append({"step": "bind_references", **bind_references(config_path)})
+    #    The next start imports the bound copy into the store, so this half
+    #    writes no store itself.
+    config_path = root / "config.yaml"
+    bound_text, bound = bind_references(imported_text)
+    config_path.write_text(bound_text, encoding="utf-8")
+    steps.append({"step": "bind_references", **bound})
     seeded = None
     app = None
     # A termination signal must unwind through the finally below so the OS
@@ -620,6 +639,13 @@ def run(args: argparse.Namespace) -> int:
         stop_horizon(app)
         app = None
         steps.append({"step": "horizon_stopped"})
+        stored_path = root / "stored.yaml"
+        stored = horizon_command(horizon, config_path, "--export-config", str(stored_path), env=env)
+        stored_text = stored_path.read_text(encoding="utf-8") if stored_path.exists() else ""
+        steps.append({"step": "settings_reach_the_store", **stored,
+                      "store_has_bindings": "credential_bindings" in stored_text,
+                      "store_has_targets": all(f"{t}:" in [line.strip() for line in stored_text.splitlines()] for t in args.targets),
+                      "copy_kept_aside": sorted(p.name for p in root.glob("config.yaml.imported-*"))})
 
         # 4. Remove the stored credential, restart, and show the target is
         #    refused: nothing about the value survives outside the store.
@@ -689,6 +715,9 @@ def finish(root: pathlib.Path, report: dict, targets: list[str]) -> int:
         problems.append("import failed")
     if by_step.get("import_profile", {}).get("config_has_bindings"):
         problems.append("import carried bindings")
+    store = by_step.get("settings_reach_the_store", {})
+    if store.get("exit") != 0 or not store.get("store_has_bindings"):
+        problems.append("the store did not receive the bound settings")
     restart = by_step.get("restart_requires_reentry")
     if restart is None:
         problems.append("restart check did not run")

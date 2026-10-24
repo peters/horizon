@@ -237,21 +237,14 @@ fn selected_with(
     horizon_app_runtime::account::Account,
     Arc<horizon_app_runtime::journal::Journal>,
 )> {
-    use horizon_core::{Config, remote_browser_credential::KeyringCredentialStore};
+    use horizon_core::remote_browser_credential::KeyringCredentialStore;
     let client = client(path)?;
     horizon_app_process::storage::Directory::open(&client.state)?;
     if let (Some(binary), Some(sha256)) = (&client.tunnel_binary, &client.tunnel_sha256) {
         horizon_app_provider::tunnel::VerifiedBinary::capture(binary, sha256)?;
     }
-    let config_path = Config::resolve_path(None).ok_or(Error::Unavailable)?;
-    let text = std::fs::read_to_string(config_path).map_err(|_| Error::Unavailable)?;
-    let config = Config::from_yaml(&text).map_err(|_| Error::Unavailable)?;
-    let profile = config
-        .browser
-        .remote
-        .providers
-        .get(&client.provider)
-        .ok_or(Error::Unavailable)?;
+    let config_path = super::settings::settings_path()?;
+    let profile = &super::settings::provider_at(&config_path, &client.provider)?;
     let account = account(&client, profile, || {
         KeyringCredentialStore::open().map_err(|_| horizon_app_runtime::Error::CredentialsUnavailable.into())
     })?;

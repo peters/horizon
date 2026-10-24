@@ -18,6 +18,17 @@ pub struct Binding {
     pub configuration_file: PathBuf,
     pub providers: BTreeSet<String>,
 }
+/// The settings that a grant names.
+///
+/// A grant names the settings of this machine, and a start moves those into the
+/// store. [`crate::Config::read`] answers from the store and from a copy that no
+/// start has imported yet, so the grant keeps working after the move.
+fn granted_settings(binding: &Binding) -> Result<crate::Config> {
+    crate::Config::read(&binding.configuration_file)
+        .map_err(|_| Error::Invalid("Invalid machine-local browser configuration"))?
+        .ok_or(Error::Invalid("Invalid machine-local browser configuration"))
+}
+
 impl Binding {
     /// # Errors
     /// Repository content cannot choose a credential file or expand a grant.
@@ -74,8 +85,7 @@ impl Prepared {
                 "BrowserStack account exceeds this repository's local credential grant",
             ));
         }
-        let config = crate::Config::from_yaml(&std::fs::read_to_string(&binding.configuration_file)?)
-            .map_err(|_| Error::Invalid("Invalid machine-local browser configuration"))?;
+        let config = granted_settings(binding)?;
         let mut remote = config.browser.remote;
         remote.targets.retain(|_, target| target.provider == selected.provider);
         remote.providers.retain(|name, _| name == &selected.provider);
@@ -235,6 +245,31 @@ mod tests {
         }))
         .unwrap()
     }
+    #[test]
+    fn a_grant_reads_the_store_after_the_copy_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.yaml");
+        let yaml = "browser:\n  remote:\n    providers:\n      account:\n        adapter: browserstack\n        endpoint: https://hub-cloud.browserstack.com/wd/hub\n";
+        crate::Config::save_text(&path, yaml).unwrap();
+        assert!(!path.exists(), "a text save writes the store and no copy");
+        let binding = Binding {
+            local_repository: root.path().into(),
+            configuration_file: path.clone(),
+            providers: ["account".into()].into(),
+        };
+
+        let config = granted_settings(&binding).unwrap();
+
+        assert!(config.browser.remote.providers.contains_key("account"));
+        assert!(
+            granted_settings(&Binding {
+                configuration_file: root.path().join("absent.yml"),
+                ..binding
+            })
+            .is_err()
+        );
+    }
+
     #[test]
     fn omitted_declaration_reads_no_grants_files_or_credentials() {
         let missing = Path::new("/missing-repository");

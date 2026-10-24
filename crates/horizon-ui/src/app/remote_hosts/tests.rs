@@ -197,11 +197,13 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
     assert!(!app.set_remote_hosts_default_workspace("   "));
     app.wait_for_settings_io();
 
-    let saved = std::fs::read_to_string(&app.config_path).expect("config written");
-    assert!(
-        saved.contains("remote_hosts:\n  default_workspace: '  Ops  '\n  vnc_port: 5900\n"),
-        "{saved}"
+    let saved = Config::load(Some(&app.config_path)).expect("settings reload");
+    assert_eq!(
+        saved.remote_hosts.default_workspace_name(),
+        "  Ops  ",
+        "the store holds the default workspace"
     );
+    assert!(!app.config_path.exists(), "no YAML copy is written next to the store");
     assert_eq!(
         app.template_config.remote_hosts.default_workspace_name(),
         "  Ops  ",
@@ -231,7 +233,7 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
 #[test]
 fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
-    std::fs::write(&app.config_path, Config::default().to_yaml().unwrap()).unwrap();
+    Config::save(&app.config_path, &app.template_config).expect("write the store");
     app.toggle_settings();
     assert!(app.settings.is_some(), "settings editor open");
 
@@ -275,67 +277,78 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
         "the GUI tabs' snapshot follows the file"
     );
     assert_eq!(
-        std::fs::read_to_string(&app.config_path).unwrap(),
-        editor.buffer,
-        "editor text matches the file"
+        Config::load(Some(&app.config_path))
+            .expect("reload")
+            .remote_hosts
+            .default_workspace_name(),
+        editor
+            .editing_config()
+            .map(|config| config.remote_hosts.default_workspace_name())
+            .unwrap_or_default(),
+        "the editor and the store hold the same settings"
     );
 }
 
 #[test]
-fn setting_the_default_workspace_patches_the_file_text_in_place() {
+fn setting_the_default_workspace_leaves_an_exported_copy_alone() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
-    let source = "version: 11 # keep this comment\nremote_hosts:\n  vnc_port: 5901 # and this one\n  future_key: true\nworkspaces: []\n";
-    std::fs::write(&app.config_path, source).unwrap();
+    Config::save(&app.config_path, &app.template_config).expect("write the store");
+    Config::export(&app.config_path, &app.config_path).expect("export a copy");
+    let exported = std::fs::read_to_string(&app.config_path).expect("read the export");
 
     assert!(app.set_remote_hosts_default_workspace("Ops"));
     app.wait_for_settings_io();
 
-    let saved = std::fs::read_to_string(&app.config_path).unwrap();
     assert_eq!(
-        saved,
-        "version: 11 # keep this comment\nremote_hosts:\n  default_workspace: Ops\n  vnc_port: 5901 # and this one\n  future_key: true\nworkspaces: []\n"
+        std::fs::read_to_string(&app.config_path).expect("read the export again"),
+        exported,
+        "Horizon writes only the store, so the export keeps its bytes"
     );
-    assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
+    assert_eq!(
+        Config::load(Some(&app.config_path))
+            .expect("reload")
+            .remote_hosts
+            .default_workspace_name(),
+        "Ops"
+    );
 }
 
 #[test]
-fn set_default_never_overwrites_a_file_it_cannot_patch_in_place() {
+fn set_default_uses_the_settings_of_the_run_with_no_file_to_patch() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
 
-    // A flow-style section is valid YAML the patcher does not rewrite.
-    let flow = "version: 11 # keep\nremote_hosts: { vnc_port: 5901 }\nworkspaces: []\n";
-    std::fs::write(&app.config_path, flow).unwrap();
-    assert!(!app.set_remote_hosts_default_workspace("Ops"));
-    assert_eq!(std::fs::read_to_string(&app.config_path).unwrap(), flow);
-
-    // A file that is currently invalid keeps its external edits.
-    let broken = "version: 11\nremote_hosts:\n  vnc_port: [\n";
-    std::fs::write(&app.config_path, broken).unwrap();
-    assert!(!app.set_remote_hosts_default_workspace("Ops"));
-    assert_eq!(std::fs::read_to_string(&app.config_path).unwrap(), broken);
-    assert_eq!(
-        app.template_config.remote_hosts.default_workspace_name(),
-        "Remote Sessions"
-    );
-
-    // The text written is what gets applied: a file edited since the last
-    // reload keeps its other settings when one key is patched.
-    let edited = "version: 11\nremote_hosts:\n  vnc_port: 5999\nworkspaces: []\n";
-    std::fs::write(&app.config_path, edited).unwrap();
-    assert_eq!(app.template_config.remote_hosts.vnc_port, 5900, "not reloaded yet");
+    // A store of another version refuses the change instead of overwriting it.
+    Config::save(&app.config_path, &app.template_config).expect("write the store");
+    let store = horizon_core::config_store::ConfigStore::resolve(&app.config_path);
+    {
+        let connection = rusqlite::Connection::open(store.path()).expect("store");
+        connection
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '99') \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )
+            .expect("write a newer schema version");
+    }
+    let before = std::fs::read(store.path()).expect("read the store");
     assert!(app.set_remote_hosts_default_workspace("Ops"));
     app.wait_for_settings_io();
-    assert_eq!(app.template_config.remote_hosts.vnc_port, 5999, "the file's value wins");
-    assert_eq!(app.template_config.remote_hosts.default_workspace_name(), "Ops");
+    assert_eq!(
+        std::fs::read(store.path()).expect("reread the store"),
+        before,
+        "a store of another version is never rewritten"
+    );
 
-    // Only a genuinely absent file is written from the config.
-    std::fs::remove_file(&app.config_path).unwrap();
-    assert!(app.set_remote_hosts_default_workspace("Fresh"));
-    app.wait_for_settings_io();
-    assert!(
-        std::fs::read_to_string(&app.config_path)
-            .unwrap()
-            .contains("default_workspace: Fresh")
+    // A fresh run with no settings writes the default workspace to the store.
+    let (_second_temp, _second_ctx, mut fresh) = test_app_with_startup(ephemeral());
+    assert!(fresh.set_remote_hosts_default_workspace("Fresh"));
+    fresh.wait_for_settings_io();
+    assert_eq!(
+        Config::load(Some(&fresh.config_path))
+            .expect("reload")
+            .remote_hosts
+            .default_workspace_name(),
+        "Fresh"
     );
 }
 
@@ -476,42 +489,23 @@ fn saving_shortcuts_stores_presets_the_palette_can_create_anywhere() {
 }
 
 #[test]
-fn saving_a_shortcut_keeps_external_config_edits_and_refuses_a_broken_file() {
+fn saving_a_shortcut_keeps_the_settings_of_the_run() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
-    // An external edit the app has not reloaded yet.
-    let edited = "version: 11\nremote_hosts:\n  vnc_port: 5999\nworkspaces: []\n";
-    std::fs::write(&app.config_path, edited).unwrap();
-    assert_eq!(app.template_config.remote_hosts.vnc_port, 5900, "not reloaded yet");
+    app.template_config.remote_hosts.vnc_port = 5999;
 
     assert_eq!(
         app.save_remote_host_shortcut(launch("lab", lab_connection(), RemoteConnectMode::Vnc)),
         Some("VNC: lab".to_string())
     );
     app.wait_for_settings_io();
-    let saved = Config::load(Some(&app.config_path)).expect("config reloads");
-    assert_eq!(saved.remote_hosts.vnc_port, 5999, "the external edit survives");
+    let saved = Config::load(Some(&app.config_path)).expect("settings reload");
+    assert_eq!(saved.remote_hosts.vnc_port, 5999, "the earlier setting survives");
     let vnc = saved
         .presets
         .iter()
         .find(|preset| preset.name == "VNC: lab")
         .expect("vnc preset");
-    assert_eq!(
-        vnc.command.as_deref(),
-        Some("127.0.0.1:5999"),
-        "the port comes from the file, not memory"
-    );
-    assert_eq!(
-        app.template_config.remote_hosts.vnc_port, 5999,
-        "what was written is what applies"
-    );
-
-    let broken = "version: 11\nremote_hosts:\n  vnc_port: [\n";
-    std::fs::write(&app.config_path, broken).unwrap();
-    assert_eq!(
-        app.save_remote_host_shortcut(launch("lab", lab_connection(), RemoteConnectMode::Vnc)),
-        None
-    );
-    assert_eq!(std::fs::read_to_string(&app.config_path).unwrap(), broken, "left alone");
+    assert_eq!(vnc.command.as_deref(), Some("127.0.0.1:5999"));
 }
 
 mod picker_in_full_app {
