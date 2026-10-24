@@ -520,6 +520,15 @@ link-local range 169.254.0.0/16, which holds the metadata service, because that
 service returns the user data, including the registry login. The container does
 not start if the rule cannot be applied.
 
+An Azure VM is a plain Ubuntu image, so its user data (`customData`) also
+installs Ubuntu's `docker.io` and formats the empty data disk at
+`/dev/disk/azure/scsi1/lun0` as ext4 once, only when it has no filesystem. Its
+guard also drops container traffic to Azure's platform address 168.63.129.16,
+which serves the custom data, and every IPv6 packet forwarded from `docker0`.
+The metadata service 169.254.169.254 is inside the link-local range above.
+[Azure provisioning](../../docs/architecture/azure-provisioning.md) lists the
+resources around the VM.
+
 The login file stays on the host (root only, never mounted into the container) so a
 restarted host can pull again if its image cache is lost. The credential also stays
 readable in the server's user data for the server's whole life, so callers must pass
