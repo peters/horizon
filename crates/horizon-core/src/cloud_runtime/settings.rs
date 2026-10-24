@@ -1,4 +1,7 @@
 //! Machine-local bindings. Repository configuration cannot select credentials.
+mod azure;
+pub use azure::Azure;
+
 use super::{Error, Result};
 use horizon_cloud::Credential;
 use serde::{Deserialize, Serialize};
@@ -57,6 +60,9 @@ pub struct Settings {
     /// Omitted unless Hetzner is configured, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hetzner: Option<Hetzner>,
+    /// Omitted unless Azure is configured, so existing settings keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub azure: Option<Azure>,
     /// Docker engines this machine may run clouds on, each under a unique name. Omitted
     /// until one is saved, so existing settings keep their encoding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -104,6 +110,39 @@ pub struct RegistryPull {
     /// A private file holding the token or password.
     pub password_file: PathBuf,
 }
+impl RegistryPull {
+    /// The host login this binding names.
+    /// # Errors
+    /// Requires a private, readable password file.
+    pub fn login(&self) -> Result<horizon_cloud::host::RegistryLogin> {
+        validate_private_key_file(&self.password_file)?;
+        let read = read_secret(&self.password_file)?;
+        let trimmed = std::str::from_utf8(&read)
+            .map_err(|_| Error::Invalid("The registry pull password file must hold one printable token"))?
+            .trim();
+        // Checked here so a refused password is never moved into a buffer that
+        // is dropped unwiped.
+        if trimmed.is_empty() || trimmed.bytes().any(|b| b <= 32 || b >= 127) {
+            return Err(Error::Invalid(
+                "The registry pull password file must hold one printable token",
+            ));
+        }
+        let password = Credential::new(trimmed.to_owned())?;
+        Ok(horizon_cloud::host::RegistryLogin {
+            server: self.server.clone(),
+            username: self.username.clone(),
+            password,
+        })
+    }
+
+    /// Whether the registry host, username and password path can make a host login.
+    #[must_use]
+    pub fn valid(&self) -> bool {
+        self.password_file.is_absolute()
+            && horizon_cloud::host::RegistryLogin::valid_identity(&self.server, &self.username)
+    }
+}
+
 #[must_use]
 pub fn default_agents() -> Vec<horizon_cloud::Agent> {
     vec![horizon_cloud::Agent::Codex, horizon_cloud::Agent::Claude]
@@ -208,10 +247,21 @@ impl Settings {
         if let Some(hetzner) = &self.hetzner {
             hetzner.validate()?;
         }
+        if let Some(azure) = &self.azure {
+            azure.validate()?;
+        }
         if let Some(github) = &self.github {
             github.validate()?;
         }
         Ok(())
+    }
+    /// The machine's Azure settings, which every Azure cloud needs.
+    /// # Errors
+    /// Refuses a machine without an `azure` section.
+    pub fn azure_settings(&self) -> Result<&Azure> {
+        self.azure.as_ref().ok_or(Error::Invalid(
+            "Add an azure section to the cloud settings before deploying an Azure cloud",
+        ))
     }
     /// Whether this machine has a `RunPod` API key; a machine may use Hetzner alone.
     #[must_use]
@@ -297,27 +347,7 @@ impl Hetzner {
     /// # Errors
     /// Requires a private, readable password file.
     pub fn registry_login(&self) -> Result<Option<horizon_cloud::host::RegistryLogin>> {
-        let Some(pull) = &self.registry_pull else {
-            return Ok(None);
-        };
-        validate_private_key_file(&pull.password_file)?;
-        let read = read_secret(&pull.password_file)?;
-        let trimmed = std::str::from_utf8(&read)
-            .map_err(|_| Error::Invalid("The registry pull password file must hold one printable token"))?
-            .trim();
-        // Checked here so a refused password is never moved into a buffer that
-        // is dropped unwiped.
-        if trimmed.is_empty() || trimmed.bytes().any(|b| b <= 32 || b >= 127) {
-            return Err(Error::Invalid(
-                "The registry pull password file must hold one printable token",
-            ));
-        }
-        let password = Credential::new(trimmed.to_owned())?;
-        Ok(Some(horizon_cloud::host::RegistryLogin {
-            server: pull.server.clone(),
-            username: pull.username.clone(),
-            password,
-        }))
+        self.registry_pull.as_ref().map(RegistryPull::login).transpose()
     }
 
     /// # Errors

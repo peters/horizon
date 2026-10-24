@@ -1,7 +1,8 @@
-//! Azure's place among the providers. Horizon cannot create, manage or delete an Azure
-//! cloud yet (#1774), so every lifecycle operation refuses before it writes a record,
-//! tells an observer or reaches a provider.
-use super::{super::Error, Cancellation, CreateState, Deployment, Event, Lifecycle, Observer, Result, Store};
+//! Azure's place among the providers. The machine's `azure` settings name the VM
+//! sizes and regions from the catalog, but Horizon cannot create, manage or delete an
+//! Azure cloud yet (#1774), so every lifecycle operation refuses before it writes a
+//! record, tells an observer or reaches a provider.
+use super::{super::Error, Cancellation, CreateState, Deployment, Event, Lifecycle, Observer, Result, Settings, Store};
 use horizon_cloud::runpod::recovery::Reconciliation;
 
 /// What every Azure lifecycle operation answers.
@@ -10,8 +11,16 @@ pub(in crate::cloud_runtime) const REFUSED: Error = Error::Invalid("Horizon cann
 pub(super) const NOT_CREATABLE: Error = Error::Invalid("Horizon cannot create clouds on Azure yet");
 /// What asks for an Azure client. Distinct from a missing account, which a key could fix.
 pub(super) const NO_CLIENT: Error = Error::Invalid("Horizon has no Azure deployment client yet");
-/// What asks for Azure VM sizes or regions before the catalog exists.
-pub(super) const NO_CATALOG: Error = Error::Invalid("Horizon has no Azure VM size or region catalog yet");
+
+/// The VM sizes Horizon tries, in order; the spec keeps them as its CPU flavors.
+pub(super) fn cpu_flavors(settings: &Settings) -> Result<Vec<String>> {
+    Ok(settings.azure_settings()?.vm_sizes.clone())
+}
+
+/// The regions an Azure cloud may be made in, in order.
+pub(super) fn data_centers(settings: &Settings) -> Result<Vec<String>> {
+    Ok(settings.azure_settings()?.regions.clone())
+}
 
 pub(super) struct Azure;
 
