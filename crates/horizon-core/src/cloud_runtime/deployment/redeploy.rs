@@ -1,7 +1,14 @@
 //! Explicit replacement after confirmed deletion. Unresolved workers stay fenced.
 use super::{Deployment, Error, Result, Stage, Store, storage};
 use crate::cloud_runtime::state::ReadyHistory;
-use horizon_cloud::CreateState;
+use horizon_cloud::{CreateState, provider::Kind};
+
+/// The refusal of a redeploy or reconnect of a deleted Azure cloud. Its `azure.json`
+/// keeps the proof that the group is gone, with `deleting` set for good, so nothing
+/// can provision under that record again.
+pub(super) const AZURE_DELETED: Error = Error::Invalid(
+    "This Azure cloud is deleted and cannot be deployed again. Remove its card, then create a new cloud",
+);
 
 /// Reopens a confirmed-deleted cloud for a new allocation.
 /// The deleted storage journal is removed before the deployment fence is saved,
@@ -9,6 +16,9 @@ use horizon_cloud::CreateState;
 pub(super) fn reopen(store: &Store, state: &mut Deployment, public_key: &str) -> Result<()> {
     if state.stage != Stage::Deleted {
         return Err(Error::Invalid("Only a deleted cloud can be redeployed"));
+    }
+    if horizon_cloud::provider::Description::of(&state.profile).kind == Kind::Azure {
+        return Err(AZURE_DELETED);
     }
     #[cfg(feature = "tailnet-node-cleanup")]
     super::super::tailnet::cleanup::require_complete(store, state)?;
@@ -379,6 +389,29 @@ mod tests {
         let saved = store.load().unwrap().unwrap();
         assert_eq!(saved.spec.as_ref().unwrap().profile.cpu, original_cpu);
         assert!(crate::cloud_runtime::lifecycle::can_remove(&store, &saved).unwrap());
+    }
+
+    #[test]
+    fn a_deleted_azure_cloud_is_never_reopened() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::lock(root.path()).unwrap();
+        let group = "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-deleted-cloud";
+        let mut state = deleted(&serde_json::json!({"state":"terminated","worker_id":"worker1"}));
+        state.profile.provider = "azure".into();
+        state.spec.as_mut().unwrap().profile.provider = "azure".into();
+        store.save(&state).unwrap();
+        let proof = serde_json::json!({
+            "region":"northeurope","group":{"state":"terminated","worker_id":group},"deleting":true,"swept":true
+        });
+        std::fs::write(root.path().join("azure.json"), serde_json::to_vec(&proof).unwrap()).unwrap();
+        let saved = std::fs::read(root.path().join("deployment.json")).unwrap();
+        let error = reopen(&store, &mut state, "unused").unwrap_err().to_string();
+        assert!(error.contains("create a new cloud"), "{error}");
+        assert_eq!(state.stage, Stage::Deleted);
+        assert_eq!(std::fs::read(root.path().join("deployment.json")).unwrap(), saved);
+        let kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("azure.json")).unwrap()).unwrap();
+        assert_eq!(kept, proof, "the deletion proof stays as it was");
     }
 
     #[test]

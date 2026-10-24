@@ -181,6 +181,11 @@ still bill. For an Azure cloud, `azure.json` is that record:
   proof of another provider.
 - A reconnect admits a bound Azure record, as `RunPod`'s, and refuses a cloud
   whose journal has `deleting`, as Hetzner's.
+- `redeploy::reopen` refuses a `Deleted` Azure record before it saves
+  anything, and a reconnect of that record gets the same refusal. The proven
+  `azure.json` keeps `deleting` for good, so a provision under that record
+  could never start. The person removes the card and creates a new cloud,
+  which gets a new cloud id and a new `azure.json`.
 
 ## Host bootstrap
 

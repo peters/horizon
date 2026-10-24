@@ -38,16 +38,19 @@ pub fn reconnect(
 /// A reconnect never reopens a deleted cloud, never starts a stopped one and never
 /// creates a cloud's first worker.
 fn admit(store: &Store, state: &Deployment) -> Result<()> {
+    let kind = horizon_cloud::provider::Description::of(&state.profile).kind;
     if state.stage == Stage::Deleted {
-        return Err(Error::Invalid(
-            "The cloud was deleted; deploy it again to create a new worker",
-        ));
+        return Err(if kind == Kind::Azure {
+            super::redeploy::AZURE_DELETED
+        } else {
+            Error::Invalid("The cloud was deleted; deploy it again to create a new worker")
+        });
     }
     if state.stop_requested {
         return Err(Error::Invalid("The worker is stopped; resume it before reconnecting"));
     }
     let bound = matches!(state.operation, CreateState::Bound { .. });
-    match horizon_cloud::provider::Description::of(&state.profile).kind {
+    match kind {
         Kind::RunPod | Kind::DockerHost if bound => Ok(()),
         Kind::Hetzner => hetzner_admits(store, bound),
         Kind::Azure => azure_admits(store, bound),
@@ -173,6 +176,7 @@ mod tests {
                 Some(r#"{"volume":{"state":"bound","worker_id":"9"},"deleting":true}"#),
                 "being deleted",
             ),
+            (record("azure", "Deleted", &prepared), None, "create a new cloud"),
             (record("azure", "Provision", &prepared), None, "deploy it first"),
             (record("azure", "Provision", &requested), None, "deploy it first"),
             (
