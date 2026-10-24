@@ -131,21 +131,8 @@ pub(super) fn profile(form: &Production) -> Option<&Profile> {
 
 pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Option<Catalog> {
     let profile = profile(form)?;
-    let runpod = form
-        .prices
-        .list
-        .as_ref()
-        .filter(|_| form.prices.runpod_bound())
-        .map(|fetched| &fetched.value);
-    let hetzner = form
-        .prices
-        .hetzner
-        .displayed()
-        .and_then(|fetched| fetched.value.as_ref());
-    if runpod.is_none() && hetzner.is_none() {
-        return None;
-    }
-    let mut workers = offers::workers(profile, form.launch.selector.hours, runpod, hetzner);
+    let mut workers = workers(form, profile)?;
+    let azure = form.prices.azure.offered();
     let interested = |provider| interested(form, profile, provider);
     let scope = Scope::new(form, profile);
     let matching_currency = |currency| {
@@ -160,7 +147,7 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
     let currency = if runpod_currency || hetzner_currency {
         comparison_currency(runpod_currency, hetzner_currency)
     } else {
-        comparison_currency(scope.runpod, scope.hetzner)
+        comparison_currency(scope.runpod || scope.azure, scope.hetzner)
     };
     let cost = |offer: &Offer| {
         offers::comparison::in_currency(
@@ -181,6 +168,7 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
     let complete = (!scope.runpod || form.prices.comparable_list().is_some() && form.prices.list_error.is_none())
         && (!scope.hetzner || form.prices.hetzner.comparable().is_some() && form.prices.hetzner.error().is_none())
         && (!interested(&horizon_core::cloud_runtime::provider::HETZNER) || form.prices.hetzner.comparable().is_some())
+        && (!scope.azure || azure.is_some())
         && offers
             .iter()
             .take(matching)
@@ -229,6 +217,36 @@ pub(in crate::app::cloud_panel::production) fn catalog(form: &Production) -> Opt
     Some(catalog)
 }
 
+/// Every worker of the providers whose prices are on show, before the comparison order.
+fn workers(form: &Production, profile: &Profile) -> Option<offers::Workers> {
+    let runpod = form
+        .prices
+        .list
+        .as_ref()
+        .filter(|_| form.prices.runpod_bound())
+        .map(|fetched| &fetched.value);
+    let hetzner = form
+        .prices
+        .hetzner
+        .displayed()
+        .and_then(|fetched| fetched.value.as_ref());
+    let azure = form.prices.azure.offered();
+    if runpod.is_none() && hetzner.is_none() && azure.is_none() {
+        return None;
+    }
+    let mut workers = offers::workers(profile, form.launch.selector.hours, runpod, hetzner);
+    if let Some((prices, policy)) = azure {
+        workers.add_azure(
+            profile,
+            form.launch.selector.hours,
+            prices,
+            &policy.sizes,
+            &policy.regions,
+        );
+    }
+    Some(workers)
+}
+
 fn interested(
     form: &Production,
     profile: &Profile,
@@ -246,6 +264,7 @@ fn interested(
 struct Scope {
     runpod: bool,
     hetzner: bool,
+    azure: bool,
 }
 
 impl Scope {
@@ -255,6 +274,9 @@ impl Scope {
                 && form.prices.runpod_bound(),
             hetzner: interested(form, profile, &horizon_core::cloud_runtime::provider::HETZNER)
                 && form.prices.hetzner.bound(),
+            // Azure joins the comparison once its token was read; until then it lists nothing.
+            azure: interested(form, profile, &horizon_core::cloud_runtime::provider::AZURE)
+                && form.prices.azure.policy().is_some(),
         }
     }
 }
@@ -392,9 +414,13 @@ pub(super) fn section(ui: &mut Ui, form: &mut Production) {
     ui.add_space(4.0);
     if open {
         chosen = cards::all(ui, &catalog, form).or(chosen);
-        if super::provider::current(form.provider, &profile).placement
-            == horizon_core::cloud_runtime::provider::Placement::Locations
-        {
+        let current = super::provider::current(form.provider, &profile);
+        if current.kind == horizon_core::cloud_runtime::provider::Kind::Azure {
+            widgets::note(
+                ui,
+                "Only the VM sizes and regions of the azure cloud settings are listed. Choosing a row fixes that VM size and region; no other is tried.",
+            );
+        } else if current.placement == horizon_core::cloud_runtime::provider::Placement::Locations {
             widgets::note(
                 ui,
                 "Hetzner availability is advisory. Choosing a row fixes that server type and location; no fallback is rented.",
@@ -503,6 +529,11 @@ fn freshness(ui: &mut Ui, form: &mut Production, profile: &Profile) {
             ui,
             &format!("Hetzner prices unavailable: {error}. Retaining the last catalog for inspection."),
         );
+    }
+    if interested(form, profile, &horizon_core::cloud_runtime::provider::AZURE)
+        && let Some(problem) = prices.azure.problem()
+    {
+        widgets::note(ui, &format!("Azure workers are not offered: {problem}"));
     }
     if uses_exchange && let Some(error) = &prices.exchange.error {
         widgets::note(ui, error);

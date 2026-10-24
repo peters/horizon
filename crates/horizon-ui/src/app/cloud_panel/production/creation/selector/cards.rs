@@ -49,7 +49,7 @@ fn total(catalog: &Catalog, offer: &Offer, form: &Production) -> Option<String> 
     Some(format!("≈ {}{total:.3} total", symbol(catalog.currency)))
 }
 
-fn symbol(currency: &str) -> &str {
+pub(super) fn symbol(currency: &str) -> &str {
     match currency {
         "EUR" => "€",
         "USD" => "$",
@@ -377,10 +377,11 @@ fn paint_price(painter: &egui::Painter, right: egui::Pos2, price: &str, total: O
 fn stock(catalog: &Catalog, index: usize, form: &Production) -> (&'static str, egui::Color32) {
     let offer = &catalog.offers[index];
     if offer.location.is_some() {
-        return if offer.availability == "listed" {
-            ("Listed available", theme::PALETTE_GREEN())
-        } else {
-            ("Unlisted · advisory", theme::PALETTE_YELLOW())
+        return match offer.availability {
+            "listed" => ("Listed available", theme::PALETTE_GREEN()),
+            // Azure lists no stock; the subscription's quota decides when the cloud starts.
+            "checked_at_creation" => ("Quota checked at start", theme::PALETTE_YELLOW()),
+            _ => ("Unlisted · advisory", theme::PALETTE_YELLOW()),
         };
     }
     widgets::stock(catalog.stock(index, form))

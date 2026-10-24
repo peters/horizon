@@ -23,6 +23,9 @@ fn configured(prices: &State) -> Vec<&'static Description> {
     if prices.hosts.bound() {
         configured.push(&provider::DOCKER_HOST);
     }
+    if prices.azure.bound() {
+        configured.push(&provider::AZURE);
+    }
     configured
 }
 
@@ -176,13 +179,4 @@ fn runpod_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let texture = ctx.load_texture("cloud-provider-mark-runpod", image, egui::TextureOptions::LINEAR);
     ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
     Some(texture)
-}
-
-/// Euros with cents, or four decimals below a cent.
-pub(super) fn euros(value: f64) -> String {
-    if value < 0.1 {
-        format!("€{value:.4}")
-    } else {
-        format!("€{value:.2}")
-    }
 }
