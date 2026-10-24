@@ -293,7 +293,7 @@ Do the tasks in order. Each task has a stable ID for the report.
 1. Run the deletion proof, removal and reconnect tests.
 
    ```sh
-   cargo test -p horizon-core --lib -- cloud_runtime::tailnet::cleanup cloud_runtime::lifecycle::tests::an_azure cloud_runtime::deployment::reconnect cloud_runtime::deployment::tests::an_azure
+   cargo test -p horizon-core --lib -- cloud_runtime::tailnet::cleanup cloud_runtime::lifecycle::tests::an_azure cloud_runtime::deployment::reconnect cloud_runtime::deployment::tests::an_azure cloud_runtime::deployment::redeploy
    ```
 
    Result: All tests pass. These tests examine the items that follow:
@@ -302,6 +302,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    - Tailnet node cleanup of an Azure receipt runs after the proof, and an unsettled `azure.json` stops it before an HTTP request.
    - `can_remove` is false while the group is bound, and after its 404 until the sweep. It is true after the proof. `can_remove_without_deployment` is false while `azure.json` exists.
    - A reconnect admits a bound Azure record. It refuses a record without a bound VM, a stopped record and a cloud whose `azure.json` has `deleting`, before a provider request.
+   - A redeploy of a `Deleted` Azure record is refused before a save. The message tells the person to remove the card and create a new cloud. The record and its `azure.json` do not change. A reconnect of that record gets the same message.
    - Without an `azure` section, a deploy is refused before a deployment record is written.
 
 ### 6.16 AZV-L1 — Create one live Azure worker
