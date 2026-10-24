@@ -3,9 +3,10 @@
 The module `horizon_cloud::azure::catalog` reads Azure prices from the retail price
 list. The module `horizon_cloud::offers::azure` makes Azure offers from these
 prices. Both modules are separate from [the ARM client](azure-arm-client.md). They
-use no credential and no subscription. `offers::AZURE_DEPLOYABLE` stays `false`, so
-each Azure offer has `rentable: false` and the Azure section has
-`deployable: false`.
+use no credential and no subscription. `offers::AZURE_DEPLOYABLE` is `true`, so
+the Azure section has `deployable: true`. Each Azure offer has `rentable: false`:
+the `azure` settings place a worker by their VM sizes and regions, and
+`WorkerChoice::for_profile` refuses a single Azure offer.
 
 ## Callers
 
