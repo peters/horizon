@@ -125,7 +125,11 @@ fn steps_card(
                     renew
                 })
                 .inner;
-            if renew { Some(StepAction::Reconnect) } else { action }
+            if renew.is_some_and(|renew| renew.clicked()) {
+                Some(StepAction::Reconnect)
+            } else {
+                action
+            }
         })
         .inner
 }

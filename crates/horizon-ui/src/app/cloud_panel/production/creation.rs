@@ -103,6 +103,10 @@ impl HorizonApp {
         let picking = self.dir_picker.is_some();
         let refocus_repository = self.prepare_cloud_creation(ctx, picking);
         self.sync_cloud_creation_choices(ctx);
+        // A refused Start shows in the footer that holds the Start button. In the body it
+        // landed under the fields, below the fold of a scrolling column, which reads as no
+        // answer at all; the board's toast cannot show through this modal either.
+        let refused = self.cloud_prototype.error.clone();
         let id = Id::unique("cloud-creation");
         let sizing_pass = measure_on_open(ctx, id);
         // Root chrome uses Tooltip order; raise this modal last to contain its input too.
@@ -136,17 +140,7 @@ impl HorizonApp {
                 ui.add_space(16.0);
                 self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
                 ui.add_space(12.0);
-                if preparing {
-                    match super::repository_setup::footer(ui, &self.cloud_prototype.production) {
-                        super::repository_setup::Footer::None => {}
-                        super::repository_setup::Footer::Close => actions.cancel = true,
-                        super::repository_setup::Footer::Run(action) => {
-                            actions.repository = RepositoryAction::SetupRun(action);
-                        }
-                    }
-                } else {
-                    checks::footer(ui, &mut self.cloud_prototype.production, &mut actions);
-                }
+                self.cloud_creation_footer(ui, &mut actions, preparing, refused.as_deref());
             });
         ctx.move_to_top(response.response.layer_id);
         // Escape is the agent's while its live terminal shows and it still works.
@@ -270,6 +264,22 @@ impl HorizonApp {
         }
     }
 
+    /// The dialog's footer: the setup agent's own controls, or the Start button with the reason
+    /// a refused Start gave.
+    fn cloud_creation_footer(&mut self, ui: &mut Ui, actions: &mut Actions, preparing: bool, refused: Option<&str>) {
+        if preparing {
+            match preparing_footer(ui, &self.cloud_prototype.production, refused) {
+                super::repository_setup::Footer::None => {}
+                super::repository_setup::Footer::Close => actions.cancel = true,
+                super::repository_setup::Footer::Run(action) => {
+                    actions.repository = RepositoryAction::SetupRun(action);
+                }
+            }
+        } else {
+            checks::footer(ui, &mut self.cloud_prototype.production, actions, refused);
+        }
+    }
+
     /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
     /// used is forgotten.
     pub(in crate::app::cloud_panel::production) fn close_cloud_creation(&mut self) {
@@ -370,10 +380,6 @@ impl HorizonApp {
                 }
             },
         );
-        if let Some(error) = &self.cloud_prototype.error {
-            ui.add_space(8.0);
-            ui.colored_label(theme::PALETTE_RED(), error);
-        }
     }
 
     /// Keeps prices and stock current for the size being chosen.
@@ -720,6 +726,18 @@ fn advanced_fields(ui: &mut Ui, form: &mut Production) -> RepositoryAction {
 
 /// What the revision decides, and what the working copy still decides on the checked-out commit.
 const REVISION_NOTE: &str = "Only committed files are transferred. On the checked-out commit, the settings come from the working copy of .horizon/cloud.yml and update as you save it, and the image builds with the uncommitted files of its recipe, listed under the profile. Another revision uses that commit alone.";
+
+/// The footer of a dialog that prepares its repository: the setup agent's controls, with the
+/// reason a refused Start gave above them. That view replaces the Start button, so the reason
+/// must not go with it.
+pub(super) fn preparing_footer(
+    ui: &mut Ui,
+    form: &Production,
+    refused: Option<&str>,
+) -> super::repository_setup::Footer {
+    checks::refusal(ui, refused);
+    super::repository_setup::footer(ui, form)
+}
 
 /// Why Start is unavailable, for the selector tests; the dialog works it out once per
 /// frame with [`submit_reason_given`].

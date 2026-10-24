@@ -295,12 +295,33 @@ fn verdict_given(form: &Production, checking: bool) -> Verdict {
 }
 
 /// The footer: Continue while the repository is still being chosen, Start cloud after.
-pub(super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut super::Actions) {
+pub(super) fn footer(ui: &mut Ui, form: &mut Production, actions: &mut super::Actions, refused: Option<&str>) {
+    refusal(ui, refused);
     if source_step(form) {
         source::continue_footer(ui, form, actions);
     } else {
         selector::summary::footer(ui, form, actions);
     }
+}
+
+/// A refused Start shows here, where the footer's own buttons are. In the body it landed
+/// under the fields, below the fold of a scrolling column, which reads as no answer at all;
+/// the board's error toast stays hidden while the dialog is open. A setup view paints it
+/// too: its footer replaces the Start button, and the reason must not go with it.
+pub(super) fn refusal(ui: &mut Ui, refused: Option<&str>) {
+    let Some(refused) = refused else {
+        return;
+    };
+    // Its own bounded band: a long reason must never push the footer's buttons out of the
+    // window.
+    egui::ScrollArea::vertical()
+        .id_salt("cloud-start-refused")
+        .max_height(52.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.label(RichText::new(refused).size(13.0).color(theme::PALETTE_RED()));
+        });
+    ui.add_space(6.0);
 }
 
 /// Whether the dialog is still asking where the code is.

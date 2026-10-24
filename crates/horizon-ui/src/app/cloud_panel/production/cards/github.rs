@@ -229,20 +229,19 @@ pub(super) fn requests(ui: &mut egui::Ui, runtime: &Runtime) -> Option<(String, 
 
 /// **Connect GitHub again**, once this cloud's GitHub step reported its outcome. A click
 /// asks the next deployment to sign in again; the caller then reconnects it.
-pub(super) fn renew_button(ui: &mut egui::Ui, runtime: &Runtime) -> bool {
+pub(super) fn renew_button(ui: &mut egui::Ui, runtime: &Runtime) -> Option<egui::Response> {
     // Not for access a worker kept after GitHub was disconnected here, nor once GitHub is
     // disconnected: nothing could sign it in again.
     if !github::configured() || !offers_renewal(runtime) {
-        return false;
+        return None;
     }
-    let clicked = ui
+    let response = ui
         .add(chrome_button("Connect GitHub again"))
-        .on_hover_text("Reconnect this cloud and sign in to GitHub again, for example to add a repository.")
-        .clicked();
-    if clicked {
+        .on_hover_text("Reconnect this cloud and sign in to GitHub again, for example to add a repository.");
+    if response.clicked() {
         runtime.renew_github.set(true);
     }
-    clicked
+    Some(response)
 }
 
 /// Whether the card offers a new sign-in now: only when the reconnect a click asks for can

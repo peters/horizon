@@ -1,5 +1,6 @@
 use super::*;
-use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app, test_app_with_startup};
+use crate::test_egui::DiscardTextures;
 use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Rect, epaint::Shape};
 use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
@@ -170,6 +171,85 @@ fn opening_a_cloud_for_a_repository_focuses_the_title_without_an_extra_click() {
         Modifiers::NONE,
     );
     assert_eq!(app.cloud_prototype.production.title, "Feature workspace");
+}
+
+#[test]
+fn a_refused_start_shows_why_beside_the_start_button() {
+    let (_temp, mut app) = test_app();
+    app.cloud_prototype.production.creating = true;
+    app.cloud_prototype.error = Some("Open a saved session from Sessions before starting a cloud".into());
+    let ctx = egui::Context::default();
+    let mut painted = |events| {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(1400.0, 900.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| app.render_cloud_creation(ui.ctx()),
+        )
+        .discard_textures()
+    };
+    painted(Vec::new());
+    let output = painted(Vec::new());
+    let texts: Vec<(String, f32)> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) => Some((text.galley.text().to_owned(), text.pos.y)),
+            _ => None,
+        })
+        .collect();
+    let y = |wanted: &str| texts.iter().find(|(text, _)| text == wanted).map(|(_, y)| *y);
+    let refused = texts
+        .iter()
+        .find(|(text, _)| text.contains("Open a saved session from Sessions before starting a cloud"))
+        .map(|(_, y)| *y);
+    let continue_y = y("Continue").unwrap_or_else(|| panic!("no Continue: {texts:?}"));
+    let refused = refused.unwrap_or_else(|| panic!("the dialog hides the refusal: {texts:?}"));
+    // The footer holds the buttons, so the reason must sit in that band: under the scrolling
+    // body and within the footer's height of the button it explains.
+    assert!(
+        refused < continue_y + 40.0 && refused > continue_y - 120.0,
+        "the refusal at {refused} is not beside Continue at {continue_y}: {texts:?}"
+    );
+    let shown = texts
+        .iter()
+        .filter(|(text, _)| text.contains("Open a saved session"))
+        .count();
+    assert_eq!(shown, 1, "the refusal shows once: {texts:?}");
+}
+
+#[test]
+fn a_setup_footer_keeps_the_reason_a_refused_start_gave() {
+    // The preparing view replaces the Start button with the agent's own controls, so the reason
+    // has to be painted before them; otherwise a Start refusal that arrives while an agent
+    // prepares the repository disappears with the button that would have shown it.
+    let ctx = egui::Context::default();
+    let refused = "Open a saved session from Sessions before starting a cloud";
+    let texts: Vec<String> = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(1400.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let form = super::Production::default();
+                super::creation::preparing_footer(ui, &form, Some(refused));
+            },
+        )
+        .discard_textures()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|text| text.contains(refused)),
+        "the setup footer hides the refusal: {texts:?}"
+    );
 }
 
 #[test]

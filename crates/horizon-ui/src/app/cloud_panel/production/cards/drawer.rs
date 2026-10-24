@@ -296,17 +296,27 @@ fn output_heading(ui: &mut egui::Ui, runtime: &Runtime) {
     });
 }
 
+/// The GitHub line, with the retry **under** it rather than beside it. A refused sign-in
+/// explains itself in one long sentence; on a shared row that sentence takes the width and
+/// the button is left with a few pixels, which a button renders as one letter per line.
+fn github_rows(
+    ui: &mut egui::Ui,
+    line: &str,
+    retry: impl FnOnce(&mut egui::Ui) -> Option<egui::Response>,
+) -> Option<egui::Response> {
+    ui.label(RichText::new(line).size(12.5).color(theme::FG_DIM()));
+    retry(ui)
+}
+
 fn overview(ui: &mut egui::Ui, id: u32, runtime: &mut Runtime, context: &Context<'_>, response: &mut Response) {
     let status = context.status;
     steps::horizontal(ui, runtime, status);
     ui.add_space(10.0);
     if let Some((line, _)) = super::github::summary(runtime) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(line).size(12.5).color(theme::FG_DIM()));
-            if super::github::renew_button(ui, runtime) {
-                response.action = Some(Action::Deploy);
-            }
-        });
+        let retry = github_rows(ui, &line, |ui| super::github::renew_button(ui, runtime));
+        if retry.is_some_and(|retry| retry.clicked()) {
+            response.action = Some(Action::Deploy);
+        }
         ui.add_space(6.0);
     }
     if let Some(failure) = &status.failure {
@@ -486,6 +496,37 @@ pub(super) fn placement(group: &CloudGroup) -> Rect {
 mod tests {
     use super::*;
     use crate::test_egui::DiscardTextures;
+
+    /// The sentence a refused sign-in leaves on the card, which is what squeezed the retry.
+    const REFUSED: &str = "GitHub: GitHub did not finish the sign-in in time. Connect GitHub again on the cloud card.";
+
+    #[test]
+    fn the_github_retry_keeps_its_width_under_a_long_refusal() {
+        let mut checked = 0;
+        let _ = egui::Context::default()
+            .run_ui(egui::RawInput::default(), |ui| {
+                for width in [260.0, 320.0, 420.0, 620.0] {
+                    ui.set_max_width(width);
+                    let line_top = ui.cursor().top();
+                    let mut retry_top = None;
+                    let retry = github_rows(ui, REFUSED, |ui| {
+                        retry_top = Some(ui.cursor().top());
+                        Some(ui.add(egui::Button::new("Connect GitHub again")))
+                    });
+                    let retry = retry.map(|retry| retry.rect);
+                    assert!(
+                        retry.is_some_and(|retry| retry.width() >= 100.0),
+                        "{width}: the retry squeezed to {retry:?}"
+                    );
+                    let gap = retry_top.unwrap_or_default() - line_top;
+                    assert!(gap >= 16.0, "{width}: the retry shares the line's row ({gap})");
+                    ui.add_space(8.0);
+                    checked += 1;
+                }
+            })
+            .discard_textures();
+        assert_eq!(checked, 4);
+    }
 
     #[test]
     fn tabs_stay_inside_the_drawer_at_every_width() {
