@@ -131,4 +131,3 @@ pub(super) fn bsd(table: &str) -> Vec<Ipv4Addr> {
         })
         .collect()
 }
-

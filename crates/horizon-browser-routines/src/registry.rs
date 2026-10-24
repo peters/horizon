@@ -416,7 +416,6 @@ mod tests {
         std::fs::set_permissions(path, permissions).expect("chmod");
     }
 
-
     #[cfg(unix)]
     #[test]
     fn lock_waits_out_a_briefly_held_lock_but_not_a_kept_one() {

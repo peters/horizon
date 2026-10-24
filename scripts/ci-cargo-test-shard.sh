@@ -59,7 +59,7 @@ run_libs() {
         run_cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer:: || status=$?
         run_cargo test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate:: || status=$?
     fi
-    # Selection and inventory tests also cover the unsupported Windows state path.
+    # Selection and inventory tests run through the example binary.
     run_cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths || status=$?
     return "$status"
 }

@@ -175,4 +175,3 @@ fn create_new_refuses_an_existing_file_and_keeps_it() {
     assert_eq!(std::fs::read(&path).unwrap(), b"first");
     assert_eq!(entry_names(root.path()), ["step-0.json"]);
 }
-

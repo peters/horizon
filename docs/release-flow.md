@@ -205,7 +205,7 @@ Run **Verify Release Credentials** after rotating the App credential. It checks 
 
 Each release job mints a short-lived installation token restricted to its one destination repository. The token action revokes installation tokens when the job ends. The App does not have workflow-write permission.
 
-Horizon supports Linux and macOS only. A release publishes the Linux and macOS assets and no Windows asset, and the workflow opens no WinGet PR. The WinGet catalog keeps the older published versions for users who still have them installed. The catalog receives no new versions. Do not add a WinGet job back while Horizon supports Linux and macOS only.
+Horizon supports Linux and macOS only. A release publishes the Linux and macOS assets and no Windows asset. The workflow does not open a WinGet pull request. The WinGet catalog keeps the older published versions for users who still have them installed. The catalog receives no new versions. Do not add a WinGet job back while Horizon supports Linux and macOS only.
 
 If a stable release is missing one of those assets or the release App credentials, the release workflow fails instead of publishing a partial Homebrew update.
 
