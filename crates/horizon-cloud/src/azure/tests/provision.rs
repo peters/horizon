@@ -68,12 +68,13 @@ fn policy() -> Policy {
     }
 }
 
-fn bound_group() -> Journal {
+pub(super) fn bound_group() -> Journal {
     Journal {
         region: Some("northeurope".into()),
         group: CreateState::Bound {
             worker_id: format!("/subscriptions/{SUB}/resourceGroups/{GROUP}"),
         },
+        ..Journal::default()
     }
 }
 
@@ -97,7 +98,7 @@ fn run(client: &Scripted, records: &mut Recorded, login: Option<host::RegistryLo
     result
 }
 
-fn worker_url() -> String {
+pub(super) fn worker_url() -> String {
     vm_url(GROUP, WORKER_VM_NAME)
 }
 
@@ -105,7 +106,7 @@ fn create_url() -> String {
     deployment_url(DEPLOYMENT_NAME)
 }
 
-fn worker_body(instance: &str) -> Value {
+pub(super) fn worker_body(instance: &str) -> Value {
     json!({
         "id": format!("/subscriptions/{SUB}/resourceGroups/{GROUP}/providers/Microsoft.Compute/virtualMachines/worker"),
         "name": "worker",
@@ -134,12 +135,12 @@ fn deployed(state: &str) -> String {
     .to_string()
 }
 
-fn absent() -> String {
+pub(super) fn absent() -> String {
     arm_error("ResourceNotFound", "not found")
 }
 
 /// The reads that end every provisioning: the deployment's address output.
-fn address_read() -> Exchange {
+pub(super) fn address_read() -> Exchange {
     get(create_url(), 200, deployed("Succeeded"))
 }
 
@@ -322,6 +323,7 @@ fn a_conflict_keeps_the_fence_and_an_unfound_create_is_unresolved() {
         Journal {
             region: Some("northeurope".into()),
             group: CreateState::Requested,
+            ..Journal::default()
         },
     );
     assert!(matches!(
@@ -425,7 +427,7 @@ fn a_request_that_cannot_succeed_sends_nothing() {
     };
     let moved = Journal {
         region: Some("westeurope".into()),
-        group: CreateState::Prepared,
+        ..Journal::default()
     };
     let refusals = [
         attempt(&small, &policy(), Journal::default(), None),

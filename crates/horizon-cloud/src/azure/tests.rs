@@ -10,6 +10,7 @@ use ureq::{
     middleware::MiddlewareNext,
 };
 
+mod lifecycle;
 mod operation;
 mod provision;
 mod reconcile;
@@ -52,6 +53,19 @@ fn put(url: String, request_body: Value, status: u16, body: impl Into<String>) -
         method: "PUT",
         url,
         request_body: Some(request_body),
+        any_body: false,
+        status,
+        headers: Vec::new(),
+        body: body.into(),
+    }
+}
+
+/// A POST or DELETE, which sends no body.
+fn bodiless(method: &'static str, url: String, status: u16, body: impl Into<String>) -> Exchange {
+    Exchange {
+        method,
+        url,
+        request_body: None,
         any_body: false,
         status,
         headers: Vec::new(),
