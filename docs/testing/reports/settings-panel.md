@@ -65,5 +65,8 @@ canvas and its own first tab.
   `Save` with `Saved` in the bar.
 - The store of the run held `window.height: 985.0` after `Save`, which
   `--export-config` showed.
-- The regression test `a_long_yaml_line_does_not_widen_the_settings_panel` drew
-  the panel 4467 pixels wide before the fix and 480 pixels wide after it.
+- The regression test `a_long_yaml_line_does_not_widen_the_settings_panel`
+  compares the panel with a short line and with a long line on the same machine,
+  because the default width and the scroll bar differ by platform. On Linux the
+  panel drew 4467 pixels wide with the long line before the fix, and 479 pixels
+  with the fix, which is the width of the short line.
