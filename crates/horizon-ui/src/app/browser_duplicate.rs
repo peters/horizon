@@ -9,20 +9,25 @@ impl HorizonApp {
         &self,
         request: &mut BrowserCreateRequest,
         actor: ActorPanel,
+        source_manifest: Option<&manifest::BrowserManifest>,
     ) -> Result<Option<PanelOptions>, (&'static str, &'static str)> {
         if request.duplicate_from.is_none() {
             return Ok(None);
         }
-        let options = self.duplicate_browser_options(request, actor)?;
+        let options = self.duplicate_browser_options(request, actor, source_manifest)?;
         request.url.clone_from(&options.command);
         request.backend = options.browser_config.as_ref().map(|config| config.backend);
         Ok(Some(options))
     }
 
+    /// The launch options of a duplicate, decided from the board and from the
+    /// source panel's manifest that the coordination worker read for this
+    /// request; a missing or unreadable manifest arrives as [`None`].
     pub(super) fn duplicate_browser_options(
         &self,
         request: &BrowserCreateRequest,
         actor: ActorPanel,
+        source_manifest: Option<&manifest::BrowserManifest>,
     ) -> Result<PanelOptions, (&'static str, &'static str)> {
         let refuse = |code, message| Err((code, message));
         if request.target.is_some() || request.backend.is_some() || request.url.is_some() {
@@ -61,14 +66,14 @@ impl HorizonApp {
         if self.browser_create_is_pending(id) || !browser.can_duplicate() {
             return refuse("browser_unavailable", "source browser panel is not ready");
         }
-        let Some(manifest) = manifest::read(source) else {
+        let Some(source_manifest) = source_manifest else {
             return refuse("browser_unavailable", "source browser panel is not available");
         };
         let identity = AgentIdentity {
             actor: &request.actor,
             host_instance: request.host_instance.as_deref(),
         };
-        authorize_duplicate(&manifest, identity, manifest::now_millis())?;
+        authorize_duplicate(source_manifest, identity, manifest::now_millis())?;
         let mut options = browser
             .duplicate_options()
             .map_err(|_| ("browser_unavailable", "source browser panel is not ready"))?;
@@ -196,7 +201,7 @@ mod tests {
             workspace_id: other,
         };
         assert_eq!(
-            app.duplicate_browser_options(&request, actor)
+            app.duplicate_browser_options(&request, actor, None)
                 .err()
                 .expect("different workspace")
                 .0,
@@ -204,7 +209,7 @@ mod tests {
         );
         request.url = Some("https://example.test/override".into());
         assert_eq!(
-            app.duplicate_browser_options(&request, actor)
+            app.duplicate_browser_options(&request, actor, None)
                 .err()
                 .expect("URL override")
                 .0,

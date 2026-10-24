@@ -115,15 +115,7 @@ impl HorizonApp {
             return;
         }
         for request in creates {
-            match actor_panel(&self.board, &request.actor) {
-                Some(actor_panel) => self.start_requested_browser(request, actor_panel),
-                None => fail_create(
-                    &mut self.browser_create_host.io,
-                    &request,
-                    "workspace_unavailable",
-                    AGENT_GONE,
-                ),
-            }
+            self.start_claimed_browser_create(request);
         }
         for request in visibility {
             match actor_panel(&self.board, &request.actor) {

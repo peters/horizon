@@ -25,6 +25,13 @@ const STARTUP_NAVIGATION_BUDGET: Duration = Duration::from_secs(10);
 /// `RESULT_DELIVERY_HEADROOM_MILLIS` beyond the request deadline.
 const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 
+/// How old the manifest snapshot of a starting create may be before the host
+/// asks the coordination worker for a fresh one. The read retries for up to
+/// two seconds on Windows, so no frame reads it; the snapshot lags by at most
+/// this interval, and the startup budget above and the deadline headroom leave
+/// room for that lag before the create deadline.
+const CREATE_MANIFEST_REFRESH: Duration = Duration::from_millis(250);
+
 pub(super) struct PendingBrowserCreate {
     pub(super) request: BrowserCreateRequest,
     /// The panel, by its persisted id: board ids restart with a new session.
@@ -44,6 +51,13 @@ pub(super) struct PendingBrowserCreate {
     pub(super) stage: CreateStage,
     /// The board it was asked on; a create of a replaced board is not one of a restored panel.
     pub(super) board: BoardFence,
+    /// The manifest the agent reads, as the coordination worker last read it:
+    /// `None` until the first read lands, and while the file is missing.
+    pub(super) manifest: Option<manifest::BrowserManifest>,
+    /// When the host last asked the worker for that read.
+    pub(super) manifest_read_at: Option<Instant>,
+    /// A read of that manifest runs on the coordination worker.
+    pub(super) manifest_reading: bool,
 }
 
 /// Where a pending create stands. Only a starting create is judged each
@@ -59,6 +73,11 @@ pub(super) enum CreateStage {
     /// is still reported ready; the next stamp writes the board's placement.
     Finishing,
 }
+
+/// What the coordination worker read of a starting create's manifest. A read
+/// that did not run, because its job panicked, reports no manifest just as a
+/// missing file does.
+struct StartingCreateManifest(Option<manifest::BrowserManifest>);
 
 /// The panel a test wants treated as still being created.
 #[cfg(test)]
@@ -173,6 +192,8 @@ impl HorizonApp {
                 changed = true;
                 continue;
             }
+            self.refresh_starting_create_manifest(&mut pending);
+            let io = &mut self.browser_create_host.io;
             match finish_ready_browser_create(&self.board, io, &mut pending) {
                 BrowserCreateCompletion::Waiting => waiting.push(pending),
                 BrowserCreateCompletion::Completed => changed = true,
@@ -204,6 +225,54 @@ impl HorizonApp {
         for pending in &starting {
             record_and_complete_failure(&mut host.io, pending, HOST_RETIRING.0, HOST_RETIRING.1);
         }
+    }
+
+    /// Asks the coordination worker for the manifest of a starting create
+    /// when the snapshot is older than [`CREATE_MANIFEST_REFRESH`] and no read
+    /// of it runs. The frame judges the create on the last snapshot instead of
+    /// reading the file, so a slow disk or a lock another process holds never
+    /// stalls a frame.
+    fn refresh_starting_create_manifest(&mut self, pending: &mut PendingBrowserCreate) {
+        let now = Instant::now();
+        let due = pending
+            .manifest_read_at
+            .is_none_or(|read_at| now.saturating_duration_since(read_at) >= CREATE_MANIFEST_REFRESH);
+        if !due || pending.manifest_reading {
+            return;
+        }
+        pending.manifest_reading = true;
+        pending.manifest_read_at = Some(now);
+        let request_id = pending.request.request_id.clone();
+        let path = manifest::manifest_path_for_root(self.host_manifest_root(), &pending.panel_local_id);
+        self.browser_create_host.io.then(
+            move || StartingCreateManifest(manifest::read_at(&path)),
+            move |app, read| app.apply_starting_create_manifest(&request_id, read),
+        );
+    }
+
+    /// Keeps a read of a starting create's manifest for the create that asked
+    /// for it. A read whose board was replaced, or whose panel left the board,
+    /// is dropped: the create it would have answered has ended.
+    fn apply_starting_create_manifest(&mut self, request_id: &str, read: Option<StartingCreateManifest>) {
+        let stale = self.browser_create_host.io.applying_stale();
+        let Some(index) = self
+            .browser_create_host
+            .pending
+            .iter()
+            .position(|pending| pending.request.request_id == request_id)
+        else {
+            return;
+        };
+        let on_board = self
+            .board
+            .panel_id_by_local_id(&self.browser_create_host.pending[index].panel_local_id)
+            .is_some();
+        let pending = &mut self.browser_create_host.pending[index];
+        pending.manifest_reading = false;
+        if stale || !on_board {
+            return;
+        }
+        pending.manifest = read.and_then(|read| read.0);
     }
 
     /// Ends a create whose publication finished; one that could not be
@@ -251,14 +320,12 @@ fn finish_ready_browser_create(
     }
     // The driver writes its manifest before the backend is ready and before
     // the initial navigation commits, so the file's existence alone must not
-    // complete the create.
-    let Some(current) = manifest::read(&pending.panel_local_id) else {
+    // complete the create. The host judges it on the snapshot that the
+    // coordination worker last read, so a missing manifest keeps the create
+    // waiting here, as the absent file did.
+    let Some(current) = pending.manifest.as_ref() else {
         return BrowserCreateCompletion::Waiting;
     };
-    // The manifest read can be slow near a boundary; decide and measure on a
-    // clock read taken after it, keeping the earlier instant only for
-    // observing `Ready`.
-    let now = Instant::now();
     let deadline = create_deadline(pending, now);
     let CreateReadiness::Ready(navigation) = create_readiness(
         PageReadiness {
@@ -383,6 +450,9 @@ mod tests {
                 user_navigations_at_start: 0,
                 stage: CreateStage::Starting,
                 board: self.browser_create_host.io.board_fence(),
+                manifest: None,
+                manifest_read_at: None,
+                manifest_reading: false,
             });
         }
     }
@@ -594,5 +664,133 @@ mod tests {
         assert_eq!(left, ["auditing"], "its dispatch audit ends it");
         std::mem::forget(release);
         std::mem::forget(app);
+    }
+
+    /// A browser panel that has not finished starting, placed in `workspace`.
+    fn starting_browser(app: &mut HorizonApp, id: u64, workspace: horizon_core::WorkspaceId) -> String {
+        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::{Panel, PanelContent, PanelId};
+        let mut state = BrowserPanelState::inert();
+        state.status = BrowserStatus::Starting;
+        let panel = Panel::from_content(
+            PanelId(id),
+            workspace,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(state)),
+        );
+        let local_id = panel.local_id.clone();
+        app.board.panels.push(panel);
+        app.board.assign_panel_to_workspace(PanelId(id), workspace);
+        local_id
+    }
+
+    /// The manifest the agent reads for `local_id`, in this host's own home.
+    fn written_manifest(app: &HorizonApp, local_id: &str, url: &str) {
+        let path = manifest::manifest_path_for_root(app.host_manifest_root(), local_id);
+        manifest::write_at(
+            &path,
+            &manifest::BrowserManifest {
+                url: url.into(),
+                ..manifest::BrowserManifest::default()
+            },
+        )
+        .expect("live manifest");
+    }
+
+    /// What one read that a starting create started left on it, once every job
+    /// the frame asked for applied. `meanwhile` runs while the read waits, as a
+    /// create that ends, a panel that closes or a board that is replaced would.
+    fn snapshot_after_one_read(meanwhile: impl FnOnce(&mut HorizonApp, &str)) -> Option<String> {
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.create_workspace("alpha");
+        let local_id = starting_browser(&mut app, 9_170, workspace);
+        app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
+            panel_local_id: local_id.clone(),
+        });
+        written_manifest(&app, &local_id, "https://example.test/");
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        app.finish_pending_browser_creates();
+        meanwhile(&mut app, &local_id);
+        release.send(()).expect("release the worker");
+        app.settle_browser_host_io();
+        app.browser_create_host
+            .pending
+            .iter()
+            .find(|pending| pending.panel_local_id == local_id)
+            .and_then(|pending| pending.manifest.as_ref())
+            .map(|manifest| manifest.url.clone())
+    }
+
+    #[test]
+    fn a_blocked_manifest_read_never_stalls_the_frame_that_judges_a_starting_create() {
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.create_workspace("alpha");
+        let local_id = starting_browser(&mut app, 9_150, workspace);
+        app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
+            panel_local_id: local_id.clone(),
+        });
+        written_manifest(&app, &local_id, "https://example.test/");
+        // The worker waits, as it does for a manifest read whose file another
+        // process holds for the read's two-second bound.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+
+        let started = Instant::now();
+        assert!(!app.finish_pending_browser_creates(), "the read is not done yet");
+        let elapsed = started.elapsed();
+        release.send(()).expect("release the worker");
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "the frame waited {elapsed:?} for the manifest read"
+        );
+        assert!(
+            app.browser_create_host.io.busy(),
+            "the read waits on the coordination worker"
+        );
+        assert!(
+            app.browser_create_host.pending[0].manifest.is_none(),
+            "the first frame judges the create on no snapshot yet"
+        );
+
+        app.settle_browser_host_io();
+        let pending = app.browser_create_host.pending.first().expect("the create still waits");
+        assert_eq!(
+            pending.manifest.as_ref().map(|manifest| manifest.url.as_str()),
+            Some("https://example.test/"),
+            "the read applies to the create that asked for it"
+        );
+        assert!(!pending.manifest_reading, "no read of it is in flight");
+    }
+
+    #[test]
+    fn a_manifest_read_is_dropped_when_its_create_ended_its_panel_left_or_its_board_was_replaced() {
+        assert_eq!(
+            snapshot_after_one_read(|_, _| {}).as_deref(),
+            Some("https://example.test/"),
+            "a read that still has its create, its panel and its board applies"
+        );
+        assert_eq!(
+            snapshot_after_one_read(|app, _| app.browser_create_host.pending.clear()),
+            None,
+            "the read of a create that ended is dropped"
+        );
+        assert_eq!(
+            snapshot_after_one_read(|app, local_id| {
+                let panel_id = app.board.panel_id_by_local_id(local_id).expect("panel");
+                app.board.panels.retain(|panel| panel.id != panel_id);
+            }),
+            None,
+            "the read of a panel that left the board is dropped"
+        );
+        assert_eq!(
+            snapshot_after_one_read(|app, _| app.browser_create_host.io.replace_board()),
+            None,
+            "a read asked for on a replaced board is dropped"
+        );
     }
 }
