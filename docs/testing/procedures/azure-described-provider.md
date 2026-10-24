@@ -1,7 +1,7 @@
 ---
 procedure: azure-described-provider
 feature: Azure as a described provider that Horizon cannot create, manage or delete
-platforms: [linux, macos]
+platforms: [linux]
 cost: none
 destructive: no
 secrets: synthetic fixtures only
@@ -18,7 +18,7 @@ It also makes sure that each path that can create, stop, resume or delete an Azu
 ## 2. Applicability
 
 - Candidate: the first pull request of #1774, which adds Azure as a described provider.
-- Platforms: Linux and macOS with the repository Rust toolchain.
+- Platform: Linux with the repository Rust toolchain.
   The deployment record test and the CLI tasks use Unix paths and a POSIX shell.
 - These tasks use synthetic inputs only. They need no network, no provider account and no Azure credential.
 - No task makes an Azure resource, and no task needs a live Azure resource.
