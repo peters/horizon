@@ -7,7 +7,7 @@
 //! answer is untrusted: bodies are size-limited, decoded into small typed views,
 //! checked against the requested identity, and never echoed into errors except as a
 //! sanitized [`Reason`]. A 409 is never retried and never a definite refusal: it is
-//! the signal to reconcile.
+//! the signal to reconcile. [`provision`] creates a worker on these calls.
 use crate::{Cancellation, CloudError, Credential, Reason};
 use serde::Deserialize;
 use serde_json::Value;
@@ -16,6 +16,7 @@ use ureq::http::HeaderMap;
 
 pub mod catalog;
 pub mod operation;
+pub mod provision;
 pub mod reconcile;
 pub mod resource;
 pub mod template;
@@ -30,7 +31,7 @@ pub use resource::{DataDisk, Deployed, DeploymentState, Group, VirtualMachine};
 
 use operation::operation_ref;
 use resource::{deployment_state, group_info, vm_view};
-use url::{valid_resource_group_name, valid_resource_name, valid_subscription_id};
+use url::{valid_location, valid_resource_group_name, valid_resource_name, valid_subscription_id};
 
 /// The public ARM endpoint.
 pub const MANAGEMENT_ENDPOINT: &str = "https://management.azure.com";
@@ -284,6 +285,30 @@ impl Azure {
         self.get_json_within(&url, cancel, None)?
             .map(|value| group_info(&value, &self.subscription_id, name))
             .transpose()
+    }
+
+    /// Creates resource group `name` in `location` with `tags`, or sets them on the
+    /// group of that name. Callers read the group first: a PUT replaces the tags of
+    /// a group that already exists.
+    /// # Errors
+    /// `Invalid` for a bad name or location (nothing is sent), `IdentityMismatch` for
+    /// a body that names another group, `InvalidResponse` for an unusable body, or
+    /// the provider failure. Only a [`Failure::definite`] failure proves that ARM
+    /// made nothing.
+    pub fn put_resource_group(
+        &self,
+        name: &str,
+        location: &str,
+        tags: &std::collections::BTreeMap<String, String>,
+        cancel: &Cancellation,
+    ) -> Result<Group, Failure> {
+        let url = self.group_url(name)?;
+        if !valid_location(location) {
+            return Err(Failure::Local(CloudError::Invalid("Invalid Azure region")));
+        }
+        let body = serde_json::json!({ "location": location, "tags": tags });
+        let reply = self.send_within(Method::Put, &url, Some(&body), cancel, None)?;
+        group_info(&reply.value, &self.subscription_id, name)
     }
 
     /// Submits `template` with `parameters` as an incremental deployment `name` in

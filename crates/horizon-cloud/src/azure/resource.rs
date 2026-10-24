@@ -33,6 +33,8 @@ pub struct VirtualMachine {
     pub name: String,
     pub location: String,
     pub vm_size: String,
+    /// `storageProfile.osDisk.diskSizeGB`, once ARM reports it.
+    pub os_disk_gb: Option<u32>,
     pub provisioning_state: String,
     /// The `PowerState/...` code of the instance view, such as `PowerState/running`.
     pub power_state: Option<String>,
@@ -49,6 +51,7 @@ pub struct VirtualMachine {
 pub struct DataDisk {
     pub id: String,
     pub lun: Option<u64>,
+    pub size_gb: Option<u32>,
     /// `Detach` keeps the disk when the VM is deleted; `Delete` removes it with the VM.
     pub delete_option: String,
 }
@@ -178,6 +181,7 @@ pub(crate) fn vm_view(
         name: observed,
         location: text(value, "/location").unwrap_or_default(),
         vm_size: text(value, "/properties/hardwareProfile/vmSize").unwrap_or_default(),
+        os_disk_gb: gb(value, "/properties/storageProfile/osDisk/diskSizeGB"),
         provisioning_state: text(value, "/properties/provisioningState").unwrap_or_default(),
         power_state,
         tags: tags(value),
@@ -187,12 +191,20 @@ pub(crate) fn vm_view(
                 Some(DataDisk {
                     id: text(disk, "/managedDisk/id")?,
                     lun: disk.pointer("/lun").and_then(Value::as_u64),
+                    size_gb: gb(disk, "/diskSizeGB"),
                     delete_option: text(disk, "/deleteOption").unwrap_or_default(),
                 })
             })
             .collect(),
         data_disk_count: disks.len(),
     })
+}
+
+fn gb(value: &Value, pointer: &str) -> Option<u32> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_u64)
+        .and_then(|gb| u32::try_from(gb).ok())
 }
 
 fn invalid() -> Failure {

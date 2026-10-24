@@ -30,8 +30,9 @@ The client guarantees these items:
 - A 2xx answer whose `id`, `name` or `vmId` does not fit the request gives
   `IdentityMismatch`. The client never returns a partial view of it.
 - A 409 is never retried and never a definite refusal. A caller must reconcile.
-- The only write is the PUT of `put_deployment`. `reconcile` sends GET requests
-  only. It adopts a group only when the group name is `horizon-ws-<operation id>`
+- The only writes are the PUT of `put_resource_group` and the PUT of
+  `put_deployment`. [Azure provisioning](azure-provisioning.md) says when each
+  one is sent. `reconcile` sends GET requests only. It adopts a group only when the group name is `horizon-ws-<operation id>`
   and its `horizon-operation` tag is that operation id. It never tags, changes or
   deletes a group that it finds.
 
@@ -39,8 +40,8 @@ The client does not guarantee these items:
 
 - It does not prove that the credential belongs to the subscription. ARM decides
   access.
-- It does not keep a durable record. A later pull request adds the creation
-  journal and the state machine on `reconcile`.
+- It does not keep a durable record. `azure::provision` gives the records to
+  its caller.
 - It does not prove that a `Created` VM runs the expected image. `vmId` names the
   instance only.
 - A `loopback` client sends HTTP to a loopback address. Only tests use it.
