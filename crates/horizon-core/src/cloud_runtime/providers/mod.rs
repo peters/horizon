@@ -19,7 +19,6 @@ use super::{
 use horizon_cloud::runpod::recovery::Reconciliation;
 use horizon_cloud::{Profile, provider::Kind};
 
-pub(super) use azure::REFUSED as AZURE_REFUSED;
 #[cfg(feature = "tailnet-node-cleanup")]
 pub(super) use deletion::confirmed as deletion_confirmed;
 

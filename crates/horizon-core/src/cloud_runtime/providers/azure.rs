@@ -9,9 +9,6 @@ use super::{
 };
 use horizon_cloud::{Profile, azure::catalog::VM_SIZES, runpod::recovery::Reconciliation};
 
-/// What a companion's operation on an Azure cloud answers until companions admit it.
-pub(in crate::cloud_runtime) const REFUSED: Error = Error::Invalid("Horizon cannot manage Azure clouds yet");
-
 /// Checks what an Azure cloud needs before any record, build or request: a workspace
 /// disk Azure can make, an id that can name the cloud's resource group, a readable
 /// token, and a VM size in the settings that fits the profile.

@@ -17,6 +17,7 @@ pub(super) fn plan(store: &Store, binding: &Binding, intent: &Intent, state: Opt
                 "docker-host.json",
                 "workspace-volume.json",
                 "workspace-volume.required",
+                "azure.json",
             ] {
                 if store.root().join(file).try_exists()? {
                     return Err(Error::Invalid(
@@ -86,6 +87,9 @@ fn deletion_pending(store: &Store, state: &Deployment) -> Result<bool> {
             Err(error) => return Err(error.into()),
         };
         return Ok(journal.deleting);
+    }
+    if state.profile.provider == horizon_cloud::azure::PROVIDER {
+        return deployment::azure::deleting(store.root());
     }
     if state.profile.provider != horizon_cloud::hetzner::PROVIDER {
         return deployment::storage::deletion_pending(store, state);
@@ -163,7 +167,13 @@ impl Backend for Live<'_> {
                 horizon_cloud::provider::Kind::RunPod => {
                     self.settings.credential()?;
                 }
-                horizon_cloud::provider::Kind::Azure => return Err(crate::cloud_runtime::providers::AZURE_REFUSED),
+                horizon_cloud::provider::Kind::Azure => {
+                    self.settings
+                        .azure
+                        .as_ref()
+                        .ok_or(Error::Invalid("Configure this cloud provider before executing"))?
+                        .credential()?;
+                }
             }
             if matches!(
                 decision,
