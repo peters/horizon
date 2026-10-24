@@ -131,7 +131,9 @@ impl HorizonApp {
         } else {
             #[cfg(target_os = "linux")]
             self.casting.refresh_pairings();
-            let content = self.load_or_generate_config_yaml();
+            // The store is the only settings source: the editor shows the settings
+            // of this run, never a YAML copy that the person exported or edited.
+            let content = self.template_config_yaml();
             let editing_config = Config::from_yaml(&content).ok();
             #[cfg(feature = "cloud-workspaces")]
             let mut tailnets = super::tailnets::State::default();
@@ -152,15 +154,6 @@ impl HorizonApp {
                 remote_devices: remote_devices::RemoteDevicesPanel::default(),
             });
         }
-    }
-
-    fn load_or_generate_config_yaml(&self) -> String {
-        if let Ok(content) = std::fs::read_to_string(&self.config_path)
-            && Config::from_yaml(&content).is_ok()
-        {
-            return content;
-        }
-        self.template_config_yaml()
     }
 
     fn template_config_yaml(&self) -> String {

@@ -35,3 +35,24 @@ fn a_save_shows_saving_and_then_saved() {
         horizon_core::AppearanceTheme::Light
     );
 }
+
+/// A YAML copy that a person exported and then edited is not a settings source:
+/// the editor shows the settings of this run, so a later save cannot put the
+/// edited file into the store.
+#[test]
+fn an_edited_export_never_reaches_the_editor() {
+    let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
+    let mut exported = app.template_config.to_yaml().expect("yaml");
+    exported = exported.replace("theme: auto", "theme: light");
+    std::fs::write(&app.config_path, &exported).expect("write the edited export");
+
+    app.toggle_settings();
+
+    let editor = app.settings.as_ref().expect("open");
+    assert!(
+        !editor.buffer.contains("theme: light"),
+        "the editor holds the settings of this run, not the edited export: {}",
+        editor.buffer
+    );
+    assert!(editor.buffer.contains("theme: auto"), "{}", editor.buffer);
+}

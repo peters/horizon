@@ -14,6 +14,7 @@ mod project;
 pub mod runner;
 pub mod services;
 pub mod sessions;
+mod settings;
 pub mod view;
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
