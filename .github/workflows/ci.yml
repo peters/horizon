@@ -28,8 +28,9 @@ env:
 
 # Cache policy: every rust-cache step below and in release-artifacts.yml
 # sets `save-if: github.ref == 'refs/heads/main'`. The platform test jobs also
-# require one saver per OS (`matrix.save_cache` on Linux and macOS), so each OS
-# keeps one entry.
+# require one saver per cache key (`matrix.save_cache`), so each key keeps one
+# entry. The Linux shards share `linux-test`; each macOS shard has its own key,
+# because libs and speech build different graphs.
 # Pull-request runs restore from main's entry but never write their own.
 # A per-branch copy of each build
 # cache pushed the repository past GitHub's 10 GB budget, and the resulting
@@ -299,10 +300,14 @@ jobs:
     # entry per OS; the key still includes this job id. Only the speech shard
     # saves, and a miss on main rebuilds the whole workspace there before the
     # speech feature.
-    # macOS runs libs, then speech, as one `all` job, which saves its own
-    # entry. GitHub-hosted accounts get about five concurrent macOS jobs, so
-    # three per run kept pull requests queued for macOS runners. The speech
-    # pass runs the horizon-ui tests, so `all` skips the plain ui pass; the
+    # macOS runs libs and speech as two jobs. One macOS job set the pull
+    # request time, about 20 minutes warm, so the two jobs start side by side.
+    # Each macOS shard keeps its own cache key and saves it, because the two
+    # jobs build different graphs: libs compiles most of the workspace, and
+    # speech compiles horizon-ui with the feature. GitHub-hosted accounts get
+    # about five concurrent macOS jobs, and two test jobs per run leave room
+    # for the nightly release builds and for another pull request. The speech
+    # pass runs the horizon-ui tests, so macOS skips the plain ui pass; the
     # Linux ui job tests the build without speech.
     timeout-minutes: ${{ matrix.timeout_minutes || 35 }}
     # On a pull request that changes no speech input, horizon-ui included
@@ -319,7 +324,9 @@ jobs:
     strategy:
     # A failing OS releases the other runner instead of holding it to the
     # full timeout; the cancelled sibling keeps its logs and a re-run
-    # recovers the complete per-OS signal. See #677.
+    # recovers the complete per-OS signal. A failing macOS job also releases
+    # the sibling shard, which frees its place in the account's macOS slots.
+    # See #677.
       fail-fast: true
       matrix:
         include:
@@ -338,11 +345,18 @@ jobs:
             save_cache: true
           - os: macos-latest
             name: macOS arm64
-            cache_key: macos-test
-            shard: all
+            cache_key: macos-test-libs
+            shard: libs
             save_cache: true
-            # libs and speech in sequence, with the same cold-cache headroom.
+            # Cold-cache headroom for the workspace build that fills the entry.
             timeout_minutes: 60
+          - os: macos-latest
+            name: macOS arm64
+            cache_key: macos-test-speech
+            shard: speech
+            save_cache: true
+            # horizon-ui with the speech feature, plus the Apple cross-build.
+            timeout_minutes: 45
     steps:
       - name: Skip the speech tests
         if: env.HORIZON_CI_SKIP_SPEECH == 'true'
@@ -393,7 +407,7 @@ jobs:
       - name: Cross-build portable casting crates for Apple mobile targets
         # Runs even when a test shard failed, so a test failure does not hide
         # this check.
-        if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'all' }}
+        if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'speech' }}
         shell: bash
         # This job saves the macOS cache entry. A separate target directory keeps
         # the iOS builds and their host build scripts out of it.

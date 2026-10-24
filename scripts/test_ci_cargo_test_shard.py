@@ -67,7 +67,7 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(libs.stdout.splitlines(), [DEFAULT_CLOUD, BUILD, WORKSPACE, EXAMPLE])
 
     def test_cloud_gateway_and_encoder_features_build_once_on_each_platform(self):
-        for shard, runner_os in [("libs", "Linux"), ("all", "macOS")]:
+        for shard, runner_os in [("libs", "Linux"), ("libs", "macOS")]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -83,7 +83,7 @@ class ShardCommandTests(unittest.TestCase):
     def test_shipped_horizon_cloud_build_keeps_its_own_run(self):
         # One horizon-cloud test asserts the default-build behaviour that
         # exposure-firewall changes, so the feature build cannot replace it.
-        for shard, runner_os in [("libs", "Linux"), ("all", "macOS")]:
+        for shard, runner_os in [("libs", "Linux"), ("libs", "macOS")]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -93,7 +93,7 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_cloud_deploy_example_runs_once_on_each_platform(self):
         command = "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: tests::malformed_selection_arguments_never_create_cloud_paths"
-        for shard, runner_os in [("libs", "Linux"), ("all", "macOS")]:
+        for shard, runner_os in [("libs", "Linux"), ("libs", "macOS")]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -102,9 +102,8 @@ class ShardCommandTests(unittest.TestCase):
     def test_enabled_producer_runs_only_in_linux_libs(self):
         command = "cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer::"
         for shard, runner_os, count in [
-            ("libs", "Linux", 1), ("all", "Linux", 1),
-            ("libs", "macOS", 0), ("all", "macOS", 0),
-            ("ui", "Linux", 0), ("speech", "Linux", 0),
+            ("libs", "Linux", 1), ("libs", "macOS", 0),
+            ("ui", "Linux", 0), ("speech", "Linux", 0), ("speech", "macOS", 0),
         ]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
@@ -113,7 +112,7 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_producer_failure_keeps_the_later_checks_and_fails_linux(self):
         env = os.environ.copy()
-        env.update(HORIZON_CI_SHARD="all", RUNNER_OS="Linux")
+        env.update(HORIZON_CI_SHARD="libs", RUNNER_OS="Linux")
         env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
         with tempfile.TemporaryDirectory() as bin_dir:
             log = Path(bin_dir) / "calls"
@@ -130,20 +129,18 @@ class ShardCommandTests(unittest.TestCase):
                                     capture_output=True, text=True, check=False)
             calls = log.read_text().splitlines()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Failed CI test shards: libs", result.stderr)
         self.assertEqual(calls.count("test --locked -p horizon-cloud-worker --features trusted-tcp-producer trusted_tcp_producer::"), 1)
-        self.assertEqual(calls[-3:], [
+        self.assertEqual(calls[-2:], [
             "test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate::",
             "test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
             "tests::malformed_selection_arguments_never_create_cloud_paths",
-            "test --locked -p horizon-ui --features speech",
         ])
 
     def test_trusted_gate_runs_once_only_in_linux_libs(self):
         command = "cargo test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate::"
         for shard, runner_os, count in [
-            ("libs", "Linux", 1), ("all", "Linux", 1), ("libs", "macOS", 0),
-            ("all", "macOS", 0), ("ui", "Linux", 0), ("speech", "Linux", 0),
+            ("libs", "Linux", 1), ("libs", "macOS", 0),
+            ("ui", "Linux", 0), ("speech", "Linux", 0), ("speech", "macOS", 0),
         ]:
             with self.subTest(shard=shard, runner_os=runner_os):
                 result = shard_commands(shard, runner_os)
@@ -152,7 +149,7 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_trusted_gate_failure_preserves_later_checks_and_fails_linux(self):
         env = os.environ.copy()
-        env.update(HORIZON_CI_SHARD="all", RUNNER_OS="Linux")
+        env.update(HORIZON_CI_SHARD="libs", RUNNER_OS="Linux")
         env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
         with tempfile.TemporaryDirectory() as bin_dir:
             log = Path(bin_dir) / "calls"
@@ -169,21 +166,21 @@ class ShardCommandTests(unittest.TestCase):
                                     capture_output=True, text=True, check=False)
             calls = log.read_text().splitlines()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Failed CI test shards: libs", result.stderr)
         self.assertEqual(calls.count("test --locked -p horizon-cloud-worker --features trusted-exposure-gate exposure_gate::"), 1)
-        self.assertEqual(calls[-2:], [
+        self.assertEqual(calls[-1:], [
             "test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
             "tests::malformed_selection_arguments_never_create_cloud_paths",
-            "test --locked -p horizon-ui --features speech",
         ])
 
     def test_speech_shard_runs_the_speech_tests(self):
-        linux = shard_commands("speech", "Linux", ref="refs/pull/1/merge", cache_hit="true")
-        self.assertEqual(linux.returncode, 0, linux.stderr)
-        self.assertEqual(
-            linux.stdout.splitlines(),
-            ["cargo test --locked -p horizon-ui --features speech"],
-        )
+        for runner_os in ["Linux", "macOS"]:
+            with self.subTest(runner_os=runner_os):
+                result = shard_commands("speech", runner_os, ref="refs/pull/1/merge", cache_hit="true")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout.splitlines(),
+                    ["cargo test --locked -p horizon-ui --features speech"],
+                )
 
     def test_cold_main_speech_shard_builds_the_whole_workspace_first(self):
         cold = shard_commands("speech", "Linux", ref="refs/heads/main", cache_hit="false")
@@ -202,23 +199,17 @@ class ShardCommandTests(unittest.TestCase):
             ["cargo test --locked -p horizon-ui --features speech"],
         )
 
-    def test_all_runs_libs_then_speech_without_the_plain_ui_pass(self):
-        for ref, cache_hit in [("refs/pull/1/merge", "true"), ("refs/heads/main", "false")]:
-            with self.subTest(ref=ref, cache_hit=cache_hit):
-                result = shard_commands("all", "macOS", ref=ref, cache_hit=cache_hit)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(
-                    result.stdout.splitlines(),
-                    [
-                        DEFAULT_CLOUD,
-                        BUILD,
-                        WORKSPACE,
-                        EXAMPLE,
-                        "cargo test --locked -p horizon-ui --features speech",
-                    ],
-                )
+    def test_macos_speech_shard_never_fills_the_entry_it_cannot_save(self):
+        # The libs job saves the macOS entry, so a cold macOS speech job must not
+        # pay for a workspace build that nothing keeps.
+        cold = shard_commands("speech", "macOS", ref="refs/heads/main", cache_hit="false")
+        self.assertEqual(cold.returncode, 0, cold.stderr)
+        self.assertEqual(
+            cold.stdout.splitlines(),
+            ["cargo test --locked -p horizon-ui --features speech"],
+        )
 
-    def test_all_runs_every_shard_and_fails_when_one_fails(self):
+    def test_libs_failure_keeps_the_remaining_checks(self):
         for failing_flag in [
             "-p horizon-cloud",
             f"--exclude horizon-ui --features {FEATURES}",
@@ -226,7 +217,7 @@ class ShardCommandTests(unittest.TestCase):
         ]:
             with self.subTest(failing_flag=failing_flag):
                 env = os.environ.copy()
-                env.update(HORIZON_CI_SHARD="all", RUNNER_OS="macOS")
+                env.update(HORIZON_CI_SHARD="libs", RUNNER_OS="macOS")
                 env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
                 with tempfile.TemporaryDirectory() as bin_dir:
                     log = Path(bin_dir) / "calls"
@@ -244,7 +235,6 @@ class ShardCommandTests(unittest.TestCase):
                                             capture_output=True, text=True, check=False)
                     calls = log.read_text().splitlines()
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Failed CI test shards: libs", result.stderr)
                 self.assertEqual(
                     calls,
                     [
@@ -252,7 +242,6 @@ class ShardCommandTests(unittest.TestCase):
                         BUILD.removeprefix("cargo "),
                         WORKSPACE.removeprefix("cargo "),
                         EXAMPLE.removeprefix("cargo "),
-                        "test --locked -p horizon-ui --features speech",
                     ],
                 )
 
@@ -263,7 +252,7 @@ class ShardCommandTests(unittest.TestCase):
 
 
 class WorkflowShardTests(unittest.TestCase):
-    def test_platform_jobs_share_one_cache_entry_per_os(self):
+    def test_platform_jobs_save_one_cache_entry_per_cache_key(self):
         workflow = WORKFLOW.read_text()
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
         rust = jobs["rust-test"]
@@ -274,18 +263,29 @@ class WorkflowShardTests(unittest.TestCase):
         shards = {(entry["name"], entry["shard"]) for entry in entries}
         self.assertEqual(
             shards,
-            {("Linux x64", "ui"), ("Linux x64", "libs"), ("Linux x64", "speech"), ("macOS arm64", "all")},
+            {
+                ("Linux x64", "ui"),
+                ("Linux x64", "libs"),
+                ("Linux x64", "speech"),
+                ("macOS arm64", "libs"),
+                ("macOS arm64", "speech"),
+            },
         )
-        # Exactly one job per OS saves the entry the others restore.
+        # Exactly one job per cache key saves the entry it restores.
         savers = {(entry["name"], entry["shard"]) for entry in entries if entry.get("save_cache") == "true"}
-        self.assertEqual(savers, {("Linux x64", "speech"), ("macOS arm64", "all")})
+        self.assertEqual(
+            savers,
+            {("Linux x64", "speech"), ("macOS arm64", "libs"), ("macOS arm64", "speech")},
+        )
         self.assertIn("cache_key: linux-test", rust)
-        self.assertIn("cache_key: macos-test", rust)
+        # The macOS shards build different graphs, so they keep one key each.
+        self.assertIn("cache_key: macos-test-libs", rust)
+        self.assertIn("cache_key: macos-test-speech", rust)
         self.assertIn("key: ${{ matrix.cache_key }}", rust)
         self.assertNotIn("matrix.shard", rust.split("save-if:", 1)[0].split("key:", 1)[-1])
         self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}", rust)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes || 35 }}", rust)
-        self.assertIn("if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'all' }}", rust)
+        self.assertIn("if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'speech' }}", rust)
         self.assertEqual(rust.count("bash scripts/ci-cargo-test-shard.sh"), 1)
         self.assertNotIn("cargo test --locked --workspace\n", rust)
 
