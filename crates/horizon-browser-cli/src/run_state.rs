@@ -891,8 +891,8 @@ fn parent_for_sync(path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-// Keep the live lease outside the staged job tree: Windows cannot rename a
-// directory while a locked descendant handle is open.
+// Keep the live lease outside the staged job tree: a locked descendant handle
+// blocks a directory rename.
 fn resume_lock_path(lock_root: &Path, job_id: &str) -> PathBuf {
     lock_root.join(format!("{job_id}.lock"))
 }
@@ -963,22 +963,9 @@ fn publish_job_directory(staging: tempfile::TempDir, destination: &Path) -> Resu
 
 fn sync_directory(path: &Path) -> Result<(), RunStateError> {
     #[cfg(unix)]
-    let sync_result = std::fs::File::open(path).and_then(|directory| directory.sync_all());
-    #[cfg(windows)]
-    let sync_result = {
-        use std::os::windows::fs::OpenOptionsExt as _;
-
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        OpenOptions::new()
-            .write(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)
-            .and_then(|directory| directory.sync_all())
-    };
-    #[cfg(any(unix, windows))]
-    sync_result.map_err(|source| io_error(format!("could not sync {}", path.display()), source))?;
-    #[cfg(not(any(unix, windows)))]
-    let _ = path;
+    std::fs::File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| io_error(format!("could not sync {}", path.display()), source))?;
     Ok(())
 }
 
@@ -986,8 +973,6 @@ fn secure_directory(path: &Path) -> Result<(), RunStateError> {
     #[cfg(unix)]
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
         .map_err(|source| io_error(format!("could not secure {}", path.display()), source))?;
-    #[cfg(not(unix))]
-    let _ = path;
     Ok(())
 }
 

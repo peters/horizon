@@ -27,8 +27,8 @@ pub(crate) struct ServiceProcess {
 
 /// Exact process-tree handle retained outside the driver so an application-exit
 /// deadline can terminate and reap the browser even if its driver is stuck in
-/// teardown. Retaining the native child or Windows Job Object, rather than
-/// only its PID, avoids targeting a later process that reused the number.
+/// teardown. Retaining the native child, rather than only its PID, avoids
+/// targeting a later process that reused the number.
 pub(crate) trait ProcessLifecycle: Send + Sync {
     fn is_reaped(&self) -> bool;
     fn terminate(&self, timeout: Duration) -> bool;

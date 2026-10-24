@@ -212,16 +212,11 @@ fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(not(unix))]
-fn open_without_blocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
-
 /// The resolved location of an open file. Linux reads it from the handle
 /// itself through `/proc`; elsewhere the pathname is resolved again and
 /// accepted only when the file it names now is the very file the handle
-/// holds (device and inode on Unix, volume and file index on Windows), so
-/// a pathname re-pointed between the two steps is refused.
+/// holds (device and inode), so a pathname re-pointed between the two steps
+/// is refused.
 #[cfg(target_os = "linux")]
 fn handle_location(file: &std::fs::File, _requested: &Path) -> std::io::Result<PathBuf> {
     use std::os::fd::AsRawFd;

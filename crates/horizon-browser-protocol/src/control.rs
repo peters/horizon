@@ -1027,11 +1027,7 @@ mod tests {
         let target = BrowserTarget::Selector {
             selector: "input[type=file]".to_string(),
         };
-        let absolute = if cfg!(windows) {
-            "C:\\uploads\\doc.pdf"
-        } else {
-            "/uploads/doc.pdf"
-        };
+        let absolute = "/uploads/doc.pdf";
         let action = BrowserControlAction::SetFiles {
             target: target.clone(),
             paths: vec![std::path::PathBuf::from(absolute)],

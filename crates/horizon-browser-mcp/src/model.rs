@@ -1280,11 +1280,7 @@ mod tests {
 
     #[test]
     fn set_files_requires_a_target_and_absolute_paths_and_is_the_only_taker_of_files() {
-        let absolute = if cfg!(windows) {
-            "C:\\uploads\\a.pdf"
-        } else {
-            "/uploads/a.pdf"
-        };
+        let absolute = "/uploads/a.pdf";
         let mut attach = act(ActKind::SetFiles);
         assert_eq!(attach.build_action(), Err("set_files requires files".to_string()));
         attach.files = Some(vec![]);
