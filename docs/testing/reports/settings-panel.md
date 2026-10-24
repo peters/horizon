@@ -24,7 +24,7 @@ canvas and its own first tab.
 | S1 | pass | The panel opened at 480 of 1600 pixels, and the canvas kept the rest. | — |
 | S2 | pass | The YAML tab drew the highlighted YAML in the same width. The tab row stayed inside the panel. | — |
 | S3 | pass | `Shift` and the wheel moved the text to the end of the long lines, and both scroll bars showed. The width did not change. | — |
-| S4 | pass | The window was 1600 x 1000 pixels for the whole run. The procedure step at 1000 x 700 pixels was not done, so the panel did not get a smaller viewport. The regression test covers the frame width instead. | — |
+| S4 | pass | The window was resized to 1000 x 700 pixels. The panel kept 478 of those 1000 pixels, which is 48 percent and below the 50 percent limit, and the canvas stayed visible. `Height` changed from 1000 to 985, the bar showed `Revert` and then `Saved`, and the store held 985. | — |
 
 ## 3. Defects
 
@@ -33,11 +33,11 @@ canvas and its own first tab.
 
 ## 4. Deviations from the procedure
 
-- Step S4.1 ran at 1600 x 1000 pixels and not at 1000 x 700 pixels. The private
-  desktop was created at 1600 x 1000 pixels, and the synthetic configuration
-  file has that window size.
-- Step S4.2 changed no setting, because step 6.4 is the same check as S3 in this
-  candidate. The Settings bar answered in the recorded video.
+- Step S4.1 resized the window with `xdotool windowsize` on a private desktop of
+  1600 x 1000 pixels, and not by starting the desktop at 1000 x 700 pixels. The
+  result is the same: the panel is sized from the window, not from the desktop.
+- Step S4.2 set `Height` to 985 in the General tab and clicked `Save`, because
+  the field alone shows a live preview and leaves the write to the bar.
 
 ## 5. Cleanup
 
@@ -60,5 +60,10 @@ canvas and its own first tab.
 - The recording of the synthetic run is in the pull request. The first run at
   `/tmp/w1run` was not published, because its recording showed the settings of
   the person.
+- The two screenshots of the resize lane are in a comment on the pull request:
+  the panel beside the canvas at 1000 x 700 pixels, and the same window after
+  `Save` with `Saved` in the bar.
+- The store of the run held `window.height: 985.0` after `Save`, which
+  `--export-config` showed.
 - The regression test `a_long_yaml_line_does_not_widen_the_settings_panel` drew
   the panel 4467 pixels wide before the fix and 480 pixels wide after it.
