@@ -403,7 +403,13 @@ fn apply(form: &mut super::Production, loaded: Loaded, quiet: bool) {
 /// workspace's folder is also just where its terminals start) stands for nothing: the dialog then
 /// asks where the code is.
 fn workspace_repository(cwd: Option<&Path>) -> String {
-    cwd.filter(|cwd| cwd.ancestors().any(|folder| folder.join(".git").exists()))
+    repository_standing_for(cwd, |folder| folder.join(".git").exists())
+}
+
+/// The same answer, with `is_checkout` naming the folders that hold a checkout. A test passes an
+/// answer bounded to the folders it owns, so a `.git` left above them decides nothing.
+fn repository_standing_for(cwd: Option<&Path>, is_checkout: impl Fn(&Path) -> bool) -> String {
+    cwd.filter(|cwd| cwd.ancestors().any(is_checkout))
         .map(|cwd| cwd.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
@@ -523,20 +529,44 @@ mod tests {
         assert!(!app.cloud_prototype.production.creating);
     }
 
+    /// Reads `.git` only in the folders at or below `root`. The folders above `root` belong to the
+    /// whole machine, and another test binary of the same run can leave a `.git` in the process
+    /// temp root, so a test that read them would answer by run order.
+    fn checkouts_under(root: &Path) -> impl Fn(&Path) -> bool + '_ {
+        move |folder| folder.starts_with(root) && folder.join(".git").exists()
+    }
+
     #[test]
     fn only_a_folder_inside_a_checkout_stands_for_a_repository() {
         let temp = tempfile::tempdir().unwrap();
         let plain = temp.path().join("notes");
         std::fs::create_dir(&plain).unwrap();
         assert_eq!(workspace_repository(None), "");
-        // Not a checkout: where terminals start is not what the cloud is made from.
-        assert_eq!(workspace_repository(Some(&plain)), "");
+        // Not a checkout: where terminals start is not what the cloud is made from. The folders
+        // above this test's own folder belong to the machine, and another test binary can leave a
+        // `.git` in the shared temp root, so the answer is read from the test's folders only.
+        assert_eq!(repository_standing_for(Some(&plain), checkouts_under(temp.path())), "");
         let checkout = temp.path().join("demo-atlas");
         std::fs::create_dir_all(checkout.join(".git")).unwrap();
         assert_eq!(workspace_repository(Some(&checkout)), checkout.to_string_lossy());
         let inside = checkout.join("crates");
         std::fs::create_dir(&inside).unwrap();
         assert_eq!(workspace_repository(Some(&inside)), inside.to_string_lossy());
+    }
+
+    /// The defect this test carries: a `.git` left beside a folder decided that the folder was a
+    /// repository, so another test binary of the same run could change the answer.
+    #[test]
+    fn a_checkout_beside_the_workspace_folder_decides_nothing() {
+        // A folder this test owns stands in for the process temp root, which another binary of
+        // the same run fills with its own `.git`. The mark lies beside the folders this test
+        // reads, as the stray one lies beside a temporary folder of a test binary.
+        let shared = tempfile::tempdir().unwrap();
+        std::fs::create_dir(shared.path().join(".git")).unwrap();
+        let workspace = shared.path().join("workspace");
+        let plain = workspace.join("notes");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(repository_standing_for(Some(&plain), checkouts_under(&workspace)), "");
     }
 
     #[test]
