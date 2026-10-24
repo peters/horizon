@@ -459,6 +459,29 @@ impl HorizonApp {
         (controls, self.minimap_overlay_rect(ctx))
     }
 
+    /// The cloud group that runs the panels of this workspace, if one does.
+    pub(in crate::app) fn cloud_group_for_workspace(&self, workspace_id: WorkspaceId) -> Option<usize> {
+        let local_id = self.board.workspace(workspace_id)?.local_id.clone();
+        self.cloud_prototype
+            .groups
+            .0
+            .iter()
+            .position(|group| group.workspace == local_id)
+    }
+
+    /// Where a new panel of this workspace runs: inside its cloud group, so the panel is a
+    /// cloud member that the worker runs, or nowhere special otherwise.
+    pub(in crate::app) fn cloud_member_position(&self, workspace_id: WorkspaceId) -> Option<[f32; 2]> {
+        let index = self.cloud_group_for_workspace(workspace_id)?;
+        Some(self.cloud_prototype.groups.0[index].next_position(&self.board))
+    }
+
+    /// Whether a cloud runs the panels of this workspace. Such a workspace has its checkout
+    /// on the worker, so a local directory picker would offer paths the panel never sees.
+    pub(in crate::app) fn workspace_runs_on_a_worker(&self, workspace_id: WorkspaceId) -> bool {
+        self.cloud_group_for_workspace(workspace_id).is_some()
+    }
+
     pub(in crate::app) fn cloud_overview(&mut self, ctx: &egui::Context) {
         let mut min = [f32::MAX; 2];
         let mut max = [f32::MIN; 2];

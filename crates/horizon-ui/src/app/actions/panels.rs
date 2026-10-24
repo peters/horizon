@@ -255,9 +255,18 @@ impl HorizonApp {
             .map_or((workspace_id, canvas_pos), |(workspace, position)| {
                 (workspace, Some(position))
             });
+        // A cloud workspace runs its panels on the worker, whose checkout exists: a local
+        // directory picker would offer paths the panel never sees, and a panel that lands
+        // outside the group would run on this machine instead of the worker.
+        #[cfg(feature = "cloud-workspaces")]
+        let canvas_pos = match self.cloud_group_for_workspace(workspace_id) {
+            Some(_) => canvas_pos.or_else(|| self.cloud_member_position(workspace_id)),
+            None => canvas_pos,
+        };
         let has_directory = workspace_cwd(&self.board, workspace_id).is_some();
         #[cfg(feature = "cloud-workspaces")]
         let has_directory = has_directory
+            || self.workspace_runs_on_a_worker(workspace_id)
             || canvas_pos.is_some_and(|pos| {
                 self.cloud_prototype
                     .groups
@@ -376,6 +385,39 @@ mod tests {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         }
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    #[test]
+    fn a_cloud_workspace_runs_a_new_panel_on_the_worker() {
+        use crate::app::test_support::test_app_with_startup;
+        use horizon_core::cloud_panel::CloudGroup;
+
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        let workspace_id = app.board.create_workspace("cloud");
+        let local_id = app.board.workspace(workspace_id).expect("workspace").local_id.clone();
+        assert!(app.board.workspace(workspace_id).expect("workspace").cwd.is_none());
+        app.cloud_prototype.groups.0.push(CloudGroup::new(
+            101,
+            "cloud".into(),
+            local_id,
+            "/workspace/checkout".into(),
+            [0.0, 0.0],
+        ));
+
+        app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+
+        assert!(
+            app.dir_picker.is_none(),
+            "the worker holds the checkout, so no local directory is requested"
+        );
+        assert_eq!(
+            app.cloud_prototype.groups.0[0].panels.len(),
+            1,
+            "the worker runs the new panel as a cloud member, not this machine"
+        );
     }
 
     #[test]
