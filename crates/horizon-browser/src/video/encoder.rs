@@ -745,14 +745,16 @@ fn system_now_millis() -> i64 {
 
 /// A readable file stem that stays inside the capture directory.
 ///
-/// Letters, digits, `.`, `-` and `_` stay as written, so a caller can use the
-/// reported path as a file name. Every other byte, including `%` itself,
-/// becomes `%xx`, which keeps one file per capture id: no id can leave the
-/// directory, and two ids never share a name.
+/// Lower-case letters, digits, `.`, `-` and `_` stay as written, so a caller can
+/// use the reported path as a file name. Every other byte, including `%` itself
+/// and an upper-case letter, becomes `%xx`. That keeps one file per capture id:
+/// no id can leave the directory, and no two ids share a name, also on a
+/// case-insensitive file system, where `Demo` would otherwise collide with
+/// `demo` and the second recording would fail because the file exists.
 fn safe_file_stem(value: &str) -> String {
     let mut stem = String::with_capacity(value.len().saturating_mul(2));
     for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+        if byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_') {
             stem.push(char::from(byte));
         } else {
             use std::fmt::Write as _;
@@ -791,6 +793,15 @@ mod tests {
         assert_eq!(safe_file_stem("a/b"), "a%2fb");
         assert_ne!(safe_file_stem("a/b"), safe_file_stem("a%2fb"));
         assert!(!safe_file_stem("../../etc/passwd").contains('/'));
+    }
+
+    #[test]
+    fn two_ids_that_differ_only_by_case_keep_two_names() {
+        // A case-insensitive file system such as APFS would fold `Demo` and `demo` together,
+        // and the second recording would fail because its file already exists.
+        assert_eq!(safe_file_stem("Demo"), "%44emo");
+        assert_eq!(safe_file_stem("demo"), "demo");
+        assert_ne!(safe_file_stem("Demo").to_lowercase(), safe_file_stem("demo"));
     }
 
     #[test]
