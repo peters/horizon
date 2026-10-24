@@ -4,10 +4,11 @@
 # only on main. A cold main entry is filled by building the whole workspace in
 # that job before the speech feature, so the saved target is not speech-only.
 #
-# macOS runs libs and speech as two jobs. The libs job saves the entry, because
-# it builds most of the workspace. This shard set skips the ui shard: speech
-# runs the same horizon-ui tests with the feature on, and the Linux ui job
-# still tests the build without it.
+# macOS runs libs and speech as two jobs, each with its own cache key and its
+# own saved entry. The two jobs build different graphs, so one shared entry
+# would leave one of them to rebuild what the other saved. This shard set skips
+# the ui shard: speech runs the same horizon-ui tests with the feature on, and
+# the Linux ui job still tests the build without it.
 set -euo pipefail
 
 shard="${HORIZON_CI_SHARD:?HORIZON_CI_SHARD is required}"
@@ -75,9 +76,9 @@ case "$shard" in
         run_libs
         ;;
     speech)
-        # Only the Linux speech job saves the entry, so only it must fill a cold
-        # one with the whole workspace. The macOS job saves no entry, so that
-        # build would be thrown away.
+        # The Linux speech job saves `linux-test`, so only it must fill a cold
+        # one with the whole workspace. A macOS speech job saves only its own
+        # speech graph, so the workspace build there would be thrown away.
         if [[ "${RUNNER_OS:?RUNNER_OS is required}" == "Linux" &&
               "${GITHUB_REF:-}" == "refs/heads/main" &&
               "${HORIZON_CI_CACHE_HIT:-}" != "true" ]]; then

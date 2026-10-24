@@ -252,7 +252,7 @@ class ShardCommandTests(unittest.TestCase):
 
 
 class WorkflowShardTests(unittest.TestCase):
-    def test_platform_jobs_share_one_cache_entry_per_os(self):
+    def test_platform_jobs_save_one_cache_entry_per_cache_key(self):
         workflow = WORKFLOW.read_text()
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
         rust = jobs["rust-test"]
@@ -271,11 +271,16 @@ class WorkflowShardTests(unittest.TestCase):
                 ("macOS arm64", "speech"),
             },
         )
-        # Exactly one job per OS saves the entry the others restore.
+        # Exactly one job per cache key saves the entry it restores.
         savers = {(entry["name"], entry["shard"]) for entry in entries if entry.get("save_cache") == "true"}
-        self.assertEqual(savers, {("Linux x64", "speech"), ("macOS arm64", "libs")})
+        self.assertEqual(
+            savers,
+            {("Linux x64", "speech"), ("macOS arm64", "libs"), ("macOS arm64", "speech")},
+        )
         self.assertIn("cache_key: linux-test", rust)
-        self.assertIn("cache_key: macos-test", rust)
+        # The macOS shards build different graphs, so they keep one key each.
+        self.assertIn("cache_key: macos-test-libs", rust)
+        self.assertIn("cache_key: macos-test-speech", rust)
         self.assertIn("key: ${{ matrix.cache_key }}", rust)
         self.assertNotIn("matrix.shard", rust.split("save-if:", 1)[0].split("key:", 1)[-1])
         self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}", rust)
