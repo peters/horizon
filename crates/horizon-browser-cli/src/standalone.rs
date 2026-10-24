@@ -350,16 +350,6 @@ async fn wait_for_interrupt() {
             return;
         }
     }
-    #[cfg(windows)]
-    {
-        if let Ok(mut close) = tokio::signal::windows::ctrl_close() {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = close.recv() => {}
-            }
-            return;
-        }
-    }
     let _ = tokio::signal::ctrl_c().await;
 }
 

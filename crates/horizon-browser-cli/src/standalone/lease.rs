@@ -426,16 +426,6 @@ fn platform_process_start_identity(pid: u32) -> Option<String> {
     )
 }
 
-#[cfg(windows)]
-fn platform_process_start_identity(pid: u32) -> Option<String> {
-    horizon_process_time::process_creation_identity(pid)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn platform_process_start_identity(_pid: u32) -> Option<String> {
-    None
-}
-
 #[cfg(target_os = "macos")]
 fn command_identity(output: std::process::Output) -> Option<String> {
     if !output.status.success() {
@@ -453,7 +443,7 @@ fn command_identity(output: std::process::Output) -> Option<String> {
 enum PidProbe {
     Alive,
     Dead,
-    /// `kill -0` could not be spawned. Windows queries do not have that failure.
+    /// `kill -0` could not be spawned.
     #[cfg(unix)]
     Unknown,
 }
@@ -475,14 +465,6 @@ fn pid_probe(pid: u32) -> PidProbe {
             Err(_) => PidProbe::Unknown,
         }
     }
-    #[cfg(windows)]
-    {
-        if horizon_process_time::process_creation_identity(pid).is_some() {
-            PidProbe::Alive
-        } else {
-            PidProbe::Dead
-        }
-    }
 }
 
 fn signal_terminate(pid: u32) -> bool {
@@ -490,15 +472,6 @@ fn signal_terminate(pid: u32) -> bool {
     {
         Command::new("kill")
             .args([&pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    }
-    #[cfg(windows)]
-    {
-        Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()

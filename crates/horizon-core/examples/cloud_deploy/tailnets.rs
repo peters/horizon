@@ -224,13 +224,4 @@ mod tests {
         assert_eq!(std::fs::read(cloud.join("tailnet.json")).unwrap(), selection);
         assert_eq!(std::fs::read(cloud.join("deployment.json")).unwrap(), deployment);
     }
-
-    #[test]
-    #[cfg(not(unix))]
-    fn unsupported_hosts_refuse_before_creating_a_cloud() {
-        let root = tempfile::tempdir().unwrap();
-        let absent = root.path().join("catalog");
-        assert!(select(&absent, "new-cloud", "stored").is_err());
-        assert!(!absent.exists());
-    }
 }

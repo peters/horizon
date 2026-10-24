@@ -1,7 +1,6 @@
 use super::*;
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn a_retained_publisher_requires_its_original_grant_only_when_a_new_image_is_needed() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();

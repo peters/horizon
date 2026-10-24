@@ -1,7 +1,7 @@
 ---
 procedure: image-destination-public
 feature: Host-scoped image destination operations
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: synthetic-only
@@ -18,8 +18,8 @@ server and an isolated desktop host. This procedure allocates no worker.
 ## 2. Applicability
 
 Protocol and parser tests run on all CI platforms. The native host fixture uses
-Linux X11. Windows cloud operations remain unsupported. These checks do not prove
-real sign-in, registry publication or issuer permission.
+Linux X11. These checks do not prove real sign-in, registry publication or issuer
+permission.
 
 ## 3. Safety
 

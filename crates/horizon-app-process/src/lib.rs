@@ -130,10 +130,6 @@ fn root_identity(file: &std::fs::File) -> Result<(Option<u64>, Option<u64>)> {
         use std::os::unix::fs::MetadataExt;
         Ok((Some(metadata.dev()), Some(metadata.ino())))
     }
-    #[cfg(not(unix))]
-    {
-        Err(Error::Invalid)
-    }
 }
 
 impl Spec {
@@ -188,29 +184,20 @@ pub enum Event {
 
 /// Entrypoint for the bundled private guardian binary. No provider credentials are read here.
 /// # Errors
-/// Unsupported platforms fail closed before executing commands.
+/// Fails when the guardian cannot hold its workspace or arm its process group.
 pub fn run_guard() -> Result<()> {
     #[cfg(unix)]
     {
         guard::run()
     }
-    #[cfg(not(unix))]
-    {
-        Err(Error::StartFailed)
-    }
 }
 
 /// Stop a waitable child process group, retaining its leader identity through signalling.
 /// # Errors
-/// Lost ownership, failed signals, unproven descendant termination and unsupported hosts stay uncertain.
+/// Lost ownership, failed signals and unproven descendant termination stay uncertain.
 pub fn stop_child_group(child: &mut std::process::Child) -> Result<()> {
     #[cfg(unix)]
     {
         group::terminate(child)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child;
-        Err(Error::CleanupUncertain)
     }
 }

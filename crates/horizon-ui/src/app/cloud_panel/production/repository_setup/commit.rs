@@ -8,9 +8,6 @@ use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 /// A path that holds no hooks on any platform.
-#[cfg(windows)]
-const NO_HOOKS: &str = "NUL";
-#[cfg(not(windows))]
 const NO_HOOKS: &str = "/dev/null";
 
 /// A git command in the repository that runs no hook or file monitor the repository's
@@ -509,10 +506,6 @@ fn shown_name(name: &std::ffi::OsStr) -> String {
     {
         shown(std::os::unix::ffi::OsStrExt::as_bytes(name))
     }
-    #[cfg(not(unix))]
-    {
-        shown(name.to_string_lossy().as_bytes())
-    }
 }
 
 /// A listed path that is not in `.horizon`.
@@ -580,10 +573,6 @@ fn path_of(bytes: &[u8]) -> std::path::PathBuf {
     {
         use std::os::unix::ffi::OsStrExt as _;
         std::ffi::OsStr::from_bytes(bytes).into()
-    }
-    #[cfg(not(unix))]
-    {
-        String::from_utf8_lossy(bytes).into_owned().into()
     }
 }
 

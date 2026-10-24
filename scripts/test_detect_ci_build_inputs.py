@@ -17,7 +17,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 ARTIFACTS_WORKFLOW = ROOT / ".github" / "workflows" / "release-artifacts.yml"
 NIGHTLY_WORKFLOW = ROOT / ".github" / "workflows" / "macos-release-builds.yml"
 MACOS_PLATFORMS = ["macos-arm64", "macos-x64"]
-RUST_JOBS = ["browser-engine", "device", "clippy", "rust-test", "windows-smoke"]
+RUST_JOBS = ["browser-engine", "device", "clippy", "rust-test"]
 ZERO_SHA = "0" * 40
 
 GIT_ENV = {
@@ -303,7 +303,6 @@ class WorkflowGateTests(unittest.TestCase):
             "needs.changes.outputs.speech_inputs == 'false' }}\n",
             jobs["rust-test"],
         )
-        self.assertNotIn("HORIZON_CI_SKIP_SPEECH", jobs["windows-smoke"])
         # The saver leg keeps its cache key and main-only save.
         self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}",
                       jobs["rust-test"])
@@ -329,7 +328,7 @@ class WorkflowGateTests(unittest.TestCase):
         self.assertIn("    uses: ./.github/workflows/release-artifacts.yml\n", job)
         self.assertIn("needs.changes.outputs.release_inputs == 'true'", job)
         platforms = job.split("      platforms: >-\n", 1)[1]
-        self.assertEqual(platforms.splitlines()[0].strip(), "linux-x64 windows-x64")
+        self.assertEqual(platforms.splitlines()[0].strip(), "linux-x64")
         self.assertIn(
             "${{ (github.event_name == 'workflow_dispatch' || "
             "needs.changes.outputs.macos_release_inputs == 'true') "
@@ -397,28 +396,26 @@ class PlatformSelectionTests(unittest.TestCase):
         return json.loads(value)
 
     def test_selects_the_named_platforms_with_empty_gaps(self):
-        include = self.include("linux-x64 windows-x64\n ")
-        self.assertEqual([entry["name"] for entry in include], ["Linux x64", "Windows x64"])
+        include = self.include("linux-x64 macos-arm64\n ")
+        self.assertEqual([entry["name"] for entry in include], ["Linux x64", "macOS arm64"])
         include = self.include("  macos-arm64   macos-x64 ")
         self.assertEqual([entry["os"] for entry in include], ["macos-latest", "macos-15-intel"])
 
     def test_cache_keys_and_assets_stay_the_same(self):
-        include = self.include("linux-x64 macos-arm64 macos-x64 windows-x64")
+        include = self.include("linux-x64 macos-arm64 macos-x64")
         self.assertEqual(
             [(e["cache_key"], e["release_asset"], e["binary_path"], e["asset_kind"])
              for e in include],
             [("linux-artifacts", "horizon-linux-x64.tar.gz", "target/release/horizon", "tar"),
              ("macos-artifacts", "horizon-osx-arm64.tar.gz", "target/release/horizon", "tar"),
-             ("macos-intel-artifacts", "horizon-osx-x64.tar.gz", "target/release/horizon", "tar"),
-             ("windows-artifacts", "horizon-windows-x64.exe", "target/release/horizon.exe",
-              "file")],
+             ("macos-intel-artifacts", "horizon-osx-x64.tar.gz", "target/release/horizon", "tar")],
         )
 
     def test_callers_name_only_known_platforms(self):
         ci = jobs_of(WORKFLOW.read_text())["rust-artifacts"]
         nightly = jobs_of(NIGHTLY_WORKFLOW.read_text())["rust-artifacts"]
         named = set(re.findall(r"\b(?:linux|macos|windows)-(?:x64|arm64)\b", ci + nightly))
-        self.assertEqual(len(self.include(" ".join(sorted(named)))), 4)
+        self.assertEqual(len(self.include(" ".join(sorted(named)))), 3)
         self.assertEqual(
             [e["id"] for e in self.include(" ".join(MACOS_PLATFORMS))], MACOS_PLATFORMS
         )

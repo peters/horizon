@@ -1,7 +1,7 @@
 ---
 procedure: chromecast-live-progressive
 feature: horizon-chromecast live cast, progressive transport
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -20,8 +20,7 @@ ends when the receiver or another sender stops it.
 
 - Candidate: a Horizon commit that contains `crates/horizon-chromecast` with
   `Transport::Progressive`.
-- Platforms: Linux, macOS and Windows hosts on the same local network as the
-  receiver.
+- Platforms: Linux and macOS hosts on the same local network as the receiver.
 - This procedure does not test the HLS transport. The `horizon-chromecast` unit
   tests cover it.
 - This procedure does not test the Horizon UI.
@@ -32,7 +31,7 @@ ends when the receiver or another sender stops it.
 - The IP address of the receiver.
 - The owner of the receiver gave permission for this run.
 - A Rust toolchain and `ffmpeg` with `libx264` on the host.
-- A shell that can run the commands in this procedure: Bash, Zsh or PowerShell.
+- A shell that can run the commands in this procedure: Bash or Zsh.
 - A stopwatch.
 - No other sender casts to the receiver.
 

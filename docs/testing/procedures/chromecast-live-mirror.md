@@ -1,7 +1,7 @@
 ---
 procedure: chromecast-live-mirror
 feature: horizon-chromecast live cast, mirror transport
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -20,8 +20,7 @@ proves that sound plays and that a receiver restart does not end the cast.
 
 - Candidate: a Horizon commit that contains `crates/horizon-chromecast` with
   `Transport::Mirror`.
-- Platforms: Linux, macOS and Windows hosts on the same local network as the
-  receiver.
+- Platforms: Linux and macOS hosts on the same local network as the receiver.
 - The receiver must have the screen mirroring application (`0F5096E8`), as
   Chromecast devices and TVs with Chromecast built-in do.
 - This procedure does not test the Horizon UI.

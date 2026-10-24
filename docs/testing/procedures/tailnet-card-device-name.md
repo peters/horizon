@@ -1,7 +1,7 @@
 ---
 procedure: tailnet-card-device-name
 feature: Cloud card tailnet device identity
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

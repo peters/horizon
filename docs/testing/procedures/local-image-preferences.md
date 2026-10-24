@@ -1,7 +1,7 @@
 ---
 procedure: local-image-preferences
 feature: worker image destinations
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ It tests scope separation, account identity, credential-free source naming and s
 ## 2. Applicability
 
 - Candidate: the destination preference prerequisite for #1597.
-- Platforms: Linux, macOS and Windows with Git and the repository Rust toolchain.
+- Platforms: Linux and macOS with Git and the repository Rust toolchain.
 - This procedure does not test: authentication, image publication, worker allocation or a UI.
 - Image omission in YAML and automatic launches remain inactive in this prerequisite.
 

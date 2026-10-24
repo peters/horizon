@@ -10,7 +10,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 |---|---|---|
 | candidate | The exact Horizon executable under test. A candidate has a commit and a SHA-256. | build under test, binary |
 | frozen candidate | A copy of the candidate in a task-owned directory. Nothing changes it during the test. | — |
-| isolated desktop | A task-owned desktop with its own display, input and private application state. On Linux, it is an Xvfb display with its own window manager and D-Bus. On macOS and Windows, it is a dedicated machine, VM or desktop session. | test desktop, sandbox desktop |
+| isolated desktop | A task-owned desktop with its own display, input and private application state. On Linux, it is an Xvfb display with its own window manager and D-Bus. On macOS, it is a dedicated machine, VM or desktop session. | test desktop, sandbox desktop |
 | fixture | The script that starts the isolated desktop and the candidate. | harness, lab |
 | Device panel | A Horizon panel that shows a VNC desktop. Agents can only read it. | native viewer, Device viewer, VNC viewer |
 | live view | A Device panel that shows the isolated desktop with frames that advance. | — |
@@ -102,10 +102,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 
 | Name | Meaning | Do not use |
 |---|---|---|
-| release build | A Horizon executable from a GitHub release, Homebrew or WinGet. It has the default features only. | prebuilt, official build |
+| release build | A Horizon executable from a GitHub release or Homebrew. It has the default features only. | prebuilt, official build |
 | source build | A Horizon executable that you build with `cargo` from the repository. | local build, dev build |
 | feature | A Cargo feature that adds a function at build time, for example `speech` or `cast-nvenc`. | flag, option |
-| platform | One operating system that Horizon supports: Linux, macOS or Windows. | OS (in text), target |
+| platform | One operating system that Horizon supports: Linux or macOS. | OS (in text), target |
 | platform support | The list of functions that work on each platform, in `docs/platform-support.md`. | compatibility matrix |
 | welcome board | A planned sample workspace that opens on the first start. | tour, onboarding board |
 | doctor | A planned command that examines this computer and reports what Horizon needs. | health check, diagnostics |

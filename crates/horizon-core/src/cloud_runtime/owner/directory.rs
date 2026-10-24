@@ -94,11 +94,6 @@ impl Directory {
             }
             Ok(())
         }
-        #[cfg(not(unix))]
-        {
-            let _ = (opened, current);
-            Err(Error::Ownership)
-        }
     }
     fn open_path(path: &Path) -> Result<File> {
         if !path.is_absolute() {
@@ -126,8 +121,6 @@ impl Directory {
             }
             Ok(directory)
         }
-        #[cfg(not(unix))]
-        Err(Error::Ownership)
     }
     pub(super) fn read(&self, name: &str) -> Result<Vec<u8>> {
         self.verify()?;
@@ -151,11 +144,6 @@ impl Directory {
             }
             self.verify()?;
             Ok(bytes)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = name;
-            Err(Error::Ownership)
         }
     }
     pub(super) fn write(&self, name: &str, bytes: &[u8]) -> Result<()> {
@@ -183,11 +171,6 @@ impl Directory {
             })();
             let _ = unlinkat(&self.file, &staged, AtFlags::empty());
             result
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = name;
-            Err(Error::Ownership)
         }
     }
 }

@@ -323,11 +323,6 @@ pub fn reconcile_status(path: &Path) -> Result<ReconcileStatus> {
     })
 }
 
-#[cfg(not(unix))]
-pub fn reconcile_status(_path: &Path) -> Result<ReconcileStatus> {
-    Err(horizon_app_runtime::Error::ReconciliationRequired.into())
-}
-
 /// # Errors
 /// Recover only exact owned legacy local operations after the operator confirms a real host reboot.
 /// This never replaces original receipts, signals PIDs, changes ownership, or replays creation.
@@ -486,24 +481,6 @@ fn close_undispatched(
     }
     workspace.journal().confirm_released(workspace.owner(), operation.id)?;
     Ok(())
-}
-
-#[cfg(not(unix))]
-pub fn open(_path: &Path) -> Result<Host> {
-    Err(Error::Unavailable)
-}
-
-#[cfg(not(unix))]
-pub fn reconcile(_path: &Path) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
-    Err(Error::Unavailable)
-}
-
-#[cfg(not(unix))]
-pub fn reconcile_after_reboot(
-    _path: &Path,
-    _confirmation: &crate::local::recovery::RebootConfirmation,
-) -> Result<Vec<horizon_app_runtime::journal::Operation>> {
-    Err(horizon_app_runtime::Error::ReconciliationRequired.into())
 }
 
 #[cfg(all(test, unix))]

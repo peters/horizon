@@ -122,18 +122,13 @@ fn options(command: &Command) -> Result<TerminalSpawnOptions> {
     } else {
         // The PTY API only supports environment additions. env removes bindings
         // in the owned child, then execs the transfer without a shell or parent mutation.
-        #[cfg(unix)]
-        {
-            let mut prefix = Vec::new();
-            for key in removals {
-                prefix.extend(["-u".into(), key]);
-            }
-            prefix.extend(["--".into(), program]);
-            prefix.extend(args);
-            ("/usr/bin/env".into(), prefix)
+        let mut prefix = Vec::new();
+        for key in removals {
+            prefix.extend(["-u".into(), key]);
         }
-        #[cfg(not(unix))]
-        return Err(Error::Invalid("Transfer environment removal requires a Unix host"));
+        prefix.extend(["--".into(), program]);
+        prefix.extend(args);
+        ("/usr/bin/env".into(), prefix)
     };
     Ok(TerminalSpawnOptions {
         program,

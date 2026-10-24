@@ -64,8 +64,7 @@ Use the original saved catalog root and an existing saved ID. Deploy with
 `STATE_ROOT` equal to `CATALOG_ROOT/CLOUD_ID`. This writes only the selected
 network through the existing lifecycle lock; it reads no secret and starts no worker.
 A provisioned cloud keeps its network. Omission or an empty ID refuses instead of
-clearing it. Windows refuses cloud-state mutation before creating paths.
-See docs/testing/procedures/cloud-tailnet-selection.md.
+clearing it. See docs/testing/procedures/cloud-tailnet-selection.md.
 
 Use `tailnet_api_credential` to request `set_personal_token`, `set_oauth` or `remove`
 for an exact saved tailnet ID and caller-chosen UUID request ID. Set requests carry

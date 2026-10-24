@@ -1,7 +1,7 @@
 ---
 procedure: exposure-firewalls
 feature: Exact owned Hetzner firewall operations
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: free
 destructive: no
 secrets: []

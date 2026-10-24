@@ -296,14 +296,6 @@ fn exited(child: &mut Child) -> Result<bool> {
     .map_err(|_| Error::TunnelStartFailed)
 }
 
-#[cfg(not(unix))]
-fn exited(child: &mut Child) -> Result<bool> {
-    child
-        .try_wait()
-        .map(|status| status.is_some())
-        .map_err(|_| Error::TunnelStartFailed)
-}
-
 fn spawn_guard(work: impl FnOnce() + Send + 'static) -> std::io::Result<std::thread::JoinHandle<()>> {
     #[cfg(test)]
     if FAIL_GUARD.with(std::cell::Cell::get) {
@@ -487,11 +479,6 @@ fn binary_file(path: &Path) -> Result<File> {
     rustix::fs::open(path, flags, rustix::fs::Mode::empty())
         .map(File::from)
         .map_err(|_| Error::TunnelBinaryRejected)
-}
-
-#[cfg(not(unix))]
-fn binary_file(_path: &Path) -> Result<File> {
-    Err(Error::TunnelBinaryRejected)
 }
 
 #[cfg(all(test, unix))]

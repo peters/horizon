@@ -4,18 +4,13 @@ mod control;
 #[cfg(target_os = "linux")]
 mod locale;
 
-#[cfg(any(windows, test))]
-use std::ffi::OsString;
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
 use std::process::Child;
 use std::process::{ChildStderr, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
-use process_wrap::std::{ChildWrapper, CommandWrap, JobObject};
 use thiserror::Error;
 
 use crate::AutomationDisclosurePolicy;
@@ -23,9 +18,6 @@ use crate::cdp::parse_devtools_ws_url;
 
 pub(crate) use control::{ChromeProcessControl, ProcessLifecycle, ServiceProcess};
 
-#[cfg(windows)]
-pub(super) type ProcessChild = Box<dyn ChildWrapper>;
-#[cfg(not(windows))]
 pub(super) type ProcessChild = Child;
 
 #[derive(Error, Debug)]
@@ -62,11 +54,6 @@ pub const BINARY_CANDIDATES: &[&str] = &[
     "brave-browser",
     "microsoft-edge",
 ];
-
-/// Windows candidates: `Path::is_file` does not apply `PATHEXT`, so the
-/// `.exe` names and standard install locations are checked explicitly.
-#[cfg(windows)]
-pub const WINDOWS_BINARY_CANDIDATES: &[&str] = &["chrome.exe", "msedge.exe", "chromium.exe"];
 
 /// Parameters for launching one Chrome instance.
 pub struct ChromeLaunch {
@@ -124,8 +111,7 @@ impl ChromeProcess {
         let mut command = Command::new(command);
         command.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
         // Give Chrome an isolated process group so emergency cleanup can
-        // terminate helpers as well as the browser parent on Unix. On Windows,
-        // `spawn_process` assigns the child tree to a retained Job Object.
+        // terminate helpers as well as the browser parent.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -353,34 +339,17 @@ fn validate_extra_args(extra_args: &[String], automation_disclosure: AutomationD
 }
 
 pub(super) fn spawn_process(command: Command) -> std::io::Result<ProcessChild> {
-    #[cfg(windows)]
-    {
-        let mut command = CommandWrap::from(command);
-        command.wrap(JobObject);
-        command.spawn()
-    }
-    #[cfg(not(windows))]
-    {
-        let mut command = command;
-        #[cfg(target_os = "linux")]
-        locale::apply(&mut command);
-        command.spawn()
-    }
+    let mut command = command;
+    #[cfg(target_os = "linux")]
+    locale::apply(&mut command);
+    command.spawn()
 }
 
 pub(super) fn take_stderr(child: &mut ProcessChild) -> Option<ChildStderr> {
-    #[cfg(windows)]
-    {
-        child.stderr().take()
-    }
-    #[cfg(not(windows))]
-    {
-        child.stderr.take()
-    }
+    child.stderr.take()
 }
 
-/// Kill and reap a child with deadline-bounded status polling. Windows uses a
-/// retained Job Object so descendant completion is part of the reap result.
+/// Kill and reap a child with deadline-bounded status polling.
 pub(super) fn kill_and_reap(
     child: &mut ProcessChild,
     timeout: Duration,
@@ -423,20 +392,6 @@ fn cleanup_reaped_process_tree(child: &mut ProcessChild) -> std::io::Result<()> 
     terminate_process_tree(child)
 }
 
-#[cfg(windows)]
-fn cleanup_reaped_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
-    // The retained Job Object outlives the exited service leader. Terminate
-    // and wait on that exact kernel-owned tree before reporting cleanup, so a
-    // Firefox/Safari descendant cannot keep the profile locked.
-    child.start_kill()?;
-    child.wait().map(|_| ())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn cleanup_reaped_process_tree(_child: &mut ProcessChild) -> std::io::Result<()> {
-    Ok(())
-}
-
 #[cfg(unix)]
 fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
     let process_group = format!("-{}", child.id());
@@ -456,18 +411,6 @@ fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
     } else {
         child.kill()
     }
-}
-
-#[cfg(windows)]
-fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
-    // `JobObjectChild::start_kill` terminates the exact retained Job Object,
-    // including descendants, without reopening a numeric PID.
-    child.start_kill()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn terminate_process_tree(child: &mut ProcessChild) -> std::io::Result<()> {
-    child.kill()
 }
 
 impl Drop for ChromeProcess {
@@ -497,47 +440,13 @@ pub fn resolve_binary(command: &str) -> Result<PathBuf> {
     let Some(path_var) = std::env::var_os("PATH") else {
         return Err(ChromeError::NoBinary);
     };
-    #[cfg(windows)]
-    let windows_path_names = windows_path_names(command);
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(command);
         if is_executable_file(&candidate) {
             return Ok(candidate);
         }
-        #[cfg(windows)]
-        for command_with_extension in &windows_path_names {
-            let candidate = dir.join(command_with_extension);
-            if is_executable_file(&candidate) {
-                return Ok(candidate);
-            }
-        }
     }
     Err(ChromeError::NoBinary)
-}
-
-#[cfg(windows)]
-fn windows_path_names(command: &str) -> Vec<OsString> {
-    if Path::new(command).extension().is_some() {
-        return Vec::new();
-    }
-    let extensions = std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
-    path_names_with_extensions(command, &extensions.to_string_lossy())
-}
-
-#[cfg(any(windows, test))]
-fn path_names_with_extensions(command: &str, extensions: &str) -> Vec<OsString> {
-    extensions
-        .split(';')
-        .filter(|extension| !extension.is_empty())
-        .map(|extension| {
-            let mut candidate = OsString::from(command);
-            if !extension.starts_with('.') {
-                candidate.push(".");
-            }
-            candidate.push(extension);
-            candidate
-        })
-        .collect()
 }
 
 /// Resolve using an explicit command or the standard candidate list.
@@ -559,21 +468,6 @@ pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
                 }
             }
         }
-        #[cfg(windows)]
-        for name in WINDOWS_BINARY_CANDIDATES {
-            for dir in std::env::split_paths(&path_var) {
-                let candidate = dir.join(name);
-                if candidate.is_file() {
-                    return Ok(candidate);
-                }
-            }
-        }
-    }
-    #[cfg(windows)]
-    for candidate in standard_installations() {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
     }
     #[cfg(target_os = "macos")]
     for candidate in standard_installations() {
@@ -582,32 +476,6 @@ pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
         }
     }
     Err(ChromeError::NoBinary)
-}
-
-/// Standard Windows install locations, in preference order.
-#[cfg(windows)]
-fn standard_installations() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    for var in ["PROGRAMFILES", "PROGRAMFILES(X86)"] {
-        let Ok(root) = std::env::var(var) else {
-            continue;
-        };
-        candidates.push(PathBuf::from(&root).join(r"Google\Chrome\Application\chrome.exe"));
-        candidates.push(PathBuf::from(&root).join(r"Microsoft\Edge\Application\msedge.exe"));
-    }
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        candidates.extend(per_user_windows_installations(Path::new(&local)));
-    }
-    candidates
-}
-
-#[cfg(any(windows, test))]
-fn per_user_windows_installations(local_app_data: &Path) -> [PathBuf; 3] {
-    [
-        local_app_data.join(r"Google\Chrome\Application\chrome.exe"),
-        local_app_data.join(r"Microsoft\Edge\Application\msedge.exe"),
-        local_app_data.join(r"Programs\chromium\Application\chrome.exe"),
-    ]
 }
 
 /// Standard macOS install locations (browsers installed as `.app` bundles
@@ -627,11 +495,6 @@ fn standard_installations() -> Vec<PathBuf> {
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.is_file() && path.metadata().is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
 }
 
 #[cfg(test)]
@@ -809,33 +672,6 @@ mod tests {
                 .unwrap_or_else(|error| panic!("wait for settled cleanup: {error}"))
         );
         worker.join().unwrap_or_else(|error| std::panic::resume_unwind(error));
-    }
-
-    #[test]
-    fn windows_path_extensions_are_applied_to_bare_commands() {
-        let names = path_names_with_extensions("chrome", ".COM;.EXE;CMD");
-        assert_eq!(
-            names,
-            [
-                OsString::from("chrome.COM"),
-                OsString::from("chrome.EXE"),
-                OsString::from("chrome.CMD")
-            ]
-        );
-    }
-
-    #[test]
-    fn windows_per_user_browser_locations_cover_chrome_edge_and_chromium() {
-        let candidates = per_user_windows_installations(Path::new(r"C:\Users\test\AppData\Local"));
-
-        assert_eq!(
-            candidates,
-            [
-                PathBuf::from(r"C:\Users\test\AppData\Local").join(r"Google\Chrome\Application\chrome.exe"),
-                PathBuf::from(r"C:\Users\test\AppData\Local").join(r"Microsoft\Edge\Application\msedge.exe"),
-                PathBuf::from(r"C:\Users\test\AppData\Local").join(r"Programs\chromium\Application\chrome.exe"),
-            ]
-        );
     }
 
     #[test]

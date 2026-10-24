@@ -12,9 +12,4 @@ pub(super) fn ensure_private_root(root: &Path) -> Result<()> {
     {
         unix::ensure(root)
     }
-    #[cfg(not(unix))]
-    {
-        let _ = root;
-        Err(super::Error::Invalid("Registry directory durability is unsupported"))
-    }
 }

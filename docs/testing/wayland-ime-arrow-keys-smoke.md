@@ -23,8 +23,8 @@ pin the behavior on which a fix has to build:
 
 - A build of the candidate head: `cargo build -p horizon-ui --bin horizon`.
 - An input method that drives the platform text-input path (ibus or fcitx5 on
-  Linux, the built-in IME on macOS/Windows) with one CJK engine installed, for
-  the composition lanes.
+  Linux, the built-in IME on macOS) with one CJK engine installed, for the
+  composition lanes.
 - Linux UI lanes run on a task-owned isolated desktop viewed through a Horizon
   native VNC Device panel, never on the developer's session.
 
@@ -100,11 +100,11 @@ not application.
 | C2 | Press ArrowUp twice, Enter | The earlier command runs again |
 | C3 | Type text, press Backspace | Characters disappear one per press |
 
-## Lane D — macOS and Windows
+## Lane D — macOS
 
 No platform-specific code changed, but the filter is shared, so confirm Lane B
-on each OS with the system IME (macOS: Japanese Romaji; Windows: Microsoft
-IME), then Lane A's A1–A3. Report each OS as passed, failed or not run.
+on macOS with the system IME (Japanese Romaji), then Lane A's A1–A3. Report the
+lane as passed, failed or not run.
 
 ## Evidence
 

@@ -20,12 +20,12 @@ These functions are available:
 
 | Function | What it does | Platforms | In v0.2.7 |
 |---|---|---|---|
-| Shell panels | A terminal in the workspace directory. | All, with limits on Windows | Yes |
-| Agent panels | Claude Code, Codex, Grok and other coding agents in a panel. | Linux and macOS. Not tested on Windows | Yes |
-| Browser panels | Chromium, Firefox or Safari on the board. You and an agent use the same page. | All. Safari on macOS only | No |
-| Device panels | A VNC view of a desktop on this computer or on an SSH host. | All | No |
+| Shell panels | A terminal in the workspace directory. | Linux and macOS | Yes |
+| Agent panels | Claude Code, Codex, Grok and other coding agents in a panel. | Linux and macOS | Yes |
+| Browser panels | Chromium, Firefox or Safari on the board. You and an agent use the same page. | Linux and macOS. Safari on macOS only | No |
+| Device panels | A VNC view of a desktop on this computer or on an SSH host. | Linux and macOS | No |
 | Agent input to an isolated desktop | An agent clicks and types on an Xvfb desktop for an application test. | Linux with X11 | No |
-| Remote Hosts | SSH panels for your hosts and Tailscale devices. | Linux and macOS. Not tested on Windows | Yes |
+| Remote Hosts | SSH panels for your hosts and Tailscale devices. | Linux and macOS | Yes |
 | Clouds | A remote worker with its own shell, agent, browser and Device panels. | Linux and macOS | No |
 | Casting | A panel, a workspace or the window on an Apple TV. | Linux | No |
 | Speech | Dictation into terminals, editors and browser pages. | Source build only | Source build only |
@@ -36,7 +36,6 @@ These functions are available:
 |---|---|---|
 | Release binary | You want to start quickly, and v0.2.7 has the functions that you need. | No |
 | Homebrew (macOS, Linux x64) | You use Homebrew. | No |
-| WinGet (Windows) | You use WinGet. | No |
 | Source build | You want the functions in this guide, speech or GPU encoder features. | Yes, with a feature |
 
 Release builds use the default features. All release routes install v0.2.7.
@@ -110,46 +109,12 @@ Release builds use the default features. All release routes install v0.2.7.
 
 A raw binary does not update itself. Download a new release to update it.
 
-## Install a release binary on Windows
-
-1. Open the [latest release](https://github.com/peters/horizon/releases/latest).
-2. Download `horizon-windows-x64.exe`.
-3. Download `SHA256SUMS.txt` from the same release.
-
-> **CAUTION:** DO NOT START A FILE WITH AN INCORRECT CHECKSUM. The checksum
-> finds an incomplete or damaged download. It does not prove who made the
-> file, because the release and `SHA256SUMS.txt` are not signed.
-
-4. In PowerShell, get the checksum of the file:
-
-   ```powershell
-   Get-FileHash horizon-windows-x64.exe
-   ```
-
-   Result: PowerShell shows the SHA-256 hash.
-
-5. Compare the hash with the line for `horizon-windows-x64.exe` in
-   `SHA256SUMS.txt`.
-
-   Result: The two hashes are the same.
-
-6. If the hashes are not the same, delete the file.
-7. Open `horizon-windows-x64.exe`.
-
-   Result: Horizon opens an empty board.
-
 ## Install with a package manager
 
 On macOS or Linux x64, install Horizon with Homebrew:
 
 ```bash
 brew install peters/horizon/horizon
-```
-
-On Windows, install Horizon with WinGet:
-
-```powershell
-winget install Peters.Horizon
 ```
 
 Use the same package manager to update Horizon. Horizon has no in-app update prompt.
@@ -170,7 +135,6 @@ Examine the old application shortcuts before you start Horizon again.
 CAUTION: Remove only the shortcut. Keep the configuration and session files.
 
 Change each shortcut to use the new installation, or remove the shortcut.
-On Windows, examine the desktop and Start Menu shortcuts.
 On macOS, examine the `Horizon.app` links in `~/Applications` and `~/Desktop`.
 On Linux, examine desktop shortcuts and pinned launchers.
 Start Horizon from the new installation to make sure you use the new executable.
@@ -181,7 +145,6 @@ Start Horizon from the new installation to make sure you use the new executable.
    - All platforms: Git, Git LFS and Rust 1.95 or later from [rustup](https://rustup.rs).
    - Linux: the system headers in [AGENTS.md](../AGENTS.md#prerequisites).
    - macOS: the Xcode Command Line Tools.
-   - Windows: the MSVC build tools. `rustup` installs them for the `msvc` target.
    - x86_64: NASM 2.15 or later on `PATH`.
 2. If you use macOS, install the Xcode Command Line Tools:
 
@@ -245,10 +208,9 @@ cargo run --release --features cast-nvenc
 
 ## Use the board
 
-On macOS, use Cmd instead of Ctrl in each step of this procedure. On Windows,
-a shell panel needs a shell in the `SHELL` variable, for example Git Bash. If
-`SHELL` is not set, Horizon starts `/bin/bash`. See
-[the platform support](platform-support.md).
+On macOS, use Cmd instead of Ctrl in each step of this procedure. A shell
+panel uses the shell in the `SHELL` variable. If `SHELL` is not set, Horizon
+starts `/bin/bash`. See [the platform support](platform-support.md).
 
 1. Hold Ctrl and double-click an empty area of the board.
 
@@ -284,9 +246,6 @@ The README lists all keyboard and mouse shortcuts. A shortcut with Ctrl uses
 Cmd on macOS.
 
 ## Open an agent panel
-
-On Windows, an agent panel needs a POSIX shell in `SHELL`, for example Git
-Bash. No test examines this.
 
 1. Install the CLI of the agent, for example Claude Code or Codex.
 2. Hold Ctrl and double-click an empty area of the board.

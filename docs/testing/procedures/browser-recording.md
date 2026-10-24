@@ -1,7 +1,7 @@
 ---
 procedure: browser-recording
 feature: Browser panel video
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,8 +18,7 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 ## 2. Applicability
 
 - Use a current Horizon candidate. The app includes the video encoder.
-- Use Chromium on Linux or Windows, or Chrome on macOS.
-- The video smoke script supports Linux and macOS. On Windows, use the MCP steps in BROWSER-VIDEO-06.
+- Use Chromium on Linux, or Chrome on macOS.
 - Use a local page or a public fixture page.
 - This procedure does not test audio, canvas capture, or Safari.
 - Device panel video is in the VNC recording procedure.
@@ -120,21 +119,19 @@ It tests the camera, record, and stop icons, pause and resume, and the completed
 
 ### BROWSER-VIDEO-06 — MCP
 
-Do not run the video smoke script on Windows.
-
-1. On Linux or macOS, run `python3 scripts/browser-smoke/video_smoke.py --backend chromium --ephemeral`.
+1. Run `python3 scripts/browser-smoke/video_smoke.py --backend chromium --ephemeral`.
 
    Result: The script exits 0.
 
-2. On Windows, start through `browser_video` with quality 40, `compression_level` 0, fps 5, and `max_width` 320.
+2. In a Chromium browser panel, start through `browser_video` with quality 40, `compression_level` 0, fps 5, and `max_width` 320.
 
    Result: The status state is `recording`.
 
-3. On Windows, pause, read status, resume, and stop through `browser_video`.
+3. Pause, read status, resume, and stop through `browser_video`.
 
    Result: Pause reports `paused`. Resume encodes more frames. Stop returns a path.
 
-4. On Windows, open the returned file and read `browser_audit` for that panel.
+4. Open the returned file and read `browser_audit` for that panel.
 
    Result: The file starts with the EBML bytes `1A 45 DF A3`. The audit has a video entry and no page pixels.
 

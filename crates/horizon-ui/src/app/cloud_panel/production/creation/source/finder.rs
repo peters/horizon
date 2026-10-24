@@ -114,17 +114,13 @@ pub(super) fn narrows(query: &str, name: &str) -> bool {
 /// Text that names a folder rather than a repository or a search.
 pub(super) fn is_path(text: &str) -> bool {
     let text = text.trim_start();
-    // `.github` is a name to search for; `./`, `../`, `.` and `..` are places, and on
-    // Windows `.\` and `..\` too.
-    let relative = matches!(text, "." | "..")
-        || ["./", "../"].iter().any(|start| text.starts_with(start))
-        || (cfg!(windows) && [".\\", "..\\"].iter().any(|start| text.starts_with(start)));
+    // `.github` is a name to search for; `./`, `../`, `.` and `..` are places.
+    let relative = matches!(text, "." | "..") || ["./", "../"].iter().any(|start| text.starts_with(start));
     // `~` and `~/...` are the home folder; `~alice` is a word to search for, as in the lookup.
     let home = text
         .strip_prefix('~')
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/') || (cfg!(windows) && rest.starts_with('\\')));
-    let windows = cfg!(windows) && (text.starts_with('\\') || (text.len() >= 2 && text.as_bytes()[1] == b':'));
-    relative || home || text.starts_with('/') || windows
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+    relative || home || text.starts_with('/')
 }
 
 impl Finder {

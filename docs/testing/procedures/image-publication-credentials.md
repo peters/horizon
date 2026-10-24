@@ -1,7 +1,7 @@
 ---
 procedure: image-publication-credentials
 feature: image publication credential isolation
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ The tests use synthetic tokens. They do not change an installed login.
 ## 2. Applicability
 
 - Candidate: The host publication preparation helper for epic #1597.
-- Platforms: Linux, macOS and Windows.
+- Platforms: Linux and macOS.
 - This helper has no launch caller yet. Existing launches keep their behavior.
 - This procedure does not test a live registry push, UI selection or cloud allocation.
 

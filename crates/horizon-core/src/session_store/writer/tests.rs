@@ -245,16 +245,3 @@ fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
-
-#[test]
-#[cfg(not(unix))]
-fn a_durable_save_is_refused_where_folders_cannot_be_synced() {
-    let (_temp, store) = store();
-    let generation = store.queue_runtime_state("session", board("queued"));
-    assert!(matches!(
-        store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
-        Err(Some(_))
-    ));
-    assert!(store.flush_runtime_states(Duration::from_secs(30)));
-    assert_eq!(on_disk(&store).as_deref(), Some("queued"), "the save itself still runs");
-}

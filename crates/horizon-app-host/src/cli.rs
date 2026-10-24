@@ -84,13 +84,6 @@ pub async fn execute(host: Host, lifetime: Duration) -> Result<()> {
             _=terminate.recv()=>{control.cancel();task.await.map_err(|_|Error::Unavailable)??},
         };
     }
-    #[cfg(not(unix))]
-    {
-        report = tokio::select! {
-            result=&mut task=>result.map_err(|_|Error::Unavailable)??,
-            signal=tokio::signal::ctrl_c()=>{signal.map_err(|_|Error::Unavailable)?;control.cancel();task.await.map_err(|_|Error::Unavailable)??},
-        };
-    }
     let (value, failed) = report;
     let mut bytes = serde_json::to_vec(&value).map_err(|_| Error::Unavailable)?;
     bytes.push(b'\n');

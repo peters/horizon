@@ -89,8 +89,6 @@ impl LockIdentity {
                 nonce,
             })
         }
-        #[cfg(not(unix))]
-        Err(Error::Ownership)
     }
 
     pub(super) fn at_path(path: &Path) -> Result<Self> {
@@ -185,7 +183,5 @@ fn require_private(metadata: &fs::Metadata) -> Result<()> {
             return Err(Error::Ownership);
         }
     }
-    #[cfg(not(unix))]
-    let _ = metadata;
     Ok(())
 }

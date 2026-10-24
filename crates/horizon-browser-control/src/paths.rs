@@ -22,34 +22,22 @@ pub enum RuntimePathError {
 
 /// The application home is independent of an explicitly configured browser root: the path in
 /// `HORIZON_HOME` when it is set and not empty, else `.horizon` in the user's home directory,
-/// from `HOME` or, where that is unset as on Windows, from `USERPROFILE`. Only without any of
-/// them is it `.horizon` in the working directory. While `HORIZON_HOME` is set this never falls
-/// back to the user's home directory; entry points reject a relative value with
-/// [`home_override`] before they use it.
+/// from `HOME`. Only without either is it `.horizon` in the working directory. While
+/// `HORIZON_HOME` is set this never falls back to the user's home directory; entry points reject
+/// a relative value with [`home_override`] before they use it.
 #[must_use]
 pub fn default_horizon_root() -> PathBuf {
-    horizon_root_from(
-        std::env::var_os(HOME_ENV),
-        std::env::var_os("HOME"),
-        std::env::var_os("USERPROFILE"),
-    )
+    horizon_root_from(std::env::var_os(HOME_ENV), std::env::var_os("HOME"))
 }
 
-fn horizon_root_from(
-    horizon_home: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
-    profile: Option<std::ffi::OsString>,
-) -> PathBuf {
+fn horizon_root_from(horizon_home: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> PathBuf {
     if let Some(root) = non_empty_path(horizon_home) {
         return root;
     }
-    home.into_iter()
-        .chain(profile)
-        .find(|value| !value.is_empty())
-        .map_or_else(
-            || PathBuf::from(".horizon"),
-            |home| PathBuf::from(home).join(".horizon"),
-        )
+    home.into_iter().find(|value| !value.is_empty()).map_or_else(
+        || PathBuf::from(".horizon"),
+        |home| PathBuf::from(home).join(".horizon"),
+    )
 }
 
 /// Freeze an absolute coordination root before using any default-path helpers.
@@ -208,7 +196,7 @@ fn browser_visible_attachments_dir(_root: &Path, _home: Option<&Path>) -> Option
 pub fn safe_local_id(local_id: &str) -> String {
     // Always encode the exact UTF-8 bytes. Keeping an apparently safe ID
     // verbatim would make identifiers that differ only by case collide on
-    // default macOS and Windows filesystems. The lowercase hexadecimal
+    // default macOS filesystems. The lowercase hexadecimal
     // alphabet itself has no case variants, and the '%' prefix keeps the
     // empty identifier distinct.
     let mut encoded = String::with_capacity(1 + local_id.len() * 2);
@@ -226,33 +214,18 @@ mod home_tests {
     use std::path::PathBuf;
 
     #[test]
-    fn the_home_comes_from_home_then_the_windows_profile() {
-        let root = |home: Option<&str>, profile: Option<&str>| {
-            super::horizon_root_from(None, home.map(OsString::from), profile.map(OsString::from))
-        };
+    fn the_home_comes_from_home() {
+        let root = |home: Option<&str>| super::horizon_root_from(None, home.map(OsString::from));
         let user = PathBuf::from("user");
-        assert_eq!(root(Some("user"), Some("profile")), user.join(".horizon"));
-        assert_eq!(
-            root(None, Some("profile")),
-            PathBuf::from("profile").join(".horizon"),
-            "Windows sets USERPROFILE and no HOME"
-        );
-        assert_eq!(
-            root(Some(""), Some("profile")),
-            PathBuf::from("profile").join(".horizon")
-        );
-        assert_eq!(root(None, None), PathBuf::from(".horizon"));
-        assert_eq!(root(Some(""), Some("")), PathBuf::from(".horizon"));
+        assert_eq!(root(Some("user")), user.join(".horizon"));
+        assert_eq!(root(Some("")), PathBuf::from(".horizon"));
+        assert_eq!(root(None), PathBuf::from(".horizon"));
     }
 
     #[test]
     fn a_horizon_home_override_replaces_the_user_home() {
         let root = |horizon_home: Option<&str>, home: Option<&str>| {
-            super::horizon_root_from(
-                horizon_home.map(OsString::from),
-                home.map(OsString::from),
-                Some(OsString::from("profile")),
-            )
+            super::horizon_root_from(horizon_home.map(OsString::from), home.map(OsString::from))
         };
         let private = std::env::temp_dir().join("private-horizon");
         let private = private.to_str().expect("UTF-8 temporary path");

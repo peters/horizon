@@ -52,12 +52,11 @@ see each one first.
   tracked file stays tracked when it also matches `.gitignore`, so its changes
   are listed like any other.
 - The target of a symbolic link: a link is copied as a link. A file reached
-  through a folder that is a link is refused. On Unix each folder on the way
-  is opened without following a link, so this also holds when the folder is
-  swapped while Horizon reads. A hard link is refused on Unix.
-- A path part that is not one plain name (`..`, or on Windows a `\` or a
-  drive) is refused, so nothing outside the checkout or the snapshot is read
-  or removed.
+  through a folder that is a link is refused. Each folder on the way is opened
+  without following a link, so this also holds when the folder is swapped while
+  Horizon reads. A hard link is refused.
+- A path part that is not one plain name (`..`) is refused, so nothing outside
+  the checkout or the snapshot is read or removed.
 - A working folder that the repository's configuration names elsewhere
   (`core.worktree`) is refused, so Git's view and the files read agree.
 - Uncommitted files with the name of a common secret file (`secret_name`),
@@ -69,11 +68,6 @@ see each one first.
   goes into the image if the person confirms it.
 - `.dockerignore` is applied by Docker, not here, so the list can name a
   file that the image does not get.
-- On Windows, a hard link is not refused, and a folder swapped for a junction
-  between the check and the read can be followed. A folder that is already a
-  symbolic link or a junction is refused; other reparse points, such as cloud
-  placeholders, count as plain folders and files. A symbolic link is refused
-  on Windows while the list is read, because it cannot be copied there.
 
 ## Untrusted: the repository's own configuration
 

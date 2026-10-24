@@ -442,7 +442,5 @@ pub(super) fn lock_named(root: &Path, name: &str) -> Result<OperationLock> {
 fn sync_directory(root: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(root)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = root;
     Ok(())
 }

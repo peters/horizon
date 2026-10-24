@@ -19,8 +19,8 @@ worker allocation as separate evidence.
 ## 2. Applicability
 
 Use a supported Unix host and an owned Docker engine. The native fixture runs on
-Linux X11. Hosted CI checks cross-platform parsing and compilation. Windows cloud
-operations and GPU allocation are not qualified by this procedure.
+Linux X11. Hosted CI checks cross-platform parsing and compilation. GPU allocation
+is not qualified by this procedure.
 
 Local registry proof uses synthetic accounts. It does not establish live GitHub
 personal or organization permission, or GitLab account connection. Git hosting

@@ -13,7 +13,7 @@
 //! The checkout is read with git2, which runs no program that a repository's configuration
 //! names (a content filter or a file system monitor), and no link is followed: a link goes
 //! into the context as a link, a file is never read through a folder that is a link, and a
-//! hard link is refused (on Unix; Windows does not report hard links here). Submodules
+//! hard link is refused. Submodules
 //! come from their commits, and untracked nested repositories are left out.
 mod overlay;
 #[cfg(test)]

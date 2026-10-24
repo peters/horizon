@@ -2,10 +2,6 @@ use super::*;
 use crate::cloud_runtime::{Cancellation, registry::tests::fixture};
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 fn selected_pull_is_checked_before_publisher_and_failure_stops_preflight() {
     let (_root, settings) = fixture();
     let prepared = Prepared::for_image(&settings, "registry.example/team/worker", None, true)
@@ -39,10 +35,6 @@ fn selected_pull_is_checked_before_publisher_and_failure_stops_preflight() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Cloud journals require Unix directory durability, matching deployment support"
-)]
 fn pull_only_checks_ignore_publisher_and_never_authorize_provider_transfer() {
     let (_root, settings) = fixture();
     let prepared = Prepared::for_image(&settings, "registry.example/team/worker", None, false)

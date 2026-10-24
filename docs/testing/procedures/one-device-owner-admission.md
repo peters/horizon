@@ -1,7 +1,7 @@
 ---
 procedure: one-device-owner-admission
 feature: Optional Core one-device owner controller prerequisite
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -129,14 +129,14 @@ Do not pass `--ignored` or substitute a host worker for the synthetic helper.
 
 ### 6.5 O05 — Unsupported original Store acquisition
 
-1. On a non-Unix host, run the existing Store entry refusal with the enabled surface.
+1. Run the existing Store entry refusal with the enabled surface.
 
    ```sh
    RUSTFLAGS="-D warnings" cargo test --locked --offline -p horizon-core --lib --features one-service-gateway,cloud-exposure cloud_runtime::state::tests::unsupported_cloud_control_does_not_create_or_modify_state -- --exact
    ```
 
    Result: No new state directory or operation lock is created, and existing record
-   bytes remain unchanged. The same regression also runs in default Windows CI.
+   bytes remain unchanged.
    Without a Store, no live OriginalCloud or admitted owner controller can be made.
    Keep the pure exact-generation admission test in the portable gateway CI command.
    Do not bypass the production guard or label unsupported live custody as passing.

@@ -708,8 +708,8 @@ fn begin(remote: &Remote, destination: &Path, branch: &str, cancel: &Cancellatio
     ready.map_err(|failure| removed(destination, failure))
 }
 
-/// `failure`, after what the clone made in `folder` is taken away. When that cannot be done (files
-/// still open on Windows, say) the folder stays and the message says where. A refusal to sign in
+/// `failure`, after what the clone made in `folder` is taken away. When that cannot be done (a file
+/// still open, say) the folder stays and the message says where. A refusal to sign in
 /// stays one, so that its prompt still appears: the folder is then offered for resuming, or
 /// refused as an occupied destination, by the dialog itself.
 fn removed(folder: &Path, failure: Failure) -> Failure {

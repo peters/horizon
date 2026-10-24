@@ -11,7 +11,7 @@ pub use chord::BrowserKeyChord;
 pub struct BrowserModifiers {
     pub alt: bool,
     pub ctrl: bool,
-    /// Command (macOS) / Windows key.
+    /// Command (macOS) / Super key.
     pub meta: bool,
     pub shift: bool,
 }

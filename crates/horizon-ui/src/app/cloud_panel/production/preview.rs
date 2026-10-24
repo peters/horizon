@@ -13,11 +13,7 @@ pub(super) fn accepts(app: &HorizonApp) -> bool {
 /// reconnects its cloud, so the cloud shows its panels, not its body.
 pub(super) fn waiting_member(app: &mut HorizonApp, workspace: WorkspaceId, name: &str) -> Option<String> {
     // The panel is replaced by its placeholder at once; its command only has to exit.
-    let (command, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/C".to_owned(), "exit".to_owned()])
-    } else {
-        ("/bin/sh", vec!["-c".to_owned(), "exit".to_owned()])
-    };
+    let (command, args) = ("/bin/sh", vec!["-c".to_owned(), "exit".to_owned()]);
     let options = || PanelOptions {
         name: Some(name.into()),
         kind: PanelKind::Shell,

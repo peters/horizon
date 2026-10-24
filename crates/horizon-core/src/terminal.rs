@@ -36,9 +36,6 @@ use self::support::default_terminal_rgb;
 pub use self::support::open_url;
 use self::support::{ColorLookup, current_cwd_for_pid, replay_terminal_bytes};
 
-#[cfg(not(windows))]
-type TerminalPty = tty::Pty;
-#[cfg(windows)]
 type TerminalPty = tty::Pty;
 
 type TerminalEventLoop = EventLoop<TerminalPty, TerminalEventProxy>;
@@ -255,11 +252,7 @@ mod tests {
 
     #[test]
     fn shutdown_with_timeout_waits_for_pty_exit() {
-        let program = if cfg!(windows) {
-            "cmd.exe".to_string()
-        } else {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
-        };
+        let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
         let mut terminal = Terminal::spawn(TerminalSpawnOptions {
             program,
             args: Vec::new(),
@@ -353,17 +346,10 @@ mod tests {
     }
 
     fn exiting_command() -> (String, Vec<String>) {
-        if cfg!(windows) {
-            (
-                "cmd.exe".to_string(),
-                vec!["/D".to_string(), "/C".to_string(), "exit".to_string()],
-            )
-        } else {
-            (
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
-                vec!["-c".to_string(), "exit".to_string()],
-            )
-        }
+        (
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+            vec!["-c".to_string(), "exit".to_string()],
+        )
     }
 
     #[test]

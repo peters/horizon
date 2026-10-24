@@ -96,7 +96,7 @@ impl WorkLaunch<'_> {
         program: &str,
         is_restore: bool,
         unambiguous: bool,
-        args: &mut Vec<String>,
+        args: &mut [String],
         env: &mut std::collections::HashMap<String, String>,
     ) -> StartupPlan {
         let owned = unambiguous.then(|| self.owned_command(program, args, env)).flatten();
@@ -131,7 +131,7 @@ impl StartupPlan {
         }
     }
 
-    pub(crate) fn seed_if_attached(&mut self, attached: bool, args: &mut Vec<String>) {
+    pub(crate) fn seed_if_attached(&mut self, attached: bool, args: &mut [String]) {
         if let Some(seed) = self.seed.take() {
             if attached && append_seed(PanelKind::Claude, args, &seed) {
                 REMAINING.set(REMAINING.get().saturating_sub(1));
@@ -263,7 +263,7 @@ pub fn resume_brief(record: &StoredWork, now: i64) -> String {
     )
 }
 
-pub(crate) fn append_seed(kind: PanelKind, args: &mut Vec<String>, brief: &str) -> bool {
+pub(crate) fn append_seed(kind: PanelKind, args: &mut [String], brief: &str) -> bool {
     if !matches!(
         kind,
         PanelKind::Claude | PanelKind::Codex | PanelKind::Pi | PanelKind::Grok | PanelKind::OpenCode
@@ -271,13 +271,6 @@ pub(crate) fn append_seed(kind: PanelKind, args: &mut Vec<String>, brief: &str) 
         return false;
     }
     if args.len() != 2 || args[0] != "-ic" {
-        if cfg!(windows) {
-            if kind == PanelKind::OpenCode {
-                args.push("--prompt".into());
-            }
-            args.push(brief.into());
-            return true;
-        }
         return false;
     }
     args[1].push_str(if kind == PanelKind::OpenCode { " --prompt " } else { " " });

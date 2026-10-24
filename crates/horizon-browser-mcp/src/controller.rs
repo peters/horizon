@@ -1347,9 +1347,6 @@ mod tests {
     }
 
     fn os_permission_denied() -> io::Error {
-        #[cfg(windows)]
-        const ACCESS_DENIED: i32 = 5;
-        #[cfg(not(windows))]
         const ACCESS_DENIED: i32 = 13;
         let error = io::Error::from_raw_os_error(ACCESS_DENIED);
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);

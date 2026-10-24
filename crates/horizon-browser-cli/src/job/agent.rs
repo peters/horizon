@@ -95,23 +95,7 @@ fn command_on_path(name: &str, path: Option<&OsStr>) -> bool {
 }
 
 fn executable_in_dir(directory: &Path, name: &str) -> bool {
-    if is_executable_file(&directory.join(name)) {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        if Path::new(name).extension().is_some() {
-            return false;
-        }
-        return windows_path_names(name)
-            .iter()
-            .any(|candidate| is_executable_file(&directory.join(candidate)));
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = name;
-        false
-    }
+    is_executable_file(&directory.join(name))
 }
 
 #[cfg(unix)]
@@ -121,29 +105,6 @@ fn is_executable_file(path: &Path) -> bool {
         && path
             .metadata()
             .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
-}
-
-#[cfg(windows)]
-fn windows_path_names(name: &str) -> Vec<OsString> {
-    let extensions = std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
-    extensions
-        .to_string_lossy()
-        .split(';')
-        .filter(|extension| !extension.is_empty())
-        .map(|extension| {
-            let mut candidate = OsString::from(name);
-            if !extension.starts_with('.') {
-                candidate.push(".");
-            }
-            candidate.push(extension);
-            candidate
-        })
-        .collect()
 }
 
 fn codex_command(
@@ -298,24 +259,12 @@ fn pin_job_dir_as_project_root(job_dir: &Path) {
 }
 
 fn grok_home_dir() -> Option<PathBuf> {
-    grok_home_from_env(
-        std::env::var_os("GROK_HOME"),
-        std::env::var_os("HOME"),
-        std::env::var_os("USERPROFILE"),
-    )
+    grok_home_from_env(std::env::var_os("GROK_HOME"), std::env::var_os("HOME"))
 }
 
-fn grok_home_from_env(
-    grok_home: Option<OsString>,
-    home: Option<OsString>,
-    user_profile: Option<OsString>,
-) -> Option<PathBuf> {
+fn grok_home_from_env(grok_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     let env_path = |value: Option<OsString>| value.filter(|value| !value.is_empty()).map(PathBuf::from);
-    env_path(grok_home).or_else(|| {
-        env_path(home)
-            .or_else(|| env_path(user_profile))
-            .map(|home| home.join(".grok"))
-    })
+    env_path(grok_home).or_else(|| env_path(home).map(|home| home.join(".grok")))
 }
 
 fn user_grok_auth() -> Option<PathBuf> {
@@ -361,35 +310,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn authentication_home_honors_override_then_home_then_user_profile() {
-        for (override_value, home, profile, expected) in [
-            (
-                Some("override"),
-                Some("home"),
-                Some("profile"),
-                PathBuf::from("override"),
-            ),
-            (None, Some("home"), Some("profile"), PathBuf::from("home").join(".grok")),
-            (
-                Some(""),
-                Some("home"),
-                Some("profile"),
-                PathBuf::from("home").join(".grok"),
-            ),
-            (None, None, Some("profile"), PathBuf::from("profile").join(".grok")),
-            (
-                Some(""),
-                Some(""),
-                Some("profile"),
-                PathBuf::from("profile").join(".grok"),
-            ),
+    fn authentication_home_honors_override_then_home() {
+        for (override_value, home, expected) in [
+            (Some("override"), Some("home"), PathBuf::from("override")),
+            (None, Some("home"), PathBuf::from("home").join(".grok")),
+            (Some(""), Some("home"), PathBuf::from("home").join(".grok")),
         ] {
             assert_eq!(
-                grok_home_from_env(
-                    override_value.map(OsString::from),
-                    home.map(OsString::from),
-                    profile.map(OsString::from)
-                ),
+                grok_home_from_env(override_value.map(OsString::from), home.map(OsString::from)),
                 Some(expected)
             );
         }
@@ -398,7 +326,7 @@ mod tests {
     #[test]
     fn authentication_home_requires_a_nonempty_location() {
         for value in [None, Some(OsString::new())] {
-            assert_eq!(grok_home_from_env(value.clone(), value.clone(), value), None);
+            assert_eq!(grok_home_from_env(value.clone(), value), None);
         }
     }
 
@@ -453,17 +381,6 @@ mod tests {
         assert_eq!(
             agent_executable_from(Some(OsString::from("codex")), Some(path.path().as_os_str())),
             OsString::from("codex")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_path_lookup_accepts_pathext_shims() {
-        let path = tempfile::tempdir().unwrap_or_else(|error| panic!("path root: {error}"));
-        std::fs::write(path.path().join("grok.cmd"), []).unwrap_or_else(|error| panic!("create grok.cmd: {error}"));
-        assert_eq!(
-            agent_executable_from(None, Some(path.path().as_os_str())),
-            OsString::from("grok")
         );
     }
 

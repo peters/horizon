@@ -24,7 +24,7 @@ send TCP traffic to each other over the tailnet.
 - Do T12 and T13 after G03 in [area G](g-companions.md). These tasks need a
   checked companion.
 - This area does not test: OAuth enrollment, the Tailscale API, Remote Hosts,
-  macOS and Windows credential stores, or a kernel VPN interface. See
+  macOS credential stores, or a kernel VPN interface. See
   [cloud tailnets](../../../cloud-workspaces.md#tailnets-auth-key-mvp).
 
 ## 3. Safety

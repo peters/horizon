@@ -86,10 +86,6 @@ fn unrelated_local_preferences_do_not_invalidate_a_plan() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "cloud records require durable directory updates, which are Unix-only"
-)]
 fn a_retry_plan_keeps_the_recorded_destination_after_local_defaults_change() {
     let (root, repo, settings, mut profile) = fixture();
     let account = Account {
@@ -146,10 +142,6 @@ fn a_retry_plan_keeps_the_recorded_destination_after_local_defaults_change() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "cloud records require durable directory updates, which are Unix-only"
-)]
 fn a_legacy_retry_plan_ignores_later_machine_preferences() {
     let (root, repo, mut settings, mut profile) = fixture();
     profile.image = "registry.example/team/original".into();

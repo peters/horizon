@@ -14,7 +14,7 @@ use std::{
 };
 
 const CHANGED: &str = "The uncommitted files in the image's build context changed after the rebuild was confirmed. Cancel the rebuild, then rebuild again to confirm the files as they are now";
-const LINK_UNSUPPORTED: &str = "An uncommitted file in the image's build context is a link, which Horizon on Windows cannot copy; replace it with a file or add it to .gitignore before you build the image";
+const LINK_UNSUPPORTED: &str = "An uncommitted file in the image's build context is a link, which Horizon cannot copy; replace it with a file or add it to .gitignore before you build the image";
 const BUFFER: usize = 64 * 1024;
 const SNAPSHOT_LINK: &str =
     "The build snapshot has a link or a file where an uncommitted file needs a folder; try again";
@@ -177,44 +177,8 @@ fn find(repository: &Path, path: &str) -> Result<Found> {
     }
 }
 
-#[cfg(not(unix))]
-fn find(repository: &Path, path: &str) -> Result<Found> {
-    use std::os::windows::fs::OpenOptionsExt;
-    // Win32: open a link itself rather than its target.
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    // The standard library reports symbolic links and junctions as links, but not other
-    // reparse points such as cloud placeholders (OneDrive), which hold the file itself.
-    let linked = |metadata: &fs::Metadata| metadata.file_type().is_symlink();
-    let (folders, leaf) = parts(path)?;
-    let mut full = repository.to_path_buf();
-    for part in folders {
-        full.push(part);
-        let metadata = fs::symlink_metadata(&full).map_err(moved)?;
-        if linked(&metadata) || !metadata.is_dir() {
-            return Err(Refusal::LinkedFolder(path.to_owned()).into());
-        }
-    }
-    full.push(leaf);
-    let metadata = fs::symlink_metadata(&full).map_err(moved)?;
-    if linked(&metadata) {
-        // Listed as a link, which `content` refuses on Windows.
-        let target = fs::read_link(&full).map(|target| target.to_string_lossy().into_owned().into_bytes());
-        return Ok(Found::Link(target.unwrap_or_default()));
-    }
-    if !metadata.is_file() {
-        return Ok(Found::Other);
-    }
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(&full)
-        .map_err(moved)?;
-    Ok(Found::File(file))
-}
-
 /// Whether `part` of a Git path is one plain name on this system: not empty, `.` or `..`,
-/// and on Windows without a `\` or a drive, which would make it several parts or another
-/// root.
+/// and without a `\`, which on another system would make it several parts.
 fn plain(part: &str) -> bool {
     let mut components = Path::new(part).components();
     matches!(
@@ -287,19 +251,9 @@ fn links(metadata: &fs::Metadata) -> u64 {
     std::os::unix::fs::MetadataExt::nlink(metadata)
 }
 
-#[cfg(not(unix))]
-const fn links(_: &fs::Metadata) -> u64 {
-    1
-}
-
 #[cfg(unix)]
 fn executable(metadata: &fs::Metadata) -> bool {
     std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o111 != 0
-}
-
-#[cfg(not(unix))]
-const fn executable(_: &fs::Metadata) -> bool {
-    false
 }
 
 /// Makes a link at `target` to `link`, a link's target as [`find`] read it.
@@ -307,11 +261,6 @@ const fn executable(_: &fs::Metadata) -> bool {
 fn make_link(link: Vec<u8>, target: &Path) -> Result<()> {
     let link = PathBuf::from(<std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(link));
     Ok(std::os::unix::fs::symlink(link, target)?)
-}
-
-#[cfg(not(unix))]
-fn make_link(_: Vec<u8>, _: &Path) -> Result<()> {
-    Err(Error::Invalid(LINK_UNSUPPORTED))
 }
 
 /// The SHA-256 of all of `reader`, written to `writer` too when one is given.
@@ -341,18 +290,6 @@ fn finish(file: &fs::File, executable: bool) -> Result<()> {
     } else {
         0o644
     }))?;
-    #[cfg(not(unix))]
-    let _ = executable;
     file.set_modified(SystemTime::UNIX_EPOCH)?;
     Ok(())
-}
-
-/// A file that disappears or changes kind while it is read is the person's checkout moving.
-#[cfg(not(unix))]
-fn moved(error: io::Error) -> Error {
-    if error.kind() == io::ErrorKind::NotFound {
-        Error::Invalid(MOVED)
-    } else {
-        error.into()
-    }
 }

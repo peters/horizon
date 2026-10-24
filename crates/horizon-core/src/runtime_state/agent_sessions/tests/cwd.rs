@@ -1,7 +1,7 @@
 use super::super::{AgentSessionCatalog, AgentSessionRecord, PanelKind, normalize_cwd};
 
 /// Session records hold cwds the way the loaders store them: `normalize_cwd`
-/// rebuilds a path from its components, so `/repo` becomes `\repo` on Windows.
+/// rebuilds a path from its components.
 pub(super) fn stored_cwd(path: &str) -> Option<String> {
     normalize_cwd(Some(path))
 }

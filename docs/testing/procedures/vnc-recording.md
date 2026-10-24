@@ -1,7 +1,7 @@
 ---
 procedure: vnc-recording
 feature: Device panel video
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

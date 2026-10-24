@@ -172,16 +172,6 @@ fn open_directory(root: &File, relative: &Path) -> Result<File> {
     Err(Error::ArtifactRejected)
 }
 
-#[cfg(not(unix))]
-fn open_anchored(_root: &Path, _relative: &Path) -> Result<File> {
-    Err(Error::ArtifactRejected)
-}
-
-#[cfg(not(unix))]
-fn open_directory(_root: &File, _relative: &Path) -> Result<File> {
-    Err(Error::ArtifactRejected)
-}
-
 fn unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
         return false;
@@ -192,10 +182,6 @@ fn unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
         // Unlike mtime, an unprivileged writer cannot restore the inode change timestamp.
         (before.dev(), before.ino(), before.ctime(), before.ctime_nsec())
             == (after.dev(), after.ino(), after.ctime(), after.ctime_nsec())
-    }
-    #[cfg(not(unix))]
-    {
-        true
     }
 }
 

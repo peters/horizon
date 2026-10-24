@@ -129,10 +129,6 @@ impl Store {
             }
             Ok(())
         }
-        #[cfg(not(unix))]
-        {
-            Err(Error::JournalInvalid)
-        }
     }
     pub(super) fn access<T>(&self, write: bool, operation: impl FnOnce(&mut Ledger) -> Result<T>) -> Result<T> {
         self.check_location()?;
@@ -245,11 +241,6 @@ fn file_identity(file: &File) -> Result<(u64, u64)> {
         use std::os::unix::fs::MetadataExt;
         let metadata = file.metadata().map_err(|_| Error::JournalUnavailable)?;
         Ok((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = file;
-        Err(Error::JournalUnavailable)
     }
 }
 
@@ -395,16 +386,6 @@ fn validate_private_child(child: File) -> Result<File> {
     Ok(child)
 }
 
-#[cfg(not(unix))]
-fn existing_child(_parent: &File, _name: &std::ffi::OsStr) -> Result<File> {
-    Err(Error::JournalUnavailable)
-}
-
-#[cfg(not(unix))]
-fn private_child(_parent: &File, _name: &std::ffi::OsStr) -> Result<File> {
-    Err(Error::JournalUnavailable)
-}
-
 #[cfg(unix)]
 fn open_file(directory: &File, name: &str, create: bool) -> Result<File> {
     use std::os::unix::fs::MetadataExt;
@@ -467,19 +448,6 @@ fn replace(directory: &File, name: &str) -> Result<()> {
         return Err(Error::JournalUnavailable);
     }
     rustix::fs::renameat(directory, name, directory, "journal.json").map_err(|_| Error::JournalUnavailable)
-}
-
-#[cfg(not(unix))]
-fn private_directory(_path: &Path, _initialization: Initialization) -> Result<File> {
-    Err(Error::JournalUnavailable)
-}
-#[cfg(not(unix))]
-fn open_file(_directory: &File, _name: &str, _create: bool) -> Result<File> {
-    Err(Error::JournalUnavailable)
-}
-#[cfg(not(unix))]
-fn replace(_directory: &File, _name: &str) -> Result<()> {
-    Err(Error::JournalUnavailable)
 }
 
 #[cfg(test)]

@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};

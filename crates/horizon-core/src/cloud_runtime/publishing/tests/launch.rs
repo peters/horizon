@@ -76,10 +76,6 @@ fn profile_omits_an_image_only_with_a_build() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "cloud records require durable directory updates, which are Unix-only"
-)]
 fn execution_uses_the_same_canonical_preference_scope_as_the_confirmed_selection() {
     let root = tempfile::tempdir().unwrap();
     let repository = root.path().join("repo");

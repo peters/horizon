@@ -110,11 +110,7 @@ fn agent_app() -> (tempfile::TempDir, crate::app::HorizonApp, String, String) {
     let (temp, mut app) = crate::app::test_support::test_app();
     let workspace = app.board.create_workspace("agents");
     let local = app.board.workspace(workspace).unwrap().local_id.clone();
-    let (command, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/C".into(), "exit 0".into()])
-    } else {
-        ("/bin/sh", vec!["-c".into(), "exit 0".into()])
-    };
+    let (command, args) = ("/bin/sh", vec!["-c".into(), "exit 0".into()]);
     let agent = app
         .board
         .create_panel(
@@ -136,7 +132,6 @@ fn agent_app() -> (tempfile::TempDir, crate::app::HorizonApp, String, String) {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn agents_reach_only_the_clouds_of_their_own_workspace() {
     let (_temp, mut app, local, actor) = agent_app();
     let listing = app.companion_listing(&local);
@@ -169,7 +164,6 @@ fn agents_reach_only_the_clouds_of_their_own_workspace() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
 fn an_uncheck_is_saved_before_the_card_queues_it() {
     let (_temp, mut app, _local, actor) = agent_app();
     let ctx = egui::Context::default();

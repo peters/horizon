@@ -146,9 +146,8 @@ impl RoutineRegistry {
         Ok(lock)
     }
 
-    /// The lock file sits beside the routine directory, not inside it:
-    /// Windows refuses to rename a directory while a file inside it is open,
-    /// and [`Self::delete`] renames the directory while holding the lock.
+    /// The lock file sits beside the routine directory, not inside it, so
+    /// [`Self::delete`] can rename the directory while holding the lock.
     fn lock_file(&self, routine_id: Uuid) -> Result<RoutineLock, RoutineError> {
         let path = self.root.join(format!(".{routine_id}.lock"));
         let mut options = fs::OpenOptions::new();
@@ -157,12 +156,6 @@ impl RoutineRegistry {
         {
             use std::os::unix::fs::OpenOptionsExt as _;
             options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt as _;
-            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-            options.share_mode(0).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         let file = options.open(&path).map_err(|_| RoutineError::Storage)?;
         let metadata = fs::symlink_metadata(&path).map_err(|_| RoutineError::Storage)?;
@@ -218,10 +211,6 @@ pub(crate) fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
                     .mode(0o700)
                     .create(path)
                     .map_err(|_| RoutineError::Storage)?;
-            }
-            #[cfg(not(unix))]
-            {
-                fs::create_dir(path).map_err(|_| RoutineError::Storage)?;
             }
         }
         Err(_) => return Err(RoutineError::Storage),
@@ -306,11 +295,6 @@ fn symlink_is_replaceable(path: &Path, link: &fs::Metadata) -> bool {
             }
             Err(_) => true,
         }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, link);
-        true
     }
 }
 
@@ -431,9 +415,6 @@ mod tests {
         permissions.set_mode(0o700);
         std::fs::set_permissions(path, permissions).expect("chmod");
     }
-
-    #[cfg(not(unix))]
-    fn privatize_temp(_path: &std::path::Path) {}
 
     #[cfg(unix)]
     #[test]

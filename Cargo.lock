@@ -2444,7 +2444,6 @@ dependencies = [
  "horizon-browser-protocol",
  "mime_guess",
  "png",
- "process-wrap",
  "rav1e",
  "ring",
  "serde",
@@ -2468,7 +2467,6 @@ dependencies = [
  "horizon-browser-control",
  "horizon-browser-mcp",
  "horizon-browser-protocol",
- "horizon-process-time",
  "png",
  "rmcp",
  "serde",
@@ -2594,7 +2592,6 @@ dependencies = [
  "unicode-general-category",
  "ureq",
  "uuid",
- "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
  "zeroize",
 ]
@@ -2682,7 +2679,6 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
- "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
  "zeroize",
 ]
@@ -2697,7 +2693,6 @@ dependencies = [
  "global-hotkey",
  "objc2-app-kit 0.3.2",
  "tokio",
- "windows-sys 0.61.2",
  "x11rb 0.14.0",
 ]
 
@@ -2735,14 +2730,6 @@ version = "0.2.7"
 dependencies = [
  "mdns-sd",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "horizon-process-time"
-version = "0.2.7"
-dependencies = [
- "time",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4450,17 +4437,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "process-wrap"
-version = "10.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f21b97672d2dc848e7b25701ab4535618b92f4861c13cc3f7f7bed52ad3c8da"
-dependencies = [
- "indexmap",
- "nix",
- "windows 0.62.2",
 ]
 
 [[package]]
@@ -6718,19 +6694,6 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
-
-[[package]]
-name = "windows-native-keyring-store"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "063426e76fdec7438d56bb777f67e318a84a25c707b07e575cb8b78e10c028f8"
-dependencies = [
- "byteorder",
- "keyring-core",
- "regex",
- "windows-sys 0.61.2",
- "zeroize",
-]
 
 [[package]]
 name = "windows-numerics"

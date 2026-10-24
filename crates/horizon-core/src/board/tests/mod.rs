@@ -14,13 +14,9 @@ mod reordering;
 mod workspace;
 mod workspace_separation;
 
-/// Shell panels whose program Windows can launch: the default shell is
-/// `/bin/bash` when `SHELL` is unset (#688), so they run `cmd.exe` there.
+/// Shell panels with the default program: `/bin/bash` when `SHELL` is unset (#688).
 fn shell_panel_options() -> PanelOptions {
-    PanelOptions {
-        command: cfg!(windows).then(|| "cmd.exe".to_string()),
-        ..PanelOptions::default()
-    }
+    PanelOptions::default()
 }
 
 fn editor_panel_options() -> PanelOptions {

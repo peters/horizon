@@ -739,11 +739,7 @@ mod tests {
     #[test]
     fn cloud_launch_defaults_precede_workspace_cwd_and_binding_is_unique() {
         let (temp, mut app) = test_app();
-        let (program, args): (String, Vec<String>) = if cfg!(windows) {
-            ("cmd.exe".into(), vec!["/D".into(), "/C".into(), "exit".into()])
-        } else {
-            ("/bin/sh".into(), vec!["-c".into(), "true".into()])
-        };
+        let (program, args): (String, Vec<String>) = ("/bin/sh".into(), vec!["-c".into(), "true".into()]);
         let issue_dir = temp.path().join("issue");
         std::fs::create_dir(&issue_dir).unwrap();
         let ws = app.board.create_workspace_at("test", [0.0, 0.0]);
@@ -803,7 +799,6 @@ mod tests {
         );
     }
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn one_cloud_accepts_multiple_instances_of_each_agent() {
         let (temp, mut app) = test_app();
         let ws = app.board.create_workspace_at("test", [0.0, 0.0]);

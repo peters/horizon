@@ -760,7 +760,6 @@ mod suppression;
 mod zoom;
 
 #[test]
-#[cfg_attr(windows, ignore = "uses a Unix shell to enable terminal application modes")]
 fn shift_never_chains_mouse_reporting_or_alternate_scroll_terminals() {
     use alacritty_terminal::term::TermMode;
     use horizon_core::{Panel, PanelId, PanelOptions, WorkspaceId};

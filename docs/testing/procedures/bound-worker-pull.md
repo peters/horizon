@@ -1,7 +1,7 @@
 ---
 procedure: bound-worker-pull
 feature: exact private image pull grants for CPU workers
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: synthetic fixtures only
@@ -18,7 +18,7 @@ It checks that host user data receives the read-only material that verified the 
 ## 2. Applicability
 
 - Candidate: The bound worker pull prerequisite of #1597.
-- Platforms: Linux and macOS for provisioning fixtures; Windows for applicable credential checks.
+- Platforms: Linux and macOS.
 - These tasks use synthetic inputs. They allocate no provider resource.
 - This procedure does not test a deployed worker or automatic image selection.
 

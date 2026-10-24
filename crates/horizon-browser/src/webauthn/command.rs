@@ -87,12 +87,6 @@ fn supervise(argv: &[String], input: Vec<u8>, timeout: Duration, cancel: &Atomic
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return CommandOutcome::Failed(format!("could not start {program}: {error}")),
@@ -194,7 +188,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "uses /bin/sh and kill")]
     fn the_command_reads_stdin_and_its_stdout_is_returned() {
         let run = CommandRun::start(&shell("cat"), b"{\"op\":\"get\"}".to_vec(), Duration::from_secs(5));
         assert_eq!(
@@ -204,7 +197,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "uses /bin/sh and kill")]
     fn missing_programs_and_oversized_output_fail() {
         let missing = CommandRun::start(
             &["/nonexistent/authenticator".to_string()],
@@ -228,7 +220,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "uses /bin/sh and kill")]
     fn deadline_and_drop_kill_the_process() {
         let dir = tempfile::tempdir().expect("temp");
         let pid_file = dir.path().join("pid");

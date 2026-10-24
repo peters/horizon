@@ -149,7 +149,7 @@ impl Panel {
     pub(super) fn prepare_restart_work(
         &self,
         owned: Option<&str>,
-        args: &mut Vec<String>,
+        args: &mut [String],
         env: &mut std::collections::HashMap<String, String>,
         brief: Option<&str>,
     ) -> Result<RestartWork> {
@@ -224,7 +224,7 @@ impl Panel {
         Ok(())
     }
 
-    fn append_work_brief(&self, args: &mut Vec<String>, brief: &str) -> Result<()> {
+    fn append_work_brief(&self, args: &mut [String], brief: &str) -> Result<()> {
         if !crate::agent_work::append_seed(self.kind, args, brief) {
             return Err(Error::State(
                 "This launch cannot accept a continuation prompt. Continue from its terminal.".into(),
@@ -278,11 +278,6 @@ fn process_may_be_alive(pid: u32) -> bool {
         .ok()
         .and_then(rustix::process::Pid::from_raw)
         .is_none_or(|pid| rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH))
-}
-
-#[cfg(not(unix))]
-fn process_may_be_alive(_pid: u32) -> bool {
-    true
 }
 
 fn saved_claude_history(session_id: &str) -> Option<()> {

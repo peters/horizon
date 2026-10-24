@@ -446,8 +446,6 @@ fn write_private(home: &Path, bytes: &[u8]) -> Result<()> {
 fn sync_directory(home: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(home)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = home;
     Ok(())
 }
 

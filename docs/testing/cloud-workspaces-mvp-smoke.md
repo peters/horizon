@@ -31,7 +31,7 @@ Prerequisites include the Rust/system dependencies in `AGENTS.md`, Docker with
 BuildKit/buildx, Git/LFS, SSH, a registry, a provider account, and credentials for
 agents being tested. Native Linux testing additionally needs Xvfb, Openbox,
 x11vnc, bubblewrap and DBus. Recording needs ffmpeg and a display-scoped recorder.
-Use an actual platform machine for macOS/Windows graphics/input claims.
+Use an actual platform machine for macOS graphics/input claims.
 
 Choose a durable `evidence_dir` outside the checkout and `/tmp`. Create a new
 subdirectory per candidate and scenario. Suggested contents:

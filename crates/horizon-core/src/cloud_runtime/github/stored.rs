@@ -265,8 +265,6 @@ pub(super) fn write_private(directory: &Path, name: &str, bytes: &[u8]) -> Resul
 fn sync_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = directory;
     Ok(())
 }
 

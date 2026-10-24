@@ -69,13 +69,7 @@ impl Holds {
         let own = root.join(&name);
         // The folder gets its name only after its lock is held, so another host never takes
         // over a folder that is still starting.
-        // Windows does not rename a folder with an open file, so there the folder starts
-        // under its own name.
-        let starting = if cfg!(unix) {
-            root.join(format!(".{name}"))
-        } else {
-            own.clone()
-        };
+        let starting = root.join(format!(".{name}"));
         create_private_dir(&starting)?;
         let owner = open_private(&starting.join(OWNER_LOCK))?;
         owner

@@ -3,17 +3,12 @@ use std::time::{Duration, Instant};
 
 use super::{Terminal, TerminalSpawnOptions};
 
-/// A process that does what Windows `ConPTY` does when a console starts: it names the
-/// console in the title and clears the screen. On Windows, `ConPTY` does it for `cls`.
+/// A console that starts by naming itself in the title and clearing the screen.
 fn console_start() -> (String, Vec<String>) {
-    if cfg!(windows) {
-        ("cmd.exe".into(), vec!["/D".into(), "/C".into(), "cls".into()])
-    } else {
-        (
-            "/bin/sh".into(),
-            vec!["-c".into(), r"printf '\033]0;console\007\033[2J\033[HSCRATCH'".into()],
-        )
-    }
+    (
+        "/bin/sh".into(),
+        vec!["-c".into(), r"printf '\033]0;console\007\033[2J\033[HSCRATCH'".into()],
+    )
 }
 
 fn options() -> TerminalSpawnOptions {

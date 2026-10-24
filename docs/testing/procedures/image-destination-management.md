@@ -1,7 +1,7 @@
 ---
 procedure: image-destination-management
 feature: shared local image destination management and bounded operation receipts
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 ---
@@ -16,8 +16,8 @@ This prerequisite wires no public adapter and does not activate automatic publis
 ## 2. Applicability
 
 Use a source checkout and the repository Rust toolchain. Metadata and receipt tests
-run on all listed platforms. Durable preference writes require Unix and are ignored
-with an explicit reason on Windows; hosted Windows compilation remains required.
+run on all listed platforms. Durable preference writes require a supported Unix
+host.
 
 ## 3. Safety
 

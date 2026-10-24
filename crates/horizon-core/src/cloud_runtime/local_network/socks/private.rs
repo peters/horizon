@@ -10,10 +10,6 @@ impl Proxy {
         {
             self.private.as_ref().map(|endpoint| endpoint.path.as_path())
         }
-        #[cfg(not(unix))]
-        {
-            None
-        }
     }
 }
 

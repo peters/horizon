@@ -1,7 +1,7 @@
 ---
 procedure: pinned-unix-ssh-attachment
 feature: Default-off pinned Unix SSH attachment prerequisite of issue 1335 M1-1
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: yes
 secrets: original task-only SSH identity reference; no provider or tailnet API keys

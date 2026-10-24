@@ -159,16 +159,14 @@ impl Discoverer {
 impl Answers for Discoverer {
     fn hello(&self) -> Hello {
         let mut sources = vec![Source::Mdns, Source::Ssdp];
-        if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
             sources.push(Source::Neighbors);
         }
         sources.push(Source::Probe);
         Hello {
             discovery: VERSION,
             sources,
-            note: cfg!(windows).then(|| {
-                "Discovery from a Windows computer is not fully tested yet; its firewall can hide devices that answer mDNS or SSDP".into()
-            }),
+            note: None,
         }
     }
 

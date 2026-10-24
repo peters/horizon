@@ -43,14 +43,6 @@ PLATFORMS = {
         "binary_path": "target/release/horizon",
         "asset_kind": "tar",
     },
-    "windows-x64": {
-        "os": "windows-latest",
-        "name": "Windows x64",
-        "cache_key": "windows-artifacts",
-        "release_asset": "horizon-windows-x64.exe",
-        "binary_path": "target/release/horizon.exe",
-        "asset_kind": "file",
-    },
 }
 
 

@@ -93,15 +93,6 @@ pub fn probe(host: &Binding, profile: Option<&Profile>, cancel: &Cancellation) -
         architecture: None,
         free_bytes: None,
     };
-    if cfg!(windows) {
-        result.check(
-            "Controller platform",
-            CheckState::Blocked,
-            "Docker host deployments need a Linux or macOS Horizon controller",
-            Some("Use Horizon on Linux or macOS. Windows cloud records do not yet support durable directory updates."),
-        );
-        return Ok(result);
-    }
     if !ssh_check(host, &runner, &mut result)? {
         return Ok(result);
     }

@@ -33,7 +33,7 @@ pub(super) struct Relay {
 
 impl Relay {
     pub(super) fn start(socket: TcpStream, mut command: Command) -> io::Result<Self> {
-        // Accepted sockets inherit the listener's nonblocking mode on Windows.
+        // An accepted socket can carry the listener's mode, so the mode is set explicitly.
         socket.set_nonblocking(false)?;
         let mut incoming = socket.try_clone()?;
         let mut outgoing = socket.try_clone()?;

@@ -38,9 +38,7 @@ Find the settings path, then export it:
   ignores every location below.
 - Otherwise it uses `$HOME/.horizon/`, then `$XDG_CONFIG_HOME/horizon/`, then a
   relative `horizon.yaml`/`horizon.yml` in the working directory. Resolution
-  keys off `HOME` on every platform — **Windows included**; `USERPROFILE` is
-  never consulted, so a native Windows launch without `HOME` set falls back to
-  the relative path.
+  keys off `HOME`; `USERPROFILE` is never consulted.
 
 The store sits beside that path and has the same name with the extension
 replaced by `.settings.sqlite` (`config.settings.sqlite`, or
@@ -70,8 +68,6 @@ List input devices:
 - Linux (ALSA only): `arecord -l`
 - macOS: `system_profiler SPAudioDataType`, or
   `ffmpeg -f avfoundation -list_devices true -i ""`
-- Windows: `ffmpeg -list_devices true -f dshow -i dummy`, or
-  `Get-PnpDevice -Class AudioEndpoint` in PowerShell
 
 Also confirm the device is not a **Bluetooth headset in HSP/HFP mode**. That
 profile is narrowband and heavily compressed; it degrades accuracy badly. Prefer
@@ -92,7 +88,6 @@ a silent default while the real microphone works, or the reverse.
   where `<device>` is a name from `arecord -L`
 - Linux (PipeWire): `pw-record --target <node-name-or-id> --rate 16000 --channels 1 sample.wav`
 - macOS: `ffmpeg -f avfoundation -i ":<device-index>" -ar 16000 -ac 1 -t 6 sample.wav`
-- Windows: `ffmpeg -f dshow -i audio="<device name>" -ar 16000 -ac 1 -t 6 sample.wav`
 
 Only fall back to the default device when `input_device` is empty, since that is
 what Horizon itself then uses.
@@ -111,8 +106,6 @@ directory, so a bare `level.py` will not be found:
 ```
 python3 <dir containing this SKILL.md>/level.py sample.wav
 ```
-
-On Windows use the standard launcher: `py -3 ...\level.py sample.wav`.
 
 It needs only the Python 3 standard library, and reports peak, RMS and clipped
 samples, each as a percentage of full scale so the numbers mean the same thing
@@ -167,8 +160,6 @@ the microphone's own noise floor as much as the voice.
   ALSA hardware control. Boost lives in `amixer -c <card>`, e.g.
   `amixer -c <card> sset 'Mic Boost' 0`.
 - macOS: System Settings → Sound → Input → Input volume.
-- Windows: Settings → System → Sound → Input → device properties. Also disable
-  "Audio Enhancements", which can gate or suppress speech.
 
 Re-run steps 2–3 after each change. Gain that sounds fine to a human can still
 be clipping.

@@ -19,7 +19,7 @@ browser:
 - Horizon starts the command without a shell. Horizon does not expand `~` or
   environment variables in the argv.
 - The command gets the environment of Horizon. Its stderr goes to
-  `/dev/null` or the Windows equivalent.
+  `/dev/null`.
 - A change to the key applies to browser sessions that start after the change.
 
 ## Supported panels
@@ -209,7 +209,6 @@ A failure:
 
 The driver writes the `message` to the debug log only. The page never gets it.
 The driver reads stdout after the command stops, whatever its exit status.
-On Windows, the command starts without a console window.
 
 ### Limits
 

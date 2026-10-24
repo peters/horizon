@@ -213,7 +213,7 @@ core test. Two plans with identical images, profiles and files but different gra
 must produce different tokens. A stale or absent publication confirmation must
 refuse against the locked record before credential reads, with unchanged record
 bytes. `plan-rebuild` also shows the recorded destination and account. Record-backed
-tests are Unix-only; pure naming and policy tests still run on Windows.
+tests need a supported Unix host.
 
 Run the actual CLI example regression
 `a_clean_retained_rebuild_requires_its_printed_publisher_token`. A clean retained

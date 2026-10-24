@@ -1,7 +1,7 @@
 ---
 procedure: snapshot-panel-text
 feature: Snapshot and placeholder panel text
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -20,9 +20,8 @@ The output of that process must not change the panel.
 ## 2. Applicability
 
 - Candidate: each build that changes terminal spawn, PTY output handling or snapshot panels.
-- Platforms: Linux, macOS and Windows.
-  On Windows, ConPTY clears the screen and sets a console title when the process starts.
-  Windows is the platform that shows a fault in this area.
+- Platforms: Linux and macOS.
+  The test process clears the screen and sets a console title when it starts.
 - This procedure does not test: live terminals, cloud workers or SSH connections.
 
 ## 3. Equipment and preconditions
@@ -62,15 +61,9 @@ The output of that process must not change the panel.
 
    Result: The test passes. The painted panel shows "Device panel requires".
 
-2. On Windows, run the test from step 1 ten times.
-
-   Result: All runs pass.
-   An earlier fault let ConPTY erase the text before the first frame on some runs.
-
 ## 6. Pass criteria
 
 - SNAP-CORE and SNAP-UI pass on each platform in the candidate run.
-- On Windows, all ten SNAP-UI runs pass.
 
 ## 7. Cleanup
 
@@ -80,4 +73,4 @@ The output of that process must not change the panel.
 
 ## 8. Record of results
 
-Put the results in the pull request. CI runs both tasks on Linux, macOS and Windows.
+Put the results in the pull request. CI runs both tasks on Linux and macOS.

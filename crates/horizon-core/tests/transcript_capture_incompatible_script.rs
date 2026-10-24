@@ -1,5 +1,3 @@
-#![cfg(not(windows))]
-
 mod support;
 
 use std::fs;

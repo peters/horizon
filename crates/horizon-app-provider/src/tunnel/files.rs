@@ -32,11 +32,6 @@ impl OwnedFile {
                     .map_err(|_| Error::TunnelStartFailed)?,
             )
         }
-        #[cfg(not(unix))]
-        {
-            let _ = suffix;
-            Err(Error::TunnelStartFailed)
-        }
     }
     #[cfg(unix)]
     fn from_temp(temp: tempfile::NamedTempFile) -> Result<Self> {
@@ -85,10 +80,6 @@ impl OwnedFile {
             self.file = self.current()?;
             Ok(())
         }
-        #[cfg(not(unix))]
-        {
-            Err(Error::TunnelStartFailed)
-        }
     }
     #[cfg(unix)]
     fn current(&self) -> Result<File> {
@@ -135,10 +126,6 @@ impl OwnedFile {
                 self.retired = true;
             }
             self.parent.sync_all().map_err(|_| Error::TunnelCleanupUncertain)
-        }
-        #[cfg(not(unix))]
-        {
-            Err(Error::TunnelCleanupUncertain)
         }
     }
 }

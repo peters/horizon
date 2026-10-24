@@ -113,8 +113,6 @@ fn sync_directory(parent: &Path) -> Result<()> {
     File::open(parent)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Storage)?;
-    #[cfg(not(unix))]
-    let _ = parent;
     Ok(())
 }
 #[cfg(test)]

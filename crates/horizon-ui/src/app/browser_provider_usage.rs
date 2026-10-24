@@ -240,15 +240,10 @@ mod tests {
     use horizon_core::{PanelKind, PanelOptions, browser_actor};
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn authorized_agents_can_query_multiple_profiles_without_allocating_or_opening_settings() {
         let (temp, mut app) = crate::app::test_support::test_app();
         let workspace = app.board.create_workspace("usage");
-        let (command, args) = if cfg!(windows) {
-            ("cmd.exe", vec!["/C".into(), "exit 0".into()])
-        } else {
-            ("/bin/sh", vec!["-c".into(), "exit 0".into()])
-        };
+        let (command, args) = ("/bin/sh", vec!["-c".into(), "exit 0".into()]);
         let agent = app
             .board
             .create_panel(

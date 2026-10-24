@@ -20,8 +20,8 @@ A new page of a profile host on a shared display must not take the keyboard focu
 ## 2. Applicability
 
 - Candidate: a source build of `horizon-browser` that has the `host` command.
-- Platforms: Linux and macOS. The mode checks of files apply only to Unix. Task PH-VISIBLE needs an X11 display.
-- This procedure does not test: remote targets, the Horizon desktop host or a Windows computer.
+- Platforms: Linux and macOS. Task PH-VISIBLE needs an X11 display.
+- This procedure does not test: remote targets or the Horizon desktop host.
 
 ## 3. Safety
 

@@ -19,7 +19,7 @@ engine still needs `allow_additional`.
 ## 2. Applicability
 
 - Use the exact candidate for the pull request.
-- The steps use Linux. The rule is the same on macOS and Windows.
+- The steps use Linux. The rule is the same on macOS.
 - This procedure does not test remote targets. A remote target still needs
   `allow_additional` when the agent holds a panel.
 
@@ -28,8 +28,8 @@ engine still needs `allow_additional`.
 - A Linux computer with Xvfb, openbox, x11vnc, Python 3, Chromium, Firefox and
   geckodriver. If x11vnc is not installed, unpack it with
   `apt-get download x11vnc libvncserver1 libvncclient1` and `dpkg-deb -x`.
-  On macOS and Windows, run the same steps in an isolated desktop session that
-  you expose through VNC.
+  On macOS, run the same steps in an isolated desktop session that you expose
+  through VNC.
 - An agent panel in your own Horizon, which can call the `device_panel` tool.
   You watch the candidate live through a native VNC Device panel.
 - The steps use their own Xvfb display, not `scripts/device-smoke/serve.py`:

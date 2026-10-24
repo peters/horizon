@@ -70,9 +70,6 @@ fn privatize_temp(path: &std::path::Path) {
     std::fs::set_permissions(path, permissions).expect("chmod");
 }
 
-#[cfg(not(unix))]
-fn privatize_temp(_path: &std::path::Path) {}
-
 #[test]
 fn pause_rejects_new_actions_and_resume_accepts_them() {
     let mut session = TeachSession::start();

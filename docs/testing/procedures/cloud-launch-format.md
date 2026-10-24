@@ -1,7 +1,7 @@
 ---
 procedure: cloud-launch-format
 feature: retain and forward reviewed image intent through saved launch consumers
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: synthetic-only

@@ -37,9 +37,6 @@ sha2.workspace = true
 rav1e = { workspace = true, optional = true }
 ureq.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-process-wrap.workspace = true
-
 [dev-dependencies]
 tempfile.workspace = true
 # Test P-256 keys for the live WebAuthn bridge test's fake authenticator.

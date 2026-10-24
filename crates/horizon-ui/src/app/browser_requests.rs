@@ -1008,11 +1008,7 @@ mod tests {
     }
 
     fn agent_options() -> PanelOptions {
-        let (command, args) = if cfg!(windows) {
-            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
-        } else {
-            ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()])
-        };
+        let (command, args) = ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()]);
         PanelOptions {
             command: Some(command.to_string()),
             args,
@@ -1227,7 +1223,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn placement_fingerprint_follows_membership_not_unrelated_panels() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");
@@ -1283,7 +1278,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn restamping_rewrites_a_live_manifest_for_the_new_membership() {
         let root = tempfile::tempdir().expect("isolated horizon home");
         let mut board = Board::new();
@@ -1378,7 +1372,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_placement_change_restamps_before_the_next_poll_tick() {
         let (_temp, mut app) = test_app();
         let alpha = app.board.create_workspace("alpha");
@@ -1445,7 +1438,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_manifest_lock_held_elsewhere_never_stalls_the_frame_that_stamps() {
         use horizon_core::browser::BrowserPanelState;
         use horizon_core::{Panel, PanelContent};
@@ -1508,7 +1500,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_stamp_that_cannot_be_written_waits_for_the_next_tick() {
         use horizon_core::browser::BrowserPanelState;
         use horizon_core::{Panel, PanelContent};
@@ -1544,7 +1535,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_stamp_asked_for_on_a_replaced_board_writes_nothing() {
         use horizon_core::browser::BrowserPanelState;
         use horizon_core::{Panel, PanelContent};
@@ -1698,17 +1688,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn workspace_stamp_follows_agent_panel_membership() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");
         let beta = board.create_workspace("beta");
         assert!(browser_workspace(&board, WorkspaceId(u64::MAX)).is_none());
-        let (command, args) = if cfg!(windows) {
-            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
-        } else {
-            ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()])
-        };
+        let (command, args) = ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()]);
         let agent_id = board
             .create_panel(
                 PanelOptions {

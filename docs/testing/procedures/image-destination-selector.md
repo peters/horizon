@@ -20,8 +20,8 @@ Ordinary machine settings enable the selector. Repeat the default with no legacy
 key and with an old false value, using private fixture settings only. This native
 fixture runs on Linux with X11. Cross-platform Rust checks
 are separate evidence; native macOS qualification remains deferred under the
-local device-smoke workflow. Windows cloud operations are unsupported. This
-procedure qualifies no registry push or worker allocation.
+local device-smoke workflow. This procedure qualifies no registry push or worker
+allocation.
 
 ## 3. Safety
 

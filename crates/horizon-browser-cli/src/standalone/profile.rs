@@ -115,10 +115,5 @@ fn listen() -> impl Future<Output = ()> {
     }
 }
 
-#[cfg(not(unix))]
-fn listen() -> impl Future<Output = ()> {
-    super::wait_for_interrupt()
-}
-
 #[cfg(test)]
 mod tests;

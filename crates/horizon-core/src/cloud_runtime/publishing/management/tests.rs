@@ -170,7 +170,6 @@ fn list_is_nonmutating_and_reads_no_registry_secret_or_compute_key() {
 }
 
 #[test]
-#[cfg_attr(target_os = "windows", ignore = "Cloud settings require Unix directory durability")]
 fn selection_and_reset_share_canonical_scope_and_reject_stale_confirmation() {
     let mut fixture = fixture();
     let choice = run(&fixture).unwrap().choices.remove(0).selection;

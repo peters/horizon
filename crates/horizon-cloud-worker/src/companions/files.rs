@@ -37,8 +37,6 @@ pub(super) fn shared_directory(path: &Path, group: Option<u32>) -> io::Result<()
         std::os::unix::fs::lchown(path, None, group)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o750))?;
     }
-    #[cfg(not(unix))]
-    let _ = group;
     Ok(())
 }
 
@@ -65,11 +63,6 @@ pub(super) fn write_with(path: &Path, bytes: &[u8], mode: u32, group: Option<u32
         file.write_all(bytes)?;
         std::os::unix::fs::fchown(&file, None, group)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (mode, group);
-        file.write_all(bytes)?;
     }
     file.sync_all()?;
     fs::rename(pending, path)?;

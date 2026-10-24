@@ -9,10 +9,10 @@ panels or Horizon does not remove it or perform any provider operation.
 
 The current implementation supports Linux clients with a trusted local
 POSIX-permission filesystem and OpenSSH `ssh-keygen` on PATH. Arbitrary network
-shares are outside this boundary. Other platforms explicitly fail before writes:
-macOS inherited ACLs can grant access independently of the checked mode bits,
-and Windows requires its own ACL-aware implementation. Both need dedicated
-permission checks and current-head platform smoke before enabling key storage.
+shares are outside this boundary. macOS explicitly fails before writes: its
+inherited ACLs can grant access independently of the checked mode bits. It needs
+dedicated permission checks and current-head macOS smoke before enabling key
+storage.
 This boundary is not a completed cross-platform remote-workspace feature.
 
 ## Ordering and recovery

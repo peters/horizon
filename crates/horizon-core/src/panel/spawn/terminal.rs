@@ -283,11 +283,7 @@ fn resolve_spawn_launch(
 }
 
 fn spawn_remote_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_bytes: Vec<u8>) -> Result<Terminal> {
-    let (program, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/D".into(), "/C".into(), "exit".into()])
-    } else {
-        ("/bin/sh", vec!["-c".into(), "exit".into()])
-    };
+    let (program, args) = ("/bin/sh", vec!["-c".into(), "exit".into()]);
     Terminal::spawn_snapshot(TerminalSpawnOptions {
         program: program.into(),
         args,
@@ -420,11 +416,7 @@ fn spawn_disconnected_snapshot_terminal(id: PanelId, rows: u16, cols: u16, repla
 }
 
 pub(super) fn disconnected_snapshot_launch_command() -> (String, Vec<String>) {
-    if cfg!(windows) {
-        ("cmd.exe".to_string(), vec!["/C".to_string(), "exit".to_string()])
-    } else {
-        (default_shell(), vec!["-c".to_string(), "exit".to_string()])
-    }
+    (default_shell(), vec!["-c".to_string(), "exit".to_string()])
 }
 
 fn spawn_disconnected_ssh_snapshot_panel(

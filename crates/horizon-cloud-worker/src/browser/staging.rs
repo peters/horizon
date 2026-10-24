@@ -403,16 +403,5 @@ fn private_directory(
     )?)
 }
 
-/// The worker runs on Linux; other hosts only build and test this module.
-#[cfg(not(unix))]
-fn create_staged_file(root: &Path, browser: &str, batch: &str, name: &str) -> io::Result<std::fs::File> {
-    let directory = root.join(browser).join(batch);
-    std::fs::create_dir_all(&directory)?;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(directory.join(name))
-}
-
 #[cfg(test)]
 mod tests;

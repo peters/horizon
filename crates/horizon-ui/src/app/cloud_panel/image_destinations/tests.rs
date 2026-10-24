@@ -106,10 +106,6 @@ fn run_profile(f: &mut Fixture, profile: &str, action: Value) -> Value {
     }
 }
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Local agent fixture uses a POSIX shell and durable Unix cloud settings"
-)]
 fn local_actor_changes_only_its_registered_checkout_without_settings_or_secrets() {
     let mut f = fixture();
     let original = std::fs::read(f.source.join(".horizon/cloud.yml")).unwrap();
@@ -132,7 +128,6 @@ fn local_actor_changes_only_its_registered_checkout_without_settings_or_secrets(
     assert!(!serde_json::to_string(&selected).unwrap().contains("absent-publish"));
 }
 #[test]
-#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
 fn expired_foreign_and_remote_scope_requests_cannot_start_work() {
     let mut f = fixture();
     let ctx = egui::Context::default();
@@ -158,10 +153,6 @@ fn expired_foreign_and_remote_scope_requests_cannot_start_work() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Local agent fixture uses a POSIX shell and durable Unix cloud settings"
-)]
 fn an_agent_started_in_a_subdirectory_manages_the_checkout_root() {
     let mut f = fixture();
     let subdirectory = f.source.join("nested").join("work");
@@ -205,10 +196,6 @@ fn real_repository_public_listing_from_a_registered_subdirectory_is_read_only() 
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Local agent fixture uses a POSIX shell and durable Unix cloud settings"
-)]
 fn public_actions_accept_the_shared_policy_profile_name_limit() {
     let mut f = fixture();
     let name = "p".repeat(100);
@@ -235,7 +222,6 @@ fn public_actions_accept_the_shared_policy_profile_name_limit() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
 fn cloud_group_members_cannot_manage_desktop_destinations() {
     let mut f = fixture();
     let ctx = egui::Context::default();
@@ -273,7 +259,6 @@ fn cloud_group_members_cannot_manage_desktop_destinations() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
 fn saved_cloud_membership_refuses_admission_before_live_groups_are_restored() {
     let mut f = fixture();
     let ctx = egui::Context::default();
@@ -311,7 +296,6 @@ fn saved_cloud_membership_refuses_admission_before_live_groups_are_restored() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
 fn restored_or_live_cloud_membership_cancels_retained_destination_operations() {
     use horizon_core::cloud_runtime::publishing::operations::Owner;
     for saved in [false, true] {
@@ -356,7 +340,6 @@ fn restored_or_live_cloud_membership_cancels_retained_destination_operations() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Local agent fixture uses a POSIX shell")]
 fn destination_changes_preserve_saved_agent_bindings_without_reading_credentials() {
     let mut f = fixture();
     let path = f.root.join("settings.json");

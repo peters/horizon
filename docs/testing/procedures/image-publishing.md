@@ -1,7 +1,7 @@
 ---
 procedure: image-publishing
 feature: worker image destinations
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ It checks account separation, registry paths and retained publisher identities.
 ## 2. Applicability
 
 - Candidate: The `horizon-cloud` destination policy prerequisite.
-- Platforms: Linux, macOS and Windows.
+- Platforms: Linux and macOS.
 - The automatic launch path is not active yet.
 - This procedure does not test registry authentication, image publication or cloud allocation.
 

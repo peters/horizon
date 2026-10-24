@@ -30,10 +30,6 @@ fn invalid_live_registry_aborts_before_touching_transcript_or_artifacts() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Claude staging requires Unix directory durability; Windows preservation is tested separately"
-)]
 fn transcript_deletion_removes_only_selected_conversation_and_its_subagents() {
     let temp = tempfile::tempdir().expect("temporary store");
     let project = temp.path().join("project");
@@ -172,10 +168,6 @@ fn empty_folder_matching_catalog_scope_preserves_history() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Claude staging requires Unix directory durability; Windows preservation is tested separately"
-)]
 fn repeated_matching_identity_and_metadata_records_allow_deletion() {
     let temp = tempfile::tempdir().expect("private store");
     let project = temp.path().join("example");
@@ -204,10 +196,6 @@ fn linked_transcripts_never_delete_their_target() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "Claude staging requires Unix directory durability; Windows preservation is tested separately"
-)]
 fn oversized_record_preserves_history_and_boundary_record_deletes() {
     for overflow in [false, true] {
         let temp = tempfile::tempdir().expect("private store");

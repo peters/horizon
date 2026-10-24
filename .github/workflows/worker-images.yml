@@ -23,7 +23,6 @@ on:
       - crates/horizon-browser-protocol/**
       - crates/horizon-cloud/**
       - crates/horizon-cloud-protocol/**
-      - crates/horizon-process-time/**
       - Cargo.toml
       - Cargo.lock
       # The image ships the license and the dependency notices this collector gathers.

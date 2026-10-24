@@ -354,7 +354,7 @@ fn cancellation_is_never_reported_as_a_refusal() {
 }
 
 #[test]
-#[cfg(unix)] // Creating symlinks on Windows needs a privilege CI runners may lack.
+#[cfg(unix)]
 fn a_symlinked_binding_names_the_checkout_it_points_to() {
     let fixture = Fixture::new();
     std::os::unix::fs::symlink(fixture.path("native-lib"), fixture.path("link")).unwrap();

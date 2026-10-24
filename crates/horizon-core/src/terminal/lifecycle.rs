@@ -17,9 +17,9 @@ impl Terminal {
     /// Spawn a terminal that shows `options.replay_bytes` and none of its process's output.
     ///
     /// A snapshot runs a process that exits at once only because a terminal needs a PTY.
-    /// That output must not reach the snapshot: Windows `ConPTY` clears the screen on its
-    /// first paint, which would push the replayed text into scrollback and leave the
-    /// panel blank, and it names the console in the title.
+    /// That output must not reach the snapshot: a console that clears its screen on the
+    /// first paint would push the replayed text into scrollback and leave the panel
+    /// blank, and one that names itself in the title would rename it.
     ///
     /// # Errors
     ///
@@ -58,8 +58,6 @@ impl Terminal {
             working_directory: options.cwd,
             drain_on_exit: true,
             env: options.env,
-            #[cfg(target_os = "windows")]
-            escape_args: true,
         };
 
         let term = Arc::new(FairMutex::new(Term::new(terminal_config, &dimensions, term_proxy)));
@@ -71,10 +69,7 @@ impl Terminal {
         };
         let pty =
             tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
-        #[cfg(not(windows))]
         let child_pid = Some(pty.child().id());
-        #[cfg(windows)]
-        let child_pid = None;
         #[cfg(target_os = "linux")]
         let child_start_time = child_pid.and_then(process_start_time);
         let pty_term = match output {

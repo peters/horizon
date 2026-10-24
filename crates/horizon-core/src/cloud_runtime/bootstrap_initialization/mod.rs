@@ -543,11 +543,6 @@ fn pin_directory(path: &std::path::Path) -> Result<std::fs::File> {
             .map_err(std::io::Error::from)?,
         ))
     }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Err(Error::Invalid)
-    }
 }
 
 fn verify_pin_parent(path: &std::path::Path, retained: &std::fs::File) -> Result<()> {
@@ -560,8 +555,6 @@ fn verify_pin_parent(path: &std::path::Path, retained: &std::fs::File) -> Result
             return Err(Error::Invalid);
         }
     }
-    #[cfg(not(unix))]
-    let _ = (current, original);
     Ok(())
 }
 
@@ -579,8 +572,6 @@ fn pin_bytes(path: &std::path::Path, retained: &std::fs::File) -> Result<zeroize
                 return Err(Error::Invalid);
             }
         }
-        #[cfg(not(unix))]
-        let _ = retained;
         Ok(())
     };
     verify()?;

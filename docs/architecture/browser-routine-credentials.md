@@ -73,7 +73,6 @@ Default `keyring` 4.2.0 platform backends:
 | Platform | Backend | Feature |
 | --- | --- | --- |
 | macOS | Keychain | `apple-native-keyring-store/keychain` |
-| Windows | Credential Manager | `windows-native-keyring-store` |
 | Linux | Secret Service via zbus | `zbus-secret-service-keyring-store` |
 
 Forbidden `keyring` features for this product: `db-keystore` and any other
@@ -86,12 +85,11 @@ Rejected alternatives:
 | --- | --- |
 | Browser password manager | Backend-specific, not a testable routine contract, not origin-bound the same way across Chromium and Firefox. A backend is not eligible for routine login until its launch path disables the browser password manager and form autofill for that routine profile. |
 | Encrypt a file next to `routine.json` | The key would live beside the ciphertext or in config. Forbidden by #342. |
-| Direct `security-framework` + `windows-sys` + `secret-service` | Three stacks, more surface, no shared fake-store seam. Revisit only if `keyring` cannot meet the fill/delete/lock tests. |
+| Direct `security-framework` + `secret-service` | Two stacks, more surface, no shared fake-store seam. Revisit only if `keyring` cannot meet the fill/delete/lock tests. |
 | Environment variables or agent-visible config | Secrets would enter MCP, traces, and process listings. |
 
 Binary cost is accepted and measured in the platform-adapter PR: Linux grows
-by zbus/Secret Service, macOS by Security.framework, Windows by the Credential
-Manager bindings. The first-tranche crate uses a `CredentialStore` trait and a
+by zbus/Secret Service, and macOS by Security.framework. The first-tranche crate uses a `CredentialStore` trait and a
 fake store so that cost is not paid until the adapter PR.
 
 ## Identity of a stored record

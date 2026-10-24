@@ -252,8 +252,6 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
 fn url_opener_invocation(url: &str) -> (&'static str, Vec<&str>) {
     if cfg!(target_os = "macos") {
         ("open", vec![url])
-    } else if cfg!(target_os = "windows") {
-        ("explorer.exe", vec![url])
     } else {
         ("xdg-open", vec![url])
     }
@@ -270,9 +268,6 @@ mod tests {
         let (program, args) = url_opener_invocation("https://example.com");
         if cfg!(target_os = "macos") {
             assert_eq!(program, "open");
-            assert_eq!(args, ["https://example.com"]);
-        } else if cfg!(target_os = "windows") {
-            assert_eq!(program, "explorer.exe");
             assert_eq!(args, ["https://example.com"]);
         } else {
             assert_eq!(program, "xdg-open");

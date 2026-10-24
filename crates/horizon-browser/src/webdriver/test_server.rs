@@ -170,9 +170,7 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         // The worker is still blocked in accept() only while this side has not
-        // been signaled. A connect to a port it has already closed is not
-        // refused on Windows: the firewall discards the SYN and the stack
-        // retransmits for about two seconds, once per finished server.
+        // been signaled, so one connect wakes it before the join below.
         let still_listening = matches!(self.done.try_recv(), Err(mpsc::TryRecvError::Empty));
         if still_listening {
             let _ = std::net::TcpStream::connect_timeout(

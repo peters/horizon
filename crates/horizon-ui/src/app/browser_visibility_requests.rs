@@ -394,7 +394,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_published_change_leaves_a_panel_that_left_the_workspace_or_that_the_user_changed() {
         let (_temp, mut app, actor, other) = fixture();
         let hide = request(&app, &actor, "hide", false);
@@ -417,7 +416,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_stamp_moves_a_panel_whose_request_runs_and_leaves_its_visibility_to_the_request() {
         let (_temp, mut app, actor, other) = fixture();
         let local_id = app.board.panel(PanelId(900)).expect("browser").local_id.clone();
@@ -446,7 +444,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_request_after_one_that_runs_starts_from_the_visibility_it_sets() {
         let (_temp, mut app, actor, _) = fixture();
         let first = request(&app, &actor, "first", false);
@@ -502,7 +499,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
     fn a_lease_that_moves_while_the_request_runs_keeps_the_new_owners_manifest() {
         let (_temp, app, actor, _) = fixture();
         let local_id = app.board.panel(PanelId(900)).expect("browser").local_id.clone();

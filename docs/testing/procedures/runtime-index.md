@@ -20,8 +20,8 @@ that an ephemeral session writes no session file.
 ## 2. Applicability
 
 - Candidate: a build that writes `runtime.sqlite` next to `runtime.yaml`.
-- Platforms: Linux. On macOS and Windows, do the same tasks in an isolated
-  desktop. Stop and start the candidate by hand at each restart.
+- Platforms: Linux. On macOS, do the same tasks in an isolated desktop. Stop
+  and start the candidate by hand at each restart.
 - This procedure does not test these functions:
   - The park state and the status line of a cloud. The unit tests and the
     [cloud park procedure](cloud-park-attach.md) cover them.

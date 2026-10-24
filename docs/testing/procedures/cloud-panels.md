@@ -24,7 +24,7 @@ report uses to give a result.
 - Platforms: Linux with Xvfb. Providers: RunPod and Hetzner. Hetzner workers are
   CPU only.
 - This procedure does not test:
-  - macOS and Windows hosts, and their credential stores.
+  - macOS hosts, and their credential stores.
   - Daytona and Fly.io. These providers are design fixtures only.
   - The creation of a cloud from a CLI or MCP tool. Creation is UI only.
   - The signed project-session runtime with a tailnet. That runtime refuses a

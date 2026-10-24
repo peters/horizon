@@ -422,12 +422,10 @@ impl Shared {
     }
 }
 
-/// `ENOBUFS` (`WSAENOBUFS` on Windows): a full UDP send queue.
+/// `ENOBUFS`: a full UDP send queue.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const NO_BUFFER_SPACE: i32 = 55;
-#[cfg(windows)]
-const NO_BUFFER_SPACE: i32 = 10055;
-#[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 const NO_BUFFER_SPACE: i32 = 105;
 
 /// RTP timestamp units in `time`, wrapping at 32 bits.

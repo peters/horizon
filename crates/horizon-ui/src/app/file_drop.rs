@@ -553,11 +553,7 @@ fn format_dropped_paths_for_terminal(dropped: &[egui::DroppedFileHandle]) -> Opt
 
 fn format_path_for_terminal(path: &Path) -> String {
     let path = path.to_string_lossy();
-    if cfg!(windows) {
-        format_windows_path(&path)
-    } else {
-        format_posix_path(&path)
-    }
+    format_posix_path(&path)
 }
 
 pub(super) fn format_posix_path(path: &str) -> String {
@@ -573,22 +569,6 @@ fn path_needs_posix_quotes(path: &str) -> bool {
         || path
             .chars()
             .any(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '/' | '.' | '_' | '-'))
-}
-
-fn format_windows_path(path: &str) -> String {
-    if !path_needs_windows_quotes(path) {
-        return path.to_string();
-    }
-
-    let trailing_backslashes = path.chars().rev().take_while(|ch| *ch == '\\').count();
-    format!("\"{path}{}\"", "\\".repeat(trailing_backslashes))
-}
-
-fn path_needs_windows_quotes(path: &str) -> bool {
-    path.is_empty()
-        || path
-            .chars()
-            .any(|ch| matches!(ch, ' ' | '\t' | '&' | '|' | '<' | '>' | '^' | '(' | ')' | '%' | '!'))
 }
 
 #[derive(Debug)]
@@ -728,10 +708,6 @@ mod tests {
 
     #[test]
     fn formatting_shell_quotes_posix_paths_when_needed() {
-        if cfg!(windows) {
-            return;
-        }
-
         let dropped = [test_support::dropped_file("/tmp/hello world's.png")];
 
         let payload = format_dropped_paths_for_terminal(&dropped).expect("payload");

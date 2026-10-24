@@ -262,9 +262,6 @@ fn calls(state: &Path) -> usize {
 }
 
 fn process_alive(pid: &str) -> bool {
-    if cfg!(windows) {
-        return false;
-    }
     std::process::Command::new("kill")
         .args(["-0", pid])
         .stderr(std::process::Stdio::null())

@@ -22,7 +22,7 @@ Restart Docker, asks before it restarts, and then offers Retry.
 - Platforms: Linux with X11, in the isolated fixture of
   [the device smoke runbook](../../../scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel).
 - This procedure does not test: a restart of a real Docker daemon, the macOS
-  and Windows restart commands, and `pkexec` password prompts. Unit tests in
+  restart command, and `pkexec` password prompts. Unit tests in
   `docker_daemon/plan.rs` cover the platform decision for each setup.
   Unit tests in `cards/docker.rs` cover Close while a restart runs, and that a
   container name already in use offers no restart.

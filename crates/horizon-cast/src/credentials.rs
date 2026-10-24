@@ -222,11 +222,6 @@ fn private_lock_file(path: &std::path::Path) -> Result<fs::File> {
         .mode(0o600)
         .open(path)?)
 }
-#[cfg(not(unix))]
-fn private_lock_file(_: &std::path::Path) -> Result<fs::File> {
-    Err(Error::Protocol("persistent pairing requires Linux"))
-}
-
 #[cfg(unix)]
 fn private_file(metadata: &fs::Metadata) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -254,19 +249,6 @@ fn private_create(path: &std::path::Path) -> Result<fs::File> {
         .mode(0o600)
         .open(path)?)
 }
-#[cfg(not(unix))]
-fn private_file(_: &fs::Metadata) -> Result<()> {
-    Err(Error::Protocol("persistent pairing requires Linux"))
-}
-#[cfg(not(unix))]
-fn prepare_directory(_: &std::path::Path) -> Result<()> {
-    Err(Error::Protocol("persistent pairing requires Linux"))
-}
-#[cfg(not(unix))]
-fn private_create(_: &std::path::Path) -> Result<fs::File> {
-    Err(Error::Protocol("persistent pairing requires Linux"))
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

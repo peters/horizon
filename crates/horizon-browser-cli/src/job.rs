@@ -432,8 +432,6 @@ fn secure_existing(path: &Path) -> Result<(), JobError> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .map_err(|source| io_error(format!("could not secure {}", path.display()), &source))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
     Ok(())
 }
 

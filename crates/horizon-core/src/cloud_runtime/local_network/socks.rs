@@ -323,7 +323,7 @@ enum Refusal {
 }
 
 fn serve(mut client: Socket, mut slot: Slot) {
-    // Accepted sockets inherit the listener's nonblocking mode on Windows.
+    // An accepted socket can carry the listener's mode, so the mode is set explicitly.
     if client.set_nonblocking(false).is_err() || slot.register(&client).is_err() {
         slot.shared.refuse();
         return;

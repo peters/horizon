@@ -555,15 +555,3 @@ fn failed_publication_leaves_no_staging_file() {
     assert!(fixture.store.write(&record).is_err());
     assert!(staging_files(&fixture.store).is_empty());
 }
-
-#[cfg(windows)]
-#[test]
-fn published_records_are_not_marked_temporary() {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x100;
-    let fixture = Fixture::new();
-    let attributes = fs::metadata(fixture.store.record_path("panel").expect("path"))
-        .expect("metadata")
-        .file_attributes();
-    assert_eq!(attributes & FILE_ATTRIBUTE_TEMPORARY, 0);
-}

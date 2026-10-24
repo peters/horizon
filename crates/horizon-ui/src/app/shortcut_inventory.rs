@@ -37,8 +37,6 @@ pub(crate) fn ssh_reconnect_shortcut_conflicts(shortcuts: &AppShortcuts) -> bool
 pub(crate) fn copy_selection_shortcut_label(primary_label: &str) -> String {
     if cfg!(target_os = "macos") {
         format!("{primary_label}+C")
-    } else if cfg!(target_os = "windows") {
-        format!("{primary_label}+Shift+C / {primary_label}+Insert")
     } else {
         format!("{primary_label}+Shift+C")
     }
@@ -47,8 +45,6 @@ pub(crate) fn copy_selection_shortcut_label(primary_label: &str) -> String {
 pub(crate) fn paste_shortcut_label(primary_label: &str) -> String {
     if cfg!(target_os = "macos") {
         format!("{primary_label}+V")
-    } else if cfg!(target_os = "windows") {
-        format!("{primary_label}+Shift+V / Shift+Insert")
     } else {
         format!("{primary_label}+Shift+V")
     }
@@ -123,9 +119,6 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_eq!(copy, "Cmd+C");
             assert_eq!(paste, "Cmd+V");
-        } else if cfg!(target_os = "windows") {
-            assert_eq!(copy, "Ctrl+Shift+C / Ctrl+Insert");
-            assert_eq!(paste, "Ctrl+Shift+V / Shift+Insert");
         } else {
             assert_eq!(copy, "Ctrl+Shift+C");
             assert_eq!(paste, "Ctrl+Shift+V");

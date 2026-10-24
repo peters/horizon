@@ -39,8 +39,8 @@ cumulative.
 | MCP schemas or public tool behavior | MCP contract on all supported backends and bundled-agent discovery; update MCP README and skill together |
 | Network events, HTTP response bodies, WebSocket capture/watch, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; E24 live-data correctness probe on both when body capture changes and the market is open; Safari unsupported response; cursor/filter/timeout/stop/gap/truncation/drop/lifecycle/audit checks; age/count/aggregate-byte retention probe; hidden capture; normal close during capture; permanent profile cleanup |
 | HTTP Basic/Digest credentials (`browser_http_auth`, challenge intercept) | Unattended `scripts/browser-smoke/http_auth_smoke.py` on Chromium and Firefox; fixture self-check; anonymous and wrong-password rejection; Basic and Digest success markers through public MCP; established and replacement cross-origin iframe fetches; iframe wrong-password, origin-mismatch, and clear rejection; audit redaction |
-| Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS and Windows cross-target checks |
-| Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head; Windows follow-up where support is claimed |
+| Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS cross-target check |
+| Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head |
 
 If a change spans rows, run the union. A fix found during smoke invalidates the
 affected evidence until the lane is repeated on the new exact head.
@@ -69,8 +69,6 @@ cargo doc -p horizon-browser --no-deps
 ./scripts/check-browser-packaging.sh
 cargo package -p horizon-browser --locked --no-verify
 cargo check -p horizon-browser --target x86_64-apple-darwin
-cargo check -p horizon-browser --target x86_64-pc-windows-gnu
-cargo check -p horizon-browser --target x86_64-pc-windows-msvc
 ```
 
 The targets and their linkers/toolchains must already be installed. A clean

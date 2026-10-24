@@ -89,8 +89,7 @@ impl<'a> IndexFile<'a> {
         file.as_file().sync_all()?;
         let written = file.as_file().metadata()?;
         let mut renamed = file.into_temp_path();
-        // Unlike `persist`, this rename also replaces an index that another process reads on
-        // Windows.
+        // Unlike `persist`, this rename also replaces an index that another process reads.
         fs::rename(&renamed, self.path)?;
         renamed.disable_cleanup(true);
         writer::sync_folder(self.folder())?;

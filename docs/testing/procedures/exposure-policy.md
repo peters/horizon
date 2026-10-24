@@ -1,7 +1,7 @@
 ---
 procedure: exposure-policy
 feature: Pure exposure policy and route facts
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

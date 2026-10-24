@@ -24,7 +24,7 @@ spare keycodes.
 - Candidate: each candidate that changes the X11 input of `horizon-device`.
 - Platforms: Linux, in an isolated desktop with a live view.
 - This procedure does not test these items:
-  - Wayland, macOS and Windows.
+  - Wayland and macOS.
   - The focus change after a click. Send a click, then wait for the focus
     before you type.
   - Keyboard layouts other than the default US layout of Xvfb.

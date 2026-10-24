@@ -21,7 +21,7 @@ toolbar in a narrow window.
 ## 2. Applicability
 
 - Candidate: a build with the toolbar **Menu** button.
-- Platforms: Linux. The toolbar is the same on macOS and Windows.
+- Platforms: Linux. The toolbar is the same on macOS.
 - This procedure does not test these functions:
   - The New cloud dialog. The
     [New cloud dialog procedure](cloud-panels/c-new-cloud-dialog.md) tests it.

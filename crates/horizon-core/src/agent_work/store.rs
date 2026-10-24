@@ -494,17 +494,12 @@ fn private_options() -> OpenOptions {
         options.mode(0o600);
         options
     }
-    #[cfg(not(unix))]
-    options
 }
 
 /// Stage `bytes` in `directory`, then rename them over `path`.
 ///
-/// `tempfile`'s `persist` hands the destination to `MoveFileExW` without the
-/// verbatim prefix, so on Windows it cannot publish a record path longer than
-/// `MAX_PATH`, which the longest panel ids reach. `fs::rename` adds the prefix,
-/// and a staging file created through `fs` does not carry the temporary
-/// attribute that `tempfile` sets on Windows.
+/// The staging file is created through `fs` instead of `tempfile`, so the
+/// published record carries no temporary attribute.
 fn replace_file(directory: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let staging = directory.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4().simple()));
     let mut file = private_options().write(true).create_new(true).open(&staging)?;

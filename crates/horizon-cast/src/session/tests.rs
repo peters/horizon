@@ -111,32 +111,6 @@ fn stop_interrupts_submitted_pin_and_saved_verification_without_extra_exchanges(
     }
 }
 
-#[cfg(not(unix))]
-#[test]
-fn persistent_pairing_fails_without_opening_a_receiver_connection() {
-    let home = tempfile::tempdir().expect("home");
-    let store = PairingStore::new(home.path().join("pairings"), "synthetic".into(), "Synthetic TV".into());
-    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let mut session =
-        CastSession::start_remembered(listener.local_addr().expect("address"), VideoFormat::default(), store)
-            .expect("session");
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !session.finished() {
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(
-        session.status(),
-        CastStatus::Failed("invalid receiver message: persistent pairing requires Linux".into())
-    );
-    assert_eq!(
-        listener.accept().expect_err("no receiver connection").kind(),
-        std::io::ErrorKind::WouldBlock
-    );
-    session.reap();
-    assert!(session.worker.is_none());
-}
 #[test]
 fn raw_source_support_requires_nonzero_even_fitted_axes_for_the_selected_canvas() {
     for resolution in [Resolution::Hd720, Resolution::FullHd1080, Resolution::Uhd4k] {

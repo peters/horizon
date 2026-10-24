@@ -58,8 +58,7 @@ impl Choices {
     /// that runs on a worker thread; a crash before then can leave the file unreadable on a
     /// file system that does not write data before a rename. An unreadable file keeps
     /// nothing ([`Self::load`]), so every repository then asks again: the choices are a
-    /// convenience, not worth a stalled frame. Windows cannot replace a file that another
-    /// handle holds open, so there the file is made durable before the rename.
+    /// convenience, not worth a stalled frame.
     ///
     /// # Errors
     /// The field is empty, too many repositories are kept, or the file cannot be written.
@@ -77,8 +76,6 @@ impl Choices {
         std::fs::create_dir_all(root)?;
         let mut file = tempfile::NamedTempFile::new_in(root)?;
         file.write_all(&bytes)?;
-        #[cfg(not(unix))]
-        file.as_file().sync_all()?;
         file.persist(root.join(FILE)).map_err(|error| error.error)?;
         self.0 = next;
         #[cfg(unix)]

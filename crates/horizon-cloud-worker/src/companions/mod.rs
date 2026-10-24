@@ -97,8 +97,6 @@ fn runtime() -> Runtime {
         system_include: "/etc/ssh/ssh_config.d/horizon-companions.conf".into(),
         #[cfg(unix)]
         privileged: rustix::process::geteuid().is_root(),
-        #[cfg(not(unix))]
-        privileged: true,
         probe_wait: Duration::from_secs(10),
     }
 }

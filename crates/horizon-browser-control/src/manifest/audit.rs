@@ -308,10 +308,9 @@ fn recover_interrupted_rotation(path: &Path) -> std::io::Result<()> {
     clear_rotation_marker(path)
 }
 
-/// Empties the live segment through a write handle of its own. Windows opens
-/// append handles without the write-data access that truncation needs, so the
-/// caller's append handle cannot do it; its later appends still land at the
-/// new end of the file.
+/// Empties the live segment through a write handle of its own, so the caller's
+/// append handle keeps its own access; its later appends still land at the new
+/// end of the file.
 fn truncate_segment(path: &Path) -> std::io::Result<()> {
     OpenOptions::new().write(true).open(path)?.set_len(0)
 }

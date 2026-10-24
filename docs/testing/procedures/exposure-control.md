@@ -1,7 +1,7 @@
 ---
 procedure: exposure-control
 feature: Default-off exposure control comparison messages
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

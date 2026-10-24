@@ -7,12 +7,9 @@ RunPod and Hetzner provision workers. An existing Docker host can also run them;
 see [Docker host clouds](cloud-docker-host.md). Daytona and Fly.io appear in
 labelled design fixtures.
 
-Cloud deployment and lifecycle control currently require a Unix host with supported
-file and directory synchronization. Windows cloud operations fail before state or
-provider mutation until durable directory updates are implemented; ordinary local
-sessions and preserved cloud metadata remain available. The standalone provider
-crate remains portable. Windows cloud durability is tracked in #823; native Device
-platform qualification remains separately tracked in #741.
+Cloud deployment and lifecycle control require Linux or macOS, with supported file
+and directory synchronization. Native Device platform qualification remains
+separately tracked in #741.
 
 ## Tailnets (auth-key MVP)
 
@@ -775,8 +772,9 @@ yet**. A working copy that is not valid shows its error instead. This is not an 
   and a program it hands to another service of yours, such as Docker or your
   systemd user manager, runs outside it, as any program you start does. What
   **Use this setup** commits does not rest on the scope: it is the setup Horizon
-  proved, read after the agent ended, with every other change named first. On macOS and Windows the dialog does not offer it, and
-  on Linux without a systemd user session the agent does not start; use
+  proved, read after the agent ended, with every other change named first. On
+  macOS the dialog does not offer it, and on Linux without a systemd user
+  session the agent does not start; use
   **Quick start** or write `.horizon` yourself.
 
 The setup agent is a normal local agent session with its existing local login.
@@ -1207,8 +1205,8 @@ source:
 Patterns are git-lfs fetch patterns (`lfs.fetchinclude`/`lfs.fetchexclude`): at most
 64 in all, each non-empty, at most 256 characters, without commas and without Unicode
 control, format, surrogate or private-use characters. The worker applies the same
-per-pattern rules. Horizon also caps the patterns at 8,192 characters in all, so its
-git-lfs call fits a Windows command line. Horizon asks the local git-lfs which of the repository's
+per-pattern rules. Horizon also caps the patterns at 8,192 characters in all.
+Horizon asks the local git-lfs which of the repository's
 own LFS paths the patterns exclude and sends every other object; the worker checks with
 its git-lfs that each path left out is excluded, then sets the same patterns in the
 repository's configuration, so worktrees keep those paths as pointer files and
@@ -2012,8 +2010,6 @@ These rules keep files out of the image:
   and macOS it refuses a hard link, because a hard link can share its content with a
   file outside the repository. It also refuses a file name with a control character
   or a text-direction character, because the list could show such a name incorrectly.
-- On Windows, Horizon refuses an uncommitted symbolic link or junction in the build
-  context, because it cannot copy it there. It does not detect a hard link there.
 - Submodules and same-worker siblings come from their commits. An untracked nested
   Git repository is not part of the build.
 - The source that the worker gets is the committed archive. Only the image recipe

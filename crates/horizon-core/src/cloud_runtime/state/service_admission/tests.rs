@@ -39,7 +39,6 @@ fn split(state: &Deployment, owner: &OwnerScope) -> Records {
     .unwrap()
 }
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn one_service_nonempty_record_fences_old_readers_and_defaults_keep_legacy_versions() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::lock(temp.path()).unwrap();
@@ -153,7 +152,6 @@ fn one_service_malformed_retained_id_binding_and_unknown_fields_are_refused() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn publication_and_unresolved_admission_keep_both_fences_and_the_current_snapshot_contract() {
     use crate::cloud_runtime::publishing::Publication;
     use horizon_cloud::image_publishing::Destination;
@@ -195,7 +193,6 @@ fn publication_and_unresolved_admission_keep_both_fences_and_the_current_snapsho
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "Cloud records require Unix directory durability")]
 fn all_retained_phases_survive_storage_without_creating_runtime_authority() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::lock(root.path()).unwrap();

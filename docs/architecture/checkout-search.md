@@ -47,8 +47,7 @@ empty, on every platform. Without one, nothing is searched.
   marker is never a reason to remove a folder.
 - A branch named in `HEAD` is read only when it is plain names joined by `/`:
   no `.` or `..` part, no `\`, `:`, drive or root, so its text cannot name a
-  place outside the Git directory, also on Windows. A Windows device name such
-  as `CON` is looked at but never opened, as it is no regular file.
+  place outside the Git directory.
 
 ## The folders of a typed path
 

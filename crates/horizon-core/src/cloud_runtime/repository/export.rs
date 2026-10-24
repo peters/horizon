@@ -78,8 +78,8 @@ pub(super) fn committed_tree(
 fn objects_dir(repository: &Path) -> Result<PathBuf> {
     let repository =
         git2::Repository::open(repository).map_err(|_| Error::Invalid("Cannot locate repository objects"))?;
-    // Absolute for the alternates file, but without `canonicalize`, which prepends a
-    // `\\?\` extended-length prefix on Windows that the git command line can reject.
+    // Absolute for the alternates file, but without `canonicalize`, whose form the git
+    // command line need not accept.
     std::path::absolute(repository.commondir().join("objects"))
         .map_err(|_| Error::Invalid("Cannot locate repository objects"))
 }
@@ -89,10 +89,7 @@ fn objects_dir(repository: &Path) -> Result<PathBuf> {
 /// octal escape, so a checkout path that holds a newline or, on Unix, bytes that are not
 /// UTF-8 names the same folder.
 fn alternate_line(path: &Path) -> Vec<u8> {
-    #[cfg(unix)]
     let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()).to_vec();
-    #[cfg(not(unix))]
-    let bytes = path.to_string_lossy().into_owned().into_bytes();
     let mut line = vec![b'"'];
     for byte in bytes {
         match byte {
@@ -190,24 +187,18 @@ fn mirror_head(repository: &Path, neutral: &Path, borrowed: &Path, runner: &Runn
 
 /// The branch `repository`'s HEAD names, byte for byte, or `None` for a detached HEAD.
 /// Opened with git2, as [`objects_dir`] is, so a name that is not UTF-8 is kept rather than
-/// decoded lossily into another branch. Windows passes a command line argument as UTF-16,
-/// so there such a name is treated as detached, which names no branch rather than a wrong
-/// one.
+/// decoded lossily into another branch.
 fn source_branch(repository: &Path) -> Option<OsString> {
     let repository = git2::Repository::open(repository).ok()?;
     let head = repository.find_reference("HEAD").ok()?;
     let branch = head.symbolic_target_bytes()?;
-    #[cfg(unix)]
     let branch = Some(<OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(branch));
-    #[cfg(not(unix))]
-    let branch = std::str::from_utf8(branch).ok().map(OsStr::new);
     branch.map(OsStr::to_os_string)
 }
 
 /// `git archive` converts line endings the way a checkout on this host would. The Linux
-/// worker builds the snapshot, so pin the conversion to a Linux checkout's: Windows
-/// defaults (`core.autocrlf=true`, a CRLF `core.eol`) would otherwise turn committed LF
-/// text into CRLF. Explicit `eol` attributes still apply. The file modes are pinned too:
+/// worker builds the snapshot, so pin the conversion to a Linux checkout's. Explicit `eol`
+/// attributes still apply. The file modes are pinned too:
 /// git keeps only whether a file is executable, so the archive holds 0644 and 0755, which
 /// extraction keeps (`-p`) whatever this computer's umask, and the image copies the
 /// committed modes. An empty `core.attributesFile` stands in for the user attributes file,
@@ -250,7 +241,7 @@ fn isolated<'c>(neutral: &Path, command: &'c mut Command) -> &'c mut Command {
     let inherited: Vec<std::ffi::OsString> = std::env::vars_os()
         .map(|(name, _)| name)
         .chain(command.get_envs().map(|(name, _)| name.to_owned()))
-        // Windows reads environment names without regard to case.
+        // Environment names are read without regard to case.
         .filter(|name| name.to_string_lossy().to_ascii_uppercase().starts_with("GIT_"))
         .collect();
     for name in inherited {

@@ -80,8 +80,7 @@ computer's OS store from its own netrc (`HORIZON_NETRC`, default
 then Horizon started and one target driven through the MCP tools, closed and
 confirmed released at the provider, and finally a restart without the stored
 items that must be refused as `credentials_not_ready`. It needs only Horizon
-and Python on the second computer (the agent panel's probe is a shell or batch
-one-liner) and runs on Linux, macOS (`--keychain` names the keychain file to
-add the items to) and Windows, where it carries its own threaded MCP client
-and a `SHELL` shim for the agent panel (#688). The 2026-09-15 run is in
+and Python on the second computer (the agent panel's probe is a shell
+one-liner) and runs on Linux, and on macOS where `--keychain` names the keychain
+file to add the items to. The 2026-09-15 run is in
 `docs/testing/2026-09-15-second-computer-portable-profile-smoke.md`.
