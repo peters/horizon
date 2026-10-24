@@ -36,8 +36,7 @@ canvas and its own first tab.
 - Step S4.1 resized the window with `xdotool windowsize` on a private desktop of
   1600 x 1000 pixels, and not by starting the desktop at 1000 x 700 pixels. The
   result is the same: the panel is sized from the window, not from the desktop.
-- Step S4.2 set `Height` to 985 in the General tab and clicked `Save`, because
-  the field alone shows a live preview and leaves the write to the bar.
+- Step S4.2 followed the procedure: `Height` to 985, then `Save` in the bar.
 
 ## 5. Cleanup
 

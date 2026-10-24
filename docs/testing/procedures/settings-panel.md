@@ -100,11 +100,12 @@ None of the steps deletes data, rents compute or changes access.
    Result: The panel keeps a width between 15 and 50 percent of the window. The
    canvas is visible beside it.
 
-2. Select the `General` tab and change one setting. For example, set `Height` to
-   a new value.
+2. Select the `General` tab, set `Height` to a new value, and click `Save` in
+   the Settings bar. The value alone is only a live preview.
 
-   Result: The control answers, the bar shows `Saving` and then `Saved`, and the
-   panel width does not change.
+   Result: The control answers. The bar shows `Revert` while the value is not
+   saved, and `Saving` and then `Saved` after the click. The panel width does
+   not change.
 
 ## 7. Cleanup
 
