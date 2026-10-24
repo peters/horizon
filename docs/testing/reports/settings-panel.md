@@ -34,8 +34,8 @@ canvas and its own first tab.
 ## 4. Deviations from the procedure
 
 - Step S4.1 ran at 1600 x 1000 pixels and not at 1000 x 700 pixels. The private
-  desktop was created at 1600 x 1000 pixels, and the copied configuration of the
-  person has that window size.
+  desktop was created at 1600 x 1000 pixels, and the synthetic configuration
+  file has that window size.
 - Step S4.2 changed no setting, because step 6.4 is the same check as S3 in this
   candidate. The Settings bar answered in the recorded video.
 
@@ -43,8 +43,11 @@ canvas and its own first tab.
 
 - The Horizon window was closed through the window manager.
 - The private display `:92`, its window manager and its VNC server were stopped.
-- The private home `/tmp/w1run` is kept for the frozen candidate. It holds a
-  copy of a real `~/.horizon` and no credential.
+- The private home `/tmp/w1run` of the first run held a copy of a real
+  `~/.horizon`, so its recording showed the settings of the person. That run was
+  repeated on a synthetic home `/tmp/w2run`, which holds one synthetic
+  `config.yaml` with a long line and an empty `sessions` folder, and the report
+  and the pull request use that run only.
 - The Device panel `daf858f6-e4c7-44ac-8d85-051e5b94e54a` was closed.
 
 ## 6. Evidence
@@ -54,7 +57,8 @@ canvas and its own first tab.
   `d9c3c954d`.
 - The build before the fix: `/tmp/l0b-bin/horizon`, SHA-256
   `4c2655890683a42ee8e0085db9c34b250f8b1bd7c9a38ab6cb267988d9cff47f`.
-- Screenshots and the video are on the private desktop of the run and in the
-  pull request.
+- The recording of the synthetic run is in the pull request. The first run at
+  `/tmp/w1run` was not published, because its recording showed the settings of
+  the person.
 - The regression test `a_long_yaml_line_does_not_widen_the_settings_panel` drew
   the panel 4467 pixels wide before the fix and 480 pixels wide after it.

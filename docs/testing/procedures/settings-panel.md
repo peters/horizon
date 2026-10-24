@@ -32,8 +32,12 @@ None of the steps deletes data, rents compute or changes access.
 ## 4. Equipment and preconditions
 
 - A Horizon build that starts with `--ephemeral`.
-- A configuration file with at least one line of 100 characters or more. The
-  `remote_hosts` and `sessions` sections usually have such a line.
+- A synthetic configuration file. Do not use the configuration of a real person:
+  a report and a recording of this procedure can become public. Give the file
+  `version: 11`, a window of 1600 x 1000 pixels, and at least one line of 100
+  characters or more, for example
+  `default_workspace: 'a-very-long-workspace-name-a-very-long-workspace-name-...'`
+  under `remote_hosts`. Use words that name no real host, person or path.
 - A free X display number. This procedure uses `:93`. Step 6.4 needs `Xvfb`,
   `openbox` and `xdotool`.
 
@@ -41,8 +45,8 @@ None of the steps deletes data, rents compute or changes access.
 
 1. Start a private desktop and a private home for the run.
 
-   Result: A display at 1600 x 1000 pixels and a home that holds a copy of a
-   real `~/.horizon`.
+   Result: A display at 1600 x 1000 pixels and a home that holds only the
+   synthetic configuration file, with an empty `sessions` folder.
 
 2. Start the candidate with `--ephemeral` and the private home.
 
