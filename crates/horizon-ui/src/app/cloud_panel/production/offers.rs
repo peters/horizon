@@ -41,6 +41,7 @@ impl HorizonApp {
         prices.poll();
         if !requirements.gpu {
             prices.exchange.request_for_deadline(ctx, deadline_in);
+            prices.azure.request(ctx);
         }
         // A machine set up for Hetzner alone answers with its other providers, and says
         // why RunPod has no offers.
@@ -64,7 +65,7 @@ impl HorizonApp {
             }
             prices.request_fresh_list(&root, ctx);
             let other_providers = other_providers(prices, requirements, deadline_in)?;
-            if !prices.hetzner.bound() && other_providers.is_empty() {
+            if !prices.hetzner.bound() && !rentable_elsewhere(&other_providers) {
                 return Some(Err(format!("cloud_offers_unavailable: {error}")));
             }
             let answer =
@@ -76,7 +77,7 @@ impl HorizonApp {
         // Hetzner fetch is reported there without taking RunPod's offers down.
         let other_providers = other_providers(prices, requirements, deadline_in)?;
         let Some(fetched) = prices.fresh_list() else {
-            if deadline_in > super::prices::ANSWER_MARGIN_MILLIS || other_providers.is_empty() {
+            if deadline_in > super::prices::ANSWER_MARGIN_MILLIS || !rentable_elsewhere(&other_providers) {
                 return None;
             }
             let answer = serde_json::json!({
@@ -103,8 +104,8 @@ impl HorizonApp {
     }
 }
 
-/// Hetzner's sections and the saved Docker hosts', each in its own currency, or `None`
-/// while either may still answer before `deadline_in`.
+/// Hetzner's sections, the saved Docker hosts' and Azure's, each in its own currency,
+/// or `None` while any may still answer before `deadline_in`.
 fn other_providers(
     prices: &super::prices::State,
     requirements: &horizon_core::cloud_runtime::offers::Requirements,
@@ -112,7 +113,16 @@ fn other_providers(
 ) -> Option<Vec<serde_json::Value>> {
     let mut sections = prices.hetzner.sections(requirements, deadline_in)?;
     sections.extend(prices.hosts.sections(requirements, deadline_in)?);
+    sections.extend(prices.azure.sections(requirements, deadline_in)?);
     Some(sections)
+}
+
+/// Whether a section other than Azure's is present. Azure's offers are informational
+/// and never rentable, so they alone do not replace a `RunPod` answer or its error.
+fn rentable_elsewhere(sections: &[serde_json::Value]) -> bool {
+    sections
+        .iter()
+        .any(|section| section["provider"] != horizon_core::cloud_runtime::provider::AZURE.label)
 }
 
 fn compared(
@@ -383,6 +393,87 @@ mod tests {
             horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING
         );
         assert_eq!(answer["other_providers"][0]["offers"][0]["id"], "cx43");
+    }
+
+    fn azure_catalog() -> horizon_core::cloud_runtime::prices::AzureCatalog {
+        serde_json::from_value(serde_json::json!({
+            "offers": [{"size": "Standard_D4s_v3", "region": "northeurope", "vcpu": 4, "memory_gb": 16,
+                "hourly_usd": 0.214}],
+            "disk_month_usd": {"northeurope": {"32": 5.28}}, "static_ip_hour_usd": {"northeurope": 0.005},
+            "regions": {"northeurope": "EUROPE"},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn azure_rows_come_beside_hetzner_and_are_never_rentable() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        priced(&mut app);
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.hetzner.answered(Some(hetzner_catalog()));
+        prices.azure.answered(azure_catalog());
+        let answer = app
+            .cloud_offers_answer(&request(&serde_json::json!({"min_vcpu": 4})), &ctx)
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer["other_providers"][0]["provider"], "Hetzner");
+        let azure = &answer["other_providers"][1];
+        assert_eq!(
+            (azure["provider"].as_str(), azure["currency"].as_str()),
+            (Some("Azure"), Some("USD"))
+        );
+        assert_eq!(azure["deployable"], false);
+        assert_eq!(azure["offers"][0]["id"], "Standard_D4s_v3");
+        assert_eq!(azure["offers"][0]["rentable"], false);
+        let total = azure["offers"][0]["estimated_total"].as_f64().unwrap();
+        assert!((total - (0.214 + 0.005 + 2.0 * 5.28 / 730.0)).abs() < 1e-9);
+        // Azure is already in US dollars, so its compared total needs no exchange rate.
+        let compared = answer["comparison"]["offers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|offer| offer["provider"] == "Azure")
+            .unwrap();
+        assert_eq!(compared["estimated_total_usd"].as_f64(), Some(total));
+        assert_eq!(compared["rentable"], false);
+        let gpu = app
+            .cloud_offers_answer(&request(&serde_json::json!({"gpu": true})), &ctx)
+            .unwrap()
+            .unwrap();
+        assert!(
+            gpu["other_providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|section| section["provider"] != "Azure")
+        );
+    }
+
+    #[test]
+    fn azure_alone_never_replaces_a_runpod_error() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let ctx = egui::Context::default();
+        app.cloud_prototype.root = Some(temp.path().to_path_buf());
+        let prices = &mut app.cloud_prototype.production.prices;
+        prices.azure.answered(azure_catalog());
+        prices.list_error = Some("Synthetic RunPod failure".into());
+        prices.list_failed_at = Some(std::time::Instant::now());
+        let cpu = request(&serde_json::json!({"min_vcpu": 4}));
+        assert_eq!(
+            app.cloud_offers_answer(&cpu, &ctx),
+            Some(Err("cloud_offers_unavailable: Synthetic RunPod failure".into()))
+        );
+        // A machine without a RunPod key still lists Azure beside the reason.
+        app.cloud_prototype.production.prices.runpod_key_missing();
+        let answer = app.cloud_offers_answer(&cpu, &ctx).unwrap().unwrap();
+        assert_eq!(
+            answer["unavailable"],
+            horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING
+        );
+        assert_eq!(answer["other_providers"][0]["provider"], "Azure");
+        assert_eq!(answer["other_providers"][0]["offers"][0]["rentable"], false);
     }
 
     #[test]
