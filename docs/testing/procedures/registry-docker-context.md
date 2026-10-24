@@ -19,7 +19,6 @@ Check that it excludes other registry logins, credential helpers and proxy crede
 
 Use a Unix host with a non-default Docker context, such as rootless Docker.
 This procedure tests local image preparation. It rents no compute and changes no installed login.
-Windows compiles the helper but does not use the Unix context links or durable cloud journals.
 
 ## 3. Safety
 

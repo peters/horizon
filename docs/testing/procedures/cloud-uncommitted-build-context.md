@@ -1,7 +1,7 @@
 ---
 procedure: cloud-uncommitted-build-context
 feature: Uncommitted files of an image build context (repository::uncommitted)
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -23,8 +23,7 @@ cloud** has task B04 in the
 ## 2. Applicability
 
 - Candidate: a checkout of the branch under test.
-- Platforms: Linux, macOS and Windows. The link and hard link tasks apply to
-  Linux and macOS only.
+- Platforms: Linux and macOS.
 - This procedure does not test: the rebuild confirmation, the image build, the
   push or a worker.
 

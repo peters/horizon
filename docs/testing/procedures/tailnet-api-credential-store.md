@@ -1,7 +1,7 @@
 ---
 procedure: tailnet-api-credential-store
 feature: desktop tailnet API credential storage foundation
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: yes       # synthetic credential and metadata removal
 secrets: [synthetic enrollment auth keys and API credentials in isolated stores, operator-approved staged API credential read-only in optional R01]

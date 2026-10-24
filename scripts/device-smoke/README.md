@@ -3,7 +3,7 @@
 The public fixture demonstrates Horizon using only disposable terminals and
 synthetic text. Keep application-specific scenarios, screenshots, recordings,
 identifiers and operational details outside the repository and public review.
-This workflow is Linux-only; native macOS/Windows qualification is deferred.
+This workflow is Linux-only; native macOS qualification is deferred.
 
 Build from the intended worktree using its own Cargo target directory. Do not
 build different worktrees into the same target directory during qualification:

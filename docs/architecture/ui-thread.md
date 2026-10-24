@@ -257,10 +257,6 @@ after the call, so a new test must also start the release thread of step 2.
   holds the worker thread on a channel. It also makes sure that the UI drops results
   of an earlier generation.
 
-Windows has no named pipe in the file system that `mkfifo` makes. Put the
-test module behind `#[cfg(all(test, unix))]`, and put its helpers behind the
-same condition.
-
 ## Known UI-thread work
 
 This work still runs on the UI thread. Do not copy it into new code.
@@ -271,13 +267,12 @@ This work still runs on the UI thread. Do not copy it into new code.
   closes. #1489 moves them.
 - Browser request file work that #1469 and #1489 do not move: recovery claims,
   provider usage and catalog results, `poll_cloud_offers` on each frame,
-  remote slot leases, `manifest::read` calls that retry on Windows, and
-  transcript deletion. [#1470](https://github.com/peters/horizon/issues/1470)
-  tracks them.
+  remote slot leases, `manifest::read` calls, and transcript deletion.
+  [#1470](https://github.com/peters/horizon/issues/1470) tracks them.
 - `capture_panel` in
   [`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)
-  calls `manifest::read` for the capture of a browser panel. On Windows, this
-  read can retry for up to 2 s. #1470 does not list this call.
+  calls `manifest::read` for the capture of a browser panel. The read can retry
+  for up to 2 s. #1470 does not list this call.
 - `plan_remote_create` in
   [`browser_remote_create.rs`](../../crates/horizon-ui/src/app/browser_remote_create.rs)
   locks the keychain store mutex, which the credential worker thread can hold, and
@@ -298,8 +293,8 @@ This work still runs on the UI thread. Do not copy it into new code.
   renames the lease file of a saved session at most every 2 s
   (`refresh_lease` in
   [`lease.rs`](../../crates/horizon-core/src/session_store/lease.rs)).
-- `Choices::set` writes and renames its file on the UI thread. On Windows, it
-  also calls `sync_all` there. On Unix, a worker thread makes the file durable
+- `Choices::set` writes and renames its file on the UI thread. A worker thread
+  makes the file durable
   ([#1491](https://github.com/peters/horizon/pull/1491)). With **Keep my choice
   for this repository** selected, a cloud start and **Open on This PC** call it
   (`keep` in

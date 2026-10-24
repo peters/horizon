@@ -1,7 +1,7 @@
 ---
 procedure: exposure-records
 feature: Retained exposure intent and paired record migration
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

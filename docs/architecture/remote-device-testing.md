@@ -18,7 +18,7 @@ Use [the STE rules](../style/ste-rules.md) and [technical names](../style/techni
 
 | Item | Requirement |
 |---|---|
-| Native host | Linux or macOS. Windows process execution is unavailable. |
+| Native host | Linux or macOS. |
 | iOS build | An approved Mac with Xcode and unattended SSH access. |
 | Android build | The project's Android SDK and JDK. |
 | Credentials | Horizon OS credential-store bindings for the selected provider. |
@@ -28,7 +28,6 @@ Use [the STE rules](../style/ste-rules.md) and [technical names](../style/techni
 The provider re-signs unsigned Debug IPA files.
 This workflow does not distribute production apps.
 The project supplies its build requirements.
-A Windows build does not qualify process or tunnel execution.
 
 ## 2. Prepare the host
 

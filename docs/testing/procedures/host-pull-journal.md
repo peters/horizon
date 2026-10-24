@@ -21,8 +21,6 @@ Use the host-only journal prerequisite for #1597.
 These checks use synthetic settings and temporary private files.
 Active deployment callers do not use the new provider-aware helper yet.
 No visible UI change or native GIF applies to this prerequisite.
-Windows compiles these tests but skips their runs with an explicit durability reason.
-Windows does not support the required durable registry journal operations.
 
 ## 3. Safety
 

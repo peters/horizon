@@ -113,8 +113,7 @@ Select an available Android target advertised by the configured provider, with
 verified physical evidence and orientation support. If the account/catalog cannot
 provide it, report B4 blocked with the value-free reason. Do not invent a catalog
 reference or silently substitute an emulator. The host UI lane runs on the actual
-isolated host OS; iOS/Android remote coverage does not qualify macOS/Windows host
-graphics. Cross-machine lanes use the repository's PR-comment handoff procedure
+isolated host OS; iOS/Android remote coverage does not qualify macOS host graphics. Cross-machine lanes use the repository's PR-comment handoff procedure
 after local review and stable CI.
 
 ## Reproducible fixture and assertions

@@ -291,7 +291,7 @@ as the cloud owner. It creates no provider resource, reads no credential and
 does not write the saved catalog. It requires the ID; omission or an empty ID
 refuses. There is no new credential entry, catalog-copy or force-switch operation.
 A pending operation retains its selected network. After allocation, the same ID
-is idempotent and a different ID refuses. Windows refuses before cloud-state writes.
+is idempotent and a different ID refuses.
 
 Selection proves no key validity, tag permission or enrollment. Normal deployment
 uses the selected entry's existing Auth reference and captures the worker identity.

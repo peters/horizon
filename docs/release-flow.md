@@ -10,8 +10,9 @@ Horizon releases are tag-driven.
 - Before publication, the workflow removes the four retired `horizon-installer-*` assets from a draft release.
   If removal fails, the release stays a draft. The workflow keeps other assets and assets on published releases.
 - The same release workflow can also be started manually with an existing tag to recover a failed or incomplete release after fixing workflow automation, without bumping the version.
-- Releases publish four executable assets and `SHA256SUMS.txt`.
-- Stable releases update the `peters/homebrew-horizon` tap and open or update the WinGet PR for `Peters.Horizon`.
+- Releases publish three executable assets and `SHA256SUMS.txt`: Linux x64, macOS arm64 and macOS x64.
+- Stable releases update the `peters/homebrew-horizon` tap.
+- Horizon supports Linux and macOS. Releases do not publish a Windows asset and the workflow opens no WinGet PR. The WinGet catalog keeps the older versions that were published before this change and receives no new ones.
 - Snap Store publication is currently paused.
 
 ## Source Of Truth
@@ -100,12 +101,11 @@ If the workflow itself needs a fix after a release was started, merge the workfl
 Then it:
 
 - rewrites the workspace version to the exact tag version in CI
-- builds the release binaries for Linux, macOS, and Windows
+- builds the release binaries for Linux and macOS
 - uploads the release assets and `SHA256SUMS.txt` to the draft GitHub Release; it skips files with matching hashes
 - publishes the GitHub Release only after the required asset set is present on that draft
 - Snap Store publication is currently paused; the `publish-snap` job and its `publish_snap` manual input remain disabled
 - in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
-- in the canonical `peters/horizon` repo only, updates the `Peters.Horizon` manifests in the configured `winget-pkgs` fork and opens or reuses the upstream PR against `microsoft/winget-pkgs`
 
 ## Update The Quick-Start Image
 
@@ -192,59 +192,24 @@ Stable-release packaging assumes:
   - `horizon-linux-x64.tar.gz`
   - `horizon-osx-arm64.tar.gz`
   - `horizon-osx-x64.tar.gz`
-  - `horizon-windows-x64.exe`
-- The workflow uploads the four executable assets before the tap update starts.
+- The workflow uploads the three executable assets before the tap update starts.
 - `snap/snapcraft.yaml` remains available for the classic `horizon-ui` snap, but the release job is currently paused
-- The Homebrew and WinGet jobs use the private `Horizon Release Automation` GitHub App with Contents write permission.
-- Each job limits its token to `peters/homebrew-horizon` or `peters/winget-pkgs`, respectively.
+- The Homebrew job uses the private `Horizon Release Automation` GitHub App with Contents write permission.
+- The job limits its token to `peters/homebrew-horizon`.
 - `SNAPCRAFT_STORE_CREDENTIALS` is not currently required while Snap Store publication is paused
 - the protected `release-automation` environment contains `RELEASE_AUTOMATION_APP_ID` (variable) and `RELEASE_AUTOMATION_PRIVATE_KEY` (secret); permit the trusted `main` branch and release tags only
-- `WINGET_PUBLIC_PR_TOKEN` in that environment is a separate expiring classic PAT with only `public_repo`, used only to query/create upstream WinGet PRs; it has no private-repository, workflow, or package scope
-- `peters/winget-pkgs` exists as a fork of `microsoft/winget-pkgs`
 
 After the credential migration, recover an older release by dispatching **Release from `main`** with the existing tag. Do not rerun a pre-migration workflow run: reruns retain the old workflow definition and its retired secret references.
 
-Run **Verify Release Credentials** after rotating either credential. It checks protected-environment access, one-repository App token scope and the public PR token owner/scope/expiry without writing release content. The initial migration also verified disposable branch writes, a draft storage asset upload/download, a controlled public PR, cleanup and token revocation.
+Run **Verify Release Credentials** after rotating the App credential. It checks protected-environment access and one-repository App token scope without writing release content. The initial migration also verified disposable branch writes, a draft storage asset upload/download, a controlled public PR, cleanup and token revocation.
 
 Each release job mints a short-lived installation token restricted to its one destination repository. The token action revokes installation tokens when the job ends. The App does not have workflow-write permission.
 
-The upstream WinGet repository belongs to Microsoft. A token scoped only to the fork cannot create its upstream PR, so the dedicated public-only PAT remains an explicit exception. Rotate it before its recorded expiry. Do not reuse it for repository checkout, package access, or private repositories.
+Horizon supports Linux and macOS only. A release publishes the Linux and macOS assets and no Windows asset, and the workflow opens no WinGet PR. The WinGet catalog keeps the older published versions for users who still have them installed. The catalog receives no new versions. Do not add a WinGet job back while Horizon supports Linux and macOS only.
 
-WinGet publication still depends on the normal `microsoft/winget-pkgs` review process after the PR opens, so catalog availability can lag behind the GitHub Release.
-
-If a stable release is missing one of those assets, the release App credentials, the WinGet public PR token, or the WinGet fork, the release workflow fails instead of publishing a partial Homebrew or WinGet update.
+If a stable release is missing one of those assets or the release App credentials, the release workflow fails instead of publishing a partial Homebrew update.
 
 ## Release validation
 
 Use the [release assets test procedure](testing/procedures/release-without-surge.md) before a release.
 Horizon has no in-app updater. Users update through their package manager or replace the release executable.
-
-## Interactive WinGet Smoke
-
-For full install, upgrade, launch, and uninstall validation on a disposable Windows 11 VM, use `scripts/run-winget-azure-smoke.sh`.
-
-The runner:
-
-- creates a Windows 11 VM with `az`
-- stages the local WinGet manifest renderer and smoke script onto the VM
-- opens an RDP session so the smoke runs from a PowerShell window in the logged-in desktop session
-- polls smoke status and collects the final logs
-- deletes the Azure resource group by default when it exits
-
-Example:
-
-```bash
-./scripts/run-winget-azure-smoke.sh \
-  --install-version 0.1.1 \
-  --install-sha 23fda14bc79aaca79e3a5fbd52c3501c11b4971d69b7a28f2f69bba94bd566e1 \
-  --install-release-date 2026-03-21 \
-  --upgrade-version 0.2.0 \
-  --upgrade-sha b7c1632f077067106883302b6936e720998ab53a2f5331511306bff8280fe5d5 \
-  --upgrade-release-date 2026-03-23
-```
-
-Host prerequisites:
-
-- `az` authenticated for the target subscription
-- `xfreerdp` available on `PATH`
-- `xvfb-run` available when running headless without an existing `DISPLAY`

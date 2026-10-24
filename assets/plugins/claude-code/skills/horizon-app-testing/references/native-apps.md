@@ -12,8 +12,7 @@ cannot replace these bindings.
 Use the repository runbook `docs/architecture/remote-device-testing.md` and its
 schema when available; do not invent a client or project contract from this summary.
 
-The host supports Linux and macOS; Windows process execution is unavailable.
-iOS builds need an approved Mac with Xcode. Android builds need the declared
+The host supports Linux and macOS. iOS builds need an approved Mac with Xcode. Android builds need the declared
 SDK and JDK. Only the BrowserStack native provider is supported. Credentials
 come from the configured OS store. Configure MCP timeouts for the requested
 lifetime, up to 1,800 seconds, and enable progress notifications.

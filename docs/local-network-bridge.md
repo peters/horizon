@@ -52,9 +52,6 @@ paused bridge that finds no network it can share when it would resume stops the
 same way. The scope you set belonged to the old network and is
 forgotten.
 
-On Windows, sleep is not noticed yet, because the clock Horizon compares with keeps
-running through suspend there; a move to another network after waking still is.
-
 The worker image must include the bridge helper. An image built before this
 feature makes the card say so; rebuild the cloud's image.
 
@@ -191,15 +188,10 @@ What each system provides:
 |---|---|---|---|
 | Linux | yes | yes | yes |
 | macOS | yes | yes | yes, from `arp` |
-| Windows | yes | yes | yes, from `arp` |
 
-The Windows row describes the discovery code only. Horizon refuses cloud
-operations on Windows, so you cannot use the bridge from Windows today. See
-[the platform support](platform-support.md).
-
-Discovery from Windows is not fully tested yet, and Windows Firewall can hide
-devices that answer mDNS or SSDP; `local_network_status` tells agents so. A source
-that fails adds a note to the answer instead of failing the whole request.
+A discovery source can hide devices on a network that blocks mDNS or SSDP;
+`local_network_status` tells agents so. A source that fails adds a note to the
+answer instead of failing the whole request.
 
 A worker helper whose owner's Horizon is older than discovery reports that
 discovery is unavailable; update Horizon on this computer.

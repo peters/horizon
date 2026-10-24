@@ -103,8 +103,8 @@ Rules the configuration PR enforces:
 - `credential_bindings` hold references only. `store: session` binds a value
   entered in Horizon and held in a scoped in-memory sink until explicit clear or
   exit. `store: os_keychain` uses `keyring-core` with the native store crates
-  the routine-credential ADR selected (macOS Keychain, Windows Credential
-  Manager, Linux Secret Service), under the distinct service name
+  the routine-credential ADR selected (macOS Keychain, Linux Secret Service),
+  under the distinct service name
   `horizon-remote-browser` and items keyed by endpoint origin plus slot. The
   `keyring` facade crate itself is not linked: its 4.x documentation directs
   applications that choose their stores to `keyring-core`. `store: environment`
@@ -279,8 +279,7 @@ Lifecycle:
 - Before a driver starts, the host saves the hold under
   `<runtime root>/standalone-remote-holds/<host instance>/`. The host locks its
   folder while it runs. On Unix the folder gets its name only after the lock is
-  held. On Windows two hosts that start at the same moment on one runtime root
-  can race for a starting folder; give each host its own runtime root there.
+  held.
 - A host that starts on the same runtime root takes over the folders of hosts
   that do not hold their lock any more, also after a kill. It checks each exact
   session at the original provider and lists the result in

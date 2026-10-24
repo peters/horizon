@@ -1,7 +1,7 @@
 ---
 procedure: remote-ios-click
 feature: Trusted clicks and field entry on remote iOS browsers
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: paid device
 destructive: no
 secrets: [remote provider credentials managed by the host]

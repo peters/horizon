@@ -1,7 +1,7 @@
 ---
 procedure: cloud-tailnet-selection
 feature: Pre-create saved tailnet selection through cloud_deploy
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -19,7 +19,6 @@ Keep the original catalog and deployment identity.
 
 - Use the candidate `cloud_deploy` example and its locked dependencies.
 - Linux and macOS support the existing durable cloud state.
-- Windows must refuse state mutation before it creates a cloud directory.
 - This procedure tests no enrollment, credential write, provider operation or native approval.
 
 ## 3. Safety
@@ -90,9 +89,8 @@ Selection does not authorize a deployment or a network change after allocation.
    cloud_deploy select-tailnet CATALOG_ROOT CLOUD_ID TAILNET_ID
    ```
 
-   Result: Unix selects the existing saved ID at `CATALOG_ROOT/CLOUD_ID`.
+   Result: Horizon selects the existing saved ID at `CATALOG_ROOT/CLOUD_ID`.
    The catalog bytes remain unchanged. No deployment or enrollment starts.
-   Windows refuses before path creation.
    Key validity and tags remain untested until normal enrollment.
 
 3. Examine the original catalog comparison and the new selected record.

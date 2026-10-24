@@ -1,7 +1,7 @@
 ---
 procedure: cloud-worker-value
 feature: Cost and capacity of a project worker
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: rents compute
 destructive: yes
 secrets: [provider credentials]

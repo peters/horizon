@@ -21,7 +21,7 @@ It also tests live views, evidence and cleanup after cancellation or a native ho
 - Provider: BrowserStack App Automate.
 - Devices: the complete project matrix, with up to two concurrent lanes.
 - Project recipes define the app features under test.
-- This procedure does not test production deployment or Windows process execution.
+- This procedure does not test production deployment.
 
 ## 3. Safety
 

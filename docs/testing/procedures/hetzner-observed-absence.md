@@ -1,7 +1,7 @@
 ---
 procedure: hetzner-observed-absence
 feature: SDK server absence observation
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ It uses synthetic HTTP responses and makes no provider resources.
 ## 2. Applicability
 
 - Candidate: `horizon-cloud` with the `delete_observed` API.
-- Platforms: Linux, macOS and Windows with the repository Rust toolchain.
+- Platforms: Linux and macOS with the repository Rust toolchain.
 - This procedure excludes real provider accounts, Core release operations and
   Horizon UI, CLI or MCP behavior.
 

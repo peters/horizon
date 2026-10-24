@@ -1,7 +1,7 @@
 ---
 procedure: settings-panel
 feature: Settings panel layout
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -19,8 +19,8 @@ panel and does not draw over the canvas.
 ## 2. Applicability
 
 - Candidate: any build of Horizon with a Settings panel.
-- Platforms: Linux, macOS and Windows. Step 6.4 also needs X11 to send the key
-  and pointer events from a terminal.
+- Platforms: Linux and macOS. Step 6.4 also needs X11 to send the key and
+  pointer events from a terminal.
 - This procedure does not test: the settings themselves, the settings store and
   the export of the configuration. Use
   [the settings store procedure](settings-store.md) for those.

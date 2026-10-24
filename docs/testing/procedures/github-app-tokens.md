@@ -1,7 +1,7 @@
 ---
 procedure: github-app-tokens
 feature: GitHub App user tokens (device sign-in, renewal, refusal and expiry)
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: yes
 secrets: [a GitHub account that can create a GitHub App]
@@ -19,7 +19,7 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 ## 2. Applicability
 
 - Candidate: a Horizon build that contains `horizon_cloud::github`.
-- Platforms: Linux, macOS and Windows. The example runs in a terminal.
+- Platforms: Linux and macOS. The example runs in a terminal.
 - This procedure does not test: the web sign-in, the manifest flow, the settings
   and the cloud card. The Connect GitHub procedure tests them when the user
   interface is available.
@@ -80,18 +80,10 @@ sign-in. The checks use a real GitHub App that the tester creates and deletes.
 
 ### 6.1 T01 — Sign in with the device flow and renew without a secret
 
-1. In the checkout, run the example with the client ID.
-
-   On Linux and macOS:
+1. In the checkout, run the example with the client ID:
 
    ```sh
    HORIZON_GITHUB_CLIENT_ID=<client id> cargo run -p horizon-cloud --example github_token_smoke
-   ```
-
-   On Windows, in PowerShell:
-
-   ```powershell
-   $env:HORIZON_GITHUB_CLIENT_ID = "<client id>"; cargo run -p horizon-cloud --example github_token_smoke
    ```
 
    Result: The example shows `Open https://github.com/login/device and enter` and

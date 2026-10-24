@@ -78,9 +78,7 @@ panel-local profile directories.
 On Unix, routine directories are mode `0700` and routine files are mode `0600`,
 owned by the effective user. Symlinked ancestors, other-user ownership, and
 group/world-writable parents are refused using the same private-store checks
-already required of Horizon's local identity files. Windows uses the same
-relative paths; owner-only ACLs land with the routine-registry implementation
-slice and are not claimed by this document as already implemented.
+already required of Horizon's local identity files.
 
 Deleting a routine must offer to delete its profile and credential records and
 must never affect another panel, routine, or shared profile. Session
@@ -90,7 +88,7 @@ Writes are atomic (temp file in the same directory, `fsync`, replace). Each
 routine has one exclusive lock so two processes cannot publish concurrent
 definitions against the same UUID. The lock file sits beside the routine
 directory rather than inside it, because deletion renames the directory while
-holding the lock and Windows refuses that rename while a file inside is open.
+holding the lock.
 Lock files are kept after deletion; removing a lock file that another process
 may be waiting on would let two holders proceed at once.
 

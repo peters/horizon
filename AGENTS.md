@@ -44,7 +44,6 @@ Pre-built binaries are attached to GitHub releases. Prefer the latest **non-prer
 | Linux x64 | `horizon-linux-x64.tar.gz` | Single `horizon` binary — extract and make executable |
 | macOS arm64 | `horizon-osx-arm64.tar.gz` | Single `horizon` binary — extract and make executable |
 | macOS x64 | `horizon-osx-x64.tar.gz` | Single `horizon` binary — extract and make executable |
-| Windows x64 | `horizon-windows-x64.exe` | Ready-to-run executable |
 
 No Rust toolchain or system headers are needed for this path. Release binaries are built with the default features, so they have no speech input. Many functions work on Linux only; read [the platform support](docs/platform-support.md) before you promise a function to a user. [First steps](docs/first-steps.md) is the user guide for the first start.
 
@@ -59,8 +58,7 @@ No Rust toolchain or system headers are needed for this path. Release binaries a
   - Fedora: `sudo dnf install -y gcc pkg-config wayland-devel libxkbcommon-devel vulkan-loader-devel mesa-libGL-devel cmake nasm`
   - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake nasm`
 - **macOS:** Xcode Command Line Tools (`xcode-select --install`). Metal ships with the OS.
-- **Windows:** MSVC build tools (installed automatically by `rustup` on the `msvc` target). DX12/Vulkan drivers ship with the GPU driver.
-- **AV1 recording on x86_64:** NASM ≥ 2.15 must be on `PATH` for rav1e's runtime-dispatched assembly kernels. The Linux commands above include it; on Intel macOS use `brew install nasm`, and on Windows install [NASM](https://www.nasm.us/) and add its directory to `PATH`. ARM64 uses the platform C compiler's assembler. Builds without `video-capture` do not require NASM.
+- **AV1 recording on x86_64:** NASM ≥ 2.15 must be on `PATH` for rav1e's runtime-dispatched assembly kernels. The Linux commands above include it; on Intel macOS use `brew install nasm`. ARM64 uses the platform C compiler's assembler. Builds without `video-capture` do not require NASM.
 - **Speech input (`--features speech`, opt-in):** additionally needs **CMake** and a **C++ compiler** (to build the vendored transcribe.cpp), plus on Linux the ALSA headers (`libasound2-dev`/`alsa-lib-devel`) for microphone capture. The default build does not require these.
 
 #### Build & Run
@@ -185,8 +183,8 @@ localci skill install
 - Some setup commands still run locally: `rustup component add` for rustfmt
   and clippy, and a `pip install` into a temporary virtual environment for the
   casting benchmark check.
-- localci runs only the jobs for your operating system. The macOS and Windows
-  jobs run on GitHub, or on a computer with that system.
+- localci runs only the jobs for your operating system. The macOS jobs run on
+  GitHub, or on a computer with macOS.
 - Some cloud worker tests need root. A local run skips them with a warning.
   GitHub CI runs them.
 - A local result does not replace the CI result on GitHub.
@@ -251,7 +249,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Keep APIs explicit: prefer `Result<T, E>` and typed structs/enums over ad-hoc tuples
 - Keep default values and default-selection rules centralized. Prefer `Default`, associated consts, or focused helper functions over repeating literals or enum variants across call sites. Use `static` items only when stable global storage is actually required
 - Prefer `tracing` for structured logging
-- `#![forbid(unsafe_code)]` on all crates. Two exceptions carry `#![deny(unsafe_code)]` with narrowly scoped `#[allow]`s instead, because they call platform FFI that has no safe equivalent: `horizon-cursor` (Win32 `GetCursorPos`) and the `horizon-wayland` pinch bridge together with its single call site in `horizon-ui` (libwayland `wl_display` adoption, whose lifetime winit's `run_app(self)` makes impossible to encode in a type). Do not widen either exception; new crates get `forbid`
+- `#![forbid(unsafe_code)]` on all crates. One exception carries `#![deny(unsafe_code)]` with narrowly scoped `#[allow]`s instead, because it calls platform FFI that has no safe equivalent: the `horizon-wayland` pinch bridge together with its single call site in `horizon-ui` (libwayland `wl_display` adoption, whose lifetime winit's `run_app(self)` makes impossible to encode in a type). Do not widen the exception; new crates get `forbid`
 - Consolidate repeated helpers into shared modules in horizon-core
 - Keep new or edited modules single-purpose; avoid mixing rendering, persistence, session bootstrap, and filesystem logic in one file
 - If UI code needs shared layout math, state conversion, or template-sync logic, move it into `horizon-core` instead of duplicating it in `horizon-ui`
@@ -441,7 +439,7 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 - Unit tests close to code (`#[cfg(test)]`)
 - Integration tests under `crates/*/tests/`
 - Test panel creation, PTY lifecycle, resize, input routing
-- CI runs the whole test suite on Linux, macOS and Windows; do not skip failing tests in the Windows job. When a test genuinely needs a Unix shell, PTY semantics or Unix paths, mark it `#[cfg_attr(windows, ignore = "<reason>")]`, or `#[cfg(unix)]` with a comment stating the reason when it cannot compile on Windows. Fix a real Windows bug instead, or file an issue for it.
+- CI runs the whole test suite on Linux and macOS. Horizon targets Unix only, so a test that needs a Unix shell, PTY semantics or Unix paths is the norm: write it against those semantics and keep it running on both platforms. Mark a test that must not run on macOS with `#[cfg_attr(target_os = "macos", ignore = "<reason>")]`, or gate a Linux-only test with `#[cfg(target_os = "linux")]` and a comment stating the reason. Fix a real macOS bug instead, or file an issue for it.
 - For UI/layout changes, verify with a live screenshot after launch and after resize/fit interactions; build success alone is not sufficient
 - Unless release-specific behavior is the thing under test, prefer `target/debug/horizon` for smoke testing so iteration stays fast while validating UI and interaction correctness
 - Every new feature and every UI-related change needs a test procedure in ASD-STE100 Simplified Technical English. Add a new procedure under `docs/testing/procedures/` from [the template](docs/testing/procedures/TEMPLATE.md), or update the existing procedure for that feature. Another agent or machine must be able to do it without extra context. Cover baseline behavior, primary flows, edge cases, persistence/migration, and visual regressions.
@@ -467,7 +465,7 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 - Drive the isolated application through explicitly configured device CLI/MCP targets; native automation, when needed, must be scoped to the fixture display and exact PID. The Device panel is read-only for agents: its Interact toggle is a person's choice in the UI, and no agent tool can turn it on. Browser-page interaction remains on the `horizon-browser` skill's public `browser_*` tools; native VNC Device panels use the `horizon-device` skill and `device_panel`.
 - For visible feature additions or behavior changes, capture a short video directly from the isolated test desktop, plus screenshots after launch and resize/fit. Use a recorder scoped to that display, start before the interaction, stop afterward, and play back or decode representative frames to verify the feature and movement were captured. Use the public `device_panel` video operation or a recorder that is scoped to the isolated desktop. If recording is unavailable or stalls, report that lane as blocked; do not replace it with screenshots or noVNC. Keep finalized evidence private until publication is authorized, except the PR GIF described next, and record the candidate binary/commit and scenario with it.
 - Every PR whose work changes the UI shows the final feature as an animated GIF at the top of its body. Record it from the task-owned isolated desktop while the flow is watched live through the native VNC Device panel, never from the developer's desktop, on the final candidate binary, and record that binary's hash in the PR. Walk the whole feature end to end, convert it with a two-pass `ffmpeg` palette (`palettegen`, then `paletteuse`; about 6 fps and 1000 px wide, sped up as needed) and keep it under 10 MB. Inspect its frames before publishing: generic fixtures and synthetic content only, with no credentials, tokens, private repository content, customer data or real network details. Upload it with `--attach` on `gh pr create` or `gh pr edit` (gh 2.99.0 or newer), which place it in the body, referencing it there as `![what it shows](./feature.gif)` so `gh` rewrites the link, then verify with `gh pr view <PR#> --json body` that the body holds a `github.com/user-attachments` URL. Never commit the GIF to the repository and never open github.com in a browser to attach it; if the upload fails, keep the file at its task-owned path and report the blocker. Attach screenshots the same way, or with `gh pr comment --attach` in a comment, when a still state needs a closer look. A PR without UI changes says in its body why no GIF applies. A push that changes what the GIF shows makes it stale: record and attach a new one on the new head.
-- On macOS or Windows, use a dedicated test machine, VM or isolated desktop session exposed through VNC and viewed in the same native Device panel. The current viewer accepts numeric loopback endpoints only; use its optional `ssh` route for an approved remote VNC endpoint, or an explicitly authorized forwarding arrangement. Platform-specific graphics/input checks must still run on the actual target OS. If a suitable isolated environment or native viewing path is unavailable, report the blocked lane.
+- On macOS, use a dedicated test machine, VM or isolated desktop session exposed through VNC and viewed in the same native Device panel. The current viewer accepts numeric loopback endpoints only; use its optional `ssh` route for an approved remote VNC endpoint, or an explicitly authorized forwarding arrangement. Platform-specific graphics/input checks must still run on the actual target OS. If a suitable isolated environment or native viewing path is unavailable, report the blocked lane.
 - Close the exact test window normally and clean up only fixture-owned processes and state. Close only the task-owned Device panel through `device_panel`; closing the viewer releases its connection but does not stop the application or fixture. Preserve the developer's Horizon, terminals and desktop throughout the test.
 
 ### Cross-Machine Smoke-Test Handoff
@@ -510,44 +508,13 @@ Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is
 - Capture proof of the recording state and the completed transcript, inspect the image, and correlate it with logs for the selected input device, negotiated sample rate/channel count, submitted duration, and transcription result. Treat output-device routing and audible playback as test preconditions rather than silently changing the user's audio setup
 - Close the exact smoke-test window through its normal window-manager close path, verify that the candidate process exited, and remove the temporary config and proof artifacts. Never stop, signal, or reuse a pre-existing Horizon process for this test
 
-### Windows Smoke Testing (Azure VMs / CI)
-
-When creating an Azure VM for smoke testing, use **Standard_D4s_v3** with `MicrosoftVisualStudio:windowsplustools:base-win11-gen2:latest` as the current best-known disposable baseline. It worked in `northeurope` when DSv5 quota was unavailable. **Generate a fresh random password** for each VM — never hard-code or commit credentials to the repo.
-
-- **Git and Git LFS are already present on the tested `windowsplustools` image**, but Horizon still needs `git lfs pull` after clone because icons and fonts are stored in LFS
-- **Install Visual Studio Build Tools before compiling if `C:\BuildTools\Common7\Tools\VsDevCmd.bat` is missing**:
-  ```powershell
-  Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vs_BuildTools.exe -OutFile C:\horizon-smoke\vs_BuildTools.exe
-  C:\horizon-smoke\vs_BuildTools.exe --quiet --wait --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621
-  ```
-- **For iterative Windows smoke work, keep a warm VM and reuse it**. A reused VM avoids Azure provisioning, first boot, and the Build Tools install. If the helper is given an existing `--resource-group` and `--vm-name`, it should start and reuse that VM instead of creating a new one
-- **Stream the guest-side smoke command output live in Azure instead of buffering it until the whole Bash command exits**. The Windows build/install path is too long to diagnose efficiently from a single final dump
-- **Install prerequisites via winget only from a real user session** (winget is per-user and not available from SYSTEM):
-  ```powershell
-  winget install Git.Git --accept-source-agreements --accept-package-agreements
-  winget install GitHub.GitLFS --accept-source-agreements --accept-package-agreements
-  winget install Microsoft.OpenSSH.Beta --accept-source-agreements --accept-package-agreements
-  winget install Rustlang.Rustup --accept-source-agreements --accept-package-agreements
-  winget install --id Microsoft.VisualStudio.2022.Community --source winget --force --override "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --addProductLang En-us"
-  ```
-- **If you need SSH, add an SSH NSG rule alongside RDP and then switch to SSH once it works**. It is still faster and more reliable than repeated `az vm run-command` calls
-- **Fix the OpenSSH firewall rule profile** — `Add-WindowsCapability` creates a rule for `Private` only, but Azure VMs use `Public`:
-  ```powershell
-  Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -Profile Any
-  ```
-- **Use debug builds** (`cargo build`) for smoke testing, not release — much faster compilation, sufficient for validating launch and crash behavior
-- **`az vm run-command` runs as SYSTEM** — no desktop, no winget, single-command-at-a-time bottleneck. Use it for guest bootstrap, log collection, and starting scheduled tasks, not for the GUI smoke itself
-- **Do not rely on the Startup folder alone to trigger the smoke**. On the tested image, autologon produced `explorer.exe` but the Startup launcher did not fire reliably. Force one autologon to create the console session, then start the actual smoke through a scheduled task with `LogonType Interactive`
-- **Hyper-V Video + WARP** are the only GPU adapters on standard Azure VMs. GUI launch tests must run in an interactive user session (scheduled task with `Interactive` logon or RDP)
-- **When SCP-ing manifest directories**, copy individual files — `scp -r` can create nested subdirectories that winget rejects with "Subdirectory not supported in manifest path"
-
 ### Performance Profiling
 
 - Prefer repeatable workloads over ad-hoc observation: profile idle, panning, mouse-move, resize, and scroll as separate cases instead of treating "high CPU" as one bucket
 - Start with `cargo build --profile profiling --features trace-profiling`, then use `HORIZON_TRACE_SPANS=1 RUST_LOG=info target/profiling/horizon` or `scripts/profile.sh <seconds>`; the script already falls back to traced spans when `perf` is blocked
 - Keep before/after comparisons workload-matched: same board layout, same interaction script, same binary profile, same tracing mode, and the same isolated runtime state (`HOME`, config, and session inputs)
 - Compare normalized span costs, not just total wall time: use per-call `avg_us` for key spans such as `horizon::app::update`, `horizon::app::lifecycle::render_active_view`, `horizon::app::panels::render_panels`, and `egui::context::pass` when frame counts differ between runs
-- When profiling pointer-driven regressions, automate the interaction with native tooling on the host OS instead of relying on manual movement: `xdotool` on X11, AppleScript/Quartz or equivalent on macOS, and Win32/UIA tooling on Windows
+- When profiling pointer-driven regressions, automate the interaction with native tooling on the host OS instead of relying on manual movement: `xdotool` on X11 and AppleScript/Quartz or equivalent on macOS
 - Scope automation and inspection to the exact PID under test when multiple Horizon processes may exist; avoid targeting windows by application name alone
 - Keep interaction workloads separate from terminal-output workloads so PTY redraw noise does not mask pointer or layout regressions
 - Treat short motion traces as provisional. If a resize or pointer regression only appears in a small sample, rerun it with a denser or longer scripted interaction before changing code

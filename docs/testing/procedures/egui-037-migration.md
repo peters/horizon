@@ -1,7 +1,7 @@
 ---
 procedure: egui-037-migration
 feature: UI dependency migration
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -17,7 +17,7 @@ This procedure checks widget identity, wheel input, accessibility roles, and cas
 ## 2. Applicability
 
 - Candidate: Horizon with egui 0.37 and its API migration.
-- Platforms: Linux, macOS, and Windows.
+- Platforms: Linux and macOS.
 - The cast task needs an approved receiver with synthetic content.
 - This procedure does not test paid providers or native apps.
 

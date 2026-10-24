@@ -20,8 +20,8 @@ limits the access and that the bridge is off after a restart of Horizon.
 
 - Candidate: the frozen candidate of [area S](s-test-fixture.md).
 - Platforms: Linux. Cloud: `smoke-a`.
-- This area does not test: UDP, IPv6 devices, Windows discovery or a move of
-  the PC to another network. See [Local Network Bridge](../../../local-network-bridge.md).
+- This area does not test: UDP, IPv6 devices or a move of the PC to another
+  network. See [Local Network Bridge](../../../local-network-bridge.md).
 
 ## 3. Safety
 

@@ -1,7 +1,7 @@
 ---
 procedure: exposure-management
 feature: Original Hetzner SDK exposure management
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: rents compute
 destructive: yes
 secrets: [original selected Hetzner credential reference]

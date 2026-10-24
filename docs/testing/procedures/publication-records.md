@@ -1,7 +1,7 @@
 ---
 procedure: publication-records
 feature: Retained image publisher persistence and status
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: synthetic metadata only
@@ -23,7 +23,6 @@ No native GIF applies because existing visible behavior is unchanged.
 Core metadata checks run on all supported desktop platforms.
 The actual cloud-list UI handler checks in PR-04 run on Unix only.
 Write and migration checks need Unix directory durability.
-Windows compiles these checks but skips unsupported runs with a stated reason.
 
 ## 3. Safety
 

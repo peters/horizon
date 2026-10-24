@@ -10,7 +10,7 @@
   <a href="https://github.com/peters/horizon/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/peters/horizon?style=flat-square&color=74a2f7" /></a>
   <a href="https://github.com/peters/horizon/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/peters/horizon/ci.yml?branch=main&style=flat-square&label=CI" /></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-a6e3a1?style=flat-square" />
-  <img alt="Platform" src="https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-cba6f7?style=flat-square" />
+  <img alt="Platform" src="https://img.shields.io/badge/Linux%20%C2%B7%20macOS-cba6f7?style=flat-square" />
 </p>
 
 <p align="center">
@@ -239,7 +239,6 @@ Grab the latest release from [**Releases**](https://github.com/peters/horizon/re
 | **Linux** x64 | `horizon-linux-x64.tar.gz` | Extract and run |
 | **macOS** arm64 | `horizon-osx-arm64.tar.gz` | Extract and run |
 | **macOS** x64 | `horizon-osx-x64.tar.gz` | Extract and run |
-| **Windows** x64 | `horizon-windows-x64.exe` | Run the executable |
 
 To update a downloaded copy, download the new release and replace the executable after you close Horizon. For package-manager installs, use the package manager's upgrade command. Horizon has no in-app updater.
 
@@ -249,17 +248,17 @@ The latest release (v0.2.7, August 2026) predates browser panels, Device panels,
 
 ### What works where
 
-Horizon runs on Linux, macOS and Windows, but some features are Linux-only today, and Windows has the most gaps:
+Horizon runs on Linux and macOS, and some features are Linux-only today:
 
-| | Linux | macOS | Windows |
-|:--|:--|:--|:--|
-| Board, shell, browser and Device panels | ✓ | ✓ | ✓ (shell panels need `SHELL` set) |
-| Coding-agent panels | ✓ | ✓ | untested, needs a POSIX shell in `SHELL` |
-| Safari browser panels | — | ✓ | — |
-| Cloud workspaces | ✓ | ✓ | — |
-| Agent-driven desktops | X11 | — | — |
-| Apple TV casting | ✓ | — | — |
-| Global push-to-talk | X11 | ✓ | — |
+| | Linux | macOS |
+|:--|:--|:--|
+| Board, shell, browser and Device panels | ✓ | ✓ |
+| Coding-agent panels | ✓ | ✓ |
+| Safari browser panels | — | ✓ |
+| Cloud workspaces | ✓ | ✓ |
+| Agent-driven desktops | X11 | — |
+| Apple TV casting | ✓ | — |
+| Global push-to-talk | X11 | ✓ |
 
 The full list, with the reason for each gap, is in [Platform support](docs/platform-support.md).
 
@@ -284,16 +283,6 @@ To update or remove it later:
 brew upgrade horizon
 brew uninstall horizon
 brew untap peters/horizon
-```
-
-### WinGet
-
-Stable releases are submitted to the official Windows Package Manager catalog. After a release's manifest PR is approved, install, upgrade, or remove Horizon with:
-
-```powershell
-winget install Peters.Horizon
-winget upgrade Peters.Horizon
-winget uninstall Peters.Horizon
 ```
 
 ### Snap
@@ -372,7 +361,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+double-click** canvas | Open the preset picker (creates a workspace and its first panel) |
 | **Ctrl+double-click** inside a workspace | Open the preset picker to add a panel |
 
-<sub>On macOS, substitute Cmd for Ctrl. Copy and paste use the standard Cmd+C / Cmd+V bindings, and on Windows you can also use Ctrl+Insert / Shift+Insert. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
+<sub>On macOS, substitute Cmd for Ctrl. Copy and paste use the standard Cmd+C / Cmd+V bindings. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
 
 <sub>Programs in a terminal can copy with the OSC 52 escape sequence: Horizon writes it to the system clipboard (`c`) or, on Linux, the primary selection (`p`). On Linux, selecting text fills the primary selection. Under Wayland it reaches other apps through the compositor's data-control protocol (for example wlroots and KDE) or through XWayland; where neither exists, use Ctrl+Shift+C and Ctrl+Shift+V.</sub>
 
@@ -498,17 +487,15 @@ Fresh configs already ship the agent, browser, git, markdown, and usage presets 
 ### Remote provider profiles
 
 Remote provider settings are empty by default. Local Docker profiles require an
-explicit local Unix socket or Windows named pipe; Horizon does not infer a Docker
-context, environment variable or default endpoint. Profile names must be unique
-and match the saved environment's profile exactly, including letter case.
+explicit local Unix socket; Horizon does not infer a Docker context, environment
+variable or default endpoint. Profile names must be unique and match the saved
+environment's profile exactly, including letter case.
 
 ```yaml
 remote:
   local_docker:
     - name: development
       docker_host: unix:///path/to/docker.sock
-    - name: windows
-      docker_host: npipe:////./pipe/docker_engine
 ```
 
 Replace the example socket with your explicitly selected local daemon. The new
@@ -572,7 +559,7 @@ A Browser panel is a real browser drawn on the canvas. Type an address and the p
 
 1. **Ctrl+double-click** empty canvas and pick **Browser**, or press **Ctrl+Shift+K** and type `web`.
 2. Click the address bar, type any site (`https://example.com`, a docs page, or `http://127.0.0.1:3000`), and press Enter.
-3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. On Linux, Horizon searches `PATH` for Chrome, Chromium, Edge, and Brave. macOS searches `PATH` and the usual browser `.app` bundles under `/Applications`, including Brave. On Windows it searches for `chrome.exe`, `msedge.exe`, and `chromium.exe`, plus the usual Chrome and Edge install folders; set `browser.command` when you want Brave there. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux and Windows. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
+3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. On Linux, Horizon searches `PATH` for Chrome, Chromium, Edge, and Brave. macOS searches `PATH` and the usual browser `.app` bundles under `/Applications`, including Brave. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
 4. Back, forward, and reload sit on the same bar. **Record** writes a private WebM of the live page.
 
 Chromium and Firefox start headless and paint into the panel. A panel you create keeps its own profile under `~/.horizon/browser-profiles`. Duplicating a Chromium or Firefox panel shares that profile, including cookies. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so the Snap can read the profile. A workspace can open straight onto a URL:
@@ -694,7 +681,7 @@ Safari shares the semantic action and audit surface but currently reports networ
 | **Firefox** | WebDriver BiDi plus adaptive lossless WebDriver screenshots | Firefox and `geckodriver` | Screenshots, not a live BiDi video stream; capture decays to zero on a static page and is capped at 30 fps while active |
 | **Safari** | Classic WebDriver screenshots, with BiDi events when `webSocketUrl` is negotiated | macOS, Safari, and an explicitly enabled `safaridriver` | One automation session at a time; isolated Safari automation state |
 
-Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself. Safari remains disabled in the picker on Linux and Windows.
+Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself. Safari remains disabled in the picker on Linux.
 
 ```yaml
 browser:

@@ -1,7 +1,7 @@
 ---
 procedure: remote-ios-evaluation
 feature: Evaluation on a browser driver that reports no script timeout
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: paid device
 destructive: no
 secrets: [remote provider credentials, managed by the host]

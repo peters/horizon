@@ -139,7 +139,7 @@ Record prior display proof and later transport evidence separately.
 All three task IDs pass.
 The unit fixture proves the completed-handle condition.
 The native smoke proves responsive panel close and separate owned child cleanup.
-One Linux smoke does not establish Windows or macOS runtime results.
+One Linux smoke does not establish macOS runtime results.
 
 ## 8. Cleanup
 

@@ -1,7 +1,7 @@
 ---
 procedure: docker-host-probe
 feature: Existing Docker engine admission
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ It tests missing requirements, SSH trust, cancellation and storage admission.
 ## 2. Applicability
 
 - Candidate: a source build with `cloud_runtime::docker_host`.
-- Platforms: Linux and macOS controllers. Windows returns a platform blocker.
+- Platforms: Linux and macOS controllers.
 - This procedure does not test deployment, saved settings, UI or MCP operations.
 - Docker Desktop and forwarded Docker contexts do not pass admission.
 

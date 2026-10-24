@@ -1,7 +1,7 @@
 ---
 procedure: terminal-clipboard-scrollback
 feature: terminal clipboard and scrollback
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -19,8 +19,8 @@ the scrollback chords do not take keys from the program in the terminal.
 
 - Candidate: a Horizon build that has the clipboard chords and the scrollback
   chords.
-- Platforms: X11 and Wayland on Linux. macOS and Windows use the same chords
-  with the Command key in place of the Control key.
+- Platforms: X11 and Wayland on Linux. macOS uses the same chords with the
+  Command key in place of the Control key.
 - This procedure does not test: the browser panel, the device panel, or a
   remote SSH session.
 

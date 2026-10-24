@@ -91,9 +91,9 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   the bridge for the life of the event loop alongside an `OwnedDisplayHandle`
   that drops after it. The crate and that call site carry
   `#![deny(unsafe_code)]` with one scoped `#[allow]` and a `// SAFETY:`
-  rationale each; the exception must not widen. The three crates permitted
-  to use scoped unsafe code are `horizon-cursor`, `horizon-wayland`, and
-  `horizon-ui`; every other crate keeps `forbid`.
+  rationale each; the exception must not widen. The crates permitted
+  to use scoped unsafe code are `horizon-wayland` and its single call site
+  in `horizon-ui`; every other crate keeps `forbid`.
 - `wayland-client` is requested with its `system` feature explicitly, since
   only the libwayland backend can adopt a foreign display. The bridge is
   Linux-only and returns `None` off Wayland, so X11 sessions keep the XInput

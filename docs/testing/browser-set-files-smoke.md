@@ -97,13 +97,13 @@ directory in `HORIZON_BROWSER_ATTACHMENT_ROOTS`, attach it, then
 read must succeed because the browser reads the staged copy, not the hidden
 source.
 
-## Lane A: Chromium (Linux, macOS, Windows)
+## Lane A: Chromium (Linux, macOS)
 
 `horizon-browser mcp --standalone --backend chromium` with `HOME` pointed at
 a throwaway directory. The engine path is `DOM.setFileInputFiles`.
 Last run: Linux, 20/20, 2026-09-21.
 
-## Lane B: Firefox (Linux, macOS, Windows)
+## Lane B: Firefox (Linux, macOS)
 
 `horizon-browser mcp --standalone --backend firefox` (needs `firefox` and
 `geckodriver` on `PATH`). The engine path is Element Send Keys with

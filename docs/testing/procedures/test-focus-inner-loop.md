@@ -1,7 +1,7 @@
 ---
 procedure: test-focus-inner-loop
 feature: focused test selection for the development loop
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ It also checks that the script reports a selection that covers no test, and that
 ## 2. Applicability
 
 - Candidate: A checkout of the commit that adds `scripts/test-focus.py`.
-- Platforms: Linux, macOS and Windows. The script needs Python 3.11 or later for `tomllib`.
+- Platforms: Linux and macOS. The script needs Python 3.11 or later for `tomllib`.
 - This procedure does not test the full local matrix. The full matrix stays the check of a candidate head.
 
 ## 4. Equipment and preconditions

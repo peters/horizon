@@ -1,7 +1,7 @@
 ---
 procedure: horizon-mcp-skills
 feature: Horizon MCP skill coverage and installation
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

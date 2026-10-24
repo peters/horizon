@@ -1,7 +1,7 @@
 ---
 procedure: release-without-surge
 feature: release assets and application updates
-platforms: [linux, macos, windows]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none
@@ -18,7 +18,7 @@ It tests the release guard, toolbar, startup and saved state.
 ## 2. Applicability
 
 - Candidate: The current pull request head.
-- Platforms: Linux, macOS and Windows.
+- Platforms: Linux and macOS.
 - This procedure does not publish a release or change an existing installation.
 
 ## 3. Equipment and preconditions
@@ -35,11 +35,11 @@ It tests the release guard, toolbar, startup and saved state.
 
    Result: The fixture starts a private desktop and gives a VNC address.
 
-2. On macOS or Windows, start the frozen candidate in a dedicated test machine, VM or isolated desktop session.
+2. On macOS, start the frozen candidate in a dedicated test machine, VM or isolated desktop session.
 
    Result: The candidate uses private application state.
 
-3. On macOS or Windows, expose that session through VNC and the authorized SSH forwarding path.
+3. On macOS, expose that session through VNC and the authorized SSH forwarding path.
 
    Result: The native Device panel can reach that session. If no isolated target exists, record that platform as blocked.
 
@@ -62,15 +62,15 @@ It tests the release guard, toolbar, startup and saved state.
    python3 -B scripts/test_detect_ci_build_inputs.py -v
    ```
 
-   Result: All tests pass. A stable release needs four executable assets and `SHA256SUMS.txt`.
+   Result: All tests pass. A stable release needs three executable assets and `SHA256SUMS.txt`.
    A missing executable keeps the release in draft state. Installers are not required.
    A resumed draft loses the four retired installer assets before publication.
    A failed removal keeps the draft private. Other assets and published releases keep their assets.
 
 2. Examine `.github/workflows/release.yml`.
 
-   Result: The workflow builds four executable assets. It does not build Surge or write update packages.
-   Homebrew and WinGet use the executable assets and their hashes.
+   Result: The workflow builds three executable assets. It does not build Surge or write update packages.
+   Homebrew uses the executable assets and their hashes.
 
 ### 5.2 UI — Startup and toolbar
 

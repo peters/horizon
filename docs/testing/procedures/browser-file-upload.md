@@ -1,7 +1,7 @@
 ---
 procedure: browser-file-upload
 feature: Browser file picker and file drops
-platforms: [linux, windows, macos]
+platforms: [linux, macos]
 cost: none
 destructive: no
 secrets: none

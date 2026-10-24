@@ -45,7 +45,7 @@ access to this PC. No ACL, firewall, operator setting or public Funnel was chang
 The cloud Serve configuration was restored to empty and its nonce backend removed.
 
 The paid provider lane was Hetzner on Linux amd64. RunPod, other architectures,
-macOS/Windows credential stores and graphics are not live-qualified by this run.
+macOS credential stores and graphics are not live-qualified by this run.
 MCP's existing owner/checked-companion and first-allocation confirmation gates
 remain; there is no general agent-controlled first-cloud creation tool. The
 signed project-session runtime refuses selected tailnets until it has its own
@@ -380,14 +380,8 @@ pending journal. All owned children exited, the device target expired and privat
 fixture state was removed. The public showcase retains original feature frames
 after the private fault-injection flow. No new paid allocation was made.
 
-The preceding PR head's unchanged Windows device-restoration UI test failed its
-initial two-frame timing assertion and passed one bounded rerun. No test or device
-behavior was altered for that failure; current-head CI remains a separate gate.
-
-The final candidate initially exposed a Windows compile warning in a new
-Unix-only selector test fixture. Its definition now has the same test/Unix
-configuration as its callers; no production behavior or warning suppression
-changed. The unchanged Linux native binary remains the demonstrated candidate.
+The final candidate's unchanged Linux native binary remains the demonstrated
+candidate.
 
 
 ## Companion workspace isolation
