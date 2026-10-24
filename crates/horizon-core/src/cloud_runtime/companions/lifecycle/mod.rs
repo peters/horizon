@@ -120,6 +120,7 @@ pub fn bind(request: &Request<'_>, binding: Binding) -> Result<()> {
                 "docker-host.json",
                 "workspace-volume.json",
                 "workspace-volume.required",
+                "azure.json",
             ]
             .iter()
             .map(|file| target.root().join(file).try_exists())

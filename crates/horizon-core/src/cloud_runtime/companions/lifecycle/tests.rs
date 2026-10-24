@@ -555,3 +555,63 @@ fn an_unchecked_companion_is_not_bound() {
         .unwrap();
     assert!(state.intents.binding("consumer").is_none());
 }
+
+#[test]
+fn an_azure_record_is_admitted_as_a_hetzner_one_and_refused_while_its_group_is_deleted() {
+    let group = r#"{"group":{"state":"bound","worker_id":"/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-target"}"#;
+    for (journal, refused) in [
+        (format!("{group}}}"), false),
+        (format!(r#"{group},"deleting":true}}"#), true),
+    ] {
+        let fixture = Fixture::new();
+        let mut state = fixture.ready();
+        state.profile.provider = horizon_cloud::azure::PROVIDER.into();
+        fixture.save(&state);
+        std::fs::write(fixture.root.path().join("target/azure.json"), &journal).unwrap();
+        let op = fixture.submit(Action::EnsureReady);
+        let mut backend = Fake::new(&fixture);
+        let phase = execute_with(&fixture.request(), op.intent.operation_id, &mut backend)
+            .unwrap()
+            .phase;
+        assert_eq!(phase == Phase::Refused, refused, "{journal}");
+    }
+    // A group journal left without its deployment is reconciled first, never created over.
+    let fixture = Fixture::new();
+    std::fs::remove_file(fixture.root.path().join("target/deployment.json")).unwrap();
+    std::fs::write(fixture.root.path().join("target/azure.json"), format!("{group}}}")).unwrap();
+    let op = fixture.submit(Action::EnsureReady);
+    let mut backend = Fake::new(&fixture);
+    let error = execute_with(&fixture.request(), op.intent.operation_id, &mut backend).unwrap_err();
+    assert!(error.to_string().contains("without its deployment"), "{error}");
+    assert!(backend.decisions.is_empty());
+}
+
+#[test]
+fn the_live_backend_needs_the_azure_settings_before_it_acts_on_an_azure_cloud() {
+    use execution::Backend as _;
+    let fixture = Fixture::new();
+    let mut state = fixture.ready();
+    state.profile.provider = horizon_cloud::azure::PROVIDER.into();
+    fixture.save(&state);
+    let settings = serde_json::from_value(serde_json::json!({
+        "runpod_key_file":"/missing", "ssh_identity_file":"/missing", "docker_config":"/missing", "cpu_flavors":[],"gpu_types":[]
+    }))
+    .unwrap();
+    let store = Store::lock(&fixture.root.path().join("target")).unwrap();
+    for decision in [Decision::Stop, Decision::ResumeThenReconnect, Decision::Reconnect] {
+        let mut live = execution::Live {
+            settings: &settings,
+            cancel: &Cancellation::default(),
+            emit: &|_| {},
+            pending: false,
+            inspecting: false,
+            settled: false,
+        };
+        let error = live.preflight(&store, decision).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Configure this cloud provider before executing",
+            "{decision:?}"
+        );
+    }
+}

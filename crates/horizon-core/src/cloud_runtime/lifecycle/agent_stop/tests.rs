@@ -52,7 +52,7 @@ fn never(_: &Store) -> Result<()> {
 }
 
 #[test]
-fn only_a_ready_hetzner_or_docker_host_cloud_is_read() {
+fn only_a_ready_hetzner_azure_or_docker_host_cloud_is_read() {
     let unread = |_: &Worker, _: &str| -> Result<String> { panic!("the worker is not read") };
     let adjustments: [fn(&mut Deployment); 4] = [
         |state| state.stage = Stage::Stopped,
@@ -70,6 +70,18 @@ fn only_a_ready_hetzner_or_docker_host_cloud_is_read() {
     let root = tempfile::tempdir().unwrap();
     ready(root.path(), |state| state.profile.provider = "docker-host".into());
     assert!(takes_stop_requests(&stored(root.path())));
+    // An Azure worker holds no Azure credential either, so its agent's stop is taken.
+    let root = tempfile::tempdir().unwrap();
+    ready(root.path(), |state| state.profile.provider = "azure".into());
+    assert!(takes_stop_requests(&stored(root.path())));
+    let asked = std::cell::Cell::new(0);
+    let empty = |_: &Worker, command: &str| {
+        assert_eq!(command, TAKE);
+        asked.set(asked.get() + 1);
+        Ok(String::new())
+    };
+    assert_eq!(read_with(root.path(), empty).unwrap(), Requested::Nothing);
+    assert_eq!(asked.get(), 1, "the worker is asked once");
 }
 
 #[test]
