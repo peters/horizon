@@ -34,6 +34,17 @@ class WritableTmp(unittest.TestCase):
             self.assertIn('keymap files', message)
             self.assertIn('quota', message)
 
+    def test_a_leftover_file_in_the_directory_does_not_stop_the_check(self):
+        # /tmp is world-writable: another user or an earlier run of this harness can
+        # leave a file there. The check must not open it or fail on it.
+        with tempfile.TemporaryDirectory(prefix='horizon-smoke-tmp-') as directory:
+            leftover = Path(directory) / 'horizon-smoke-write-1.tmp'
+            leftover.write_text('leftover')
+
+            serve.require_writable_tmp(directory)
+
+            self.assertEqual(leftover.read_text(), 'leftover')
+
     def test_the_run_checks_the_host_tmp_its_x_server_uses(self):
         self.assertEqual(serve.TMP_DIR, Path('/tmp'))
         serve.require_writable_tmp(serve.TMP_DIR)

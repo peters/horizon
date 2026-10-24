@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Own a disposable application/X11 lab and read-only noVNC viewer until Ctrl-C."""
 import argparse
-import contextlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +8,7 @@ import shutil
 import signal
 import re
 import sys
+import tempfile
 import time
 
 import sandbox
@@ -143,11 +143,13 @@ def require_writable_tmp(directory=None):
     "Cannot close ... (not enough space?)", which reads like an X or keyboard defect.
     """
     directory = TMP_DIR if directory is None else Path(directory)
-    probe = directory / f'horizon-smoke-write-{os.getpid()}.tmp'
     try:
-        # Larger than the keymap the X server compiles there, so a nearly full
-        # filesystem fails here as well as an exhausted quota does.
-        probe.write_bytes(b'\0' * (64 * 1024))
+        # An unnamed file: no path stays behind, and a leftover file or symbolic
+        # link under /tmp from another run or user cannot make this fail.
+        with tempfile.TemporaryFile(dir=directory) as probe:
+            # Larger than the keymap the X server compiles there, so a nearly full
+            # filesystem fails here as well as an exhausted quota does.
+            probe.write(b'\0' * (64 * 1024))
     except OSError as error:
         raise RuntimeError(
             f'{directory} refused a write ({error.strerror or error}). The fixture starts its X server '
@@ -155,9 +157,6 @@ def require_writable_tmp(directory=None):
             'Free space on that filesystem or check its per-user quota, and keep the fixture '
             'state and any frozen binary on a filesystem with space.'
         ) from None
-    finally:
-        with contextlib.suppress(OSError):
-            probe.unlink()
 
 
 def main():
