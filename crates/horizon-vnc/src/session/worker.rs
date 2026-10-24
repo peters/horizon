@@ -22,11 +22,12 @@ pub(super) async fn connection(
     input: &mut mpsc::UnboundedReceiver<InputEvent>,
 ) -> Result<(), Error> {
     // The tunnel process lives exactly as long as this connection.
+    let host = route.tunnel_host();
     let (client, mut tunnel) = connect_client(route).await?;
     let result = stream_desktop(client, shared, latest_full, input).await;
     match (result, tunnel.as_mut()) {
         // A forward that dies mid-session ends the stream; ssh says why.
-        (Err(error), Some(tunnel)) => Err(tunnel.explain(error).await),
+        (Err(error), Some(tunnel)) => Err(tunnel.explain(error, host.as_ref()).await),
         (result, _) => result,
     }
 }
@@ -214,6 +215,9 @@ async fn forward_input_until(
 }
 
 async fn connect_client(route: Route) -> Result<(vnc::VncClient, Option<SshTunnel>), Error> {
+    // A failed connect may be ssh refusing the host key, which only a person
+    // can resolve.
+    let host = route.tunnel_host();
     match route {
         Route::Direct(address) => {
             let client = tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, async {
@@ -225,13 +229,13 @@ async fn connect_client(route: Route) -> Result<(vnc::VncClient, Option<SshTunne
             .map_err(|_| Error::Timeout)??;
             Ok((client, None))
         }
-        Route::Tunnel { program, args } => {
+        Route::Tunnel { program, args, .. } => {
             let mut tunnel = SshTunnel::spawn(&program, &args)?;
             let stream = tunnel.take_stream()?;
             match tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, handshake(stream)).await {
                 Ok(Ok(client)) => Ok((client, Some(tunnel))),
-                Ok(Err(error)) => Err(tunnel.explain(error).await),
-                Err(_) => Err(tunnel.explain(Error::Timeout).await),
+                Ok(Err(error)) => Err(tunnel.explain(error, host.as_ref()).await),
+                Err(_) => Err(tunnel.explain(Error::Timeout, host.as_ref()).await),
             }
         }
     }

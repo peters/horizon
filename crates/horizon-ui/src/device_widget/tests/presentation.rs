@@ -108,7 +108,7 @@ fn a_connected_empty_desktop_says_so_and_a_busy_one_does_not() {
     );
 
     state.update_texture(&ctx, ColorImage::filled([64, 48], egui::Color32::BLACK));
-    state.status = Status::Disconnected("lost".into());
+    state.status = Status::disconnected("lost");
     assert!(
         !painted_texts(&ctx, &mut state).iter().any(|text| text == EMPTY_HINT),
         "a lost connection is shown as that, not as an empty desktop"

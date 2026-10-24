@@ -296,7 +296,7 @@ fn hidden_viewer_processes_resize_and_disconnect() -> Result<(), Error> {
     drop(stream);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        if matches!(session.observation().status, Some(Status::Disconnected(_))) {
+        if matches!(session.observation().status, Some(Status::Disconnected { .. })) {
             break;
         }
         assert!(std::time::Instant::now() < deadline, "hidden disconnect never observed");
@@ -340,7 +340,7 @@ fn wayvnc_layout_then_pixels_in_one_update_keeps_the_viewer_connected() -> Resul
             let updates = session.take_updates();
             if let Some(status) = updates.status {
                 assert!(
-                    !matches!(status, Status::Disconnected(_)),
+                    !matches!(status, Status::Disconnected { .. }),
                     "mixed update disconnected the viewer"
                 );
                 connected |= matches!(status, Status::Connected);
@@ -448,7 +448,7 @@ fn resize_before_disconnect_retains_the_last_observed_desktop_size() -> Result<(
         std::thread::sleep(Duration::from_millis(50));
         session.set_visible(true);
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !matches!(session.observation().status, Some(Status::Disconnected(_))) {
+        while !matches!(session.observation().status, Some(Status::Disconnected { .. })) {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }

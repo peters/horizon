@@ -178,7 +178,7 @@ impl DeviceUiState {
             return;
         };
         let updates = session.take_updates(ctx.viewport_id());
-        let disconnected = matches!(updates.status, Some(Status::Disconnected(_) | Status::Stopped));
+        let disconnected = matches!(updates.status, Some(Status::Disconnected { .. } | Status::Stopped));
         let full = disconnected.then(|| session.latest_full()).flatten();
         self.image.received_sequence = updates.received_frame_sequence;
         if let Some(desktop) = updates.desktop {
@@ -383,7 +383,7 @@ impl DeviceUiState {
             }
             self.session = None;
             self.texture = None;
-            self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
+            self.status = Status::disconnected("Desktop exceeds the renderer's texture limit");
             false
         } else if let Some(texture) = &mut self.texture {
             texture.set(image, TextureOptions::LINEAR);
@@ -431,7 +431,7 @@ impl DeviceUiState {
                 self.session = Some(session);
                 self.status = Status::Connecting;
             }
-            Err(error) => self.status = Status::Disconnected(error.to_string()),
+            Err(error) => self.status = Status::disconnected(error.to_string()),
         }
     }
 }

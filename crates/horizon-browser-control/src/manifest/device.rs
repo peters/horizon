@@ -306,6 +306,55 @@ impl NativeSessionMetadata {
     }
 }
 
+/// Why a viewer's transport failed, when Horizon can name the cause. The
+/// `code` is what a caller branches on; `connection_error` keeps the text that
+/// a person reads. No operation trusts a host key, and Horizon accepts none
+/// from a caller.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ConnectionFailure {
+    pub code: ConnectionFailureCode,
+    /// The SSH host whose key was refused, when this failure is a host key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host_key: Option<SshHostKeyFailure>,
+    /// What a person can do next. It names no key to accept and no ssh option.
+    pub action: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionFailureCode {
+    /// ssh holds no `known_hosts` entry for this host, so it refuses the
+    /// tunnel. A person must verify and add the host key before a viewer can
+    /// connect.
+    HostNotTrusted,
+    /// `known_hosts` holds a different key for this host. A changed host key
+    /// is a verification failure that a person investigates out of band.
+    HostKeyChanged,
+}
+
+/// The SSH host whose host key ssh refused.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct SshHostKeyFailure {
+    /// The host as the viewer's ssh route named it.
+    pub host: String,
+    /// The SSH port the route named; omitted leaves it to the SSH configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// The key the host presented to an unauthenticated probe. Observing a key
+    /// is not trust: compare the fingerprint with the machine out of band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<ObservedSshHostKey>,
+}
+
+/// A host key that a probe observed. Nothing is written to `known_hosts`.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ObservedSshHostKey {
+    /// The SSH key algorithm, for example `ssh-ed25519`.
+    pub key_type: String,
+    /// The fingerprint in the form `ssh-keygen -lf` prints.
+    pub sha256: String,
+}
+
 /// Details observed on this VNC connection, not persisted machine identity.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default)]
@@ -332,6 +381,10 @@ pub struct PanelState {
     pub owned_by_caller: bool,
     pub connection: Connection,
     pub connection_error: Option<String>,
+    /// Typed cause of a failed connection; absent when Horizon cannot name one.
+    /// A `host_not_trusted` or `host_key_changed` code needs a person, not a retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_failure: Option<ConnectionFailure>,
     /// Absent on older hosts; lack of diagnostics is not proof of a stalled stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Diagnostics>,
@@ -881,6 +934,48 @@ mod tests {
         assert_eq!(decoded.image.received_frame_sequence, 7);
         assert_eq!(decoded.image.frame_sequence, 0);
         assert!(!decoded.image.image_received && !decoded.image.image_displayed);
+    }
+
+    #[test]
+    fn a_typed_connection_failure_is_additive_and_names_no_key_to_accept() {
+        let legacy = r#"{"panel_id":"viewer","endpoint":"127.0.0.1:5900","visible":true,"owned_by_caller":true,"connection":"disconnected","connection_error":"ssh: refused","image_received":false,"image_displayed":false,"frame_sequence":0}"#;
+        let panel: PanelState = serde_json::from_str(legacy).unwrap();
+        assert!(panel.connection_failure.is_none(), "an older host sends no typed cause");
+        assert!(
+            !serde_json::to_value(&panel)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("connection_failure"),
+            "an untyped failure adds no field"
+        );
+
+        let failure = ConnectionFailure {
+            code: ConnectionFailureCode::HostNotTrusted,
+            ssh_host_key: Some(SshHostKeyFailure {
+                host: "lab".into(),
+                port: Some(2222),
+                observed: Some(ObservedSshHostKey {
+                    key_type: "ssh-ed25519".into(),
+                    sha256: "SHA256:ZCf2G4oj6NBiKuZG8dQbSNWd7S0CvUOHYAOPJf5m6o8".into(),
+                }),
+            }),
+            action: "[lab]:2222 is not in known_hosts".into(),
+        };
+        let encoded = serde_json::to_value(&failure).unwrap();
+        assert_eq!(encoded["code"], "host_not_trusted");
+        assert_eq!(encoded["ssh_host_key"]["host"], "lab");
+        assert_eq!(encoded["ssh_host_key"]["port"], 2222);
+        assert_eq!(encoded["ssh_host_key"]["observed"]["key_type"], "ssh-ed25519");
+        let decoded: ConnectionFailure = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, failure);
+        let changed = serde_json::to_value(ConnectionFailure {
+            code: ConnectionFailureCode::HostKeyChanged,
+            ssh_host_key: None,
+            action: String::new(),
+        })
+        .unwrap();
+        assert_eq!(changed["code"], "host_key_changed");
     }
 
     #[test]

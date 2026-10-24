@@ -3,6 +3,7 @@
 //! takes what changed when it draws and sends input at any time.
 #[cfg(any(test, feature = "test-support"))]
 mod fixture;
+mod host_key;
 mod tunnel;
 mod worker;
 
@@ -18,10 +19,13 @@ use std::{
 
 use tokio::sync::{mpsc, oneshot};
 
+use host_key::TunnelHost;
+
 use crate::{Error, Frame, InputEvent, Region, ViewOptions};
 
 #[cfg(any(test, feature = "test-support"))]
 pub use fixture::SentInput;
+pub use host_key::{HostKeyFailure, HostKeyRefusal, ObservedHostKey, UnobservedReason};
 
 /// How the session reaches the VNC server.
 #[derive(Clone, Debug)]
@@ -31,7 +35,35 @@ pub enum Route {
     /// A program whose standard input and output carry the connection, for
     /// example `ssh -W host:port`. The program stops with the connection, and
     /// its last standard error lines are added to a failure message.
-    Tunnel { program: String, args: Vec<String> },
+    Tunnel {
+        program: String,
+        args: Vec<String>,
+        /// The SSH host the program reaches, for a host-key refusal. `ssh`
+        /// itself resolves the address from this machine's configuration.
+        host: String,
+        /// The SSH port the route names; None leaves it to that configuration.
+        port: Option<u16>,
+    },
+}
+
+impl Route {
+    /// The SSH host a tunnel route names, for a host-key refusal.
+    fn tunnel_host(&self) -> Option<TunnelHost> {
+        match self {
+            Self::Direct(_) => None,
+            Self::Tunnel {
+                program,
+                args,
+                host,
+                port,
+            } => Some(TunnelHost {
+                program: program.clone(),
+                host: host.clone(),
+                port: *port,
+                args: args.clone(),
+            }),
+        }
+    }
 }
 
 /// What a session connects to and how it presents the desktop.
@@ -63,8 +95,32 @@ pub enum Status {
     Stopped,
     Connecting,
     Connected,
-    /// The connection failed or ended; the text says why.
-    Disconnected(String),
+    /// The connection failed or ended. `message` is what a viewer shows, and
+    /// `host_key` types an SSH host-key refusal, which a caller can tell from
+    /// an unreachable host.
+    Disconnected {
+        message: String,
+        host_key: Option<HostKeyFailure>,
+    },
+}
+
+impl Status {
+    /// A failure that Horizon cannot type further, with the text a viewer shows.
+    #[must_use]
+    pub fn disconnected(message: impl Into<String>) -> Self {
+        Self::Disconnected {
+            message: message.into(),
+            host_key: None,
+        }
+    }
+
+    /// A failure as the transport reported it.
+    fn from_error(error: &Error) -> Self {
+        Self::Disconnected {
+            message: error.to_string(),
+            host_key: error.host_key_failure().cloned(),
+        }
+    }
 }
 
 /// Why the session asks the UI to draw again.
@@ -243,8 +299,8 @@ impl Session {
                 });
             let status = match result {
                 Ok(Ok(())) => Status::Stopped,
-                Ok(Err(error)) => Status::Disconnected(error.to_string()),
-                Err(error) => Status::Disconnected(error.to_string()),
+                Ok(Err(error)) => Status::from_error(&error),
+                Err(error) => Status::disconnected(error.to_string()),
             };
             worker_live.store(false, Ordering::Release);
             worker_shared.publish_status(status);

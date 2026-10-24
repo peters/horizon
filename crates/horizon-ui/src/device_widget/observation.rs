@@ -2,8 +2,12 @@
 use super::{DevicePanelState, DeviceUiState, Status};
 use horizon_core::browser::manifest::{
     self,
-    device::{Connection, Diagnostics, ImageEvidence, PanelState, Presentation, SshRoute},
+    device::{
+        Connection, ConnectionFailure, ConnectionFailureCode, Diagnostics, ImageEvidence, ObservedSshHostKey,
+        PanelState, Presentation, SshHostKeyFailure, SshRoute,
+    },
 };
+use horizon_vnc::{HostKeyFailure, HostKeyRefusal};
 use std::time::Instant;
 
 impl DeviceUiState {
@@ -31,11 +35,15 @@ impl DeviceUiState {
                 self.server.desktop_size = Some(size);
             }
         }
-        let (connection, connection_error) = match &self.status {
-            Status::Stopped => (Connection::Stopped, None),
-            Status::Connecting => (Connection::Connecting, None),
-            Status::Connected => (Connection::Connected, None),
-            Status::Disconnected(error) => (Connection::Disconnected, Some(error.clone())),
+        let (connection, connection_error, failure) = match &self.status {
+            Status::Stopped => (Connection::Stopped, None, None),
+            Status::Connecting => (Connection::Connecting, None, None),
+            Status::Connected => (Connection::Connected, None, None),
+            Status::Disconnected { message, host_key } => (
+                Connection::Disconnected,
+                Some(message.clone()),
+                host_key.as_ref().map(connection_failure),
+            ),
         };
         let (stream, paused) = self.session.as_ref().map_or_else(
             || (super::session::StreamEvidence::default(), true),
@@ -84,7 +92,29 @@ impl DeviceUiState {
             }),
             connection,
             connection_error,
+            connection_failure: failure,
         }
+    }
+}
+
+/// The typed cause of a refusal, with the evidence a person decides with.
+/// Horizon has no operation that trusts a host.
+fn connection_failure(host_key: &HostKeyFailure) -> ConnectionFailure {
+    let code = match host_key.refusal {
+        HostKeyRefusal::NotTrusted => ConnectionFailureCode::HostNotTrusted,
+        HostKeyRefusal::Changed => ConnectionFailureCode::HostKeyChanged,
+    };
+    ConnectionFailure {
+        code,
+        ssh_host_key: Some(SshHostKeyFailure {
+            host: host_key.host.clone(),
+            port: host_key.port,
+            observed: host_key.observed.as_ref().map(|observed| ObservedSshHostKey {
+                key_type: observed.key_type.clone(),
+                sha256: observed.sha256.clone(),
+            }),
+        }),
+        action: host_key.advice(),
     }
 }
 
