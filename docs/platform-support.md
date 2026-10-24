@@ -1,8 +1,16 @@
 # Platform support
 
-Horizon supports Linux and macOS. Windows is not a supported platform: the code
-has no Windows paths, the workflows build and test Linux and macOS only, and a
-release publishes no Windows asset.
+Horizon supports Linux and macOS. Windows is not a supported platform: the
+workflows build and test Linux and macOS only, and a release publishes no
+Windows asset. The Windows build, test and release lanes are gone, and the
+platform gate that chose a Windows code path is gone with them.
+
+Two kinds of Windows value stay. A BrowserStack target device is a remote
+device, not the platform Horizon runs on. A saved `Os::Windows` and a
+named-pipe endpoint in the Docker restart plan, the `windows` data path in the
+OpenCode lookup and the `USERPROFILE` and `APPDATA` fallbacks are values that no
+supported build reaches, because they only apply when `HOME` is unset or when
+the local operating system is Windows.
 
 This document tells which Horizon functions work on Linux and macOS. It
 describes the code on `main`. It does not give a plan. Each note gives the code,
