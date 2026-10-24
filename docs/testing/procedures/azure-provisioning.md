@@ -2,7 +2,7 @@
 procedure: azure-provisioning
 feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
 platforms: [linux]
-cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-14 cost nothing
+cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-15 cost nothing
 destructive: yes      # task AZV-L2 and the cleanup delete the test resource groups
 secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
@@ -19,17 +19,17 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 - Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-14 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-01 to AZV-15 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
 - Tasks AZV-L1 and AZV-L2 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. Both need the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
-  - A reconnect of an Azure cloud and the proof of its deletion for the card. A later part of #1774 adds them.
+  - The operations of a companion on an Azure cloud. A later part of #1774 adds them.
   - The rebuild of an Azure cloud. It stays refused.
   - Azure in the New cloud dialog. `offers::AZURE_DEPLOYABLE` stays `false`.
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-14 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-15 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
@@ -41,7 +41,7 @@ Tasks AZV-01 to AZV-14 do not rent compute, delete data, send a secret or change
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-14: no Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-15: no Azure account, Azure credential or provider key.
 - For tasks AZV-L1 and AZV-L2: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
@@ -212,8 +212,8 @@ Do the tasks in order. Each task has a stable ID for the report.
    - A token file that others can read, or with two words, is refused.
    - Without an `azure` section, `cpu_flavors` and `data_centers` refuse. The `RunPod` settings do not answer for an Azure cloud.
    - With an `azure` section, `cpu_flavors` and `data_centers` give the VM sizes and regions in the settings order, and `compute` gives a client without a request.
-   - Without an `azure` section, `compute` gives "Add an azure section to the cloud settings before deploying an Azure cloud". This text is not the preflight refusal.
-   - `preflight` still gives "Horizon cannot create clouds on Azure yet", and `offers::AZURE_DEPLOYABLE` is `false`.
+   - Without an `azure` section, `preflight` and `compute` give "Add an azure section to the cloud settings before deploying an Azure cloud".
+   - With an `azure` section, `preflight` admits the profile. It refuses a workspace disk of 3 GB, a cloud id of 80 characters or with a dot, a profile that no VM size of the settings fits, and an unreadable token file.
    - Without an `azure` section, check, stop, resume and delete refuse with the same text and write no file. Release refuses with "Azure clouds hold no hosted devices to release".
    - `retained` is true when `azure.json` has a group fence at `requested` or `bound`.
 
@@ -288,7 +288,23 @@ Do the tasks in order. Each task has a stable ID for the report.
    - A delete that fails keeps `deleting`, the bound VM fence and `retained`.
    - Settings that name another subscription than the cloud's group are refused.
 
-### 6.15 AZV-L1 — Create one live Azure worker
+### 6.15 AZV-15 — Check the deletion proof and the reconnect admission
+
+1. Run the deletion proof, removal and reconnect tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::tailnet::cleanup cloud_runtime::lifecycle::tests::an_azure cloud_runtime::deployment::reconnect cloud_runtime::deployment::tests::an_azure
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - `providers::deletion` confirms an Azure deletion only from an `azure.json` with `deleting`, `swept` and the group `terminated` with the id of this cloud's group.
+   - The proof is refused for the group of another cloud, a journal without `swept`, a bound group, an unknown field, a bound VM fence, a journal above 1 MiB, and a `docker-host.json`, `hetzner.json` or `workspace-volume.json` beside it. An `azure.json` beside a Docker host journal refuses that proof too.
+   - Tailnet node cleanup of an Azure receipt runs after the proof, and an unsettled `azure.json` stops it before an HTTP request.
+   - `can_remove` is false while the group is bound, and after its 404 until the sweep. It is true after the proof. `can_remove_without_deployment` is false while `azure.json` exists.
+   - A reconnect admits a bound Azure record. It refuses a record without a bound VM, a stopped record and a cloud whose `azure.json` has `deleting`, before a provider request.
+   - Without an `azure` section, a deploy is refused before a deployment record is written.
+
+### 6.16 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -412,7 +428,7 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
 13. Keep the worker of `azv-l1-01` and the state in `$AZV`. Task AZV-L2 stops, resumes and deletes them.
 
-### 6.16 AZV-L2 — Stop, resume and delete the live worker
+### 6.17 AZV-L2 — Stop, resume and delete the live worker
 
 Do this task after task AZV-L1, in the same terminal, with `$AZV` and `$SUB` set. Set the variables of the live tests.
 
@@ -542,12 +558,12 @@ export RG=horizon-ws-azv-l1-01
 
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-14 pass and send no request to Azure.
+- Tasks AZV-01 to AZV-15 pass and send no request to Azure.
 - For the live acceptance, each step of tasks AZV-L1 and AZV-L2 gives its result. AZV-L2 proves each group absent.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-14 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
+Tasks AZV-01 to AZV-15 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
 
 1. Examine the tag of each test group that remains. Then delete the group.
 
