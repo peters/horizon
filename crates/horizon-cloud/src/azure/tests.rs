@@ -12,6 +12,7 @@ use ureq::{
 
 mod operation;
 mod reconcile;
+mod template;
 mod transport;
 
 const SUB: &str = "00000000-0000-4000-8000-000000000001";
