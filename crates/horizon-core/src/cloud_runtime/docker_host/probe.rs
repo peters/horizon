@@ -115,9 +115,7 @@ pub fn probe(host: &Binding, profile: Option<&Profile>, cancel: &Cancellation) -
     if endpoint.is_err() {
         cancel.check()?;
     }
-    let local = endpoint
-        .as_ref()
-        .is_ok_and(|value| value.trim().starts_with("unix://") || value.trim().starts_with("npipe://"));
+    let local = endpoint.as_ref().is_ok_and(|value| value.trim().starts_with("unix://"));
     result.check(
         "Engine location",
         if local { CheckState::Ready } else { CheckState::Blocked },

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 pub enum Os {
     Linux,
     MacOs,
-    Windows,
     #[default]
     Other,
 }
@@ -18,7 +17,6 @@ impl Os {
         match std::env::consts::OS {
             "linux" => Self::Linux,
             "macos" => Self::MacOs,
-            "windows" => Self::Windows,
             _ => Self::Other,
         }
     }
@@ -29,8 +27,6 @@ impl Os {
 pub enum Endpoint {
     /// A Unix socket on this computer, with symbolic links resolved when possible.
     Socket(PathBuf),
-    /// A Windows named pipe, such as `//./pipe/docker_engine`.
-    Pipe(String),
     /// Docker on another machine: `ssh://`, `tcp://` or any other address.
     Remote(String),
 }
@@ -41,8 +37,6 @@ impl Endpoint {
         let host = host.trim();
         if let Some(path) = host.strip_prefix("unix://") {
             Self::Socket(PathBuf::from(path))
-        } else if let Some(pipe) = host.strip_prefix("npipe://") {
-            Self::Pipe(pipe.to_owned())
         } else {
             Self::Remote(host.to_owned())
         }
@@ -53,7 +47,6 @@ impl Endpoint {
     pub fn address(&self) -> String {
         match self {
             Self::Socket(path) => format!("unix://{}", path.display()),
-            Self::Pipe(pipe) => format!("npipe://{pipe}"),
             Self::Remote(host) => host.clone(),
         }
     }
@@ -129,8 +122,6 @@ const SERVICE_WITHOUT_PKEXEC: &str = "Docker runs as a system service, and resta
 const DESKTOP_MENU: &str = "Quit Docker Desktop from its menu, open it again, then retry.";
 const MAC_OTHER: &str =
     "This Docker is not Docker Desktop. Restart the program that runs it, such as Colima or OrbStack, then retry.";
-const WINDOWS_DESKTOP: &str = "Right-click the Docker Desktop icon in the notification area, choose Quit Docker Desktop, start Docker Desktop again, then retry.";
-const WINDOWS_OTHER: &str = "Restart Docker Desktop from the icon in the notification area or, for the Docker service, run this command in an administrator PowerShell. Then retry.";
 
 fn restart(argv: &[&str], shown: &str, command: Option<&str>) -> Plan {
     Plan::Restart {
@@ -160,7 +151,6 @@ pub fn plan(facts: &Facts) -> Plan {
         ),
         Some(Endpoint::Socket(path)) if facts.os == Os::Linux => linux(facts, path),
         Some(Endpoint::Socket(path)) if facts.os == Os::MacOs => mac(facts, path),
-        Some(Endpoint::Pipe(pipe)) if facts.os == Os::Windows => windows(facts, pipe),
         Some(_) => manual(UNKNOWN, None),
     }
 }
@@ -193,16 +183,6 @@ fn mac(facts: &Facts, socket: &Path) -> Plan {
         desktop(facts, DESKTOP_MENU)
     } else {
         manual(MAC_OTHER, None)
-    }
-}
-
-fn windows(facts: &Facts, pipe: &str) -> Plan {
-    // The generic `docker_engine` pipe can be the Windows Docker service even where
-    // Docker Desktop's CLI is installed, so only Docker Desktop's own pipe or context counts.
-    if facts.context.as_deref() == Some(DESKTOP_CONTEXT) || pipe.ends_with("dockerDesktopLinuxEngine") {
-        desktop(facts, WINDOWS_DESKTOP)
-    } else {
-        manual(WINDOWS_OTHER, Some("Restart-Service docker"))
     }
 }
 
@@ -267,11 +247,7 @@ mod tests {
 
     #[test]
     fn an_address_round_trips() {
-        for address in [
-            "unix:///var/run/docker.sock",
-            "npipe:////./pipe/docker_engine",
-            "ssh://builder@build.example",
-        ] {
+        for address in ["unix:///var/run/docker.sock", "ssh://builder@build.example"] {
             assert_eq!(Endpoint::parse(address).address(), address, "the address round-trips");
         }
     }
@@ -316,7 +292,7 @@ mod tests {
     #[test]
     fn docker_on_another_machine_or_an_unknown_socket_is_never_restarted() {
         for host in ["ssh://builder@build.example", "tcp://192.0.2.10:2376", "fd://"] {
-            for os in [Os::Linux, Os::MacOs, Os::Windows] {
+            for os in [Os::Linux, Os::MacOs] {
                 let facts = Facts {
                     os,
                     user_unit: true,
@@ -341,26 +317,12 @@ mod tests {
     }
 
     #[test]
-    fn docker_desktop_restarts_through_its_cli_on_every_system() {
-        let cli = Ok(DESKTOP_CLI.join(" "));
+    fn docker_desktop_restarts_through_its_cli() {
         let mut facts = linux("unix:///home/person/.docker/desktop/docker.sock");
         facts.user_unit = true;
         assert_eq!(runs(&facts), Err(DESKTOP_MENU.into()));
         facts.desktop_cli = true;
-        assert_eq!(runs(&facts), cli);
-
-        let mut facts = Facts {
-            os: Os::Windows,
-            endpoint: Some(Endpoint::parse("npipe:////./pipe/dockerDesktopLinuxEngine")),
-            ..Facts::default()
-        };
-        assert_eq!(runs(&facts), Err(WINDOWS_DESKTOP.into()));
-        facts.desktop_cli = true;
-        assert_eq!(runs(&facts), cli);
-        // The generic engine pipe may be the Windows service, even beside Docker Desktop's CLI.
-        facts.endpoint = Some(Endpoint::parse("npipe:////./pipe/docker_engine"));
-        assert_eq!(runs(&facts), Err(WINDOWS_OTHER.into()));
-        assert_eq!(plan(&facts).command(), Some("Restart-Service docker"));
+        assert_eq!(runs(&facts), Ok(DESKTOP_CLI.join(" ")));
     }
 
     #[test]

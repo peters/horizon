@@ -103,7 +103,7 @@ impl Daemon {
                 "Horizon cannot tell which Docker daemon Docker uses here (docker context inspect names none), so it runs no proof: check that Docker is installed and its context works, then start the setup again."
                     .to_owned(),
             ),
-            Some(endpoint @ (Endpoint::Socket(_) | Endpoint::Pipe(_))) => Ok(Self {
+            Some(endpoint @ Endpoint::Socket(_)) => Ok(Self {
                 host: Some(endpoint.address()),
                 remote: None,
             }),
