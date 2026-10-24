@@ -25,7 +25,7 @@ use crate::{Error, Frame, InputEvent, Region, ViewOptions};
 
 #[cfg(any(test, feature = "test-support"))]
 pub use fixture::SentInput;
-pub use host_key::{HostKeyFailure, HostKeyRefusal, ObservedHostKey};
+pub use host_key::{HostKeyFailure, HostKeyRefusal, ObservedHostKey, UnobservedReason};
 
 /// How the session reaches the VNC server.
 #[derive(Clone, Debug)]
@@ -52,11 +52,15 @@ impl Route {
         match self {
             Self::Direct(_) => None,
             Self::Tunnel {
-                program, host, port, ..
+                program,
+                args,
+                host,
+                port,
             } => Some(TunnelHost {
                 program: program.clone(),
                 host: host.clone(),
                 port: *port,
+                args: args.clone(),
             }),
         }
     }

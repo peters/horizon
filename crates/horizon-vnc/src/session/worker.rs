@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
-use super::{Image, Route, Shared, Status, host_key::TunnelHost, tunnel::SshTunnel};
+use super::{Image, Route, Shared, Status, tunnel::SshTunnel};
 use crate::{Error, Frame, InputEvent, Region, ViewOptions, framebuffer::Framebuffer};
 
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -215,6 +215,9 @@ async fn forward_input_until(
 }
 
 async fn connect_client(route: Route) -> Result<(vnc::VncClient, Option<SshTunnel>), Error> {
+    // A failed connect may be ssh refusing the host key, which only a person
+    // can resolve.
+    let host = route.tunnel_host();
     match route {
         Route::Direct(address) => {
             let client = tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, async {
@@ -226,25 +229,13 @@ async fn connect_client(route: Route) -> Result<(vnc::VncClient, Option<SshTunne
             .map_err(|_| Error::Timeout)??;
             Ok((client, None))
         }
-        Route::Tunnel {
-            program,
-            args,
-            host,
-            port,
-        } => {
-            // A failed connect may be ssh refusing the host key, which only a
-            // person can resolve.
-            let host = TunnelHost {
-                program: program.clone(),
-                host,
-                port,
-            };
+        Route::Tunnel { program, args, .. } => {
             let mut tunnel = SshTunnel::spawn(&program, &args)?;
             let stream = tunnel.take_stream()?;
             match tokio::time::timeout(TUNNEL_CONNECT_TIMEOUT, handshake(stream)).await {
                 Ok(Ok(client)) => Ok((client, Some(tunnel))),
-                Ok(Err(error)) => Err(tunnel.explain(error, Some(&host)).await),
-                Err(_) => Err(tunnel.explain(Error::Timeout, Some(&host)).await),
+                Ok(Err(error)) => Err(tunnel.explain(error, host.as_ref()).await),
+                Err(_) => Err(tunnel.explain(Error::Timeout, host.as_ref()).await),
             }
         }
     }

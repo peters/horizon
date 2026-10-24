@@ -665,6 +665,8 @@ fn untrusted_host_status() -> Status {
                 key_type: "ssh-ed25519".into(),
                 sha256: "SHA256:ZCf2G4oj6NBiKuZG8dQbSNWd7S0CvUOHYAOPJf5m6o8".into(),
             }),
+            unobserved: None,
+            resolved: None,
         }),
     }
 }
@@ -705,6 +707,39 @@ fn an_untrusted_ssh_host_is_a_typed_refusal_with_the_key_a_person_compares() {
     assert!(
         failure.action.contains("out of band"),
         "observing a key is not verifying it: {}",
+        failure.action
+    );
+}
+
+/// ssh's configuration sends the connection through a jump host, so Horizon
+/// reports the refusal without a fingerprint and says why.
+#[test]
+fn a_refusal_without_an_observable_key_says_why_it_has_none() {
+    use horizon_vnc::UnobservedReason;
+
+    let device = fixture_device();
+    let mut status = untrusted_host_status();
+    let Status::Disconnected { host_key, .. } = &mut status else {
+        panic!("a disconnected status");
+    };
+    let Some(host_key) = host_key else {
+        panic!("a typed refusal");
+    };
+    host_key.observed = None;
+    host_key.unobserved = Some(UnobservedReason::Proxy);
+
+    let mut state = DeviceUiState {
+        initialized: true,
+        status,
+        ..Default::default()
+    };
+    let observation = state.observation("panel".into(), &device, true, "agent");
+    let failure = observation.connection_failure.expect("a typed refusal");
+    let host_key = failure.ssh_host_key.expect("the host whose key was refused");
+    assert_eq!(host_key.observed, None, "nothing was observed through a jump host");
+    assert!(
+        failure.action.contains("proxy jump or a proxy command"),
+        "the action says why there is no fingerprint: {}",
         failure.action
     );
 }

@@ -56,6 +56,6 @@ pub use input::{
 pub use session::SentInput;
 pub use session::{
     Config, HostKeyFailure, HostKeyRefusal, Image, Observation, ObservedHostKey, Route, ServerDetails, Session, Status,
-    StreamEvidence, Updates, Wake,
+    StreamEvidence, UnobservedReason, Updates, Wake,
 };
 pub use view::{ImageLayout, LayoutError, Region, ViewOptions};

@@ -107,7 +107,10 @@ impl SshTunnel {
             return error;
         }
         let message = failure_message(&error.to_string(), &tail, host_key.as_ref());
-        Error::Tunnel { message, host_key }
+        Error::Tunnel {
+            message,
+            host_key: host_key.map(Box::new),
+        }
     }
 }
 
@@ -249,6 +252,7 @@ mod tests {
             program: "/nonexistent/horizon-vnc-test/ssh".into(),
             host: "lab".into(),
             port: Some(22),
+            args: vec!["-W".to_string(), "127.0.0.1:5900".to_string(), "lab".to_string()],
         }
     }
 

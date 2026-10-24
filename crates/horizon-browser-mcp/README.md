@@ -545,10 +545,14 @@ An untrusted host is a refusal, not an unreachable host. While `connection` is
 host, and `host_key_changed` when `known_hosts` holds a different key. Both
 need a person, not a retry. `connection_error` keeps the text that a person
 reads. `ssh_host_key.observed` is the key that the host presented to an
-unauthenticated probe (`ssh-keyscan`), and it is absent when that probe could
-not answer, for example when `host` is an SSH config alias that the probe
-cannot resolve. Observing a key is not verification: an impostor answers with
-its own key.
+unauthenticated probe (`ssh-keyscan`). The probe first asks the tunnel's own
+`ssh` for its configuration, so it contacts the host name and port that ssh
+resolved, not the route's words, and `action` names that endpoint when it
+differs. Observed is absent when Horizon cannot repeat the connection: a
+`ProxyJump` or `ProxyCommand` sends it through another machine, `HostKeyAlias`
+renames the key, or the probe could not run. `action` then says which of these
+applies. Observing a key is not verification: an impostor answers with its own
+key.
 
 The trust step stays with the person. Read the host key from the machine
 itself, for example through its own control plane or its console, compare it

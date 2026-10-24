@@ -19,11 +19,12 @@ pub enum Error {
     #[error("{0}")]
     Layout(#[from] LayoutError),
     /// A tunnel failed. `message` holds its last diagnostic lines and what a
-    /// person can do next; `host_key` types a refusal of the host key.
+    /// person can do next; `host_key` types a refusal of the host key. The
+    /// refusal is boxed, so a failed result stays small.
     #[error("{message}")]
     Tunnel {
         message: String,
-        host_key: Option<HostKeyFailure>,
+        host_key: Option<Box<HostKeyFailure>>,
     },
     #[error("connection timed out")]
     Timeout,
@@ -34,7 +35,7 @@ impl Error {
     #[must_use]
     pub fn host_key_failure(&self) -> Option<&HostKeyFailure> {
         match self {
-            Self::Tunnel { host_key, .. } => host_key.as_ref(),
+            Self::Tunnel { host_key, .. } => host_key.as_deref(),
             _ => None,
         }
     }

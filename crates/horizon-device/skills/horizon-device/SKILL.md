@@ -45,10 +45,14 @@ ssh holds no `known_hosts` entry, or `code: "host_key_changed"` when
 `known_hosts` holds a different key. It also carries `ssh_host_key` with the
 `host` and `port`, `ssh_host_key.observed` with the `key_type` and `sha256`
 fingerprint that the host presented to a probe, and `action`, which is what the
-person does. Do not retry either code; they need a person. Report the host, the
-observed fingerprint and the action, and say that a host key must be compared
-with the machine out of band before it is added. Never accept a host key, write
-`known_hosts` yourself, or claim that a probe proves which machine answered.
+person does. The probe repeats the tunnel's own ssh configuration, so the
+fingerprint is the key that ssh saw; `observed` is absent when a `ProxyJump`, a
+`ProxyCommand` or a `HostKeyAlias` keeps a direct probe from repeating that
+connection, and `action` then says which one applies. Do not retry either code;
+they need a person. Report the host, the observed fingerprint and the action,
+and say that a host key must be compared with the machine out of band before it
+is added. Never accept a host key, write `known_hosts` yourself, or claim that
+a probe proves which machine answered.
 When the person reports that the host is trusted, call `reconnect` and inspect
 again. Without a code, `connection_error` alone stands and the failure may be a
 network or ssh configuration problem.
