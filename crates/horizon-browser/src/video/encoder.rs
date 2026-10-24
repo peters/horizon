@@ -743,14 +743,25 @@ fn system_now_millis() -> i64 {
         .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(0))
 }
 
+/// A readable file stem that stays inside the capture directory.
+///
+/// Lower-case letters, digits, `.`, `-` and `_` stay as written, so a caller can
+/// use the reported path as a file name. Every other byte, including `%` itself
+/// and an upper-case letter, becomes `%xx`. That keeps one file per capture id:
+/// no id can leave the directory, and no two ids share a name, also on a
+/// case-insensitive file system, where `Demo` would otherwise collide with
+/// `demo` and the second recording would fail because the file exists.
 fn safe_file_stem(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len().saturating_mul(2).saturating_add(1));
-    encoded.push('%');
+    let mut stem = String::with_capacity(value.len().saturating_mul(2));
     for byte in value.bytes() {
-        use std::fmt::Write as _;
-        let _ = write!(encoded, "{byte:02x}");
+        if byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_') {
+            stem.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(stem, "%{byte:02x}");
+        }
     }
-    encoded
+    stem
 }
 
 #[cfg(test)]
@@ -773,6 +784,52 @@ mod tests {
             rgb.extend_from_slice(&[red, green, blue]);
         }
         rgb
+    }
+
+    #[test]
+    fn file_stems_stay_literal_and_never_alias() {
+        assert_eq!(safe_file_stem("vnc"), "vnc");
+        assert_eq!(safe_file_stem("capture-1_a.b"), "capture-1_a.b");
+        assert_eq!(safe_file_stem("a/b"), "a%2fb");
+        assert_ne!(safe_file_stem("a/b"), safe_file_stem("a%2fb"));
+        assert!(!safe_file_stem("../../etc/passwd").contains('/'));
+    }
+
+    #[test]
+    fn two_ids_that_differ_only_by_case_keep_two_names() {
+        // A case-insensitive file system such as APFS would fold `Demo` and `demo` together,
+        // and the second recording would fail because its file already exists.
+        assert_eq!(safe_file_stem("Demo"), "%44emo");
+        assert_eq!(safe_file_stem("demo"), "demo");
+        assert_ne!(safe_file_stem("Demo").to_lowercase(), safe_file_stem("demo"));
+    }
+
+    #[test]
+    fn recording_reports_the_literal_file_name_it_wrote() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(10, 20, 30));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 5,
+            compression_level: 0,
+            max_width: Some(320),
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(root.path(), "vnc", Arc::clone(&slot), options, Arc::clone(&handle))
+            .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        let path = thread.path.clone();
+        assert_eq!(path.file_name().and_then(std::ffi::OsStr::to_str), Some("vnc.webm"));
+        let capture = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish encoder: {error}"));
+        assert_eq!(
+            capture.path,
+            path.to_string_lossy(),
+            "the reported path is the written name"
+        );
+        assert!(path.is_file(), "the literal file name exists on disk");
     }
 
     #[test]
