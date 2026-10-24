@@ -1,7 +1,10 @@
 //! Small typed views of the ARM resources this client reads. A response body is
 //! untrusted: only the fields below are kept, and an identity field that does not
 //! name the requested resource is an `IdentityMismatch`, never a partial view.
-use super::{Failure, url::valid_resource_group_id};
+use super::{
+    Failure,
+    url::{valid_instance_id, valid_resource_group_id, valid_vm_resource_id},
+};
 use crate::CloudError;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -16,6 +19,37 @@ pub struct Group {
     pub provisioning_state: String,
     /// String tags only; a tag with another JSON type is dropped.
     pub tags: BTreeMap<String, String>,
+}
+
+/// The fields of a VM and its instance view that a lifecycle needs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VirtualMachine {
+    /// The VM's resource id, checked against the requested subscription, group and name.
+    pub id: String,
+    /// `properties.vmId`, the identity of this instance. A VM that is deleted and made
+    /// again under the same name keeps its resource id but gets a new `vmId`.
+    pub instance_id: Option<String>,
+    pub name: String,
+    pub location: String,
+    pub vm_size: String,
+    pub provisioning_state: String,
+    /// The `PowerState/...` code of the instance view, such as `PowerState/running`.
+    pub power_state: Option<String>,
+    pub tags: BTreeMap<String, String>,
+    /// The managed data disks of the storage profile that carry a disk id.
+    pub data_disks: Vec<DataDisk>,
+    /// Every data disk entry of the storage profile. A count above `data_disks.len()`
+    /// means storage that this view cannot name.
+    pub data_disk_count: usize,
+}
+
+/// One managed data disk attached to a VM.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DataDisk {
+    pub id: String,
+    pub lun: Option<u64>,
+    /// `Detach` keeps the disk when the VM is deleted; `Delete` removes it with the VM.
+    pub delete_option: String,
 }
 
 pub(crate) fn text(value: &Value, pointer: &str) -> Option<String> {
@@ -48,6 +82,58 @@ pub(crate) fn group_info(value: &Value, subscription_id: &str, expected: &str) -
         location: text(value, "/location").unwrap_or_default(),
         provisioning_state: text(value, "/properties/provisioningState").unwrap_or_default(),
         tags: tags(value),
+    })
+}
+
+/// A VM body for `name` in `group` of `subscription_id`. A `vmId` that is present but
+/// not a lowercase UUID is an identity mismatch: it cannot pin this instance.
+pub(crate) fn vm_view(
+    value: &Value,
+    subscription_id: &str,
+    group: &str,
+    name: &str,
+) -> Result<VirtualMachine, Failure> {
+    let id = text(value, "/id").ok_or_else(invalid)?;
+    let observed = text(value, "/name").ok_or_else(invalid)?;
+    if !observed.eq_ignore_ascii_case(name) || !valid_vm_resource_id(&id, subscription_id, group, name) {
+        return Err(mismatch());
+    }
+    let instance_id = match value.pointer("/properties/vmId") {
+        None => None,
+        Some(Value::String(instance)) if valid_instance_id(instance) => Some(instance.clone()),
+        Some(_) => return Err(mismatch()),
+    };
+    let disks: &[Value] = value
+        .pointer("/properties/storageProfile/dataDisks")
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice);
+    let power_state = value
+        .pointer("/properties/instanceView/statuses")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|status| text(status, "/code"))
+        .find(|code| code.starts_with("PowerState/"));
+    Ok(VirtualMachine {
+        id,
+        instance_id,
+        name: observed,
+        location: text(value, "/location").unwrap_or_default(),
+        vm_size: text(value, "/properties/hardwareProfile/vmSize").unwrap_or_default(),
+        provisioning_state: text(value, "/properties/provisioningState").unwrap_or_default(),
+        power_state,
+        tags: tags(value),
+        data_disks: disks
+            .iter()
+            .filter_map(|disk| {
+                Some(DataDisk {
+                    id: text(disk, "/managedDisk/id")?,
+                    lun: disk.pointer("/lun").and_then(Value::as_u64),
+                    delete_option: text(disk, "/deleteOption").unwrap_or_default(),
+                })
+            })
+            .collect(),
+        data_disk_count: disks.len(),
     })
 }
 

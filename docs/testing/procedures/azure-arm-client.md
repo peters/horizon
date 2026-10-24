@@ -1,6 +1,6 @@
 ---
 procedure: azure-arm-client
-feature: The Azure Resource Manager client
+feature: The Azure Resource Manager client and its read-only reconcile
 platforms: [linux]
 cost: none
 destructive: no
@@ -13,12 +13,13 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that the ARM client of `horizon-cloud` sends only bounded and valid requests.
-It also makes sure that the client classifies each ARM answer correctly.
+It also makes sure that the client classifies each ARM answer correctly and that reconcile only reads.
 
 ## 2. Applicability
 
 - Candidate: a pull request of #1774 that adds to the module `horizon_cloud::azure`.
   The first of these pull requests adds the ARM transport, its error classification and the resource group read.
+  The second adds the VM read and the reconcile by name (ARM-04 to ARM-06).
 - Platform: Linux with the repository Rust toolchain.
 - The tests use a scripted agent and synthetic data only.
   They need no network, no socket, no Azure account and no Azure credential.
@@ -26,7 +27,6 @@ It also makes sure that the client classifies each ARM answer correctly.
 - No test sleeps.
 - The trust boundary of the client is in [the ARM client architecture](../../architecture/azure-arm-client.md).
 - This procedure does not test these items. Later pull requests of #1774 add them:
-  - The VM read and the reconcile by name.
   - The deployment and the operation poll.
   - The provisioning, stop, resume and delete of an Azure worker.
   - The Azure credential source and its token refresh.
@@ -76,8 +76,8 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The production agent accepts HTTPS only, follows no redirect and has a request timeout of 30 seconds.
    - `loopback` refuses an address that is not a loopback address.
    - A subscription id that is not a lowercase UUID gives `Invalid` before the client exists.
-   - A bad resource group name gives `Invalid` and sends no request. A bad resource name fails validation.
-   - A cancelled call gives `Cancelled` and sends no request.
+   - A bad resource group or resource name gives `Invalid` and sends no request.
+   - A cancelled call gives `Cancelled` and sends no request. This applies to the reads and reconcile.
    - A success body of 4 MiB or more gives `InvalidResponse`.
 
 ### 6.2 ARM-02 — Check the identity of each answer
@@ -120,6 +120,58 @@ Do the tasks in order. Each task has a stable ID for the report.
    A reason that contains the credential, also with characters between its letters, is removed.
    A failure body of more than 8 KiB gives no reason.
 
+### 6.4 ARM-04 — Check the VM view
+
+1. Run the VM view test.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::transport::virtual_machine_views_carry_identity_instance_power_and_disks
+   ```
+
+   Result: 1 test passes. This test examines the items that follow:
+   - A VM view keeps the resource id, `vmId`, size, power state, tags and data disks.
+   - A data disk without a disk id is counted but not named.
+   - A `vmId` that is not a lowercase UUID gives `IdentityMismatch`. A VM answer with another name gives `IdentityMismatch`.
+   - A VM 404 gives `Ok(None)`.
+
+### 6.5 ARM-05 — Check the reconcile rules
+
+1. Run the reconcile tests.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::reconcile::reconcile_proves_absence_with_one_read azure::tests::reconcile::reconcile_adopts_a_matching_group_and_vm azure::tests::reconcile::reconcile_refuses_a_foreign_group_and_a_wrong_vm_name
+   ```
+
+   Result: 3 tests pass. These tests examine the items that follow:
+   - The group of operation `op-1` is `horizon-ws-op-1`.
+   - A group 404 gives `Absent`. The client sends no second request.
+   - An operation id that cannot name a group gives `Invalid` and sends no request.
+   - A group with the tag `horizon-operation: op-1` and a VM 404 gives `GroupOnly`.
+   - A group with that tag and the VM `worker` gives `Created`. The result keeps the `vmId` of the VM.
+   - A group with the tag of another operation, or without the tag, gives `IdentityMismatch`. The client does not read its VM.
+   - A VM with another name, or with a resource id in another group, gives `IdentityMismatch`.
+
+### 6.6 ARM-06 — Check that reconcile only reads
+
+1. Run the read-only test.
+
+   ```sh
+   cargo test -p horizon-cloud --lib -- azure::tests::reconcile::reconcile_never_writes
+   ```
+
+   Result: 1 test passes.
+   Reconcile gives `Absent`, `GroupOnly`, `Created`, `IdentityMismatch`, `Http(409)` and `Transport` in six calls.
+   Each of the 8 recorded requests is a GET.
+
+2. Make sure that the module has no write path.
+
+   ```sh
+   grep -rn "Method::" crates/horizon-cloud/src/azure.rs crates/horizon-cloud/src/azure/*.rs
+   ```
+
+   Result: The output shows only `Method::Get`: the call in `get_json_within` and the arm of `send_within`.
+   The module has no PUT, POST or DELETE request.
+
 ## 7. Pass criteria
 
 1. Run all tests of the module.
@@ -128,11 +180,12 @@ Do the tasks in order. Each task has a stable ID for the report.
    cargo test -p horizon-cloud --lib -- azure::
    ```
 
-   Result: 11 tests pass.
+   Result: 16 tests pass.
 
 - All tasks pass on the candidate commit.
 - No request leaves the scripted agent. No test sleeps.
 - A 409 is never definite, and the client never sends a request a second time.
+- Reconcile sends GET requests only.
 - No error text contains the synthetic credential.
 
 ## 8. Cleanup
