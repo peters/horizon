@@ -393,17 +393,19 @@ mod tests {
         use crate::app::test_support::test_app_with_startup;
         use horizon_core::cloud_panel::CloudGroup;
 
-        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState::default()),
         });
         let workspace_id = app.board.create_workspace("cloud");
         let local_id = app.board.workspace(workspace_id).expect("workspace").local_id.clone();
         assert!(app.board.workspace(workspace_id).expect("workspace").cwd.is_none());
+        // A real directory, so that a panel which fell back to this machine could
+        // still start there on every platform. The cloud member runs it on the worker.
         app.cloud_prototype.groups.0.push(CloudGroup::new(
             101,
             "cloud".into(),
             local_id,
-            "/workspace/checkout".into(),
+            temp.path().to_path_buf(),
             [0.0, 0.0],
         ));
 
