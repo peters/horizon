@@ -5,8 +5,13 @@ list. The module `horizon_cloud::offers::azure` makes Azure offers from these
 prices. Both modules are separate from [the ARM client](azure-arm-client.md). They
 use no credential and no subscription. `offers::AZURE_DEPLOYABLE` is `true`, so
 the Azure section has `deployable: true`. Each Azure offer has `rentable: false`:
-the `azure` settings place a worker by their VM sizes and regions, and
-`WorkerChoice::for_profile` refuses a single Azure offer.
+an offer is a price, not a place that this machine can use. Only the `azure`
+settings decide the VM sizes and regions of a worker. New cloud lists the offers
+that the section allows and places the cloud on the row that the person chooses.
+`cloud_deploy --worker-choice` refuses an Azure offer. A cloud without a choice
+uses its recorded region or the first region of the section. It tries the sizes
+of the section in their order in that region, and no other region. See
+[the Azure provisioning architecture](azure-provisioning.md).
 
 ## Callers
 
@@ -17,7 +22,11 @@ the `azure` settings place a worker by their VM sizes and regions, and
   fetch is asked again after 30 seconds. The Azure section comes after the
   Hetzner and Docker host sections in `other_providers`.
 - The CLI plan runner `cloud_deploy offers` fetches it for a CPU request.
-- The New cloud dialog does not ask for it. Azure has no cloud settings yet.
+- The New cloud dialog fetches it on a background thread when the machine has
+  an `azure` section. It lists Azure rows only when the token of that section
+  can be read. The catalog stays current for one hour.
+  `offers::Workers::add_azure` keeps only the VM sizes and regions of the
+  section. **Start cloud** stays off while the prices are older than one hour.
 - A cloud worker does not receive it. A worker lists no Azure offers.
 
 Azure offers alone do not replace a `RunPod` answer. If the `RunPod` fetch

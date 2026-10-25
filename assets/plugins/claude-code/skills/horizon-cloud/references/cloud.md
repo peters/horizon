@@ -92,15 +92,31 @@ Changes to fallback preferences do not substitute a different worker. The locati
 must remain permitted, and the chosen type must meet the profile requirements.
 
 Azure offers are in US dollars from the public Azure retail price list. They need
-no Azure settings or credential, and they are information only: Horizon creates an
-Azure cloud from the `azure` settings section, not from an offer, so each offer has
-`rentable: false` and a worker choice for one is refused. The section reports
-`deployable: true` only when this machine has that settings section. The estimated
-total includes the OS disk, the workspace disk and the static public address. The
-stopped cost includes all three, because a deallocated VM keeps them: a stopped
-Azure cloud still bills for its disks and its address. Creating, stopping,
-resuming and deleting an Azure cloud need the subscription and the machine-local
-token file that section names. A cloud worker lists no Azure offers.
+no Azure settings or credential. The Azure section always reports
+`deployable: true`: Horizon can create Azure clouds. Each offer has
+`rentable: false`, because an offer is a price, not a place this machine may use.
+The machine's `azure` settings section (`token_file`, `subscription_id`,
+`vm_sizes`, `regions`) decides where an Azure cloud can go:
+
+- New cloud lists Azure only when that section exists and its token file can be
+  read. It shows only the section's VM sizes and regions, and starts the cloud on
+  the one size and region the person chooses. A size or region the section does
+  not have is refused before any work starts.
+- `cloud_deploy plan-deploy`/`deploy`, the quick start and companions take no
+  Azure worker choice: `--worker-choice` with an Azure offer is refused. They use
+  the region the cloud recorded, or the section's first region, and try the
+  section's VM sizes in order in that region. When all sizes are refused, the
+  attempt stops with a capacity error. No other region is tried.
+
+The estimated total includes the OS disk, the workspace disk and the static public
+address. `cloud_deploy stop` deallocates the VM, which ends the compute charge;
+the disks and the address stay and keep billing until `cloud_deploy delete`
+removes the resource group. `resume` starts the same VM; `reconnect` then brings
+the cloud to Ready on the same address. `plan-rebuild` then `rebuild` deletes the
+VM and starts a new one on the same workspace disk and address
+(`continue-rebuild` and `cancel-rebuild` work as for Hetzner). Each of these
+needs the subscription and the machine-local token file the section names. A
+cloud worker lists no Azure offers.
 
 ## Repository development profiles
 

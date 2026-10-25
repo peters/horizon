@@ -103,7 +103,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    - The stopped cost is both disks and the static address for one month.
    - An offer without a disk or address price is not shown.
    - The region, memory, vCPU and hourly price filters apply. A GPU request gets no Azure offer.
-   - The answer section has `provider: Azure`, `currency: USD` and `deployable: true`. Each offer has `rentable: false`, because the `azure` settings place the worker, not one offer.
+   - The answer section has `provider: Azure`, `currency: USD` and `deployable: true`. Each offer has `rentable: false`, because the `azure` settings decide the VM sizes and regions of a worker, not one offer.
    - The price uses a minimum of one hour and a maximum of one year.
 
 ### 6.3 AZP-03 — Make sure that the other offers do not change

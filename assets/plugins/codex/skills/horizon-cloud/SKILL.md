@@ -183,7 +183,10 @@ See `docs/testing/procedures/bound-worker-pull.md` for synthetic checks.
 Failed cloud cards diagnose output from the failed step's current visit only.
 A Hetzner image rebuild replaces the server and keeps its workspace volume.
 An Azure image rebuild deletes the VM and starts a new one on the same workspace
-disk and static address.
+disk and static address. An Azure stop deallocates the VM: the compute charge
+ends, but its disks and static address keep billing until the cloud is deleted.
+Azure placement comes from the machine's `azure` settings, not from an offer
+(`rentable: false`); see `references/cloud.md`.
 `error during placement` reports a provider placement refusal after the image
 steps. A prior `invoke-rc.d: policy-rc.d denied execution of start.` notice
 reports a skipped service action during package installation, not that refusal.
