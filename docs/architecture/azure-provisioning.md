@@ -21,9 +21,14 @@ quick start and companions create an Azure worker for a profile with
 `provider: azure` when `providers::preflight` admits it. The `azure` settings
 decide where the worker can go:
 
-- New cloud lists Azure only when the machine has an `azure` section with a
-  readable token. It lists only the VM sizes and regions of that section that
-  the retail catalog prices. A row that the person chooses gives one VM size and
+- New cloud lists an Azure entry in its heading for every profile that Azure can
+  run. The entry is a choice: it moves the cloud to Azure and takes the cheapest
+  VM size and region that the section allows, also when the prices arrive after
+  the choice. Without an `azure` section the
+  entry says which settings to add, and Azure offers no worker. New cloud lists
+  workers only when the machine has an `azure` section with a readable token,
+  and only the VM sizes and regions of that section that the retail catalog
+  prices. A row that the person chooses gives one VM size and
   one region (`WorkerChoice::for_profile`). `Settings::for_cloud` narrows the
   section to them, so provisioning tries no other size or region. It refuses a
   size or region that the section does not have before work starts.

@@ -12,11 +12,12 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that the **New cloud** dialog offers Azure only on a
-computer whose cloud settings have a valid `azure` section. It proves that the
-dialog lists only the VM sizes and regions of that section, prices them in US
-dollars, and starts a cloud on the one VM size and region that the person
-chooses.
+This procedure proves that the **New cloud** dialog offers Azure as a provider
+choice. It proves that the Azure entry reads the machine's `azure` section, and
+that the computer must have the section before Azure can start a cloud. It
+proves that the dialog lists only the VM sizes and regions of that section,
+prices them in US dollars, and starts a cloud on the VM size and region that the
+person chooses.
 
 ## 2. Applicability
 
@@ -104,6 +105,10 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
    Result: `$CLOUD/settings.json` exists. It has no `azure` section.
 
+   A test key is sufficient for this procedure. The RunPod check then says
+   "Provider authentication failed". That line belongs to the test key. It is
+   not an Azure finding.
+
 ## 6. Tasks
 
 ### 6.1 ANC-T — Run the headless tests
@@ -117,12 +122,18 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    ```
 
    Result: All tests pass. These tests examine the items that follow:
-   - Without an `azure` section, the dialog shows no Azure chip, filter or row.
+   - Without an `azure` section, the heading shows one Azure entry and the
+     dialog shows no Azure filter or row. Choosing the entry names the settings
+     to add.
    - With a section whose token cannot be read, the dialog shows the reason and
      no Azure row.
+   - With a valid section, the heading's Azure entry starts the cloud on the
+     cheapest VM size and region that the section allows, also when the prices
+     arrive after the choice.
    - With a valid section, the dialog lists only its VM sizes and regions,
      prices them in US dollars, and records the chosen size and region in the
      new cloud.
+   - Every Azure offer is informational: no Azure row is rentable.
    - `Settings::for_cloud` narrows the section to the chosen size and region,
      and refuses a size or region that the section does not have.
 
@@ -130,10 +141,24 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
 1. Open the test repository in **New cloud**. Keep the `development` profile.
 
-   Result: The heading shows RunPod and no Azure chip. **All machines and
-   filters** shows no **Azure** filter. No row starts with `Azure ·`.
+   Result: The heading shows a RunPod entry and one dimmed Azure entry with the
+   blue "A" mark. **All machines and filters** shows no **Azure** filter. No row
+   starts with `Azure ·`.
 
-2. Select the `azure` profile.
+2. Click the Azure entry in the heading.
+
+   Result: The Azure entry is marked as the cloud's provider. One line under the
+   title says "No Azure settings on this computer yet. Save Cloud settings once,
+   then add an azure section to its settings.json with token_file,
+   subscription_id, vm_sizes and regions." No Azure row shows. **Start cloud**
+   stays disabled.
+
+3. Click the RunPod entry in the heading.
+
+   Result: The line under the title goes away. The summary shows a RunPod
+   worker again.
+
+4. Select the `azure` profile.
 
    Result: The checks show "No Azure settings on this computer yet" with the
    names `token_file`, `subscription_id`, `vm_sizes` and `regions`, or "Add an
@@ -168,10 +193,28 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 3. Open the test repository in **New cloud**. Keep the `development` profile.
    Wait until the Azure prices load.
 
-   Result: The heading shows an Azure chip with a blue "A" mark. **All machines
+   Result: The Azure entry in the heading is no longer dimmed. **All machines
    and filters** shows an **Azure** filter.
 
-4. Click the **Azure** filter.
+   Horizon reads the settings again after they are saved. A dialog that is
+   already open needs no second start.
+
+4. Click the Azure entry in the heading.
+
+   Result: The Azure entry is marked as the cloud's provider. No line under the
+   title asks for settings. The summary shows "4 vCPU · 16 GB", "Azure ·
+   profile development" and the cheapest VM size and region that the section
+   allows: **VM size** `Standard_D4s_v3` and `northeurope`. The amount lines are
+   in `$`.
+
+5. Close the dialog. Open it again. Click the Azure entry before the Azure
+   prices load.
+
+   Result: The Azure entry is marked as the cloud's provider. When the prices
+   load, the summary shows **VM size** `Standard_D4s_v3` and `northeurope`
+   without another click. **Start cloud** becomes available.
+
+5. Click the **Azure** filter.
 
    Result: The list shows `Azure · Standard_D4s_v3 · northeurope` and
    `Azure · Standard_D8s_v3 · northeurope`. Each row has the pill "Quota
@@ -181,7 +224,8 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
 ### 6.4 ANC-3 — Choose an Azure row
 
-1. Click the row `Azure · Standard_D4s_v3 · northeurope`.
+1. Click the row `Azure · Standard_D8s_v3 · northeurope`, then the row
+   `Azure · Standard_D4s_v3 · northeurope`.
 
    Result: The summary shows "4 vCPU · 16 GB", "Azure · profile development"
    and `northeurope`. It shows the lines **VM size** `Standard_D4s_v3`,
@@ -307,10 +351,13 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
 ## 7. Pass criteria
 
-- Without an `azure` section, the dialog shows no Azure chip, filter, row or
-  price.
+- Without an `azure` section, the heading shows one Azure entry that names the
+  settings to add, and the dialog shows no Azure filter, row or price.
+- With a valid section, the heading's Azure entry starts the cloud on the
+  cheapest VM size and region that the section allows.
 - With a valid section, the dialog lists only the VM sizes and regions of the
   section, in US dollars.
+- No Azure row is rentable: the section decides the VM size and region.
 - A token that cannot be read, a size outside the catalog and a removed size
   each show a reason, and **Start cloud** stays disabled.
 - A chosen row records its VM size and region in the new cloud.

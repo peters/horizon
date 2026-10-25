@@ -1,8 +1,12 @@
 //! The provider a new cloud runs on, read from each provider's description, and the
-//! offers of providers that place workers in named locations. A provider choice is shown
-//! only when more than one configured provider supports the profile; nothing moves a
-//! cloud between providers on its own.
+//! offers of providers that place workers in named locations. The heading lists a provider
+//! the selected profile can use once this machine can use it, and one whose VM sizes and
+//! regions come from a settings section even when it has none, with what to add. A click
+//! moves this cloud to that provider; nothing moves a cloud between providers on its own.
 use super::super::{Production, machine_size::Size, prices::State};
+use super::selector;
+use crate::theme;
+use egui::{RichText, Stroke, Ui};
 use horizon_core::cloud_runtime::{
     flavors,
     prices::Profile,
@@ -83,20 +87,170 @@ pub(in crate::app::cloud_panel) fn sized(
     Ok(sized)
 }
 
-/// The providers the dialog compares, for the heading: every configured provider the
-/// selected profile can use, or every configured provider before a profile is read.
-/// With none configured, the provider the profile names, as the heading named it before.
-pub(super) fn compared(form: &Production) -> Vec<&'static Description> {
+/// The providers the dialog lists in its heading: every provider the selected profile can
+/// use that this machine is set up for, or every one it is set up for before a profile is
+/// read. A provider whose VM sizes and regions are a settings section is listed without
+/// one, since no key form here makes it: the entry says what to add instead of vanishing.
+/// With nothing to list, the provider the profile names, as the heading named it before.
+pub(super) fn entries(form: &Production) -> Vec<Entry> {
+    let prices = &form.prices;
     let profile = form
         .profiles
         .as_ref()
         .and_then(|config| config.profiles.get(&form.selected_profile));
-    let providers = profile.map_or_else(|| configured(&form.prices), |profile| choices(&form.prices, profile));
-    if providers.is_empty() {
-        vec![profile.map_or(&provider::RUNPOD, |profile| current(form.provider, profile))]
-    } else {
-        providers
+    let current = profile.map(|profile| current(form.provider, profile));
+    let ready = |provider: &'static Description| Entry {
+        provider,
+        unavailable: None,
+        selected: current == Some(provider),
+    };
+    let mut entries: Vec<Entry> = match profile {
+        Some(profile) => choices(prices, profile).into_iter().map(ready).collect(),
+        None => configured(prices).into_iter().map(ready).collect(),
+    };
+    // A profile written for a Docker host runs on the saved host: no rented provider joins it.
+    if let Some(profile) = profile.filter(|profile| profile.provider != provider::DOCKER_HOST.id) {
+        for provider in provider::ALL
+            .into_iter()
+            .filter(|provider| provider.needs_settings && provider.supports(profile))
+        {
+            if entries.iter().all(|entry| entry.provider != provider) {
+                entries.push(Entry {
+                    provider,
+                    unavailable: unavailable(prices, provider),
+                    selected: current == Some(provider),
+                });
+            }
+        }
     }
+    if entries.is_empty() {
+        entries.push(Entry {
+            provider: current.unwrap_or(&provider::RUNPOD),
+            unavailable: None,
+            selected: true,
+        });
+    }
+    entries
+}
+
+/// A provider the heading lists, and why this machine cannot start a cloud there yet.
+pub(in crate::app::cloud_panel) struct Entry {
+    pub provider: &'static Description,
+    /// What to add before a cloud on it can start, when it cannot start here yet.
+    pub unavailable: Option<String>,
+    /// Whether this dialog's cloud runs there.
+    pub selected: bool,
+}
+
+/// What a machine without Azure settings must add; no key form in the dialog can make them.
+pub(in crate::app::cloud_panel) const AZURE_MISSING: &str = "No Azure settings on this computer yet. Save Cloud settings once, then add an azure section to its settings.json with token_file, subscription_id, vm_sizes and regions.";
+
+/// Whether `chosen` stays this cloud's provider although no choice lists it: a saved Docker
+/// host, which runs the profile with no reading to offer it, or a provider whose VM sizes
+/// and regions are a settings section this machine has not read. Start refuses the cloud
+/// and says what to add, so the choice is not silently moved to another provider.
+pub(in crate::app::cloud_panel) fn keeps_its_choice(chosen: &Description, profile: &Profile) -> bool {
+    chosen.kind == provider::Kind::DockerHost || chosen.needs_settings && chosen.supports(profile)
+}
+
+/// Why a cloud cannot start on `provider` here yet, in the words the checks use: a
+/// provider whose placement is a settings section needs one this machine has not read.
+fn unavailable(prices: &State, provider: &Description) -> Option<String> {
+    match provider.kind {
+        provider::Kind::Azure => (!prices.azure.bound()).then(|| {
+            prices
+                .azure
+                .problem()
+                .map_or_else(|| AZURE_MISSING.to_owned(), str::to_owned)
+        }),
+        provider::Kind::RunPod | provider::Kind::Hetzner | provider::Kind::DockerHost => None,
+    }
+}
+
+/// Keeps a cloud that runs on a provider whose placement is a settings section on the
+/// cheapest worker that section allows, while the person has chosen no row of their own.
+/// Its prices can arrive after the provider was chosen, and the section decides the size
+/// and region either way, so the dialog never waits for a choice it already has.
+pub(in crate::app::cloud_panel) fn settle(form: &mut Production) {
+    let waiting = selector::profile(form).is_some_and(|profile| {
+        form.provider
+            .is_some_and(|provider| provider.needs_settings && provider.supports(profile))
+            && form.placement.cpu_types.is_empty()
+            && form.placement.data_centers.is_empty()
+    });
+    if let Some(provider) = form.provider.filter(|_| waiting) {
+        choose(form, provider);
+    }
+}
+
+/// Moves this dialog's cloud to `provider`: at the profile's own size and place, then onto
+/// the cheapest worker that provider's catalog offers for it, as a profile written for that
+/// provider starts. A provider with no worker to show leaves the size and place to it.
+pub(in crate::app::cloud_panel) fn choose(form: &mut Production, provider: &'static Description) {
+    form.provider = Some(provider);
+    form.size = None;
+    form.placement = horizon_core::cloud_panel::Placement::default();
+    let Some(catalog) = selector::catalog(form) else {
+        return;
+    };
+    let cheapest = catalog
+        .offers
+        .iter()
+        .take(catalog.matching)
+        .find(|offer| offer.provider == provider.label);
+    if let Some(offer) = cheapest {
+        selector::choose(form, catalog.gpu, offer);
+    }
+}
+
+/// One provider in the heading: its mark and its name, drawn as a button. A provider this
+/// machine cannot start a cloud on yet stays as a choice, dimmed, so that choosing it shows
+/// what it needs. Returns whether the person clicked it.
+pub(in crate::app::cloud_panel::production) fn choice(ui: &mut Ui, entry: &Entry) -> bool {
+    let id = ui.scope_id().with(("cloud-provider-choice", entry.provider.id));
+    let hovered = ui.ctx().read_response(id).is_some_and(|response| response.hovered());
+    // The stroke never changes width, so that the heading keeps its height as the choice does.
+    let (fill, stroke) = if entry.selected {
+        (
+            theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.14),
+            Stroke::new(1.0, theme::ACCENT()),
+        )
+    } else if hovered {
+        (theme::PANEL_BG_ALT(), Stroke::new(1.0, theme::FG_DIM()))
+    } else {
+        (theme::PANEL_BG_ALT(), Stroke::new(1.0, theme::BORDER_SUBTLE()))
+    };
+    let frame = egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let color = if entry.unavailable.is_some() {
+                    theme::FG_DIM()
+                } else {
+                    theme::FG_SOFT()
+                };
+                mark(ui, entry.provider, 15.0);
+                ui.label(RichText::new(entry.provider.label).size(13.0).color(color));
+            });
+        });
+    let response = ui
+        .interact(frame.response.rect, id, egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let label = format!(
+        "{}, {}",
+        entry.provider.label,
+        match (&entry.unavailable, entry.selected) {
+            (Some(_), _) => "cannot start a cloud here yet",
+            (None, true) => "this cloud's provider",
+            (None, false) => "run this cloud there",
+        }
+    );
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), entry.selected, &label));
+    response.clicked()
 }
 
 /// A provider's mark, `size` points square: its logo where Horizon has one, else a

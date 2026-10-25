@@ -86,7 +86,7 @@ impl State {
                         .into(),
                 )]
             } else if profile.provider == horizon_core::cloud_runtime::provider::AZURE.id {
-                vec![problem("Cloud settings", AZURE_MISSING.into())]
+                vec![problem("Cloud settings", provider::AZURE_MISSING.into())]
             } else {
                 vec![problem(
                     "Cloud settings",
@@ -100,9 +100,6 @@ impl State {
         self.job = Some(receiver);
     }
 }
-
-/// What a machine without Azure settings must add; no key form here can make them.
-const AZURE_MISSING: &str = "No Azure settings on this computer yet. Save Cloud settings once, then add an azure section to its settings.json with token_file, subscription_id, vm_sizes and regions.";
 
 const AZURE_READY: &str =
     "Azure token is readable and prices are current; Azure checks the token when the cloud starts";
@@ -198,7 +195,7 @@ fn rows(form: &Production) -> Vec<Row> {
         Row::Fail(problem.reason.clone())
     } else if let Some(problem) = problem("Provider account") {
         Row::Fail(if provider.kind == Kind::Azure && form.prices.azure.absent() {
-            AZURE_MISSING.to_owned()
+            provider::AZURE_MISSING.to_owned()
         } else {
             problem.reason.clone()
         })
@@ -431,6 +428,7 @@ fn show(ui: &mut Ui, form: &mut Production, root: Option<&Path>) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::provider::AZURE_MISSING;
     use super::*;
 
     fn form_with(problems: Vec<Problem>) -> Production {

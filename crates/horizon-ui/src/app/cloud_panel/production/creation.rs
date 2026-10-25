@@ -135,7 +135,7 @@ impl HorizonApp {
                 if preparing {
                     super::repository_setup::heading(ui, &self.cloud_prototype.production);
                 } else {
-                    heading(ui, &provider::compared(&self.cloud_prototype.production));
+                    heading(ui, &mut self.cloud_prototype.production);
                 }
                 ui.add_space(16.0);
                 self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
@@ -520,25 +520,19 @@ fn navigation_key(key: ShortcutKey) -> ShortcutBinding {
     ShortcutBinding::new(ShortcutModifiers::NONE, key)
 }
 
-/// The title, and one chip per provider the dialog compares: its mark and its name.
-fn heading(ui: &mut Ui, providers: &[&'static horizon_core::cloud_runtime::provider::Description]) {
+/// The title, and one chip per provider the dialog lists: its mark and its name. A click
+/// moves this cloud to that provider; a provider this machine is not ready for says below
+/// the title what it needs.
+fn heading(ui: &mut Ui, form: &mut Production) {
+    let entries = provider::entries(form);
+    let mut chosen = None;
     ui.horizontal(|ui| {
         ui.label(RichText::new("New cloud").size(26.0).strong().color(theme::FG()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            for provider in providers.iter().rev() {
-                Frame::new()
-                    .fill(theme::PANEL_BG_ALT())
-                    .corner_radius(8)
-                    .inner_margin(egui::Margin::symmetric(10, 6))
-                    .show(ui, |ui| {
-                        // The heading lays out right to left, so the name goes first and
-                        // the mark lands on its left.
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(RichText::new(provider.label).size(13.0).color(theme::FG_SOFT()));
-                            provider::mark(ui, provider, 15.0);
-                        });
-                    });
+            for entry in entries.iter().rev() {
+                if provider::choice(ui, entry) {
+                    chosen = Some(entry.provider);
+                }
             }
         });
     });
@@ -547,6 +541,20 @@ fn heading(ui: &mut Ui, providers: &[&'static horizon_core::cloud_runtime::provi
             .size(14.0)
             .color(theme::FG_SOFT()),
     );
+    // New cloud is a tooltip-order modal, so what a provider needs is drawn under the title
+    // rather than shown on hover, and only once that provider is the cloud's own.
+    if let Some(reason) = entries
+        .iter()
+        .find(|entry| entry.selected)
+        .and_then(|entry| entry.unavailable.as_deref())
+    {
+        ui.label(RichText::new(reason).size(13.0).color(theme::PALETTE_YELLOW()));
+    }
+    // Before the repository's profiles are read there is no cloud to move to a provider.
+    if let Some(provider) = chosen.filter(|_| form.profiles.is_some()) {
+        provider::choose(form, provider);
+    }
+    provider::settle(form);
 }
 
 fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> egui::Response {
@@ -686,12 +694,12 @@ fn fields(ui: &mut Ui, form: &mut Production, submit: &mut bool, refocus_reposit
 fn machine(ui: &mut Ui, form: &mut Production) -> bool {
     if let Some(profile) = selector::profile(form) {
         let gpu = profile.gpu;
-        // A chosen Docker host stays chosen while no reading offers it, also when the
-        // hosts were removed or switched off: Start then refuses it, and the person picks
-        // another worker. Resetting would let New cloud fall back to a rented worker.
+        // A chosen Docker host, or a provider whose VM sizes and regions are a settings
+        // section this machine has not read, stays chosen while no choice lists it: Start
+        // then refuses the cloud and says what to add, and the person picks another
+        // worker. Resetting would let New cloud fall back to another provider.
         if form.provider.is_some_and(|chosen| {
-            chosen.kind != horizon_core::cloud_runtime::provider::Kind::DockerHost
-                && !provider::choices(&form.prices, profile).contains(&chosen)
+            !provider::keeps_its_choice(chosen, profile) && !provider::choices(&form.prices, profile).contains(&chosen)
         }) {
             form.provider = None;
             form.placement = Placement::default();

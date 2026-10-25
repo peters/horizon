@@ -86,6 +86,11 @@ pub struct Description {
     pub registry_auth: bool,
     /// How a ready worker moves onto a rebuilt image.
     pub rebuild: Rebuild,
+    /// Whether the provider reads the VM sizes and regions it may use from a settings
+    /// section on this machine, which no credential form makes. A dialog lists such a
+    /// provider even when the section is missing, so that it can say what to add; a
+    /// provider with a credential form is listed only once this machine has one.
+    pub needs_settings: bool,
 }
 
 /// How a provider moves a ready worker onto a rebuilt image.
@@ -117,6 +122,7 @@ pub const RUNPOD: Description = Description {
     creatable: true,
     registry_auth: true,
     rebuild: Rebuild::InPlace,
+    needs_settings: false,
     site: "runpod.io",
     cpu_volume_gb: (
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
@@ -138,6 +144,7 @@ pub const HETZNER: Description = Description {
     creatable: crate::offers::HETZNER_DEPLOYABLE,
     registry_auth: false,
     rebuild: Rebuild::NewServer,
+    needs_settings: false,
     site: "hetzner.com",
     cpu_volume_gb: (
         *crate::hetzner::volumes::SIZE_GB.start(),
@@ -162,6 +169,7 @@ pub const AZURE: Description = Description {
     creatable: crate::offers::AZURE_DEPLOYABLE,
     registry_auth: false,
     rebuild: Rebuild::NewServer,
+    needs_settings: true,
     site: "azure.microsoft.com",
     cpu_volume_gb: (4, 32_767),
 };
@@ -182,6 +190,7 @@ pub const DOCKER_HOST: Description = Description {
     creatable: true,
     registry_auth: false,
     rebuild: Rebuild::Unsupported,
+    needs_settings: false,
     site: "your own machine",
     // A Docker volume has no size of its own; it shares the host's disk.
     cpu_volume_gb: (1, 65_535),
@@ -277,6 +286,24 @@ mod tests {
         // Choices the code cannot honor yet are offered by no provider.
         assert!(ALL.iter().all(|provider| !provider.offers(Choice::CommunityHosts)));
         assert!(HETZNER.offers(Choice::ServerTypeFallback) && !RUNPOD.offers(Choice::ServerTypeFallback));
+    }
+
+    #[test]
+    fn only_a_provider_that_reads_its_own_settings_section_is_listed_without_a_credential() {
+        // Azure's VM sizes and regions come from the `azure` settings section, which no key
+        // form makes, so a dialog lists it and says what to add. Every other provider is
+        // listed once this machine has its credential or its saved host.
+        const {
+            assert!(
+                AZURE.needs_settings,
+                "Azure reads its VM sizes and regions from settings"
+            );
+        }
+        assert!(
+            [&RUNPOD, &HETZNER, &DOCKER_HOST]
+                .iter()
+                .all(|provider| !provider.needs_settings)
+        );
     }
 
     #[test]
