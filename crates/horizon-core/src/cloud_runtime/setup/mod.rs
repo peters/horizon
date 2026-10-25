@@ -157,9 +157,13 @@ impl Draft {
         }
         let runpod = !self.runpod_key.is_empty() || self.settings.runpod_configured();
         // Saved hosts count while they are switched off, so the switch itself can be saved.
-        if !runpod && !self.hetzner.enabled && self.settings.docker_hosts.is_empty() {
+        if !runpod
+            && !self.hetzner.enabled
+            && self.settings.docker_hosts.is_empty()
+            && !self.settings.azure_configured()
+        {
             return Err(Error::Invalid(
-                "Enter your RunPod API key, turn on Hetzner and enter its token, or add a Docker host",
+                "Enter your RunPod API key, turn on Hetzner and enter its token, add a Docker host, or add an azure section to the settings file",
             ));
         }
         if runpod {
@@ -246,7 +250,11 @@ impl Draft {
             });
         }
         self.settings.hetzner = self.hetzner.save(self.settings.hetzner.as_ref(), &mut write)?;
-        if !self.settings.ssh_identity_file.exists() && self.settings.ssh_identity_file == default_identity(&self.root)
+        // A settings file that names no identity, such as one with only an `azure` section,
+        // gets one here: this save is what the message that asks for an identity points at.
+        let default = default_identity(&self.root);
+        if self.settings.ssh_identity_file.as_os_str().is_empty()
+            || (self.settings.ssh_identity_file == default && !self.settings.ssh_identity_file.exists())
         {
             self.settings.ssh_identity_file = write.ssh_identity()?;
         }

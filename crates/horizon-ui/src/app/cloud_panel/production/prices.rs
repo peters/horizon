@@ -430,10 +430,12 @@ fn spawn<T: Send + 'static>(
     fetch: impl FnOnce(&Settings, &Cancellation) -> horizon_core::cloud_runtime::Result<T> + Send + 'static,
 ) -> Job<T> {
     let (tx, rx) = channel();
-    let path = root.join("settings.json");
+    let root = root.to_path_buf();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        let result = Settings::load(&path)
+        // A machine that never saved Cloud settings has their defaults, as Cloud settings
+        // itself reads them: no saved file is an ordinary state, not a read failure.
+        let result = horizon_core::cloud_runtime::setup::load_settings(&root)
             .and_then(|settings| fetch(&settings, &Cancellation::default()))
             .map(|value| Fetched {
                 value,
@@ -566,6 +568,22 @@ mod tests {
                 ("US-MO-2".into(), Availability::Low),
             ],
         }
+    }
+
+    #[test]
+    fn a_fresh_home_reports_no_runpod_key_rather_than_a_read_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let job = spawn(root.path(), &egui::Context::default(), |settings, cancel| {
+            prices::price_list(settings, cancel)
+        });
+        let outcome = job
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|error| panic!("price list: {error}"));
+        assert_eq!(
+            outcome.err().as_deref(),
+            Some(horizon_core::cloud_runtime::settings::RUNPOD_KEY_MISSING),
+            "a machine that saved no settings has no RunPod key, not an I/O failure"
+        );
     }
 
     #[test]

@@ -203,6 +203,8 @@ pub fn ready_profiles(root: &Path, config: &CloudConfig, cancel: &super::super::
         ),
         // A saved Docker host needs no credential.
         (settings.docker_hosts_on(), &super::super::provider::DOCKER_HOST),
+        // The `azure` section places the cloud, and Azure checks its token when it starts.
+        (settings.azure_configured(), &super::super::provider::AZURE),
     ]
     .into_iter()
     .filter_map(|(bound, provider)| bound.then_some(provider))
@@ -501,6 +503,57 @@ mod tests {
         assert_eq!(ready_profiles(temp.path(), &config, &cancel), ["dev", "local"]);
         docker_host(true);
         assert!(ready_profiles(temp.path(), &config, &cancel).is_empty());
+    }
+
+    #[test]
+    fn an_azure_only_machine_is_ready_for_the_profiles_azure_can_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("identity");
+        assert!(
+            Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(&key)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let token = temp.path().join("arm-token");
+        std::fs::write(&token, "synthetic-token").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut mode = std::fs::metadata(&token).unwrap().permissions();
+            mode.set_mode(0o600);
+            std::fs::set_permissions(&token, mode).unwrap();
+        }
+        let settings = |azure: serde_json::Value| {
+            let settings = serde_json::json!({
+                "ssh_identity_file": key, "cpu_flavors": [], "gpu_types": [], "azure": azure
+            });
+            std::fs::write(temp.path().join("settings.json"), settings.to_string()).unwrap();
+        };
+        let mut config = CloudConfig::parse(CONFIG).unwrap();
+        let mut gpu = config.profiles["dev"].clone();
+        gpu.gpu = true;
+        config.profiles.insert("gpu".into(), gpu);
+        let mut sized = config.profiles["dev"].clone();
+        sized.provider = "azure".into();
+        config.profiles.insert("azure".into(), sized);
+        let cancel = super::super::super::Cancellation::default();
+        // A section whose token no one can read readies nothing.
+        settings(serde_json::json!({
+            "token_file": temp.path().join("missing-token"),
+            "subscription_id": "00000000-0000-4000-8000-000000000001",
+            "vm_sizes": ["Standard_D4s_v3"], "regions": ["northeurope"],
+        }));
+        assert!(ready_profiles(temp.path(), &config, &cancel).is_empty());
+        // A readable one readies the CPU profiles, the profile written for Azure among them.
+        settings(serde_json::json!({
+            "token_file": token,
+            "subscription_id": "00000000-0000-4000-8000-000000000001",
+            "vm_sizes": ["Standard_D4s_v3"], "regions": ["northeurope"],
+        }));
+        assert_eq!(ready_profiles(temp.path(), &config, &cancel), ["azure", "dev"]);
     }
 
     #[test]

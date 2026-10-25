@@ -171,6 +171,8 @@ fn azure_is_a_provider_choice_that_says_what_it_needs_without_azure_settings() {
         runtime_state: Box::new(RuntimeState::default()),
     });
     prepare(&mut app, &ctx, temp.path());
+    // The machine's settings were read and hold no `azure` section.
+    app.cloud_prototype.production.prices.azure.without_section();
     let output = tall_frame(&ctx, &mut app);
     click(&ctx, &mut app, azure_entry(&output).center());
     let text = painted(&tall_frame(&ctx, &mut app));
@@ -189,6 +191,48 @@ fn azure_is_a_provider_choice_that_says_what_it_needs_without_azure_settings() {
     // No section, no prices: nothing is offered as a rentable Azure worker.
     assert!(!text.contains("Azure · Standard_"), "{text}");
     assert!(azure_offers_are_never_rentable(&app));
+}
+
+/// The one reason the heading gives for Azure, and whether it is the settings claim.
+fn azure_reason_rules_out_missing_settings(text: &str, reason: &str) {
+    assert!(text.contains(reason), "{reason}: {text}");
+    assert!(
+        !text.contains("No Azure settings on this computer yet"),
+        "a machine with settings is not told to add them: {text}"
+    );
+}
+
+#[test]
+fn azure_says_why_its_settings_cannot_be_used_instead_of_asking_for_them_again() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, azure_entry(&output).center());
+
+    // The section is there, and its retail prices could not be fetched.
+    app.cloud_prototype
+        .production
+        .prices
+        .azure
+        .binding_without_prices(&["Standard_D4s_v3"], &["northeurope"]);
+    app.cloud_prototype
+        .production
+        .prices
+        .azure
+        .catalog_failed("Provider transport failed");
+    let text = painted(&tall_frame(&ctx, &mut app));
+    azure_reason_rules_out_missing_settings(&text, "Provider transport failed");
+
+    // The settings file itself cannot be read.
+    app.cloud_prototype
+        .production
+        .prices
+        .azure
+        .unreadable_settings("Invalid cloud state or settings");
+    let text = painted(&tall_frame(&ctx, &mut app));
+    azure_reason_rules_out_missing_settings(&text, "Invalid cloud state or settings");
 }
 
 #[test]

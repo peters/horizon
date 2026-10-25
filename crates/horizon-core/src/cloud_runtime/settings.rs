@@ -18,11 +18,18 @@ pub struct Settings {
     /// Starting selection for repository setup; existing profiles keep their own capabilities.
     #[serde(default = "default_agents")]
     pub default_agents: Vec<horizon_cloud::Agent>,
+    /// `RunPod`'s binding. Unset on a machine that runs clouds on another provider, so a
+    /// settings file with only that provider's section loads.
+    #[serde(default)]
     pub runpod_key_file: PathBuf,
+    /// The identity every worker is reached with. Unset until Cloud settings make one.
+    #[serde(default)]
     pub ssh_identity_file: PathBuf,
+    #[serde(default)]
     pub docker_config: PathBuf,
     #[serde(default)]
     pub docker_host: Option<String>,
+    #[serde(default)]
     pub registry_pull_auth_id: Option<String>,
     #[serde(default)]
     pub registries: Option<super::registry::Config>,
@@ -37,7 +44,10 @@ pub struct Settings {
         skip_serializing
     )]
     pub portable_image_publishing: bool,
+    /// `RunPod`'s selection preferences, which a machine on another provider does not set.
+    #[serde(default)]
     pub cpu_flavors: Vec<String>,
+    #[serde(default)]
     pub gpu_types: Vec<String>,
     #[serde(default)]
     pub data_centers: Vec<String>,
@@ -162,7 +172,11 @@ impl Settings {
     /// # Errors
     /// Rejects missing/malformed settings and relative binding paths.
     pub fn load(path: &Path) -> Result<Self> {
-        let mut value: Self = serde_json::from_slice(&std::fs::read(path)?).map_err(|_| Error::Json)?;
+        Self::decode(path, &std::fs::read(path)?)
+    }
+
+    fn decode(path: &Path, bytes: &[u8]) -> Result<Self> {
+        let mut value: Self = serde_json::from_slice(bytes).map_err(|_| Error::Json)?;
         value.validate()?;
         value.codex_home = path.parent().map(super::codex_login::home);
         super::github::remember(value.github.is_some());
@@ -197,7 +211,7 @@ impl Settings {
         }
         if [&self.runpod_key_file, &self.ssh_identity_file, &self.docker_config]
             .iter()
-            .any(|p| !p.is_absolute())
+            .any(|path| !unset_or_absolute(path))
         {
             return Err(Error::Invalid(
                 "Credential bindings must use absolute machine-local paths",
@@ -270,6 +284,13 @@ impl Settings {
     #[must_use]
     pub fn runpod_configured(&self) -> bool {
         self.runpod_key_file.is_file()
+    }
+
+    /// Whether this machine has an `azure` section whose token it can read: a profile
+    /// written for Azure runs a cloud from it, with no key of another provider.
+    #[must_use]
+    pub fn azure_configured(&self) -> bool {
+        self.azure.as_ref().is_some_and(|azure| azure.credential().is_ok())
     }
     /// # Errors
     /// Requires a private, readable API-key file.
@@ -416,7 +437,17 @@ fn read_secret(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>> {
 /// Why a `RunPod` request cannot be made on a machine set up for Hetzner alone.
 pub const RUNPOD_KEY_MISSING: &str = "This machine has no RunPod API key; add one in cloud settings to use RunPod";
 
+/// A binding this machine has set is an absolute path; one it has not set is empty.
+fn unset_or_absolute(path: &Path) -> bool {
+    path.as_os_str().is_empty() || path.is_absolute()
+}
+
 pub(super) fn validate_ssh_identity(path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(Error::Invalid(
+            "Cloud settings name no SSH identity file; save Cloud settings to make one",
+        ));
+    }
     let meta = std::fs::metadata(path)?;
     if !meta.is_file() || meta.len() == 0 || meta.len() > 64 * 1024 {
         return Err(Error::Invalid("Invalid SSH private-key file"));
@@ -460,6 +491,48 @@ pub fn validate_private_key_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A settings file that holds an `azure` section and nothing else, as a machine set up
+    /// for Azure alone saves it.
+    #[cfg(unix)]
+    fn azure_section(root: &Path) -> serde_json::Value {
+        serde_json::json!({"azure": {
+            "token_file": root.join("arm-token"),
+            "subscription_id": "00000000-0000-4000-8000-000000000001",
+            "vm_sizes": ["Standard_D4s_v3"],
+            "regions": ["northeurope"],
+        }})
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_settings_file_with_only_an_azure_section_is_this_machines_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        std::fs::write(&path, azure_section(root.path()).to_string()).unwrap();
+        let settings = Settings::load(&path).unwrap();
+        assert_eq!(
+            settings.azure_settings().unwrap().vm_sizes,
+            ["Standard_D4s_v3"],
+            "the section Azure needs loads without the RunPod bindings"
+        );
+        assert!(!settings.runpod_configured(), "nothing binds RunPod here");
+        assert_eq!(
+            settings.credential().err().map(|error| error.to_string()),
+            Some(RUNPOD_KEY_MISSING.to_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_settings_file_that_names_a_relative_binding_is_still_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let mut value = azure_section(root.path());
+        value["runpod_key_file"] = serde_json::json!("relative/key");
+        std::fs::write(&path, value.to_string()).unwrap();
+        assert!(Settings::load(&path).is_err());
+    }
 
     #[test]
     fn a_cloud_asks_only_for_the_data_centers_and_gpu_types_chosen_for_it() {

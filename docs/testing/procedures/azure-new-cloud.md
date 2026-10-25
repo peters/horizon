@@ -125,6 +125,9 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    - Without an `azure` section, the heading shows one Azure entry and the
      dialog shows no Azure filter or row. Choosing the entry names the settings
      to add.
+   - A settings file with only an `azure` section binds Azure on a fresh home,
+     and a fresh home with no settings file binds no Azure section and reports
+     no I/O failure.
    - With a section whose token cannot be read, the dialog shows the reason and
      no Azure row.
    - With a valid section, the heading's Azure entry starts the cloud on the
@@ -320,7 +323,54 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    Result: The Azure chip, the rows, the summary and **Start cloud** stay
    inside the dialog. No text overlaps.
 
-### 6.9 ANC-L1 — Start one Azure cloud
+### 6.9 ANC-8 — Examine the message when the settings cannot be used
+
+1. Close the dialog. Replace the `azure` section of `$CLOUD/settings.json`
+   with the `azure` section alone, so that the file has no other section.
+
+   Result: The file is valid JSON.
+
+2. Open the test repository in **New cloud**. Wait for the Azure prices.
+
+   Result: The dialog does not say "No Azure settings on this computer yet".
+   It reads the `azure` section and lists the VM sizes and regions of the
+   section, because a machine that uses Azure alone does not need the sections
+   of another provider. The checks name what is still missing on this machine,
+   such as the SSH identity file, and **Start cloud** stays disabled for that
+   reason.
+
+3. Open **Menu › Cloud settings**. Press **Save settings**.
+
+   Result: The form closes, and the message that asks for a save is gone. The
+   saved `settings.json` names an `ssh_identity_file` in the cloud settings
+   folder, and that path holds a private SSH key pair. In **New cloud**, the
+   row then reads "SSH key is usable" under **Checks passed**, and **Start
+   cloud** is enabled.
+
+4. Rename the settings file, so that the cloud settings folder has no
+   `settings.json`. Move the pointer over the dialog.
+
+   Result: The dialog says "No Azure settings on this computer yet" and names
+   `token_file`, `subscription_id`, `vm_sizes` and `regions`. It does not show
+   an I/O error such as "Cloud state I/O failed".
+
+5. Put the full settings file back under its name. Move the pointer over the
+   dialog.
+
+   Result: The Azure row and its prices come back without a restart.
+
+6. Write text that is not JSON into `settings.json`. Move the pointer over the
+   dialog.
+
+   Result: The dialog gives the reason that the settings cannot be read. It
+   does not say that this computer has no Azure settings, and it does not show
+   "Cloud state I/O failed".
+
+7. Put the saved settings file back.
+
+   Result: The Azure row and its prices come back without a restart.
+
+### 6.10 ANC-L1 — Start one Azure cloud
 
 > **CAUTION:** THIS TASK RENTS COMPUTE IN THE AZURE SUBSCRIPTION. Delete the
 > cloud at the end of the task.
@@ -353,6 +403,11 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
 - Without an `azure` section, the heading shows one Azure entry that names the
   settings to add, and the dialog shows no Azure filter, row or price.
+- A settings file with only an `azure` section is read: the dialog lists the VM
+  sizes and regions of that section, and it does not ask for settings.
+- A settings file that cannot be read, or a machine with no settings file, each
+  show their own reason. No message describes an ordinary state as an I/O
+  failure.
 - With a valid section, the heading's Azure entry starts the cloud on the
   cheapest VM size and region that the section allows.
 - With a valid section, the dialog lists only the VM sizes and regions of the

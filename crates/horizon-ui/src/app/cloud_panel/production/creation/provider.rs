@@ -154,15 +154,22 @@ pub(in crate::app::cloud_panel) fn keeps_its_choice(chosen: &Description, profil
 }
 
 /// Why a cloud cannot start on `provider` here yet, in the words the checks use: a
-/// provider whose placement is a settings section needs one this machine has not read.
+/// provider whose placement is a settings section needs one this machine has read, and
+/// says which part is missing or broken rather than always asking for settings.
 fn unavailable(prices: &State, provider: &Description) -> Option<String> {
     match provider.kind {
-        provider::Kind::Azure => (!prices.azure.bound()).then(|| {
-            prices
-                .azure
-                .problem()
-                .map_or_else(|| AZURE_MISSING.to_owned(), str::to_owned)
-        }),
+        provider::Kind::Azure => {
+            let azure = &prices.azure;
+            if azure.bound() {
+                // With a section, only its token or its prices can refuse the cloud.
+                azure.problem().map(str::to_owned)
+            } else if azure.absent() {
+                Some(AZURE_MISSING.to_owned())
+            } else {
+                // Settings that could not be read, or that no read has answered for yet.
+                azure.read_error().map(str::to_owned)
+            }
+        }
         provider::Kind::RunPod | provider::Kind::Hetzner | provider::Kind::DockerHost => None,
     }
 }
