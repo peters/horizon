@@ -168,7 +168,23 @@ local connect client.
    Result: the result holds `browser set_files failed (attachment path is outside
    the allowed roots ...)` and the remote machine holds no copy.
 
-### 6.6 R6 — a sign-in stays over a restart
+### 6.6 R6 — an entry of an earlier start is updated
+
+1. Remove the `browser_host` entry, close Horizon, and start it one time. Then
+   set the entry of step 5.2 again and start Horizon.
+
+   Result: the `args` of the `horizon-browser` server in `~/.grok/config.toml`
+   (or in `~/.grok/config.toml` of `GROK_HOME`) changes from `["--browser-mcp"]`
+   to `["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]`, and
+   every other line of that file stays as it was. Grok then uses the named host
+   without a new install.
+
+2. Remove the `browser_host` entry again and start Horizon.
+
+   Result: the `args` change back to `["--browser-mcp"]`, and the local browser
+   is used again.
+
+### 6.7 R7 — a sign-in stays over a restart
 
 1. In the remote page, sign in to a test site, or run the existing profile-host
    test:
@@ -182,13 +198,14 @@ local connect client.
 
 ## 7. Pass criteria
 
-- R1 to R6 pass.
+- R1 to R7 pass.
 - With a `browser_host` entry that names `browser-vm` and `mail`, the `.mcp.json`
   of the Claude plugin holds
   `"args": ["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]`, and
   the `~/.grok/config.toml` of Grok holds the same arguments.
 - With no `browser_host` entry, the `.mcp.json` of the Claude plugin holds
-  `"args": ["--browser-mcp"]` and no `--remote`.
+  `"args": ["--browser-mcp"]` and no `--remote`, and the Grok entry is the one of
+  the local server again.
 
 ## 8. Cleanup
 
