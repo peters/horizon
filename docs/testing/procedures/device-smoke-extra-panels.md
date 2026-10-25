@@ -85,13 +85,21 @@ an unusable panel file stops the fixture before Horizon starts.
 1. Remove `position` and `size` from the entry, then start a second fixture with
    a new state directory.
 
-   Result: The panel starts at the right edge of the board and does not cover
-   the default panels.
+   Result: The panel starts in a column to the right of every panel the fixture
+   places and does not cover them.
+
+2. Start a third fixture with `--firefox-system-access` and the same entry
+   without a position.
+
+   Result: The panel starts to the right of the browser panel of that board and
+   does not cover it.
 
 ### 6.3 P3 — An unusable file stops the start
 
-1. Start the fixture with a panel file that has no `name`, one whose `kind` is a
-   number, one whose `args` is a string, and one that is not a list.
+1. Start the fixture with a panel file that has no string `name`, one whose
+   `kind` is not a panel kind (for example `agent`, `Codex` or `3`), one whose
+   `args` holds a number, one whose `position` is a string, and one that is not
+   a list.
 
    Result: Each run stops before Horizon starts, and each message names the file
    and the entry.
@@ -105,7 +113,8 @@ an unusable panel file stops the fixture before Horizon starts.
 ## 7. Pass criteria
 
 - P1 shows the extra panel on the board and the frozen binary in use.
-- P2 places a panel without a position out of the way.
+- P2 places a panel without a position out of the way of the panels the fixture
+  places, on the default board and on the Firefox disclosure board.
 - P3 stops every unusable file before Horizon starts.
 - P4 leaves the default board unchanged.
 - No step changes the settings, the sessions or the running Horizon of the

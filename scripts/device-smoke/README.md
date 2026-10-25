@@ -120,9 +120,12 @@ the test.
 `--panels FILE` opens extra workspace panels at start from a JSON list of
 terminal entries, so a procedure that needs an agent panel, a scripted client or
 another command keeps the same viewer and needs no click. An entry without a
-`position` is placed at the right edge of the default board. The fixture checks
-the file before it starts Horizon, and a panel without a `name`, a `kind` that is
-not a string or `args` that is not a list stops it with an error.
+`position` is placed in a column to the right of every panel the fixture places,
+including the board that `--firefox-system-access` replaces. The fixture checks
+the file before it starts Horizon, the same way `TerminalConfig` reads it: a
+panel needs a string `name`, a `kind` from the panel kinds, string `command`,
+`cwd` and `args` items, two numbers for `position` and `size`, and a `resume`
+value Horizon reads. Any other value stops the fixture with an error.
 
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The

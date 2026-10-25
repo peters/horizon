@@ -46,9 +46,17 @@ with socket.socket() as listener:
 
 PRESET_RESUME_MODES = ('fresh', 'last')
 
+# The snake_case names of `PanelKind` (`crates/horizon-core/src/panel.rs`). A file that
+# names another kind makes Horizon refuse the whole config, which starts the default
+# board instead of the board the procedure tests.
+PANEL_KINDS = frozenset({
+    'shell', 'ssh', 'codex', 'claude', 'open_code', 'gemini', 'kilo_code', 'pi', 'grok',
+    'command', 'editor', 'git_changes', 'usage', 'browser', 'device', 'setup_board',
+})
 
-def presets_resume_error(index, resume):
-    """Why a `resume` value of a preset is not one that Horizon reads, or None.
+
+def resume_error(place, resume):
+    """Why a `resume` value is not one that Horizon reads, or None.
 
     `PanelResume` renames its unit variants to `fresh` and `last`, and its `session`
     variant keeps a session id, so only the map form `{"session": {"session_id": …}}`
@@ -61,11 +69,16 @@ def presets_resume_error(index, resume):
         session_id = session.get('session_id') if isinstance(session, dict) else None
         if isinstance(session_id, str) and session_id:
             return None
-        return f'presets[{index}].resume.session needs a session_id'
+        return f'{place}.resume.session needs a session_id'
     modes = ', '.join(PRESET_RESUME_MODES)
     return (
-        f'presets[{index}].resume must be {modes}, or '
+        f'{place}.resume must be {modes}, or '
         f'{{"session": {{"session_id": "<id>"}}}}; received {resume!r}')
+
+
+def presets_resume_error(index, resume):
+    """Why a `resume` value of a preset is not one that Horizon reads, or None."""
+    return resume_error(f'presets[{index}]', resume)
 
 
 def load_presets(path):
@@ -86,6 +99,39 @@ def load_presets(path):
     return presets
 
 
+def panel_error(index, panel):
+    """Why Horizon would refuse this panel, or None.
+
+    The fixture earns its place only when the board it intends is the board Horizon
+    shows, so the checks follow `TerminalConfig` (`crates/horizon-core/src/config.rs`).
+    """
+    place = f'panels[{index}]'
+    if not isinstance(panel, dict):
+        return f'{place} must be an object'
+    if not isinstance(panel.get('name'), str) or not panel.get('name'):
+        return f'{place} needs a name that is a string'
+    kind = panel.get('kind', 'shell')
+    if kind not in PANEL_KINDS:
+        return f'{place} kind {kind!r} is not a panel kind: {sorted(PANEL_KINDS)}'
+    for key in ('command', 'cwd'):
+        if panel.get(key) is not None and not isinstance(panel[key], str):
+            return f'{place} {key} must be a string'
+    args = panel.get('args', [])
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        return f'{place} args must be a list of strings'
+    for key in ('position', 'size'):
+        value = panel.get(key)
+        if value is None:
+            continue
+        if (not isinstance(value, list) or len(value) != 2
+                or not all(isinstance(number, (int, float)) and not isinstance(number, bool)
+                           for number in value)):
+            return f'{place} {key} must be two numbers'
+    if 'resume' in panel:
+        return resume_error(place, panel['resume'])
+    return None
+
+
 def load_panels(path):
     """Extra workspace panels of the fixture file, checked before Horizon reads them.
 
@@ -97,13 +143,25 @@ def load_panels(path):
     if not isinstance(panels, list):
         raise ValueError(f'{path}: the panels must be a JSON list of panels')
     for index, panel in enumerate(panels):
-        if not isinstance(panel, dict) or not panel.get('name'):
-            raise ValueError(f'{path}: panels[{index}] needs a name')
-        if not isinstance(panel.get('kind', ''), str):
-            raise ValueError(f'{path}: panels[{index}] kind must be a string')
-        if not isinstance(panel.get('args', []), list):
-            raise ValueError(f'{path}: panels[{index}] args must be a list')
+        problem = panel_error(index, panel)
+        if problem:
+            raise ValueError(f'{path}: {problem}')
     return panels
+
+
+def extra_column(placed):
+    """The x where a panel of the file starts, to the right of every placed panel.
+
+    The default board is not always the two default terminals, so the column is worked
+    out from the panels the fixture actually places.
+    """
+    right = 40
+    for panel in placed:
+        position, size = panel.get('position'), panel.get('size')
+        if (isinstance(position, list) and isinstance(size, list)
+                and len(position) == 2 and len(size) == 2):
+            right = max(right, position[0] + size[0])
+    return right + 40
 
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None):
@@ -145,9 +203,10 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         # Panels the fixture opens at start, so a procedure that needs an agent panel or
         # another command keeps one viewer and no manual click.
         placed = fixture['workspaces'][0]['terminals']
+        column = extra_column(placed)
         for index, panel in enumerate(extra_panels):
             entry = dict(panel)
-            entry.setdefault('position', [1240, 60 + 500 * index])
+            entry.setdefault('position', [column, 60 + 500 * index])
             entry.setdefault('size', [330, 440])
             placed.append(entry)
     return fixture

@@ -21,6 +21,14 @@ SCRIPTED_AGENT = {
 }
 
 
+def overlaps(first, second):
+    """Whether two panel rectangles share a point."""
+    (left, top), (width, height) = first['position'], first['size']
+    (other_left, other_top), (other_width, other_height) = second['position'], second['size']
+    return (left < other_left + other_width and other_left < left + width
+            and top < other_top + other_height and other_top < top + height)
+
+
 class PanelsConfigTests(unittest.TestCase):
     def test_an_omitted_list_keeps_the_default_board(self):
         document = serve.application_document('/tmp/fixture-data')
@@ -40,9 +48,29 @@ class PanelsConfigTests(unittest.TestCase):
         panel = {'name': 'Second agent', 'kind': 'codex', 'command': '/bin/true'}
         document = serve.application_document('/tmp/fixture-data', extra_panels=[panel])
         placed = document['workspaces'][0]['terminals'][2]
-        self.assertEqual(placed['position'], [1240, 60])
+        # The default board ends at x 1180, so the column starts one step further right.
+        self.assertEqual(placed['position'], [1220, 60])
         self.assertEqual(placed['size'], [330, 440])
         self.assertNotIn('position', panel, 'the file of the procedure stays unchanged')
+        for default in document['workspaces'][0]['terminals'][:2]:
+            self.assertFalse(overlaps(placed, default), default['name'])
+
+    def test_a_panel_without_a_position_clears_a_replaced_board(self):
+        # The Firefox disclosure board ends at x 1440, so a fixed column would cover it.
+        document = serve.application_document(
+            '/tmp/fixture-data', firefox_system_access=True,
+            extra_panels=[{'name': 'Second agent', 'kind': 'codex', 'command': '/bin/true'}])
+        placed = document['workspaces'][0]['terminals'][-1]
+        self.assertEqual(placed['position'], [1480, 60])
+        for panel in document['workspaces'][0]['terminals'][:-1]:
+            self.assertFalse(overlaps(placed, panel), panel['name'])
+
+    def test_two_panels_without_a_position_share_the_column_and_do_not_overlap(self):
+        panels = [{'name': 'One', 'kind': 'codex'}, {'name': 'Two', 'kind': 'codex'}]
+        document = serve.application_document('/tmp/fixture-data', extra_panels=panels)
+        first, second = document['workspaces'][0]['terminals'][-2:]
+        self.assertEqual(first['position'][0], second['position'][0])
+        self.assertFalse(overlaps(first, second))
 
     def test_a_checked_list_is_returned_unchanged(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -50,18 +78,35 @@ class PanelsConfigTests(unittest.TestCase):
             path.write_text(json.dumps([SCRIPTED_AGENT]))
             self.assertEqual(serve.load_panels(path), [SCRIPTED_AGENT])
 
-    def test_a_panel_the_fixture_cannot_place_stops_it_before_it_starts(self):
+    def test_a_panel_horizon_would_refuse_stops_the_fixture(self):
         for panel, problem in (
-            ({'kind': 'codex'}, 'needs a name'),
-            ({'name': 'Agent', 'kind': 3}, 'kind must be a string'),
-            ({'name': 'Agent', 'args': 'x'}, 'args must be a list'),
-            ('not a panel', 'needs a name'),
+            ({'kind': 'codex'}, 'needs a name that is a string'),
+            ({'name': 5}, 'needs a name that is a string'),
+            ({'name': 'Agent', 'kind': 3}, 'is not a panel kind'),
+            ({'name': 'Agent', 'kind': 'agent'}, 'is not a panel kind'),
+            ({'name': 'Agent', 'kind': 'Codex'}, 'is not a panel kind'),
+            ({'name': 'Agent', 'args': 'x'}, 'args must be a list of strings'),
+            ({'name': 'Agent', 'args': ['-c', 1]}, 'args must be a list of strings'),
+            ({'name': 'Agent', 'command': 7}, 'command must be a string'),
+            ({'name': 'Agent', 'cwd': []}, 'cwd must be a string'),
+            ({'name': 'Agent', 'position': '40,560'}, 'position must be two numbers'),
+            ({'name': 'Agent', 'position': [40]}, 'position must be two numbers'),
+            ({'name': 'Agent', 'size': [1, True]}, 'size must be two numbers'),
+            ({'name': 'Agent', 'resume': 'session'}, 'resume must be fresh, last'),
+            ('not a panel', 'must be an object'),
         ):
             with self.subTest(panel=panel), tempfile.TemporaryDirectory() as folder:
                 path = Path(folder) / 'panels.json'
                 path.write_text(json.dumps([panel]))
                 with self.assertRaisesRegex(ValueError, problem):
                     serve.load_panels(path)
+
+    def test_every_panel_kind_of_horizon_is_accepted(self):
+        for kind in sorted(serve.PANEL_KINDS):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'panels.json'
+                path.write_text(json.dumps([{'name': 'Panel', 'kind': kind}]))
+                self.assertEqual(len(serve.load_panels(path)), 1)
 
     def test_a_list_is_required(self):
         with tempfile.TemporaryDirectory() as folder:
