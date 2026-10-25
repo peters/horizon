@@ -69,6 +69,11 @@ impl Panel {
         let rows = terminal.rows();
         let cols = terminal.cols();
 
+        if let Some(failure) = self.working_directory_failure() {
+            self.show_working_directory_failure(&failure)?;
+            return Ok(());
+        }
+
         // A pre-assigned Claude binding may not have a transcript yet (panel
         // never received a message); resuming it would fail, so relaunch
         // fresh under the same session id instead.

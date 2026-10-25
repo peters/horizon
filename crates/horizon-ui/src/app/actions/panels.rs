@@ -265,7 +265,10 @@ impl HorizonApp {
         let canvas_pos = canvas_pos.or_else(|| self.cloud_member_position(workspace_id));
         #[cfg(feature = "cloud-workspaces")]
         let takes_cloud_panel = canvas_pos.is_some_and(|pos| self.cloud_takes_panel_at(workspace_id, pos));
-        let has_directory = workspace_cwd(&self.board, workspace_id).is_some();
+        // A directory that was renamed or deleted is no directory for a new
+        // panel: ask where to run instead of starting it in Horizon's own
+        // checkout. Picking one also repairs the workspace directory.
+        let has_directory = workspace_cwd(&self.board, workspace_id).is_some_and(|path| path.is_dir());
         #[cfg(feature = "cloud-workspaces")]
         let has_directory = has_directory || takes_cloud_panel;
         if has_directory || !preset.requires_workspace_cwd() {
@@ -372,6 +375,62 @@ mod tests {
             args: Vec::new(),
             resume: PanelResume::Fresh,
             ssh_connection: None,
+        }
+    }
+
+    mod workspace_directory {
+        use horizon_core::{PresetConfig, RuntimeState, StartupDecision};
+
+        use crate::app::HorizonApp;
+        use crate::app::test_support::test_app_with_startup;
+
+        use super::shell_preset;
+
+        fn running_app() -> (tempfile::TempDir, egui::Context, HorizonApp) {
+            test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            })
+        }
+
+        fn exiting_shell() -> PresetConfig {
+            PresetConfig {
+                command: Some("/bin/sh".to_string()),
+                args: vec!["-c".to_string(), "exit".to_string()],
+                ..shell_preset()
+            }
+        }
+
+        #[test]
+        fn a_directory_that_is_gone_asks_where_the_workspace_runs() {
+            let (temp, ctx, mut app) = running_app();
+            let workspace = app.board.create_workspace("moved");
+            let gone = temp.path().join("renamed-away");
+            app.board.workspace_mut(workspace).expect("workspace").cwd = Some(gone);
+
+            app.add_panel_to_workspace(&ctx, workspace, exiting_shell(), None);
+
+            assert!(
+                app.dir_picker.is_some(),
+                "a new panel asks where to run instead of starting in Horizon's own directory"
+            );
+            assert!(app.board.panels.is_empty(), "no panel starts anywhere else");
+        }
+
+        #[test]
+        fn an_existing_directory_starts_the_panel_without_asking() {
+            let (temp, ctx, mut app) = running_app();
+            let workspace = app.board.create_workspace("here");
+            app.board.workspace_mut(workspace).expect("workspace").cwd = Some(temp.path().to_path_buf());
+
+            app.add_panel_to_workspace(&ctx, workspace, exiting_shell(), None);
+
+            assert!(app.dir_picker.is_none(), "the workspace directory is usable");
+            let panel_id = *app.board.panels.first().map(|panel| &panel.id).expect("panel");
+            assert_eq!(
+                app.board.panel(panel_id).and_then(|panel| panel.launch_cwd.clone()),
+                Some(temp.path().to_path_buf())
+            );
+            app.board.shutdown_terminal_panels();
         }
     }
 
