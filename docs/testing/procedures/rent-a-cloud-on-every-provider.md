@@ -224,7 +224,7 @@ tasks at the same time.
    Result: The card shows **Provision worker**, and then **Check readiness**. A
    request above the shared-core limit fails with
    `Provider rejected the request or capacity is unavailable: shared core limit
-   exceeded` within a few seconds. Record that text, and select the next larger
+   exceeded` within a few seconds. Record that text, and select the next smaller
    type that the limit allows.
 
 4. Wait for the ready state.
@@ -249,7 +249,7 @@ tasks at the same time.
    Result: The shell prints `h1774-ui-smoke`, and then
    `docker: command not found`.
 
-6. Run the identity commands of step 5 of task RENT-RP.
+6. Run the identity commands of step 6 of task RENT-RP.
 
    Result: `findmnt` shows `/dev/sdb[/workspace] ext4`, which is the volume of
    the server, and `/etc/horizon-worker` holds the two contract files.
@@ -315,8 +315,10 @@ tasks at the same time.
    az resource list --query "[?tags.\"horizon-operation\"=='<cloud-id>']" -o tsv
    ```
 
-   Result: `az group exists` gives `false`, the group list is empty, and the tag
-   sweep is empty.
+   Result: `az group exists` gives `false`, the group list holds no
+   `horizon-ws-<cloud-id>` of this run, and the tag sweep is empty. The group
+   list can hold a `horizon-ws-*` group of another run; that group is not this
+   run's proof, and you must not delete it.
 
 ## 7. Pass criteria
 
