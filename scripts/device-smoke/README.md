@@ -117,6 +117,13 @@ Horizon itself starts with its own defaults when a configuration does not load,
 and an unchecked file would then show an empty board instead of the presets of
 the test.
 
+`--panels FILE` opens extra workspace panels at start from a JSON list of
+terminal entries, so a procedure that needs an agent panel, a scripted client or
+another command keeps the same viewer and needs no click. An entry without a
+`position` is placed at the right edge of the default board. The fixture checks
+the file before it starts Horizon, and a panel without a `name`, a `kind` that is
+not a string or `args` that is not a list stops it with an error.
+
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The
 agent must be launched inside a supporting Horizon host. Read the endpoint from

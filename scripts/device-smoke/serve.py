@@ -86,7 +86,27 @@ def load_presets(path):
     return presets
 
 
-def application_document(cwd, device_address=None, firefox_system_access=False, presets=None):
+def load_panels(path):
+    """Extra workspace panels of the fixture file, checked before Horizon reads them.
+
+    A procedure needs a panel the fixture does not place by default, such as an agent
+    panel that runs a scripted client. Horizon starts with its own defaults when the
+    config does not load, so the fixture refuses the file first.
+    """
+    panels = json.loads(path.read_text())
+    if not isinstance(panels, list):
+        raise ValueError(f'{path}: the panels must be a JSON list of panels')
+    for index, panel in enumerate(panels):
+        if not isinstance(panel, dict) or not panel.get('name'):
+            raise ValueError(f'{path}: panels[{index}] needs a name')
+        if not isinstance(panel.get('kind', ''), str):
+            raise ValueError(f'{path}: panels[{index}] kind must be a string')
+        if not isinstance(panel.get('args', []), list):
+            raise ValueError(f'{path}: panels[{index}] args must be a list')
+    return panels
+
+
+def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None):
     """Disposable Horizon config. System access stays off unless requested."""
     fixture = {
         'version': 11, 'window': {'width': 1480, 'height': 900},
@@ -121,6 +141,15 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         # The New Workspace menu of the fixture, so a procedure can test an agent that
         # has several presets without changing the real menu of the person.
         fixture['presets'] = presets
+    if extra_panels:
+        # Panels the fixture opens at start, so a procedure that needs an agent panel or
+        # another command keeps one viewer and no manual click.
+        placed = fixture['workspaces'][0]['terminals']
+        for index, panel in enumerate(extra_panels):
+            entry = dict(panel)
+            entry.setdefault('position', [1240, 60 + 500 * index])
+            entry.setdefault('size', [330, 440])
+            placed.append(entry)
     return fixture
 
 
@@ -180,6 +209,11 @@ def main():
         '--presets',
         type=Path,
         help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
+    parser.add_argument(
+        '--panels',
+        type=Path,
+        help='JSON list of extra workspace panels the fixture opens at start, such as an '
+             'agent panel that runs a scripted MCP client')
     args = parser.parse_args()
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
     args.state = args.state.resolve()
@@ -248,8 +282,9 @@ def main():
         spawn('openbox', ['openbox'])
         config = data / 'horizon.yaml'
         presets = load_presets(args.presets) if args.presets else None
+        extra_panels = load_panels(args.panels) if args.panels else None
         fixture = application_document(
-            str(data.resolve()), args.device_address, args.firefox_system_access, presets)
+            str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session))
