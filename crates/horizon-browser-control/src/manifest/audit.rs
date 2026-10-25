@@ -188,13 +188,32 @@ fn append_at(path: &Path, entry: &BrowserAuditEntry) -> std::io::Result<()> {
     append_at_with_limit(path, entry, MAX_AUDIT_SEGMENT_BYTES)
 }
 
+/// Appends one JSON line to a private journal that keeps the browser audit's private
+/// permissions, lock, segment bound and one-step rotation.
+pub(super) fn append_record_at<T: Serialize>(path: &Path, record: &T) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = ManifestLock::acquire(path)?;
+    let mut file = open_private_append(path)?;
+    let encoded = encode_record(record)?;
+    write_entry(&mut file, path, &encoded, MAX_AUDIT_SEGMENT_BYTES)
+}
+
 fn append_at_with_limit(path: &Path, entry: &BrowserAuditEntry, max_segment_bytes: u64) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _lock = ManifestLock::acquire(path)?;
     let mut file = open_private_append(path)?;
-    write_entry(&mut file, path, entry, max_segment_bytes)
+    let encoded = encode_record(entry)?;
+    write_entry(&mut file, path, &encoded, max_segment_bytes)
+}
+
+fn encode_record<T: Serialize>(record: &T) -> std::io::Result<Vec<u8>> {
+    let mut encoded = serde_json::to_vec(record).map_err(std::io::Error::other)?;
+    encoded.push(b'\n');
+    Ok(encoded)
 }
 
 #[derive(Debug, Default)]
@@ -216,9 +235,10 @@ impl AuditSink {
                 path,
             });
         }
+        let encoded = encode_record(entry)?;
         let result = cached.as_mut().map_or_else(
             || Err(std::io::Error::other("audit writer unavailable")),
-            |writer| write_entry(&mut writer.file, &writer.path, entry, MAX_AUDIT_SEGMENT_BYTES),
+            |writer| write_entry(&mut writer.file, &writer.path, &encoded, MAX_AUDIT_SEGMENT_BYTES),
         );
         if result.is_err() {
             cached.take();
@@ -248,14 +268,7 @@ fn open_private_append(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-fn write_entry(
-    file: &mut std::fs::File,
-    path: &Path,
-    entry: &BrowserAuditEntry,
-    max_segment_bytes: u64,
-) -> std::io::Result<()> {
-    let mut encoded = serde_json::to_vec(entry).map_err(std::io::Error::other)?;
-    encoded.push(b'\n');
+fn write_entry(file: &mut std::fs::File, path: &Path, encoded: &[u8], max_segment_bytes: u64) -> std::io::Result<()> {
     let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
     settle_pending_drop(path)?;
     recover_interrupted_rotation(path)?;
@@ -268,7 +281,7 @@ fn write_entry(
         clear_rotation_marker(path)?;
         settle_pending_drop(path)?;
     }
-    file.write_all(&encoded)
+    file.write_all(encoded)
 }
 
 fn stage_drop_for_rotated_segment(path: &Path) -> std::io::Result<()> {

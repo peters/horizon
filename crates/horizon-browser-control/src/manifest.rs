@@ -48,6 +48,7 @@ mod cloud_delete;
 mod cloud_list;
 mod create;
 pub mod device;
+pub mod exec;
 mod image_destination;
 mod ownership;
 pub mod provider_usage;

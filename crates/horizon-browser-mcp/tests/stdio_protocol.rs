@@ -375,6 +375,16 @@ fn assert_companion_tools_contract(tools: &Value) {
         list.get("workspace").is_none(),
         "the caller's workspace is the only scope"
     );
+    let exec = &listed_tool(tools, "cloud_exec")["inputSchema"]["properties"];
+    let exec_fields = exec.as_object().expect("cloud command arguments");
+    assert_eq!(
+        exec_fields
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["cloud", "command", "timeout_millis"].into(),
+        "a command names no user, uid, environment or shell"
+    );
     let listing = listed_tool(tools, "cloud_companions");
     assert!(
         listing["description"]
@@ -501,7 +511,7 @@ fn assert_credential_request_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(38));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(39));
     assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);

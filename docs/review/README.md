@@ -52,7 +52,7 @@ applyTo: "crates/horizon-core/src/dir_search.rs,crates/horizon-core/src/dir_sear
 
 ## The boundary groups
 
-The boundaries divide into eight groups. The group shows the neighbours of a
+The boundaries divide into nine groups. The group shows the neighbours of a
 subsystem, not the crate that holds it. [`trust-boundary-audit.md`](trust-boundary-audit.md)
 gives the untrusted input, the guarantee and the limit of each boundary.
 
@@ -90,6 +90,8 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    create and delete operations that rent and delete a cloud on this machine's
    credentials. Boundaries: `image-publishing`, `repository-setup`,
    `claude-setup-token`, `cloud-create-request`, `cloud-delete-request`.
+9. **Worker command authority** — an agent runs one command in a worker as the
+   unprivileged agent user. Boundaries: `cloud-exec-request`.
 
 ## Checks
 

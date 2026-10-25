@@ -21,6 +21,7 @@ pub(crate) mod cloud_delete;
 pub(crate) mod cloud_list;
 pub(crate) mod companion;
 mod device;
+pub(crate) mod exec;
 mod handoff;
 mod host_answer;
 mod image_destination;
