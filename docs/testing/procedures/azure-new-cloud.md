@@ -339,26 +339,34 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    such as the SSH identity file, and **Start cloud** stays disabled for that
    reason.
 
-3. Rename the settings file, so that the cloud settings folder has no
+3. Open **Menu › Cloud settings**. Press **Save settings**.
+
+   Result: The form closes, and the message that asks for a save is gone. The
+   saved `settings.json` names an `ssh_identity_file` in the cloud settings
+   folder, and that path holds a private SSH key pair. In **New cloud**, the
+   row then reads "SSH key is usable" under **Checks passed**, and **Start
+   cloud** is enabled.
+
+4. Rename the settings file, so that the cloud settings folder has no
    `settings.json`. Move the pointer over the dialog.
 
    Result: The dialog says "No Azure settings on this computer yet" and names
    `token_file`, `subscription_id`, `vm_sizes` and `regions`. It does not show
    an I/O error such as "Cloud state I/O failed".
 
-4. Put the full settings file back under its name. Move the pointer over the
+5. Put the full settings file back under its name. Move the pointer over the
    dialog.
 
    Result: The Azure row and its prices come back without a restart.
 
-5. Write text that is not JSON into `settings.json`. Move the pointer over the
+6. Write text that is not JSON into `settings.json`. Move the pointer over the
    dialog.
 
    Result: The dialog gives the reason that the settings cannot be read. It
    does not say that this computer has no Azure settings, and it does not show
    "Cloud state I/O failed".
 
-6. Put the saved settings file back.
+7. Put the saved settings file back.
 
    Result: The Azure row and its prices come back without a restart.
 
