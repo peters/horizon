@@ -126,12 +126,39 @@ procedure for that provider under `docs/testing/procedures/` and this lane:
   the PR GIF from it under the repository GIF rule.
 - Delete the cloud that the run made, and report the proof of absence for it.
 
+### The cross-provider rent pass is mandatory
+
+A provider PR completes on its own provider. A release that adds a provider, or
+that changes the creation path that every provider shares, also needs one rent
+pass on **every** provider, because the shared path is what a person uses and a
+single provider cannot show a defect that only another provider has.
+
+- The pass follows
+  [Rent a cloud on every provider](../testing/procedures/rent-a-cloud-on-every-provider.md).
+- It runs one provider at a time, and it deletes each cloud before the next
+  provider starts, so one rental bills at a time.
+- It records, per provider, the cloud ID, the machine type, the region, the
+  time to the ready state, the marker output on the worker, the delete time,
+  and the provider API proof that nothing remains.
+- A provider that the pass cannot run, such as one whose account limit refuses
+  the request, is a recorded result with its exact text. A skipped provider is
+  not a passed provider.
+
+The first pass on 2026-10-25 found three differences between the providers that
+no single-provider run had shown: a Hetzner account limit that refuses 8
+shared-core vCPU, a write to the root of `/workspace` that RunPod accepts and
+the host-filesystem providers refuse, and a `docker` command that the base
+worker image does not have on any provider.
+
 ## Consequences
 
 - A provider epic lists the four outcomes as acceptance items, and its last PR
   is the one that records the smoke run.
 - A reviewer refuses a provider UI PR that has no native VNC smoke run and no
   GIF, and a provider PR that a person cannot pick in **New cloud**.
+- A release that adds a provider, or that changes the shared creation path,
+  carries the cross-provider rent pass, and its report names each provider that
+  the pass could not run.
 - A new provider costs one real subscription run. That run is the price of the
   outcomes above, and it is not replaceable with a recorded provider response.
 - `rentable` keeps one meaning. Code that compares prices keeps using
