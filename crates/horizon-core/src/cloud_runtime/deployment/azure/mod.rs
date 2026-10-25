@@ -2,7 +2,8 @@
 //! keeps the workspace on a managed data disk, all inside the cloud's own resource
 //! group. The VM is fenced by the deployment's `operation`; the group and its region
 //! live in this cloud's `azure.json` journal. A stop deallocates the VM, Resume
-//! starts it again, and a delete removes the group and proves it absent.
+//! starts it again, and a delete removes the group and proves it absent. A rebuild
+//! deletes only the VM and makes a new one on the same workspace disk (`rebuild`).
 //!
 //! `providers::preflight` admits an Azure cloud that the settings can make, and
 //! `offers::AZURE_DEPLOYABLE` lets every caller create one. A worker is placed by
@@ -10,6 +11,7 @@
 //! one size and region a worker choice names.
 mod lifecycle;
 mod provision;
+pub(in crate::cloud_runtime) mod rebuild;
 #[cfg(test)]
 mod tests;
 
@@ -80,11 +82,19 @@ pub(super) fn load(root: &Path) -> Result<Journal> {
 
 /// Syncs the file and its directory, as the deployment record does.
 pub(super) fn save(journal: &Journal, root: &Path) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(journal).map_err(|_| Error::Json)?;
+    persist(
+        &serde_json::to_vec_pretty(journal).map_err(|_| Error::Json)?,
+        root,
+        JOURNAL,
+    )
+}
+
+/// Replaces `name` in `root` with `bytes`, durable once this returns.
+fn persist(bytes: &[u8], root: &Path, name: &str) -> Result<()> {
     let mut file = tempfile::NamedTempFile::new_in(root)?;
-    file.write_all(&bytes)?;
+    file.write_all(bytes)?;
     file.as_file().sync_all()?;
-    file.persist(root.join(JOURNAL)).map_err(|error| error.error)?;
+    file.persist(root.join(name)).map_err(|error| error.error)?;
     #[cfg(unix)]
     std::fs::File::open(root)?.sync_all()?;
     Ok(())

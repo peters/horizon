@@ -6,7 +6,7 @@ use super::{Head, Provider, Recipe, Server, Steps, pair};
 use crate::cloud_runtime::{
     Error, Event, Result, browser_auth,
     command::Runner,
-    deployment::{Request, hetzner, image, storage},
+    deployment::{Request, azure, hetzner, image, storage},
     image::{Context, Images},
     registry,
     repository::{
@@ -21,7 +21,7 @@ use crate::cloud_runtime::{
 };
 use horizon_cloud::{
     Build, Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
-    provider::{Description, Rebuild},
+    provider::{Description, Kind, Rebuild},
     runpod::{RunPod, replacement::Observed},
 };
 use std::{
@@ -86,29 +86,70 @@ impl Provider for Pod<'_> {
     }
 }
 
+/// A provider that rebuilds on a new server, and so how its server is released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Host {
+    /// A Hetzner stop deletes the server and keeps the volume, so the release is that stop.
+    Hetzner,
+    /// An Azure stop keeps the VM, so the release deletes the VM and keeps the workspace disk.
+    Azure,
+}
+
+/// The server a rebuild releases: `None` for a provider that switches the worker in
+/// place, the host for one that rebuilds on a new server.
+/// # Errors
+/// Refuses a provider that offers no rebuild.
+pub(super) fn host(rebuild: Rebuild, kind: Kind) -> Result<Option<Host>> {
+    match (rebuild, kind) {
+        (Rebuild::InPlace, _) => Ok(None),
+        (Rebuild::NewServer, Kind::Hetzner) => Ok(Some(Host::Hetzner)),
+        (Rebuild::NewServer, Kind::Azure) => Ok(Some(Host::Azure)),
+        (Rebuild::NewServer, Kind::RunPod | Kind::DockerHost) | (Rebuild::Unsupported, _) => {
+            Err(Error::Invalid(super::UNSUPPORTED))
+        }
+    }
+}
+
 /// Releases and reopens the server of a provider that rebuilds on a new server.
 pub(super) struct Released<'a> {
+    host: Host,
     settings: &'a Settings,
     cancel: &'a Cancellation,
 }
 
 impl<'a> Released<'a> {
-    pub(super) const fn new(settings: &'a Settings, cancel: &'a Cancellation) -> Self {
-        Self { settings, cancel }
+    /// The release of `profile`'s provider.
+    /// # Errors
+    /// Refuses a provider that does not rebuild on a new server.
+    pub(super) fn of(profile: &Profile, settings: &'a Settings, cancel: &'a Cancellation) -> Result<Self> {
+        let description = Description::of(profile);
+        let host = host(description.rebuild, description.kind)?.ok_or(Error::Invalid(IN_PLACE))?;
+        Ok(Self { host, settings, cancel })
     }
 }
 
+const IN_PLACE: &str = "This cloud's provider rebuilds in place, not on a new server";
+
 impl Server for Released<'_> {
     fn released(&self, store: &Store, state: &Deployment) -> Result<bool> {
-        hetzner::rebuild::released(store, state)
+        match self.host {
+            Host::Hetzner => hetzner::rebuild::released(store, state),
+            Host::Azure => azure::rebuild::released(store, state),
+        }
     }
 
     fn release(&self, store: &Store, state: &mut Deployment) -> Result<()> {
-        hetzner::rebuild::release(store, state, self.settings, self.cancel)
+        match self.host {
+            Host::Hetzner => hetzner::rebuild::release(store, state, self.settings, self.cancel),
+            Host::Azure => azure::rebuild::release(store, state, self.settings, self.cancel),
+        }
     }
 
     fn reopen(&self, store: &Store, state: &mut Deployment) -> Result<()> {
-        hetzner::rebuild::reopen(store, state)
+        match self.host {
+            Host::Hetzner => hetzner::rebuild::reopen(store, state),
+            Host::Azure => azure::rebuild::reopen(store, state),
+        }
     }
 }
 
@@ -167,10 +208,10 @@ impl<'a> Live<'a> {
             building && state.publication.as_ref().is_none_or(|record| record.account.is_none()),
             Description::of(&state.profile).kind,
         )?;
-        let (provider, server) = match Description::of(&state.profile).rebuild {
-            Rebuild::InPlace => (Some(RunPod::new(settings.credential()?)), None),
-            Rebuild::NewServer => (None, Some(Released::new(settings, cancel))),
-            Rebuild::Unsupported => return Err(Error::Invalid(super::UNSUPPORTED)),
+        let description = Description::of(&state.profile);
+        let (provider, server) = match host(description.rebuild, description.kind)? {
+            None => (Some(RunPod::new(settings.credential()?)), None),
+            Some(host) => (None, Some(Released { host, settings, cancel })),
         };
         Ok(Self {
             request,
@@ -289,10 +330,16 @@ impl<'a> Live<'a> {
     /// server is released, so an image the new server could not pull never stops it.
     fn hosted(&self, state: &Deployment, digest: String) -> Result<ReplacementImage> {
         let settings = &self.request.settings;
-        let machine = settings.hetzner.as_ref().ok_or(Error::Invalid(
-            "Add a hetzner section to the cloud settings before rebuilding a Hetzner cloud",
-        ))?;
-        if let Some(login) = hetzner::pull_login(machine, settings.registries.as_ref(), &digest)? {
+        let login = match self.server.as_ref().map(|server| server.host) {
+            Some(Host::Azure) => azure::rebuild::pull_login(settings, &digest)?,
+            Some(Host::Hetzner) | None => {
+                let machine = settings.hetzner.as_ref().ok_or(Error::Invalid(
+                    "Add a hetzner section to the cloud settings before rebuilding a Hetzner cloud",
+                ))?;
+                hetzner::pull_login(machine, settings.registries.as_ref(), &digest)?
+            }
+        };
+        if let Some(login) = login {
             horizon_cloud::host::pull::verify_pull(&login, &digest, self.runner.cancel)?;
         }
         let spec = state
@@ -441,5 +488,29 @@ impl Recipe for Runner<'_> {
             .as_ref()
             .ok_or(Error::Invalid("This cloud has no same-worker siblings"))?;
         siblings::latest(set, &state.repository, config, profile, self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Host, host};
+    use horizon_cloud::provider::{Kind, Rebuild};
+
+    #[test]
+    fn a_new_server_rebuild_is_released_by_its_own_provider() {
+        let kinds = [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure];
+        for kind in kinds {
+            assert_eq!(host(Rebuild::InPlace, kind).ok(), Some(None), "{kind:?}");
+            assert!(host(Rebuild::Unsupported, kind).is_err(), "{kind:?}");
+        }
+        assert_eq!(host(Rebuild::NewServer, Kind::Hetzner).ok(), Some(Some(Host::Hetzner)));
+        assert_eq!(
+            host(Rebuild::NewServer, Kind::Azure).ok(),
+            Some(Some(Host::Azure)),
+            "an Azure VM is never released as a Hetzner stop"
+        );
+        for kind in [Kind::RunPod, Kind::DockerHost] {
+            assert!(host(Rebuild::NewServer, kind).is_err(), "no release for {kind:?}");
+        }
     }
 }

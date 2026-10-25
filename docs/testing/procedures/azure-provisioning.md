@@ -2,7 +2,7 @@
 procedure: azure-provisioning
 feature: The Azure worker bootstrap, its ARM deployment, the creation of an Azure worker, and its stop, start and delete
 platforms: [linux]
-cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-18 cost nothing
+cost: rents compute   # tasks AZV-L1 and AZV-L2 only; tasks AZV-01 to AZV-19 cost nothing
 destructive: yes      # task AZV-L2 and the cleanup delete the test resource groups
 secrets: [Azure ARM bearer token file, SSH identity of the cloud settings]
 owner: peters
@@ -17,9 +17,9 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, `horizon_cloud::azure::release`, the `azure` cloud settings, the Azure provider arms or `horizon_core::cloud_runtime::deployment::azure`.
+- Candidate: a pull request of #1774 that changes `horizon_cloud::host`, `horizon_cloud::azure::template`, `horizon_cloud::azure::provision`, `horizon_cloud::azure::lifecycle`, `horizon_cloud::azure::release`, the `azure` cloud settings, the Azure provider arms, the rebuild dispatch in `horizon_core::cloud_runtime::deployment::replacement` or `horizon_core::cloud_runtime::deployment::azure`.
 - Platform: Linux with the repository Rust toolchain.
-- Tasks AZV-01 to AZV-18 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
+- Tasks AZV-01 to AZV-19 use synthetic specs, recorded ARM answers and a loopback ARM endpoint. They need no network and no Azure account.
 - Tasks AZV-L1 and AZV-L2 are the live acceptance. AZV-L1 creates one real VM in an Azure subscription. AZV-L2 stops, resumes and deletes it. Both need the Azure CLI.
 - The trust boundary is in [the Azure provisioning architecture](../../architecture/azure-provisioning.md).
 - This procedure does not test these items:
@@ -28,7 +28,7 @@ It examines the host bootstrap, the metadata guard, the custom data limit and th
 
 ## 3. Safety
 
-Tasks AZV-01 to AZV-18 do not rent compute, delete data, send a secret or change access.
+Tasks AZV-01 to AZV-19 do not rent compute, delete data, send a secret or change access.
 
 > **CAUTION:** TASK AZV-L1 RENTS AN AZURE VM, A DISK AND A STATIC ADDRESS. The subscription pays for them until you delete the resource group. Do the cleanup of this task in the same session.
 
@@ -40,7 +40,7 @@ Tasks AZV-01 to AZV-18 do not rent compute, delete data, send a secret or change
 
 - A checkout of the candidate commit.
 - The repository's supported Rust toolchain.
-- For tasks AZV-01 to AZV-18: no Azure account, Azure credential or provider key.
+- For tasks AZV-01 to AZV-19: no Azure account, Azure credential or provider key.
 - For tasks AZV-L1 and AZV-L2: an Azure subscription with quota for one `Standard_D4s_v3`, the Azure CLI (`az`) signed in to it, `jq`, an SSH identity and a worker image digest that the VM can pull.
 
 ## 5. Setup
@@ -224,7 +224,7 @@ Do the tasks in order. Each task has a stable ID for the report.
    cargo test -p horizon-core --lib -- cloud_runtime::deployment::azure
    ```
 
-   Result: 4 tests pass and 1 test (`live_create`) is ignored. These tests examine the items that follow:
+   Result: 20 tests pass and 4 tests (`live_create`, `live_stop`, `live_resume` and `live_delete`) are ignored. The filter also selects the tests of tasks AZV-14 and AZV-19. These tests examine the items that follow:
    - A create against a loopback ARM endpoint sends these requests in this order: GET of the group, PUT of the group, PUT of the deployment, GET of the VM, GET of the deployment.
    - Each mutation is announced only after its fence is durable. The deployment record has the bound `vmId` and the worker, and `azure.json` has the bound group and the region.
    - After a lost create answer (503), the deployment record keeps `requested`. The next run sends GET requests only and binds the VM.
@@ -355,7 +355,26 @@ Do the tasks in order. Each task has a stable ID for the report.
    - A VM of another `vmId`, a VM or a workspace disk of another operation, and an invalid operation id are refused.
    - A missing workspace disk is refused. Horizon does not start a new VM on an empty disk.
 
-### 6.19 AZV-L1 — Create one live Azure worker
+### 6.19 AZV-19 — Check the rebuild records through the deployment records
+
+1. Run the loopback rebuild tests, the dispatch test and the reconnect tests.
+
+   ```sh
+   cargo test -p horizon-core --lib -- cloud_runtime::deployment::azure::tests::rebuild cloud_runtime::deployment::replacement::live cloud_runtime::deployment::reconnect
+   ```
+
+   Result: All tests pass. These tests examine the items that follow:
+   - A release sends one `DELETE .../virtualMachines/worker`. The record keeps the stage `Replace`, the bound `vmId` and no stop. The worker has no address. `azure.json` does not change, and `retained` stays true.
+   - A retry after a `DELETE` that ARM finished sends no second `DELETE`. It records the release.
+   - A VM whose data disk has no `deleteOption: Detach` is not released. `azure-release.json` is not written.
+   - A cloud whose `azure.json` has `deleting` is not released.
+   - `reopen` refuses a VM that was not released. After the release, it saves the fence `Prepared` and no worker. `released` is cleared, and `held` stays true.
+   - After `reopen`, a deploy sends one `PUT` of the deployment and no delete. It binds a new `vmId` with the same address. The new VM attaches `worker-workspace` on LUN 0 with `createOption: Attach`.
+   - A new-server rebuild selects the Hetzner release for Hetzner and the Azure release for Azure. A rebuild in place has no release. RunPod and a Docker host have no new-server release.
+   - A reconnect of an Azure record without a bound VM is refused. With `held` in `azure-release.json`, it is admitted. With `deleting` in `azure.json`, it is refused.
+   - Before the release, the rebuild checks the pull login of the next VM from the `azure` settings. It does not need a `hetzner` section. A login for another registry than the image's is refused.
+
+### 6.20 AZV-L1 — Create one live Azure worker
 
 Do this task on the computer that has the Azure subscription. Use a new cloud id for each run, for example `azv-l1-01`.
 
@@ -479,7 +498,7 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
 13. Keep the worker of `azv-l1-01` and the state in `$AZV`. Task AZV-L2 stops, resumes and deletes them.
 
-### 6.20 AZV-L2 — Stop, resume and delete the live worker
+### 6.21 AZV-L2 — Stop, resume and delete the live worker
 
 Do this task after task AZV-L1, in the same terminal, with `$AZV` and `$SUB` set. Set the variables of the live tests.
 
@@ -609,12 +628,12 @@ export RG=horizon-ws-azv-l1-01
 
 ## 7. Pass criteria
 
-- Tasks AZV-01 to AZV-18 pass and send no request to Azure.
+- Tasks AZV-01 to AZV-19 pass and send no request to Azure.
 - For the live acceptance, each step of tasks AZV-L1 and AZV-L2 gives its result. AZV-L2 proves each group absent.
 
 ## 8. Cleanup
 
-Tasks AZV-01 to AZV-18 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
+Tasks AZV-01 to AZV-19 make temporary data only. Task AZV-L2 deletes the groups of task AZV-L1. If a run stopped before AZV-L2 ended, do these steps:
 
 1. Examine the tag of each test group that remains. Then delete the group.
 
