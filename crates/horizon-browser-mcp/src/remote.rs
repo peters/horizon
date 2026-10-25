@@ -53,9 +53,7 @@ pub const MAX_STAGED_BYTES: u64 = 512 * 1024 * 1024;
 const REMOTE_EXECUTABLE: &str = "horizon-browser";
 /// The record that a running profile host writes under its runtime root.
 const RECORD: &str = "profile-host.json";
-/// The folder-name prefix of each browser profile of a profile host.
-const PROFILE_PREFIX: &str = "profile-";
-/// Bound of the record and the profile list that the bridge reads first.
+/// Bound of the record that the bridge reads first.
 const MAX_PROBE_BYTES: u64 = 64 * 1024;
 /// The exit code of the probe when the remote runtime root holds no record.
 const PROBE_NO_RECORD: i32 = 3;
@@ -67,12 +65,6 @@ pub enum RemoteBridgeError {
     ActorUnavailable,
     #[error("remote browser host {target} is not running: {reason}")]
     HostUnavailable { target: String, reason: String },
-    #[error("remote browser host {target} does not serve the profile {profile}: {reason}")]
-    ProfileUnavailable {
-        target: String,
-        profile: String,
-        reason: String,
-    },
     #[error("could not use the SSH target {target}: {reason}")]
     Transport { target: String, reason: String },
 }
@@ -80,14 +72,15 @@ pub enum RemoteBridgeError {
 /// Serve the MCP contract of the profile host at the SSH target `target` until
 /// the client closes the stream or the remote server stops.
 ///
-/// `profile` names the browser profile whose pages the callers use. The bridge
-/// refuses a profile that the remote host does not serve, so a person does not
-/// get an empty page list with no reason.
+/// The bridge takes no profile. A caller names a profile as the `target` of a
+/// `browser_create`, and the remote host refuses one that its host file does not
+/// name with its own reason, so the bridge never guesses which profiles the host
+/// serves from the folders of a machine it does not own.
 ///
 /// # Errors
 /// Returns when this computer has no agent identity, when no host runs at
-/// `target`, when `profile` is not served, or when the stream fails.
-pub fn serve(target: &str, profile: Option<&str>) -> Result<(), RemoteBridgeError> {
+/// `target`, or when the stream fails.
+pub fn serve(target: &str) -> Result<(), RemoteBridgeError> {
     let actor = std::env::var(ACTOR_ENV)
         .ok()
         .map(|actor| actor.trim().to_string())
@@ -99,22 +92,6 @@ pub fn serve(target: &str, profile: Option<&str>) -> Result<(), RemoteBridgeErro
         .filter(|root| !root.is_empty())
         .map(PathBuf::from);
     let host = probe(target, root.as_deref())?;
-    if let Some(profile) = profile.map(str::trim).filter(|profile| !profile.is_empty())
-        && !host.profiles.iter().any(|served| served == profile)
-    {
-        return Err(RemoteBridgeError::ProfileUnavailable {
-            target: target.to_string(),
-            profile: profile.to_string(),
-            reason: format!(
-                "its host file names [{}]",
-                if host.profiles.is_empty() {
-                    "no profile".to_string()
-                } else {
-                    host.profiles.join(", ")
-                }
-            ),
-        });
-    }
     let command = command::server_command(&remote_executable(), &actor, &host.host_instance, root.as_deref());
     let mut child = ssh::server(target, &command).map_err(|error| RemoteBridgeError::Transport {
         target: target.to_string(),
@@ -176,8 +153,6 @@ struct RemoteHost {
     root: PathBuf,
     /// The instance that the remote host wrote in `profile-host.json`.
     host_instance: String,
-    /// The browser profiles that the host serves.
-    profiles: Vec<String>,
 }
 
 fn probe(target: &str, root: Option<&std::path::Path>) -> Result<RemoteHost, RemoteBridgeError> {
@@ -205,8 +180,8 @@ fn probe(target: &str, root: Option<&std::path::Path>) -> Result<RemoteHost, Rem
     })
 }
 
-/// Read the answer of the probe: the runtime root, the record, then one folder
-/// name for each browser profile.
+/// Read the answer of the probe: the runtime root and the record of the host
+/// that runs there.
 fn parse_probe(text: &str) -> Option<RemoteHost> {
     let mut lines = text.lines();
     let root = lines.next()?.trim();
@@ -216,15 +191,9 @@ fn parse_probe(text: &str) -> Option<RemoteHost> {
     if root.is_empty() || !manifest::valid_host_instance(host_instance) {
         return None;
     }
-    let profiles = lines
-        .filter_map(|line| line.trim().strip_prefix(PROFILE_PREFIX))
-        .filter(|profile| !profile.is_empty())
-        .map(str::to_string)
-        .collect();
     Some(RemoteHost {
         root: PathBuf::from(root),
         host_instance: host_instance.to_string(),
-        profiles,
     })
 }
 

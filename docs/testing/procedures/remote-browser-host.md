@@ -58,9 +58,9 @@ local connect client.
    horizon --export-config /tmp/settings.yaml
    ```
 
-   Result: the export holds a `browser_host` section. Add `ssh_target` and
-   `profile` to that section, then set it with the Settings window YAML tab, or
-   start Horizon one time with the entry.
+   Result: the export holds a `browser_host` section. Add `ssh_target` to that
+   section, then set it with the Settings window YAML tab, or start Horizon one
+   time with the entry.
 
 3. Start Horizon, then start one agent panel in a workspace.
 
@@ -131,11 +131,12 @@ local connect client.
 
    Result: the agent reports `remote browser host <target> is not running`.
 
-2. Start the host with the host file of a profile `chat` only, and keep
-   `profile: mail` in the entry.
+2. Start the host with the host file of a profile `chat` only. Ask the agent to
+   call `browser_create` with the target `mail`.
 
-   Result: the agent reports `does not serve the profile mail` and names the
-   profiles that the host serves.
+   Result: the result holds the reason of the host itself, `target_unknown`, and
+   says that the profile `mail` is not in the host file. The bridge refuses no
+   profile of its own, because the host decides which profiles it serves.
 
 3. Ask the agent to call `browser_act` with `set_files` and a path outside the
    work root.

@@ -11,13 +11,12 @@ through one SSH transport. The design is in the section "Remote host bridge" of
 
 ## Trusted: the settings entry and the SSH target
 
-Horizon writes the entry `browser_host` with an SSH target and an optional
-profile name. A person does not edit it by hand.
+Horizon writes the entry `browser_host` with an SSH target. A person does not
+edit it by hand.
 
 - The entry refuses an SSH target that `ssh` reads as an option, that holds a
   space or a control character, and that is longer than 255 characters.
-- The entry refuses a profile that is not 1 to 40 of `a-z`, `0-9` and `-` with a
-  letter or a digit at each end, and a profile without an SSH target.
+- The bridge takes no profile, so the entry of this change carries none.
 - The bridge uses the OpenSSH client of this computer. The host key of the
   target is the host key that OpenSSH checks, and the bridge adds no trust of
   its own.
@@ -29,12 +28,15 @@ profile name. A person does not edit it by hand.
 The remote machine writes the record of its profile host and every result that
 the bridge forwards.
 
-- The bridge reads `profile-host.json` and the profile folder names over the SSH
-  transport. It takes only `host_instance` from the record, and it accepts that
-  value only through `manifest::valid_host_instance`.
-- The bridge names the profile of a call only when the profile folder of the
-  remote host has that name. It otherwise refuses with a message that lists the
-  profiles that the host serves.
+- The bridge reads `profile-host.json` over the SSH transport. It takes only
+  `host_instance` from the record, and it accepts that value only through
+  `manifest::valid_host_instance`.
+- The bridge does not pre-validate a profile. A profile reaches the host only as
+  the `target` of a `browser_create` that a caller makes, and the host refuses a
+  profile that its host file does not name with its own typed reason
+  (`target_unknown`), which the bridge forwards unchanged. The folder names under
+  `browser-profiles` are no evidence of what the host serves, because the host
+  never deletes a profile folder.
 - A result is forwarded unchanged, except for the two rewrites. A capture is
   read only when the structured result names a `path`, and only up to 8 MiB.
 - The bytes of a capture are the bytes that the page produced. The person reads

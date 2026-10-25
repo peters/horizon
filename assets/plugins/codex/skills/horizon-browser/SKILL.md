@@ -337,6 +337,37 @@ private PNG on the host's computer; a client started with
 `mcp --connect --inline-screenshots` also gets the PNG as an image block. A
 screenshot counts as an action of the page.
 
+A profile host on another computer is reachable over SSH. Horizon writes the
+`browser_host` entry with the SSH target, or you start the bridge yourself:
+
+```bash
+horizon-browser mcp --connect --inline-screenshots --remote <ssh-target>
+```
+
+The bridge runs `ssh -Tq <ssh-target> horizon-browser mcp --connect
+--inline-screenshots` and forwards the MCP lines of both directions unchanged.
+The pages, the profiles and the cookies stay on that machine. Your actor
+identity crosses, so the host stamps each page for you, and the host instance
+comes from the `profile-host.json` of that machine.
+
+- The bridge refuses with `remote browser host <target> is not running` when no
+  host runs on the runtime root of that machine. It takes no profile and refuses
+  none: name a profile of the host as the `browser_create` target, and the host
+  itself refuses a profile that its host file does not name with
+  `target_unknown`.
+- For `set_files` and `drop_files`, the bridge stages each local path on the
+  remote machine under `<remote root>/browser-staging/call-<id>/` and forwards
+  the remote path, so the page reads a copy. Only a file under the work root or a
+  permitted attachment root is staged, at most 512 MiB in one call. The copy
+  exists on that machine for the duration of the call, and the bridge removes it
+  when the answer arrives.
+- A `browser_video` or `browser_network` result carries its bytes as an MCP
+  resource block up to 8 MiB. A larger capture stays a path on the remote
+  machine, which you cannot open from here.
+- `HORIZON_BROWSER_REMOTE_ROOT` names another runtime root on that machine, and
+  `HORIZON_BROWSER_REMOTE_EXECUTABLE` names another `horizon-browser` program.
+  The SSH target must answer without a prompt.
+
 ## Actions, attachments, and screenshots
 
 `browser_act` operations are `click`, `fill`, `press`, `scroll`, `reload`, `back`,

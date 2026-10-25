@@ -10,12 +10,11 @@ const RECORD: &str =
     r#"{"host_instance":"7c1f8a9e-2b44-4f4c-9d3f-3c0b6f6f2a11","pid":4242,"started_at":1761264000000}"#;
 
 #[test]
-fn the_probe_answer_gives_the_root_the_record_and_the_profiles_of_the_remote_host() {
-    let text = format!("/srv/state\n{RECORD}\nprofile-mail\nprofile-chat\n");
+fn the_probe_answer_gives_the_root_and_the_record_of_the_remote_host() {
+    let text = format!("/srv/state\n{RECORD}\n");
     let host = parse_probe(&text).expect("a running host");
     assert_eq!(host.root, std::path::PathBuf::from("/srv/state"));
     assert_eq!(host.host_instance, "7c1f8a9e-2b44-4f4c-9d3f-3c0b6f6f2a11");
-    assert_eq!(host.profiles, vec!["mail".to_string(), "chat".to_string()]);
 }
 
 #[test]
@@ -32,23 +31,39 @@ fn a_record_that_no_running_host_wrote_is_not_a_host() {
     );
     assert!(
         parse_probe(&format!("/srv/state\n{RECORD}\n")).is_some(),
-        "a host with no profile yet is still a host"
+        "the probe answer takes no further line"
     );
 }
 
 #[test]
-fn a_profile_that_the_remote_host_does_not_serve_names_the_reason() {
-    let error = RemoteBridgeError::ProfileUnavailable {
-        target: "browser-vm".to_string(),
-        profile: "mail".to_string(),
-        reason: "its host file names [chat]".to_string(),
-    };
-    let message = error.to_string();
-    assert!(message.contains("browser-vm"), "{message}");
-    assert!(message.contains("mail"), "{message}");
-    assert!(
-        message.contains("chat"),
-        "the answer names what the host serves: {message}"
+fn a_profile_that_the_host_does_not_serve_reaches_it_and_is_refused_there() {
+    let relay = super::relay::Relay::new("browser-vm".to_string(), std::path::PathBuf::from("/srv/state"));
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {"name": "browser_create", "arguments": {"target": "mail", "url": "https://example.com"}}
+    })
+    .to_string();
+    assert_eq!(
+        relay.request(request.as_bytes()),
+        request.as_bytes(),
+        "the bridge takes no profile of its own, so the host receives the profile of the call"
+    );
+    let refusal = json!({
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+            "content": [{"type": "text", "text":
+                "browser action create-1 failed (target_unknown): profile `mail` is not in the host file"}],
+            "isError": true
+        }
+    })
+    .to_string();
+    assert_eq!(
+        relay.response(refusal.as_bytes()),
+        refusal.as_bytes(),
+        "the reason of the host reaches the caller unchanged"
     );
 }
 

@@ -400,11 +400,11 @@ user, with the same root.
 
 An agent that runs on the computer of the person can use the profile host of
 another machine. Horizon writes one setting, `browser_host`, with the SSH target
-of that machine and an optional profile name. It then gives each agent this MCP
-entry, which runs the bridge of this computer:
+of that machine. It then gives each agent this MCP entry, which runs the bridge
+of this computer:
 
 ```text
-<horizon> --browser-mcp --remote <ssh-target> [--profile <name>]
+<horizon> --browser-mcp --remote <ssh-target>
 ```
 
 The bridge starts the server of the other machine through one `ssh` call and
@@ -412,7 +412,7 @@ forwards the JSON-RPC lines of both directions. The same bridge is available
 from the CLI, which is how the tests and a script reach it:
 
 ```bash
-horizon-browser mcp --connect --inline-screenshots --remote browser-vm --profile mail
+horizon-browser mcp --connect --inline-screenshots --remote browser-vm
 ```
 
 The process on the other machine is:
@@ -427,8 +427,12 @@ env HORIZON_BROWSER_ACTOR=<actor of the agent> \
   stamps each page for it, so one agent sees the pages that it opened.
 - The host instance is the one that the remote host wrote in its
   `profile-host.json`. The bridge reads it over the same SSH transport before it
-  forwards a line, and it refuses with a typed reason when no host runs there or
-  when the named profile is not in the host file of that machine.
+  forwards a line, and it refuses with a typed reason when no host runs there.
+- The bridge takes no profile and names none. A caller names a profile of the
+  host as the `browser_create` target, and the host refuses a profile that its
+  host file does not name with its own reason (`target_unknown`). A folder under
+  `browser-profiles` of that machine is not proof that the host serves the
+  profile, because the host never deletes a profile folder.
 - The runtime root of the remote host is its default, `$HOME/.horizon`. To use
   another root, set `HORIZON_BROWSER_REMOTE_ROOT` to that path on the remote
   machine.
