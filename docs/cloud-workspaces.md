@@ -1915,11 +1915,14 @@ Horizon then releases any hosted devices and switches the existing worker to the
 new image through the provider's pod update, which keeps the worker ID. A Hetzner
 cloud instead releases its server and starts a new one, with a new server ID and
 address, on the same workspace volume; see
-[Hetzner](cloud-hetzner.md#rebuilding-the-image). On either provider `/workspace`
+[Hetzner](cloud-hetzner.md#rebuilding-the-image). An Azure cloud deletes its VM and
+starts a new one, with a new VM ID and the same address, on the same workspace disk;
+see [Azure provisioning](architecture/azure-provisioning.md#the-rebuild-records-of-an-azure-cloud).
+On each provider `/workspace`
 (worktrees, agent logins, SSH host keys) survives; the container disk is reset and
 running processes end. The worker gets the new capabilities in its
 environment: the pod update sends them on RunPod, and the new server gets them on
-Hetzner. The cloud's profile changes only when the worker runs the new image. Until
+Hetzner and Azure. The cloud's profile changes only when the worker runs the new image. Until
 then, and after a cancelled rebuild, the cloud keeps its previous profile. After
 readiness, Horizon gives the credentials of each added agent to the worker, as for a
 new cloud, and relaunches each session's process in its existing worktree without

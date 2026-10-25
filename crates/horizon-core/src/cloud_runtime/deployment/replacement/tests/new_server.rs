@@ -427,3 +427,183 @@ fn a_mismatched_journal_is_refused_before_the_server_is_touched() {
     assert!(cancel_new(&fixture, &steps).is_err());
     assert!(steps.hosting.calls.borrow().is_empty(), "the server was never released");
 }
+
+/// An Azure cloud as `Fixture` records a `RunPod` one: its workspace disk lives in
+/// its resource group, not in a `RunPod` storage journal.
+fn azure() -> Fixture {
+    let fixture = Fixture::new();
+    std::fs::remove_file(fixture.root.join("workspace-volume.json")).unwrap();
+    fixture.edit(|state| {
+        state.profile.provider = horizon_cloud::azure::PROVIDER.into();
+        state.spec.as_mut().unwrap().profile = state.profile.clone();
+        state.spec.as_mut().unwrap().registry_auth_id = None;
+    });
+    fixture
+}
+
+fn new_server(script: &Script) -> NewServer<'_> {
+    NewServer {
+        script,
+        hosting: Hosting::default(),
+    }
+}
+
+#[test]
+fn every_provider_is_released_by_its_own_rebuild() {
+    use super::super::live::{Host, host};
+    use horizon_cloud::provider::{AZURE, DOCKER_HOST, HETZNER, RUNPOD};
+    let of = |description: &horizon_cloud::provider::Description| {
+        host(description.rebuild, description.kind).map_err(|error| error.to_string())
+    };
+    assert_eq!(of(&RUNPOD), Ok(None), "RunPod switches the worker in place");
+    assert_eq!(of(&HETZNER), Ok(Some(Host::Hetzner)));
+    assert_eq!(
+        of(&AZURE),
+        Ok(Some(Host::Azure)),
+        "Azure releases its own VM, not through Hetzner"
+    );
+    assert_eq!(of(&DOCKER_HOST), Err(super::super::UNSUPPORTED.to_owned()));
+}
+
+#[test]
+fn only_a_docker_host_is_refused_as_a_provider_and_its_record_is_unchanged() {
+    let fixture = Fixture::new();
+    fixture.edit(|state| {
+        state.profile.provider = horizon_cloud::provider::DOCKER_HOST.id.into();
+        state.spec.as_mut().unwrap().profile = state.profile.clone();
+    });
+    let before = std::fs::read(fixture.root.join("deployment.json")).unwrap();
+    let state = fixture.state();
+    let request = Request::new(
+        state.cloud_id.clone(),
+        state.repository.clone(),
+        state.revision.clone(),
+        state.profile.clone(),
+        fixture.root.clone(),
+        serde_json::from_value(json!({
+            "runpod_key_file": "/unused", "ssh_identity_file": "/unused", "docker_config": "/unused",
+            "cpu_flavors": [], "gpu_types": []
+        }))
+        .unwrap(),
+    );
+    // Refused before the checkout's recipe is read: the repository does not exist.
+    let refusal = super::super::rebuild(&request, "dev", None, &Cancellation::default(), &|_| {})
+        .unwrap_err()
+        .to_string();
+    assert_eq!(refusal, super::super::UNSUPPORTED);
+    assert_eq!(std::fs::read(fixture.root.join("deployment.json")).unwrap(), before);
+
+    // An Azure cloud passes the provider check and meets the next refusal in order.
+    let fixture = azure();
+    assert!(
+        ready(&fixture.state()).is_ok(),
+        "a ready Azure cloud with a recipe rebuilds"
+    );
+    fixture.edit(|state| state.profile.build = None);
+    assert_eq!(
+        ready(&fixture.state()).unwrap_err().to_string(),
+        super::super::NO_RECIPE
+    );
+    fixture.edit(|state| state.stage = Stage::Stopped);
+    assert_eq!(
+        ready(&fixture.state()).unwrap_err().to_string(),
+        super::super::NO_RECIPE
+    );
+    let fixture = azure();
+    fixture.edit(|state| state.stage = Stage::Stopped);
+    assert_eq!(
+        ready(&fixture.state()).unwrap_err().to_string(),
+        super::super::NOT_READY
+    );
+}
+
+#[test]
+fn an_azure_rebuild_releases_the_vm_and_commits_the_image_with_the_fence_cleared() {
+    let fixture = azure();
+    let script = Script::new(&fixture);
+    let steps = new_server(&script);
+    assert_eq!(rebuild_new(&fixture, &steps).unwrap(), Driven::Committed);
+    assert_committed(&fixture, &steps);
+    assert_eq!(*steps.hosting.calls.borrow(), ["release", "reopen"]);
+    assert_eq!(script.count("build"), 1);
+}
+
+#[test]
+fn an_interrupted_azure_rebuild_continues_and_a_cancel_keeps_or_replaces_the_vm() {
+    for boundary in [Boundary::Built, Boundary::Requested, Boundary::Released] {
+        let fixture = azure();
+        let script = Script::new(&fixture);
+        let steps = new_server(&script);
+        steps.hosting.fail_at.set(Some(boundary));
+        assert!(rebuild_new(&fixture, &steps).is_err(), "{boundary:?}");
+        steps.hosting.fail_at.set(None);
+        continue_new(&fixture, &steps).unwrap();
+        assert_committed(&fixture, &steps);
+        assert_eq!(script.count("build"), 1, "{boundary:?}");
+    }
+    // Cancelled before the release: the same VM, image and stage.
+    let fixture = azure();
+    let before = fixture.state();
+    let script = Script::new(&fixture);
+    let steps = new_server(&script);
+    steps.hosting.fail_at.set(Some(Boundary::Requested));
+    assert!(rebuild_new(&fixture, &steps).is_err());
+    assert_eq!(cancel_new(&fixture, &steps).unwrap(), flow::Cancelled::Untouched);
+    assert_eq!(
+        serde_json::to_value(fixture.state()).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+    assert!(steps.hosting.calls.borrow().is_empty(), "the VM was never touched");
+    // Cancelled after the release began: a new VM on the previous image.
+    let fixture = azure();
+    let script = Script::new(&fixture);
+    let steps = new_server(&script);
+    steps.hosting.release_fails.set(true);
+    assert!(rebuild_new(&fixture, &steps).is_err());
+    assert_eq!(cancel_new(&fixture, &steps).unwrap(), flow::Cancelled::Released);
+    let after = fixture.state();
+    assert_eq!(after.spec, before.spec, "the previous image is kept");
+    assert_eq!(
+        (after.operation, after.stage),
+        (CreateState::Prepared, Stage::Readiness)
+    );
+    assert!(after.image_replacement.is_none() && after.session_restart.is_some());
+}
+
+#[test]
+fn an_interrupted_azure_release_is_never_reconnected_around_or_read_as_a_stop() {
+    use crate::cloud_runtime::{deployment::Compute as _, settings::Settings, state::REPLACEMENT_PENDING};
+    let fixture = azure();
+    let script = Script::new(&fixture);
+    let steps = new_server(&script);
+    steps.hosting.release_fails.set(true);
+    assert!(rebuild_new(&fixture, &steps).is_err());
+    let token = fixture.root.join("azure-token");
+    std::fs::write(&token, "synthetic-arm-token").unwrap();
+    std::fs::set_permissions(&token, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file": fixture.root.join("unused"), "ssh_identity_file": fixture.root.join("unused"),
+        "docker_config": fixture.root.join("unused"), "cpu_flavors": [], "gpu_types": [],
+        "azure": {"token_file": token, "subscription_id": "00000000-0000-4000-8000-000000000001",
+            "vm_sizes": ["Standard_D4s_v3"], "regions": ["northeurope"]}
+    }))
+    .unwrap();
+    let store = fixture.store();
+    let mut state = store.load().unwrap().unwrap();
+    let cancel = Cancellation::default();
+    // A reconnect would place a VM around the rebuild.
+    let compute = crate::cloud_runtime::deployment::azure::Compute::new(&settings).unwrap();
+    let refused = compute
+        .settle(&store, &mut state, &cancel, crate::cloud_runtime::mutation::IGNORE)
+        .unwrap_err();
+    assert_eq!(refused.to_string(), REPLACEMENT_PENDING);
+    // A provider check would read the deleted VM as missing.
+    let refused = crate::cloud_runtime::providers::lifecycle(&state, &settings)
+        .check(&store, &mut state, None, &cancel)
+        .unwrap_err();
+    assert_eq!(refused.to_string(), REPLACEMENT_PENDING);
+    drop(store);
+    let kept = fixture.state();
+    assert_eq!(kept.stage, Stage::Replace);
+    assert!(kept.image_replacement.as_ref().unwrap().requested());
+}

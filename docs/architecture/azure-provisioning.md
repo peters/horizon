@@ -69,8 +69,11 @@ These items do not change:
 - `providers::preflight` checks an Azure cloud before a record is written: a
   workspace disk from 4 to 32,767 GB, a cloud id that can name its group, a
   readable token and a VM size of the settings that fits the profile.
-- Release refuses: an Azure profile cannot have hosted devices. Rebuild is
-  `Rebuild::Unsupported`: `settle` refuses a requested image replacement.
+- Release refuses: an Azure profile cannot have hosted devices.
+- A rebuild is `Rebuild::NewServer`. It deletes the VM and starts a new one on
+  the same workspace disk ([the rebuild records](#the-rebuild-records-of-an-azure-cloud)).
+  While a rebuild is requested, `settle` and Check refuse, so a reconnect cannot
+  place a VM around the rebuild.
 - Only a direct caller of `deployment::azure::provision`, such as the loopback
   tests and the ignored live test `live_create`, creates a worker.
 
@@ -202,6 +205,12 @@ the VM, so the Azure release is `azure::release`.
   the new image. It uses the machine's registry binding for the image, or else
   `azure.registry_pull`, as provisioning does. It does not read the `hetzner`
   section.
+- `provider::AZURE` has `StoppedCost::WorkerKept` and `Rebuild::NewServer`. No
+  other provider has this pair. Thus the card and `cloud_deploy plan-rebuild`
+  offer a rebuild for an Azure cloud that has a recipe, as for Hetzner.
+- The new VM has a new `vmId`. The static address, the network interface and the
+  workspace disk stay. The container keeps its SSH host keys on `/workspace`, so
+  the address and the host key do not change. The card says that the address stays.
 
 ### The lifecycle of an Azure cloud
 

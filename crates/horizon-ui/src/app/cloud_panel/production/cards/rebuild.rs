@@ -46,6 +46,8 @@ const CANCEL_REQUESTED: &str = "Cancel the image switch? The worker switches bac
 /// On a provider that rebuilds on a new server (`provider::Rebuild::NewServer`).
 const NEW_SERVER: &str =
     " The server is released and a new one starts on the same workspace volume, with a new address.";
+/// On Azure, whose rebuild deletes the VM and keeps its workspace disk and static address.
+const NEW_VM: &str = " The VM is deleted and a new one starts on the same workspace disk, with the same address.";
 const REQUESTED_NEW_SERVER: &str = "The rebuild may have released the server. Continue to start a new server on the rebuilt image, or cancel to start one on the previous image; before the release the cloud keeps its server.";
 const CANCEL_REQUESTED_NEW_SERVER: &str = "Cancel the rebuild? If the server was already released, a new one starts on the previous image on the same workspace volume. Running agent processes restart; files under /workspace are kept.";
 
@@ -56,6 +58,16 @@ fn on_public_base(runtime: &Runtime) -> bool {
         .state
         .as_ref()
         .is_some_and(|state| cloud_runtime::repository::launch::quick_start::on_public_base(&state.profile))
+}
+
+/// What the confirmation adds for a provider that rebuilds on a new server: Azure
+/// keeps the static address, Hetzner gives the new server a new one.
+fn new_server_text(runtime: &Runtime) -> &'static str {
+    let on_azure = runtime
+        .state
+        .as_ref()
+        .is_some_and(|state| state.profile.provider == cloud_runtime::provider::AZURE.id);
+    if on_azure { NEW_VM } else { NEW_SERVER }
 }
 
 /// Whether the cloud's provider rebuilds on a new server rather than in place.
@@ -250,7 +262,7 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
     } else {
         (OFFER, CONFIRMATION)
     };
-    let new_server = new_server(runtime);
+    let new_server = new_server(runtime).then(|| new_server_text(runtime));
     let base = on_public_base(runtime);
     let Confirmation::Rebuild(preview) = &mut runtime.confirmation else {
         let detail = if base {
@@ -283,8 +295,8 @@ pub(super) fn offer(ui: &mut egui::Ui, runtime: &mut Runtime) -> Option<Action> 
             ui.colored_label(egui::Color32::LIGHT_RED, format!("Rebuild refused: {reason}"));
         }
         Some(Ok(plan)) => {
-            if new_server {
-                ui.label(format!("{confirmation}{NEW_SERVER}"));
+            if let Some(new_server) = new_server {
+                ui.label(format!("{confirmation}{new_server}"));
             } else {
                 ui.label(confirmation);
             }

@@ -580,6 +580,41 @@ fn a_new_server_rebuild_says_that_the_server_is_replaced() {
 }
 
 #[test]
+fn an_azure_rebuild_says_that_the_vm_is_replaced_and_keeps_its_address() {
+    let ctx = egui::Context::default();
+    let azure = |phase| {
+        let mut runtime = hetzner(true, phase);
+        let state = runtime.state.as_mut().unwrap();
+        state.profile.provider = cloud_runtime::provider::AZURE.id.into();
+        if let Some(spec) = &mut state.spec {
+            spec.profile.provider = cloud_runtime::provider::AZURE.id.into();
+        }
+        runtime
+    };
+    let mut runtime = azure(Phase::None);
+    assert!(
+        has(&texts(&ctx, &mut runtime), "Rebuild image & restart…"),
+        "Azure offers Rebuild"
+    );
+    runtime.confirmation = read(&runtime, &[], None);
+    let confirming = texts(&ctx, &mut runtime);
+    assert!(has(&confirming, &format!("{CONFIRMATION}{NEW_VM}")));
+    assert!(
+        !has(&confirming, &format!("{CONFIRMATION}{NEW_SERVER}")),
+        "the address stays"
+    );
+
+    let mut runtime = azure(Phase::Requested);
+    assert!(has(&texts(&ctx, &mut runtime), REQUESTED_NEW_SERVER));
+    assert!(click(&ctx, &mut runtime, "Cancel rebuild…").is_none());
+    assert!(has(&texts(&ctx, &mut runtime), CANCEL_REQUESTED_NEW_SERVER));
+    assert!(matches!(
+        click(&ctx, &mut runtime, "Cancel and keep the previous image"),
+        Some(Action::CancelRebuild)
+    ));
+}
+
+#[test]
 fn rebuild_outcomes_stay_on_the_card() {
     let ctx = egui::Context::default();
     let mut runtime = ready(true, Phase::None);
