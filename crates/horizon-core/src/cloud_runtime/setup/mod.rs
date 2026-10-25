@@ -250,7 +250,11 @@ impl Draft {
             });
         }
         self.settings.hetzner = self.hetzner.save(self.settings.hetzner.as_ref(), &mut write)?;
-        if !self.settings.ssh_identity_file.exists() && self.settings.ssh_identity_file == default_identity(&self.root)
+        // A settings file that names no identity, such as one with only an `azure` section,
+        // gets one here: this save is what the message that asks for an identity points at.
+        let default = default_identity(&self.root);
+        if self.settings.ssh_identity_file.as_os_str().is_empty()
+            || (self.settings.ssh_identity_file == default && !self.settings.ssh_identity_file.exists())
         {
             self.settings.ssh_identity_file = write.ssh_identity()?;
         }

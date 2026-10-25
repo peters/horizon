@@ -577,3 +577,38 @@ fn an_azure_section_is_somewhere_for_clouds_to_run() {
     assert!(saved.azure_configured());
     assert!(!saved.runpod_configured());
 }
+
+/// A settings file with only an `azure` section names no SSH identity, so Start asks for one
+/// and points at Cloud settings. That save is where the identity is made.
+#[cfg(unix)]
+#[test]
+fn a_save_on_a_machine_with_only_an_azure_section_makes_the_identity_start_asks_for() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("arm-token");
+    std::fs::write(&token, "synthetic-arm-token").unwrap();
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(
+        root.path().join("settings.json"),
+        serde_json::json!({
+            "azure": {
+                "token_file": token,
+                "subscription_id": "00000000-0000-4000-8000-000000000001",
+                "vm_sizes": ["Standard_D4s_v3"],
+                "regions": ["northeurope"],
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let draft = Draft::load(root.path()).unwrap();
+    assert!(
+        draft.settings.ssh_identity_file.as_os_str().is_empty(),
+        "a file with only an azure section names no identity"
+    );
+    let saved = draft.save().unwrap();
+    assert!(saved.ssh_identity_file.starts_with(root.path()));
+    settings::validate_ssh_identity(&saved.ssh_identity_file).unwrap();
+    assert!(saved.azure_configured());
+    assert!(!saved.runpod_configured());
+}
