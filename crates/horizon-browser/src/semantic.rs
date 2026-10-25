@@ -510,7 +510,6 @@ pub(crate) fn focused_document_expression() -> &'static str {
         return {
             focused: document.hasFocus(),
             activeIsFrame: tag === 'IFRAME' || tag === 'FRAME',
-            activeIsRoot: !active || active === document.body || active === document.documentElement,
         };
     })()"
 }
