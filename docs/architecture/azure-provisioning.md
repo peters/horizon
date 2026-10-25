@@ -23,7 +23,8 @@ decide where the worker can go:
 
 - New cloud lists an Azure entry in its heading for every profile that Azure can
   run. The entry is a choice: it moves the cloud to Azure and takes the cheapest
-  VM size and region that the section allows. Without an `azure` section the
+  VM size and region that the section allows, also when the prices arrive after
+  the choice. Without an `azure` section the
   entry says which settings to add, and Azure offers no worker. New cloud lists
   workers only when the machine has an `azure` section with a readable token,
   and only the VM sizes and regions of that section that the retail catalog

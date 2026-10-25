@@ -105,6 +105,10 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
    Result: `$CLOUD/settings.json` exists. It has no `azure` section.
 
+   A test key is sufficient for this procedure. The RunPod check then says
+   "Provider authentication failed". That line belongs to the test key. It is
+   not an Azure finding.
+
 ## 6. Tasks
 
 ### 6.1 ANC-T — Run the headless tests
@@ -124,7 +128,8 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    - With a section whose token cannot be read, the dialog shows the reason and
      no Azure row.
    - With a valid section, the heading's Azure entry starts the cloud on the
-     cheapest VM size and region that the section allows.
+     cheapest VM size and region that the section allows, also when the prices
+     arrive after the choice.
    - With a valid section, the dialog lists only its VM sizes and regions,
      prices them in US dollars, and records the chosen size and region in the
      new cloud.
@@ -191,6 +196,9 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    Result: The Azure entry in the heading is no longer dimmed. **All machines
    and filters** shows an **Azure** filter.
 
+   Horizon reads the settings again after they are saved. A dialog that is
+   already open needs no second start.
+
 4. Click the Azure entry in the heading.
 
    Result: The Azure entry is marked as the cloud's provider. No line under the
@@ -198,6 +206,13 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
    profile development" and the cheapest VM size and region that the section
    allows: **VM size** `Standard_D4s_v3` and `northeurope`. The amount lines are
    in `$`.
+
+5. Close the dialog. Open it again. Click the Azure entry before the Azure
+   prices load.
+
+   Result: The Azure entry is marked as the cloud's provider. When the prices
+   load, the summary shows **VM size** `Standard_D4s_v3` and `northeurope`
+   without another click. **Start cloud** becomes available.
 
 5. Click the **Azure** filter.
 

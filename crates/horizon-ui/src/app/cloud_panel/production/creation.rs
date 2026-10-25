@@ -554,6 +554,7 @@ fn heading(ui: &mut Ui, form: &mut Production) {
     if let Some(provider) = chosen.filter(|_| form.profiles.is_some()) {
         provider::choose(form, provider);
     }
+    provider::settle(form);
 }
 
 fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> egui::Response {

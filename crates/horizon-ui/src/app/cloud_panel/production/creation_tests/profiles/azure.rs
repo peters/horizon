@@ -218,3 +218,40 @@ fn the_heading_starts_an_azure_cloud_on_the_size_and_region_the_settings_allow()
     assert_eq!(launch.placement.cpu_types, ["Standard_D4s_v3"]);
     assert_eq!(launch.placement.data_centers, ["northeurope"]);
 }
+
+#[test]
+fn an_azure_choice_settles_on_the_settings_when_its_prices_arrive_later() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    // The person chooses Azure while the machine has read no prices yet.
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, azure_entry(&output).center());
+    assert_eq!(
+        app.cloud_prototype.production.provider,
+        Some(&horizon_core::cloud_runtime::provider::AZURE)
+    );
+    assert!(app.cloud_prototype.production.placement.cpu_types.is_empty());
+
+    // The settings section and its prices arrive after the choice.
+    azure_binding(&mut app);
+    let text = painted(&tall_frame(&ctx, &mut app));
+    let form = &app.cloud_prototype.production;
+    assert_eq!(
+        form.placement.cpu_types,
+        ["Standard_D4s_v3"],
+        "the cheapest worker the settings allow: {text}"
+    );
+    assert_eq!(form.placement.data_centers, ["northeurope"], "{text}");
+    assert!(!text.contains("Choose an Azure VM size and region."), "{text}");
+    assert!(azure_offers_are_never_rentable(&app));
+
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "azure");
+    assert_eq!(launch.placement.cpu_types, ["Standard_D4s_v3"]);
+    assert_eq!(launch.placement.data_centers, ["northeurope"]);
+}
