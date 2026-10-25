@@ -43,6 +43,7 @@ documents that are not yet STE.
 | [host-registry-management](procedures/host-registry-management.md) | Host-only pull checks and separate provider access | none |
 | [browser-engine-panels](procedures/browser-engine-panels.md) | One browser panel per engine for each agent | none |
 | [browser-vm-image](procedures/browser-vm-image.md) | Browser image: display, VNC on the loopback, profile host, sign-in that stays | none |
+| [browser-vm-egress](procedures/browser-vm-egress.md) | Browser image: home egress through a SOCKS5 proxy over SSH, and the observed answer when it fails | none |
 | [browser-firefox-disclosure](procedures/browser-firefox-disclosure.md) | Firefox native webdriver getter and sign-in field | none |
 | [browser-passkey-bridge](procedures/browser-passkey-bridge.md) | Browser WebAuthn bridge to an external authenticator command | none |
 | [browser-recording](procedures/browser-recording.md) | Browser panel video and toolbar icons | none |
