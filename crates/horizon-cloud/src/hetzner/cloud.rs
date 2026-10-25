@@ -9,6 +9,7 @@ use super::{
 };
 use crate::{CloudError, CreateState, Worker, WorkerSpec, WorkerStatus, host};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 mod lifecycle;
 mod provision;
@@ -251,18 +252,32 @@ pub fn supported(spec: &WorkerSpec) -> Result<(), CloudError> {
 }
 
 /// The host plan for this worker. The environment matches what the worker image
-/// expects from any provider; nothing secret is in it but the registry login.
+/// expects from any provider; nothing secret is in it but the registry login. A
+/// browser VM takes no environment: it reads its profile folder from `/state`.
 /// # Errors
 /// Fails only if the capabilities cannot be serialized.
-pub fn plan(spec: &WorkerSpec, device: &str, registry: Option<host::RegistryLogin>) -> Result<host::Plan, CloudError> {
+pub fn plan(
+    spec: &WorkerSpec,
+    device: &str,
+    registry: Option<host::RegistryLogin>,
+    purpose: host::Purpose,
+) -> Result<host::Plan, CloudError> {
     Ok(host::Plan {
         image: spec.image_digest.clone(),
-        environment: spec.container_environment()?,
+        environment: match purpose {
+            host::Purpose::Worker => spec.container_environment()?,
+            host::Purpose::BrowserVm => BTreeMap::new(),
+        },
         registry,
         workspace_device: device.to_owned(),
-        shm_gb: shared_memory_gb(spec.profile.memory_gb),
-        exposure_ingress: spec.profile.bootstrap.exposure_ingress,
+        // The image itself documents one shared-memory gigabyte for Chromium.
+        shm_gb: match purpose {
+            host::Purpose::Worker => shared_memory_gb(spec.profile.memory_gb),
+            host::Purpose::BrowserVm => 1,
+        },
+        exposure_ingress: purpose == host::Purpose::Worker && spec.profile.bootstrap.exposure_ingress,
         platform: host::Platform::Prepared,
+        purpose,
     })
 }
 

@@ -427,5 +427,28 @@ not OS acknowledgement. Capture claims ownership and refuses another live owner,
 human steering, or pending handoff. It changes no focus, visibility, or canvas.
 Copy needed evidence before panel close or host exit; only eight exports remain.
 
+## The browser VM
+
+`browser_vm` rents one dedicated machine that runs the browser image of issue
+1780, so a person signs in to each site one time.
+
+- `deploy` needs an immutable image reference (`name@sha256:...`, never a tag)
+  and a dedicated `ccx` server type such as `ccx13`. It uses the first location
+  of the Hetzner settings and a 20 GB state volume unless the request names
+  them. It answers with the phase it started.
+- `status` reads the record and touches no provider. Poll it until the phase is
+  `ready`, `stopped`, `deleted` or `failed`.
+- `stop` releases the server and keeps the state volume, so the sign-ins stay.
+  `resume` rents a new server on that volume. `delete` removes the server and
+  the volume, and it is the only operation that removes a sign-in.
+- A `ready` answer holds `ssh_target` (`root@<address>`), a route for the native
+  Device panel and a `person_step`. A person must sign in: open that panel as the
+  `horizon-device` skill describes, with the `ssh` route of the answer, and ask
+  the person to sign in to the sites on the display. An agent cannot do that step.
+- The `ssh_target` is the `browser_host` entry of the Settings window. It
+  applies at the next start of Horizon.
+- One run at a time. A second run is refused with `browser_vm_busy`. A failed
+  run keeps its record, so you retry or delete it, and never rent twice.
+
 Casting uses `horizon-cast`. Cloud offers and companions use `horizon-cloud`.
 Native iOS and Android sessions use `horizon-app-testing`.

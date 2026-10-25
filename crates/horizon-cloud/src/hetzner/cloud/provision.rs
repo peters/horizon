@@ -51,6 +51,8 @@ pub struct Request<'a> {
     /// Whether the caller holds nothing of a previous workspace, as after a
     /// redeploy. A deleted cloud starts afresh only then.
     pub fresh: bool,
+    /// What the host runs: the unchanged worker image, or the browser VM image.
+    pub purpose: host::Purpose,
 }
 
 /// Provisions the cloud's worker, or reconnects to the one it has, and returns
@@ -75,6 +77,7 @@ pub fn provision(
         policy,
         login,
         fresh,
+        purpose,
     } = request;
     let operation_id = spec.operation_id.as_str();
     // The worker's key, image digest and machine types are part of the host
@@ -94,7 +97,7 @@ pub fn provision(
     // The whole host configuration is rendered once before the first request.
     // The volume's real device path is only known after it exists, and can only
     // be shorter than the probe's.
-    let mut host = plan(spec, PROBE_DEVICE, login)?;
+    let mut host = plan(spec, PROBE_DEVICE, login, purpose)?;
     host.cloud_config()?;
     reopen(journal, operation, fresh, records)?;
     // A volume fixes the location. Until one exists, every allowed location with a
@@ -151,14 +154,7 @@ pub fn provision(
     };
     // Each journal change is saved before the caller's journal takes it, so a
     // failed save leaves the journal as it is on disk and a retry saves it again.
-    if journal.key.is_none() {
-        let next = Journal {
-            key: Some(throwaway_public_key()?),
-            ..journal.clone()
-        };
-        records.journal(&next)?;
-        *journal = next;
-    }
+    record_key(spec, journal, records, purpose)?;
     let public_key = journal
         .key
         .clone()
@@ -194,6 +190,32 @@ pub fn provision(
         }
     }
     Err(CloudError::Capacity(sold_out.unwrap_or_default()))
+}
+
+/// Records the key the host registers, before it is registered, so a lost answer of the
+/// registration is reconciled by label instead of registering a second key. A worker's key
+/// only keeps Hetzner from generating a root password. A browser VM keeps its SSH route
+/// for the person, who signs in on the display, so the machine accepts the person's own key.
+fn record_key(
+    spec: &WorkerSpec,
+    journal: &mut Journal,
+    records: &mut impl Records,
+    purpose: host::Purpose,
+) -> Result<(), CloudError> {
+    if journal.key.is_some() {
+        return Ok(());
+    }
+    let key = match purpose {
+        host::Purpose::Worker => throwaway_public_key()?,
+        host::Purpose::BrowserVm => spec.public_key.clone(),
+    };
+    let next = Journal {
+        key: Some(key),
+        ..journal.clone()
+    };
+    records.journal(&next)?;
+    *journal = next;
+    Ok(())
 }
 
 /// A server is about to be created, and a host that cannot pull its image never

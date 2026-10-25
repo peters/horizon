@@ -185,7 +185,7 @@ fn only_configured_types_with_enough_cpu_and_memory_in_the_location_are_tried() 
 #[test]
 fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
     let mut spec = spec();
-    let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+    let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None, host::Purpose::Worker)
         .unwrap()
         .cloud_config()
         .unwrap();
@@ -203,7 +203,7 @@ fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
     }
     // An idle period has no effect, so no server carries it.
     spec.profile.idle_stop_minutes = Some(30);
-    let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+    let rendered = plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None, host::Purpose::Worker)
         .unwrap()
         .cloud_config()
         .unwrap();
@@ -214,13 +214,13 @@ fn the_host_plan_carries_the_worker_contract_and_its_idle_period() {
 fn protected_publication_is_new_host_intent_and_never_a_fabricated_worker_mapping() {
     let mut spec = spec();
     assert!(
-        !plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+        !plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None, host::Purpose::Worker)
             .unwrap()
             .exposure_ingress
     );
     spec.profile.bootstrap.exposure_ingress = true;
     assert!(
-        plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None)
+        plan(&spec, "/dev/disk/by-id/scsi-0HC_Volume_9", None, host::Purpose::Worker)
             .unwrap()
             .exposure_ingress
     );

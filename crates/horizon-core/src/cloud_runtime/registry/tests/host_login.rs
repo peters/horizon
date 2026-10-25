@@ -55,6 +55,7 @@ fn a_host_login_requires_verification_and_keeps_the_verified_pull_material() {
         shm_gb: 1,
         exposure_ingress: false,
         platform: horizon_cloud::host::Platform::Prepared,
+        purpose: horizon_cloud::host::Purpose::Worker,
     };
     let yaml = plan.cloud_config().unwrap();
     let document: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
@@ -168,6 +169,7 @@ fn host_logins_preserve_explicit_default_and_zero_padded_ports() {
             shm_gb: 1,
             exposure_ingress: false,
             platform: horizon_cloud::host::Platform::Prepared,
+            purpose: horizon_cloud::host::Purpose::Worker,
         };
         let document: serde_yaml::Value = serde_yaml::from_str(&plan.cloud_config().unwrap()).unwrap();
         let entry = document["write_files"]

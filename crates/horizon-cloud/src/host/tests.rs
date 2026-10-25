@@ -20,6 +20,7 @@ fn plan() -> Plan {
         shm_gb: 2,
         exposure_ingress: false,
         platform: Platform::Prepared,
+        purpose: Purpose::Worker,
     }
 }
 
@@ -366,6 +367,54 @@ fn a_prepared_host_keeps_its_user_data() {
     ] {
         assert!(!document.contains(absent), "{absent}");
     }
+}
+
+fn browser_vm_plan() -> Plan {
+    Plan {
+        environment: BTreeMap::new(),
+        shm_gb: 1,
+        purpose: Purpose::BrowserVm,
+        ..plan()
+    }
+}
+
+#[test]
+fn a_browser_vm_host_mounts_its_state_volume_and_keeps_its_ssh_route() {
+    let document = browser_vm_plan().cloud_config().unwrap();
+    let config: Value = serde_yaml::from_str(&document).unwrap();
+    // The volume is the state directory of the image, so the profiles and their
+    // sign-ins live on it.
+    assert_eq!(config["mounts"][0][1].as_str(), Some(BROWSER_VM_STATE));
+    assert_eq!(config["mounts"][0][0].as_str(), Some(plan().workspace_device.as_str()));
+    // The person signs in on the display through the SSH route of this host, so root
+    // logs in with the key registered for the server; only the password is refused.
+    assert_eq!(config["disable_root"], Value::Bool(false));
+    assert_eq!(config["ssh_pwauth"], Value::Bool(false));
+    let setup = content(&config, BROWSER_VM_SETUP);
+    assert!(
+        !setup.contains("mask"),
+        "the Device panel and the bridge reach the machine over ssh"
+    );
+    assert!(setup.contains("systemctl enable --now horizon-browser-vm.service"));
+    let start = content(&config, BROWSER_VM_START);
+    assert!(start.contains("-p 127.0.0.1:5900:5900"), "{start}");
+    assert!(start.contains("-v /state:/state"), "{start}");
+    assert!(
+        !start.contains("22:22"),
+        "the worker contract's port is not this host's"
+    );
+    assert!(content(&config, BROWSER_VM_GUARD).contains("mountpoint -q /state"));
+    let unit = content(&config, BROWSER_VM_UNIT);
+    assert!(unit.contains("RequiresMountsFor=/state") && unit.contains("docker stop horizon-browser-vm"));
+    // Nothing of the worker contract is rendered: no environment file, no worker port.
+    assert!(
+        config["write_files"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .all(|file| file["path"] != ENVIRONMENT_FILE)
+    );
+    assert_eq!(config["runcmd"], serde_yaml::to_value([[BROWSER_VM_SETUP]]).unwrap());
 }
 
 #[test]

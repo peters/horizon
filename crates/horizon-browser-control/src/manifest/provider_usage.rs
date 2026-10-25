@@ -1,6 +1,7 @@
 //! Bounded host-scoped requests for the live host: shared provider usage, catalogs and
 //! cloud offers only read; companion requests and the `attach` and `park` of a cloud
 //! list request change clouds, and the host authorizes each one.
+pub use super::browser_vm::{BrowserVmAction, BrowserVmRequest};
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 pub use super::cloud_create::{CloudCreateOperation, CloudCreateRequest};
 pub use super::cloud_delete::{CloudDeleteOperation, CloudDeleteRequest};
@@ -58,6 +59,9 @@ pub struct UsageRequest {
     /// One bounded command for a cloud's worker, run by the host's recorded route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_exec: Option<CloudExecRequest>,
+    /// A browser VM request, authorized and run by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_vm: Option<BrowserVmRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<CredentialRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +95,9 @@ pub struct UsageResult {
     /// The host's answer to a cloud command: its exit status, both streams and its account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_exec: Option<serde_json::Value>,
+    /// The host's answer to a browser VM request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_vm: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,6 +120,7 @@ impl UsageRequest {
             cloud_create: None,
             cloud_delete: None,
             cloud_exec: None,
+            browser_vm: None,
             tailnet_credential: None,
             image_destination: None,
             error,
@@ -339,6 +347,28 @@ pub fn enqueue_cloud_exec(identity: AgentIdentity<'_>, request: CloudExecRequest
     enqueue_cloud_exec_at(BrowserRuntimePaths::resolve().root(), identity, request)
 }
 
+
+/// Queues a browser VM request for the live host. Deployment, stop, resume and delete
+/// answer once the host recorded the phase it started; poll `status` after that.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_browser_vm(identity: AgentIdentity<'_>, request: BrowserVmRequest) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid browser VM request",
+        ));
+    }
+    enqueue_request_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        Ask {
+            browser_vm: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 fn enqueue_cloud_exec_at(
     root: &Path,
     identity: AgentIdentity<'_>,
@@ -436,6 +466,7 @@ struct Ask {
     cloud_create: Option<CloudCreateRequest>,
     cloud_delete: Option<CloudDeleteRequest>,
     cloud_exec: Option<CloudExecRequest>,
+    browser_vm: Option<BrowserVmRequest>,
     tailnet_credential: Option<CredentialRequest>,
     image_destination: Option<ImageDestinationRequest>,
     /// How long the caller waits, when it differs from the shared request deadline.
@@ -452,6 +483,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_create,
         cloud_delete,
         cloud_exec,
+    browser_vm,
         tailnet_credential,
         image_destination,
         deadline_millis,
@@ -503,6 +535,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_create,
         cloud_delete,
         cloud_exec,
+    browser_vm,
         tailnet_credential,
         image_destination,
     };

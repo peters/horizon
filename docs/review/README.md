@@ -68,7 +68,8 @@ gives the untrusted input, the guarantee and the limit of each boundary.
 3. **Cloud records and durable evidence** — saved JSON, journals and records
    that a later start reads again. Boundaries: `publication-records`,
    `exposure-records`, `one-device-admission-records`,
-   `tailnet-enrollment-receipts`, `rebuild-uncommitted`, `cloud-removal`.
+   `tailnet-enrollment-receipts`, `rebuild-uncommitted`, `cloud-removal`,
+   `browser-vm-deploy`.
 4. **Tailnet identity** — an auth key, an API credential, a device ID and the
    removal of a device. Boundaries: `tailnet-api-credentials`,
    `tailnet-enrollment`, `tailnet-node-api`, `tailnet-node-cleanup`.

@@ -55,6 +55,14 @@ impl CloudPrototype {
     }
 }
 
+impl HorizonApp {
+    /// The cloud settings directory of this Horizon, when cloud support has one. A
+    /// browser VM keeps its record and reads the provider credential beside it.
+    pub(in crate::app) fn cloud_root(&self) -> Option<PathBuf> {
+        self.cloud_prototype.root.clone()
+    }
+}
+
 impl CloudPrototype {
     pub(super) fn creation_open(&self) -> bool {
         self.production.creating || self.production.setup.open

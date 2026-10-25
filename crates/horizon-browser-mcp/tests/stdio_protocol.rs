@@ -306,6 +306,30 @@ fn assert_device_panel_contract(tools: &Value) {
     }
 }
 
+/// The rented browser machine: its operations, the digest it needs, and the step where
+/// a person signs in on the display.
+fn assert_browser_vm_contract(tools: &Value) {
+    let machine = listed_tool(tools, "browser_vm");
+    let properties = &machine["inputSchema"]["properties"];
+    for field in ["operation", "image", "server_type", "location", "volume_gb"] {
+        assert!(properties.get(field).is_some(), "browser_vm schema lacks {field}");
+    }
+    let schema = machine["inputSchema"].to_string();
+    for operation in ["deploy", "status", "stop", "resume", "delete"] {
+        assert!(schema.contains(operation), "browser_vm offers no {operation}");
+    }
+    let description = machine["description"].as_str().unwrap();
+    for claim in [
+        "device_panel",
+        "A person must sign in",
+        "sha256",
+        "ccx13",
+        "state volume",
+    ] {
+        assert!(description.contains(claim), "browser_vm description lacks {claim}");
+    }
+}
+
 fn assert_provider_tools_contract(tools: &Value) {
     let usage = listed_tool(tools, "browser_provider_usage");
     assert!(usage["inputSchema"]["properties"].get("provider").is_some());
@@ -511,7 +535,7 @@ fn assert_credential_request_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(39));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(40));
     assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
@@ -520,6 +544,7 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert_companion_tools_contract(tools);
     assert_create_tool_contract(tools);
     assert_delete_tool_contract(tools);
+    assert_browser_vm_contract(tools);
     assert_orientation_contract(tools);
     assert_screenshot_contract(tools);
     assert_resize_contract(tools);

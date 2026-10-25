@@ -17,6 +17,8 @@ pub(super) struct UsageHostState {
     pub(in crate::app) image_destinations: horizon_core::cloud_runtime::publishing::operations::Manager,
     #[cfg(feature = "cloud-workspaces")]
     pub(in crate::app) tailnet_credentials: super::tailnets::requests::Requests,
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) browser_vm: super::browser_vm_requests::State,
 }
 
 struct PendingUsage {
@@ -62,6 +64,8 @@ impl HorizonApp {
         self.poll_tailnet_credential_requests();
         #[cfg(feature = "cloud-workspaces")]
         self.poll_image_destination_operations(ctx);
+        #[cfg(feature = "cloud-workspaces")]
+        self.poll_browser_vm(ctx);
         for request in requests {
             if request.image_destination.is_some() {
                 self.answer_image_destination(&request, ctx);
@@ -87,7 +91,11 @@ impl HorizonApp {
                 self.queue_cloud_delete(request);
                 continue;
             }
-            if request.cloud_exec.is_some() {
+            if request.browser_vm.is_some() {
+            self.queue_browser_vm(request, ctx);
+            continue;
+        }
+        if request.cloud_exec.is_some() {
                 self.queue_cloud_exec(request, ctx);
                 continue;
             }
@@ -243,6 +251,18 @@ impl HorizonApp {
         );
         if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
             tracing::warn!(kind = ?error.kind(), "could not answer a cloud list request");
+        }
+    }
+
+    #[cfg(not(feature = "cloud-workspaces"))]
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    fn queue_browser_vm(&mut self, request: UsageRequest, _ctx: &egui::Context) {
+        let result = request.result(
+            Vec::new(),
+            Some("browser_vm_unavailable: this Horizon build has no cloud support".into()),
+        );
+        if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
+            tracing::warn!(kind = ?error.kind(), "could not answer a browser VM request");
         }
     }
 

@@ -74,6 +74,7 @@ pub(in crate::cloud_runtime::deployment) fn provision(
         login,
         // A redeploy resets the source the deployment claims for its workspace.
         fresh: !state.source_ready,
+        purpose: horizon_cloud::host::Purpose::Worker,
     };
     let mut operation = state.operation.clone();
     let mut saved = Saved::new(store, state);

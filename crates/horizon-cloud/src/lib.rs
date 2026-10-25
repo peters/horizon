@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod azure;
+pub mod browser_vm;
 mod capabilities;
 pub mod companions;
 pub mod docker_host;

@@ -136,6 +136,7 @@ impl Planned {
             shm_gb: crate::hetzner::cloud::shared_memory_gb(spec.profile.memory_gb),
             exposure_ingress: spec.profile.bootstrap.exposure_ingress,
             platform: host::Platform::Azure,
+            purpose: host::Purpose::Worker,
         };
         let custom_data = custom_data(&plan.cloud_config()?)?;
         Ok(Self {
