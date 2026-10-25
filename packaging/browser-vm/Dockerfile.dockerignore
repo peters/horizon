@@ -1,0 +1,6 @@
+# The build context of packaging/browser-vm/Dockerfile, which starts at the
+# repository root. The ignore file of the root keeps the sources of the CLI out
+# of a context, so this file replaces it.
+.git
+target
+**/target

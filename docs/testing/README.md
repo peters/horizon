@@ -42,6 +42,7 @@ documents that are not yet STE.
 | [registry-docker-context](procedures/registry-docker-context.md) | Keep daemon selection with isolated registry credentials | none |
 | [host-registry-management](procedures/host-registry-management.md) | Host-only pull checks and separate provider access | none |
 | [browser-engine-panels](procedures/browser-engine-panels.md) | One browser panel per engine for each agent | none |
+| [browser-vm-image](procedures/browser-vm-image.md) | Browser image: display, VNC on the loopback, profile host, sign-in that stays | none |
 | [browser-firefox-disclosure](procedures/browser-firefox-disclosure.md) | Firefox native webdriver getter and sign-in field | none |
 | [browser-passkey-bridge](procedures/browser-passkey-bridge.md) | Browser WebAuthn bridge to an external authenticator command | none |
 | [browser-recording](procedures/browser-recording.md) | Browser panel video and toolbar icons | none |
