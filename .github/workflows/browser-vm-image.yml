@@ -1,7 +1,8 @@
 name: Browser VM image
 
 # Publishes ghcr.io/peters/browser-vm: the browser machine of issue 1780, which the
-# `browser_vm` deploy entry of Horizon rents a Hetzner server with. The deploy refuses
+# `browser_vm` deploy entry of Horizon rents a Hetzner server with (pull request
+# #1849 of this issue; until it merges, this workflow has no caller). The deploy refuses
 # a mutable tag, so this workflow publishes a digest and prints the reference to copy.
 #
 # The image is linux/amd64 only: the deploy rents a Hetzner ccx server, which is x86_64,

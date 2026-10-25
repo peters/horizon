@@ -130,8 +130,10 @@ Give that line as the image of the deploy:
 {"operation": "deploy", "image": "ghcr.io/peters/browser-vm@sha256:<digest>", "server_type": "ccx13"}
 ```
 
-The operation `browser_vm` answers with the phase it started.
-The operation `status` gives the SSH target when the machine is ready.
+The `browser_vm` operation that takes this call is pull request #1849 of issue 1780.
+Until that pull request merges into the branch that this machine runs, an image
+publication has no caller: publish it, keep the digest, and use it when the
+operation is there.
 
 A new package is private.
 Set the visibility of the package to public in the package settings, or the
