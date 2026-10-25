@@ -285,10 +285,18 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
     let stopped = Instant::now() + Duration::from_secs(30);
     while Instant::now() < stopped {
         panel.drain_events();
-        if !panel.is_remote_host() {
+        if !panel.remote_host_is_live() {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(!panel.is_remote_host(), "the channel of the panel ended");
+    assert!(
+        !panel.remote_host_is_live(),
+        "the channel of the panel ended with the panel"
+    );
+    assert!(
+        panel.is_remote_host(),
+        "the panel still reports the backend that it was created with"
+    );
+    println!("=== the live lane of the remote browser panel passed");
 }

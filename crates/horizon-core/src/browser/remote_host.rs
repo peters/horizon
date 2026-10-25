@@ -267,6 +267,17 @@ impl BrowserPanelState {
         self.remote_host.as_ref().and_then(|host| host.profile.as_deref())
     }
 
+    /// Whether the panel holds a live channel to its browser host. The backend
+    /// stays after a stop and after a failure, so a panel reports its host and
+    /// still holds no channel: the Retry of a person needs that difference.
+    #[must_use]
+    pub fn remote_host_is_live(&self) -> bool {
+        self.remote_host
+            .as_ref()
+            .and_then(|host| host.view.as_ref())
+            .is_some_and(HostView::can_send)
+    }
+
     /// Why the last channel of this panel ended before its page was ready, as
     /// the typed reason that the panel draws. `None` while a channel is live.
     #[must_use]
@@ -399,9 +410,10 @@ impl BrowserPanelState {
             };
             self.shutdown_remote_host();
         } else {
-            if state.note.is_some() {
-                self.navigation_error = state.note;
-            }
+            // The note of the view is the live state of the page: a frame that
+            // arrives clears the reason that a capture failed before the paint,
+            // so this assignment also clears the line of the panel.
+            self.navigation_error = state.note;
             self.status = if state.ready {
                 BrowserStatus::Ready
             } else {

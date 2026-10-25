@@ -231,6 +231,29 @@ fn refused_note(refusal: RemoteHostRefusal) -> String {
     refusal.message().to_string()
 }
 
+/// Which kind of call left the note of a panel. A note is live state: the next
+/// success of the same kind clears it, and a refusal of the other kind replaces
+/// it, so a panel never shows a reason about a call that no longer fails.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum NoteKind {
+    /// No note is live.
+    #[default]
+    Clear,
+    /// A command of the panel, such as a key press or a navigation.
+    Command,
+    /// A screenshot of the page.
+    Frame,
+}
+
+impl NoteKind {
+    /// Clear the note of the panel when it belongs to `kind`.
+    fn clear(self, state: &mut HostViewState, kind: Self) {
+        if self == kind {
+            state.note = None;
+        }
+    }
+}
+
 /// Carry the panel's work to the page until the panel stops, then close it.
 /// Returns the failure that ended the channel, or `None` for a normal stop.
 fn drive(
@@ -274,6 +297,12 @@ fn run(
     state.ready = true;
     publish(shared, Some(state.clone()));
 
+    // The note of a panel is the live reason of the last call that the host
+    // refused, and it belongs to the kind of call that was refused. A frame that
+    // the host could not capture while the page was still loading is not a
+    // reason about the input, so the first frame that arrives clears it; a
+    // command that the host refused stays until a command succeeds.
+    let mut note = NoteKind::default();
     let mut ticks = 0u32;
     while !shared.stop.load(Ordering::Acquire) {
         for command in commands.try_iter().take(MAX_COMMANDS) {
@@ -281,29 +310,35 @@ fn run(
                 Ok(actions) => actions,
                 Err(refusal) => {
                     state.note = Some(refused_note(refusal));
+                    note = NoteKind::Command;
                     continue;
                 }
             };
             for action in actions {
                 match client.call(action.tool, &action.arguments, CALL_TIMEOUT) {
-                    Ok(_) => {}
-                    Err(ClientError::Refused(reason)) => state.note = Some(reason),
+                    Ok(_) => note.clear(&mut state, NoteKind::Command),
+                    Err(ClientError::Refused(reason)) => {
+                        state.note = Some(reason);
+                        note = NoteKind::Command;
+                    }
                     Err(error) => return Err(failure_of(&error)),
                 }
             }
         }
         match client.call("browser_screenshot", &panel_arguments(&panel_id), CALL_TIMEOUT) {
             Ok(frame) => {
+                note.clear(&mut state, NoteKind::Frame);
                 if let Some(png) = frame.image.as_deref() {
                     let _ = shared.frames.store_base64_png(png);
                 }
             }
             Err(ClientError::Refused(reason)) => {
-                // A screen is not ready for every moment of a page: the host
-                // refuses a capture before the first frame, while the page
-                // loads, and while another claim holds it. The reason stays in
-                // the panel note and the panel keeps reading the page.
+                // The page has no frame at this moment: it is loading, or the
+                // first paint has not happened. The panel keeps reading the
+                // page, and the log keeps the reason of this attempt.
+                tracing::debug!(%reason, "the page of the host has no frame at this moment");
                 state.note = Some(reason);
+                note = NoteKind::Frame;
             }
             Err(error) => return Err(failure_of(&error)),
         }

@@ -28,6 +28,9 @@ struct Script {
     hang_up_after: Option<usize>,
     /// The one tool that the peer refuses, with its reason.
     refuse: Option<(&'static str, &'static str)>,
+    /// Screenshots that the peer refuses before it paints, as a profile host
+    /// refuses them before the first frame of a page.
+    refuse_first_frames: Arc<Mutex<usize>>,
     seen: Arc<Mutex<Vec<String>>>,
 }
 
@@ -36,7 +39,17 @@ impl Script {
         Self {
             hang_up_after: None,
             refuse: None,
+            refuse_first_frames: Arc::default(),
             seen: Arc::default(),
+        }
+    }
+
+    /// A peer that answers `screenshot_unavailable` for its first frames, as a
+    /// profile host does until the page paints.
+    fn before_first_paint(frames: usize) -> Self {
+        Self {
+            refuse_first_frames: Arc::new(Mutex::new(frames)),
+            ..Self::new()
         }
     }
 
@@ -75,6 +88,26 @@ impl Script {
             .filter(|call| call.starts_with(&format!("{tool} ")))
             .filter_map(|call| serde_json::from_str(call.split_once(' ').map_or("", |(_, rest)| rest)).ok())
             .collect()
+    }
+
+    /// The reason this peer refuses `tool`, when it refuses it now. A screenshot
+    /// is refused until the scripted first paint, and one named tool is refused
+    /// for the whole run.
+    fn refusal(&self, tool: &str) -> Option<String> {
+        if tool == "browser_screenshot" {
+            let mut left = self
+                .refuse_first_frames
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *left > 0 {
+                *left -= 1;
+                return Some("screenshot_unavailable: Browser has not received a frame".to_string());
+            }
+        }
+        match self.refuse {
+            Some((refused, reason)) if refused == tool => Some(reason.to_string()),
+            _ => None,
+        }
     }
 
     /// Wait until one answered call satisfies `wanted`, then give every answered
@@ -222,9 +255,7 @@ fn answer(peer: UnixStream, script: &Script) {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(format!("{name} {arguments}"));
             answered += 1;
-            if let Some((refused, reason)) = script.refuse
-                && refused == name
-            {
+            if let Some(reason) = script.refusal(&name) {
                 Some(json!({
                     "content": [{ "type": "text", "text": reason }],
                     "isError": true,
@@ -460,6 +491,7 @@ fn a_closed_panel_closes_its_page_on_the_host() {
         panel.is_remote_host(),
         "a closed panel keeps the backend that it reports"
     );
+    assert!(!panel.remote_host_is_live(), "a closed panel holds no channel");
     assert_eq!(
         script.arguments("browser_close"),
         Some(json!({ "panel_id": PAGE })),
@@ -505,6 +537,23 @@ fn a_host_that_disappears_mid_session_ends_the_panel_with_a_typed_reason() {
             .is_some_and(|note| note.contains("127.0.0.1")),
         "the panel names the host that ended: {:?}",
         panel.remote_status
+    );
+}
+
+#[test]
+fn a_refusal_before_the_first_frame_does_not_stick_to_a_painting_panel() {
+    let script = Script::before_first_paint(2);
+    let mut panel = panel(&script);
+    // `settled` waits for a frame, which is the third screenshot of this peer.
+    assert_eq!(settled(&mut panel), BrowserStatus::Ready);
+    panel.drain_events();
+    assert!(
+        panel.frame_slot.latest().is_some(),
+        "the panel paints after the refused captures"
+    );
+    assert_eq!(
+        panel.navigation_error, None,
+        "the note of a frame that the host could not capture before the paint is gone"
     );
 }
 
