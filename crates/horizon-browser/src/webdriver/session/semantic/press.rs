@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::session::BrowserEventSender;
 use crate::webdriver::actions::ActionState;
@@ -26,11 +26,12 @@ impl Driver {
         let inputs = (0..count).flat_map(|_| crate::semantic_keys::press_inputs(key, modifiers));
         self.pending_classic_history_start = None;
         let result = if self.firefox_bidi() {
+            let context = self.press_context(event_tx);
             let mut payload = self.actions.key_sequence_payload(inputs);
-            payload["context"] = json!(self.context_id);
+            payload["context"] = json!(context);
             let result = self.call_bidi("input.performActions", &payload, event_tx).map(|_| ());
             if result.is_err() {
-                let context = json!({ "context": self.context_id });
+                let context = json!({ "context": context });
                 let _ = self.call_bidi("input.releaseActions", &context, event_tx);
                 self.actions = ActionState::default();
             }
@@ -54,5 +55,44 @@ impl Driver {
         result
             .map(|()| BrowserControlValue::Accepted)
             .map_err(|error| BrowserControlFailure::new("input_failed", error))
+    }
+
+    /// The browsing context that owns the document focus. `BiDi` key actions
+    /// name one context, and key events sent to the top document do not reach
+    /// a focused child frame, so a press follows the focus a verified frame
+    /// click left. A parent document names its child frame as the active
+    /// element, so only a document that focuses a real element is selected.
+    fn press_context(&mut self, events: &BrowserEventSender) -> String {
+        let top = self.context_id.clone().unwrap_or_default();
+        let mut candidates = vec![top.clone()];
+        candidates.extend(self.semantic.bidi_scan_contexts().iter().cloned());
+        candidates.truncate(crate::semantic::MAX_SEMANTIC_FRAMES + 1);
+        for context in candidates {
+            if self.context_focuses_element(&context, events) {
+                return context;
+            }
+        }
+        top
+    }
+
+    fn context_focuses_element(&mut self, context: &str, events: &BrowserEventSender) -> bool {
+        let result = self.call_bidi(
+            "script.evaluate",
+            &json!({
+                "expression": format!(
+                    "(async () => JSON.stringify(await ({})))()",
+                    crate::semantic::focused_document_expression()
+                ),
+                "target": {"context": context},
+                "awaitPromise": true,
+            }),
+            events,
+        );
+        result.is_ok_and(|result| {
+            super::frames::json_result(&result).is_ok_and(|value| {
+                value.get("focused") == Some(&Value::Bool(true))
+                    && value.get("activeIsFrame") != Some(&Value::Bool(true))
+            })
+        })
     }
 }

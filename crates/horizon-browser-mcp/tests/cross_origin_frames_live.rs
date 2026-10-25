@@ -764,3 +764,308 @@ fn fixture(nested: bool) -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::Jo
     });
     (port, stop, server)
 }
+
+const CHAT_WIDGET: &str = r#"<!doctype html><title>Chat widget</title>
+<style>
+ body { margin: 0; font: 14px sans-serif; }
+ .history { height: 620px; padding: 8px; background: #f4f4f4; }
+ .composer { position: relative; display: flex; gap: 8px; padding: 12px; }
+ #__TAG__-composer { width: 220px; height: 56px; }
+ #__TAG__-send { width: 88px; height: 32px; }
+ #__TAG__-send.idle { opacity: 0.45; }
+ .covered { position: relative; display: inline-block; }
+ #__TAG__-cover { position: absolute; inset: 0; z-index: 2; background: rgba(0, 0, 0, 0.05); }
+ #__TAG__-reverting { min-height: 32px; border: 1px solid #ccc; padding: 6px; }
+ #__TAG__-editor { min-height: 32px; border: 1px solid #ccc; padding: 6px; }
+</style>
+<div class="history">Support history</div>
+<div class="composer">
+  <textarea id="__TAG__-composer" aria-label="Message"></textarea>
+  <button id="__TAG__-send" class="idle" type="button">Send</button>
+  <span class="covered"><button id="__TAG__-covered" type="button">Covered</button><span id="__TAG__-cover"></span></span>
+  <button id="__TAG__-dismiss" type="button">Dismiss</button>
+  <div id="__TAG__-reverting" contenteditable="true" aria-label="Reverting field">reverting field</div>
+  <div id="__TAG__-editor" contenteditable="true" aria-label="Editor"></div>
+</div>
+<script>
+const tag = '__TAG__';
+const composer = document.querySelector('#' + tag + '-composer');
+const send = document.querySelector('#' + tag + '-send');
+const state = { keydowns: 0, inputs: 0, beforeinputs: 0, ignored: 0 };
+const post = (data) => parent.postMessage(Object.assign({ tag }, data), '*');
+composer.addEventListener('keydown', () => {
+  state.keydowns += 1;
+  send.classList.remove('idle');
+});
+composer.addEventListener('beforeinput', () => { state.beforeinputs += 1; });
+composer.addEventListener('input', () => {
+  state.inputs += 1;
+  post({ edited: composer.value });
+});
+send.addEventListener('click', (event) => {
+  if (state.keydowns === 0) {
+    state.ignored += 1;
+    post({ ignored: true });
+    return;
+  }
+  const rect = send.getBoundingClientRect();
+  post({ sent: {
+    text: composer.value,
+    inside: event.clientX >= rect.left && event.clientX <= rect.right &&
+      event.clientY >= rect.top && event.clientY <= rect.bottom,
+    keydowns: state.keydowns,
+    beforeinputs: state.beforeinputs,
+    inputs: state.inputs,
+  } });
+});
+document.querySelector('#' + tag + '-covered').addEventListener('click', () => post({ covered: true }));
+document.querySelector('#' + tag + '-dismiss').addEventListener('click', (event) => {
+  post({ dismissed: true });
+  event.target.style.display = 'none';
+});
+document.querySelector('#' + tag + '-reverting').addEventListener('input', (event) => { event.target.textContent = ''; });
+post({ ready: true });
+</script>"#;
+
+const CHAT_PAGE: &str = r#"<!doctype html><title>Chat fixture</title>
+<body style="margin:0">
+<iframe id="same-chat" src="http://127.0.0.1:__PORT__/chat?tag=same" style="position:absolute;left:40px;top:60px;width:380px;height:240px;border:0;padding:10px 0 0 12px;transform:translate(7px,5px)"></iframe>
+<iframe id="cross-chat" src="http://localhost:__PORT__/chat?tag=cross" style="position:absolute;left:460px;top:60px;width:380px;height:240px;border:0"></iframe>
+<script>
+window.chat = { same: [], cross: [] };
+window.addEventListener('message', (event) => {
+  const data = event.data || {};
+  if (!data.tag || !window.chat[data.tag]) return;
+  window.chat[data.tag].push(data);
+  const mark = (name) => document.body.setAttribute('data-' + data.tag + '-' + name, '');
+  if (data.ready) mark('ready');
+  if (data.sent) mark('sent');
+  if (data.edited) mark('edited');
+  if (data.covered) mark('covered');
+});
+</script>
+</body>"#;
+
+fn chat_fixture() -> (u16, Arc<std::sync::atomic::AtomicBool>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server_stop = stop.clone();
+    listener.set_nonblocking(true).unwrap();
+    let page = CHAT_PAGE.replace("__PORT__", &port.to_string());
+    let server = thread::spawn(move || {
+        while !server_stop.load(std::sync::atomic::Ordering::Acquire) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = [0; 4096];
+            let size = stream.read(&mut request).unwrap_or(0);
+            if size == 0 {
+                continue;
+            }
+            let request = String::from_utf8_lossy(&request[..size]);
+            let body = if let Some(query) = request
+                .strip_prefix("GET /chat?tag=")
+                .and_then(|rest| rest.split_whitespace().next())
+                .filter(|tag| matches!(*tag, "same" | "cross"))
+            {
+                CHAT_WIDGET.replace("__TAG__", query)
+            } else {
+                page.clone()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, stop, server)
+}
+
+#[test]
+#[ignore = "requires local Chromium, Firefox, geckodriver and loopback sockets"]
+fn mcp_frame_actions_verify_that_the_target_received_them_on_both_backends() {
+    let root = tempfile::tempdir().unwrap();
+    horizon_browser_control::paths::configure_runtime_root(root.path()).unwrap();
+    for backend in [BackendKind::ChromiumCdp, BackendKind::FirefoxBidi] {
+        eprintln!("Testing {backend:?}");
+        run_chat(backend, root.path());
+    }
+}
+
+fn run_chat(backend: BackendKind, root: &Path) {
+    let (port, stop, server) = chat_fixture();
+    let profiles = tempfile::Builder::new().prefix("chat-profiles-").tempdir().unwrap();
+    let slot = Arc::new(FrameSlot::new());
+    let session = start_session(BrowserSessionConfig {
+        browser: BrowserConfig {
+            backend,
+            headless: true,
+            profile_root: Some(profiles.path().join("profiles")),
+            ..Default::default()
+        },
+        panel_local_id: "frame-test".into(),
+        initial_url: Some(format!("http://127.0.0.1:{port}/")),
+        width: 900,
+        height: 700,
+        frame_slot: slot.clone(),
+        coordination: Some(Arc::new(ManifestCoordination::default())),
+        capture_directory: None,
+        video: Arc::default(),
+        remote: None,
+    })
+    .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_first_frame(&session, &slot);
+        let mut host = McpProcess::start(root);
+        host.call(
+            "browser_wait",
+            json!({"selector":"body[data-same-ready][data-cross-ready]","state":"present","timeout_millis":15000}),
+        )
+        .unwrap_or_else(|error| panic!("chat fixture readiness: {error}"));
+        chat_roundtrip(&mut host);
+        drop(host);
+    }));
+    assert!(session.send(BrowserCommand::Stop));
+    assert!(session.shutdown_signal().wait(Duration::from_secs(10)));
+    stop.store(true, std::sync::atomic::Ordering::Release);
+    server.join().unwrap();
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}
+
+fn chat_roundtrip(host: &mut McpProcess) {
+    for tag in ["same", "cross"] {
+        let composer = host.nodes(&format!("#{tag}-composer"));
+        assert_eq!(composer.len(), 1, "{tag}: composer node");
+        assert!(
+            composer[0].bounds.is_none(),
+            "{tag}: a child-frame rectangle is frame-local, so it is not reported as top-level bounds"
+        );
+        host.call(
+            "browser_act",
+            json!({"action":"fill","ref":composer[0].reference,"value":"synthetic hello"}),
+        )
+        .unwrap_or_else(|error| panic!("{tag}: frame fill: {error}"));
+        let submit = host.nodes(&format!("#{tag}-send"));
+        assert_eq!(submit.len(), 1, "{tag}: send node");
+        host.call("browser_act", json!({"action":"click","ref":submit[0].reference}))
+            .unwrap_or_else(|error| panic!("{tag}: frame click: {error}"));
+        let delivered = wait_for_chat(host, tag, 0, |message| message.get("sent").is_some());
+        let delivered = &delivered["sent"];
+        assert_eq!(
+            delivered["text"], "synthetic hello",
+            "{tag}: the widget read the filled text"
+        );
+        assert_eq!(
+            delivered["inside"], true,
+            "{tag}: the click landed inside the send control"
+        );
+        assert!(
+            delivered["keydowns"].as_u64().unwrap_or_default() >= 1,
+            "{tag}: the fill reached the widget as typing, not only as an input event"
+        );
+
+        // A completed frame click moves focus into the frame: the next press
+        // reaches the composer instead of the top-level document.
+        let composer = host.nodes(&format!("#{tag}-composer"));
+        host.call("browser_act", json!({"action":"click","ref":composer[0].reference}))
+            .unwrap_or_else(|error| panic!("{tag}: composer click: {error}"));
+        let seen = chat_messages(host, tag).len();
+        host.call("browser_act", json!({"action":"press","key":"A"}))
+            .unwrap_or_else(|error| panic!("{tag}: press after a frame click: {error}"));
+        let edited = wait_for_chat(host, tag, seen, |message| {
+            message
+                .get("edited")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains('A'))
+        });
+        assert!(
+            edited["edited"].as_str().unwrap_or_default().contains('A'),
+            "{tag}: the press reached the focused composer"
+        );
+
+        // A control the page reports as visible but that another element
+        // covers cannot receive the click, so the action must not report
+        // completion.
+        let covered = host.nodes(&format!("#{tag}-covered"));
+        assert_eq!(covered.len(), 1, "{tag}: covered node");
+        let error = host
+            .call("browser_act", json!({"action":"click","ref":covered[0].reference}))
+            .unwrap_err();
+        assert!(error.contains("element_obstructed"), "{tag}: covered click: {error}");
+        assert!(
+            !chat_messages(host, tag)
+                .iter()
+                .any(|message| message.get("covered").is_some()),
+            "{tag}: the covered control received no click"
+        );
+
+        // A control that removes itself on click still took the click, so the
+        // action is reported as completed even though the browser then moves
+        // the focus back to the frame's body.
+        let dismiss = host.nodes(&format!("#{tag}-dismiss"));
+        assert_eq!(dismiss.len(), 1, "{tag}: dismiss node");
+        host.call("browser_act", json!({"action":"click","ref":dismiss[0].reference}))
+            .unwrap_or_else(|error| panic!("{tag}: self-removing click: {error}"));
+        wait_for_chat(host, tag, 0, |message| message.get("dismissed").is_some());
+
+        // A page that throws the fill away is reported as a failure instead
+        // of a completed fill.
+        let reverting = host.nodes(&format!("#{tag}-reverting"));
+        assert_eq!(reverting.len(), 1, "{tag}: reverting node");
+        let error = host
+            .call(
+                "browser_act",
+                json!({"action":"fill","ref":reverting[0].reference,"value":"synthetic"}),
+            )
+            .unwrap_err();
+        assert!(error.contains("input_failed"), "{tag}: reverting fill: {error}");
+
+        // An editable host stores a line break as an element and a repeated or
+        // trailing space as a no-break space, so its readback compares the
+        // rendered text of both sides.
+        for value in ["line one\nline two", "two  spaces "] {
+            let editor = host.nodes(&format!("#{tag}-editor"));
+            assert_eq!(editor.len(), 1, "{tag}: editor node");
+            host.call(
+                "browser_act",
+                json!({"action":"fill","ref":editor[0].reference,"value":value}),
+            )
+            .unwrap_or_else(|error| panic!("{tag}: editable host fill: {error}"));
+        }
+    }
+}
+
+fn chat_messages(host: &mut McpProcess, tag: &str) -> Vec<Value> {
+    let value = host
+        .call(
+            "browser_evaluate",
+            json!({"expression":format!("window.chat[{}]", serde_json::to_string(tag).unwrap())}),
+        )
+        .unwrap();
+    value["value"].as_array().cloned().unwrap_or_default()
+}
+
+fn wait_for_chat(host: &mut McpProcess, tag: &str, skip: usize, mut matches: impl FnMut(&Value) -> bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(message) = chat_messages(host, tag)
+            .into_iter()
+            .skip(skip)
+            .find(|message| matches(message))
+        {
+            return message;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{tag}: no matching widget message in {:?}",
+            chat_messages(host, tag)
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}

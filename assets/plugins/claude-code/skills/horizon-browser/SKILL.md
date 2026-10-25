@@ -104,7 +104,13 @@ a scan, the scan returns `stale_reference`; take a new snapshot or query.
 Context events from unrelated pages do not invalidate this scan.
 Chromium ignores destruction of isolated execution contexts during a scan.
 Nested session retirement processes each tracked parent link once and preserves siblings.
-Direct selector actions, `browser_wait`, and `browser_evaluate` target the
+A child-frame `click` hit-tests the target inside its own frame before it
+dispatches: `element_obstructed` means another element covers the target and
+`element_not_hittable` means the point is outside the frame viewport. After the
+click the frame document must show that it took the click; `input_failed` means
+it never took focus. The target's own focus is not required, because a handler
+can hide or disable the control it was clicked on. A verified frame click moves
+focus into the frame, so a following `press` reaches the focused element there. Direct selector actions, `browser_wait`, and `browser_evaluate` target the
 top-level document. Child-frame
 refs do not support `scroll` or `set_files`. Safari and remote sessions scan only
 the top-level document. If these tools cannot reach the embedded frame content,
@@ -116,6 +122,13 @@ the frame.
 Local fills support contenteditable elements, textareas, and input types `text`,
 `search`, `tel`, `url`, `email`, `password`, and `number`. Other controls and
 read-only fields return `element_not_editable`; use `set_files` for file inputs.
+A local fill types the value as trusted key events, so a widget that enables its
+control from `keydown` sees typing. It types at most 256 characters that way; a
+longer remainder, and characters a key cannot type without another effect, are
+inserted as trusted text. A fill then reads the field back and returns
+`input_failed` when the page did not keep the requested value. An editable host
+is compared by its rendered text, so a line break or a repeated space that the
+editor stored as an element or a no-break space still matches.
 If an onfocus handler redirects focus or an inert ancestor prevents focus, the
 fill returns `element_not_focused` before it clears the value or sends an input
 event. If an input handler moves focus during clearing, the fill stops before

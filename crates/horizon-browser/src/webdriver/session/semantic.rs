@@ -6,8 +6,8 @@ mod press;
 use serde_json::{Value, json};
 
 use crate::semantic::{
-    bounded_control_value, check_script_error, parse_target_rect, scroll_expression, target_rect_expression,
-    wait_scan_expression,
+    bounded_control_value, check_script_error, fill_readback_expression, parse_target_rect, scroll_expression,
+    target_rect_expression, wait_scan_expression,
 };
 use crate::semantic_files::{
     ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, RESET_FILE_INPUT_FUNCTION, check_attachment_request,
@@ -79,13 +79,11 @@ fn send_keys_through(
     }
     // Resolve again: a reactive handler may replace the original element.
     // Return only equality, never the current or requested field contents.
-    let response = post(
-        "execute/sync",
-        &json!({
-            "script": "const element = document.querySelector(arguments[0]); return !!element && (element.isContentEditable ? element.textContent : element.value) === arguments[1];",
-            "args": [selector, text],
-        }),
-    )?;
+    let script = format!(
+        "const element = document.querySelector(arguments[0]); if (!element) return false; {} return normalize(held) === normalize(arguments[1]);",
+        crate::semantic::FILL_VALUE_HELD
+    );
+    let response = post("execute/sync", &json!({ "script": script, "args": [selector, text] }))?;
     if webdriver_value(&response).and_then(Value::as_bool) != Some(true) {
         return Err("remote fill did not retain the requested value; native input may be unsupported or the page may have changed the field".to_string());
     }
@@ -456,6 +454,13 @@ impl Driver {
         if self.safari.is_some() {
             self.flush_safari_input(event_tx)
                 .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        }
+        let applied = self.evaluate_json(&fill_readback_expression(&selector, value))?;
+        if applied != Value::Bool(true) {
+            return Err(BrowserControlFailure::new(
+                "input_failed",
+                "the field did not keep the requested value; the page may have changed or rejected it",
+            ));
         }
         Ok(BrowserControlValue::Accepted)
     }

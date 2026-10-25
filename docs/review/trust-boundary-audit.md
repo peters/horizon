@@ -132,6 +132,20 @@ guarantee that the code gives, and what the code does not guarantee.
     verification; a page can detect the page script; a cross-site iframe in
     Chromium keeps the browser's own behavior; a popup in a new top-level
     context is not covered; a child process of the command can outlive a kill.
+- [`browser-semantic-actions`](trust-boundaries/browser-semantic-actions.md)
+  - Untrusted: the page's own rectangles, hit test, focus and the value it kept
+    after a fill; the frame routes the panel recorded.
+  - Guarantees: a selector and a fill value are quoted as data in every
+    expression; each observation is one number, one boolean or one element name
+    from a closed set, never page text; a click point is hit-tested inside the
+    frame that dispatches it and a point another element owns, or that no
+    element holds, is a typed failure; a click must leave focus in the frame
+    document; a fill that the page did not keep is a typed failure, compared by
+    the rendered text of an editable host; a frame route is host-owned.
+  - Does not guarantee: a page can refuse a click it received and the action
+    still reports completion; a page can move focus after taking a click; a
+    same-process child shares the page's focus, so its focus cannot prove that
+    one click arrived; a fill readback is an immediate postcondition.
 - [`cloud-browser-uploads`](trust-boundaries/cloud-browser-uploads.md)
   - Untrusted: the page and its `accept` and `origin` text, the agents of the
     worker, and the control service toward the host.

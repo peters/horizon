@@ -5,8 +5,10 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::semantic::{
-    FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, frame_fill_expression,
-    parse_target_rect, scan_expression, scan_node_limit_reached, target_rect_expression,
+    FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, click_focus_failure,
+    click_point_expression, click_point_failure, fill_readback_expression, focus_after_click_expression,
+    frame_fill_expression, parse_click_focus, parse_click_point, parse_target_rect, scan_expression,
+    scan_node_limit_reached,
 };
 use crate::session::BrowserEventSender;
 use crate::{BrowserButton, BrowserControlFailure, BrowserControlValue, BrowserInput, BrowserModifiers};
@@ -133,6 +135,16 @@ impl Driver {
         self.call_bidi("input.performActions", &payload, events)
             .map_err(|_| BrowserControlFailure::new("input_failed", "child-frame text input failed"))?;
         self.frames.demand();
+        if !self.semantic.bidi_frame_is_current(frame) {
+            return Err(stale());
+        }
+        let applied = self.frame_value(frame, &fill_readback_expression(selector, value), events)?;
+        if applied != Value::Bool(true) {
+            return Err(BrowserControlFailure::new(
+                "input_failed",
+                "the field did not keep the requested value; the page may have changed or rejected it",
+            ));
+        }
         Ok(BrowserControlValue::Accepted)
     }
 
@@ -144,8 +156,11 @@ impl Driver {
         events: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         self.pending_classic_history_start = None;
-        let result = self.frame_value(frame, &target_rect_expression(selector, false), events)?;
-        let (x, y) = parse_target_rect(&result)?;
+        let observed = self.frame_value(frame, &click_point_expression(selector), events)?;
+        let point = parse_click_point(&observed)?;
+        if let Some(rejection) = click_point_failure(point) {
+            return Err(rejection);
+        }
         let FrameTarget::Bidi { context, realm } = frame else {
             return Err(stale());
         };
@@ -160,9 +175,9 @@ impl Driver {
             .pointer("/result/sharedId")
             .and_then(Value::as_str)
             .ok_or_else(stale)?;
-        let mut payload = self
-            .actions
-            .click_payload(x, y, BrowserButton::Left, count, BrowserModifiers::none());
+        let mut payload =
+            self.actions
+                .click_payload(point.x, point.y, BrowserButton::Left, count, BrowserModifiers::none());
         payload["context"] = json!(context);
         // Element origin lets the browser map nested and transformed frame coordinates.
         let pointer = payload["actions"]
@@ -175,11 +190,17 @@ impl Driver {
         self.call_bidi("input.performActions", &payload, events)
             .map_err(|_| BrowserControlFailure::new("input_failed", "child-frame pointer input failed"))?;
         self.frames.demand();
+        if !self.semantic.bidi_frame_is_current(frame) {
+            return Err(stale());
+        }
+        let observed = self.frame_value(frame, focus_after_click_expression(), events)?;
+        let focus = parse_click_focus(&observed)?;
+        click_focus_failure(focus, true).map_or(Ok(()), Err)?;
         Ok(BrowserControlValue::Accepted)
     }
 }
 
-fn json_result(result: &Value) -> Result<Value, BrowserControlFailure> {
+pub(super) fn json_result(result: &Value) -> Result<Value, BrowserControlFailure> {
     if result.get("type").and_then(Value::as_str) != Some("success") {
         return Err(stale());
     }

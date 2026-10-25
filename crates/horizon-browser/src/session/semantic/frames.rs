@@ -9,8 +9,10 @@ use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
-    FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, frame_fill_expression,
-    parse_target_rect, scan_expression, scan_node_limit_reached, target_rect_expression,
+    FrameTarget, MAX_SEMANTIC_FRAMES, append_frame_scan, bounded_control_value, click_focus_failure,
+    click_point_expression, click_point_failure, fill_readback_expression, focus_after_click_expression,
+    frame_fill_expression, parse_click_focus, parse_click_point, parse_target_rect, scan_expression,
+    scan_node_limit_reached,
 };
 use crate::session::{BrowserEventSender, DriverState};
 use crate::{BrowserControlFailure, BrowserControlValue};
@@ -192,15 +194,25 @@ impl DriverState {
         let deadline = Instant::now() + super::super::CALL_TIMEOUT;
         let result = self.frame_value(link, events, slot, frame, &frame_fill_expression(selector), deadline)?;
         parse_target_rect(&result)?;
-        let (session, _) = self.cdp_frame(frame)?;
-        // Focus crosses the iframe boundary; the browser inserts native text.
-        self.frame_call(
+        for input in crate::semantic_keys::text_inputs(value) {
+            let (session, _) = self.cdp_frame(frame)?;
+            let (method, params) = input.cdp();
+            self.frame_call(link, events, slot, (&session, method, &params), deadline)?;
+        }
+        let applied = self.frame_value(
             link,
             events,
             slot,
-            (&session, "Input.insertText", &json!({"text":value})),
+            frame,
+            &fill_readback_expression(selector, value),
             deadline,
         )?;
+        if applied != Value::Bool(true) {
+            return Err(BrowserControlFailure::new(
+                "input_failed",
+                "the field did not keep the requested value; the page may have changed or rejected it",
+            ));
+        }
         Ok(BrowserControlValue::Accepted)
     }
 
@@ -214,16 +226,73 @@ impl DriverState {
         count: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let deadline = Instant::now() + super::super::CALL_TIMEOUT;
-        let result = self.frame_value(
-            link,
-            events,
-            slot,
-            frame,
-            &target_rect_expression(selector, false),
-            deadline,
-        )?;
-        parse_target_rect(&result)?;
         let (session, context) = self.cdp_frame(frame)?;
+        // A same-process child shares the page document's focus, so only a
+        // separate frame document owns focus that the click itself must win.
+        // A separate frame dispatches the point its own viewport measures; a
+        // same-process child dispatches on the page session, so its point comes
+        // from the quads the browser reports, which include the frame's padding
+        // and transforms.
+        let own_document = self.session_id.as_deref() != Some(session.as_str());
+        let observed = self.frame_value(link, events, slot, frame, &click_point_expression(selector), deadline)?;
+        let point = parse_click_point(&observed)?;
+        if let Some(rejection) = click_point_failure(point) {
+            return Err(rejection);
+        }
+        let (x, y) = if own_document {
+            (point.x, point.y)
+        } else {
+            self.page_click_point(
+                link,
+                events,
+                slot,
+                frame,
+                &PageClickPoint {
+                    session: &session,
+                    context,
+                    selector,
+                },
+                deadline,
+            )?
+        };
+        for click in 1..=count {
+            self.cdp_frame(frame)?;
+            for input in [pointer_press(x, y, click), pointer_release(x, y, click)] {
+                let (method, params) = input.cdp();
+                self.frame_call(link, events, slot, (&session, method, &params), deadline)?;
+            }
+        }
+        let observed = self.frame_value(link, events, slot, frame, focus_after_click_expression(), deadline)?;
+        let focus = parse_click_focus(&observed)?;
+        click_focus_failure(focus, own_document).map_or(Ok(BrowserControlValue::Accepted), Err)
+    }
+}
+
+/// Where a same-process child's target lives: the page session, the child
+/// context inside it, and the target's selector there.
+struct PageClickPoint<'a> {
+    session: &'a str,
+    context: u64,
+    selector: &'a str,
+}
+
+impl DriverState {
+    /// The page-space centre of the target for a same-process child, as the
+    /// browser reports it for that element's content box.
+    fn page_click_point(
+        &mut self,
+        link: &mut CdpLink,
+        events: &BrowserEventSender,
+        slot: &Arc<FrameSlot>,
+        frame: &FrameTarget,
+        point: &PageClickPoint<'_>,
+        deadline: Instant,
+    ) -> Result<(f64, f64), BrowserControlFailure> {
+        let PageClickPoint {
+            session,
+            context,
+            selector,
+        } = point;
         let expression = format!(
             "document.querySelector({})",
             serde_json::to_string(selector).map_err(|_| stale())?
@@ -233,11 +302,9 @@ impl DriverState {
             events,
             slot,
             (
-                &session,
+                session,
                 "Runtime.evaluate",
-                &json!({
-                    "expression":expression, "contextId":context, "returnByValue":false,
-                }),
+                &json!({"expression":expression, "contextId":context, "returnByValue":false}),
             ),
             deadline,
         )?;
@@ -246,32 +313,22 @@ impl DriverState {
             .and_then(Value::as_str)
             .ok_or_else(stale)?
             .to_owned();
-        let result = (|| {
-            let quads = self.frame_call(
-                link,
-                events,
-                slot,
-                (&session, "DOM.getContentQuads", &json!({"objectId":object})),
-                deadline,
-            )?;
-            let (x, y) = quad_center(&quads)?;
-            for click in 1..=count {
-                self.cdp_frame(frame)?;
-                for input in [pointer_press(x, y, click), pointer_release(x, y, click)] {
-                    let (method, params) = input.cdp();
-                    self.frame_call(link, events, slot, (&session, method, &params), deadline)?;
-                }
-            }
-            Ok(BrowserControlValue::Accepted)
-        })();
+        let quads = self.frame_call(
+            link,
+            events,
+            slot,
+            (session, "DOM.getContentQuads", &json!({"objectId":object})),
+            deadline,
+        );
         let _ = self.frame_call(
             link,
             events,
             slot,
-            (&session, "Runtime.releaseObject", &json!({"objectId":object})),
+            (session, "Runtime.releaseObject", &json!({"objectId":object})),
             Instant::now() + Duration::from_secs(1),
         );
-        result
+        let _ = self.cdp_frame(frame)?;
+        quad_center(&quads?)
     }
 }
 

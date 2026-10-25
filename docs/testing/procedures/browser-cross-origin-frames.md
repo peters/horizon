@@ -46,6 +46,7 @@ The test does not use the developer's browser session.
    The directory must not have a name that starts with a dot.
    Firefox and geckodriver must both have access to it.
 2. On Linux, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
+   The run includes the frame-verification test of task 6.7.
 3. On macOS, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live mcp_safari_preserves_top_level_input_and_frame_boundaries -- --ignored --nocapture`.
    Run the selected test alone. Each test uses its own coordination root.
 
@@ -53,7 +54,7 @@ The test does not use the developer's browser session.
 
 ## 6. Tasks
 
-On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
+On Linux, use tasks 6.1 through 6.7. On macOS, use tasks 6.6 and 6.8.
 
 ### 6.1 FRAME-INPUT — Fill and submit the form
 
@@ -147,7 +148,26 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
    Result: After the input tasks, the test changes the page background and fills a top-level field.
    A new decoded frame arrives within three seconds.
 
-### 6.7 SAFARI-COMPAT — Check the supported Safari behavior
+### 6.7 FRAME-VERIFY — Check that a frame action reached its target
+
+1. Examine the result of `mcp_frame_actions_verify_that_the_target_received_them_on_both_backends`.
+
+   Result: The fixture has one same-process chat widget and one cross-origin chat widget.
+   Each frame is at a non-zero offset and scrolls internally.
+   A `fill` on a widget composer returns completion and the widget records `keydown` events.
+   A `click` on the widget send control returns completion and the widget reports the filled text in its own click handler.
+   The reported click point is inside the send control.
+   A `click` on the composer returns completion.
+   A `press` with `A` then reaches the focused composer in the frame.
+   A `click` on a control that another element covers returns `element_obstructed` and the widget receives no click.
+   A `fill` on a field that discards its input returns `input_failed`.
+   A `fill` of an editable field accepts a line break and a repeated and trailing space.
+   A `click` on a control that hides itself returns completion and the widget reports its own click.
+   The same-process frame has padding and a transform, and its clicks still reach their targets.
+   The child-frame nodes report no top-level bounds.
+   Chromium and Firefox give the same result.
+
+### 6.8 SAFARI-COMPAT — Check the supported Safari behavior
 
 1. Examine the macOS test result.
 
@@ -163,8 +183,8 @@ On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
 
 ## 7. Pass criteria
 
-- On Linux, the Chromium and Firefox assertions in tasks 6.1 through 6.6 pass.
-- On macOS, the Safari assertions in tasks 6.6 and 6.7 pass.
+- On Linux, the Chromium and Firefox assertions in tasks 6.1 through 6.7 pass.
+- On macOS, the Safari assertions in tasks 6.6 and 6.8 pass.
 - The selected platform tasks pass through public MCP tools.
 - Decoded frame delivery continues after the input tasks.
 - The test does not require a human handoff.
