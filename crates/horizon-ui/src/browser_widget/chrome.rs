@@ -102,6 +102,10 @@ pub fn show(
         ui.label(RichText::new(note).size(10.5).color(theme::FG_SOFT()));
     }
 
+    if let Some(note) = browser.kept_host_note() {
+        ui.label(RichText::new(note).size(10.5).color(theme::FG_SOFT()));
+    }
+
     if let Some((sent, total)) = browser.cloud_upload_progress() {
         // The total is zero until the transfer thread read the file sizes.
         let text = match sent.saturating_mul(100).checked_div(total) {
@@ -724,6 +728,61 @@ mod tests {
             },
             ..egui::RawInput::default()
         }
+    }
+
+    #[test]
+    fn a_panel_of_a_browser_host_states_that_it_keeps_that_host() {
+        let backend = horizon_core::browser::RemoteHostBackend::new("browser-vm", Some("mail".to_string()))
+            .expect("one SSH name");
+        let mut remote = BrowserPanelState::start_remote_host(
+            "panel-kept-host",
+            &horizon_core::browser::BrowserConfig::default(),
+            None,
+            &backend,
+        );
+        let notes = notes_of(&mut remote);
+        assert!(
+            notes.iter().any(|note| note == horizon_core::browser::KEPT_HOST_NOTE),
+            "a panel of a browser host says that it keeps its host: {notes:?}"
+        );
+        assert!(
+            notes.iter().any(|note| note == horizon_core::browser::POINTER_NOTE),
+            "the pointer limit keeps its own line: {notes:?}"
+        );
+        remote.stop();
+
+        let notes = notes_of(&mut BrowserPanelState::inert());
+        assert!(
+            !notes.iter().any(|note| note == horizon_core::browser::KEPT_HOST_NOTE),
+            "a local panel shows no line about a browser host: {notes:?}"
+        );
+    }
+
+    /// The text lines of one headless pass of the chrome.
+    fn notes_of(browser: &mut BrowserPanelState) -> Vec<String> {
+        fn walk(shape: &egui::Shape, into: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => into.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, into)),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut state = crate::browser_widget::BrowserUiState::default();
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(720.0, 220.0))),
+                    ..egui::RawInput::default()
+                },
+                |ui| {
+                    super::show(ui, horizon_core::PanelId(9), browser, &mut state, true);
+                },
+            )
+            .discard_textures();
+        let mut texts = Vec::new();
+        output.shapes.iter().for_each(|shape| walk(&shape.shape, &mut texts));
+        texts
     }
 
     #[test]

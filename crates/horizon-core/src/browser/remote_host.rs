@@ -47,6 +47,12 @@ pub const PANEL_ACTOR: &str = "horizon:person:browser-panel";
 /// channel carries, and the one way to click the page.
 pub const POINTER_NOTE: &str = "To click this page, open the machine's display in a device panel.";
 
+/// The note that a panel of a browser host shows about its backend: the page
+/// lives on the machine of the host, so another entry in the settings cannot
+/// move this panel.
+pub const KEPT_HOST_NOTE: &str =
+    "This panel keeps the browser host that it was created with; a new panel follows the settings.";
+
 /// Why a panel backed by a browser host stopped, as a typed code and a fixed
 /// message. The detail of the host stays in the panel note.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -312,6 +318,13 @@ impl BrowserPanelState {
         self.is_remote_host().then_some(POINTER_NOTE)
     }
 
+    /// The short line that says that this panel keeps the host that it was
+    /// created with when the settings name another host.
+    #[must_use]
+    pub fn kept_host_note(&self) -> Option<&'static str> {
+        self.is_remote_host().then_some(KEPT_HOST_NOTE)
+    }
+
     /// What a page of a browser host can do that a provider remote session can
     /// not: its content viewport can be pinned, and the profile of the host
     /// outlives the panel.
@@ -335,9 +348,6 @@ impl BrowserPanelState {
         let Some(host) = self.remote_host.take() else {
             return;
         };
-        if let Some(view) = host.view.as_ref() {
-            view.shutdown();
-        }
         self.frame_slot.clear();
         self.navigation_error = None;
         let page = HostPage {
@@ -346,8 +356,11 @@ impl BrowserPanelState {
         };
         // The new channel opens on the worker thread of the view, so a retry
         // returns at once and the panel keeps painting while a dead host is
-        // being contacted. The outcome arrives as the state of the panel.
-        let view = HostView::start(
+        // being contacted. The page of the old channel closes there first,
+        // because the host takes one page of an engine at a time. The outcome
+        // arrives as the state of the panel.
+        let view = HostView::start_after(
+            host.view,
             ssh_opener(host.target.clone()),
             page,
             self.config.backend,

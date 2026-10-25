@@ -14,7 +14,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use horizon_browser::{BackendKind, BrowserCommand, BrowserEventWaker, FrameSlot};
 
@@ -37,6 +37,10 @@ const QUEUE: usize = 128;
 /// page of the host through it. A channel that is unresponsive is stopped when
 /// this bound ends, so no `ssh` process outlives a panel.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// How long a replacement view waits for the pump of the panel that it replaces.
+/// That pump closes its page first, and a host refuses a second page of the same
+/// actor and engine while the first one is open.
+const PREDECESSOR_WAIT: Duration = Duration::from_secs(SHUTDOWN_GRACE.as_secs() + 2);
 
 /// The transport of one panel to its browser host: the standard streams of the
 /// MCP server, and the way to stop it.
@@ -101,6 +105,22 @@ impl HostView {
     /// `page` on the host and pumps its frames. This call returns at once: the
     /// outcome, including a host that never answers, is a state of the panel.
     pub(super) fn start(open: HostOpener, page: HostPage, backend: BackendKind, frames: Arc<FrameSlot>) -> Self {
+        Self::start_after(None, open, page, backend, frames)
+    }
+
+    /// Start the worker thread of the view that replaces `previous`, which talks
+    /// to the same host. The new page is created only after the pump of
+    /// `previous` closed its own page: a host refuses a second page of the same
+    /// actor and engine while the first one is open, so a retry of a panel would
+    /// otherwise be refused as `already owned by this agent`. The wait runs on the
+    /// worker thread, so the thread that asks for the retry stays free.
+    pub(super) fn start_after(
+        previous: Option<Self>,
+        open: HostOpener,
+        page: HostPage,
+        backend: BackendKind,
+        frames: Arc<FrameSlot>,
+    ) -> Self {
         let (tx, commands) = mpsc::sync_channel(QUEUE);
         let shared = Shared {
             latest: Arc::default(),
@@ -119,6 +139,10 @@ impl HostView {
             channel: Arc::clone(&channel),
         };
         std::thread::spawn(move || {
+            if let Some(previous) = previous {
+                previous.shutdown();
+                wait_for_pump_end(&previous);
+            }
             let mut opened = match open() {
                 Ok(channel) => channel,
                 Err(failure) => {
@@ -216,6 +240,19 @@ fn lock<T>(slot: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn stop_channel(slot: &ChannelSlot) {
     if let Some(channel) = lock(slot).as_mut() {
         channel.stop();
+    }
+}
+
+/// Wait until the pump of a replaced view ended, which it does after it closed
+/// the page of its host. The view reports no live channel from that moment.
+fn wait_for_pump_end(previous: &HostView) {
+    let deadline = Instant::now() + PREDECESSOR_WAIT;
+    while previous.can_send() {
+        if Instant::now() >= deadline {
+            tracing::warn!("the page of the replaced browser panel was still open when its replacement started");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

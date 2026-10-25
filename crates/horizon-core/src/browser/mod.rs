@@ -16,7 +16,9 @@ pub use status::BrowserStatus;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
 mod remote_host;
-pub use remote_host::{PANEL_ACTOR, POINTER_NOTE, RemoteHostBackend, RemoteHostFailure, RemoteHostRefusal};
+pub use remote_host::{
+    KEPT_HOST_NOTE, PANEL_ACTOR, POINTER_NOTE, RemoteHostBackend, RemoteHostFailure, RemoteHostRefusal,
+};
 #[cfg(feature = "cloud-workspaces")]
 mod cloud;
 pub mod file_chooser;

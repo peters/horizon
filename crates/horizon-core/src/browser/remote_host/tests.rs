@@ -674,3 +674,51 @@ fn the_actor_of_the_person_is_a_horizon_identity_that_no_agent_uses() {
         "no agent identity uses the reserved person prefix"
     );
 }
+
+/// A page of a profile host belongs to one engine of one actor, so the page of
+/// the old channel must close before the page of its replacement is created.
+/// Without that order the host refuses the retry of a panel as a second page.
+#[test]
+fn a_replacement_channel_closes_the_page_of_the_old_one_before_it_creates_its_own() {
+    let script = Script::new();
+    let frames = Arc::new(crate::browser::FrameSlot::new());
+    let page = || HostPage {
+        url: Some("https://example.test/".to_string()),
+        profile: Some("mail".to_string()),
+    };
+    let channel = || {
+        let (client, peer) = UnixStream::pair().expect("socket pair");
+        let responder = script.clone();
+        std::thread::spawn(move || answer(peer, &responder));
+        peer_opener(Box::new(SocketChannel(Some(client))))
+    };
+
+    let first = HostView::start(channel(), page(), BackendKind::ChromiumCdp, Arc::clone(&frames));
+    script.wait_for("browser_create");
+    let _second = HostView::start_after(
+        Some(first),
+        channel(),
+        page(),
+        BackendKind::ChromiumCdp,
+        Arc::clone(&frames),
+    );
+    script.wait_until("browser_create", |calls| {
+        calls.iter().filter(|call| call.starts_with("browser_create ")).count() == 2
+    });
+
+    let calls = script.tools();
+    let closed = calls.iter().position(|tool| tool == "browser_close");
+    let created_again = calls.iter().filter(|tool| *tool == "browser_create").count();
+    assert_eq!(created_again, 2, "the replacement created one page: {calls:?}");
+    let second_create = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, tool)| *tool == "browser_create")
+        .nth(1)
+        .map(|(index, _)| index);
+    assert!(closed.is_some(), "the page of the old channel closed: {calls:?}");
+    assert!(
+        closed < second_create,
+        "the old page closes before the new one is created: {calls:?}"
+    );
+}

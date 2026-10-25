@@ -2,6 +2,7 @@ use crate::app::HorizonApp;
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use horizon_core::{PanelId, PanelOptions, PanelResume, PanelTranscript, PresetConfig, WorkspaceId};
 
+use super::support::preset_panel_options;
 use super::{add_panel_position, inherit_workspace_cwd, workspace_cwd};
 
 /// Newly added agent panels always start a new session. `resume: last` on a
@@ -268,7 +269,7 @@ impl HorizonApp {
         #[cfg(feature = "cloud-workspaces")]
         let has_directory = has_directory || takes_cloud_panel;
         if has_directory || !preset.requires_workspace_cwd() {
-            let mut options = preset.to_panel_options(&self.template_config.browser);
+            let mut options = preset_panel_options(&preset, &self.template_config.browser);
             options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
             #[cfg(feature = "cloud-workspaces")]
             if takes_cloud_panel {

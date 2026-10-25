@@ -127,6 +127,13 @@ panel needs a string `name`, a `kind` from the panel kinds, string `command`,
 `cwd` and `args` items, two numbers for `position` and `size`, and a `resume`
 value Horizon reads. Any other value stops the fixture with an error.
 
+`--browser-host TARGET` names a browser host in the fixture settings, so a
+browser panel that the fixture creates opens on that host instead of the local
+browser. `--browser-host-profile PROFILE` adds the profile of that host, and it
+needs `--browser-host`. The target is one name that `ssh` resolves, such as an
+SSH config alias; the fixture does not start the host. Leave both out to keep
+the local browser.
+
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The
 agent must be launched inside a supporting Horizon host. Read the endpoint from

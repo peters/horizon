@@ -168,6 +168,11 @@ pub struct PanelOptions {
     pub browser_config: Option<crate::browser::BrowserConfig>,
     /// Stable profile identity shared by explicitly duplicated browser pages.
     pub browser_session_id: Option<String>,
+    /// Let the browser host that the settings name decide the backend of this
+    /// panel. Only a panel that the person creates from the preset picker sets
+    /// it: a page that an agent asks for, a page of a local profile that a panel
+    /// duplicates and a saved panel keep the backend that their caller chose.
+    pub follows_browser_host: bool,
     #[cfg(feature = "cloud-workspaces")]
     pub cloud_connection: Option<crate::cloud_runtime::ssh::Connection>,
     /// Run the browser panel at a remote grid with this prepared request
@@ -211,6 +216,7 @@ impl Default for PanelOptions {
             template: None,
             browser_config: None,
             browser_session_id: None,
+            follows_browser_host: false,
             #[cfg(feature = "cloud-workspaces")]
             cloud_connection: None,
             remote_session: None,

@@ -388,6 +388,9 @@ impl PanelState {
                 .as_ref()
                 .and_then(|profile| profile.session_id.clone()),
             browser_config: (self.kind == PanelKind::Browser).then(|| self.browser_config_for_restore(browser_config)),
+            // A saved panel comes back on the backend that it saved, not on the
+            // browser host that the settings of today name.
+            follows_browser_host: false,
             remote_session: None,
             remote_target: self
                 .browser_profile
