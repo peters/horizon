@@ -109,27 +109,11 @@ struct CloudConfig<'a> {
     package_update: bool,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     packages: &'a [&'a str],
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    fs_setup: Vec<FsSetup<'a>>,
     ssh_pwauth: bool,
     disable_root: bool,
     mounts: Vec<[&'a str; 6]>,
     runcmd: Vec<Vec<&'a str>>,
     write_files: Vec<WriteFile<'a>>,
-}
-/// cloud-init's `fs_setup` entry. `overwrite` governs the partition table only, and
-/// cloud-init still runs `mkfs` on a device that already holds a filesystem, so
-/// `replace_fs: false` is what keeps a rebuilt Azure host from formatting the workspace
-/// (cloud-init 26.2 on Ubuntu 24.04 ran `mkfs.ext4 -F` on the attached workspace disk of
-/// a rebuild's new VM during the live acceptance of #1774, which lost `/workspace`).
-#[derive(Serialize)]
-struct FsSetup<'a> {
-    label: &'a str,
-    filesystem: &'a str,
-    device: &'a str,
-    partition: &'a str,
-    overwrite: bool,
-    replace_fs: bool,
 }
 #[derive(Serialize)]
 struct WriteFile<'a> {
@@ -150,7 +134,7 @@ impl Plan {
         let registry = self.registry.as_ref().map(registry_config).transpose()?;
         let (image, setup, guard, start, unit) = (
             format!("{}\n", self.image),
-            setup_script(),
+            setup_script(self.platform, &self.workspace_device),
             guard_script(self.platform),
             if self.exposure_ingress {
                 format!(
@@ -184,18 +168,6 @@ impl Plan {
         let config = CloudConfig {
             package_update: azure,
             packages: if azure { &["docker.io"] } else { &[] },
-            fs_setup: if azure {
-                vec![FsSetup {
-                    label: WORKSPACE_LABEL,
-                    filesystem: "ext4",
-                    device: &self.workspace_device,
-                    partition: "none",
-                    overwrite: false,
-                    replace_fs: false,
-                }]
-            } else {
-                Vec::new()
-            },
             ssh_pwauth: false,
             disable_root: true,
             write_files,
@@ -485,15 +457,36 @@ fn workspace(platform: Platform) -> String {
 
 /// Runs once on first boot. The worker service is enabled last, so it never
 /// starts while the host could still accept an SSH or password login.
-fn setup_script() -> String {
-    "#!/bin/sh
+fn setup_script(platform: Platform, device: &str) -> String {
+    let mut script = "#!/bin/sh
 set -eu
 systemctl mask --now ssh.socket ssh.service
 passwd --lock root
-systemctl daemon-reload
-systemctl enable --now horizon-worker.service
 "
-    .to_owned()
+    .to_owned();
+    if platform == Platform::Azure {
+        let _ = write!(script, "{}", format_script(device, volume_mount(platform)));
+    }
+    script.push_str(
+        "systemctl daemon-reload
+systemctl enable --now horizon-worker.service
+",
+    );
+    script
+}
+
+/// Formats and mounts an Azure workspace. cloud-init 26.2 runs `mkfs` on a whole device
+/// that already holds a filesystem whatever `fs_setup` says — both `overwrite` and
+/// `replace_fs` failed a live rebuild — and a rebuild must keep the filesystem it finds,
+/// so the host asks `blkid` itself and formats only an empty device.
+fn format_script(device: &str, mount: &str) -> String {
+    format!(
+        "if [ -z \"$(blkid -o value -s TYPE {device} 2>/dev/null)\" ]; then
+  mkfs.ext4 -L {WORKSPACE_LABEL} {device}
+fi
+mountpoint -q {mount} || mount {mount}
+"
+    )
 }
 
 /// Runs before every container start. The metadata service serves the user data,

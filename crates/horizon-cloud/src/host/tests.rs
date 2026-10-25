@@ -369,25 +369,25 @@ fn a_prepared_host_keeps_its_user_data() {
 }
 
 #[test]
-fn an_azure_host_installs_docker_and_formats_only_a_blank_data_disk() {
+fn an_azure_host_leaves_every_filesystem_to_its_own_script() {
     let document = azure_plan().cloud_config().unwrap();
     let config: Value = serde_yaml::from_str(&document).unwrap();
     assert_eq!(config["package_update"], Value::Bool(true));
     assert_eq!(config["packages"], serde_yaml::to_value(["docker.io"]).unwrap());
-    assert_eq!(
-        config["fs_setup"],
-        serde_yaml::to_value([serde_json::json!({
-            "label": "horizon-ws", "filesystem": "ext4", "device": AZURE_DATA_DISK,
-            "partition": "none", "overwrite": false, "replace_fs": false
-        })])
-        .unwrap()
+    assert!(
+        config.get("fs_setup").is_none(),
+        "cloud-init must not format the workspace: it ran mkfs on a device that already held one"
     );
+    let setup = content(&config, SETUP);
+    assert!(setup.contains(&format!("blkid -o value -s TYPE {AZURE_DATA_DISK}")));
+    assert!(setup.contains("mkfs.ext4 -L horizon-ws"));
+    assert!(setup.contains(&format!(
+        "mountpoint -q {AZURE_VOLUME_MOUNT} || mount {AZURE_VOLUME_MOUNT}"
+    )));
     assert_eq!(config["mounts"][0][0].as_str(), Some(AZURE_DATA_DISK));
     assert_eq!(config["mounts"][0][1].as_str(), Some(AZURE_VOLUME_MOUNT));
-    // Everything else is the prepared host's bootstrap, apart from the volume path that
-    // the Azure temporary disk at `/mnt` would hide.
     let prepared = parse(&plan());
-    for path in [ENVIRONMENT_FILE, IMAGE_FILE, SETUP, REGISTRY_FILE] {
+    for path in [ENVIRONMENT_FILE, IMAGE_FILE, REGISTRY_FILE] {
         assert_eq!(file(&config, path), file(&prepared, path), "{path}");
     }
     assert_eq!(config["runcmd"], prepared["runcmd"]);
@@ -400,23 +400,62 @@ fn an_azure_host_installs_docker_and_formats_only_a_blank_data_disk() {
 
 #[test]
 fn a_rebuilt_host_never_reformats_the_workspace_disk() {
-    let config = parse(&azure_plan());
-    let filesystem = &config["fs_setup"][0];
-    assert_eq!(filesystem["device"].as_str(), Some(AZURE_DATA_DISK));
-    for key in ["overwrite", "replace_fs"] {
-        assert_eq!(
-            filesystem[key],
-            Value::Bool(false),
-            "cloud-init must leave a device that already holds the workspace filesystem alone: {key}"
-        );
+    // The rendered format step runs against stubs, so the test checks what the host does,
+    // not what the document says it intends.
+    let directory = std::env::temp_dir().join(format!("horizon-format-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("format.sh");
+    std::fs::write(&script, format_script("/dev/stub-workspace", "/stub-mount")).unwrap();
+    let bin = directory.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["mkfs.ext4", "mount"] {
+        std::fs::write(bin.join(name), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(bin.join(name), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     }
-    let document = azure_plan().cloud_config().unwrap();
-    for format in ["mkfs", "wipefs"] {
-        assert!(
-            !document.contains(format),
-            "the host never formats a device by itself: {format}"
-        );
-    }
+    let calls = |kind: &str, existing: &str| {
+        std::fs::write(
+            bin.join("blkid"),
+            format!(
+                "#!/bin/sh
+printf '%s' '{existing}'
+"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(bin.join("blkid"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::write(bin.join("mountpoint"), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            bin.join("mountpoint"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let log = directory.join("calls.log");
+        let _ = std::fs::remove_file(&log);
+        std::fs::write(
+            bin.join("mkfs.ext4"),
+            format!("#!/bin/sh\necho {kind} >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            bin.join("mkfs.ext4"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .arg(&script)
+            .env("PATH", &bin)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read_to_string(&log).unwrap_or_default().lines().count()
+    };
+    assert_eq!(
+        calls("formatted", "ext4"),
+        0,
+        "a device that already holds the workspace filesystem is never formatted"
+    );
+    assert_eq!(calls("formatted", ""), 1, "an empty device is formatted exactly once");
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 #[test]
