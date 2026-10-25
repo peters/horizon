@@ -329,6 +329,33 @@ fn a_failed_server_request_leaves_only_what_a_delete_removes() {
 }
 
 #[test]
+fn a_rental_from_the_fences_of_a_finished_delete_is_refused_until_they_are_cleared() {
+    // A delete proves the server and the volume gone but keeps their fences and the delete
+    // intent, so a rental from those records is refused. The record of the machine clears
+    // them when a deploy follows a finished delete, and the rental then starts from the
+    // clean fences that `a_browser_vm_is_rented_with_a_named_state_volume_at_state` uses.
+    let deleted = Journal {
+        location: Some("fsn1".into()),
+        volume: CreateState::Terminated {
+            worker_id: VOLUME.to_string(),
+        },
+        deleting: true,
+        ..Journal::default()
+    };
+    let (deployed, recorded) = deploy(
+        &request(),
+        CreateState::Terminated {
+            worker_id: SERVER.to_string(),
+        },
+        deleted,
+        Vec::new(),
+    );
+    let error = deployed.unwrap_err().to_string();
+    assert!(error.contains("Finish deleting"), "{error}");
+    assert!(recorded.requests.is_empty(), "nothing reaches the provider");
+}
+
+#[test]
 fn a_stop_releases_the_server_and_keeps_the_state_volume() {
     let bound = CreateState::Bound {
         worker_id: SERVER.to_string(),

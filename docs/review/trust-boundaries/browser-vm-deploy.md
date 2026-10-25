@@ -38,7 +38,10 @@ queue. The host plan of that server is
   host keeps its SSH server, because the person signs in on the display through
   that route.
 - The tool answers with the phase it recorded, and `status` reads the record
-  without a provider request. One run at a time: a second run is refused.
+  without a provider request: a read never starts one. One provider run at a
+  time: a second one is refused while the first is in flight, and a read is
+  answered meanwhile. A phase that a crash left in progress is taken over by the
+  next explicit deploy, stop or delete.
 - A failed run keeps its record. Stop keeps the state volume. Delete removes the
   server, the volume and the key, each proven absent, and only a delete removes a
   sign-in.

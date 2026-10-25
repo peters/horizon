@@ -92,10 +92,10 @@ impl HorizonApp {
                 continue;
             }
             if request.browser_vm.is_some() {
-            self.queue_browser_vm(request, ctx);
-            continue;
-        }
-        if request.cloud_exec.is_some() {
+                self.queue_browser_vm(request, ctx);
+                continue;
+            }
+            if request.cloud_exec.is_some() {
                 self.queue_cloud_exec(request, ctx);
                 continue;
             }

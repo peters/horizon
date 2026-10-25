@@ -126,10 +126,6 @@ pub struct Record {
     pub hourly_net: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Whether this run may start a new machine afresh, as one after a finished delete
-    /// may. A stop and a resume keep the state volume, so they never do.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub fresh: bool,
     /// The fence for the server, as the provider runtime records it.
     #[serde(default = "prepared")]
     pub operation: CreateState,
@@ -154,7 +150,6 @@ impl Default for Record {
             server_id: None,
             hourly_net: None,
             error: None,
-            fresh: false,
             operation: CreateState::Prepared,
             journal: Journal::default(),
         }
@@ -233,17 +228,16 @@ impl Operation {
 }
 
 /// Checks a run against the cloud settings of this machine and records the phase it
-/// starts, without touching the provider. A run that is interrupted therefore reads as
-/// the phase it reached, and is resumed or deleted instead of repeated.
+/// starts, without touching the provider.
+///
+/// A phase that a run left in progress is stale, because one Horizon runs one provider
+/// run at a time: an explicit `Deploy`, `Stop` or `Delete` takes it over, which is how an
+/// interrupted run is finished. A read never does.
 /// # Errors
 /// Refuses a request the Hetzner settings do not allow, and records that could not be
 /// made durable.
 pub fn begin(root: &Path, operation: &Operation) -> Result<Status> {
-    let record = Record::load(root)?;
-    if !record.phase.idle() {
-        return Err(busy());
-    }
-    let mut record = record;
+    let mut record = Record::load(root)?;
     match operation {
         Operation::Deploy(deploy) => {
             if record.phase == Phase::Stopped {
@@ -251,10 +245,14 @@ pub fn begin(root: &Path, operation: &Operation) -> Result<Status> {
                     "The browser VM is stopped; resume it, so the sign-ins of its profiles stay",
                 ));
             }
-            // A machine the records prove deleted starts afresh; a stop keeps its volume.
-            let fresh = matches!(record.phase, Phase::Idle | Phase::Deleted);
+            // A machine that never existed, or one whose delete finished, starts from a
+            // clean record: its server fence and journal name resources that are gone, and
+            // a provider run would refuse them.
+            if matches!(record.phase, Phase::Idle | Phase::Deleted) {
+                record.operation = CreateState::Prepared;
+                record.journal = Journal::default();
+            }
             admission(root, deploy)?;
-            record.fresh = fresh;
             record.image = Some(deploy.image.clone());
             record.server_type = Some(deploy.server_type.clone());
             record.location = Some(deploy.location.clone());
@@ -268,7 +266,6 @@ pub fn begin(root: &Path, operation: &Operation) -> Result<Status> {
                 &mut record.journal,
                 record.phase == Phase::Stopped,
             )?;
-            record.fresh = false;
         }
         Operation::Stop | Operation::Delete => {
             if record.phase == Phase::Idle {
@@ -392,10 +389,6 @@ fn place(
     }
     let placed = saved.finish(placed);
     saved.settled(placed, Phase::Ready)
-}
-
-fn busy() -> Error {
-    Error::Invalid("A browser VM run is already in progress; read the browser VM status")
 }
 
 /// The settings of this machine, checked before any request is made.

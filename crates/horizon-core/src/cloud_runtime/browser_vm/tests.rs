@@ -172,7 +172,7 @@ fn only_a_finished_stop_is_resumed_and_it_keeps_its_volume() {
     assert_eq!(begun.phase, Phase::Resuming);
     let recorded = Record::load(root.path()).unwrap();
     assert_eq!(recorded.operation, CreateState::Prepared);
-    assert!(recorded.journal.released.is_none() && !recorded.fresh);
+    assert!(recorded.journal.released.is_none());
     assert_eq!(
         recorded.journal.volume,
         CreateState::Bound { worker_id: "9".into() },
@@ -181,30 +181,90 @@ fn only_a_finished_stop_is_resumed_and_it_keeps_its_volume() {
 }
 
 #[test]
-fn a_deploy_records_the_phase_and_whether_it_may_start_afresh() {
+fn a_deploy_records_the_phase_and_the_machine_it_asks_for() {
     let root = root(&["fsn1"]);
     let begun = super::begin(root.path(), &Operation::Deploy(deploy())).unwrap();
     assert_eq!(begun.phase, Phase::Deploying);
     let recorded = Record::load(root.path()).unwrap();
-    assert!(recorded.fresh, "nothing was rented before");
     assert_eq!(recorded.image.as_deref(), Some(IMAGE));
-    // The machine is now in a run, so nothing else starts until it ends.
-    assert!(super::begin(root.path(), &Operation::Deploy(deploy())).is_err());
+    assert_eq!(recorded.operation, CreateState::Prepared, "nothing was rented before");
+    // The machine is now in a run, and an explicit action takes it over.
+    assert!(super::begin(root.path(), &Operation::Deploy(deploy())).is_ok());
 }
 
 #[test]
-fn a_run_in_progress_refuses_another_and_a_delete_with_nothing_refuses_too() {
+fn a_deploy_after_a_finished_delete_leaves_the_fences_that_a_rental_needs() {
+    // A delete proves the server and the volume gone, and leaves the fences of both plus
+    // the delete intent. A rental from those fences is refused by the provider runtime, so
+    // a deploy after a finished delete must clear them.
     let root = root(&["fsn1"]);
-    for phase in [Phase::Deploying, Phase::Stopping, Phase::Resuming, Phase::Deleting] {
-        let record = Record {
-            phase,
-            ..Record::default()
-        };
-        record.save(root.path()).unwrap();
-        assert!(!phase.idle());
-        let busy = super::begin(root.path(), &Operation::Delete).unwrap_err();
-        assert!(busy.to_string().contains("in progress"), "{busy}");
+    Record {
+        phase: Phase::Deleted,
+        image: Some(IMAGE.into()),
+        server_type: Some("ccx13".into()),
+        location: Some("fsn1".into()),
+        volume_gb: Some(DEFAULT_VOLUME_GB),
+        operation: CreateState::Terminated { worker_id: "42".into() },
+        journal: Journal {
+            location: Some("fsn1".into()),
+            volume: CreateState::Terminated { worker_id: "9".into() },
+            deleting: true,
+            ..Journal::default()
+        },
+        ..Record::default()
     }
+    .save(root.path())
+    .unwrap();
+
+    let begun = super::begin(root.path(), &Operation::Deploy(deploy())).unwrap();
+    assert_eq!(begun.phase, Phase::Deploying);
+    let recorded = Record::load(root.path()).unwrap();
+    assert_eq!(
+        recorded.operation,
+        CreateState::Prepared,
+        "the server fence names a deleted server"
+    );
+    assert_eq!(
+        recorded.journal,
+        Journal::default(),
+        "the journal of the deleted machine, with its delete intent, is gone"
+    );
+    assert_eq!(recorded.image.as_deref(), Some(IMAGE), "the new request is recorded");
+}
+
+#[test]
+fn an_explicit_delete_takes_over_a_run_that_a_crash_left_open() {
+    // A status read answers the recorded phase, so a crash during a deploy leaves the
+    // record at `deploying`. Only an explicit action may finish it, and a delete must be
+    // possible then, or nothing can remove the machine.
+    let root = root(&["fsn1"]);
+    Record {
+        phase: Phase::Deploying,
+        image: Some(IMAGE.into()),
+        operation: CreateState::Bound { worker_id: "42".into() },
+        journal: Journal {
+            location: Some("fsn1".into()),
+            volume: CreateState::Bound { worker_id: "9".into() },
+            ..Journal::default()
+        },
+        ..Record::default()
+    }
+    .save(root.path())
+    .unwrap();
+    assert_eq!(
+        super::status(root.path()).unwrap().phase,
+        Phase::Deploying,
+        "a read reports the stale phase and changes nothing"
+    );
+    let begun = super::begin(root.path(), &Operation::Delete).unwrap();
+    assert_eq!(begun.phase, Phase::Deleting);
+    let begun = super::begin(root.path(), &Operation::Stop);
+    assert!(begun.is_ok(), "a stop also takes the stale run over: {begun:?}");
+}
+
+#[test]
+fn a_delete_and_a_stop_with_nothing_refuse() {
+    let root = root(&["fsn1"]);
     Record::default().save(root.path()).unwrap();
     let nothing = super::begin(root.path(), &Operation::Delete).unwrap_err();
     assert!(nothing.to_string().contains("nothing to delete"), "{nothing}");

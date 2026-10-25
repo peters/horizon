@@ -347,7 +347,6 @@ pub fn enqueue_cloud_exec(identity: AgentIdentity<'_>, request: CloudExecRequest
     enqueue_cloud_exec_at(BrowserRuntimePaths::resolve().root(), identity, request)
 }
 
-
 /// Queues a browser VM request for the live host. Deployment, stop, resume and delete
 /// answer once the host recorded the phase it started; poll `status` after that.
 /// # Errors
@@ -483,7 +482,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_create,
         cloud_delete,
         cloud_exec,
-    browser_vm,
+        browser_vm,
         tailnet_credential,
         image_destination,
         deadline_millis,
@@ -535,7 +534,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_create,
         cloud_delete,
         cloud_exec,
-    browser_vm,
+        browser_vm,
         tailnet_credential,
         image_destination,
     };

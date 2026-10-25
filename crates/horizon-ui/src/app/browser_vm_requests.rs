@@ -13,18 +13,21 @@ use horizon_core::cloud_runtime::{
 };
 use serde_json::{Value, json};
 
-use super::{HorizonApp, browser_provider_usage::UsageHostState};
+use super::HorizonApp;
 
-/// The run of this Horizon.
+/// The requests of this Horizon that are on their own thread.
 #[derive(Default)]
 pub(super) struct State {
-    job: Option<Job>,
+    jobs: Vec<Job>,
 }
 
 struct Job {
     request: UsageRequest,
     answers: Receiver<Answer>,
     cancel: Cancellation,
+    /// Whether this job runs provider work, so a second one must wait for it.
+    mutating: bool,
+    finished: bool,
 }
 
 impl Drop for Job {
@@ -43,14 +46,29 @@ enum Answer {
 }
 
 impl State {
-    fn busy(&self) -> bool {
-        self.job.is_some()
+    /// Whether a provider run of this Horizon is in flight.
+    fn running(&self) -> bool {
+        self.jobs.iter().any(|job| job.mutating)
     }
 }
 
+/// Why a request waits, or nothing when it may start. A read touches nothing, so it is
+/// never refused while a run is in flight: reading the phase is how the caller watches
+/// that run.
+fn refusal(action: BrowserVmAction, running: bool) -> Option<&'static str> {
+    (running && runs_provider(action))
+        .then_some("browser_vm_busy: a browser VM run is already in progress; read its status")
+}
+
+/// Whether this action runs provider work. Only these wait for each other, and only these
+/// answer with the phase of a run that is still going.
+fn runs_provider(action: BrowserVmAction) -> bool {
+    action != BrowserVmAction::Status
+}
+
 impl HorizonApp {
-    /// Starts a browser VM request on its own thread, or refuses it while a run of this
-    /// Horizon is in flight.
+    /// Starts a browser VM request on its own thread, or refuses a provider run while one
+    /// of this Horizon is in flight.
     pub(in crate::app) fn queue_browser_vm(&mut self, request: UsageRequest, ctx: &egui::Context) {
         let Some(root) = self.cloud_root() else {
             self.answer_browser_vm(
@@ -59,74 +77,59 @@ impl HorizonApp {
             );
             return;
         };
-        let state: &UsageHostState = &self.browser_create_host.provider_usage;
-        if state.browser_vm.busy() {
-            self.answer_browser_vm(
-                &request,
-                Err("browser_vm_busy: a browser VM run is already in progress; read its status".into()),
-            );
-            return;
-        }
         let Some(action) = request.browser_vm.clone() else {
             return;
         };
+        if let Some(refusal) = refusal(
+            action.action,
+            self.browser_create_host.provider_usage.browser_vm.running(),
+        ) {
+            self.answer_browser_vm(&request, Err(refusal.into()));
+            return;
+        }
+        let mutating = runs_provider(action.action);
         let (sender, answers) = channel();
         let cancel = Cancellation::default();
         let worker_cancel = cancel.clone();
         let repaint = ctx.clone();
         std::thread::spawn(move || {
-            let begun = begin(&root, &action);
-            let running = begun.as_ref().is_ok_and(|status| {
-                matches!(
-                    status.phase,
-                    Phase::Deploying | Phase::Resuming | Phase::Stopping | Phase::Deleting
-                )
-            });
+            let begun = work(&root, &action, &worker_cancel, &mut run_provider);
             let _ = sender.send(Answer::Begun(begun));
             repaint.request_repaint();
-            if running {
-                // A stop and a delete report no step the person can act on, so their
-                // progress is read from the record with `status`. The phase a run ends in
-                // is in that record too.
-                let _ = browser_vm::run(&root, &worker_cancel, &mut |_| {});
-            }
-            // A read, or a request that was refused before it started, ends the job here,
-            // so the next request runs.
             let _ = sender.send(Answer::Finished);
             repaint.request_repaint();
         });
-        self.browser_create_host.provider_usage.browser_vm.job = Some(Job {
+        self.browser_create_host.provider_usage.browser_vm.jobs.push(Job {
             request,
             answers,
             cancel,
+            mutating,
+            finished: false,
         });
     }
 
-    /// Answers a recorded run, and clears the job when its provider work ends.
+    /// Answers every recorded run, and drops a job when its thread ended.
     pub(in crate::app) fn poll_browser_vm(&mut self, ctx: &egui::Context) {
-        let mut begun = None;
-        let mut answered = false;
-        let mut finished = false;
-        if let Some(job) = self.browser_create_host.provider_usage.browser_vm.job.as_mut() {
-            while let Ok(answer) = job.answers.try_recv() {
-                match answer {
-                    Answer::Begun(result) => {
-                        answered = true;
-                        begun = Some((job.request.clone(), result));
+        let mut answers = Vec::new();
+        {
+            let state = &mut self.browser_create_host.provider_usage.browser_vm;
+            for job in &mut state.jobs {
+                while let Ok(answer) = job.answers.try_recv() {
+                    match answer {
+                        Answer::Begun(result) => answers.push((job.request.clone(), result)),
+                        Answer::Finished => job.finished = true,
                     }
-                    Answer::Finished => finished = true,
                 }
             }
+            state.jobs.retain(|job| !job.finished);
         }
-        let failed = begun.as_ref().is_some_and(|(_, result)| result.is_err());
-        if let Some((request, result)) = begun {
+        if answers.is_empty() {
+            return;
+        }
+        for (request, result) in answers {
             self.answer_browser_vm(&request, result);
         }
-        // A refused run never started, so its answer ends the job.
-        if finished || (answered && failed) {
-            self.browser_create_host.provider_usage.browser_vm.job = None;
-            ctx.request_repaint();
-        }
+        ctx.request_repaint();
     }
 
     fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>) {
@@ -139,30 +142,49 @@ impl HorizonApp {
     }
 }
 
-/// The recorded run this request asks for.
-fn begin(root: &Path, request: &BrowserVmRequest) -> Result<Status, String> {
-    let operation = match request.action {
-        BrowserVmAction::Status => return browser_vm::status(root).map_err(|error| error.to_string()),
+/// The provider run an action asks for, or nothing for a read.
+fn operation(request: &BrowserVmRequest) -> Option<Operation> {
+    Some(match request.action {
+        BrowserVmAction::Status => return None,
         BrowserVmAction::Resume => Operation::Resume,
         BrowserVmAction::Stop => Operation::Stop,
         BrowserVmAction::Delete => Operation::Delete,
         BrowserVmAction::Deploy => Operation::Deploy(Deploy {
-            image: request
-                .image
-                .clone()
-                .ok_or("browser_vm_invalid_request: deploy needs an image")?,
-            server_type: request
-                .server_type
-                .clone()
-                .ok_or("browser_vm_invalid_request: deploy needs a ccx server type")?,
-            location: match &request.location {
-                Some(location) => location.clone(),
-                None => first_location(root)?,
-            },
+            image: request.image.clone().unwrap_or_default(),
+            server_type: request.server_type.clone().unwrap_or_default(),
+            location: request.location.clone().unwrap_or_default(),
             volume_gb: request.volume_gb.unwrap_or(browser_vm::DEFAULT_VOLUME_GB),
         }),
+    })
+}
+
+/// Answers one request. A read answers the recorded phase and never reaches `run`; an
+/// interrupted run is finished by an explicit deploy, stop or delete.
+fn work(
+    root: &Path,
+    request: &BrowserVmRequest,
+    cancel: &Cancellation,
+    run: &mut dyn FnMut(&Path, &Cancellation),
+) -> Result<Status, String> {
+    let Some(mut operation) = operation(request) else {
+        return browser_vm::status(root).map_err(|error| error.to_string());
     };
-    browser_vm::begin(root, &operation).map_err(|error| error.to_string())
+    if let Operation::Deploy(deploy) = &mut operation
+        && deploy.location.is_empty()
+    {
+        deploy.location = first_location(root)?;
+    }
+    let begun = browser_vm::begin(root, &operation).map_err(|error| error.to_string())?;
+    if runs_provider(request.action) {
+        run(root, cancel);
+    }
+    Ok(begun)
+}
+
+fn run_provider(root: &Path, cancel: &Cancellation) {
+    // A stop and a delete report no step the person can act on, so their progress is read
+    // from the record with `status`. The phase a run ends in is in that record too.
+    let _ = browser_vm::run(root, cancel, &mut |_| {});
 }
 
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.
@@ -202,4 +224,174 @@ fn describe(status: &Status) -> Value {
         });
     }
     answer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::cloud_runtime::browser_vm::{Phase, Record};
+
+    fn request(action: BrowserVmAction) -> BrowserVmRequest {
+        BrowserVmRequest {
+            action,
+            image: None,
+            server_type: None,
+            location: None,
+            volume_gb: None,
+        }
+    }
+
+    /// A cloud settings directory with no cloud settings, so the answer of a read needs
+    /// no provider and a run that reached one would fail at its first check.
+    fn root(phase: Phase) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        Record {
+            phase,
+            image: Some("ghcr.io/example/vm@sha256:synthetic".into()),
+            server_type: Some("ccx13".into()),
+            location: Some("fsn1".into()),
+            volume_gb: Some(20),
+            ..Record::default()
+        }
+        .save(root.path())
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_status_read_is_answered_while_a_provider_run_is_in_flight() {
+        // The tool, the skill and the busy message all tell the caller to read its status.
+        assert_eq!(refusal(BrowserVmAction::Status, true), None);
+        assert_eq!(refusal(BrowserVmAction::Status, false), None);
+        for action in [
+            BrowserVmAction::Deploy,
+            BrowserVmAction::Stop,
+            BrowserVmAction::Resume,
+            BrowserVmAction::Delete,
+        ] {
+            let refused = refusal(action, true).unwrap_or_else(|| panic!("{action:?} must wait for the run"));
+            assert!(refused.starts_with("browser_vm_busy"), "{refused}");
+            assert_eq!(refusal(action, false), None, "{action:?} runs when nothing else does");
+        }
+    }
+
+    #[test]
+    fn a_status_read_runs_no_provider_work() {
+        assert!(!runs_provider(BrowserVmAction::Status));
+        assert!(
+            operation(&request(BrowserVmAction::Status)).is_none(),
+            "a read has no provider operation to run"
+        );
+        for action in [
+            BrowserVmAction::Deploy,
+            BrowserVmAction::Stop,
+            BrowserVmAction::Resume,
+            BrowserVmAction::Delete,
+        ] {
+            assert!(runs_provider(action), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_status_read_reports_a_stale_deploying_phase_and_runs_nothing() {
+        // A crash during a deploy leaves the record at `deploying`. A read answers that
+        // phase; it must never pick the rental up again by itself.
+        let root = root(Phase::Deploying);
+        let mut started = 0;
+        let answered = work(
+            root.path(),
+            &request(BrowserVmAction::Status),
+            &Cancellation::default(),
+            &mut |_, _| started += 1,
+        )
+        .unwrap();
+        assert_eq!(answered.phase, Phase::Deploying);
+        assert_eq!(started, 0, "a read must not run the provider");
+        assert_eq!(
+            Record::load(root.path()).unwrap().phase,
+            Phase::Deploying,
+            "a read changes no record"
+        );
+    }
+
+    #[test]
+    fn a_stop_answers_the_started_phase_and_runs_the_provider_once() {
+        let root = root(Phase::Ready);
+        let mut started = 0;
+        let answered = work(
+            root.path(),
+            &request(BrowserVmAction::Stop),
+            &Cancellation::default(),
+            &mut |_, _| started += 1,
+        )
+        .unwrap();
+        assert_eq!(answered.phase, Phase::Stopping);
+        assert_eq!(started, 1);
+    }
+
+    #[test]
+    fn a_refused_action_runs_nothing() {
+        // Nothing was ever rented, so the delete is refused before the provider.
+        let root = root(Phase::Idle);
+        let mut started = 0;
+        let refused = work(
+            root.path(),
+            &request(BrowserVmAction::Delete),
+            &Cancellation::default(),
+            &mut |_, _| started += 1,
+        )
+        .unwrap_err();
+        assert!(refused.contains("nothing to delete"), "{refused}");
+        assert_eq!(started, 0);
+    }
+
+    fn ready() -> Status {
+        Status {
+            phase: Phase::Ready,
+            ssh_target: Some("root@203.0.113.10".into()),
+            image: Some("ghcr.io/example/browser-vm@sha256:synthetic".into()),
+            server_type: Some("ccx13".into()),
+            location: Some("fsn1".into()),
+            volume_gb: Some(20),
+            hourly_net: Some(0.0689),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn a_ready_machine_names_the_route_a_person_signs_in_through() {
+        let answer = describe(&ready());
+        assert_eq!(answer["phase"], "ready");
+        assert_eq!(answer["ssh_target"], "root@203.0.113.10");
+        assert_eq!(answer["device_panel"]["ssh"]["host"], "203.0.113.10");
+        assert_eq!(answer["device_panel"]["ssh"]["user"], "root");
+        assert_eq!(answer["device_panel"]["ssh"]["vnc"], "127.0.0.1:5900");
+        assert!(
+            answer["person_step"]
+                .as_str()
+                .unwrap()
+                .contains("A person must sign in"),
+            "the step where a person is needed is stated plainly"
+        );
+        assert_eq!(answer["browser_host"]["ssh_target"], "root@203.0.113.10");
+    }
+
+    #[test]
+    fn a_machine_that_is_not_ready_names_no_sign_in() {
+        for phase in [Phase::Deploying, Phase::Stopped, Phase::Deleting] {
+            let answer = describe(&Status { phase, ..ready() });
+            assert!(answer.get("person_step").is_none(), "{phase:?}");
+            assert!(answer.get("device_panel").is_none(), "{phase:?}");
+        }
+    }
+
+    #[test]
+    fn a_failed_run_reports_its_reason() {
+        let failed = Status {
+            phase: Phase::Failed,
+            error: Some("the provider refused the server".into()),
+            ..ready()
+        };
+        assert_eq!(describe(&failed)["error"], "the provider refused the server");
+    }
 }
