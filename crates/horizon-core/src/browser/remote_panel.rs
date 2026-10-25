@@ -344,6 +344,10 @@ impl BrowserPanelState {
         if let Some(cloud) = &self.cloud {
             return !cloud.process_lost;
         }
+        if self.is_remote_host() {
+            // A retry opens a new channel and a new page of the same host.
+            return true;
+        }
         !self.is_remote()
     }
 

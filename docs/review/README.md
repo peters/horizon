@@ -58,8 +58,9 @@ gives the untrusted input, the guarantee and the limit of each boundary.
 
 1. **Local host and private files** — a program on this computer reads a
    private file, a host file or a Docker host. Boundaries:
-   `browser-profile-host`, `browser-remote-bridge`, `standalone-remote-host`,
-   `native-client-file`, `checkout-search`, `docker-host-provider`.
+   `browser-profile-host`, `browser-remote-bridge`, `browser-remote-panel`,
+   `standalone-remote-host`, `native-client-file`, `checkout-search`,
+   `docker-host-provider`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
    drop a file, answer a passkey request or judge a semantic action. Boundaries:
    `browser-webauthn`, `browser-semantic-actions`, `cloud-browser-uploads`,

@@ -98,6 +98,10 @@ pub fn show(
         ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
     }
 
+    if let Some(note) = browser.remote_host_note() {
+        ui.label(RichText::new(note).size(10.5).color(theme::FG_SOFT()));
+    }
+
     if let Some((sent, total)) = browser.cloud_upload_progress() {
         // The total is zero until the transfer thread read the file sizes.
         let text = match sent.saturating_mul(100).checked_div(total) {
@@ -153,7 +157,19 @@ fn remote_identity_header(
 
 /// The picker acts only for an interactive local panel that is not teaching.
 fn picker_enabled(browser: &BrowserPanelState, interactive: bool) -> bool {
-    interactive && browser.teach().is_none() && !browser.is_remote()
+    interactive && browser.teach().is_none() && !browser.is_remote() && !browser.is_remote_host()
+}
+
+/// The SSH target of the browser host of this panel. The target is the name that
+/// `ssh` resolves, never an endpoint of the host.
+fn remote_host_label(ui: &mut Ui, browser: &BrowserPanelState) {
+    let Some(target) = browser.remote_host_target() else {
+        return;
+    };
+    ui.add(egui::Label::new(
+        RichText::new(target).size(10.0).color(theme::FG_SOFT()),
+    ))
+    .on_hover_text("This page belongs to a browser host on this SSH target");
 }
 
 fn backend_picker(
@@ -165,6 +181,12 @@ fn backend_picker(
     // Remote panels show the family and disclosure on the identity header.
     // A picker on that row would be a second fixed control.
     if browser.is_remote() {
+        return false;
+    }
+    // The engine of a page of a browser host is fixed by the profile of that
+    // host, so the picker shows the host instead of offering another engine.
+    if browser.is_remote_host() {
+        remote_host_label(ui, browser);
         return false;
     }
     let previous = browser.backend();

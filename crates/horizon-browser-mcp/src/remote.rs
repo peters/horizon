@@ -15,30 +15,26 @@
 //! Two results cannot cross an SSH stream as a path. The bridge therefore stages
 //! the files of a `set_files` action on the remote machine before the action, and
 //! adds the bounded bytes of a finished `browser_video` or `browser_network`
-//! capture to its result. `mod relay` holds both rewrites, and `mod ssh` holds
-//! every call that the bridge makes to the remote machine.
+//! capture to its result. `mod relay` holds both rewrites.
+//!
+//! The channel itself is not the bridge's own: a browser panel of Horizon reaches
+//! a profile host through the same record, the same remote command and the same
+//! bounded `ssh` calls, so `horizon_browser_control::remote_host` holds that one
+//! implementation and both clients call it.
 
-mod command;
 mod relay;
-mod ssh;
 
 use std::io;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use horizon_browser_control::manifest;
+use horizon_browser_control::remote_host::{RemoteChannel, RemoteChannelError};
 
 use relay::Relay;
 
 /// The identity of the calling agent panel. The bridge forwards it, because the
 /// remote host stamps each page for the actor that opened it.
 pub const ACTOR_ENV: &str = "HORIZON_BROWSER_ACTOR";
-/// The runtime root of the remote host, as a path on that machine. Unset means
-/// the remote default, `$HOME/.horizon`, which is what Horizon leaves it at.
-pub const REMOTE_ROOT_ENV: &str = "HORIZON_BROWSER_REMOTE_ROOT";
-/// The `horizon-browser` program on the remote machine, when the login shell of
-/// the SSH target does not find it on its `PATH`.
-pub const REMOTE_EXECUTABLE_ENV: &str = "HORIZON_BROWSER_REMOTE_EXECUTABLE";
+pub use horizon_browser_control::remote_host::{REMOTE_EXECUTABLE_ENV, REMOTE_ROOT_ENV};
 /// The folder under the remote runtime root that holds the staged copies of one
 /// call. The bridge removes a call's folder when its answer arrives.
 pub const STAGING_DIR: &str = "browser-staging";
@@ -49,24 +45,30 @@ pub const MAX_INLINE_BYTES: u64 = 8 * 1024 * 1024;
 /// machine. Each single file keeps the local attachment limit.
 pub const MAX_STAGED_BYTES: u64 = 512 * 1024 * 1024;
 
-/// The program that serves the MCP contract on the remote machine.
-const REMOTE_EXECUTABLE: &str = "horizon-browser";
-/// The record that a running profile host writes under its runtime root.
-const RECORD: &str = "profile-host.json";
-/// Bound of the record that the bridge reads first.
-const MAX_PROBE_BYTES: u64 = 64 * 1024;
-/// The exit code of the probe when the remote runtime root holds no record.
-const PROBE_NO_RECORD: i32 = 3;
-
 /// Why the bridge cannot serve the MCP stream of a remote browser host.
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteBridgeError {
     #[error("remote browser host unavailable: {ACTOR_ENV} is not set, so the bridge has no actor to forward")]
     ActorUnavailable,
+    #[error("remote browser host unavailable: no actor was given, so its pages would have no identity")]
+    ActorMissing,
+    #[error("`{target}` is not one SSH name that `ssh` can take as one argument")]
+    InvalidTarget { target: String },
     #[error("remote browser host {target} is not running: {reason}")]
     HostUnavailable { target: String, reason: String },
     #[error("could not use the SSH target {target}: {reason}")]
     Transport { target: String, reason: String },
+}
+
+impl From<RemoteChannelError> for RemoteBridgeError {
+    fn from(error: RemoteChannelError) -> Self {
+        match error {
+            RemoteChannelError::ActorMissing => Self::ActorMissing,
+            RemoteChannelError::InvalidTarget { target } => Self::InvalidTarget { target },
+            RemoteChannelError::HostUnavailable { target, reason } => Self::HostUnavailable { target, reason },
+            RemoteChannelError::Transport { target, reason } => Self::Transport { target, reason },
+        }
+    }
 }
 
 /// Serve the MCP contract of the profile host at the SSH target `target` until
@@ -88,31 +90,25 @@ pub fn serve(target: &str, profile: Option<&str>) -> Result<(), RemoteBridgeErro
         .map(|actor| actor.trim().to_string())
         .filter(|actor| !actor.is_empty())
         .ok_or(RemoteBridgeError::ActorUnavailable)?;
-    let root = std::env::var(REMOTE_ROOT_ENV)
-        .ok()
-        .map(|root| root.trim().to_string())
-        .filter(|root| !root.is_empty())
-        .map(PathBuf::from);
-    let host = probe(target, root.as_deref())?;
-    let command = command::server_command(&remote_executable(), &actor, &host.host_instance, root.as_deref());
-    let mut child = ssh::server(target, &command).map_err(|error| RemoteBridgeError::Transport {
-        target: target.to_string(),
-        reason: error.to_string(),
-    })?;
+    let mut channel = RemoteChannel::open(target, &actor).map_err(RemoteBridgeError::from)?;
     let profile = profile.map(str::trim).filter(|profile| !profile.is_empty());
-    let relay = Arc::new(Relay::new(target.to_string(), host.root, profile.map(str::to_string)));
+    let relay = Arc::new(Relay::new(
+        target.to_string(),
+        channel.root().to_path_buf(),
+        profile.map(str::to_string),
+    ));
     let output = Arc::new(Mutex::new(io::stdout()));
     let responses = {
         let relay = Arc::clone(&relay);
         let output = Arc::clone(&output);
-        let stdout = child.stdout.take();
+        let stdout = channel.take_output();
         std::thread::spawn(move || match stdout {
             Some(stdout) => relay::forward_responses(io::BufReader::new(stdout), &mut SharedOut::new(&output), &relay),
             None => Ok(()),
         })
     };
     let stdin = io::stdin();
-    let forwarded = child.stdin.take().map_or(Ok(()), |server| {
+    let forwarded = channel.take_input().map_or(Ok(()), |server| {
         relay::forward_requests(
             io::BufReader::new(stdin.lock()),
             server,
@@ -120,7 +116,7 @@ pub fn serve(target: &str, profile: Option<&str>) -> Result<(), RemoteBridgeErro
             &relay,
         )
     });
-    let status = child.wait();
+    let status = channel.wait();
     let answered = responses.join().unwrap_or(Ok(()));
     relay.remove_leftover_staging();
     forwarded.and(answered).map_err(|error| RemoteBridgeError::Transport {
@@ -138,66 +134,6 @@ pub fn serve(target: &str, profile: Option<&str>) -> Result<(), RemoteBridgeErro
             reason: error.to_string(),
         }),
     }
-}
-
-/// The program of the remote server, from the environment when the machine keeps
-/// it outside the `PATH` of the login shell of the SSH target.
-fn remote_executable() -> String {
-    std::env::var(REMOTE_EXECUTABLE_ENV)
-        .ok()
-        .map(|program| program.trim().to_string())
-        .filter(|program| !program.is_empty())
-        .unwrap_or_else(|| REMOTE_EXECUTABLE.to_string())
-}
-
-/// What the record of a running remote host gives the bridge.
-struct RemoteHost {
-    /// The runtime root of the remote host, as a path on that machine.
-    root: PathBuf,
-    /// The instance that the remote host wrote in `profile-host.json`.
-    host_instance: String,
-}
-
-fn probe(target: &str, root: Option<&std::path::Path>) -> Result<RemoteHost, RemoteBridgeError> {
-    let output = ssh::run(target, &command::probe_command(root), MAX_PROBE_BYTES).map_err(|error| {
-        RemoteBridgeError::Transport {
-            target: target.to_string(),
-            reason: error.to_string(),
-        }
-    })?;
-    if output.code == Some(PROBE_NO_RECORD) && !output.too_large {
-        return Err(RemoteBridgeError::HostUnavailable {
-            target: target.to_string(),
-            reason: format!("no {RECORD} under its runtime root"),
-        });
-    }
-    if !output.succeeded() {
-        return Err(RemoteBridgeError::Transport {
-            target: target.to_string(),
-            reason: output.stderr,
-        });
-    }
-    parse_probe(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| RemoteBridgeError::Transport {
-        target: target.to_string(),
-        reason: format!("its {RECORD} is not a record of a running host"),
-    })
-}
-
-/// Read the answer of the probe: the runtime root and the record of the host
-/// that runs there.
-fn parse_probe(text: &str) -> Option<RemoteHost> {
-    let mut lines = text.lines();
-    let root = lines.next()?.trim();
-    let record = lines.next()?.trim();
-    let record: serde_json::Value = serde_json::from_str(record).ok()?;
-    let host_instance = record.get("host_instance")?.as_str()?;
-    if root.is_empty() || !manifest::valid_host_instance(host_instance) {
-        return None;
-    }
-    Some(RemoteHost {
-        root: PathBuf::from(root),
-        host_instance: host_instance.to_string(),
-    })
 }
 
 /// The one writer of the MCP stream to the client. The two forwarding threads

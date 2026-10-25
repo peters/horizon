@@ -1,39 +1,11 @@
-//! The bridge reads the record of a host it did not start, so these tests use a
-//! recorded answer of a real `horizon-browser host` and the JSON of a real tool
-//! result rather than a live machine.
+//! These tests use the JSON of a real tool result rather than a live machine. The
+//! record of a host it did not start, and the command line of the remote server,
+//! belong to the channel that the bridge shares with a browser panel, so
+//! `horizon_browser_control::remote_host` tests them.
 
 use serde_json::{Value, json};
 
-use super::{RemoteBridgeError, parse_probe};
-
-const RECORD: &str =
-    r#"{"host_instance":"7c1f8a9e-2b44-4f4c-9d3f-3c0b6f6f2a11","pid":4242,"started_at":1761264000000}"#;
-
-#[test]
-fn the_probe_answer_gives_the_root_and_the_record_of_the_remote_host() {
-    let text = format!("/srv/state\n{RECORD}\n");
-    let host = parse_probe(&text).expect("a running host");
-    assert_eq!(host.root, std::path::PathBuf::from("/srv/state"));
-    assert_eq!(host.host_instance, "7c1f8a9e-2b44-4f4c-9d3f-3c0b6f6f2a11");
-}
-
-#[test]
-fn a_record_that_no_running_host_wrote_is_not_a_host() {
-    assert!(parse_probe("").is_none(), "an empty answer");
-    assert!(parse_probe("/srv/state\n").is_none(), "no record");
-    assert!(
-        parse_probe("/srv/state\n{\"host_instance\":\"\",\"pid\":1}\n").is_none(),
-        "a blank instance"
-    );
-    assert!(
-        parse_probe("\n{\"host_instance\":\"instance\",\"pid\":1}\n").is_none(),
-        "no root"
-    );
-    assert!(
-        parse_probe(&format!("/srv/state\n{RECORD}\n")).is_some(),
-        "the probe answer takes no further line"
-    );
-}
+use super::RemoteBridgeError;
 
 #[test]
 fn a_profile_that_the_host_does_not_serve_reaches_it_and_is_refused_there() {

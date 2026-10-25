@@ -9,8 +9,14 @@ pub mod manifest;
 mod orientation;
 mod remote_identity;
 pub use remote_identity::RemoteIdentityDisplay;
+mod page;
+pub use page::panel_title_for_url;
+mod status;
+pub use status::BrowserStatus;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
+mod remote_host;
+pub use remote_host::{PANEL_ACTOR, POINTER_NOTE, RemoteHostBackend, RemoteHostFailure, RemoteHostRefusal};
 #[cfg(feature = "cloud-workspaces")]
 mod cloud;
 pub mod file_chooser;
@@ -45,51 +51,6 @@ pub use horizon_browser::{
     RemoteSessionRequest, normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// Short human-facing title for a URL (hostname, or a non-empty fallback).
-#[must_use]
-pub fn panel_title_for_url(url: &str) -> String {
-    let input = url.trim();
-    if input.is_empty() {
-        return "Browser".to_string();
-    }
-    let Some((_, scheme_specific)) = input.split_once("://") else {
-        return input.to_string();
-    };
-    let authority = scheme_specific.split(['/', '?', '#']).next().unwrap_or_default();
-    let host_and_port = authority.rsplit('@').next().unwrap_or_default();
-    let host = if let Some(bracketed) = host_and_port.strip_prefix('[') {
-        bracketed.split_once(']').map_or("", |(host, _)| host)
-    } else {
-        host_and_port.split(':').next().unwrap_or_default()
-    };
-    if host.is_empty() {
-        input.to_string()
-    } else {
-        host.to_string()
-    }
-}
-
-/// Coarse liveness of the panel's browser session.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum BrowserStatus {
-    #[default]
-    Starting,
-    Ready,
-    Error {
-        message: String,
-    },
-    Stopped {
-        code: Option<i32>,
-    },
-}
-
-impl BrowserStatus {
-    #[must_use]
-    pub const fn is_alive(&self) -> bool {
-        matches!(self, Self::Starting | Self::Ready)
-    }
-}
 
 /// Panel content for `PanelKind::Browser` panels.
 pub struct BrowserPanelState {
@@ -140,6 +101,9 @@ pub struct BrowserPanelState {
     /// The remote session this panel runs (or ran) at; `None` for a local
     /// browser. Carries the resolved authorization for this process only.
     remote: Option<remote_panel::RemoteLifecycle>,
+    /// The browser host of another machine that holds the page of this panel,
+    /// with the channel that reads its frames; `None` for a local browser.
+    remote_host: Option<remote_host::RemoteHostSlot>,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -176,6 +140,9 @@ impl BrowserPanelState {
         if self.cloud.is_some() {
             return false;
         }
+        if self.is_remote_host() {
+            return !self.status.is_alive();
+        }
         !self.status.is_alive() && self.session.is_none() && self.pending_relaunch.is_none()
     }
 
@@ -210,6 +177,7 @@ impl BrowserPanelState {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -276,6 +244,7 @@ impl BrowserPanelState {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -295,6 +264,10 @@ impl BrowserPanelState {
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud.is_some() {
             return self.relaunch_cloud();
+        }
+        if self.is_remote_host() {
+            self.relaunch_remote_host();
+            return;
         }
         self.launch_session(self.relaunch_target());
     }
@@ -357,6 +330,8 @@ impl BrowserPanelState {
         }
         if self.is_remote() {
             BackendCapabilities::remote_session()
+        } else if self.is_remote_host() {
+            self.remote_host_capabilities()
         } else {
             self.config.backend.capabilities()
         }
@@ -371,8 +346,9 @@ impl BrowserPanelState {
     /// backend. The replacement starts only after the old process has been
     /// reaped, so panel switching cannot overlap profile or port ownership.
     pub fn switch_backend(&mut self, backend: BackendKind) {
-        if self.teach.is_some() || self.config.backend == backend || self.is_remote() {
-            // A remote session's browser is fixed by its target.
+        if self.teach.is_some() || self.config.backend == backend || self.is_remote() || self.is_remote_host() {
+            // A remote session's browser is fixed by its target, and the engine
+            // of a page of a browser host is fixed by the profile of that host.
             return;
         }
         if self.shared_session.as_ref().is_some_and(|session| {
@@ -510,6 +486,9 @@ impl BrowserPanelState {
         if let Some(cloud) = &self.cloud {
             return cloud.needs_waker();
         }
+        if self.is_remote_host() {
+            return self.needs_remote_host_waker();
+        }
         self.session.as_ref().is_some_and(|session| session.needs_event_waker())
     }
 
@@ -517,6 +496,10 @@ impl BrowserPanelState {
         #[cfg(feature = "cloud-workspaces")]
         if let Some(cloud) = &self.cloud {
             cloud.set_waker(callback);
+            return;
+        }
+        if self.is_remote_host() {
+            self.set_remote_host_waker(callback);
             return;
         }
         if let Some(session) = &self.session {
@@ -551,21 +534,23 @@ impl BrowserPanelState {
         if let Some(cloud) = &self.cloud {
             return cloud.send(command);
         }
+        if self.is_remote_host() {
+            if self.remote_host_refusal(&command).is_some() {
+                return false;
+            }
+            let may_navigate = page::command_may_navigate(&command);
+            let accepted = self.send_remote_host(command);
+            if accepted && may_navigate {
+                self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            return accepted;
+        }
         // Chrome commands, and the input that can navigate from inside the
         // page (a click on a link, Enter in a form), count as user activity
         // that may take a pending startup navigation over, but only once the
         // driver accepted them; pointer moves and wheel events do not
         // navigate on their own.
-        let may_navigate = matches!(
-            command,
-            BrowserCommand::Navigate(_)
-                | BrowserCommand::Back
-                | BrowserCommand::Forward
-                | BrowserCommand::Reload
-                | BrowserCommand::Input(
-                    horizon_browser::BrowserInput::MousePress { .. } | horizon_browser::BrowserInput::KeyDown { .. }
-                )
-        );
+        let may_navigate = page::command_may_navigate(&command);
         let accepted = self.session.as_ref().is_some_and(|session| session.send(command));
         if accepted && may_navigate {
             self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -628,6 +613,7 @@ impl BrowserPanelState {
                 cloud.shutdown();
             }
         }
+        self.shutdown_remote_host();
         self.clear_remote_identity();
         // A queued Retry must not survive an explicit stop: drain_events
         // would otherwise relaunch Chrome after the caller stopped it.
@@ -650,6 +636,7 @@ impl BrowserPanelState {
                 cloud.shutdown();
             }
         }
+        self.shutdown_remote_host();
         self.clear_remote_identity();
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
@@ -723,6 +710,11 @@ impl BrowserPanelState {
         #[cfg(feature = "cloud-workspaces")]
         if self.cloud.is_some() {
             let mut output = self.drain_cloud();
+            output.had_output |= orientation_expired;
+            return output;
+        }
+        if self.is_remote_host() {
+            let mut output = self.drain_remote_host();
             output.had_output |= orientation_expired;
             return output;
         }
@@ -1023,20 +1015,6 @@ mod tests {
     }
 
     #[test]
-    fn panel_titles_extract_dns_and_bracketed_ipv6_hosts() {
-        assert_eq!(panel_title_for_url("https://example.com:8443/path"), "example.com");
-        assert_eq!(panel_title_for_url("http://[::1]:3000/path"), "::1");
-        assert_eq!(panel_title_for_url("https://user:secret@example.net/a"), "example.net");
-    }
-
-    #[test]
-    fn panel_titles_keep_non_empty_fallbacks_for_hostless_urls() {
-        assert_eq!(panel_title_for_url("file:///tmp/page.html"), "file:///tmp/page.html");
-        assert_eq!(panel_title_for_url("about:blank"), "about:blank");
-        assert_eq!(panel_title_for_url("  "), "Browser");
-    }
-
-    #[test]
     fn status_transitions() {
         assert!(BrowserStatus::default().is_alive());
         assert!(BrowserStatus::Ready.is_alive());
@@ -1099,6 +1077,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1149,6 +1128,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1193,6 +1173,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1245,6 +1226,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1314,6 +1296,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1407,6 +1390,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1453,6 +1437,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1498,6 +1483,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1546,6 +1532,7 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
+            remote_host: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
