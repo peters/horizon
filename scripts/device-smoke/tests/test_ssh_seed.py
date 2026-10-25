@@ -105,12 +105,19 @@ class SeedSshTest(unittest.TestCase):
         sandbox.seed_ssh(box.private_home, self.config, self.identity)
 
         result = subprocess.run(
-            [*box.namespace, 'ssh', '-T', '-o', 'BatchMode=yes', 'fixture-browser-vm', 'true'],
+            [*box.namespace, 'ssh', '-G', 'browser-vm'],
             capture_output=True, text=True, timeout=60)
 
         self.assertNotIn('Bad owner or permissions', result.stderr)
-        self.assertIn('Could not resolve hostname fixture-browser-vm', result.stderr,
-                      'ssh read its configuration and took the alias for a host name')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Only the seeded configuration can supply these values: the alias has no
+        # DNS record, and the port is not a default of the client.
+        self.assertIn('hostname 127.0.0.1', result.stdout,
+                      'ssh did not read the seeded configuration of its private home')
+        self.assertIn('port 2225', result.stdout,
+                      'ssh did not read the seeded configuration of its private home')
+        self.assertIn('user runner', result.stdout,
+                      'ssh did not read the seeded configuration of its private home')
 
 
 if __name__ == '__main__':
