@@ -214,12 +214,7 @@ pub(super) fn prepare_image(
     .to_owned();
     let cpu_flavors = super::sizing::bound_types(&state.profile, &request.settings, state.spec.as_ref())?;
     let data_centers = super::sizing::bound_centers(&state.profile, &request.settings, state.spec.as_ref())?;
-    let exact_placement = state.spec.as_ref().is_some_and(|spec| spec.exact_placement)
-        || request
-            .settings
-            .placement
-            .as_ref()
-            .is_some_and(|placement| !placement.cpu_types.is_empty());
+    let exact_placement = exact_placement(&state.profile, request.settings.placement.as_ref(), state.spec.as_ref());
     let spec = WorkerSpec {
         exact_placement,
         operation_id: state.cloud_id.clone(),
@@ -241,6 +236,20 @@ pub(super) fn prepare_image(
 fn built(state: &mut Deployment, spec: WorkerSpec, uncommitted: Option<crate::cloud_runtime::state::UncommittedImage>) {
     state.uncommitted_image = uncommitted;
     state.spec = Some(spec);
+}
+
+/// Whether the spec places the worker exactly: a machine type chosen in the dialog, on the
+/// provider that rents one server type and keeps a saved choice. An `azure` section always
+/// names one VM size and region, and Azure narrows the section to the cloud's placement
+/// itself, so its spec keeps the sizes its provider may try.
+fn exact_placement(
+    profile: &horizon_cloud::Profile,
+    placement: Option<&crate::cloud_panel::Placement>,
+    saved: Option<&WorkerSpec>,
+) -> bool {
+    let chosen = placement.is_some_and(|placement| !placement.cpu_types.is_empty());
+    saved.is_some_and(|spec| spec.exact_placement)
+        || (chosen && profile.provider == horizon_cloud::provider::HETZNER.id)
 }
 
 /// The uncommitted files that the first image of `state` builds from, as New cloud
@@ -507,6 +516,48 @@ mod tests {
             crate::cloud_runtime::deployment::prepare(&typed).unwrap();
             assert_eq!(laid_over(&typed).unwrap(), "FROM scratch\n");
         }
+    }
+
+    #[test]
+    fn a_chosen_machine_type_is_an_exact_placement_only_where_the_provider_rents_one_server_type() {
+        let placement = |cpu_types: &[&str]| crate::cloud_panel::Placement {
+            cpu_types: cpu_types.iter().map(|&name| name.to_owned()).collect(),
+            ..crate::cloud_panel::Placement::default()
+        };
+        let profile = |provider: &str| -> horizon_cloud::Profile {
+            serde_json::from_value(serde_json::json!({
+                "provider": provider, "image": "example.invalid/worker", "cpu": 4, "memory_gb": 16
+            }))
+            .unwrap()
+        };
+        let spec = |exact_placement: bool| WorkerSpec {
+            exact_placement,
+            operation_id: "azure-choice".into(),
+            image_digest: format!(
+                "{}@sha256:{}",
+                quick_start::IMAGE.split('@').next().unwrap_or_default(),
+                "a".repeat(64)
+            ),
+            profile: profile("azure"),
+            public_key: "fixture".into(),
+            registry_auth_id: None,
+            gpu_types: Vec::new(),
+            cpu_flavors: vec!["Standard_D4s_v3".into()],
+            data_centers: vec!["northeurope".into()],
+            startup_metadata: None,
+        };
+        assert!(exact_placement(&profile("hetzner"), Some(&placement(&["cx33"])), None));
+        assert!(!exact_placement(&profile("hetzner"), Some(&placement(&[])), None));
+        // The `azure` section always names one VM size and region; its own narrow places the
+        // cloud, so the spec keeps the sizes Azure may try and is no Hetzner placement.
+        assert!(!exact_placement(
+            &profile("azure"),
+            Some(&placement(&["Standard_D4s_v3"])),
+            None
+        ));
+        // A saved spec keeps what it recorded.
+        assert!(exact_placement(&profile("azure"), None, Some(&spec(true))));
+        assert!(!exact_placement(&profile("azure"), None, Some(&spec(false))));
     }
 
     #[test]
