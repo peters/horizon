@@ -31,7 +31,7 @@ impl Durability {
 
     /// Waits until the session writer made that save, or a newer one, durable. Every save
     /// the writer makes is durable, so a later save cannot replace it with one that is not.
-    fn sync(&self) -> Result<(), String> {
+    pub(in crate::app::cloud_panel::production) fn sync(&self) -> Result<(), String> {
         self.store
             .wait_runtime_state_durable(&self.session_id, self.generation, DURABLE_WITHIN)
             .map_err(|failure| {

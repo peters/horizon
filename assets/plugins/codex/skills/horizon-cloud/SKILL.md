@@ -1,12 +1,13 @@
 ---
 name: horizon-cloud
-description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
+description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, rent a quick-start cloud without a person, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
 ---
 
 # Horizon cloud MCP
 
-Use this skill for cloud offers, the cloud list of your workspace, companion workers,
-a worker's Local Network Bridge, and GitHub access on a cloud worker.
+Use this skill for cloud offers, the cloud list of your workspace, a quick-start
+cloud that an agent rents without a person, companion workers, a worker's Local
+Network Bridge, and GitHub access on a cloud worker.
 Read [the cloud reference](references/cloud.md) for the server and operation you need.
 Use tools from the connected server and their current schemas. Do not substitute
 private Horizon state for MCP results. Cloud-list `worker_image` and
@@ -17,6 +18,16 @@ not prove current registry access.
 
 Hetzner offers include all current x86 types in permitted locations. The configured
 server types are fallback preferences; they do not restrict explicit worker choices.
+
+`cloud_create` is the only cloud tool that spends money without a person. It rents a
+quick-start cloud in your workspace on the machine's own provider credentials, and
+only when cloud settings allow that in its `agent_lifecycle` section. It answers at
+once: poll `status` with the same `operation_id` until `done` is true. The cloud
+appears on a card in your workspace and the card shows the same progress; stop it
+there, or read it with `cloud_list`. A cancel cannot recall a rented worker, so then
+read `cloud_list` and stop that cloud if it exists. This version has no worker choice,
+plan token, siblings or publishing choice. Read `references/cloud.md` before you
+submit.
 
 Cloud cards show the last-read tailnet device name under Connections > Tailnet.
 Copy includes the MagicDNS domain when the worker reports it. A stable-name

@@ -66,7 +66,7 @@ See docs/testing/procedures/publication-records.md.
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
-`cloud_list`, `cloud_companions`, `cloud_companion_ensure_ready`,
+`cloud_list`, `cloud_create`, `cloud_companions`, `cloud_companion_ensure_ready`,
 `cloud_companion_stop`, `cloud_companion_uncheck`, `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
@@ -520,6 +520,81 @@ stop itself after its old idle period until a rebuild; the card then shows
 
 From a Horizon agent panel, `horizon-browser cloud list|attach|park [CLOUD-ID]`
 calls the same tool.
+
+## Create a cloud without a person
+
+`cloud_create` rents a quick-start cloud in the workspace of your agent panel. It is
+the only cloud tool that spends money without a person.
+`cloud_create` operations are `submit`, `status` and `cancel`.
+Choose one lowercase UUID `operation_id` and keep it: `submit` answers at once, and
+`status` then reads the same operation. A repeated `submit` with that ID answers the
+same operation and rents no second cloud.
+
+`submit` takes `repository`, the directory of a Git checkout on the Horizon host, and
+`quick_start: true`. Quick start is the only choice in this version: it runs the
+built-in profile on the public base image. Horizon refuses a commit with its own
+`.horizon/cloud.yml`, because quick start does not apply there. The optional `name`
+sets the card title; the repository folder name is the default.
+
+The machine must allow the create. Cloud settings has an optional `agent_lifecycle`
+section with `providers`, `max_hourly`, `repositories` and
+`allow_github_sign_in_skip`. Without that section no create rents anything. Horizon
+also refuses a repository, a provider or a quoted hourly rate that the section does
+not allow, and a machine that cannot quote a rate rents nothing. Horizon reads the
+settings on its own thread, so `submit` answers first and `status` then reports the
+refusal.
+
+Horizon registers the cloud on its card in your workspace before it rents the worker,
+and that card shows the same progress. The card cannot start a second deployment
+while the operation runs. `status` returns `phase` (`submitted`, `rolling_out`,
+`ready`, `failed` or `cancelled`), `done`, the `cloud` ID, `stage`, the last 200
+output `lines`, `ready` with the worker ID, hourly rate and image, and `error`.
+
+A ready cloud is done: `phase` stays `ready`, `done` is true, and the cloud stays on
+its card with its own watches. Stop it there, or read it with `cloud_list`.
+
+`cancel` asks an operation that is not ready yet to stop. It cannot recall a worker
+that is already rented; its answer says to run `cloud_list` and stop that cloud if it
+exists. A cancel of a ready cloud changes nothing and answers `cloud_create_done`.
+
+The refusals name what to do next. A refusal that ends the operation is the `error`
+of a `failed` or a `cancelled` phase, and the tool answers it directly when it needs
+no work beyond the request itself:
+
+- `cloud_create_unavailable`: this Horizon has no agent panel for the caller, no cloud
+  state directory, or no cloud support in its build. Call it from an agent panel.
+- `cloud_create_invalid_request`: the shape is wrong. Fix `operation_id`,
+  `repository` or `quick_start` and send a new request.
+- `cloud_create_expired`: the request expired before Horizon answered it. Nothing was
+  rented; send a new request.
+- `cloud_create_unknown_operation`: this ID is not an operation of your agent panel.
+  Read the operation ID you submitted, or use a new one.
+- `cloud_create_refused`: the machine policy does not allow this create. The machine
+  owner sets `agent_lifecycle`, the repository and `max_hourly` in Cloud settings.
+- `cloud_create_needs_persistent_session`: save the workspace in a Horizon session
+  first. A quick-start cloud belongs to a saved session.
+- `cloud_create_busy`: your workspace already has a cloud for this repository. Use
+  that cloud, or another repository.
+- `cloud_create_needs_profile`: the commit has its own `.horizon/cloud.yml`, so quick
+  start does not apply. This version offers no other profile.
+- `cloud_create_card_removed`: the card was removed before the worker was rented.
+  Nothing was rented; submit again if you still need the cloud.
+- `cloud_create_needs_person`: the worker asked for a GitHub sign-in and the policy
+  does not allow continuing without one. A worker may already exist, so run
+  `cloud_list` and stop it if it exists, then sign in on its card.
+- `cloud_create_cancelled`: a cancel asked for the stop, and the worker may already
+  have been rented. Run `cloud_list` and stop that cloud if it exists.
+- `cloud_create_done`: the cloud is ready, so a cancel changes nothing. `cloud_list`
+  shows it, and its card stops it.
+- `cloud_create_failed`: Horizon stopped with the reason in the message. Read `stage`
+  and `lines`, and keep the cloud that may exist.
+- `cloud_create_timed_out`: Horizon did not answer. A cloud may have been rented, so
+  run `cloud_list` and stop it if it exists, then poll `status` again.
+- `cloud_create_result_unavailable`: Horizon's answer could not be read. Poll `status`
+  with the same `operation_id`.
+
+This version does not choose a worker, a plan token, siblings or a publishing
+destination, and it has no CLI plan entry.
 
 ## GitHub access
 

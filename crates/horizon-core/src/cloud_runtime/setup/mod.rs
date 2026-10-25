@@ -414,6 +414,7 @@ fn defaults(root: &Path) -> Settings {
         hetzner: None,
         azure: None,
         github: None,
+        agent_lifecycle: None,
         placement: None,
         codex_home: None,
     }

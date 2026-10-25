@@ -1,5 +1,7 @@
 //! Machine-local bindings. Repository configuration cannot select credentials.
+mod agent_lifecycle;
 mod azure;
+pub use agent_lifecycle::{AgentLifecycle, Refusal as AgentLifecycleRefusal};
 pub use azure::Azure;
 
 use super::{Error, Result};
@@ -84,6 +86,10 @@ pub struct Settings {
     /// The GitHub App of Connect GitHub. Omitted until it is connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<super::github::Settings>,
+    /// Who may rent a cloud without a person. Omitted until the owner sets it, and a
+    /// machine without it refuses every cloud an agent asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_lifecycle: Option<AgentLifecycle>,
     /// The cloud's own placement, kept by [`Settings::for_cloud`] for providers
     /// that read it themselves. Never stored.
     #[serde(skip)]
@@ -269,6 +275,9 @@ impl Settings {
         }
         if let Some(github) = &self.github {
             github.validate()?;
+        }
+        if let Some(lifecycle) = &self.agent_lifecycle {
+            lifecycle.validate()?;
         }
         Ok(())
     }

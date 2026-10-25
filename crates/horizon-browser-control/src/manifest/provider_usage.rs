@@ -2,6 +2,7 @@
 //! cloud offers only read; companion requests and the `attach` and `park` of a cloud
 //! list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
+pub use super::cloud_create::{CloudCreateOperation, CloudCreateRequest};
 pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
 pub use super::image_destination::{Action as ImageDestinationAction, ImageDestinationRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
@@ -41,6 +42,9 @@ pub struct UsageRequest {
     /// A cloud list request, answered by the host for the caller's workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_list: Option<CloudListRequest>,
+    /// A cloud create request, which rents the worker on the host's own thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_create: Option<CloudCreateRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<CredentialRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +69,9 @@ pub struct UsageResult {
     /// The host's answer to a cloud list request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_list: Option<serde_json::Value>,
+    /// The host's answer to a cloud create request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_create: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +91,7 @@ impl UsageRequest {
             offers: None,
             companion: None,
             cloud_list: None,
+            cloud_create: None,
             tailnet_credential: None,
             image_destination: None,
             error,
@@ -243,6 +251,35 @@ fn enqueue_cloud_list_at(
     )
 }
 
+/// Queues a cloud create request for the live host, which rents the worker on its own
+/// thread when the machine's agent lifecycle policy admits it.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_create(identity: AgentIdentity<'_>, request: CloudCreateRequest) -> std::io::Result<String> {
+    enqueue_cloud_create_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_cloud_create_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudCreateRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud create request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            cloud_create: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 /// Queue only a request for an owner decision; never accepts credential bytes.
 /// # Errors
 /// Invalid metadata, missing live host identity or unavailable bounded queue.
@@ -315,6 +352,7 @@ struct Ask {
     cloud_offers: Option<serde_json::Value>,
     cloud_companion: Option<CompanionRequest>,
     cloud_list: Option<CloudListRequest>,
+    cloud_create: Option<CloudCreateRequest>,
     tailnet_credential: Option<CredentialRequest>,
     image_destination: Option<ImageDestinationRequest>,
 }
@@ -326,6 +364,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_offers,
         cloud_companion,
         cloud_list,
+        cloud_create,
         tailnet_credential,
         image_destination,
     } = ask;
@@ -373,6 +412,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_offers,
         cloud_companion,
         cloud_list,
+        cloud_create,
         tailnet_credential,
         image_destination,
     };
@@ -609,6 +649,53 @@ mod tests {
             assert!(enqueue_companion_at(root.path(), identity, invalid).is_err());
         }
         assert!(enqueue_companion_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
+    }
+
+    #[test]
+    fn cloud_create_requests_reach_only_their_host_and_answer_only_their_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let request = CloudCreateRequest {
+            operation_id: "27d497e2-1f54-4bc4-b746-ab2a3d9efad5".into(),
+            operation: CloudCreateOperation::Submit,
+            repository: Some("/home/person/shop".into()),
+            name: None,
+            quick_start: Some(true),
+        };
+        let id = enqueue_cloud_create_at(root.path(), identity, request.clone()).unwrap();
+        assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
+        let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(claimed.cloud_create.as_ref(), Some(&request));
+        let mut result = claimed.result(Vec::new(), None);
+        result.cloud_create = Some(serde_json::json!({"phase": "submitted"}));
+        complete_at(root.path(), &result).unwrap();
+        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id).unwrap().unwrap().cloud_create,
+            Some(serde_json::json!({"phase": "submitted"}))
+        );
+        // A committed profile, an unnamed repository and a made-up ID are never queued.
+        let submit = |repository: String, quick_start: bool| CloudCreateRequest {
+            operation_id: "27d497e2-1f54-4bc4-b746-ab2a3d9efad5".into(),
+            operation: CloudCreateOperation::Submit,
+            repository: Some(repository),
+            name: None,
+            quick_start: Some(quick_start),
+        };
+        for invalid in [
+            submit("/home/person/shop".into(), false),
+            submit(String::new(), true),
+            CloudCreateRequest {
+                operation_id: "operation-1".into(),
+                operation: CloudCreateOperation::Status,
+                repository: None,
+                name: None,
+                quick_start: None,
+            },
+        ] {
+            assert!(enqueue_cloud_create_at(root.path(), identity, invalid).is_err());
+        }
+        assert!(enqueue_cloud_create_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
     }
 
     #[test]

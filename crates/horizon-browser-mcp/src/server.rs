@@ -260,6 +260,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_create",
+        description = "Rent one cloud worker without a person, on the machine's own provider credentials, in the workspace of your agent panel. operation submit starts it and needs repository (a directory on the Horizon host) and quick_start true; the built-in profile on the public base image is the only choice, and a repository whose commit has its own .horizon/cloud.yml is refused because quick start does not apply there. It answers once Horizon has accepted the operation: poll operation status with the same operation_id until done is true. Horizon registers the cloud on its card in your workspace, which shows the same progress; the card cannot start a second deployment of it. The machine must configure an agent lifecycle policy and allow this repository and provider under its hourly limit; without that policy every submission is refused. If the worker asks for a GitHub sign-in, Horizon continues without GitHub access only when the policy allows that, else the operation fails with cloud_create_needs_person before the worker is used; a reauthenticate step needs the person on the card. cancel requests a stop of the operation before it is ready, and answers that the worker may have been rented: read cloud_list and stop that cloud if it exists. A ready cloud is done and stays on its card, which shows it and stops it, so a cancel of it answers cloud_create_done and the card's own controls work again. No worker choice, plan token, siblings or publishing selection."
+    )]
+    async fn cloud_create(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::CloudCreateRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_create(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "cloud_list",
         description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. worker_image and image_publication describe that cloud's retained image and publisher metadata when its matching runtime is loaded, otherwise null. An unresolved image is null too. Registry publisher metadata includes its opaque nonsecret grant ID, never credential values or paths. They read no credentials and do not prove current registry access. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
@@ -930,6 +944,7 @@ mod tests {
                 "cloud_companion_stop",
                 "cloud_companion_uncheck",
                 "cloud_companions",
+                "cloud_create",
                 "cloud_image_destination",
                 "cloud_list",
                 "cloud_offers",

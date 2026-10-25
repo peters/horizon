@@ -85,9 +85,11 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    publication, its receipt reader and the one-device endpoint.
    Boundaries: `protected-host-ingress`, `protected-ingress-reader`,
    `one-service-gateway`, `one-device-owner-admission`.
-8. **Image publishing and the setup agent** — the publication destination, the
-   proof of a setup and the Claude setup token. Boundaries:
-   `image-publishing`, `repository-setup`, `claude-setup-token`.
+8. **Image publishing, the setup agent and an agent's cloud spend** — the
+   publication destination, the proof of a setup, the Claude setup token and the
+   create operation that rents a cloud on this machine's credentials. Boundaries:
+   `image-publishing`, `repository-setup`, `claude-setup-token`,
+   `cloud-create-request`.
 
 ## Checks
 

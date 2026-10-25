@@ -6,8 +6,9 @@ mod job;
 mod tests;
 
 use super::{Confirmation, HorizonApp, Runtime, Stage, cloud_runtime, lifecycle};
+pub(super) use job::Durability;
 pub(super) use job::Pending;
-use job::{Durability, Failure, Report};
+use job::{Failure, Report};
 
 impl Runtime {
     /// Ends a preparation that could not start its deployment. A refused reconnect after
@@ -53,6 +54,12 @@ impl HorizonApp {
             .get(&id)
             .is_some_and(|runtime| runtime.recovery_receiver.is_some() || runtime.preparation.is_some())
         {
+            return;
+        }
+        // An agent's create operation owns this cloud's deployment until it ends, so no
+        // other path starts a second one. The card keeps its buttons; pressing one does
+        // nothing while the operation owns it.
+        if self.cloud_prototype.production.create_agent.owns(id) {
             return;
         }
         if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&id) {
@@ -125,6 +132,8 @@ impl HorizonApp {
                 self.apply_preparation(id, report, ctx);
             }
         }
+        // An agent's create request prepares its cloud here too, before it allocates.
+        self.poll_cloud_create_requests(ctx);
     }
 
     fn apply_preparation(&mut self, id: u32, report: Report, ctx: &egui::Context) {
@@ -198,7 +207,7 @@ impl HorizonApp {
 
     /// Saves the cloud in its persistent session before any allocation and returns what a
     /// worker thread makes durable. `None` when refused; the card says why.
-    fn save_cloud_before_allocation(&mut self, id: u32) -> Option<Durability> {
+    pub(super) fn save_cloud_before_allocation(&mut self, id: u32) -> Option<Durability> {
         let result = (|| {
             let session = self
                 .active_session
