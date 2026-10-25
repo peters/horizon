@@ -66,8 +66,10 @@ See docs/testing/procedures/publication-records.md.
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
-`cloud_list`, `cloud_create`, `cloud_companions`, `cloud_companion_ensure_ready`,
-`cloud_companion_stop`, `cloud_companion_uncheck`, `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require the owning Horizon to run.
+`cloud_list`, `cloud_create`, `cloud_delete`, `cloud_companions`,
+`cloud_companion_ensure_ready`, `cloud_companion_stop`, `cloud_companion_uncheck`,
+`cloud_companion_operation`, and `tailnet_api_credential`. Host operations require
+the owning Horizon to run.
 
 On a configured worker, `horizon-cloud-worker companions mcp` provides
 `cloud_companions_list`, `cloud_companion_inspect`, and `cloud_offers`.
@@ -595,6 +597,86 @@ no work beyond the request itself:
 
 This version does not choose a worker, a plan token, siblings or a publishing
 destination, and it has no CLI plan entry.
+
+## Delete a cloud without a person
+
+`cloud_delete` deletes one cloud's provider resources in the workspace of your agent
+panel. It is irreversible: after Horizon accepts a `submit`, a provider request that
+it sent cannot be recalled.
+`cloud_delete` operations are `submit`, `status` and `cancel`.
+Choose one lowercase UUID `operation_id` and keep it. `submit` needs `cloud`, the ID
+that `cloud_list` reports, and answers at once. It names the `cloud`, the `provider`,
+and an `in_progress` sentence that says a delete may already be in progress. A
+repeated `submit` with the same ID answers the same operation and deletes no second
+time.
+
+You delete only a cloud that an agent panel of your own actor created. Horizon
+records the agent and the session at create, and it refuses every other cloud:
+
+- A cloud that a person created with **New cloud** has no creator.
+- A cloud that another agent panel created names that panel.
+- A cloud with no requested worker has no provider resource to delete.
+
+Each of these answers `cloud_delete_refused`, and the message says that the person
+deletes the cloud on its card. The tool removes no card and deletes no credential:
+after the delete the card offers **Remove cloud**.
+
+`status` returns `phase` (`submitted`, `deleting`, `done`, `failed` or
+`cancelled`), `done`, the `cloud`, the `provider`, the `stage` of the deletion step,
+`absent`, and `absence`. `absent` is true only when the cloud's record and the
+provider journal confirm that nothing the cloud created remains:
+
+- Hetzner: the record is `Deleted` with a terminated, canonical server ID, a valid
+  location and no key or released device left, and the volume journal is terminated.
+- RunPod: the record is `Deleted` with the worker terminated, and the workspace
+  volume journal is absent, or canonical as `Deleted`, with no required marker.
+- Azure: the resource group answered `404` and the tag sweep listed nothing.
+- Docker host: the container and volume journals are the empty default.
+
+`absence` states which of these cases holds. When it does not confirm absence,
+check the provider with your own credential: worker ID, volume ID, server ID or
+resource group, as the record names them.
+
+`cancel` asks the delete to stop. It cannot recall a provider request that Horizon
+already sent, so it answers `cloud_delete_cancelled: the delete may already have
+started`. Poll `status` instead of deleting again, because a cancelled operation
+keeps `done: false` until its deletion ends. It then keeps `phase: cancelled` as
+the answer to your request, and `absent` and `stage` state what the record and the
+provider journal prove, also when the delete had already gone past recall. A
+cancel of a finished delete answers `cloud_delete_done`.
+
+The refusals:
+
+- `cloud_delete_unavailable`: this Horizon has no agent panel for the caller, no
+  cloud state directory, or no cloud support in its build. Call it from an agent
+  panel.
+- `cloud_delete_invalid_request`: the shape is wrong. Fix `operation_id` or `cloud`
+  and send a new request.
+- `cloud_delete_expired`: the request expired before Horizon answered it. Nothing
+  changed; send a new request.
+- `cloud_delete_unknown_cloud`: no cloud with this ID is in your workspace, or more
+  than one saved cloud has it. Run `cloud_list`.
+- `cloud_delete_unknown_operation`: this ID is not an operation of your agent panel,
+  or Horizon restarted since the `submit`.
+- `cloud_delete_busy`: another operation owns this cloud, such as its own
+  deployment, a provider check, an agent create, or another delete. Read that
+  operation or the card; nothing was deleted.
+- `cloud_delete_refused`: not an agent's cloud, no requested worker, or no
+  deployment record. The person deletes the cloud or removes its card.
+- `cloud_delete_cancelled`: a cancel asked the delete to stop, and it may already
+  have started.
+- `cloud_delete_done`: the delete finished. `cloud_list` shows the cloud without a
+  worker, and a person removes its card.
+- `cloud_delete_failed`: the delete stopped with the reason in the message. The
+  record keeps the step it reached; call `cloud_delete` again with a new
+  `operation_id` to resume.
+- `cloud_delete_timed_out`: Horizon did not answer. A delete may already have
+  started, so run `cloud_list` and poll `status` again.
+- `cloud_delete_result_unavailable`: Horizon's answer could not be read. Poll
+  `status` with the same `operation_id`.
+
+This version takes no provider, force flag, repository or worker argument, and it
+has no CLI plan entry.
 
 ## GitHub access
 

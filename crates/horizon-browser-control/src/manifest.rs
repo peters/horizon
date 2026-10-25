@@ -44,6 +44,7 @@ pub mod cast;
 mod close;
 mod cloud_companion;
 mod cloud_create;
+mod cloud_delete;
 mod cloud_list;
 mod create;
 pub mod device;

@@ -1,12 +1,12 @@
 ---
 name: horizon-cloud
-description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, rent a quick-start cloud without a person, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
+description: Inspect Horizon cloud offers and companions, read or act on the cloud list of your workspace, rent or delete a cloud without a person, control explicitly authorized companion workers, use a worker Local Network Bridge, or ask for GitHub access from a cloud worker through public MCP tools.
 ---
 
 # Horizon cloud MCP
 
-Use this skill for cloud offers, the cloud list of your workspace, a quick-start
-cloud that an agent rents without a person, companion workers, a worker's Local
+Use this skill for cloud offers, the cloud list of your workspace, a cloud that an
+agent rents or deletes without a person, companion workers, a worker's Local
 Network Bridge, and GitHub access on a cloud worker.
 Read [the cloud reference](references/cloud.md) for the server and operation you need.
 Use tools from the connected server and their current schemas. Do not substitute
@@ -28,6 +28,16 @@ there, or read it with `cloud_list`. A cancel cannot recall a rented worker, so 
 read `cloud_list` and stop that cloud if it exists. This version has no worker choice,
 plan token, siblings or publishing choice. Read `references/cloud.md` before you
 submit.
+
+`cloud_delete` deletes one cloud's provider resources without a person. It is
+irreversible: a provider request that Horizon sent cannot be recalled, so a delete
+may already be in progress as soon as `submit` answers. You can delete only a cloud
+that an agent panel of your own actor created. A cloud a person created, or one
+another agent created, is refused with `cloud_delete_refused`, and the person
+deletes it on its card. Poll `status` with the same `operation_id`: it reports the
+stage, the provider, and `absent`, which is true only when the record and the
+provider journal confirm that nothing the cloud created remains. The tool removes
+no card and deletes no credential. Read `references/cloud.md` before you submit.
 
 Cloud cards show the last-read tailnet device name under Connections > Tailnet.
 Copy includes the MagicDNS domain when the worker reports it. A stable-name

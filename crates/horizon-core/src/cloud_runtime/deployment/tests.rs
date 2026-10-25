@@ -754,3 +754,184 @@ fn quick_start_accepts_tagged_tailnet_without_local_docker() {
     );
     assert!(!request.state_root.join("workspace-volume.json").exists());
 }
+
+#[test]
+#[cfg(unix)]
+fn a_cloud_records_the_agent_that_created_it_and_earlier_records_still_load() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = root.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    let profile: horizon_cloud::Profile = serde_json::from_value(serde_json::json!({
+        "provider":"runpod","cpu":2,"memory_gb":4,
+        "build":{"context":".","dockerfile":"Dockerfile"}
+    }))
+    .unwrap();
+    let request = |creator: Option<(&str, Option<String>)>| {
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":root.path().join("key"),"ssh_identity_file":root.path().join("ssh"),
+            "docker_config":root.path().join("docker"),"registry_pull_auth_id":null,
+            "cpu_flavors":[],"gpu_types":[],"portable_image_publishing":true,
+            "registries":{"root":root.path().join("registry"),"bindings":[{
+                "repository":"registry.example/team/worker","generation":"grant-one",
+                "read_only_confirmed":true,
+                "pull":{"username":"reader","secret_file":root.path().join("pull"),"expires_at":null},
+                "publish":{"username":"builder","secret_file":root.path().join("push"),"expires_at":null}
+            }]}
+        }))
+        .unwrap();
+        settings.registries.as_mut().unwrap().bindings[0].repository = profile.image.clone();
+        let made = Request::new(
+            "created-by".into(),
+            repository.clone(),
+            "a".repeat(40),
+            profile.clone(),
+            root.path().join("cloud"),
+            settings,
+        );
+        match creator {
+            Some((actor, session)) => made.with_creator(actor, session),
+            None => made,
+        }
+    };
+    // The agent that asked is recorded on the cloud, with the session that named it.
+    let agent = request(Some(("horizon:agent", Some("session-1".into()))));
+    prepare(&agent).unwrap();
+    let store = Store::lock(&agent.state_root).unwrap();
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(
+        saved.created_by,
+        Some(crate::cloud_runtime::state::Creator {
+            actor: "horizon:agent".into(),
+            session: Some("session-1".into()),
+        })
+    );
+    assert_eq!(saved.version, 1, "a creator changes no record version");
+    let bytes = std::fs::read(agent.state_root.join("deployment.json")).unwrap();
+    assert!(
+        std::str::from_utf8(&bytes).unwrap().contains("\"created_by\""),
+        "the saved record carries the creator"
+    );
+    drop(store);
+    // A cloud a person created omits it, so an earlier record keeps its exact encoding.
+    std::fs::remove_dir_all(&agent.state_root).unwrap();
+    let person = request(None);
+    prepare(&person).unwrap();
+    let store = Store::lock(&person.state_root).unwrap();
+    assert_eq!(store.load().unwrap().unwrap().created_by, None);
+    let bytes = std::fs::read(person.state_root.join("deployment.json")).unwrap();
+    assert!(
+        !std::str::from_utf8(&bytes).unwrap().contains("created_by"),
+        "a cloud without a creator keeps the encoding an earlier build wrote"
+    );
+}
+
+#[test]
+#[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+fn a_creator_survives_the_legacy_split_of_its_cloud() {
+    use crate::cloud_runtime::allocation::{AllocationId, ControllerId, ProjectId, ProjectIdentity, legacy::Records};
+    let record = serde_json::json!({
+        "version":1,"cloud_id":"split-cloud","repository":"/synthetic/app","revision":"a".repeat(40),
+        "profile":{"provider":"runpod","image":"registry.example/worker","cpu":4,"memory_gb":8},
+        "stage":"Ready","operation":{"state":"bound","worker_id":"worker-1"},"spec":null,"worker":null,
+        "sessions":[],
+        "created_by":{"actor":"horizon:agent","session":"session-1"}
+    });
+    let identity = ProjectIdentity::new(
+        ProjectId::generate(),
+        "session-1".into(),
+        "workspace-1".into(),
+        "split-cloud".into(),
+    )
+    .unwrap();
+    let pair = Records::from_legacy(
+        &serde_json::to_vec(&record).unwrap(),
+        identity,
+        AllocationId::generate(),
+        ControllerId::generate(),
+    )
+    .unwrap();
+    // A reconcile, resume or rebuild reads the split record back as a deployment, which
+    // keeps the lease: without it the cloud would belong to no agent after the split.
+    assert_eq!(
+        pair.deployment().created_by,
+        Some(crate::cloud_runtime::state::Creator {
+            actor: "horizon:agent".into(),
+            session: Some("session-1".into()),
+        })
+    );
+    let mut without = record.clone();
+    without.as_object_mut().unwrap().remove("created_by");
+    let identity = ProjectIdentity::new(
+        ProjectId::generate(),
+        "session-1".into(),
+        "workspace-1".into(),
+        "split-cloud".into(),
+    )
+    .unwrap();
+    let pair = Records::from_legacy(
+        &serde_json::to_vec(&without).unwrap(),
+        identity,
+        AllocationId::generate(),
+        ControllerId::generate(),
+    )
+    .unwrap();
+    assert_eq!(
+        pair.deployment().created_by,
+        None,
+        "a person's cloud still splits without a creator"
+    );
+}
+
+#[test]
+#[cfg(all(unix, feature = "tailnet-node-cleanup"))]
+fn absence_reports_only_what_the_record_and_its_provider_journal_confirm() {
+    let root = tempfile::tempdir().unwrap();
+    let state_root = root.path().join("absence-cloud");
+    std::fs::create_dir_all(&state_root).unwrap();
+    let profile: horizon_cloud::Profile = serde_json::from_value(serde_json::json!({
+        "provider":"runpod","image":"example/worker","cpu":2,"memory_gb":4
+    }))
+    .unwrap();
+    let record = |stage: &str, operation: serde_json::Value| -> Deployment {
+        serde_json::from_value(serde_json::json!({
+            "version":1,"cloud_id":"absence-cloud","repository":"/synthetic","revision":"a".repeat(40),
+            "profile":profile,"stage":stage,"operation":operation,
+            "spec":{"operation_id":"absence-cloud","image_digest":format!("example/worker@sha256:{}", "a".repeat(64)),
+                "profile":profile,"public_key":"unused-fixture-key","registry_auth_id":null,
+                "gpu_types":[],"cpu_flavors":["cpu3c"],"data_centers":[]},
+            "worker":null,"sessions":[]
+        }))
+        .unwrap()
+    };
+    let terminated = || serde_json::json!({"state":"terminated","worker_id":"worker-1"});
+    let save = |state: &Deployment| {
+        let store = Store::lock(&state_root).unwrap();
+        store.save(state).unwrap();
+    };
+    let journal = state_root.join("workspace-volume.json");
+    // The worker's record and its provider journal both confirm that nothing remains.
+    save(&record("Deleted", terminated()));
+    assert_eq!(absence(&state_root).unwrap(), Absence::Proven);
+    // A live workspace volume is a provider resource that still exists.
+    let worker = record("Deleted", terminated()).spec.unwrap();
+    let size = u32::from(worker.profile.storage.volume_gb);
+    let data_center = "EU-TEST-1";
+    let bound = serde_json::json!({
+        "version":1,
+        "worker":worker,
+        "spec":{"operation_id":"absence-cloud","size":size,"data_center_id":data_center,"tier":"STANDARD"},
+        "state":{"state":"bound","volume":{
+            "id":"volume1","name":format!("horizon-volume-{}", worker.operation_id),
+            "size":size,"dataCenterId":data_center
+        }}
+    });
+    std::fs::write(&journal, serde_json::to_vec(&bound).unwrap()).unwrap();
+    assert_eq!(absence(&state_root).unwrap(), Absence::MayRemain);
+    // A record that never reached the deleted step proves no absence, also with no journal.
+    std::fs::remove_file(&journal).unwrap();
+    save(&record(
+        "Ready",
+        serde_json::json!({"state":"bound","worker_id":"worker-1"}),
+    ));
+    assert_eq!(absence(&state_root).unwrap(), Absence::Unconfirmed);
+}

@@ -570,6 +570,25 @@ guarantee that the code gives, and what the code does not guarantee.
     in memory, so a restart answers `cloud_create_unknown_operation`; no worker
     choice, plan token, sibling, publishing selection or CLI plan entry is
     offered.
+- [`cloud-delete-request`](trust-boundaries/cloud-delete-request.md) (added after
+  this audit, with this change)
+  - Untrusted: the `cloud_delete` request of an agent panel and its cloud ID, the
+    saved cloud record that carries the creator, the provider's deletion
+    journals, and the provider's answers during the delete.
+  - Guarantees: only a live agent panel of this Horizon answers, in its own
+    workspace; the cloud ID names exactly one cloud there; a card operation, a
+    provider check, a preparation or a running create of that cloud is a refusal;
+    only the actor that created the cloud deletes it, and a cloud without a
+    creator or without a requested worker is refused; the deletion takes the
+    Store lock as the card's delete does; the answer reports only what the record
+    and the provider journal confirm about absence; a cancel says the delete may
+    already have started.
+  - Does not guarantee: a delete is irreversible once accepted and a sent
+    provider request cannot be recalled; absence is the provider's own recorded
+    confirmation and not a fresh query; a deployment that starts between the
+    record check and the deletion is deleted with the cloud; another process may
+    hold the Store lock; the tool removes no card and holds no discard authority;
+    the operation table is in memory.
 ## Follow-up work
 
 - Closed: `AGENTS.md` named `.github/` as the home of the review instructions,

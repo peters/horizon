@@ -30,6 +30,44 @@ pub fn terminate(
     finish_termination(state, &store, emit)
 }
 
+/// What this computer's own records prove about the provider resources of a cloud. It
+/// sends no provider request and reads no credential: each provider records its own
+/// confirmation around the request it sent, and this only reports it.
+#[cfg(feature = "tailnet-node-cleanup")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Absence {
+    /// The record and every provider journal confirm that nothing the cloud created
+    /// remains at the provider.
+    Proven,
+    /// A provider journal still holds something the cloud created.
+    MayRemain,
+    /// No absent confirmation: there is no readable record, the deletion did not finish,
+    /// or its provider journal is not settled yet.
+    Unconfirmed,
+}
+
+/// Reads the cloud's records for what its provider confirmed.
+/// # Errors
+/// A record the caller cannot read now, such as one another operation holds, is not a
+/// verdict and is reported as it is.
+#[cfg(feature = "tailnet-node-cleanup")]
+pub fn absence(root: &std::path::Path) -> Result<Absence> {
+    let store = Store::lock_existing(root)?;
+    let Some(state) = store.load()? else {
+        return Ok(Absence::Unconfirmed);
+    };
+    if crate::cloud_runtime::providers::retained(&store, &state)? {
+        return Ok(Absence::MayRemain);
+    }
+    Ok(
+        if crate::cloud_runtime::providers::deletion_confirmed(&store, &state)? {
+            Absence::Proven
+        } else {
+            Absence::Unconfirmed
+        },
+    )
+}
+
 fn finish_termination(state: Deployment, store: &Store, emit: &dyn Fn(Event)) -> Result<()> {
     let state = finish_deletion(state, store)?;
     // Publish the saved provider-deletion fact before node cleanup can fail and

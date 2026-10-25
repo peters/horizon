@@ -3,6 +3,7 @@
 //! list request change clouds, and the host authorizes each one.
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 pub use super::cloud_create::{CloudCreateOperation, CloudCreateRequest};
+pub use super::cloud_delete::{CloudDeleteOperation, CloudDeleteRequest};
 pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
 pub use super::image_destination::{Action as ImageDestinationAction, ImageDestinationRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
@@ -45,6 +46,10 @@ pub struct UsageRequest {
     /// A cloud create request, which rents the worker on the host's own thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_create: Option<CloudCreateRequest>,
+    /// A cloud delete request, which deletes the cloud's provider resources on the
+    /// host's own thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_delete: Option<CloudDeleteRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<CredentialRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,6 +77,9 @@ pub struct UsageResult {
     /// The host's answer to a cloud create request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_create: Option<serde_json::Value>,
+    /// The host's answer to a cloud delete request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_delete: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +100,7 @@ impl UsageRequest {
             companion: None,
             cloud_list: None,
             cloud_create: None,
+            cloud_delete: None,
             tailnet_credential: None,
             image_destination: None,
             error,
@@ -280,6 +289,35 @@ fn enqueue_cloud_create_at(
     )
 }
 
+/// Queues a cloud delete request for the live host, which deletes the cloud's provider
+/// resources on its own thread when the caller's agent panel created that cloud.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_delete(identity: AgentIdentity<'_>, request: CloudDeleteRequest) -> std::io::Result<String> {
+    enqueue_cloud_delete_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_cloud_delete_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudDeleteRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud delete request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            cloud_delete: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 /// Queue only a request for an owner decision; never accepts credential bytes.
 /// # Errors
 /// Invalid metadata, missing live host identity or unavailable bounded queue.
@@ -353,6 +391,7 @@ struct Ask {
     cloud_companion: Option<CompanionRequest>,
     cloud_list: Option<CloudListRequest>,
     cloud_create: Option<CloudCreateRequest>,
+    cloud_delete: Option<CloudDeleteRequest>,
     tailnet_credential: Option<CredentialRequest>,
     image_destination: Option<ImageDestinationRequest>,
 }
@@ -365,6 +404,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_companion,
         cloud_list,
         cloud_create,
+        cloud_delete,
         tailnet_credential,
         image_destination,
     } = ask;
@@ -413,6 +453,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_companion,
         cloud_list,
         cloud_create,
+        cloud_delete,
         tailnet_credential,
         image_destination,
     };
@@ -696,6 +737,49 @@ mod tests {
             assert!(enqueue_cloud_create_at(root.path(), identity, invalid).is_err());
         }
         assert!(enqueue_cloud_create_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
+    }
+
+    #[test]
+    fn cloud_delete_requests_reach_only_their_host_and_answer_only_their_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let request = CloudDeleteRequest {
+            operation_id: "27d497e2-1f54-4bc4-b746-ab2a3d9efad5".into(),
+            operation: CloudDeleteOperation::Submit,
+            cloud: Some("cloud-1".into()),
+        };
+        let id = enqueue_cloud_delete_at(root.path(), identity, request.clone()).unwrap();
+        assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
+        let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(claimed.cloud_delete.as_ref(), Some(&request));
+        let mut result = claimed.result(Vec::new(), None);
+        result.cloud_delete = Some(serde_json::json!({"phase": "submitted"}));
+        complete_at(root.path(), &result).unwrap();
+        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id).unwrap().unwrap().cloud_delete,
+            Some(serde_json::json!({"phase": "submitted"}))
+        );
+        // A submission without a cloud, a status with one and a made-up ID are never queued.
+        for invalid in [
+            CloudDeleteRequest {
+                cloud: None,
+                ..request.clone()
+            },
+            CloudDeleteRequest {
+                operation: CloudDeleteOperation::Status,
+                cloud: Some("cloud-1".into()),
+                ..request.clone()
+            },
+            CloudDeleteRequest {
+                operation: CloudDeleteOperation::Cancel,
+                operation_id: "operation-1".into(),
+                cloud: None,
+            },
+        ] {
+            assert!(enqueue_cloud_delete_at(root.path(), identity, invalid).is_err());
+        }
+        assert!(enqueue_cloud_delete_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
     }
 
     #[test]

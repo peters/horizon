@@ -89,6 +89,9 @@ pub(super) struct Project {
     pub uncommitted_image: Option<UncommittedImage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_copy: Option<crate::cloud_runtime::repository::uncommitted::Confirmed>,
+    /// The agent panel that created the cloud, kept so its lease survives the split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<crate::cloud_runtime::state::Creator>,
 }
 
 impl Project {
@@ -133,6 +136,7 @@ impl Records {
             siblings: _,
             uncommitted_image,
             working_copy,
+            created_by,
         } = legacy;
         Self {
             allocation: Allocation {
@@ -181,6 +185,7 @@ impl Records {
                 tailnet_device,
                 uncommitted_image,
                 working_copy,
+                created_by,
             },
         }
     }
@@ -230,6 +235,7 @@ impl Records {
             siblings: None,
             uncommitted_image: self.project.uncommitted_image.clone(),
             working_copy: self.project.working_copy.clone(),
+            created_by: self.project.created_by.clone(),
         }
     }
 }

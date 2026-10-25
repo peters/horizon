@@ -77,6 +77,7 @@ fn resizing_requires_a_saved_record_without_a_requested_worker() {
         siblings: None,
         uncommitted_image: None,
         working_copy: None,
+        created_by: None,
     };
     store.save(&state).unwrap();
     app.resize_production_cloud(1, (16, 64));

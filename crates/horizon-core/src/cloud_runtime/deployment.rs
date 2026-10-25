@@ -22,6 +22,8 @@ mod tests;
 use agent_credentials::configure_agent_auth;
 pub(in crate::cloud_runtime) use agent_credentials::validate_agent_auth;
 pub use deletion::terminate;
+#[cfg(feature = "tailnet-node-cleanup")]
+pub use deletion::{Absence, absence};
 use git_credentials::configure_git_auth;
 use image::{prepare_image, validate_allocation_image};
 pub use reconnect::reconnect;
@@ -65,6 +67,9 @@ pub struct Request {
     pub profile_name: Option<String>,
     /// The destination shown before Start; a new build refuses changes to this selection.
     pub publishing_selection: Option<super::publishing::Selection>,
+    /// The agent panel that asks for this deployment. It is recorded as the cloud's
+    /// creator, and it is the only caller that may delete the cloud it created.
+    pub created_by: Option<super::state::Creator>,
 }
 
 impl Request {
@@ -88,7 +93,19 @@ impl Request {
             working_copy: None,
             profile_name: None,
             publishing_selection: None,
+            created_by: None,
         }
+    }
+
+    /// Records the agent panel that asks for this deployment, so only that panel deletes
+    /// the cloud it created. A person's card records no creator.
+    #[must_use]
+    pub fn with_creator(mut self, actor: &str, session: Option<String>) -> Self {
+        self.created_by = Some(super::state::Creator {
+            actor: actor.to_owned(),
+            session,
+        });
+        self
     }
 }
 /// # Errors
@@ -535,6 +552,7 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             siblings: None,
             uncommitted_image: None,
             working_copy: request.working_copy.clone(),
+            created_by: request.created_by.clone(),
         };
         super::publishing::bind_initial(request, &mut created)?;
         if created.publication.is_some() {
