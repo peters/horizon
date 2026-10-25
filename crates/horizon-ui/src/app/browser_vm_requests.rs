@@ -86,12 +86,14 @@ impl HorizonApp {
             repaint.request_repaint();
             if running {
                 // A stop and a delete report no step the person can act on, so their
-                // progress is read from the record with `status`.
-                // The phase the run ends in is in the record; `status` reads it there.
+                // progress is read from the record with `status`. The phase a run ends in
+                // is in that record too.
                 let _ = browser_vm::run(&root, &worker_cancel, &mut |_| {});
-                let _ = sender.send(Answer::Finished);
-                repaint.request_repaint();
             }
+            // A read, or a request that was refused before it started, ends the job here,
+            // so the next request runs.
+            let _ = sender.send(Answer::Finished);
+            repaint.request_repaint();
         });
         self.browser_create_host.provider_usage.browser_vm.job = Some(Job {
             request,
