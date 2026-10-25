@@ -277,6 +277,32 @@ impl Board {
         }
     }
 
+    /// Set the directory of a workspace.
+    ///
+    /// A panel that runs in the previous directory of the workspace follows the
+    /// new directory, so a workspace and its panels keep one directory. A panel
+    /// with its own directory keeps it. Returns whether anything changed.
+    pub fn set_workspace_directory(&mut self, workspace_id: WorkspaceId, directory: Option<&Path>) -> bool {
+        let Some(directory) = directory else {
+            return false;
+        };
+        let Some(previous) = self.workspace(workspace_id).map(|workspace| workspace.cwd.clone()) else {
+            return false;
+        };
+        if previous.as_deref() == Some(directory) {
+            return false;
+        }
+        if let Some(workspace) = self.workspace_mut(workspace_id) {
+            workspace.cwd = Some(directory.to_path_buf());
+        }
+        for panel in &mut self.panels {
+            if panel.workspace_id == workspace_id {
+                panel.follow_workspace_directory(previous.as_deref(), directory);
+            }
+        }
+        true
+    }
+
     /// Restart a panel's terminal process in-place, preserving identity and
     /// session binding.
     ///

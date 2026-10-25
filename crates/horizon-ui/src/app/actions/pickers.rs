@@ -36,7 +36,8 @@ impl HorizonApp {
             DirPickerPurpose::NewWorkspace { canvas_pos, preset } => {
                 let name = format!("Workspace {}", self.board.workspaces.len() + 1);
                 let workspace_id = self.create_workspace_at_visible(ctx, &name, canvas_pos);
-                super::update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
+                self.board
+                    .set_workspace_directory(workspace_id, path.map(PathBuf::as_path));
                 let mut options = preset_panel_options(&preset, &self.template_config.browser);
                 options.position = Some(canvas_pos);
                 match self.create_panel_with_options(options, workspace_id) {
@@ -49,7 +50,8 @@ impl HorizonApp {
                 preset,
                 canvas_pos,
             } => {
-                super::update_workspace_cwd(self.board.workspace_mut(workspace_id), path);
+                self.board
+                    .set_workspace_directory(workspace_id, path.map(PathBuf::as_path));
                 let mut options = preset_panel_options(&preset, &self.template_config.browser);
                 options.position = super::add_panel_position(&self.board, workspace_id, canvas_pos);
                 match self.create_panel_with_options(options, workspace_id) {

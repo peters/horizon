@@ -546,6 +546,29 @@ impl Panel {
         Ok(true)
     }
 
+    /// Follow the new directory of this workspace.
+    ///
+    /// A panel that runs in the directory of its workspace keeps that directory
+    /// when the person sets another one. A panel with its own directory keeps
+    /// its own directory. A panel that could not start says to set the directory
+    /// of its workspace and restart it, which must then start the panel.
+    pub(crate) fn follow_workspace_directory(
+        &mut self,
+        previous: Option<&std::path::Path>,
+        directory: &std::path::Path,
+    ) {
+        if !panel_runs_a_local_process(self.kind) || self.launch_cwd.as_deref() != previous {
+            return;
+        }
+        tracing::info!(
+            panel_id = self.id.0,
+            from = ?self.launch_cwd,
+            to = %directory.display(),
+            "panel follows the new directory of its workspace"
+        );
+        self.launch_cwd = Some(directory.to_path_buf());
+    }
+
     /// The directory this panel cannot start its process in, if any.
     fn working_directory_failure(&self) -> Option<spawn::UnusableWorkingDirectory> {
         if !panel_runs_a_local_process(self.kind) {

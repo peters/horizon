@@ -132,3 +132,92 @@ fn a_restart_in_a_directory_that_is_gone_explains_itself() {
     assert!(text.contains("Reason: the directory does not exist"), "{text}");
     board.shutdown_terminal_panels();
 }
+
+#[test]
+fn a_restart_follows_the_directory_the_person_set_for_the_workspace() {
+    let state = tempfile::tempdir().expect("owned fixture root");
+    let checkout = state.path().join("youpark.no");
+    std::fs::create_dir(&checkout).expect("fixture checkout");
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("moved");
+    board.workspace_mut(workspace_id).expect("workspace").cwd = Some(checkout.clone());
+    let panel_id = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Shell,
+                command: Some("/bin/sh".to_string()),
+                args: vec!["-c".to_string(), "exit".to_string()],
+                ..PanelOptions::default()
+            },
+            workspace_id,
+        )
+        .expect("panel in an existing directory");
+    let renamed = state.path().join("youpark.no-old");
+    std::fs::rename(&checkout, &renamed).expect("the directory moves");
+    board
+        .restart_panel(panel_id)
+        .expect("the panel reports why it cannot start");
+
+    // The person sets the directory of the workspace, as the panel says.
+    assert!(board.set_workspace_directory(workspace_id, Some(&renamed)));
+    board
+        .restart_panel(panel_id)
+        .expect("the panel starts in the new directory");
+
+    let panel = board.panel(panel_id).expect("panel");
+    assert_eq!(panel.launch_cwd.as_ref(), Some(&renamed));
+    let text = panel.terminal().expect("terminal").last_lines_text(24);
+    assert!(!text.contains("Horizon could not start this panel"), "{text}");
+    board.shutdown_terminal_panels();
+}
+
+#[test]
+fn a_panel_with_its_own_directory_keeps_it_when_the_workspace_directory_changes() {
+    let state = tempfile::tempdir().expect("owned fixture root");
+    let workspace_directory = state.path().join("workspace");
+    let own_directory = state.path().join("own");
+    let other_directory = state.path().join("other");
+    for directory in [&workspace_directory, &own_directory, &other_directory] {
+        std::fs::create_dir(directory).expect("fixture directory");
+    }
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("moved");
+    board.workspace_mut(workspace_id).expect("workspace").cwd = Some(workspace_directory.clone());
+    let own_panel = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Shell,
+                command: Some("/bin/sh".to_string()),
+                args: vec!["-c".to_string(), "exit".to_string()],
+                cwd: Some(own_directory.clone()),
+                ..PanelOptions::default()
+            },
+            workspace_id,
+        )
+        .expect("panel with its own directory");
+
+    board.set_workspace_directory(workspace_id, Some(&other_directory));
+
+    assert_eq!(
+        board.panel(own_panel).expect("panel").launch_cwd.as_ref(),
+        Some(&own_directory),
+        "a panel with its own directory keeps it"
+    );
+    board.shutdown_terminal_panels();
+}
+
+#[test]
+fn setting_the_same_workspace_directory_reports_no_change() {
+    let state = tempfile::tempdir().expect("owned fixture root");
+    let mut board = Board::new();
+    let workspace_id = board.create_workspace("moved");
+    board.workspace_mut(workspace_id).expect("workspace").cwd = Some(state.path().to_path_buf());
+
+    assert!(!board.set_workspace_directory(workspace_id, Some(state.path())));
+    assert!(!board.set_workspace_directory(workspace_id, None));
+    assert!(board.set_workspace_directory(workspace_id, Some(&state.path().join("elsewhere"))));
+    assert_eq!(
+        board.workspace(workspace_id).expect("workspace").cwd.as_deref(),
+        Some(state.path().join("elsewhere").as_path())
+    );
+}
