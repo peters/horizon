@@ -112,6 +112,9 @@ The command `--shm-size 1g` gives Chromium more shared memory than the 64 MB
 that Docker gives by default.
 The argument `--disable-dev-shm-usage` in `host.example.yaml` is a second
 guard for a container with the default size.
+The egress profile of `host.example.yaml` names a proxy on another machine, so
+this command needs no option for it.
+Section 7 gives the proxy.
 
 Examine the start:
 
@@ -161,23 +164,62 @@ allows, so a profile without a proxy argument uses the network of that host.
 
 A browser profile gets its own egress only from the `args` of that profile in
 the host file.
-`host.example.yaml` shows a commented profile with
-`--proxy-server=socks5://host.docker.internal:1080`, which is the SOCKS5 proxy
-of `ssh -N -D 1080` on the home machine.
-A container on Linux does not resolve `host.docker.internal` unless the start
-names the gateway of the Docker host, so add this option to the command of
-section 5 when a profile uses that proxy:
+`host.example.yaml` shows a commented profile whose Chromium argument is
+`--proxy-server=socks5://100.64.0.10:1080`.
+The egress of issue 1780 is the SOCKS5 proxy of the home machine, so the
+profile names the tailnet address of the home machine.
 
-```sh
---add-host=host.docker.internal:host-gateway
+To use the profile, remove the comment markers of the block, put it at the
+indentation of the profile `probe`, and replace the example address
+`100.64.0.10` with the tailnet address of your proxy machine:
+
+```yaml
+    egress:
+      backend: chromium
+      args:
+        - --no-sandbox
+        - --disable-dev-shm-usage
+        - --proxy-server=socks5://100.64.0.10:1080
 ```
 
-A profile that uses a proxy on another machine, for example a tailnet address,
-does not need that option.
-Any other profile uses the network of the Docker host.
+A tailnet address needs no option in the container start of section 5, because
+the container reaches it through the network of the Docker host.
 
-Issue 1780 uses the SOCKS5 proxy of the home machine as the egress, so this
-image needs no proxy rule of its own.
+Run the proxy on that machine with a listener that accepts the connection of
+the container.
+The default listener of `ssh -N -D 1080` binds `127.0.0.1`, which another
+machine cannot reach, so name the tailnet address of the machine:
+
+```sh
+ssh -N -D 100.64.0.10:1080 <the proxy machine>
+```
+
+> **CAUTION:** CHOOSE THE ADDRESS OF THE SOCKS5 LISTENER WITH CARE.
+> The listener has no password.
+> Anyone who reaches the address uses the network of the proxy machine.
+> Name the tailnet address as above, and keep the tailnet access rule of that
+> machine narrow.
+> Do not use `0.0.0.0` on a machine with a public address.
+
+To examine the egress profile from the container:
+
+```sh
+docker exec horizon-browser-vm chromium --headless --no-sandbox \
+  --disable-dev-shm-usage --proxy-server=socks5://100.64.0.10:1080 \
+  --dump-dom https://example.org/
+```
+
+Result: the command prints the page `Example Domain`, and the log of the proxy
+holds the connection of the container.
+A refused connection means that the listener of the proxy does not accept the
+container, and the CAUTION above names the reason.
+
+The image needs no proxy rule of its own, and it needs no option in the start
+for a profile that names a proxy on another machine.
+A profile that uses a proxy on the Docker host itself needs the name
+`host.docker.internal` and the option
+`--add-host=host.docker.internal:host-gateway` in the start of section 5,
+because Docker Engine on Linux adds that name only with the option.
 Do not depend on this image to stop a profile that has no proxy.
 
 ## 8. Limits
