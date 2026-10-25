@@ -98,7 +98,50 @@ A build with a warm layer cache takes about 2 minutes.
 A build with no cache takes longer, because it compiles the CLI and its
 dependencies.
 
-## 5. Start the container
+## 5. The published image
+
+The workflow `.github/workflows/browser-vm-image.yml` publishes the image to
+`ghcr.io/peters/browser-vm`.
+A person who rents a browser VM pulls that image and does not build it.
+A push to `main` that changes the recipe, this file or the sources of the
+profile host publishes a new image.
+The workflow builds `linux/amd64` only, because the rent is a Hetzner `ccx`
+server, which is x86_64.
+
+The workflow publishes two tags.
+
+| Tag | Use |
+|---|---|
+| `sha-<commit>` | The image of one commit of `main`. It never moves. |
+| `latest` | The image of the newest publication. It moves. |
+
+The deploy refuses a tag, because a machine must not change what it runs
+between two rents.
+Read the digest of a publication in the summary of its workflow run.
+The summary holds the line to copy:
+
+```
+ghcr.io/peters/browser-vm@sha256:<64 hexadecimal characters>
+```
+
+Give that line as the image of the deploy:
+
+```json
+{"operation": "deploy", "image": "ghcr.io/peters/browser-vm@sha256:<digest>", "server_type": "ccx13"}
+```
+
+The operation `browser_vm` answers with the phase it started.
+The operation `status` gives the SSH target when the machine is ready.
+
+A new package is private.
+Set the visibility of the package to public in the package settings, or the
+rented machine needs a registry login before it can pull the image.
+
+Withdraw a wrong image by deleting its version in the package settings.
+A deleted version cannot be pulled.
+Delete the whole package to remove every version of it.
+
+## 6. Start the container
 
 ```sh
 docker run --detach --name horizon-browser-vm \
@@ -114,7 +157,7 @@ The argument `--disable-dev-shm-usage` in `host.example.yaml` is a second
 guard for a container with the default size.
 The egress profile of `host.example.yaml` names a proxy on another machine, so
 this command needs no option for it.
-Section 7 gives the proxy.
+Section 8 gives the proxy.
 
 Examine the start:
 
@@ -137,7 +180,7 @@ without that signal.
 | `HORIZON_BROWSER_VM_VNC_PORT` | `5900` | The port of the VNC server in the container. |
 | `HORIZON_BROWSER_VM_SCREEN` | `1920x1080x24` | The size and the depth of the display. |
 
-## 6. Sign in one time
+## 7. Sign in one time
 
 1. Publish the VNC port on the loopback of the Docker host, as section 3 shows.
 2. Open a Device panel with the SSH route to the Docker host:
@@ -156,7 +199,7 @@ without that signal.
 The sign-in stays after a stop and a start of the container, because the state
 volume keeps the profile folder.
 
-## 7. Network and egress
+## 8. Network and egress
 
 The image does not block the network and does not route it through a proxy.
 A Chromium in the image reaches the internet as the network of the Docker host
@@ -182,7 +225,7 @@ indentation of the profile `probe`, and replace the example address
         - --proxy-server=socks5://100.64.0.10:1080
 ```
 
-A tailnet address needs no option in the container start of section 5, because
+A tailnet address needs no option in the container start of section 6, because
 the container reaches it through the network of the Docker host.
 
 Run the proxy on that machine with a listener that accepts the connection of
@@ -218,11 +261,11 @@ The image needs no proxy rule of its own, and it needs no option in the start
 for a profile that names a proxy on another machine.
 A profile that uses a proxy on the Docker host itself needs the name
 `host.docker.internal` and the option
-`--add-host=host.docker.internal:host-gateway` in the start of section 5,
+`--add-host=host.docker.internal:host-gateway` in the start of section 6,
 because Docker Engine on Linux adds that name only with the option.
 Do not depend on this image to stop a profile that has no proxy.
 
-## 8. Limits
+## 9. Limits
 
 > **CAUTION:** PUBLISH THE VNC PORT ON THE LOOPBACK OF THE DOCKER HOST ONLY.
 > The VNC server has no password. A published port on another interface gives
