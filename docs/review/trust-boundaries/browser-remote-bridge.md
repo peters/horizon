@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-mcp/src/remote.rs,crates/horizon-browser-mcp/src/remote/**,crates/horizon-browser-cli/tests/remote_parity.rs,crates/horizon-core/src/config/browser_host.rs"
+applyTo: "crates/horizon-browser-mcp/src/remote.rs,crates/horizon-browser-mcp/src/remote/**,crates/horizon-browser-control/src/remote_host.rs,crates/horizon-browser-control/src/remote_host/**,crates/horizon-browser-cli/tests/remote_parity.rs,crates/horizon-core/src/config/browser_host.rs"
 ---
 
 # Trust boundary of the remote browser bridge
@@ -8,6 +8,11 @@ A bridge gives the agents of this computer the profile host of another machine
 through one SSH transport. The design is in the section "Remote host bridge" of
 `crates/horizon-browser-cli/README.md` and in the module comment of
 `crates/horizon-browser-mcp/src/remote.rs`.
+
+The SSH transport itself is `crates/horizon-browser-control/src/remote_host.rs`,
+because a browser panel of Horizon reaches a profile host through the same
+record, the same remote command and the same bounded `ssh` calls. The bridge is
+one client of that channel and the panel is the other.
 
 ## Trusted: the settings entry and the SSH target
 
@@ -34,9 +39,10 @@ profile name. A person does not edit it by hand.
 The remote machine writes the record of its profile host and every result that
 the bridge forwards.
 
-- The bridge reads `profile-host.json` over the SSH transport. It takes only
+- The channel reads `profile-host.json` over the SSH transport. It takes only
   `host_instance` from the record, and it accepts that value only through
-  `manifest::valid_host_instance`.
+  `manifest::valid_host_instance`. It starts the remote server before the record
+  of that root leaves the probe, so no client sees a stale instance.
 - The bridge does not pre-validate the profile of its entry. It adds that
   profile as the `target` of a `browser_create` that names none, and the host
   refuses a profile that its host file does not name with its own typed reason
@@ -57,6 +63,8 @@ remote machine.
 - Only a path that `AttachmentPolicy` authorizes is staged: a regular file under
   the work root of the agent or under `HORIZON_BROWSER_ATTACHMENT_ROOTS`. A path
   outside those roots is refused before a byte leaves this computer.
+- `AttachmentPolicy` is the rule of the bridge. A browser panel stages no file at
+  all, because its channel offers no attachment call.
 - One file keeps the limit of 512 MiB, and one call stages at most 512 MiB.
 - The staging folder of one call is `browser-staging/call-<pid>-<count>-<nanos>`
   under the remote runtime root. Its name is fixed by the bridge, so a value of
@@ -84,7 +92,7 @@ remote machine.
 
 - Without a named remote host the bridge does not start: the local entry of an
   agent stays the local server, byte for byte.
-- The bridge starts one `ssh` process for the MCP stream, and it starts no
-  listener.
+- The bridge, and a panel, start one `ssh` process for the MCP stream, and they
+  start no listener.
 - The remote host instance always comes from the record of the remote machine,
   never from `HORIZON_BROWSER_HOST_INSTANCE` of this computer.

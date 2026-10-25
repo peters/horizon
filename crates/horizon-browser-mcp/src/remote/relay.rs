@@ -24,8 +24,8 @@ use base64::Engine as _;
 use rmcp::model::{ContentBlock, ResourceContents};
 use serde_json::{Value, json};
 
-use super::ssh;
 use super::{MAX_INLINE_BYTES, MAX_STAGED_BYTES};
+use horizon_browser_control::remote_host as ssh;
 
 /// One MCP call that the bridge must answer differently from a local call.
 pub(super) struct Relay {

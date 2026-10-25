@@ -78,6 +78,7 @@ impl BrowserPanelState {
     #[must_use]
     pub fn can_duplicate(&self) -> bool {
         !self.is_remote()
+            && !self.is_remote_host()
             && matches!(self.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
             && matches!(self.status, BrowserStatus::Ready)
             && self.shared_session.is_some()
