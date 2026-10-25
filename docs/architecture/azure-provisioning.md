@@ -16,15 +16,41 @@ fixed name and the same tag.
 | VM | `worker` | Ubuntu 24.04. No managed identity, no password login. |
 | OS disk | `worker-os` | Premium SSD, deleted with the VM. A tags resource tags it. |
 
-`offers::AZURE_DEPLOYABLE` is `true`. `cloud_deploy deploy`, the quick start and
-companions create an Azure worker for a profile with `provider: azure` when
-`providers::preflight` admits it. The worker is placed by the VM sizes and
-regions of the `azure` settings, in their order; a choice of one Azure offer is
-refused. New cloud does not list Azure until its prices have a binding. A
-repository whose default profile is Azure keeps that default. The dialog's
-account row then fails and tells the person to choose another profile: it names
-the missing `azure` section, or says that New cloud cannot start an Azure profile
-yet. The row never stays pending.
+`offers::AZURE_DEPLOYABLE` is `true`. New cloud, `cloud_deploy deploy`, the
+quick start and companions create an Azure worker for a profile with
+`provider: azure` when `providers::preflight` admits it. The `azure` settings
+decide where the worker can go:
+
+- New cloud lists Azure only when the machine has an `azure` section with a
+  readable token. It lists only the VM sizes and regions of that section that
+  the retail catalog prices. A row that the person chooses gives one VM size and
+  one region (`WorkerChoice::for_profile`). `Settings::for_cloud` narrows the
+  section to them, so provisioning tries no other size or region. It refuses a
+  size or region that the section does not have before work starts.
+- Without a worker choice, provisioning tries the VM sizes and regions of the
+  section in their order. A capacity refusal moves to the next VM size. This is
+  the placement of `cloud_deploy deploy` and the quick start. A companion uses
+  the placement that its cloud recorded.
+  `cloud_deploy --worker-choice` finds no Azure offer under the machine policy
+  and refuses it. Thus each Azure offer of `cloud_offers` has `rentable: false`.
+- The New cloud account row of an Azure profile names the missing `azure`
+  section, or the reason that the token cannot be read. It passes only with a
+  readable token and prices less than one hour old. No key form is offered for
+  it. The token itself is first used when the cloud starts.
+
+### The plan runner verbs for an Azure cloud
+
+The CLI plan runner `cloud_deploy` runs the same lifecycle code as the card. It has no Azure worker choice:
+
+| Verb | What it does for an Azure cloud |
+|---|---|
+| `offers SETTINGS [REQUIREMENTS_JSON]` | Lists Azure offers in US dollars. It needs no `azure` section. Each offer has `rentable: false`. |
+| `plan-deploy`, then `deploy ... --plan-token <token>` | Creates the worker on the VM sizes and regions of the `azure` section, in their order. |
+| `stop SETTINGS STATE_ROOT` | Deallocates the VM. The compute charge stops. The two disks and the static address stay, and Azure bills them until the cloud is deleted. |
+| `resume`, then `reconnect` | `resume` starts the same VM. `reconnect` brings the cloud to `Ready` with the same address. |
+| `take-stop SETTINGS STATE_ROOT` | Reads an agent's stop request once and deallocates the cloud for it. |
+| `plan-rebuild SETTINGS STATE_ROOT PROFILE`, then `rebuild ... <token>` | Deletes the VM and starts a new one on the same workspace disk and static address. `continue-rebuild` and `cancel-rebuild` continue or cancel a requested rebuild. |
+| `delete SETTINGS STATE_ROOT` | Deletes the resource group and proves that nothing of the cloud is left. |
 
 ## Machine settings
 
@@ -117,7 +143,8 @@ change is proven by what ARM reports after it.
 - A stop sends `POST .../virtualMachines/worker/deallocate`. It never sends
   `powerOff`. A VM that is only powered off keeps its compute allocation, and
   Azure bills it. The stop ends when the VM reports `PowerState/deallocated`.
-  The disks and the static address stay.
+  The disks and the static address stay, and Azure bills them while the cloud
+  is stopped. Only a delete ends these charges.
 - A start sends `POST .../virtualMachines/worker/start` to the same VM. It ends
   when the VM reports `PowerState/running`.
 - Before a power change, the client reads the VM. It refuses a VM that is

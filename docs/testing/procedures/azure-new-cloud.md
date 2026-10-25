@@ -20,8 +20,8 @@ chooses.
 
 ## 2. Applicability
 
-- Candidate: a build that includes the branches `feat/azure-chosen-placement`
-  and `feat/azure-new-cloud` of [epic #1774](https://github.com/peters/horizon/issues/1774).
+- Candidate: a build that includes the chosen Azure placement and Azure in New
+  cloud (PR 6 of [epic #1774](https://github.com/peters/horizon/issues/1774)).
 - Platforms: Linux with Xvfb. Provider: Azure, beside RunPod.
 - This procedure does not test:
   - A form for the `azure` section in **Cloud settings**. There is no such
