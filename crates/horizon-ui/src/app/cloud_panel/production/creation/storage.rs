@@ -47,6 +47,17 @@ pub(super) fn launch_reason(form: &super::Production) -> Option<&'static str> {
     if super::provider::current(form.provider, profile).kind == Kind::Hetzner && form.prices.hetzner.too_old() {
         return Some("Hetzner prices are over an hour old. Refresh them before starting.");
     }
+    if super::provider::current(form.provider, profile).kind == Kind::Azure {
+        if form.prices.azure.policy().is_none() {
+            return Some("Azure needs an azure section with a readable token in the cloud settings.");
+        }
+        if form.prices.azure.too_old() {
+            return Some("Azure prices are over an hour old. Refresh them before starting.");
+        }
+        if form.placement.cpu_types.len() != 1 || form.placement.data_centers.len() != 1 {
+            return Some("Choose an Azure VM size and region.");
+        }
+    }
     if super::provider::current(form.provider, profile).kind == Kind::RunPod {
         if form.prices.too_old() {
             return Some("Prices are over an hour old. Refresh them before starting.");
@@ -203,10 +214,10 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         u16::MAX
     };
     ui.horizontal(|ui| {
-        let label = ui.label(if provider.kind == Kind::Hetzner {
-            "System disk requirement"
-        } else {
-            "Container disk"
+        let label = ui.label(match provider.kind {
+            Kind::Hetzner => "System disk requirement",
+            Kind::Azure => "OS disk",
+            _ => "Container disk",
         });
         ui.add(
             DragValue::new(&mut profile.storage.container_gb)
@@ -215,10 +226,12 @@ pub(super) fn field(ui: &mut Ui, profile: &mut Profile, provider: &Description) 
         )
         .labelled_by(label.id);
     });
-    ui.small(if provider.kind == Kind::Hetzner {
-        "Choose a server type with at least this much system disk."
-    } else {
-        "Temporary storage for the image and installed tools; cleared when the worker stops."
+    ui.small(match provider.kind {
+        Kind::Hetzner => "Choose a server type with at least this much system disk.",
+        Kind::Azure => {
+            "Holds the system, the image and installed tools; at least 30 GB. It is kept, and billed, while the cloud is stopped."
+        }
+        _ => "Temporary storage for the image and installed tools; cleared when the worker stops.",
     });
     before != profile.storage
 }

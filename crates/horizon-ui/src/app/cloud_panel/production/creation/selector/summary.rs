@@ -74,23 +74,40 @@ fn located(ui: &mut Ui, form: &Production, profile: &Profile, provider: &str) {
         && let Some(index) = catalog.selected
     {
         let offer = &catalog.offers[index];
-        widgets::line(ui, "Worker", &offer.id, true);
-        widgets::line(ui, "Compute", &format!("{}/hr", provider::euros(offer.hourly)), false);
+        let azure = offer.provider == horizon_core::cloud_runtime::provider::AZURE.label;
+        let amount = |value: f64| {
+            let symbol = super::cards::symbol(offer.currency);
+            if value < 0.1 {
+                format!("{symbol}{value:.4}")
+            } else {
+                format!("{symbol}{value:.2}")
+            }
+        };
+        widgets::line(ui, if azure { "VM size" } else { "Worker" }, &offer.id, true);
+        widgets::line(ui, "Compute", &format!("{}/hr", amount(offer.hourly)), false);
         widgets::line(
             ui,
-            "Estimated run, storage + IPv4",
-            &provider::euros(offer.estimated_total),
+            if azure {
+                "Estimated run, disks + static address"
+            } else {
+                "Estimated run, storage + IPv4"
+            },
+            &amount(offer.estimated_total),
             true,
         );
         widgets::line(
             ui,
             "Stopped workspace",
-            &format!("{}/mo", provider::euros(offer.stopped_monthly)),
+            &format!("{}/mo", amount(offer.stopped_monthly)),
             false,
         );
         widgets::note(
             ui,
-            "Hetzner prices exclude VAT. Billed per started hour, with a monthly cap. Availability is advisory.",
+            if azure {
+                "Azure retail prices in US dollars, before tax. A stop deallocates the VM; its disks and static address bill until the cloud is deleted. Azure checks quota when the cloud starts."
+            } else {
+                "Hetzner prices exclude VAT. Billed per started hour, with a monthly cap. Availability is advisory."
+            },
         );
     } else {
         widgets::note(ui, "Choose an exact worker and location.");

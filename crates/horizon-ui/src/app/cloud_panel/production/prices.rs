@@ -62,8 +62,8 @@ pub(super) struct State {
     /// The saved Docker hosts' free capacity, read beside Hetzner's catalog.
     pub hosts: hosts::State,
     pub exchange: exchange::State,
-    /// Azure's retail prices, for agents' offer requests only: New cloud has no Azure
-    /// settings yet.
+    /// Azure's retail prices for agents' offer requests, and for New cloud when this
+    /// machine has an `azure` settings section.
     pub azure: azure::State,
     /// A fetch found no `RunPod` API key. Kept through refreshes and expired errors,
     /// and cleared only by a list `RunPod` answered, so a retry never offers `RunPod`
@@ -87,6 +87,7 @@ impl State {
             self.hetzner.request(root, ctx);
             self.hosts.request(root, ctx);
             self.exchange.request(ctx);
+            self.azure.request_bound(root, ctx);
         }
         let key = key(profile);
         let current = self
@@ -159,6 +160,7 @@ impl State {
         self.size_jobs.clear();
         self.hetzner.restart();
         self.hosts.restart();
+        self.azure.restart();
     }
 
     /// The price list while the dialog may compare with it: current, or gone stale

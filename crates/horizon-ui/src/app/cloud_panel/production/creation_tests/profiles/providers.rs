@@ -805,6 +805,133 @@ fn hetzner_summary_owns_the_system_disk_editor_with_more_options_open() {
     assert!(!text.contains("Container disk"), "{text}");
 }
 
+fn azure_catalog() -> horizon_core::cloud_runtime::prices::AzureCatalog {
+    let offer = |size: &str, region: &str, vcpu: u16, memory_gb: u16, hourly: f64| serde_json::json!({"size": size, "region": region, "vcpu": vcpu, "memory_gb": memory_gb, "hourly_usd": hourly});
+    let disks = serde_json::json!({"32": 5.28, "64": 10.21, "128": 19.71});
+    serde_json::from_value(serde_json::json!({
+        "offers": [offer("Standard_D2s_v3", "northeurope", 2, 8, 0.107),
+            offer("Standard_D4s_v3", "northeurope", 4, 16, 0.214),
+            offer("Standard_D8s_v3", "northeurope", 8, 32, 0.428),
+            offer("Standard_D4s_v3", "westeurope", 4, 16, 0.2)],
+        "disk_month_usd": {"northeurope": disks, "westeurope": disks},
+        "static_ip_hour_usd": {"northeurope": 0.005, "westeurope": 0.005},
+        "regions": {"northeurope": "EUROPE", "westeurope": "EUROPE"},
+    }))
+    .unwrap()
+}
+
+/// An `azure` section that allows two sizes in one region, and current Azure prices.
+fn azure_binding(app: &mut HorizonApp) {
+    app.cloud_prototype.production.prices.azure.answered_with_policy(
+        azure_catalog(),
+        &["Standard_D4s_v3", "Standard_D8s_v3"],
+        &["northeurope"],
+    );
+}
+
+#[test]
+fn azure_is_offered_only_with_azure_settings_and_only_what_they_allow() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    let text = painted(&tall_frame(&ctx, &mut app));
+    assert!(!text.contains("Azure"), "no azure section, no Azure: {text}");
+    assert!(
+        selector::catalog(&app.cloud_prototype.production)
+            .unwrap()
+            .offers
+            .iter()
+            .all(|offer| offer.provider != "Azure")
+    );
+
+    app.cloud_prototype
+        .production
+        .prices
+        .azure
+        .unreadable("The Azure token file must hold one printable token");
+    let text = painted(&tall_frame(&ctx, &mut app));
+    assert!(
+        text.contains("Azure workers are not offered: The Azure token file must hold one printable token"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Azure · Standard_"),
+        "no row without a readable token: {text}"
+    );
+
+    azure_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, provider_filter(&output, "Azure").center());
+    let text = painted(&tall_frame(&ctx, &mut app));
+    assert!(text.contains("Azure · Standard_D4s_v3 · northeurope"), "{text}");
+    assert!(text.contains("Azure · Standard_D8s_v3 · northeurope"), "{text}");
+    assert!(text.contains("Quota checked at start"), "{text}");
+    assert!(
+        !text.contains("Standard_D2s_v3"),
+        "a size the settings leave out: {text}"
+    );
+    assert!(!text.contains("westeurope"), "a region the settings leave out: {text}");
+    let shown = selector::catalog(&app.cloud_prototype.production).unwrap();
+    assert!(shown.complete);
+    assert_eq!(shown.currency, "USD");
+}
+
+#[test]
+fn an_azure_row_is_priced_in_dollars_and_starts_on_its_size_and_region() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    azure_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, provider_filter(&output, "Azure").center());
+    let output = tall_frame(&ctx, &mut app);
+    click(
+        &ctx,
+        &mut app,
+        label_rect(&output, "Azure · Standard_D4s_v3 · northeurope").center(),
+    );
+    let text = painted(&tall_frame(&ctx, &mut app));
+    let form = &app.cloud_prototype.production;
+    assert_eq!(form.provider, Some(&horizon_core::cloud_runtime::provider::AZURE));
+    assert_eq!(form.placement.cpu_types, ["Standard_D4s_v3"]);
+    assert_eq!(form.placement.data_centers, ["northeurope"]);
+    assert_eq!(selected(&app).id, "Standard_D4s_v3");
+    for shown in [
+        "VM size",
+        "Estimated run, disks + static address",
+        "$0.21/hr",
+        "Azure retail prices in US dollars, before tax",
+        "OS disk",
+        "no other is tried",
+    ] {
+        assert!(text.contains(shown), "{shown}: {text}");
+    }
+    assert!(!text.contains("€"), "{text}");
+    assert!(!text.contains("Hetzner prices exclude VAT"), "{text}");
+    let refused = "Azure needs an azure section with a readable token in the cloud settings.";
+    assert!(!text.contains(refused), "{text}");
+
+    // Settings that no longer have a readable token refuse Start before any work.
+    app.cloud_prototype
+        .production
+        .prices
+        .azure
+        .unreadable("Credential bindings must use absolute machine-local paths");
+    let text = painted(&tall_frame(&ctx, &mut app));
+    assert!(text.contains(refused), "{text}");
+    azure_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "azure");
+    assert_eq!((launch.profile.cpu, launch.profile.memory_gb), (4, 16));
+    assert_eq!(launch.placement.cpu_types, ["Standard_D4s_v3"]);
+    assert_eq!(launch.placement.data_centers, ["northeurope"]);
+}
+
 /// The provider filter button named `label`. The heading has a chip per provider with
 /// the same name, so the filter is the last exact match.
 fn provider_filter(output: &egui::FullOutput, label: &str) -> Rect {

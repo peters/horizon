@@ -78,8 +78,6 @@ impl State {
                         format!("{error}. Open Cloud settings to repair them."),
                     )],
                 }
-            } else if profile.provider == horizon_core::cloud_runtime::provider::AZURE.id {
-                vec![problem("Provider account", AZURE_NEEDS_SETTINGS.into())]
             } else if profile.provider == horizon_core::cloud_runtime::provider::DOCKER_HOST.id {
                 // Not a key a rented provider asks for, so no key form either.
                 vec![problem(
@@ -87,6 +85,8 @@ impl State {
                     "No Docker host is saved on this computer yet. Add one in the Docker host card of Cloud settings."
                         .into(),
                 )]
+            } else if profile.provider == horizon_core::cloud_runtime::provider::AZURE.id {
+                vec![problem("Cloud settings", AZURE_MISSING.into())]
             } else {
                 vec![problem(
                     "Cloud settings",
@@ -101,14 +101,11 @@ impl State {
     }
 }
 
-/// An Azure profile on a machine without cloud settings: no key pasted here adds the
-/// `azure` section it needs.
-const AZURE_NEEDS_SETTINGS: &str =
-    "Azure needs its azure section in the cloud settings, which New cloud cannot add yet. Choose another profile.";
+/// What a machine without Azure settings must add; no key form here can make them.
+const AZURE_MISSING: &str = "No Azure settings on this computer yet. Save Cloud settings once, then add an azure section to its settings.json with token_file, subscription_id, vm_sizes and regions.";
 
-/// An Azure profile whose settings pass: New cloud has no Azure prices to confirm, so
-/// it cannot start one on this machine yet.
-const AZURE_CANNOT_START: &str = "New cloud cannot start an Azure profile on this machine yet: it has no Azure prices to check. Choose another profile.";
+const AZURE_READY: &str =
+    "Azure token is readable and prices are current; Azure checks the token when the cloud starts";
 
 fn problem(what: &'static str, reason: String) -> Problem {
     Problem { what, reason }
@@ -194,18 +191,24 @@ fn rows(form: &Production) -> Vec<Row> {
         ),
         // Nothing is rented: there is no account to check and no price to fetch.
         Kind::DockerHost => (true, None),
-        // No Azure price binding yet, so nothing here can ever confirm the account.
-        Kind::Azure => (false, Some(AZURE_CANNOT_START)),
+        Kind::Azure => (form.prices.azure.offered().is_some(), form.prices.azure.problem()),
     };
     rows.push(if let Some(problem) = problem("Provider profile") {
         // What no key can fix: the profile asks for something this provider cannot give.
         Row::Fail(problem.reason.clone())
     } else if let Some(problem) = problem("Provider account") {
-        Row::Fail(problem.reason.clone())
+        Row::Fail(if provider.kind == Kind::Azure && form.prices.azure.absent() {
+            AZURE_MISSING.to_owned()
+        } else {
+            problem.reason.clone()
+        })
     } else if let Some(error) = error {
         Row::Fail(error.to_owned())
     } else if live && found.is_some() && provider.kind == Kind::DockerHost {
         Row::Pass("Docker host saved; nothing is rented".into())
+    } else if live && found.is_some() && provider.kind == Kind::Azure {
+        // Azure's prices need no credential, so nothing here has asked Azure about the token.
+        Row::Pass(AZURE_READY.into())
     } else if live && found.is_some() {
         Row::Pass(format!("{} account accepted, prices are current", provider.label))
     } else {
@@ -220,9 +223,14 @@ fn rows(form: &Production) -> Vec<Row> {
 }
 
 /// The provider account is missing or was turned down, which a key pasted here can fix.
-/// The form takes a `RunPod` or Hetzner key only, so it never fixes an Azure profile.
+/// Azure's settings are not a key, so they are never asked for here.
 fn needs_account(form: &Production) -> bool {
-    if selected_kind(form) == Some(Kind::Azure) {
+    let azure = form
+        .profiles
+        .as_ref()
+        .and_then(|config| config.profiles.get(&form.selected_profile))
+        .is_some_and(|profile| provider::current(form.provider, profile).kind == Kind::Azure);
+    if azure {
         return false;
     }
     let missing = form.checks.problems.as_deref().is_some_and(|found| {
@@ -250,17 +258,13 @@ fn turned_down(error: &str) -> bool {
     .any(|word| error.contains(word))
 }
 
-/// The provider the selected profile starts on, as chosen here.
-fn selected_kind(form: &Production) -> Option<Kind> {
-    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
-    Some(provider::current(form.provider, profile).kind)
-}
-
 fn provider_error(form: &Production) -> Option<&str> {
-    match selected_kind(form)? {
+    let profile = form.profiles.as_ref()?.profiles.get(&form.selected_profile)?;
+    match provider::current(form.provider, profile).kind {
         Kind::RunPod => form.prices.list_error.as_deref(),
         Kind::Hetzner => form.prices.hetzner.error(),
-        Kind::DockerHost | Kind::Azure => None,
+        Kind::Azure => form.prices.azure.problem(),
+        Kind::DockerHost => None,
     }
 }
 
@@ -533,53 +537,6 @@ mod tests {
         assert_eq!(blocked_given(&form, false), None);
     }
 
-    /// A repository whose default profile is Azure, beside a Hetzner one.
-    fn mixed(form: &mut Production) {
-        form.profiles = Some(
-            horizon_core::cloud_panel::CloudConfig::parse(
-                "version: 1\ndefault: az\nprofiles:\n  az:\n    provider: azure\n    image: ghcr.io/demo-org/dev-image\n    cpu: 4\n    memory_gb: 16\n    gpu: false\n    storage:\n      container_gb: 20\n      volume_gb: 60\n  dev:\n    provider: hetzner\n    image: ghcr.io/demo-org/dev-image\n    cpu: 4\n    memory_gb: 16\n    gpu: false\n    storage:\n      container_gb: 20\n      volume_gb: 60\n",
-            )
-            .unwrap(),
-        );
-        form.selected_profile = "az".into();
-    }
-
-    #[test]
-    fn an_azure_default_ends_in_a_reason_to_choose_another_profile() {
-        // Its settings pass: before, the account row stayed pending for ever.
-        let mut form = form_with(Vec::new());
-        mixed(&mut form);
-        let listed = rows(&form);
-        assert_eq!(listed[1], Row::Fail(AZURE_CANNOT_START.into()));
-        assert!(
-            !listed
-                .iter()
-                .any(|row| matches!(row, Row::Pending(text) if text.contains("Azure")))
-        );
-        assert_eq!(verdict_given(&form, true), Verdict::Failed);
-        assert!(blocked_given(&form, true).is_some());
-        assert!(!needs_account(&form), "a RunPod or Hetzner key cannot fix it");
-        // The missing azure section is named as it is.
-        let missing = "Add an azure section to the cloud settings before deploying an Azure cloud";
-        form.checks.problems = Some(vec![problem("Provider account", missing.into())]);
-        assert_eq!(rows(&form)[1], Row::Fail(missing.into()));
-        assert!(!needs_account(&form));
-        // The Hetzner profile beside it is checked as before.
-        form.checks.problems = Some(Vec::new());
-        form.selected_profile = "dev".into();
-        assert_eq!(rows(&form)[1], Row::Pending("Checking the Hetzner account".into()));
-    }
-
-    #[test]
-    fn an_azure_profile_on_a_machine_without_settings_names_its_settings_section() {
-        let root = tempfile::tempdir().unwrap();
-        let mut form = form_with(Vec::new());
-        mixed(&mut form);
-        answered(&mut form, root.path());
-        assert_eq!(rows(&form)[1], Row::Fail(AZURE_NEEDS_SETTINGS.into()));
-        assert!(!needs_account(&form));
-    }
-
     fn loaded(form: &mut Production) {
         form.profiles = Some(
             horizon_core::cloud_panel::CloudConfig::parse(
@@ -647,6 +604,67 @@ mod tests {
             "settings, key and SSH identity are usable"
         );
         assert!(!needs_account(&form));
+    }
+
+    fn azure_loaded(form: &mut Production) {
+        form.profiles = Some(
+            horizon_core::cloud_panel::CloudConfig::parse(
+                "version: 1\ndefault: cpu\nprofiles:\n  cpu:\n    provider: azure\n    image: ghcr.io/demo-org/dev-image\n    cpu: 4\n    memory_gb: 8\n",
+            )
+            .unwrap(),
+        );
+        form.selected_profile = "cpu".into();
+    }
+
+    #[test]
+    fn an_azure_profile_without_settings_is_told_what_it_needs_and_offered_no_key_form() {
+        let root = tempfile::tempdir().unwrap();
+        let mut form = form_with(Vec::new());
+        azure_loaded(&mut form);
+        answered(&mut form, root.path());
+        assert_eq!(rows(&form).last(), Some(&Row::Fail(AZURE_MISSING.into())));
+        assert!(!needs_account(&form), "no key pasted here makes Azure settings");
+    }
+
+    #[test]
+    fn an_azure_row_says_what_to_fix_and_passes_only_with_a_token_and_prices() {
+        let account = |reason: &str| vec![problem("Provider account", reason.into())];
+        let missing = "Add an azure section to the cloud settings before deploying an Azure cloud";
+        let mut form = form_with(account(missing));
+        azure_loaded(&mut form);
+        assert_eq!(
+            rows(&form)[1],
+            Row::Fail(missing.into()),
+            "the settings are not read yet"
+        );
+        form.prices.azure.without_section();
+        assert_eq!(rows(&form)[1], Row::Fail(AZURE_MISSING.into()), "no azure section");
+        assert!(!needs_account(&form));
+        assert_eq!(verdict_given(&form, true), Verdict::Failed);
+
+        let unreadable = "The Azure token file must hold one printable token";
+        form.prices.azure.unreadable(unreadable);
+        form.checks.problems = Some(account(unreadable));
+        assert_eq!(rows(&form)[1], Row::Fail(unreadable.into()));
+        assert_eq!(provider_error(&form), Some(unreadable));
+        assert!(!needs_account(&form), "a token is not pasted here");
+
+        form.checks.problems = Some(Vec::new());
+        form.prices.azure.answered_with_policy(
+            serde_json::from_value(serde_json::json!({
+                "offers": [{"size": "Standard_D4s_v3", "region": "northeurope", "vcpu": 4, "memory_gb": 16,
+                    "hourly_usd": 0.214}],
+                "disk_month_usd": {"northeurope": {"32": 5.28, "64": 10.21}},
+                "static_ip_hour_usd": {"northeurope": 0.005},
+                "regions": {"northeurope": "EUROPE"},
+            }))
+            .unwrap(),
+            &["Standard_D4s_v3"],
+            &["northeurope"],
+        );
+        assert_eq!(rows(&form)[1], Row::Pass(AZURE_READY.into()));
+        assert_eq!(provider_error(&form), None);
+        assert_eq!(verdict_given(&form, true), Verdict::Ready);
     }
 
     #[test]
