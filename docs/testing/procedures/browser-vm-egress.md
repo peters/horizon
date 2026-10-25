@@ -234,7 +234,8 @@ the network of the Docker host, so the container start needs no option for it.
    ```
 
    Result: The shell returns the prompt, and `/tmp/egress-tunnel.pid` holds one
-   process ID.
+   process ID. Keep the file: the cleanup uses it. After a restart of the home
+   machine the file holds an old process ID.
 
 2. On the home machine, examine the listener.
 
@@ -307,7 +308,8 @@ that profile.
 1. Stop the home machine.
 
    Result: The home machine is off, and its tailnet address accepts no
-   connection.
+   connection. The tunnel ends with the machine, so `/tmp/egress-tunnel.pid`
+   now holds an old process ID.
 
 2. Call `browser_navigate` on the panel of task EG-EGRESS with the URL
    `https://ifconfig.me/ip` and the bound `timeout_millis` 20000.
@@ -327,20 +329,24 @@ egress nor the proxy. This is the gap of issue #1841.
 
 ### 6.7 EG-REFUSED: With the machine up and the tunnel stopped, the refusal names the proxy
 
-> **CAUTION:** THE NEXT STEP STOPS THE SOCKS5 LISTENER. The profile `egress`
-> then has no egress. Do not use a private page in that profile in this run.
+> **CAUTION:** THESE STEPS LEAVE THE PROFILE `egress` WITHOUT AN EGRESS. The
+> tunnel is stopped. Do not use a private page in that profile in this run.
 
-1. Start the home machine again, and stop the tunnel on it.
+1. Start the home machine again.
+
+   Result: The home machine answers on its tailnet address.
+
+2. Examine the listener.
 
    ```sh
-   kill "$(cat /tmp/egress-tunnel.pid)"
    ss -ltn 'sport = :1080'
    ```
 
-   Result: The home machine answers on its tailnet address. The command `ss`
-   shows no listener, so the port 1080 accepts no connection.
+   Result: The command prints no line, because the restart ended the tunnel. If
+   a line holds `100.64.0.10:1080`, stop the tunnel with steps 3 and 4 of the
+   cleanup.
 
-2. Call `browser_navigate` on the panel of task EG-EGRESS with the URL
+3. Call `browser_navigate` on the panel of task EG-EGRESS with the URL
    `https://ifconfig.me/ip`.
 
    Result: The answer fails after 0.3 s with this text:
@@ -377,18 +383,28 @@ the egress. The person sees a blank page in the Device panel.
 
    Result: The command ends and the terminal shows the prompt.
 
-> **CAUTION:** THE NEXT STEP STOPS THE SOCKS5 LISTENER. The profile `egress`
+> **CAUTION:** THE NEXT STEPS STOP THE SOCKS5 LISTENER. The profile `egress`
 > then has no egress.
 
-3. Stop the tunnel if it still runs.
+3. Examine the process that the tunnel file names.
 
    ```sh
-   kill "$(cat /tmp/egress-tunnel.pid)" 2>/dev/null || true
+   ps -o args= -p "$(cat /tmp/egress-tunnel.pid 2>/dev/null)" 2>/dev/null
+   ```
+
+   Result: The output holds `ssh -N -D 100.64.0.10:1080 localhost`. The output
+   is empty when the tunnel stopped. An output of another command is not the
+   tunnel: do not stop that process.
+
+4. If step 3 shows the tunnel, stop it.
+
+   ```sh
+   kill "$(cat /tmp/egress-tunnel.pid)"
    ```
 
    Result: The command `ss -ltn 'sport = :1080'` prints no line.
 
-4. Remove the process ID file of the tunnel.
+5. Remove the process ID file of the tunnel.
 
    ```sh
    rm -f /tmp/egress-tunnel.pid
@@ -400,7 +416,7 @@ the egress. The person sees a blank page in the Device panel.
 > writes the shipped example host file again, so the profile list of the run is
 > gone.
 
-5. Remove the host file of the run.
+6. Remove the host file of the run.
 
    ```sh
    docker exec hz-bvm-$RUN rm -f /state/host.yaml
@@ -413,7 +429,7 @@ the egress. The person sees a blank page in the Device panel.
 > **CAUTION:** REMOVE ONLY THE CONTAINER AND THE VOLUME THAT THIS PROCEDURE
 > CREATED. A removed volume deletes every browser profile and every sign-in.
 
-6. Stop and remove the container, the volume and the image.
+7. Stop and remove the container, the volume and the image.
 
    ```sh
    docker rm -f hz-bvm-$RUN
@@ -423,7 +439,7 @@ the egress. The person sees a blank page in the Device panel.
 
    Result: `docker volume ls` and `docker image ls` show no name of the run.
 
-7. Close the Device panel of task EG-VIEW.
+8. Close the Device panel of task EG-VIEW.
 
    Result: The panel leaves the board. The other panels of the board stay.
 
