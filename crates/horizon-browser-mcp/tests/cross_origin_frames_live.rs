@@ -776,13 +776,16 @@ const CHAT_WIDGET: &str = r#"<!doctype html><title>Chat widget</title>
  .covered { position: relative; display: inline-block; }
  #__TAG__-cover { position: absolute; inset: 0; z-index: 2; background: rgba(0, 0, 0, 0.05); }
  #__TAG__-reverting { min-height: 32px; border: 1px solid #ccc; padding: 6px; }
+ #__TAG__-editor { min-height: 32px; border: 1px solid #ccc; padding: 6px; }
 </style>
 <div class="history">Support history</div>
 <div class="composer">
   <textarea id="__TAG__-composer" aria-label="Message"></textarea>
   <button id="__TAG__-send" class="idle" type="button">Send</button>
   <span class="covered"><button id="__TAG__-covered" type="button">Covered</button><span id="__TAG__-cover"></span></span>
+  <button id="__TAG__-dismiss" type="button">Dismiss</button>
   <div id="__TAG__-reverting" contenteditable="true" aria-label="Reverting field">reverting field</div>
+  <div id="__TAG__-editor" contenteditable="true" aria-label="Editor"></div>
 </div>
 <script>
 const tag = '__TAG__';
@@ -816,13 +819,17 @@ send.addEventListener('click', (event) => {
   } });
 });
 document.querySelector('#' + tag + '-covered').addEventListener('click', () => post({ covered: true }));
+document.querySelector('#' + tag + '-dismiss').addEventListener('click', (event) => {
+  post({ dismissed: true });
+  event.target.style.display = 'none';
+});
 document.querySelector('#' + tag + '-reverting').addEventListener('input', (event) => { event.target.textContent = ''; });
 post({ ready: true });
 </script>"#;
 
 const CHAT_PAGE: &str = r#"<!doctype html><title>Chat fixture</title>
 <body style="margin:0">
-<iframe id="same-chat" src="http://127.0.0.1:__PORT__/chat?tag=same" style="position:absolute;left:40px;top:60px;width:380px;height:240px;border:0"></iframe>
+<iframe id="same-chat" src="http://127.0.0.1:__PORT__/chat?tag=same" style="position:absolute;left:40px;top:60px;width:380px;height:240px;border:0;padding:10px 0 0 12px;transform:translate(7px,5px)"></iframe>
 <iframe id="cross-chat" src="http://localhost:__PORT__/chat?tag=cross" style="position:absolute;left:460px;top:60px;width:380px;height:240px;border:0"></iframe>
 <script>
 window.chat = { same: [], cross: [] };
@@ -998,6 +1005,15 @@ fn chat_roundtrip(host: &mut McpProcess) {
             "{tag}: the covered control received no click"
         );
 
+        // A control that removes itself on click still took the click, so the
+        // action is reported as completed even though the browser then moves
+        // the focus back to the frame's body.
+        let dismiss = host.nodes(&format!("#{tag}-dismiss"));
+        assert_eq!(dismiss.len(), 1, "{tag}: dismiss node");
+        host.call("browser_act", json!({"action":"click","ref":dismiss[0].reference}))
+            .unwrap_or_else(|error| panic!("{tag}: self-removing click: {error}"));
+        wait_for_chat(host, tag, 0, |message| message.get("dismissed").is_some());
+
         // A page that throws the fill away is reported as a failure instead
         // of a completed fill.
         let reverting = host.nodes(&format!("#{tag}-reverting"));
@@ -1009,6 +1025,19 @@ fn chat_roundtrip(host: &mut McpProcess) {
             )
             .unwrap_err();
         assert!(error.contains("input_failed"), "{tag}: reverting fill: {error}");
+
+        // An editable host stores a line break as an element and a repeated or
+        // trailing space as a no-break space, so its readback compares the
+        // rendered text of both sides.
+        for value in ["line one\nline two", "two  spaces "] {
+            let editor = host.nodes(&format!("#{tag}-editor"));
+            assert_eq!(editor.len(), 1, "{tag}: editor node");
+            host.call(
+                "browser_act",
+                json!({"action":"fill","ref":editor[0].reference,"value":value}),
+            )
+            .unwrap_or_else(|error| panic!("{tag}: editable host fill: {error}"));
+        }
     }
 }
 

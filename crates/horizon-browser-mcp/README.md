@@ -195,10 +195,13 @@ shell commands, files, or other MCP servers.
   A child-frame `click` hit-tests the target's centre inside its own frame
   first: a point another element owns returns `element_obstructed`, and a point
   outside the frame viewport returns `element_not_hittable`, instead of a
-  reported completion. After the click the frame must hold the focus the target
-  took: `element_not_focused` or `input_failed` mean the frame received no
-  usable click. A verified frame click moves focus into the frame, so a
-  following `press` reaches the focused element there.
+  reported completion. After the click the frame document must show that it
+  took the click: `input_failed` means it never took focus. The target's own
+  focus is not required, because a handler can hide or disable the control it
+  was clicked on. A verified frame click moves focus into the frame, so a
+  following `press` reaches the focused element there. A same-process child
+  dispatches the point that the browser reports for the element, which includes
+  the frame's padding and transforms.
   `set_files` attaches host files to an `input[type=file]`: target the input
   itself (query it by selector when a styled button hides it) and pass
   `files` as absolute paths, at most 32. Each path must resolve to a regular

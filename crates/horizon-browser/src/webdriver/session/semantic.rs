@@ -79,13 +79,11 @@ fn send_keys_through(
     }
     // Resolve again: a reactive handler may replace the original element.
     // Return only equality, never the current or requested field contents.
-    let response = post(
-        "execute/sync",
-        &json!({
-            "script": "const element = document.querySelector(arguments[0]); const editable = !!element && element.isContentEditable && !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName); return !!element && (editable ? element.textContent : element.value) === arguments[1];",
-            "args": [selector, text],
-        }),
-    )?;
+    let script = format!(
+        "const element = document.querySelector(arguments[0]); if (!element) return false; {} return normalize(held) === normalize(arguments[1]);",
+        crate::semantic::FILL_VALUE_HELD
+    );
+    let response = post("execute/sync", &json!({ "script": script, "args": [selector, text] }))?;
     if webdriver_value(&response).and_then(Value::as_bool) != Some(true) {
         return Err("remote fill did not retain the requested value; native input may be unsupported or the page may have changed the field".to_string());
     }

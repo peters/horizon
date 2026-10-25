@@ -139,9 +139,9 @@ guarantee that the code gives, and what the code does not guarantee.
     expression; each observation is one number, one boolean or one element name
     from a closed set, never page text; a click point is hit-tested inside the
     frame that dispatches it and a point another element owns, or that no
-    element holds, is a typed failure; a click that names a focusable target must
-    leave that target focused in the frame; a fill that the page did not keep is
-    a typed failure; a frame route is host-owned.
+    element holds, is a typed failure; a click must leave focus in the frame
+    document; a fill that the page did not keep is a typed failure, compared by
+    the rendered text of an editable host; a frame route is host-owned.
   - Does not guarantee: a page can refuse a click it received and the action
     still reports completion; a page can move focus after taking a click; a
     same-process child shares the page's focus, so its focus cannot prove that

@@ -161,6 +161,9 @@ On Linux, use tasks 6.1 through 6.7. On macOS, use tasks 6.6 and 6.8.
    A `press` with `A` then reaches the focused composer in the frame.
    A `click` on a control that another element covers returns `element_obstructed` and the widget receives no click.
    A `fill` on a field that discards its input returns `input_failed`.
+   A `fill` of an editable field accepts a line break and a repeated and trailing space.
+   A `click` on a control that hides itself returns completion and the widget reports its own click.
+   The same-process frame has padding and a transform, and its clicks still reach their targets.
    The child-frame nodes report no top-level bounds.
    Chromium and Firefox give the same result.
 

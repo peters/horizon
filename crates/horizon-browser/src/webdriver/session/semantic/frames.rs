@@ -156,7 +156,7 @@ impl Driver {
         events: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         self.pending_classic_history_start = None;
-        let observed = self.frame_value(frame, &click_point_expression(selector, false), events)?;
+        let observed = self.frame_value(frame, &click_point_expression(selector), events)?;
         let point = parse_click_point(&observed)?;
         if let Some(rejection) = click_point_failure(point) {
             return Err(rejection);
@@ -193,7 +193,7 @@ impl Driver {
         if !self.semantic.bidi_frame_is_current(frame) {
             return Err(stale());
         }
-        let observed = self.frame_value(frame, &focus_after_click_expression(selector), events)?;
+        let observed = self.frame_value(frame, focus_after_click_expression(), events)?;
         let focus = parse_click_focus(&observed)?;
         click_focus_failure(focus, true).map_or(Ok(()), Err)?;
         Ok(BrowserControlValue::Accepted)

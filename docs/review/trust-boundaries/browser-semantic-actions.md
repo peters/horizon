@@ -36,21 +36,23 @@ The frame reports its own positions.
 - A count of page text inside an error is the page's own error message, cut to
   512 bytes, as the page scripts already did.
 - A frame route is host-owned. A page cannot return or change a route.
-- A click point is measured and hit-tested inside the frame, in the coordinate
-  space that the session of that frame dispatches in. A point that another
-  element owns or that is outside the frame viewport is a typed failure, not a
-  completion.
-- A frame that does not take focus after a click that names a focusable target
-  is a typed failure.
-- A fill that the page did not keep is a typed failure.
+- A click point is hit-tested inside the frame at the target's own centre. A
+  point that another element owns or that is outside the frame viewport is a
+  typed failure, not a completion. A same-process child dispatches the point
+  that the browser reports for the element, so the frame's padding and
+  transforms are included.
+- A frame document that does not take focus after a click is a typed failure.
+- A fill that the page did not keep is a typed failure. An editable host is
+  compared by its rendered text, so a stored line break or a no-break space
+  still matches the requested value.
 
 ## Does not guarantee
 
 - The page can refuse a click that reached it, for example with its own state
   machine, and the action still reports completion. The agent examines the
   visible result.
-- The page can move focus after it takes a click. That is reported as
-  completion.
+- The page can move focus after it takes a click, and a control can hide or
+  disable itself. Both are reported as completion.
 - A page can make an action fail by covering its own control or by moving
   focus. A failure is not proof that the page is hostile.
 - A same-process child shares the page's focus, so its focus cannot prove that

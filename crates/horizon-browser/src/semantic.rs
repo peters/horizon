@@ -432,40 +432,40 @@ pub(crate) fn fill_readback_expression(selector: &str, text: &str) -> String {
     format!(
         "(() => {{
             const element = document.querySelector({selector});
-            // Chromium reports an element with a `contenteditable` attribute as
-            // editable even when it is a form control, whose text lives in
-            // `value`; the clearing step uses the same rule.
-            const editable = !!element && element.isContentEditable &&
-                !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName);
-            return !!element && (editable ? element.textContent : element.value) === {text};
+            if (!element) return false;
+            {FILL_VALUE_HELD}
+            return normalize(held) === normalize({text});
         }})()"
     )
 }
 
-/// Whether the target's click point reaches the target itself, and the point
-/// in the space the click is dispatched in. A point another element owns, or
-/// outside the frame viewport, is delivered to a different element or to
-/// nothing at all.
+/// The page-side value a fill compares, for the local readback and for the
+/// remote one. It needs `element` in scope and defines `normalize` and `held`.
 ///
-/// A same-process child dispatches on the page session, so `page_space` maps
-/// the point through each same-origin frame owner; a cross-origin child
-/// dispatches on its own session, which takes the point inside its viewport.
-pub(crate) fn click_point_expression(selector: &str, page_space: bool) -> String {
+/// Chromium reports an element with a `contenteditable` attribute as editable
+/// even when it is a form control, whose text lives in `value`; the clearing
+/// step uses the same rule. An editable host stores a line break as an element
+/// and a repeated or trailing space as a no-break space, so both sides are
+/// normalized.
+pub(crate) const FILL_VALUE_HELD: &str = r"const editable = element.isContentEditable &&
+                !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName);
+            const normalize = (value) => String(value)
+                .replace(/\r\n?/g, '\n')
+                .replace(/\u00a0/g, ' ');
+            const held = editable
+                ? (typeof element.innerText === 'string' ? element.innerText : element.textContent)
+                : element.value;";
+
+/// Whether the target's click point reaches the target itself, measured inside
+/// the frame's own document. A point another element owns, or outside the frame
+/// viewport, is delivered to a different element or to nothing at all.
+///
+/// A cross-origin child dispatches this point on its own session, which takes
+/// it inside its viewport. A same-process child dispatches on the page session,
+/// so its page-space point comes from the quads the browser reports for the
+/// element, which include the frame's padding and transforms.
+pub(crate) fn click_point_expression(selector: &str) -> String {
     let selector = json_string(selector);
-    let mapping = if page_space {
-        r"
-            let view = window;
-            for (let depth = 0; view.frameElement && depth < 32; depth += 1) {
-                const frame = view.frameElement;
-                const box = frame.getBoundingClientRect();
-                x += box.left + frame.clientLeft;
-                y += box.top + frame.clientTop;
-                view = frame.ownerDocument.defaultView;
-            }
-            if (view.frameElement) return { error: { code: 'frame_unavailable', message: 'the frame cannot map its position into the page' } };"
-    } else {
-        ""
-    };
     format!(
         "(() => {{
             let element;
@@ -494,9 +494,7 @@ pub(crate) fn click_point_expression(selector: &str, page_space: bool) -> String
                     break;
                 }}
             }}
-            let x = point.x;
-            let y = point.y;{mapping}
-            return {{ x, y, hit, onTarget }};
+            return {{ x: point.x, y: point.y, hit, onTarget }};
         }})()"
     )
 }
@@ -517,26 +515,12 @@ pub(crate) fn focused_document_expression() -> &'static str {
     })()"
 }
 
-/// What the document focuses after a click, so a click that reached no target
-/// cannot be reported as completed. `focusable` names a target the browser
-/// focuses on a successful click, so its focus is the click's own evidence.
-pub(crate) fn focus_after_click_expression(selector: &str) -> String {
-    let selector = json_string(selector);
-    format!(
-        "(() => {{
-            const element = document.querySelector({selector});
-            const active = document.activeElement;
-            const root = !active || active === document.body || active === document.documentElement;
-            return {{
-                hasFocus: document.hasFocus(),
-                activeOnTarget: !!active && !!element && !root &&
-                    (active === element || element.contains(active) || active.contains(element)),
-                activeIsRoot: root,
-                focusable: !!element && (element.isContentEditable || element.matches(
-                    'a[href],area[href],button,input,select,textarea,summary,iframe,[tabindex],[contenteditable]')),
-            }};
-        }})()"
-    )
+/// Whether the frame document took the click, so a click that reached no
+/// element in it cannot be reported as completed. The target's own focus is not
+/// required: a handler can hide or disable the target, and an engine may not
+/// focus a button on a click.
+pub(crate) fn focus_after_click_expression() -> &'static str {
+    r"(() => ({ hasFocus: document.hasFocus() }))()"
 }
 
 pub(crate) fn scroll_expression(selector: Option<&str>, delta_x: f64, delta_y: f64) -> String {
@@ -566,23 +550,10 @@ pub(crate) struct ClickPoint {
     pub(crate) on_target: bool,
 }
 
-/// Which element one document reports after a click.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ActiveElement {
-    /// The target, one of its descendants, or a focusable ancestor that owns it.
-    Target,
-    /// The frame's body or root element: the click focused nothing at all.
-    Root,
-    /// Another element, so the page moved focus after it took the click.
-    Elsewhere,
-}
-
 /// What one document reports about its focus after a click.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ClickFocus {
     pub(crate) has_focus: bool,
-    pub(crate) active: ActiveElement,
-    pub(crate) focusable: bool,
 }
 
 pub(crate) fn parse_click_point(value: &Value) -> Result<ClickPoint, BrowserControlFailure> {
@@ -606,15 +577,8 @@ pub(crate) fn parse_click_point(value: &Value) -> Result<ClickPoint, BrowserCont
 
 pub(crate) fn parse_click_focus(value: &Value) -> Result<ClickFocus, BrowserControlFailure> {
     check_script_error(value)?;
-    let active = match (flag(value, "activeOnTarget")?, flag(value, "activeIsRoot")?) {
-        (true, _) => ActiveElement::Target,
-        (false, true) => ActiveElement::Root,
-        (false, false) => ActiveElement::Elsewhere,
-    };
     Ok(ClickFocus {
         has_focus: flag(value, "hasFocus")?,
-        active,
-        focusable: flag(value, "focusable")?,
     })
 }
 
@@ -642,18 +606,11 @@ pub(crate) fn click_point_failure(point: ClickPoint) -> Option<BrowserControlFai
     })
 }
 
-/// The typed failure a click reports when the document shows the target did not
-/// receive it: a focusable target that focused nothing, or a frame document
-/// that never took focus. A page that moves focus elsewhere after the click
-/// still took it, and a same-process child shares the page's focus, so it
-/// reports `own_document: false`.
+/// The typed failure a click reports when the frame document never took focus,
+/// which no browser does for a click it delivered. A page that moves focus
+/// after the click still took it, and a same-process child shares the page's
+/// focus, so it reports `own_document: false` and gets no focus verdict.
 pub(crate) fn click_focus_failure(focus: ClickFocus, own_document: bool) -> Option<BrowserControlFailure> {
-    if focus.focusable && focus.active == ActiveElement::Root {
-        return Some(BrowserControlFailure::new(
-            "element_not_focused",
-            "the click did not focus the target, so the page received no click on it",
-        ));
-    }
     (own_document && !focus.has_focus).then(|| {
         BrowserControlFailure::new(
             "input_failed",
@@ -891,25 +848,22 @@ mod tests {
     }
 
     #[test]
-    fn fill_readback_compares_the_value_the_page_kept() {
+    fn fill_readback_quotes_the_value_as_data() {
         let expression = fill_readback_expression("#field", "text'); throw new Error('owned");
 
-        assert!(expression.contains("editable ? element.textContent : element.value"));
-        assert!(expression.contains("!['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName)"));
         assert!(expression.contains("\"text'); throw new Error('owned\""));
         assert!(expression.contains("document.querySelector(\"#field\")"));
+        assert!(expression.contains("normalize(held) === normalize("));
     }
 
     #[test]
-    fn click_points_are_measured_inside_the_frame_and_mapped_for_the_page() {
-        let local = click_point_expression("#submit", false);
-        let page = click_point_expression("#submit", true);
+    fn click_points_are_measured_inside_the_frame() {
+        let expression = click_point_expression("#submit");
 
-        assert!(local.contains("elementFromPoint"));
-        assert!(!local.contains("frameElement"));
-        assert!(page.contains("frameElement"));
-        assert!(page.contains("getBoundingClientRect"));
-        assert!(page.contains("depth < 32"));
+        assert!(expression.contains("elementFromPoint"));
+        assert!(expression.contains("getClientRects"));
+        assert!(expression.contains("element_disabled"));
+        assert!(!expression.contains("frameElement"));
     }
 
     #[test]
@@ -943,29 +897,28 @@ mod tests {
     }
 
     #[test]
-    fn a_click_without_focus_is_a_typed_failure_but_a_page_that_moves_focus_is_not() {
-        let focus = |has_focus, active, focusable| ClickFocus {
-            has_focus,
-            active,
-            focusable,
-        };
-        assert!(click_focus_failure(focus(true, ActiveElement::Target, true), true).is_none());
+    fn a_click_into_a_frame_that_never_took_focus_is_a_typed_failure() {
+        let focus = |has_focus| ClickFocus { has_focus };
+
+        assert!(click_focus_failure(focus(true), true).is_none());
         assert_eq!(
-            click_focus_failure(focus(true, ActiveElement::Root, true), true).map(|failure| failure.code),
-            Some("element_not_focused".to_string())
-        );
-        assert_eq!(
-            click_focus_failure(focus(false, ActiveElement::Root, false), true).map(|failure| failure.code),
+            click_focus_failure(focus(false), true).map(|failure| failure.code),
             Some("input_failed".to_string())
         );
         assert!(
-            click_focus_failure(focus(false, ActiveElement::Root, false), false).is_none(),
+            click_focus_failure(focus(false), false).is_none(),
             "a same-process child shares the page's focus, so it cannot prove the click itself"
         );
-        assert!(
-            click_focus_failure(focus(true, ActiveElement::Elsewhere, true), true).is_none(),
-            "a page that moves focus elsewhere still took the click"
-        );
+    }
+
+    #[test]
+    fn an_editable_host_compares_its_rendered_text() {
+        let expression = fill_readback_expression("#editor", "line one\nline two");
+
+        assert!(expression.contains("element.innerText"));
+        assert!(expression.contains(r"/\u00a0/g"));
+        assert!(expression.contains(r"/\r\n?/g"));
+        assert!(expression.contains("!['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName)"));
     }
 
     #[test]
