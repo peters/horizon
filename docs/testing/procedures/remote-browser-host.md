@@ -58,9 +58,19 @@ local connect client.
    horizon --export-config /tmp/settings.yaml
    ```
 
-   Result: the export holds a `browser_host` section. Add `ssh_target` to that
-   section, then set it with the Settings window YAML tab, or start Horizon one
-   time with the entry.
+   Result: the export holds a `browser_host` section. Add `ssh_target` and the
+   optional `profile` of that host to that section, then set it with the
+   Settings window YAML tab, or start Horizon one time with the entry.
+
+   ```yaml
+   browser_host:
+     ssh_target: browser-vm
+     profile: mail
+   ```
+
+   Result: a start reads the entry. A target that starts with `-`, holds a space
+   or a control character, and a profile off the host-file rule are refused with
+   an error that names `browser_host`.
 
 3. Start Horizon, then start one agent panel in a workspace.
 
@@ -75,11 +85,24 @@ local connect client.
 
    Result: the tool returns a panel id that starts with `profile-mail-`.
 
+2. Ask the agent to call `browser_create` with the URL `example.com` and no
+   target.
+
+   Result: the tool returns a panel id that starts with `profile-mail-`, because
+   the bridge adds the profile of the entry. The agent does not name the
+   profile, so every page of the entry lands in the profile of the person.
+
+3. Ask the agent to call `browser_create` with a target that the host file does
+   not name, such as `chat`.
+
+   Result: the tool returns the reason of the host itself, `target_unknown`, and
+   the bridge does not replace the target of the call.
+
 2. Ask the agent to call `browser_list`.
 
    Result: the list holds that page and no page of another agent.
 
-3. Ask the agent to call `browser_screenshot`.
+4. Ask the agent to call `browser_screenshot`.
 
    Result: the result holds the path of a PNG and an image block with the PNG.
 
@@ -131,12 +154,13 @@ local connect client.
 
    Result: the agent reports `remote browser host <target> is not running`.
 
-2. Start the host with the host file of a profile `chat` only. Ask the agent to
-   call `browser_create` with the target `mail`.
+2. Stop the host, then start it with the host file of a profile `chat` only.
+   Ask the agent to call `browser_create` with no target.
 
    Result: the result holds the reason of the host itself, `target_unknown`, and
-   says that the profile `mail` is not in the host file. The bridge refuses no
-   profile of its own, because the host decides which profiles it serves.
+   says that the profile `mail` of the entry is not in the host file. The bridge
+   refuses no profile of its own, because the host decides which profiles it
+   serves.
 
 3. Ask the agent to call `browser_act` with `set_files` and a path outside the
    work root.
@@ -144,7 +168,23 @@ local connect client.
    Result: the result holds `browser set_files failed (attachment path is outside
    the allowed roots ...)` and the remote machine holds no copy.
 
-### 6.6 R6 — a sign-in stays over a restart
+### 6.6 R6 — an entry of an earlier start is updated
+
+1. Remove the `browser_host` entry, close Horizon, and start it one time. Then
+   set the entry of step 5.2 again and start Horizon.
+
+   Result: the `args` of the `horizon-browser` server in `~/.grok/config.toml`
+   (or in `~/.grok/config.toml` of `GROK_HOME`) changes from `["--browser-mcp"]`
+   to `["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]`, and
+   every other line of that file stays as it was. Grok then uses the named host
+   without a new install.
+
+2. Remove the `browser_host` entry again and start Horizon.
+
+   Result: the `args` change back to `["--browser-mcp"]`, and the local browser
+   is used again.
+
+### 6.7 R7 — a sign-in stays over a restart
 
 1. In the remote page, sign in to a test site, or run the existing profile-host
    test:
@@ -158,9 +198,14 @@ local connect client.
 
 ## 7. Pass criteria
 
-- R1 to R6 pass.
+- R1 to R7 pass.
+- With a `browser_host` entry that names `browser-vm` and `mail`, the `.mcp.json`
+  of the Claude plugin holds
+  `"args": ["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]`, and
+  the `~/.grok/config.toml` of Grok holds the same arguments.
 - With no `browser_host` entry, the `.mcp.json` of the Claude plugin holds
-  `"args": ["--browser-mcp"]` and no `--remote`.
+  `"args": ["--browser-mcp"]` and no `--remote`, and the Grok entry is the one of
+  the local server again.
 
 ## 8. Cleanup
 

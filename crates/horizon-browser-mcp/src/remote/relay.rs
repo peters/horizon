@@ -1,15 +1,17 @@
-//! The two rewrites of the bridge, and nothing else.
+//! The rewrites of the bridge, and nothing else.
 //!
-//! Every JSON-RPC line crosses the bridge unchanged except for these two cases:
+//! Every JSON-RPC line crosses the bridge unchanged except for these cases:
 //!
+//! - a `browser_create` that names no `target` opens in the profile of the
+//!   bridge, so every page of an agent lands in the profile of the person;
 //! - a `set_files` or `drop_files` action names files of this computer, so the
 //!   bridge stages them on the remote machine and forwards their remote paths;
 //! - a finished `browser_video` or `browser_network` capture names a private file
 //!   of the remote machine, so the bridge adds its bounded bytes to the result.
 //!
-//! A refusal of the first case becomes an MCP error result with the same typed
-//! reason that a local path gives, because a caller must not wait for an answer
-//! that the bridge will not send.
+//! A refusal of the attachment case becomes an MCP error result with the same
+//! typed reason that a local path gives, because a caller must not wait for an
+//! answer that the bridge will not send.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -30,6 +32,8 @@ pub(super) struct Relay {
     target: String,
     /// The runtime root of the remote host, as the host reported it.
     root: PathBuf,
+    /// The profile that a `browser_create` without a target opens in.
+    profile: Option<String>,
     calls: Mutex<Calls>,
     next_call: AtomicU64,
 }
@@ -49,10 +53,11 @@ pub(super) struct Capture {
 }
 
 impl Relay {
-    pub(super) fn new(target: String, root: PathBuf) -> Self {
+    pub(super) fn new(target: String, root: PathBuf, profile: Option<String>) -> Self {
         Self {
             target,
             root,
+            profile,
             calls: Mutex::new(Calls::default()),
             next_call: AtomicU64::new(0),
         }
@@ -75,6 +80,9 @@ impl Relay {
             return line.to_vec();
         };
         let key = id_key(&id);
+        if tool == "browser_create" {
+            return self.create_in_profile(message, line);
+        }
         if let Some(mime_type) = capture_tool(&tool) {
             self.calls().tool_by_id.insert(key, mime_type.to_string());
             return line.to_vec();
@@ -119,6 +127,28 @@ impl Relay {
                 refusal(&id, &format!("browser {action} failed ({reason})"))
             }
         }
+    }
+
+    /// The line to forward for one `browser_create`. A create that names no
+    /// target opens in the profile of this bridge; a create that names its own
+    /// target keeps it, so an agent that knows a profile of the host is not
+    /// limited to the one profile of the settings.
+    fn create_in_profile(&self, mut message: Value, line: &[u8]) -> Vec<u8> {
+        let Some(profile) = self.profile.as_deref() else {
+            return line.to_vec();
+        };
+        let Some(arguments) = message.pointer_mut("/params/arguments").and_then(Value::as_object_mut) else {
+            return line.to_vec();
+        };
+        let names_target = arguments
+            .get("target")
+            .and_then(Value::as_str)
+            .is_some_and(|target| !target.trim().is_empty());
+        if names_target {
+            return line.to_vec();
+        }
+        arguments.insert("target".to_string(), Value::String(profile.to_string()));
+        serde_json::to_vec(&message).unwrap_or_else(|_| line.to_vec())
     }
 
     /// The line to forward for one answer of the remote server. A finished
@@ -403,7 +433,7 @@ mod tests {
     use super::{Relay, capture_tool, forward_requests, id_key, staged_name};
 
     fn relay() -> Relay {
-        Relay::new("browser-vm".to_string(), std::path::PathBuf::from("/srv/state"))
+        Relay::new("browser-vm".to_string(), std::path::PathBuf::from("/srv/state"), None)
     }
 
     #[test]
@@ -437,6 +467,66 @@ mod tests {
         assert_eq!(capture_tool("browser_network"), Some("application/x-ndjson"));
         assert_eq!(capture_tool("browser_screenshot"), None);
         assert_eq!(capture_tool("browser_act"), None);
+    }
+
+    #[test]
+    fn a_create_without_a_target_opens_in_the_profile_of_the_bridge() {
+        let relay = Relay::new(
+            "browser-vm".to_string(),
+            std::path::PathBuf::from("/srv/state"),
+            Some("mail".to_string()),
+        );
+        let request = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+             "params": {"name": "browser_create", "arguments": {"url": "https://example.com"}}});
+        let forwarded: Value =
+            serde_json::from_slice(&relay.request(request.to_string().as_bytes())).expect("a request line");
+        assert_eq!(
+            forwarded.pointer("/params/arguments/target"),
+            Some(&json!("mail")),
+            "the create lands in the profile that the person chose"
+        );
+        assert_eq!(
+            forwarded.pointer("/params/arguments/url"),
+            Some(&json!("https://example.com")),
+            "the rest of the call is unchanged"
+        );
+
+        let blank = json!({"jsonrpc": "2.0", "id": 12, "method": "tools/call",
+             "params": {"name": "browser_create", "arguments": {"target": "  ", "url": "https://example.com"}}});
+        let forwarded: Value =
+            serde_json::from_slice(&relay.request(blank.to_string().as_bytes())).expect("a request line");
+        assert_eq!(
+            forwarded.pointer("/params/arguments/target"),
+            Some(&json!("mail")),
+            "a blank target names no profile"
+        );
+    }
+
+    #[test]
+    fn a_create_that_names_its_own_target_is_left_alone() {
+        let relay = Relay::new(
+            "browser-vm".to_string(),
+            std::path::PathBuf::from("/srv/state"),
+            Some("mail".to_string()),
+        );
+        let request = json!({"jsonrpc": "2.0", "id": 13, "method": "tools/call",
+             "params": {"name": "browser_create", "arguments": {"target": "chat", "url": "https://example.com"}}})
+        .to_string();
+        assert_eq!(
+            relay.request(request.as_bytes()),
+            request.as_bytes(),
+            "an agent that names a profile of the host keeps it"
+        );
+
+        let bridge_without_profile = Relay::new("browser-vm".to_string(), std::path::PathBuf::from("/srv/state"), None);
+        let target_less = json!({"jsonrpc": "2.0", "id": 14, "method": "tools/call",
+             "params": {"name": "browser_create", "arguments": {"url": "https://example.com"}}})
+        .to_string();
+        assert_eq!(
+            bridge_without_profile.request(target_less.as_bytes()),
+            target_less.as_bytes(),
+            "a bridge without a profile of its own rewrites no create"
+        );
     }
 
     #[test]
@@ -479,7 +569,7 @@ mod tests {
         );
         assert_eq!(staged_name(std::path::Path::new("/work/..")), "file");
         assert_eq!(staged_name(std::path::Path::new("/work/.hidden")), ".hidden");
-        let relay = Relay::new("target".to_string(), std::path::PathBuf::from("/srv/state"));
+        let relay = Relay::new("target".to_string(), std::path::PathBuf::from("/srv/state"), None);
         let name = relay.call_name(&id_key(&json!("a/../b 'quoted'")));
         assert!(name.starts_with("call-"), "{name}");
         assert!(

@@ -37,7 +37,7 @@ fn a_record_that_no_running_host_wrote_is_not_a_host() {
 
 #[test]
 fn a_profile_that_the_host_does_not_serve_reaches_it_and_is_refused_there() {
-    let relay = super::relay::Relay::new("browser-vm".to_string(), std::path::PathBuf::from("/srv/state"));
+    let relay = super::relay::Relay::new("browser-vm".to_string(), std::path::PathBuf::from("/srv/state"), None);
     let request = json!({
         "jsonrpc": "2.0",
         "id": 9,
@@ -48,7 +48,7 @@ fn a_profile_that_the_host_does_not_serve_reaches_it_and_is_refused_there() {
     assert_eq!(
         relay.request(request.as_bytes()),
         request.as_bytes(),
-        "the bridge takes no profile of its own, so the host receives the profile of the call"
+        "a bridge without a profile of its own forwards the profile of the call"
     );
     let refusal = json!({
         "jsonrpc": "2.0",

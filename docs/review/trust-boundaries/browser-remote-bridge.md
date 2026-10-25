@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-mcp/src/remote.rs,crates/horizon-browser-mcp/src/remote/**,crates/horizon-browser-cli/tests/remote_parity.rs"
+applyTo: "crates/horizon-browser-mcp/src/remote.rs,crates/horizon-browser-mcp/src/remote/**,crates/horizon-browser-cli/tests/remote_parity.rs,crates/horizon-core/src/config/browser_host.rs"
 ---
 
 # Trust boundary of the remote browser bridge
@@ -11,12 +11,18 @@ through one SSH transport. The design is in the section "Remote host bridge" of
 
 ## Trusted: the settings entry and the SSH target
 
-Horizon writes the entry `browser_host` with an SSH target. A person does not
-edit it by hand.
+Horizon writes the entry `browser_host` with an SSH target and an optional
+profile name. A person does not edit it by hand.
 
 - The entry refuses an SSH target that `ssh` reads as an option, that holds a
   space or a control character, and that is longer than 255 characters.
-- The bridge takes no profile, so the entry of this change carries none.
+- The entry refuses a profile that is not 1 to 40 of `a-z`, `0-9` and `-` with a
+  letter or a digit at each end, and it refuses a profile without an SSH target.
+- Horizon writes the target and the profile of the entry as the arguments of the
+  MCP entry of an agent. `crates/horizon-ui/src/plugin_install/` writes that
+  entry for the Claude and Grok agents, and
+  `crates/horizon-core/src/panel/spawn.rs` writes it for a Codex panel. Without a
+  named host the entry is the local server of this computer.
 - The bridge uses the OpenSSH client of this computer. The host key of the
   target is the host key that OpenSSH checks, and the bridge adds no trust of
   its own.
@@ -31,12 +37,13 @@ the bridge forwards.
 - The bridge reads `profile-host.json` over the SSH transport. It takes only
   `host_instance` from the record, and it accepts that value only through
   `manifest::valid_host_instance`.
-- The bridge does not pre-validate a profile. A profile reaches the host only as
-  the `target` of a `browser_create` that a caller makes, and the host refuses a
-  profile that its host file does not name with its own typed reason
+- The bridge does not pre-validate the profile of its entry. It adds that
+  profile as the `target` of a `browser_create` that names none, and the host
+  refuses a profile that its host file does not name with its own typed reason
   (`target_unknown`), which the bridge forwards unchanged. The folder names under
   `browser-profiles` are no evidence of what the host serves, because the host
-  never deletes a profile folder.
+  never deletes a profile folder. The bridge rewrites no create that names its
+  own target.
 - A result is forwarded unchanged, except for the two rewrites. A capture is
   read only when the structured result names a `path`, and only up to 8 MiB.
 - The bytes of a capture are the bytes that the page produced. The person reads

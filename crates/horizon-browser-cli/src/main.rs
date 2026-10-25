@@ -45,7 +45,7 @@ USAGE:
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
     horizon-browser mcp --standalone --config <HOST-FILE>
-    horizon-browser mcp --connect --inline-screenshots [--remote <SSH-TARGET>]
+    horizon-browser mcp --connect --inline-screenshots [--remote <SSH-TARGET> [--profile <NAME>]]
     horizon-browser mcp --stop [PANEL-ID]
     horizon-browser host --config <HOST-FILE> [--visible]
 
@@ -73,7 +73,8 @@ COMMANDS:
            host. The screenshots of a Horizon host stay a path. --remote
            relays the same contract over `ssh -Tq <SSH-TARGET>` to the profile
            host of another machine, stages the files of set_files there, and
-           returns a bounded video or network capture inline.
+           returns a bounded video or network capture inline. --profile names
+           the profile that a browser_create without a target opens in.
     host   Keep the named persistent profiles of a host file (browser.profiles)
            for `mcp --connect` clients until an interrupt or a termination
            signal. A client names a profile as the browser_create target; the
@@ -226,7 +227,7 @@ async fn serve_mcp(
     let result = if let Some(remote) = remote {
         // The bridge owns this process's standard streams until the client or
         // the remote server stops, so it runs without a browser of this machine.
-        horizon_browser_mcp::remote::serve(&remote.target).map_err(|error| error.to_string())
+        horizon_browser_mcp::remote::serve(&remote.target, remote.profile.as_deref()).map_err(|error| error.to_string())
     } else if let Some(config) = config {
         horizon_browser_cli::standalone::remote::serve(config)
             .await
@@ -751,9 +752,11 @@ fn parse_job(prompt: String, mut args: impl Iterator<Item = OsString>) -> Result
     }))
 }
 
-/// The SSH target of a profile host that this process relays to.
+/// The SSH target of a profile host that this process relays to, and the
+/// profile that a `browser_create` without a target opens in.
 struct RemoteBridge {
     target: String,
+    profile: Option<String>,
 }
 
 /// The flags of one `mcp` command, before their combinations are checked.
@@ -770,6 +773,7 @@ struct McpFlags {
     stop_panel: Option<String>,
     inline_screenshots: bool,
     remote: Option<String>,
+    profile: Option<String>,
 }
 
 fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
@@ -782,6 +786,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             || flags.config.is_some()
             || flags.inline_screenshots
             || flags.remote.is_some()
+            || flags.profile.is_some()
         {
             return Err("--stop cannot be combined with other MCP mode flags".to_string());
         }
@@ -791,6 +796,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     }
     let remote = remote_bridge(
         flags.remote,
+        flags.profile.as_deref(),
         flags.standalone,
         flags.backend_seen || flags.visible || flags.keep_alive,
         flags.config.is_some(),
@@ -881,6 +887,10 @@ fn parse_mcp_flags(args: impl Iterator<Item = OsString>) -> Result<McpFlags, Str
                 flags.remote = Some(next_value(&mut args, "--remote requires an SSH target")?);
             }
             Some("--remote") => return Err("--remote may be specified only once".to_string()),
+            Some("--profile") if flags.profile.is_none() => {
+                flags.profile = Some(next_value(&mut args, "--profile requires a profile name")?);
+            }
+            Some("--profile") => return Err("--profile may be specified only once".to_string()),
             Some(argument) => return Err(format!("unexpected mcp argument `{argument}`")),
             None => return Err("mcp argument is not valid UTF-8".to_string()),
         }
@@ -891,10 +901,18 @@ fn parse_mcp_flags(args: impl Iterator<Item = OsString>) -> Result<McpFlags, Str
 /// The remote bridge of an MCP command, or `None` for the local server.
 fn remote_bridge(
     target: Option<String>,
+    profile: Option<&str>,
     standalone: bool,
     local_browser_flags: bool,
     host_file: bool,
 ) -> Result<Option<RemoteBridge>, String> {
+    let profile = match profile.map(str::trim) {
+        Some("") => return Err("--profile takes one profile name".to_string()),
+        profile => profile.map(str::to_string),
+    };
+    if profile.is_some() && target.is_none() {
+        return Err("--profile names a profile of the host that --remote reaches".to_string());
+    }
     let Some(target) = target else {
         return Ok(None);
     };
@@ -904,7 +922,7 @@ fn remote_bridge(
     if target.trim().is_empty() || target.starts_with('-') {
         return Err("--remote takes one SSH target without a leading dash".to_string());
     }
-    Ok(Some(RemoteBridge { target }))
+    Ok(Some(RemoteBridge { target, profile }))
 }
 
 fn next_value(args: &mut impl Iterator<Item = OsString>, message: &str) -> Result<String, String> {
@@ -1219,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn the_remote_bridge_takes_one_ssh_target_without_a_profile() {
+    fn the_remote_bridge_takes_one_ssh_target_and_one_optional_profile() {
         let Command::Mcp { remote, .. } =
             parse_args(["mcp", "--connect", "--remote", "browser-vm"].map(OsString::from)).expect("remote MCP")
         else {
@@ -1227,6 +1245,7 @@ mod tests {
         };
         let remote = remote.expect("a remote bridge");
         assert_eq!(remote.target, "browser-vm");
+        assert_eq!(remote.profile, None, "a bridge without a profile rewrites no create");
 
         let Command::Mcp { remote, .. } = parse_args(
             [
@@ -1235,19 +1254,32 @@ mod tests {
                 "--inline-screenshots",
                 "--remote",
                 "peters@10.0.0.5",
+                "--profile",
+                "mail",
             ]
             .map(OsString::from),
         )
-        .expect("remote MCP over an address") else {
+        .expect("remote MCP over an address with a profile") else {
             panic!("expected MCP command");
         };
-        assert_eq!(remote.expect("a remote bridge").target, "peters@10.0.0.5");
+        let remote = remote.expect("a remote bridge");
+        assert_eq!(remote.target, "peters@10.0.0.5");
+        assert_eq!(remote.profile.as_deref(), Some("mail"));
 
         for refused in [
-            // The profile of the host arrives with the settings entry of a later change,
-            // so the bridge of this change takes no profile at all.
-            &["mcp", "--connect", "--remote", "browser-vm", "--profile", "mail"][..],
-            &["mcp", "--connect", "--profile", "mail"],
+            &["mcp", "--connect", "--profile", "mail"][..],
+            &["mcp", "--connect", "--remote", "browser-vm", "--profile"],
+            &[
+                "mcp",
+                "--connect",
+                "--remote",
+                "browser-vm",
+                "--profile",
+                "mail",
+                "--profile",
+                "chat",
+            ],
+            &["mcp", "--connect", "--remote", "browser-vm", "--profile", "  "],
             &["mcp", "--connect", "--remote"],
             &["mcp", "--connect", "--remote", "a", "--remote", "b"],
             &["mcp", "--connect", "--remote", "-oProxyCommand=evil"],

@@ -483,7 +483,7 @@ fn resolve_agent_launch_command(
     let uses_default_command = command.is_none();
     let program = command.unwrap_or_else(|| definition.default_command.to_string());
     let mut launch_args = match definition.integration {
-        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
+        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(crate::browser_host()),
         AgentIntegrationKind::GrokMcp
             if uses_default_command
                 && !args
@@ -697,7 +697,9 @@ pub fn browser_actor(local_id: &str) -> String {
     format!("horizon:{:016x}", hasher.finish())
 }
 
-fn horizon_codex_mcp_args() -> Vec<String> {
+/// The browser MCP entry of a Codex panel, as the `-c` arguments of `codex`.
+/// `browser_host` is the host that the settings name, when there is one.
+fn horizon_codex_mcp_args(browser_host: Option<&crate::BrowserHostConfig>) -> Vec<String> {
     let Some(command) = crate::browser_mcp_executable()
         .and_then(|path| path.into_os_string().into_string().ok())
         .and_then(|path| serde_json::to_string(&path).ok())
@@ -705,11 +707,13 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         tracing::warn!("could not resolve Horizon executable for browser MCP integration");
         return Vec::new();
     };
+    let server_args = serde_json::to_string(&crate::browser_mcp_args(browser_host))
+        .unwrap_or_else(|_| "[\"--browser-mcp\"]".to_string());
     vec![
         "-c".to_string(),
         format!("mcp_servers.horizon-browser.command={command}"),
         "-c".to_string(),
-        "mcp_servers.horizon-browser.args=[\"--browser-mcp\"]".to_string(),
+        format!("mcp_servers.horizon-browser.args={server_args}"),
         "-c".to_string(),
         "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_HOME\"]"
             .to_string(),
@@ -833,6 +837,37 @@ mod tests {
         assert!(!command.contains("browser-cli"));
         #[cfg(target_os = "linux")]
         assert!(command.contains(&format!("/proc/{}/exe", std::process::id())));
+    }
+
+    #[test]
+    fn a_named_browser_host_reaches_the_codex_entry_and_an_unnamed_keeps_the_local_server() {
+        let local = horizon_codex_mcp_args(None).join(" ");
+        assert!(
+            local.contains("mcp_servers.horizon-browser.args=[\"--browser-mcp\"]"),
+            "{local}"
+        );
+        assert!(!local.contains("--remote"), "no host means the local server: {local}");
+        assert_eq!(
+            local,
+            horizon_codex_mcp_args(Some(&crate::BrowserHostConfig::default())).join(" "),
+            "an entry that names no host is the entry of the local server"
+        );
+
+        let browser_host = crate::BrowserHostConfig {
+            ssh_target: Some("browser-vm".to_string()),
+            profile: Some("mail".to_string()),
+        };
+        let remote = horizon_codex_mcp_args(Some(&browser_host)).join(" ");
+        assert!(
+            remote.contains(
+                "mcp_servers.horizon-browser.args=[\"--browser-mcp\",\"--remote\",\"browser-vm\",\"--profile\",\"mail\"]"
+            ),
+            "{remote}"
+        );
+        assert!(
+            remote.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"),
+            "the entry keeps the handoff timeout: {remote}"
+        );
     }
 
     #[test]

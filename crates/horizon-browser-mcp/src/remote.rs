@@ -72,15 +72,17 @@ pub enum RemoteBridgeError {
 /// Serve the MCP contract of the profile host at the SSH target `target` until
 /// the client closes the stream or the remote server stops.
 ///
-/// The bridge takes no profile. A caller names a profile as the `target` of a
-/// `browser_create`, and the remote host refuses one that its host file does not
-/// name with its own reason, so the bridge never guesses which profiles the host
-/// serves from the folders of a machine it does not own.
+/// `profile` is the profile that a `browser_create` opens when the call names no
+/// `target`, so every page of an agent lands in the profile that the person
+/// chose without the agent knowing its name. A create that names its own target
+/// keeps it. The bridge does not check the profile against the host: the host
+/// decides which profiles it serves, and it refuses an unknown one with its own
+/// `target_unknown`, which crosses unchanged.
 ///
 /// # Errors
 /// Returns when this computer has no agent identity, when no host runs at
 /// `target`, or when the stream fails.
-pub fn serve(target: &str) -> Result<(), RemoteBridgeError> {
+pub fn serve(target: &str, profile: Option<&str>) -> Result<(), RemoteBridgeError> {
     let actor = std::env::var(ACTOR_ENV)
         .ok()
         .map(|actor| actor.trim().to_string())
@@ -97,7 +99,8 @@ pub fn serve(target: &str) -> Result<(), RemoteBridgeError> {
         target: target.to_string(),
         reason: error.to_string(),
     })?;
-    let relay = Arc::new(Relay::new(target.to_string(), host.root));
+    let profile = profile.map(str::trim).filter(|profile| !profile.is_empty());
+    let relay = Arc::new(Relay::new(target.to_string(), host.root, profile.map(str::to_string)));
     let output = Arc::new(Mutex::new(io::stdout()));
     let responses = {
         let relay = Arc::clone(&relay);

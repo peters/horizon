@@ -78,6 +78,24 @@ guarantee that the code gives, and what the code does not guarantee.
     its storage; a process of the same operating-system user can read the
     runtime root and write a request as any actor; the host instance in
     `profile-host.json` is not a secret.
+- [`browser-remote-bridge`](trust-boundaries/browser-remote-bridge.md) (added
+  after this audit, with #1780)
+  - Untrusted: the remote host and its record, the results of that host, and the
+    files of this computer that an attachment call names.
+  - Guarantees: the settings entry refuses a target that `ssh` reads as an
+    option, a space and a control character, and a profile off the host-file
+    rule; only an authorized path is staged, with a 512 MiB limit for one file
+    and for one call; the bridge removes the staging folder of a call after its
+    answer and after a failure; the host instance always comes from the record
+    of the remote machine; a `browser_create` that names no target gets the
+    profile of the entry, and a create that names one keeps it; a capture
+    crosses inline only up to 8 MiB; the bridge starts no listener and holds no
+    credential.
+  - Does not guarantee: a staged file is readable on the remote machine for the
+    duration of the call; a process of the operating-system user on that machine
+    can read the staged copies and the runtime root; the bridge does not check
+    the profile of its entry against the host file, so an unknown profile is
+    reported by the host as `target_unknown`.
 - [`standalone-remote-host`](trust-boundaries/standalone-remote-host.md)
   - Untrusted: the MCP client and its tool calls.
   - Guarantees: the client cannot supply an endpoint, a capability or a
