@@ -1,0 +1,36 @@
+# The host file of the browser image.
+#
+# The container copies this file to /state/host.yaml when the state volume has
+# no host file. Horizon writes the host file on the machine in a later step of
+# issue 1780. The profile host refuses a host file that the group or other
+# users can write, so keep the mode 0600.
+
+browser:
+  profiles:
+    # The profile of the image test. The profile host runs as root in this
+    # container, so Chromium needs --no-sandbox. --disable-dev-shm-usage keeps
+    # the renderer off the small /dev/shm of a container.
+    probe:
+      backend: chromium
+      args:
+        - --no-sandbox
+        - --disable-dev-shm-usage
+
+    # The same profile with the egress of issue 1780: the pages of the profile
+    # leave through a SOCKS5 proxy on another machine, for example the home
+    # machine. The profile names the tailnet address of that machine, so the
+    # container start needs no option. Replace the example address
+    # 100.64.0.10 with the tailnet address of your proxy machine, and start
+    # `ssh -N -D 100.64.0.10:1080` on that machine. README.md section 7 gives
+    # that command, the CAUTION and the check of the result.
+    #
+    # To use it, remove the comment markers, put the block at the indentation
+    # of the profile `probe`, and replace the address. README.md section 7
+    # shows the result.
+    #
+    # egress:
+    #   backend: chromium
+    #   args:
+    #     - --no-sandbox
+    #     - --disable-dev-shm-usage
+    #     - --proxy-server=socks5://100.64.0.10:1080
