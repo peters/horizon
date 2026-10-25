@@ -164,8 +164,9 @@ def extra_column(placed):
     return right + 40
 
 
-def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None):
-    """Disposable Horizon config. System access stays off unless requested."""
+def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
+                         browser_host=None, browser_host_profile=None):
+    """Disposable Horizon config. System access and a browser host stay off unless requested."""
     fixture = {
         'version': 11, 'window': {'width': 1480, 'height': 900},
         'appearance': {'theme': 'dark'},
@@ -195,6 +196,13 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
                  'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
                  'position': [40, 720], 'size': [550, 140]},
             ]
+    if browser_host:
+        # A browser host that a browser panel follows, so a procedure proves the
+        # panel route without a hand edit of the private settings of the fixture.
+        entry = {'ssh_target': browser_host}
+        if browser_host_profile:
+            entry['profile'] = browser_host_profile
+        fixture['browser_host'] = entry
     if presets is not None:
         # The New Workspace menu of the fixture, so a procedure can test an agent that
         # has several presets without changing the real menu of the person.
@@ -269,11 +277,20 @@ def main():
         type=Path,
         help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
     parser.add_argument(
+        '--browser-host',
+        help='SSH target of a browser host for the fixture, such as an SSH config alias, so the '
+             'remote browser panel procedure opens its panels there')
+    parser.add_argument(
+        '--browser-host-profile',
+        help='Profile of that browser host whose pages the fixture opens; needs --browser-host')
+    parser.add_argument(
         '--panels',
         type=Path,
         help='JSON list of extra workspace panels the fixture opens at start, such as an '
              'agent panel that runs a scripted MCP client')
     args = parser.parse_args()
+    if args.browser_host_profile and not args.browser_host:
+        parser.error('--browser-host-profile needs --browser-host')
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
     args.state = args.state.resolve()
     app = args.horizon.resolve(strict=True)
@@ -343,7 +360,8 @@ def main():
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
         fixture = application_document(
-            str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels)
+            str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
+            args.browser_host, args.browser_host_profile)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session))

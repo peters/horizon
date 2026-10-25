@@ -21,11 +21,13 @@
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use horizon_core::browser::{
     BackendKind, BrowserCommand, BrowserConfig, BrowserInput, BrowserPanelState, BrowserStatus,
 };
+use horizon_core::{BrowserHostConfig, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 const HOST_FILE: &str =
     "browser:\n  profiles:\n    mail:\n      backend: chromium\n      args: [\"--disable-gpu\", \"--no-first-run\"]\n";
@@ -202,6 +204,61 @@ fn recorded_instance(record: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The variable of the channel of a panel, so one lane holds its own root.
+static LIVE_LANE: Mutex<()> = Mutex::new(());
+
+/// A temporary runtime root for one live lane, with the variables that the
+/// channel of a panel reads set to it. The lane keeps the returned guard for its
+/// whole run, so the two lanes of this file never share a root.
+fn live_root(program: &Path) -> (MutexGuard<'static, ()>, tempfile::TempDir) {
+    let lane = LIVE_LANE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A confined browser can not read a path with a hidden folder on it, so the
+    // caller may name a visible folder to hold the runtime root of the test.
+    let root = match std::env::var_os("HORIZON_CORE_REMOTE_HOST_ROOT") {
+        Some(folder) => {
+            let folder = PathBuf::from(folder);
+            std::fs::create_dir_all(&folder).expect("root folder");
+            tempfile::Builder::new()
+                .prefix("panel-live-")
+                .tempdir_in(&folder)
+                .expect("temporary runtime root")
+        }
+        None => tempfile::tempdir().expect("temporary runtime root"),
+    };
+    // SAFETY: the guard serialises the live lanes of this file, each lane sets
+    // both variables before it starts its host, and no other test of this binary
+    // reads them.
+    unsafe {
+        std::env::set_var("HORIZON_BROWSER_REMOTE_ROOT", root.path().join("state"));
+        std::env::set_var("HORIZON_BROWSER_REMOTE_EXECUTABLE", program);
+    }
+    (lane, root)
+}
+
+/// Wait until the page of the host is ready, naming why the host gave up when it
+/// is not.
+fn wait_for_ready(panel: &mut BrowserPanelState) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        panel.drain_events();
+        match panel.status {
+            BrowserStatus::Ready => return true,
+            BrowserStatus::Error { ref message } => {
+                eprintln!(
+                    "the profile host did not open the page: {message} | host note: {:?} | status: {:?}",
+                    panel.navigation_error, panel.remote_status
+                );
+                return false;
+            }
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 #[ignore = "needs an SSH server on the target, the horizon-browser binary there and a local Chromium"]
 fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
@@ -217,25 +274,7 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
         eprintln!("skipped: no horizon-browser program is on the PATH of this test");
         return;
     };
-    // A confined browser can not read a path with a hidden folder on it, so the
-    // caller may name a visible folder to hold the runtime root of the test.
-    let root = match std::env::var_os("HORIZON_CORE_REMOTE_HOST_ROOT") {
-        Some(folder) => {
-            let folder = PathBuf::from(folder);
-            std::fs::create_dir_all(&folder).expect("root folder");
-            tempfile::Builder::new()
-                .prefix("panel-live-")
-                .tempdir_in(&folder)
-                .expect("temporary runtime root")
-        }
-        None => tempfile::tempdir().expect("temporary runtime root"),
-    };
-    // SAFETY: no other test of this binary reads these variables, and the test
-    // process owns them for its whole run.
-    unsafe {
-        std::env::set_var("HORIZON_BROWSER_REMOTE_ROOT", root.path().join("state"));
-        std::env::set_var("HORIZON_BROWSER_REMOTE_EXECUTABLE", &program);
-    }
+    let (_lane, root) = live_root(&program);
     let _running = start_host(root.path(), &program);
     let backend = horizon_core::browser::RemoteHostBackend::new(&target, Some("mail".to_string()))
         .expect("the SSH target of the test");
@@ -248,26 +287,7 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
     assert!(panel.is_remote_host());
     assert_eq!(panel.remote_host_target(), Some(target.as_str()));
 
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let ready = loop {
-        panel.drain_events();
-        match panel.status {
-            BrowserStatus::Ready => break true,
-            BrowserStatus::Error { ref message } => {
-                eprintln!(
-                    "the profile host did not open the page: {message} | host note: {:?} | status: {:?}",
-                    panel.navigation_error, panel.remote_status
-                );
-                break false;
-            }
-            _ => {}
-        }
-        if Instant::now() >= deadline {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert!(ready, "the page of the profile host became ready");
+    assert!(wait_for_ready(&mut panel), "the page of the profile host became ready");
     let backend_of_page = panel.backend();
     assert!(
         matches!(backend_of_page, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi),
@@ -299,4 +319,84 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
         "the panel still reports the backend that it was created with"
     );
     println!("=== the live lane of the remote browser panel passed");
+}
+
+#[test]
+#[ignore = "needs an SSH server on the target, the horizon-browser binary there and a local Chromium"]
+fn a_panel_created_from_the_settings_uses_the_named_browser_host() {
+    let target = ssh_target();
+    if !ssh_reachable(&target) {
+        eprintln!(
+            "skipped: `ssh -Tq {target}` needs an SSH server that answers without a prompt, \
+             with the horizon-browser binary of this build on its PATH"
+        );
+        return;
+    }
+    let Some(program) = remote_program() else {
+        eprintln!("skipped: no horizon-browser program is on the PATH of this test");
+        return;
+    };
+    let (_lane, root) = live_root(&program);
+    let _running = start_host(root.path(), &program);
+    // The entry that the start of Horizon reads, before any panel of the test
+    // exists. The first call wins, and this lane is the only caller.
+    horizon_core::configure_browser_host(Some(BrowserHostConfig {
+        ssh_target: Some(target.clone()),
+        profile: Some("mail".to_string()),
+    }));
+    assert_eq!(
+        horizon_core::browser_host().and_then(BrowserHostConfig::ssh_target),
+        Some(target.as_str()),
+        "the settings name the host before a panel is created"
+    );
+
+    // The route that a person takes: the preset picker creates the panel with
+    // `follows_browser_host`, and the panel reads the named host instead of
+    // starting the local browser.
+    let mut panel = Panel::spawn(
+        PanelId(1),
+        WorkspaceId(1),
+        PanelOptions {
+            kind: PanelKind::Browser,
+            command: Some("https://example.test/".to_string()),
+            follows_browser_host: true,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("a browser panel");
+    let browser = panel.browser_mut().expect("a browser panel");
+    assert!(
+        browser.is_remote_host(),
+        "a new panel that a person picks goes to the named host"
+    );
+    assert_eq!(browser.remote_host_target(), Some(target.as_str()));
+    assert_eq!(browser.remote_host_profile(), Some("mail"));
+
+    assert!(
+        wait_for_ready(browser),
+        "the page of the named host became ready in the panel of the route"
+    );
+    let (before, after) = show_frame_and_send_input(browser);
+    assert!(
+        browser.remote_host_failure().is_none(),
+        "the channel of the routed panel is live after the input: {:?}",
+        browser.remote_host_failure()
+    );
+    eprintln!("the routed panel painted and took input, frames {before} -> {after}");
+
+    panel.restart().expect("the restart of a routed panel");
+    let browser = panel.browser_mut().expect("a browser panel");
+    assert!(
+        browser.is_remote_host(),
+        "a restart of the panel keeps the host that it was created with"
+    );
+    assert_eq!(browser.remote_host_target(), Some(target.as_str()));
+    assert_eq!(browser.remote_host_profile(), Some("mail"));
+    assert!(
+        wait_for_ready(browser),
+        "the restarted panel shows a page of the host again"
+    );
+
+    browser.stop();
+    println!("=== the live lane of the browser panel route passed");
 }

@@ -10,6 +10,18 @@ use crate::theme;
 use super::PresetPickerAction;
 use crate::app::DetachedWorkspaceViewportState;
 
+/// The options of a panel that a person creates from a preset. A browser panel
+/// of this path follows the browser host that the settings name; every other
+/// caller of `PresetConfig::to_panel_options` keeps the backend that it chose.
+pub(super) fn preset_panel_options(
+    preset: &PresetConfig,
+    browser_config: &horizon_core::browser::BrowserConfig,
+) -> horizon_core::PanelOptions {
+    let mut options = preset.to_panel_options(browser_config);
+    options.follows_browser_host = matches!(preset.kind, PanelKind::Browser);
+    options
+}
+
 pub(super) fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'static str {
     if target_workspace.is_some() {
         "New Terminal"
@@ -309,7 +321,38 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
 mod tests {
     use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
 
-    use super::{PresetCategory, command_palette_preset_entries, preset_category};
+    use super::{PresetCategory, command_palette_preset_entries, preset_category, preset_panel_options};
+
+    fn browser_preset() -> PresetConfig {
+        PresetConfig {
+            name: "Browser".to_string(),
+            alias: Some("web".to_string()),
+            kind: PanelKind::Browser,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        }
+    }
+
+    #[test]
+    fn a_browser_panel_of_the_picker_follows_the_named_browser_host() {
+        let options = preset_panel_options(&browser_preset(), &horizon_core::browser::BrowserConfig::default());
+        assert_eq!(options.kind, PanelKind::Browser);
+        assert!(
+            options.follows_browser_host,
+            "the panel that a person picks opens on the browser host of the settings"
+        );
+
+        let shell = preset_panel_options(
+            &shell_preset_with_stale_ssh_metadata(),
+            &horizon_core::browser::BrowserConfig::default(),
+        );
+        assert!(
+            !shell.follows_browser_host,
+            "a panel that is not a browser asks for no browser host"
+        );
+    }
 
     fn shell_preset_with_stale_ssh_metadata() -> PresetConfig {
         PresetConfig {

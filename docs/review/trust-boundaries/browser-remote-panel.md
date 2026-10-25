@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/browser/remote_host.rs,crates/horizon-core/src/browser/remote_host/**,crates/horizon-core/tests/remote_host_panel.rs,crates/horizon-ui/src/browser_widget/chrome.rs"
+applyTo: "crates/horizon-core/src/browser/remote_host.rs,crates/horizon-core/src/browser/remote_host/**,crates/horizon-core/src/panel/spawn.rs,crates/horizon-core/tests/remote_host_panel.rs,crates/horizon-ui/src/browser_widget/chrome.rs"
 ---
 
 # Trust boundary of the remote browser panel
@@ -22,6 +22,19 @@ The SSH target comes from the settings entry `browser_host`. The panel takes it
 as one value and refuses a target that `ssh` reads as an option, that holds a
 space or a control character, and that is longer than 255 characters.
 
+- `crates/horizon-core/src/panel/spawn.rs` creates a new browser panel on that
+  entry through `start_remote_host`, with the profile of the entry as the target
+  of its first page. A target that the rule above refuses gives no panel and no
+  channel, so a value of the settings never becomes an argument of `ssh`.
+- Only the preset path of a person sets `PanelOptions::follows_browser_host`, so
+  only a panel that a person picks follows the entry. A page that an agent asks
+  for stays on the browser of this computer, and the entry of that agent reaches
+  the host over the bridge instead, so a signed-in profile of the person takes no
+  page that an agent asked for.
+- A panel that already exists keeps the backend that it was created with: a
+  restore of a saved panel and a page of a local profile that a panel duplicates
+  take the path they took before the entry existed, so a change of the entry
+  moves no live page between machines.
 - The actor of every page of a panel is the constant `horizon:person:browser-panel`.
   A person never supplies it, and no agent identity uses it.
 - The panel uses the OpenSSH client of this computer. The host key is the host key
@@ -92,6 +105,9 @@ a key press on the focused element, a page scroll, a navigation, a viewport.
 - The probe of the record has its own deadline, and the process is killed when the
   deadline passes. A host that stops answering is a typed reason, never a wait.
 - The page of the host closes with the panel, and the profile of the host stays.
+- A replacement channel closes the page of the channel that it replaces before it
+  creates its own page, on the worker thread. A host takes one page of an engine
+  at a time, so the order is what makes the Retry and the restart of a panel work.
 - A stopped channel leaves the panel with a typed reason and one line that gives
   the SSH target. It retries only when the person asks for a retry.
 - A local panel takes none of these paths: its backend, its capabilities and its
