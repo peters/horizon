@@ -30,8 +30,9 @@ delete removes the machine and the state volume.
 ## 3. Safety
 
 > **CAUTION:** THIS PROCEDURE RENTS A DEDICATED HETZNER SERVER AND A STATE VOLUME.
-> A `ccx13` server costs about 0.02 EUR for each hour, and the volume costs about
-> 0.01 EUR for each month. Keep the run short, and complete step 8.
+> A `ccx13` server in `fsn1` costs 0.0689 EUR (net) for each hour, which is 42.99
+> EUR for each month. A 20 GB state volume costs 1.15 EUR for each month, at
+> 0.0572 EUR for each GB. Keep the run short, and complete step 8.
 
 > **CAUTION:** DO NOT SIGN IN TO AN ACCOUNT THAT YOU CANNOT SIGN OUT OF. Use a
 > test account, or a site that you can leave. Every cookie of the run stays in the
