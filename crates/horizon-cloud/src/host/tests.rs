@@ -400,62 +400,25 @@ fn an_azure_host_leaves_every_filesystem_to_its_own_script() {
 
 #[test]
 fn a_rebuilt_host_never_reformats_the_workspace_disk() {
-    // The rendered format step runs against stubs, so the test checks what the host does,
-    // not what the document says it intends.
-    let directory = std::env::temp_dir().join(format!("horizon-format-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    let script = directory.join("format.sh");
-    std::fs::write(&script, format_script("/dev/stub-workspace", "/stub-mount")).unwrap();
-    let bin = directory.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    for name in ["mkfs.ext4", "mount"] {
-        std::fs::write(bin.join(name), "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(bin.join(name), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    }
-    let calls = |kind: &str, existing: &str| {
-        std::fs::write(
-            bin.join("blkid"),
-            format!(
-                "#!/bin/sh
-printf '%s' '{existing}'
-"
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(bin.join("blkid"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        std::fs::write(bin.join("mountpoint"), "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(
-            bin.join("mountpoint"),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        let log = directory.join("calls.log");
-        let _ = std::fs::remove_file(&log);
-        std::fs::write(
-            bin.join("mkfs.ext4"),
-            format!("#!/bin/sh\necho {kind} >> {}\n", log.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(
-            bin.join("mkfs.ext4"),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        let status = std::process::Command::new("/bin/sh")
-            .arg(&script)
-            .env("PATH", &bin)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        std::fs::read_to_string(&log).unwrap_or_default().lines().count()
-    };
-    assert_eq!(
-        calls("formatted", "ext4"),
-        0,
-        "a device that already holds the workspace filesystem is never formatted"
+    // Asserted from the rendered document, never executed: a test must not run host
+    // bootstrap on the machine that runs `cargo test`. The behaviour itself is proven on an
+    // owned VM by task AZV-L3, which keeps the filesystem UUID and its creation time across
+    // a rebuild.
+    let config = parse(&azure_plan());
+    let setup = content(&config, SETUP);
+    let format = format!("mkfs.ext4 -L {WORKSPACE_LABEL} {AZURE_DATA_DISK}");
+    assert_eq!(setup.matches("mkfs.ext4").count(), 1, "one format step: {setup}");
+    let guarded =
+        format!("if [ -z \"$(blkid -o value -s TYPE {AZURE_DATA_DISK} 2>/dev/null)\" ]; then\n  {format}\nfi\n");
+    assert!(
+        setup.contains(&guarded),
+        "the only format step runs inside the empty-device guard: {setup}"
     );
-    assert_eq!(calls("formatted", ""), 1, "an empty device is formatted exactly once");
-    std::fs::remove_dir_all(&directory).unwrap();
+    let mount = format!("mountpoint -q {AZURE_VOLUME_MOUNT} || mount {AZURE_VOLUME_MOUNT}");
+    assert!(
+        setup.find(&guarded) < setup.find(&mount),
+        "the mount follows the guard, so a device that already holds a filesystem is mounted as it is: {setup}"
+    );
 }
 
 #[test]
