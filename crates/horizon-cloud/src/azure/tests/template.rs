@@ -201,7 +201,7 @@ pub(super) fn login_of(length: usize) -> host::RegistryLogin {
 
 #[test]
 fn a_bootstrap_too_large_for_a_host_is_refused_while_planning() {
-    let fits = Planned::new(&spec(), "northeurope", size("Standard_D4s_v3"), Some(login_of(16_384))).unwrap();
+    let fits = Planned::new(&spec(), "northeurope", size("Standard_D4s_v3"), Some(login_of(16_128))).unwrap();
     assert!(fits.parameters()["customData"]["value"].as_str().unwrap().len() <= CUSTOM_DATA_LIMIT);
     let error = Planned::new(&spec(), "northeurope", size("Standard_D4s_v3"), Some(login_of(32_768))).unwrap_err();
     assert!(error.to_string().contains("user-data limit"), "{error}");

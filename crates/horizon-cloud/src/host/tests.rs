@@ -33,7 +33,7 @@ fn parse(plan: &Plan) -> Value {
 fn protected_start_is_explicit_and_the_default_keeps_its_original_bootstrap_files() {
     let mut candidate = plan();
     let ordinary = parse(&candidate);
-    assert_eq!(content(&ordinary, START), start_script(2));
+    assert_eq!(content(&ordinary, START), start_script(2, Platform::Prepared));
     assert!(
         ordinary["write_files"]
             .as_sequence()
@@ -45,7 +45,7 @@ fn protected_start_is_explicit_and_the_default_keeps_its_original_bootstrap_file
     let protected = parse(&candidate);
     assert_eq!(
         content(&protected, START),
-        format!("#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} 2\n")
+        format!("#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} 2 {WORKSPACE}\n")
     );
     assert_eq!(content(&protected, INGRESS), include_str!("ingress.py"));
     assert_eq!(file(&protected, INGRESS)["permissions"], "0700");
@@ -369,37 +369,70 @@ fn a_prepared_host_keeps_its_user_data() {
 }
 
 #[test]
-fn an_azure_host_installs_docker_and_formats_only_a_blank_data_disk() {
+fn an_azure_host_leaves_every_filesystem_to_its_own_script() {
     let document = azure_plan().cloud_config().unwrap();
     let config: Value = serde_yaml::from_str(&document).unwrap();
     assert_eq!(config["package_update"], Value::Bool(true));
     assert_eq!(config["packages"], serde_yaml::to_value(["docker.io"]).unwrap());
-    assert_eq!(
-        config["fs_setup"],
-        serde_yaml::to_value([serde_json::json!({
-            "label": "horizon-ws", "filesystem": "ext4", "device": AZURE_DATA_DISK,
-            "partition": "none", "overwrite": false
-        })])
-        .unwrap()
+    assert!(
+        config.get("fs_setup").is_none(),
+        "cloud-init must not format the workspace: it ran mkfs on a device that already held one"
     );
+    let setup = content(&config, SETUP);
+    assert!(setup.contains(&format!("blkid -o value -s TYPE {AZURE_DATA_DISK}")));
+    assert!(setup.contains("mkfs.ext4 -L horizon-ws"));
+    assert!(setup.contains(&format!(
+        "mountpoint -q {AZURE_VOLUME_MOUNT} || mount {AZURE_VOLUME_MOUNT}"
+    )));
     assert_eq!(config["mounts"][0][0].as_str(), Some(AZURE_DATA_DISK));
-    assert_eq!(config["mounts"][0][1].as_str(), Some(VOLUME_MOUNT));
-    // Everything else is the prepared host's bootstrap.
+    assert_eq!(config["mounts"][0][1].as_str(), Some(AZURE_VOLUME_MOUNT));
     let prepared = parse(&plan());
-    for path in [ENVIRONMENT_FILE, IMAGE_FILE, SETUP, START, UNIT, REGISTRY_FILE] {
+    for path in [ENVIRONMENT_FILE, IMAGE_FILE, REGISTRY_FILE] {
         assert_eq!(file(&config, path), file(&prepared, path), "{path}");
     }
     assert_eq!(config["runcmd"], prepared["runcmd"]);
+    let start = content(&config, START);
+    assert!(start.contains(&format!("-v {AZURE_VOLUME_MOUNT}/workspace:/workspace")));
+    let unit = content(&config, UNIT);
+    assert!(unit.contains(&format!("RequiresMountsFor={AZURE_VOLUME_MOUNT}")));
+    assert!(!unit.contains(VOLUME_MOUNT));
+}
+
+#[test]
+fn a_rebuilt_host_never_reformats_the_workspace_disk() {
+    // Asserted from the rendered document, never executed: a test must not run host
+    // bootstrap on the machine that runs `cargo test`. The behaviour itself is proven on an
+    // owned VM by task AZV-L3, which keeps the filesystem UUID and its creation time across
+    // a rebuild.
+    let config = parse(&azure_plan());
+    let setup = content(&config, SETUP);
+    let format = format!("mkfs.ext4 -L {WORKSPACE_LABEL} {AZURE_DATA_DISK}");
+    assert_eq!(setup.matches("mkfs.ext4").count(), 1, "one format step: {setup}");
+    let guarded =
+        format!("if [ -z \"$(blkid -o value -s TYPE {AZURE_DATA_DISK} 2>/dev/null)\" ]; then\n  {format}\nfi\n");
+    assert!(
+        setup.contains(&guarded),
+        "the only format step runs inside the empty-device guard: {setup}"
+    );
+    let mount = format!("mountpoint -q {AZURE_VOLUME_MOUNT} || mount {AZURE_VOLUME_MOUNT}");
+    assert!(
+        setup.find(&guarded) < setup.find(&mount),
+        "the mount follows the guard, so a device that already holds a filesystem is mounted as it is: {setup}"
+    );
 }
 
 #[test]
 fn an_azure_guard_closes_both_metadata_addresses_and_ipv6_before_every_start() {
     let config = parse(&azure_plan());
     let guard = content(&config, GUARD);
+    for line in PREPARED_GUARD.lines().filter(|line| !line.contains("horizon-volume")) {
+        assert!(guard.lines().any(|guard| guard == line), "{line}");
+    }
     assert!(
-        guard.starts_with(PREPARED_GUARD),
-        "the link-local rule, IMDS 169.254.169.254 included, stays"
+        guard.contains(&format!("mountpoint -q {AZURE_VOLUME_MOUNT} || {{")),
+        "an Azure host checks the mount point the temporary disk cannot shadow"
     );
+    assert!(guard.contains(&format!("mkdir -p {AZURE_VOLUME_MOUNT}/workspace")));
     for rule in [
         "iptables -C DOCKER-USER -d 168.63.129.16/32 -p tcp -m multiport --dports 80,32526 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 168.63.129.16/32 -p tcp -m multiport --dports 80,32526 -j DROP",
         "ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i docker0 -j DROP",

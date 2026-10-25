@@ -18,8 +18,12 @@ use std::{collections::BTreeMap, fmt::Write as _};
 
 /// The largest user data providers accept (Hetzner's limit).
 pub const USER_DATA_LIMIT: usize = 32 * 1024;
-/// Where the workspace volume is mounted on the host.
+/// Where the workspace volume is mounted on a host whose image does not mount `/mnt`.
 pub const VOLUME_MOUNT: &str = "/mnt/horizon-volume";
+/// Where an Azure host mounts the workspace volume. The Azure image mounts the VM's
+/// temporary disk at `/mnt`, and that mount hides anything mounted beneath it, so an
+/// Azure volume sits outside `/mnt` where no image mount can shadow it.
+pub const AZURE_VOLUME_MOUNT: &str = "/horizon-volume";
 /// The directory on the volume the container sees as `/workspace`. A subdirectory
 /// keeps the filesystem's own `lost+found` out of the worker's view.
 pub const WORKSPACE: &str = "/mnt/horizon-volume/workspace";
@@ -105,23 +109,11 @@ struct CloudConfig<'a> {
     package_update: bool,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     packages: &'a [&'a str],
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    fs_setup: Vec<FsSetup<'a>>,
     ssh_pwauth: bool,
     disable_root: bool,
     mounts: Vec<[&'a str; 6]>,
     runcmd: Vec<Vec<&'a str>>,
     write_files: Vec<WriteFile<'a>>,
-}
-/// cloud-init's `fs_setup` entry. With `overwrite: false` cloud-init leaves a device
-/// that already holds a filesystem as it is, so a reboot never formats the workspace.
-#[derive(Serialize)]
-struct FsSetup<'a> {
-    label: &'a str,
-    filesystem: &'a str,
-    device: &'a str,
-    partition: &'a str,
-    overwrite: bool,
 }
 #[derive(Serialize)]
 struct WriteFile<'a> {
@@ -142,17 +134,18 @@ impl Plan {
         let registry = self.registry.as_ref().map(registry_config).transpose()?;
         let (image, setup, guard, start, unit) = (
             format!("{}\n", self.image),
-            setup_script(),
+            setup_script(self.platform, &self.workspace_device),
             guard_script(self.platform),
             if self.exposure_ingress {
                 format!(
-                    "#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} {}\n",
-                    self.shm_gb
+                    "#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} {} {}\n",
+                    self.shm_gb,
+                    workspace(self.platform)
                 )
             } else {
-                start_script(self.shm_gb)
+                start_script(self.shm_gb, self.platform)
             },
-            unit(),
+            unit(self.platform),
         );
         let file = |path, permissions, content| WriteFile {
             path,
@@ -175,23 +168,12 @@ impl Plan {
         let config = CloudConfig {
             package_update: azure,
             packages: if azure { &["docker.io"] } else { &[] },
-            fs_setup: if azure {
-                vec![FsSetup {
-                    label: WORKSPACE_LABEL,
-                    filesystem: "ext4",
-                    device: &self.workspace_device,
-                    partition: "none",
-                    overwrite: false,
-                }]
-            } else {
-                Vec::new()
-            },
             ssh_pwauth: false,
             disable_root: true,
             write_files,
             mounts: vec![[
                 &self.workspace_device,
-                VOLUME_MOUNT,
+                volume_mount(self.platform),
                 "ext4",
                 "defaults,nofail,discard",
                 "0",
@@ -458,17 +440,53 @@ fn registry_config(registry: &RegistryLogin) -> Result<zeroize::Zeroizing<String
     Ok(zeroize::Zeroizing::new(text))
 }
 
+/// The mount point of the workspace volume on this platform's host image.
+fn volume_mount(platform: Platform) -> &'static str {
+    if platform == Platform::Azure {
+        AZURE_VOLUME_MOUNT
+    } else {
+        VOLUME_MOUNT
+    }
+}
+
+/// The directory on the volume the container sees as `/workspace`. A subdirectory
+/// keeps the filesystem's own `lost+found` out of the worker's view.
+fn workspace(platform: Platform) -> String {
+    format!("{}/workspace", volume_mount(platform))
+}
+
 /// Runs once on first boot. The worker service is enabled last, so it never
 /// starts while the host could still accept an SSH or password login.
-fn setup_script() -> String {
-    "#!/bin/sh
+fn setup_script(platform: Platform, device: &str) -> String {
+    let mut script = "#!/bin/sh
 set -eu
 systemctl mask --now ssh.socket ssh.service
 passwd --lock root
-systemctl daemon-reload
-systemctl enable --now horizon-worker.service
 "
-    .to_owned()
+    .to_owned();
+    if platform == Platform::Azure {
+        let _ = write!(script, "{}", format_script(device, volume_mount(platform)));
+    }
+    script.push_str(
+        "systemctl daemon-reload
+systemctl enable --now horizon-worker.service
+",
+    );
+    script
+}
+
+/// Formats and mounts an Azure workspace. cloud-init 26.2 runs `mkfs` on a whole device
+/// that already holds a filesystem whatever `fs_setup` says — both `overwrite` and
+/// `replace_fs` failed a live rebuild — and a rebuild must keep the filesystem it finds,
+/// so the host asks `blkid` itself and formats only an empty device.
+fn format_script(device: &str, mount: &str) -> String {
+    format!(
+        "if [ -z \"$(blkid -o value -s TYPE {device} 2>/dev/null)\" ]; then
+  mkfs.ext4 -L {WORKSPACE_LABEL} {device}
+fi
+mountpoint -q {mount} || mount {mount}
+"
+    )
 }
 
 /// Runs before every container start. The metadata service serves the user data,
@@ -482,14 +500,23 @@ systemctl enable --now horizon-worker.service
 /// checked before it is added, so a restart adds none twice, and `set -eu` keeps the
 /// container stopped when a rule cannot be applied.
 fn guard_script(platform: Platform) -> String {
+    let mount = volume_mount(platform);
+    // An Azure host names the path it checked, because that mount point is what a
+    // temporary-disk mount at `/mnt` once hid.
+    let missing = if platform == Platform::Azure {
+        format!("the workspace volume is not mounted at {mount}")
+    } else {
+        "the workspace volume is not mounted".to_owned()
+    };
     let mut script = format!(
         "#!/bin/sh
 set -eu
 command -v docker >/dev/null || {{ echo 'horizon-worker: Docker is not installed on this host' >&2; exit 1; }}
-mountpoint -q {VOLUME_MOUNT} || {{ echo 'horizon-worker: the workspace volume is not mounted' >&2; exit 1; }}
-mkdir -p {WORKSPACE}
+mountpoint -q {mount} || {{ echo 'horizon-worker: {missing}' >&2; exit 1; }}
+mkdir -p {}
 iptables -C DOCKER-USER -d 169.254.0.0/16 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.0.0/16 -j DROP
-"
+",
+        workspace(platform)
     );
     if platform == Platform::Azure {
         let _ = write!(
@@ -504,7 +531,8 @@ ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i d
 }
 
 /// Pulls the image once, retrying, and keeps it cached so restarts need no registry.
-fn start_script(shm_gb: u8) -> String {
+fn start_script(shm_gb: u8, platform: Platform) -> String {
+    let workspace = workspace(platform);
     format!(
         "#!/bin/sh
 set -eu
@@ -517,19 +545,20 @@ until docker image inspect \"$image\" >/dev/null 2>&1 || docker pull --quiet \"$
 done
 exec docker run --rm --name horizon-worker --pull never -p 22:22 --shm-size {shm_gb}g \\
   --log-driver local --log-opt max-size=10m --log-opt max-file=5 \\
-  -v {WORKSPACE}:/workspace --env-file {ENVIRONMENT_FILE} \"$image\"
+  -v {workspace}:/workspace --env-file {ENVIRONMENT_FILE} \"$image\"
 "
     )
 }
 
-fn unit() -> String {
+fn unit(platform: Platform) -> String {
+    let mount = volume_mount(platform);
     format!(
         "[Unit]
 Description=Horizon worker container
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
-RequiresMountsFor={VOLUME_MOUNT}
+RequiresMountsFor={mount}
 
 [Service]
 Environment=DOCKER_CONFIG=/root/.docker

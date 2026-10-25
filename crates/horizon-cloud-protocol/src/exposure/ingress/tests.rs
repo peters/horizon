@@ -198,7 +198,7 @@ fn actual_host_encoder_and_port_plan_match_the_canonical_receipt_contract() {
         "namespace={{'__name__':'pure_contract_fixture'}}\nexec({},namespace)\n{}",
         serde_json::to_string(source).unwrap(),
         r"
-owner=namespace['Original']('registry.example/worker@sha256:'+'a'*64,'allocation-original',2)
+owner=namespace['Original']('registry.example/worker@sha256:'+'a'*64,'allocation-original',2,'/synthetic-volume/workspace')
 owner.cid='b'*64
 ports={'22/tcp':[dict(HostIp='0.0.0.0',HostPort='22')]}
 for i in range(namespace['COUNT']):
