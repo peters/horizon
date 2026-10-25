@@ -104,13 +104,58 @@ fn every_ssh_of_the_channel_is_bounded_and_can_not_ask_a_question() {
         );
     }
     assert!(
-        args.first().is_some_and(|first| first == "-Tq"),
-        "no controlling terminal and a quiet stderr: {args:?}"
+        args.first().is_some_and(|first| first == "-T"),
+        "no controlling terminal: {args:?}"
+    );
+    assert!(
+        args.iter().any(|argument| argument == "LogLevel=ERROR"),
+        "a fatal line of ssh reaches the reason: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|argument| argument == "-q" || argument == "-Tq"),
+        "the quiet flag drops the fatal line of ssh and leaves an empty reason: {args:?}"
     );
     assert_eq!(
         args.iter().rev().take(2).rev().collect::<Vec<_>>(),
         ["browser-vm", "horizon-browser mcp --connect --inline-screenshots"],
         "the target and the remote command stay the last two words: {args:?}"
+    );
+}
+
+#[test]
+fn an_unknown_alias_carries_the_words_of_ssh_and_never_an_empty_tail() {
+    if Command::new("ssh").arg("-V").output().is_err() {
+        eprintln!("skipped: this test needs the ssh client of the host");
+        return;
+    }
+    // The reserved eTLD `.invalid` never resolves, so the name fails here in
+    // microseconds and no real machine is part of the test.
+    let target = "horizon-fixture-no-such-host.invalid";
+    let error = super::probe(target, None).expect_err("a name that cannot resolve");
+    let RemoteChannelError::Transport { reason, .. } = &error else {
+        panic!("a target that ssh cannot resolve is a transport failure: {error}");
+    };
+    assert!(!reason.is_empty(), "the refusal carries the words of ssh: {error}");
+    assert!(
+        error.to_string().contains(target) && error.to_string().contains(reason.as_str()),
+        "the refusal names the target and its reason: {error}"
+    );
+}
+
+#[test]
+fn a_failed_call_that_wrote_nothing_carries_its_exit_status() {
+    let output = super::Output {
+        code: Some(255),
+        stdout: Vec::new(),
+        stderr: String::new(),
+        too_large: false,
+    };
+    let reason = super::failure_reason(&output);
+    assert_eq!(reason, "ssh exited with status 255 and wrote no reason");
+    let ended = super::Output { code: None, ..output };
+    assert_eq!(
+        super::failure_reason(&ended),
+        "ssh ended on a signal and wrote no reason"
     );
 }
 

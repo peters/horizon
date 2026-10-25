@@ -113,11 +113,17 @@ pub fn ssh_program() -> String {
 /// One `ssh` call with every option that keeps it from waiting: no prompt, a
 /// bounded connect and a bounded keepalive, so a host that drops packets or asks
 /// a question fails in seconds instead of holding the caller.
+///
+/// The log level is `ERROR` and not the quieter `-q`, which is `QUIET` and drops
+/// the fatal line as well: a target that `ssh` could not resolve then reported
+/// an empty reason, so a refusal said nothing that a person could act on.
 #[must_use]
 fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
     let mut command = Command::new(program);
     command.args([
-        "-Tq".to_string(),
+        "-T".to_string(),
+        "-o".to_string(),
+        "LogLevel=ERROR".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
@@ -186,13 +192,26 @@ fn probe_with(
     if !output.succeeded() {
         return Err(RemoteChannelError::Transport {
             target: target.to_string(),
-            reason: output.stderr,
+            reason: failure_reason(&output),
         });
     }
     parse_probe(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| RemoteChannelError::Transport {
         target: target.to_string(),
         reason: format!("its {RECORD} is not a record of a running host"),
     })
+}
+
+/// Why one `ssh` call of the channel failed: its own words, or its exit status
+/// when it wrote none. A refusal never ends in an empty reason, because an
+/// operator cannot act on one.
+fn failure_reason(output: &Output) -> String {
+    if !output.stderr.is_empty() {
+        return output.stderr.clone();
+    }
+    match output.code {
+        Some(code) => format!("{SSH} exited with status {code} and wrote no reason"),
+        None => format!("{SSH} ended on a signal and wrote no reason"),
+    }
 }
 
 /// Read the answer of the probe: the runtime root and the record of the host
