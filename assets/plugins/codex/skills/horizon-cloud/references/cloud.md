@@ -103,8 +103,10 @@ The machine's `azure` settings section (`token_file`, `subscription_id`,
   the one size and region the person chooses. A size or region the section does
   not have is refused before any work starts.
 - `cloud_deploy plan-deploy`/`deploy`, the quick start and companions take no
-  Azure worker choice: `--worker-choice` with an Azure offer is refused. They try
-  the section's VM sizes and regions in order.
+  Azure worker choice: `--worker-choice` with an Azure offer is refused. They use
+  the region the cloud recorded, or the section's first region, and try the
+  section's VM sizes in order in that region. When all sizes are refused, the
+  attempt stops with a capacity error. No other region is tried.
 
 The estimated total includes the OS disk, the workspace disk and the static public
 address. `cloud_deploy stop` deallocates the VM, which ends the compute charge;

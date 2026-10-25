@@ -8,8 +8,9 @@ the Azure section has `deployable: true`. Each Azure offer has `rentable: false`
 an offer is a price, not a place that this machine can use. Only the `azure`
 settings decide the VM sizes and regions of a worker. New cloud lists the offers
 that the section allows and places the cloud on the row that the person chooses.
-`cloud_deploy --worker-choice` refuses an Azure offer, and a cloud without a
-choice tries the sizes and regions of the section in their order. See
+`cloud_deploy --worker-choice` refuses an Azure offer. A cloud without a choice
+uses its recorded region or the first region of the section. It tries the sizes
+of the section in their order in that region, and no other region. See
 [the Azure provisioning architecture](azure-provisioning.md).
 
 ## Callers

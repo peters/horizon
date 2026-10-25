@@ -27,8 +27,11 @@ decide where the worker can go:
   one region (`WorkerChoice::for_profile`). `Settings::for_cloud` narrows the
   section to them, so provisioning tries no other size or region. It refuses a
   size or region that the section does not have before work starts.
-- Without a worker choice, provisioning tries the VM sizes and regions of the
-  section in their order. A capacity refusal moves to the next VM size. This is
+- Without a worker choice, provisioning uses the region that the cloud recorded,
+  or the first region of the section. It tries the VM sizes of the section in
+  their order in that region. A capacity refusal moves to the next VM size. When
+  all sizes are refused, the attempt stops with a capacity error. Provisioning
+  does not try another region. This is
   the placement of `cloud_deploy deploy` and the quick start. A companion uses
   the placement that its cloud recorded.
   `cloud_deploy --worker-choice` finds no Azure offer under the machine policy
@@ -45,7 +48,7 @@ The CLI plan runner `cloud_deploy` runs the same lifecycle code as the card. It 
 | Verb | What it does for an Azure cloud |
 |---|---|
 | `offers SETTINGS [REQUIREMENTS_JSON]` | Lists Azure offers in US dollars. It needs no `azure` section. Each offer has `rentable: false`. |
-| `plan-deploy`, then `deploy ... --plan-token <token>` | Creates the worker on the VM sizes and regions of the `azure` section, in their order. |
+| `plan-deploy`, then `deploy ... --plan-token <token>` | Creates the worker in the recorded region or the first region of the `azure` section. It tries the VM sizes of the section in their order, and no other region. |
 | `stop SETTINGS STATE_ROOT` | Deallocates the VM. The compute charge stops. The two disks and the static address stay, and Azure bills them until the cloud is deleted. |
 | `resume`, then `reconnect` | `resume` starts the same VM. `reconnect` brings the cloud to `Ready` with the same address. |
 | `take-stop SETTINGS STATE_ROOT` | Reads an agent's stop request once and deallocates the cloud for it. |
