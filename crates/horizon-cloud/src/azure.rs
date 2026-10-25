@@ -7,8 +7,9 @@
 //! answer is untrusted: bodies are size-limited, decoded into small typed views,
 //! checked against the requested identity, and never echoed into errors except as a
 //! sanitized [`Reason`]. A 409 is never retried and never a definite refusal: it is
-//! the signal to reconcile. [`provision`] creates a worker on these calls, and
-//! [`lifecycle`] stops, starts and deletes it.
+//! the signal to reconcile. [`provision`] creates a worker on these calls,
+//! [`lifecycle`] stops, starts and deletes it, and [`release`] deletes only its VM
+//! for a rebuild on a new VM.
 use crate::{Cancellation, CloudError, Credential, Reason};
 use serde::Deserialize;
 use serde_json::Value;
@@ -20,6 +21,7 @@ pub mod lifecycle;
 pub mod operation;
 pub mod provision;
 pub mod reconcile;
+pub mod release;
 pub mod resource;
 pub mod template;
 pub mod url;
