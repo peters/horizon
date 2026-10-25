@@ -98,10 +98,13 @@ no Azure settings or credential. The Azure section always reports
 The machine's `azure` settings section (`token_file`, `subscription_id`,
 `vm_sizes`, `regions`) decides where an Azure cloud can go:
 
-- New cloud lists Azure only when that section exists and its token file can be
-  read. It shows only the section's VM sizes and regions, and starts the cloud on
-  the one size and region the person chooses. A size or region the section does
-  not have is refused before any work starts.
+- New cloud lists an Azure entry in its heading for every profile Azure can run.
+  The entry is a choice: it moves the cloud to Azure and takes the cheapest VM
+  size and region the section allows, also when the prices arrive after the
+  choice. Without the section the entry is dimmed and says which settings to add,
+  and Start stays refused. With the section, New cloud shows only its VM sizes
+  and regions, and a chosen row fixes that one size and region. A size or region
+  the section does not have is refused before any work starts.
 - `cloud_deploy plan-deploy`/`deploy`, the quick start and companions take no
   Azure worker choice: `--worker-choice` with an Azure offer is refused. They use
   the region the cloud recorded, or the section's first region, and try the
