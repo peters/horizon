@@ -6,6 +6,7 @@ use super::{ANSWER_MARGIN_MILLIS, Fetched, Job, RETRY_FAILED, finished, spawn};
 use horizon_core::cloud_runtime::{
     Cancellation,
     prices::{self, AzureCatalog},
+    settings::Settings,
 };
 use std::{
     path::Path,
@@ -37,6 +38,11 @@ pub(in crate::app::cloud_panel::production) struct State {
     binding: Option<Binding>,
     binding_job: Option<Job<Binding>>,
     binding_failed_at: Option<Instant>,
+    /// Why the settings could not be read at all, such as a file that is not valid JSON.
+    read_error: Option<String>,
+    /// Whether the settings have been read once, which a machine with no settings file
+    /// also reaches: `None` there means "no `azure` section", not "nothing is known".
+    read: bool,
     /// When the settings the last read found were saved.
     settings_saved: Option<SystemTime>,
 }
@@ -52,22 +58,11 @@ impl State {
             .and_then(|metadata| metadata.modified())
             .ok();
         let retry = self.binding_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED);
-        if self.binding_job.is_none() && (saved != self.settings_saved || retry) {
+        if self.binding_job.is_none() && (!self.read || saved != self.settings_saved || retry) {
             self.binding_failed_at = None;
             self.settings_saved = saved;
-            self.binding_job = Some(spawn(root, ctx, |settings, _| {
-                Ok(settings.azure.as_ref().map_or(Ok(None), |azure| {
-                    azure
-                        .credential()
-                        .map(|_| {
-                            Some(Policy {
-                                sizes: azure.vm_sizes.clone(),
-                                regions: azure.regions.clone(),
-                            })
-                        })
-                        .map_err(|error| error.to_string())
-                }))
-            }));
+            self.read = true;
+            self.binding_job = Some(spawn(root, ctx, |settings, _| Ok(binding(settings))));
         }
         if self.bound() {
             self.request(ctx);
@@ -79,6 +74,7 @@ impl State {
         self.binding_job = None;
         self.settings_saved = None;
         self.binding_failed_at = None;
+        self.read = false;
     }
 
     /// Whether this machine has an `azure` section, as the last read found, even when
@@ -105,6 +101,12 @@ impl State {
             Some(Ok(Some(_))) => self.error.as_deref(),
             _ => None,
         }
+    }
+
+    /// Why the settings could not be read at all, which no `azure` section can be read from.
+    /// `None` on a machine whose settings were read, including one that saved none.
+    pub fn read_error(&self) -> Option<&str> {
+        self.read_error.as_deref()
     }
 
     /// The catalog and the policy New cloud offers Azure workers from: the token was
@@ -153,10 +155,14 @@ impl State {
 
     pub fn poll(&mut self) {
         match finished(&mut self.binding_job) {
-            Some(Ok(Fetched { value, .. })) => self.binding = Some(value),
+            Some(Ok(Fetched { value, .. })) => {
+                self.binding = Some(value);
+                self.read_error = None;
+            }
             // Unreadable settings are reported by the checks; Azure is not offered meanwhile.
-            Some(Err(_)) => {
+            Some(Err(error)) => {
                 self.binding = None;
+                self.read_error = Some(error);
                 self.binding_failed_at = Some(Instant::now());
             }
             None => {}
@@ -231,6 +237,21 @@ impl State {
     }
 }
 
+/// What the machine's settings say about Azure, read from the settings Cloud settings saves.
+fn binding(settings: &Settings) -> Binding {
+    settings.azure.as_ref().map_or(Ok(None), |azure| {
+        azure
+            .credential()
+            .map(|_| {
+                Some(Policy {
+                    sizes: azure.vm_sizes.clone(),
+                    regions: azure.regions.clone(),
+                })
+            })
+            .map_err(|error| error.to_string())
+    })
+}
+
 /// A catalog as if the price list had just answered, for the tests, which never reach it.
 #[cfg(test)]
 impl State {
@@ -254,9 +275,34 @@ impl State {
         })));
     }
 
+    /// As if the settings had an `azure` section with these sizes and regions, and its
+    /// prices had not arrived yet.
+    pub fn binding_without_prices(&mut self, sizes: &[&str], regions: &[&str]) {
+        let names = |names: &[&str]| names.iter().map(|&name| name.to_owned()).collect();
+        self.binding = Some(Ok(Some(Policy {
+            sizes: names(sizes),
+            regions: names(regions),
+        })));
+    }
+
+    /// As if the settings had an `azure` section whose prices cannot be fetched.
+    pub fn catalog_failed(&mut self, error: &str) {
+        self.error = Some(error.to_owned());
+        self.failed_at = Some(Instant::now());
+    }
+
+    /// As if the settings could not be read at all.
+    pub fn unreadable_settings(&mut self, error: &str) {
+        self.binding = None;
+        self.read = true;
+        self.read_error = Some(error.to_owned());
+        self.binding_failed_at = Some(Instant::now());
+    }
+
     /// As if the settings had been read and had no `azure` section.
     pub fn without_section(&mut self) {
         self.binding = Some(Ok(None));
+        self.read = true;
     }
 
     /// As if the settings had an `azure` section whose token could not be read.
@@ -275,6 +321,7 @@ impl State {
 mod tests {
     use super::*;
     use horizon_core::cloud_runtime::offers::Requirements;
+    use std::time::Duration;
 
     fn catalog() -> AzureCatalog {
         match serde_json::from_value(serde_json::json!({
@@ -287,6 +334,55 @@ mod tests {
             Ok(catalog) => catalog,
             Err(error) => panic!("catalog: {error}"),
         }
+    }
+
+    /// The settings read the dialog and the agents ask for, on `root`.
+    fn read_settings(root: &Path) -> Result<Option<Policy>, String> {
+        let job = spawn(root, &egui::Context::default(), |settings, _| Ok(binding(settings)));
+        job.recv_timeout(Duration::from_secs(30))
+            .unwrap_or_else(|error| panic!("settings read: {error}"))?
+            .value
+    }
+
+    /// A token file Cloud settings accepts, which must stay private.
+    #[cfg(unix)]
+    fn private_token(root: &Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("azure-token");
+        std::fs::write(&path, "synthetic-arm-token\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_azure_section_alone_binds_the_policy_on_a_fresh_home() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("settings.json"),
+            serde_json::json!({"azure": {
+                "token_file": private_token(root.path()),
+                "subscription_id": "00000000-0000-4000-8000-000000000001",
+                "vm_sizes": ["Standard_D4s_v3"],
+                "regions": ["northeurope"],
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let policy = read_settings(root.path()).unwrap_or_else(|error| panic!("binding: {error}"));
+        let policy = policy.unwrap_or_else(|| panic!("an azure section binds a policy"));
+        assert_eq!(policy.sizes, ["Standard_D4s_v3"]);
+        assert_eq!(policy.regions, ["northeurope"]);
+    }
+
+    #[test]
+    fn a_fresh_home_with_no_settings_file_has_no_azure_section() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_settings(root.path()).unwrap_or_else(|error| panic!("binding: {error}")),
+            None,
+            "no saved settings is not a read failure"
+        );
     }
 
     #[test]
