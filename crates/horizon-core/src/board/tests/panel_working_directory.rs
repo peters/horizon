@@ -16,7 +16,8 @@ fn shell_panel_state(local_id: &str, cwd: Option<&std::path::Path>) -> PanelStat
         cwd: cwd.map(|path| path.display().to_string()),
         ssh_connection: None,
         rows: 24,
-        cols: 80,
+        // Wide enough that a temporary directory path stays on one line.
+        cols: 200,
         work_resume: crate::agent_work::ResumePolicy::default(),
         resume: PanelResume::Fresh,
         position: Some([0.0, 40.0]),
@@ -44,6 +45,7 @@ fn a_new_panel_says_why_it_cannot_start_in_its_workspace_directory() {
                 kind: PanelKind::Shell,
                 command: Some("/bin/sh".to_string()),
                 args: vec!["-c".to_string(), "exit".to_string()],
+                cols: 200,
                 ..PanelOptions::default()
             },
             workspace_id,
@@ -110,6 +112,7 @@ fn a_restart_in_a_directory_that_is_gone_explains_itself() {
                 kind: PanelKind::Shell,
                 command: Some("/bin/sh".to_string()),
                 args: vec!["-c".to_string(), "exit".to_string()],
+                cols: 200,
                 ..PanelOptions::default()
             },
             workspace_id,
@@ -147,6 +150,7 @@ fn a_restart_follows_the_directory_the_person_set_for_the_workspace() {
                 kind: PanelKind::Shell,
                 command: Some("/bin/sh".to_string()),
                 args: vec!["-c".to_string(), "exit".to_string()],
+                cols: 200,
                 ..PanelOptions::default()
             },
             workspace_id,
@@ -190,6 +194,7 @@ fn a_panel_with_its_own_directory_keeps_it_when_the_workspace_directory_changes(
                 command: Some("/bin/sh".to_string()),
                 args: vec!["-c".to_string(), "exit".to_string()],
                 cwd: Some(own_directory.clone()),
+                cols: 200,
                 ..PanelOptions::default()
             },
             workspace_id,
