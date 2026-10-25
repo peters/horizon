@@ -67,6 +67,12 @@ impl From<RemoteChannelError> for RemoteBridgeError {
             RemoteChannelError::InvalidTarget { target } => Self::InvalidTarget { target },
             RemoteChannelError::HostUnavailable { target, reason } => Self::HostUnavailable { target, reason },
             RemoteChannelError::Transport { target, reason } => Self::Transport { target, reason },
+            // The bridge relays one stream, so a host that stops answering ends
+            // as a transport failure with the bound in its reason.
+            RemoteChannelError::NoAnswer { target, seconds } => Self::Transport {
+                target,
+                reason: format!("the host gave no answer within {seconds} seconds"),
+            },
         }
     }
 }

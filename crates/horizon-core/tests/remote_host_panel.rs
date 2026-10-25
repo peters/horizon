@@ -18,7 +18,6 @@
 //! ```
 #![cfg(unix)]
 
-use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -98,19 +97,109 @@ fn start_host(root: &Path, program: &Path) -> Host {
     // The guard owns the process, so a host that never writes its record is
     // stopped before this function reports the failure.
     let host = Host(Some(child));
-    let record = root.join("state").join(RECORD);
+    let state = root.join("state");
+    let record = state.join(RECORD);
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        if let Ok(file) = std::fs::File::open(&record) {
-            let mut line = String::new();
-            if BufReader::new(file).read_line(&mut line).is_ok() && line.contains("host_instance") {
-                return host;
-            }
+        // The record is pretty-printed JSON, so it is read whole and parsed, not
+        // by its first line.
+        if let Some(instance) = recorded_instance(&record) {
+            eprintln!("profile host {instance} wrote {}", record.display());
+            return host;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    // Name what the host left behind, so a failure says why it never became
+    // ready instead of only that the record was absent.
+    let found = std::fs::read_dir(&state)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     drop(host);
-    panic!("the profile host wrote no {RECORD}");
+    panic!(
+        "the profile host wrote no readable {RECORD} within 30 seconds; {} holds {found:?}",
+        state.display()
+    );
+}
+
+/// Print the first real frame of the page, send a key press and a page scroll,
+/// and give the frame counter before and after them. The host answers a call of
+/// the contract only when the page took it, and a refused call reaches the panel
+/// note instead of the page.
+fn show_frame_and_send_input(panel: &mut BrowserPanelState) -> (u64, u64) {
+    let frame_deadline = Instant::now() + Duration::from_secs(60);
+    while panel.frame_slot.latest().is_none() && Instant::now() < frame_deadline {
+        panel.drain_events();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let first = panel
+        .frame_slot
+        .latest()
+        .expect("the panel shows the first frame of the page");
+    eprintln!(
+        "real frame: {}x{} in RGB, sequence {}, url {:?}, title {:?}, engine {:?}",
+        first.width,
+        first.height,
+        first.seq,
+        panel.url.as_deref().unwrap_or_default(),
+        panel.title,
+        panel.backend()
+    );
+    let before = first.seq;
+    assert!(
+        panel.try_send(BrowserCommand::Input(BrowserInput::KeyDown {
+            physical_key: Some(horizon_core::browser::BrowserKey::Tab),
+            key: horizon_core::browser::BrowserKey::Tab,
+            text: None,
+            modifiers: horizon_core::browser::BrowserModifiers::none(),
+            repeat: false,
+            edit_command: None,
+        })),
+        "the panel queued the key press"
+    );
+    assert!(
+        panel.try_send(BrowserCommand::Input(BrowserInput::Wheel {
+            x: 100.0,
+            y: 100.0,
+            delta_x: 0.0,
+            delta_y: -240.0,
+            modifiers: horizon_core::browser::BrowserModifiers::none(),
+        })),
+        "the panel queued the page scroll"
+    );
+    let input_deadline = Instant::now() + Duration::from_secs(30);
+    while panel.frame_slot.latest().map(|frame| frame.seq) == Some(before) && Instant::now() < input_deadline {
+        panel.drain_events();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panel.drain_events();
+    assert!(
+        panel.navigation_error.is_none(),
+        "the host refused the input: {:?}",
+        panel.navigation_error
+    );
+    let after = panel.frame_slot.latest().map(|frame| frame.seq).unwrap_or_default();
+    assert!(
+        after > before,
+        "the page kept producing frames after the input ({before} -> {after})"
+    );
+    (before, after)
+}
+
+/// The host instance of a record that a running host wrote, when the file is
+/// there and holds one.
+fn recorded_instance(record: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(record).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("host_instance")
+        .and_then(serde_json::Value::as_str)
+        .filter(|instance| !instance.is_empty())
+        .map(str::to_string)
 }
 
 #[test]
@@ -128,7 +217,19 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
         eprintln!("skipped: no horizon-browser program is on the PATH of this test");
         return;
     };
-    let root = tempfile::tempdir().expect("temporary runtime root");
+    // A confined browser can not read a path with a hidden folder on it, so the
+    // caller may name a visible folder to hold the runtime root of the test.
+    let root = match std::env::var_os("HORIZON_CORE_REMOTE_HOST_ROOT") {
+        Some(folder) => {
+            let folder = PathBuf::from(folder);
+            std::fs::create_dir_all(&folder).expect("root folder");
+            tempfile::Builder::new()
+                .prefix("panel-live-")
+                .tempdir_in(&folder)
+                .expect("temporary runtime root")
+        }
+        None => tempfile::tempdir().expect("temporary runtime root"),
+    };
     // SAFETY: no other test of this binary reads these variables, and the test
     // process owns them for its whole run.
     unsafe {
@@ -143,8 +244,7 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
         &BrowserConfig::default(),
         Some("https://example.test/".to_string()),
         &backend,
-    )
-    .expect("the channel to the profile host starts");
+    );
     assert!(panel.is_remote_host());
     assert_eq!(panel.remote_host_target(), Some(target.as_str()));
 
@@ -154,7 +254,10 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
         match panel.status {
             BrowserStatus::Ready => break true,
             BrowserStatus::Error { ref message } => {
-                eprintln!("the profile host did not open the page: {message}");
+                eprintln!(
+                    "the profile host did not open the page: {message} | host note: {:?} | status: {:?}",
+                    panel.navigation_error, panel.remote_status
+                );
                 break false;
             }
             _ => {}
@@ -170,24 +273,13 @@ fn a_panel_shows_the_page_of_a_browser_host_and_sends_its_input_there() {
         matches!(backend_of_page, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi),
         "the panel reports the engine of the profile: {backend_of_page:?}"
     );
-    let frame_deadline = Instant::now() + Duration::from_secs(60);
-    while panel.frame_slot.latest().is_none() && Instant::now() < frame_deadline {
-        panel.drain_events();
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let (before, after) = show_frame_and_send_input(&mut panel);
     assert!(
-        panel.frame_slot.latest().is_some(),
-        "the panel shows the first frame of the page"
+        panel.remote_host_failure().is_none(),
+        "the channel of the panel is live after the input: {:?}",
+        panel.remote_host_failure()
     );
-
-    assert!(panel.try_send(BrowserCommand::Input(BrowserInput::KeyDown {
-        physical_key: Some(horizon_core::browser::BrowserKey::Tab),
-        key: horizon_core::browser::BrowserKey::Tab,
-        text: None,
-        modifiers: horizon_core::browser::BrowserModifiers::none(),
-        repeat: false,
-        edit_command: None,
-    })));
+    eprintln!("real input round trip: key press and page scroll accepted, frames {before} -> {after}");
 
     panel.stop();
     let stopped = Instant::now() + Duration::from_secs(30);

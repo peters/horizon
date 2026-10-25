@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use horizon_browser::{BrowserCommand, BrowserInput, BrowserKey, BrowserModifiers};
 use serde_json::{Value, json};
 
-use super::view::{HostChannel, HostPage, HostView};
-use super::{PANEL_ACTOR, POINTER_NOTE, RemoteHostRefusal, RemoteHostSlot};
+use super::view::{HostChannel, HostOpener, HostPage, HostView};
+use super::{PANEL_ACTOR, POINTER_NOTE, RemoteHostFailure, RemoteHostRefusal, RemoteHostSlot};
 use crate::browser::{BackendKind, BrowserConfig, BrowserPanelState, BrowserStatus};
 
 /// A 1x1 PNG, as a screenshot result inlines it.
@@ -122,31 +122,66 @@ fn panel(script: &Script) -> BrowserPanelState {
     state.status = BrowserStatus::Starting;
     state.loading = true;
     let view = HostView::start(
-        Box::new(SocketChannel(Some(client))),
+        peer_opener(Box::new(SocketChannel(Some(client)))),
         HostPage {
             url: Some("https://example.test/".to_string()),
             profile: Some("mail".to_string()),
         },
         BackendKind::ChromiumCdp,
         Arc::clone(&state.frame_slot),
-    )
-    .expect("the channel of the peer starts");
+    );
     state.remote_host = Some(RemoteHostSlot {
         view: Some(view),
         target: "127.0.0.1".to_string(),
         profile: Some("mail".to_string()),
+        failure: None,
+    });
+    state
+}
+
+/// An opener that hands the view a channel that already exists.
+fn peer_opener(channel: Box<dyn HostChannel>) -> HostOpener {
+    Box::new(move || Ok(channel))
+}
+
+/// A panel whose channel never opens, because its opener keeps the worker thread
+/// for `delay` and then reports the reason.
+fn panel_with_slow_opener(delay: Duration, failure: RemoteHostFailure) -> BrowserPanelState {
+    let mut state = BrowserPanelState::inert();
+    state.panel_local_id = "panel-mail".to_string();
+    state.status = BrowserStatus::Starting;
+    state.loading = true;
+    let view = HostView::start(
+        Box::new(move || {
+            std::thread::sleep(delay);
+            Err(failure)
+        }),
+        HostPage {
+            url: None,
+            profile: Some("mail".to_string()),
+        },
+        BackendKind::ChromiumCdp,
+        Arc::clone(&state.frame_slot),
+    );
+    state.remote_host = Some(RemoteHostSlot {
+        view: Some(view),
+        target: "127.0.0.1".to_string(),
+        profile: Some("mail".to_string()),
+        failure: None,
     });
     state
 }
 
 /// The panel state after the pump has published it, once `ready` holds or the
-/// status is an error.
+/// status is an error. A ready panel holds one frame of its page: the create
+/// answer and the first screenshot are two calls of one tick.
 fn settled(panel: &mut BrowserPanelState) -> BrowserStatus {
     let deadline = Instant::now() + DEADLINE;
     loop {
         panel.drain_events();
         let status = panel.status.clone();
-        if status == BrowserStatus::Ready || matches!(status, BrowserStatus::Error { .. }) {
+        let ready = status == BrowserStatus::Ready && panel.frame_slot.latest().is_some();
+        if ready || matches!(status, BrowserStatus::Error { .. }) {
             return status;
         }
         assert!(Instant::now() < deadline, "the panel never settled: {status:?}");
@@ -196,12 +231,20 @@ fn answer(peer: UnixStream, script: &Script) {
                 }))
             } else {
                 Some(match name.as_str() {
+                    // The shape of a real `browser_create`: the page arrives
+                    // under `panel`, and the page id belongs to that object.
                     "browser_create" => json!({
                         "content": [{ "type": "text", "text": "created" }],
                         "structuredContent": {
-                            "panel_id": PAGE,
-                            "panel": { "url": "https://example.test/", "title": "Example", "backend": "chromium" },
+                            "action_id": "create-1",
                             "navigation": "committed",
+                            "panel": {
+                                "panel_id": PAGE,
+                                "url": "https://example.test/",
+                                "title": "Example",
+                                "backend": "chromium",
+                            },
+                            "startup_millis": 601,
                         },
                         "isError": false,
                     }),
@@ -462,6 +505,82 @@ fn a_host_that_disappears_mid_session_ends_the_panel_with_a_typed_reason() {
             .is_some_and(|note| note.contains("127.0.0.1")),
         "the panel names the host that ended: {:?}",
         panel.remote_status
+    );
+}
+
+#[test]
+fn a_channel_that_never_opens_does_not_hold_the_thread_that_asked() {
+    /// How long the stand-in opener holds its worker thread.
+    const OPEN_DELAY: Duration = Duration::from_millis(1500);
+    let started = Instant::now();
+    let mut panel = panel_with_slow_opener(OPEN_DELAY, RemoteHostFailure::NO_ANSWER);
+    let asked = started.elapsed();
+    assert!(
+        asked < Duration::from_millis(200),
+        "creating the panel never waits for the host: {asked:?}"
+    );
+    assert!(
+        panel.remote_host_failure().is_none(),
+        "the panel starts with no reason and keeps painting"
+    );
+    let deadline = Instant::now() + DEADLINE;
+    while panel.remote_host_failure().is_none() && Instant::now() < deadline {
+        panel.drain_events();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panel.drain_events();
+    assert_eq!(
+        panel.remote_host_failure().map(|failure| failure.code),
+        Some("remote_host_no_answer"),
+        "the reason of the worker thread reaches the panel as a typed state"
+    );
+    assert!(matches!(panel.status, BrowserStatus::Error { .. }));
+    assert!(
+        panel.remote_host_target().is_some(),
+        "the panel still reports the host that it uses"
+    );
+}
+
+#[test]
+fn a_relaunch_of_a_panel_whose_host_does_not_answer_returns_at_once() {
+    let mut state = BrowserPanelState::inert();
+    state.panel_local_id = "panel-mail".to_string();
+    // A backend with no view is what a failed channel leaves behind, which is the
+    // state in which the person sees the Retry button.
+    state.remote_host = Some(RemoteHostSlot {
+        view: None,
+        target: "127.0.0.1".to_string(),
+        profile: Some("mail".to_string()),
+        failure: Some(RemoteHostFailure::UNREACHABLE),
+    });
+    state.status = BrowserStatus::Error {
+        message: RemoteHostFailure::UNREACHABLE.message.to_string(),
+    };
+    let started = Instant::now();
+    state.relaunch();
+    let asked = started.elapsed();
+    assert!(
+        asked < Duration::from_millis(200),
+        "the retry of the person never waits for ssh: {asked:?}"
+    );
+    assert_eq!(
+        state.status,
+        BrowserStatus::Starting,
+        "the panel shows that it is starting while the host is contacted"
+    );
+    let deadline = Instant::now() + DEADLINE;
+    while state.remote_host_failure().is_none() && Instant::now() < deadline {
+        state.drain_events();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    state.drain_events();
+    assert!(
+        state
+            .remote_host_failure()
+            .is_some_and(|failure| failure.code == "remote_host_unreachable"
+                || failure.code == "remote_host_no_answer"),
+        "a host that does not answer ends the retry with a typed reason: {:?}",
+        state.remote_host_failure()
     );
 }
 

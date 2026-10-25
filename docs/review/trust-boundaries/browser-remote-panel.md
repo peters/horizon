@@ -83,6 +83,14 @@ a key press on the focused element, a page scroll, a navigation, a viewport.
 ## Lifecycle that a review must keep
 
 - A panel starts one `ssh` process for its channel and no listener.
+- No `ssh` of the channel runs on the UI thread. Creating a panel and the Retry of
+  a person start a worker thread that reads the record and starts the server, and
+  the panel draws the outcome as a state.
+- Every `ssh` of the channel carries `-o BatchMode=yes`, a bounded
+  `-o ConnectTimeout`, and a bounded server-alive setting, so a host that drops
+  packets or asks a question fails in seconds and never waits for a prompt.
+- The probe of the record has its own deadline, and the process is killed when the
+  deadline passes. A host that stops answering is a typed reason, never a wait.
 - The page of the host closes with the panel, and the profile of the host stays.
 - A stopped channel leaves the panel with a typed reason and one line that gives
   the SSH target. It retries only when the person asks for a retry.

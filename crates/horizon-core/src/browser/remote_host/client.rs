@@ -130,13 +130,22 @@ impl McpClient {
                     .find_map(|block| (block.get("type")?.as_str()? == "image").then(|| block.get("data")?.as_str())?)
             })
             .map(str::to_string);
-        Ok(ToolResult {
-            value: result
-                .get("structuredContent")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-            image,
-        })
+        // A server of this contract answers the structured value in
+        // `structuredContent`; a server that holds only the text block answers
+        // the same JSON there, so both shapes give the same value.
+        let value = result
+            .get("structuredContent")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .or_else(|| {
+                result
+                    .get("content")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|blocks| blocks.iter().find_map(|block| block.get("text")?.as_str()))
+                    .and_then(|text| serde_json::from_str(text).ok())
+            })
+            .unwrap_or(serde_json::Value::Null);
+        Ok(ToolResult { value, image })
     }
 
     fn notify(&mut self, method: &str) -> Result<(), ClientError> {

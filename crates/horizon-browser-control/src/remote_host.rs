@@ -15,6 +15,8 @@ use std::fs::File;
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// The runtime root of the remote host, as a path on that machine. Unset means
 /// the remote default, `$HOME/.horizon`, which is what Horizon leaves it at.
@@ -39,6 +41,20 @@ const REMOTE_EXECUTABLE: &str = "horizon-browser";
 const RECORD: &str = "profile-host.json";
 const SSH: &str = "ssh";
 const READ_BUFFER: usize = 8 * 1024;
+/// Bound of the TCP connect of one `ssh`, in seconds. A host that drops packets
+/// fails here instead of holding the caller for the two minutes of a default
+/// connect.
+const CONNECT_TIMEOUT_SECONDS: u32 = 5;
+/// Keepalive interval of one `ssh`, in seconds, so a host that stops answering
+/// after the connect fails at the same order of time.
+const SERVER_ALIVE_INTERVAL_SECONDS: u32 = 5;
+/// Number of keepalives without an answer that end one `ssh`.
+const SERVER_ALIVE_COUNT_MAX: u32 = 2;
+/// Deadline of the probe of the record, which is the first call of every client.
+const PROBE_DEADLINE: Duration = Duration::from_secs(10);
+/// Deadline of one file call of the relay. A call that crosses this bound is
+/// killed, so no caller waits on a host that stopped answering.
+const CALL_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Why a channel to the browser host of another machine cannot serve its client.
 #[derive(Debug, thiserror::Error)]
@@ -51,6 +67,8 @@ pub enum RemoteChannelError {
     HostUnavailable { target: String, reason: String },
     #[error("could not use the SSH target {target}: {reason}")]
     Transport { target: String, reason: String },
+    #[error("the browser host {target} gave no answer within {seconds} seconds")]
+    NoAnswer { target: String, seconds: u64 },
 }
 
 /// Whether `target` is one name that `ssh` takes as one argument and not as an
@@ -86,6 +104,34 @@ pub fn remote_executable() -> String {
         .unwrap_or_else(|| REMOTE_EXECUTABLE.to_string())
 }
 
+/// The program of one `ssh` call.
+#[must_use]
+pub fn ssh_program() -> String {
+    SSH.to_string()
+}
+
+/// One `ssh` call with every option that keeps it from waiting: no prompt, a
+/// bounded connect and a bounded keepalive, so a host that drops packets or asks
+/// a question fails in seconds instead of holding the caller.
+#[must_use]
+fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
+    let mut command = Command::new(program);
+    command.args([
+        "-Tq".to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        format!("ConnectTimeout={CONNECT_TIMEOUT_SECONDS}"),
+        "-o".to_string(),
+        format!("ServerAliveInterval={SERVER_ALIVE_INTERVAL_SECONDS}"),
+        "-o".to_string(),
+        format!("ServerAliveCountMax={SERVER_ALIVE_COUNT_MAX}"),
+        target.to_string(),
+        remote_command.to_string(),
+    ]);
+    command
+}
+
 /// What the record of a running remote host gives a client.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteHostRecord {
@@ -101,9 +147,35 @@ pub struct RemoteHostRecord {
 /// See [`RemoteChannelError`]: no host runs on that runtime root, the transport
 /// failed, or the record is not a record of a running host.
 pub fn probe(target: &str, root: Option<&Path>) -> Result<RemoteHostRecord, RemoteChannelError> {
-    let output = run(target, &probe_command(root), MAX_PROBE_BYTES).map_err(|error| RemoteChannelError::Transport {
-        target: target.to_string(),
-        reason: error.to_string(),
+    probe_with(target, root, &ssh_program(), PROBE_DEADLINE)
+}
+
+/// Read the record of the host at `target` through `program`, within `deadline`.
+/// This is the seam whose test gives the probe a stand-in `ssh` that never
+/// answers: the child is killed when the deadline passes, and the caller gets a
+/// typed reason instead of a wait.
+fn probe_with(
+    target: &str,
+    root: Option<&Path>,
+    program: &str,
+    deadline: Duration,
+) -> Result<RemoteHostRecord, RemoteChannelError> {
+    let output = run_bounded(
+        ssh_command(program, target, &probe_command(root)),
+        MAX_PROBE_BYTES,
+        deadline,
+    )
+    .map_err(|error| {
+        if error.kind() == io::ErrorKind::TimedOut {
+            return RemoteChannelError::NoAnswer {
+                target: target.to_string(),
+                seconds: deadline.as_secs(),
+            };
+        }
+        RemoteChannelError::Transport {
+            target: target.to_string(),
+            reason: error.to_string(),
+        }
     })?;
     if output.code == Some(PROBE_NO_RECORD) && !output.too_large {
         return Err(RemoteChannelError::HostUnavailable {
@@ -170,8 +242,7 @@ impl RemoteChannel {
         let root = remote_root();
         let host = probe(target, root.as_deref())?;
         let command = server_command(&remote_executable(), actor, &host.host_instance, root.as_deref());
-        let child = Command::new(SSH)
-            .args(["-Tq", target, &command])
+        let child = ssh_command(&ssh_program(), target, &command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -263,8 +334,19 @@ impl Output {
 /// # Errors
 /// Returns when `ssh` cannot start or its output cannot be read.
 pub fn run(target: &str, remote_command: &str, limit: u64) -> io::Result<Output> {
-    let mut child = Command::new(SSH)
-        .args(["-Tq", target, remote_command])
+    run_bounded(
+        ssh_command(&ssh_program(), target, remote_command),
+        limit,
+        CALL_DEADLINE,
+    )
+}
+
+/// Run one command and read at most `limit` bytes of its standard output, with a
+/// deadline. The read runs on its own thread, so a call that never answers is
+/// killed when the deadline passes and the caller gets
+/// [`io::ErrorKind::TimedOut`] instead of a wait.
+fn run_bounded(mut command: Command, limit: u64, deadline: Duration) -> io::Result<Output> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -272,21 +354,34 @@ pub fn run(target: &str, remote_command: &str, limit: u64) -> io::Result<Output>
     let Some(mut stdout) = child.stdout.take() else {
         return Err(io::Error::other("ssh has no standard output"));
     };
-    let mut bytes = Vec::new();
-    let mut buffer = [0u8; READ_BUFFER];
-    let mut too_large = false;
-    loop {
-        let read = stdout.read(&mut buffer)?;
-        if read == 0 {
-            break;
+    let (sender, received) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; READ_BUFFER];
+        let mut too_large = false;
+        loop {
+            match stdout.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if u64::try_from(bytes.len() + read).unwrap_or(u64::MAX) > limit {
+                        too_large = true;
+                        break;
+                    }
+                    bytes.extend_from_slice(&buffer[..read]);
+                }
+            }
         }
-        if u64::try_from(bytes.len() + read).unwrap_or(u64::MAX) > limit {
-            too_large = true;
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-    }
-    drop(stdout);
+        // The receiver may be gone after a deadline, which is not an error.
+        let _ = sender.send((bytes, too_large));
+    });
+    let Ok((bytes, too_large)) = received.recv_timeout(deadline) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("ssh gave no answer within {} seconds", deadline.as_secs()),
+        ));
+    };
     if too_large {
         let _ = child.kill();
     }
@@ -307,12 +402,15 @@ pub fn run(target: &str, remote_command: &str, limit: u64) -> io::Result<Output>
 /// Returns when the local file or `ssh` cannot be opened.
 pub fn stage(target: &str, file: &Path, directory: &str, subdirectory: usize, name: &str) -> io::Result<Output> {
     let input = File::open(file)?;
-    let child = Command::new(SSH)
-        .args(["-Tq", target, &stage_file_command(directory, subdirectory, name)])
-        .stdin(Stdio::from(input))
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let child = ssh_command(
+        &ssh_program(),
+        target,
+        &stage_file_command(directory, subdirectory, name),
+    )
+    .stdin(Stdio::from(input))
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()?;
     let output = child.wait_with_output()?;
     Ok(Output {
         code: output.status.code(),

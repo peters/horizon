@@ -1,7 +1,10 @@
 //! The record of a real profile host, the answer of a real probe, and the
 //! command line of a real remote server, rather than a live machine.
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use super::{
     MAX_ACTOR_LEN, RemoteChannel, RemoteChannelError, RemoteHostRecord, create_directory_command, parse_probe,
@@ -76,6 +79,86 @@ fn a_refused_channel_names_its_reason_before_it_opens_a_connection() {
     assert!(matches!(error, RemoteChannelError::ActorMissing), "{error}");
     let error = RemoteChannel::open("127.0.0.1", " ").err().expect("an empty actor");
     assert!(matches!(error, RemoteChannelError::ActorMissing), "{error}");
+}
+
+#[test]
+fn every_ssh_of_the_channel_is_bounded_and_can_not_ask_a_question() {
+    let command = super::ssh_command(
+        "ssh",
+        "browser-vm",
+        "horizon-browser mcp --connect --inline-screenshots",
+    );
+    let args = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for bounded in [
+        "BatchMode=yes",
+        "ConnectTimeout=5",
+        "ServerAliveInterval=5",
+        "ServerAliveCountMax=2",
+    ] {
+        assert!(
+            args.iter().any(|argument| argument == bounded),
+            "{bounded} is missing: {args:?}"
+        );
+    }
+    assert!(
+        args.first().is_some_and(|first| first == "-Tq"),
+        "no controlling terminal and a quiet stderr: {args:?}"
+    );
+    assert_eq!(
+        args.iter().rev().take(2).rev().collect::<Vec<_>>(),
+        ["browser-vm", "horizon-browser mcp --connect --inline-screenshots"],
+        "the target and the remote command stay the last two words: {args:?}"
+    );
+}
+
+#[test]
+fn a_call_that_never_answers_is_killed_at_its_deadline() {
+    let started = Instant::now();
+    let error = super::run_bounded(Command::new("sh"), 0, Duration::from_millis(300)).err();
+    let elapsed = started.elapsed();
+    let _ = error;
+    // The command needs an argument to hang, so the call above fails at once as
+    // a spawn error. This is the case that must not wait either.
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "a call that cannot start returns at once: {elapsed:?}"
+    );
+
+    let mut hanging = Command::new("sh");
+    hanging.args(["-c", "sleep 30"]);
+    let started = Instant::now();
+    let error = super::run_bounded(hanging, 0, Duration::from_millis(300))
+        .err()
+        .expect("a call that never answers");
+    let elapsed = started.elapsed();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the deadline ends the call, not the sleep: {elapsed:?}"
+    );
+}
+
+#[test]
+fn a_probe_of_a_stand_in_ssh_that_never_answers_is_a_typed_no_answer() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let program = directory.path().join("ssh");
+    std::fs::write(&program, "#!/bin/sh\nsleep 30\n").expect("stand-in ssh");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    let started = Instant::now();
+    let error = super::probe_with("browser-vm", None, &program.to_string_lossy(), Duration::from_secs(1))
+        .expect_err("a host that never answers");
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(&error, RemoteChannelError::NoAnswer { target, seconds } if target == "browser-vm" && *seconds == 1),
+        "{error}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the probe keeps its own deadline: {elapsed:?}"
+    );
 }
 
 #[test]

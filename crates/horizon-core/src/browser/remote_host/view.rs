@@ -77,6 +77,15 @@ impl HostViewState {
     }
 }
 
+/// Opens the channel of one panel to its host. It runs on the worker thread of
+/// the view, so a host that does not answer never holds the thread that asked for
+/// the panel, and a person keeps seeing the window paint.
+pub(super) type HostOpener = Box<dyn FnOnce() -> Result<Box<dyn HostChannel>, RemoteHostFailure> + Send>;
+
+/// The channel of a view once it exists. The pump stores it as soon as it opens,
+/// so a stop that arrives during the open still stops it.
+type ChannelSlot = Arc<Mutex<Option<Box<dyn HostChannel>>>>;
+
 /// One live connection of a panel to its browser host.
 pub(super) struct HostView {
     tx: mpsc::SyncSender<BrowserCommand>,
@@ -84,25 +93,14 @@ pub(super) struct HostView {
     latest: Arc<Mutex<Option<HostViewState>>>,
     waker: Arc<Mutex<Option<BrowserEventWaker>>>,
     stop: Arc<AtomicBool>,
-    channel: Arc<Mutex<Box<dyn HostChannel>>>,
+    channel: ChannelSlot,
 }
 
 impl HostView {
-    /// Start the pump on `channel` and create the page of `page` there.
-    ///
-    /// # Errors
-    /// Returns when the channel has no standard streams. The channel is stopped
-    /// in that case, so no server of the host stays behind.
-    pub(super) fn start(
-        mut channel: Box<dyn HostChannel>,
-        page: HostPage,
-        backend: BackendKind,
-        frames: Arc<FrameSlot>,
-    ) -> Result<Self, RemoteHostFailure> {
-        let Some((input, output)) = channel.take_streams() else {
-            channel.stop();
-            return Err(RemoteHostFailure::STOPPED);
-        };
+    /// Start the worker thread that opens the channel, then creates the page of
+    /// `page` on the host and pumps its frames. This call returns at once: the
+    /// outcome, including a host that never answers, is a state of the panel.
+    pub(super) fn start(open: HostOpener, page: HostPage, backend: BackendKind, frames: Arc<FrameSlot>) -> Self {
         let (tx, commands) = mpsc::sync_channel(QUEUE);
         let shared = Shared {
             latest: Arc::default(),
@@ -110,7 +108,7 @@ impl HostView {
             stop: Arc::new(AtomicBool::new(false)),
             frames,
         };
-        let channel: Arc<Mutex<Box<dyn HostChannel>>> = Arc::new(Mutex::new(channel));
+        let channel: ChannelSlot = Arc::default();
         let alive = Arc::new(());
         let view = Self {
             tx,
@@ -121,7 +119,30 @@ impl HostView {
             channel: Arc::clone(&channel),
         };
         std::thread::spawn(move || {
-            let ended = drive(McpClient::start(input, output), &commands, &shared, &page, backend);
+            let mut opened = match open() {
+                Ok(channel) => channel,
+                Err(failure) => {
+                    // The host never answered. The panel draws this reason, and
+                    // the thread that asked for the panel is already free.
+                    publish(
+                        &shared,
+                        Some(HostViewState {
+                            failure: Some(failure),
+                            ..HostViewState::starting(backend)
+                        }),
+                    );
+                    drop(commands);
+                    drop(alive);
+                    shared.stop.store(true, Ordering::Release);
+                    return;
+                }
+            };
+            let streams = opened.take_streams();
+            *lock(&channel) = Some(opened);
+            let ended = match streams {
+                Some((input, output)) => drive(McpClient::start(input, output), &commands, &shared, &page, backend),
+                None => Some((RemoteHostFailure::STOPPED, None)),
+            };
             // Drop the receiver before the last state, so a send cannot succeed
             // after the pump stopped reading it.
             drop(commands);
@@ -136,12 +157,10 @@ impl HostView {
                     }),
                 );
             }
-            if let Ok(mut channel) = channel.lock() {
-                channel.stop();
-            }
+            stop_channel(&channel);
             shared.stop.store(true, Ordering::Release);
         });
-        Ok(view)
+        view
     }
 
     /// Queue one command for the page of the host.
@@ -170,14 +189,14 @@ impl HostView {
 
     /// Stop this panel: the pump closes the page of the host through the live
     /// channel, and the channel is stopped when it did or when the grace ends.
+    /// A channel that is still opening has no process yet, so the stop also
+    /// covers a host that never answers.
     pub(super) fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
         let channel = Arc::clone(&self.channel);
         std::thread::spawn(move || {
             std::thread::sleep(SHUTDOWN_GRACE);
-            if let Ok(mut channel) = channel.lock() {
-                channel.stop();
-            }
+            stop_channel(&channel);
         });
     }
 }
@@ -191,6 +210,13 @@ struct Shared {
 
 fn lock<T>(slot: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Stop the process of the channel, when it exists yet.
+fn stop_channel(slot: &ChannelSlot) {
+    if let Some(channel) = lock(slot).as_mut() {
+        channel.stop();
+    }
 }
 
 fn publish(shared: &Shared, state: Option<HostViewState>) {
@@ -229,9 +255,13 @@ fn run(
     let created = client
         .call("browser_create", &create_arguments(page), CREATE_TIMEOUT)
         .map_err(|error| failure_of(&error))?;
+    // A create answers the page under `panel`, and every other call names the
+    // page at its top level.
     let Some(panel_id) = created
         .value
-        .get("panel_id")
+        .get("panel")
+        .and_then(|panel| panel.get("panel_id"))
+        .or_else(|| created.value.get("panel_id"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
     else {
@@ -269,9 +299,11 @@ fn run(
                 }
             }
             Err(ClientError::Refused(reason)) => {
-                // The page is gone, or its claim moved: the panel has nothing
-                // left to show, so the reason ends it.
-                return Err((RemoteHostFailure::REFUSED, Some(reason)));
+                // A screen is not ready for every moment of a page: the host
+                // refuses a capture before the first frame, while the page
+                // loads, and while another claim holds it. The reason stays in
+                // the panel note and the panel keeps reading the page.
+                state.note = Some(reason);
             }
             Err(error) => return Err(failure_of(&error)),
         }

@@ -18,6 +18,11 @@
 //!
 //! The actor of the pages of a panel is [`PANEL_ACTOR`], which no agent has, so a
 //! page of a panel and a page of an agent never appear in each other's list.
+//!
+//! Nothing here waits on `ssh` on the thread that calls it. Creating a panel, and
+//! the Retry of a person, start a worker thread that reads the record of the host
+//! and starts its server; the outcome, including a host that never answers, is a
+//! typed state that the panel draws, so the window keeps painting.
 
 mod client;
 mod input;
@@ -31,7 +36,7 @@ use std::io;
 use horizon_browser::{BrowserCommand, BrowserEventWaker};
 
 use super::{BrowserDrainOutput, BrowserPanelState, BrowserStatus};
-use view::{HostChannel, HostPage, HostView};
+use view::{HostChannel, HostOpener, HostPage, HostView};
 
 /// The identity of every page that a panel of this computer opens on a browser
 /// host. A profile host takes only `horizon:` identities, and no agent uses this
@@ -71,6 +76,21 @@ impl RemoteHostFailure {
         code: "remote_host_no_answer",
         message: "the browser host did not answer within the bound of one call, so the panel shows no page; check that machine, then use Retry",
     };
+
+    /// The typed failure of a channel that could not open. Every reason except a
+    /// deadline means that this computer could not reach or not use the host;
+    /// a deadline has its own code, because the host may still be starting.
+    #[must_use]
+    pub fn for_channel_error(error: &horizon_browser_control::remote_host::RemoteChannelError) -> Self {
+        use horizon_browser_control::remote_host::RemoteChannelError;
+        match error {
+            RemoteChannelError::NoAnswer { .. } => Self::NO_ANSWER,
+            RemoteChannelError::ActorMissing
+            | RemoteChannelError::InvalidTarget { .. }
+            | RemoteChannelError::HostUnavailable { .. }
+            | RemoteChannelError::Transport { .. } => Self::UNREACHABLE,
+        }
+    }
 }
 
 /// A panel command that the channel of a browser host cannot carry.
@@ -156,6 +176,21 @@ impl RemoteHostBackend {
 /// The channel of a browser host that Horizon starts with `ssh`.
 struct SshChannel(horizon_browser_control::remote_host::RemoteChannel);
 
+/// The opener of a view: it reads the record of the host and starts the MCP
+/// server of that host. It runs on the worker thread of the view, never on the
+/// thread that asked for a panel or for a retry, because `ssh` can wait for a
+/// host that drops packets.
+fn ssh_opener(target: String) -> HostOpener {
+    Box::new(move || {
+        horizon_browser_control::remote_host::RemoteChannel::open(&target, PANEL_ACTOR)
+            .map(|channel| Box::new(SshChannel(channel)) as Box<dyn HostChannel>)
+            .map_err(|error| {
+                tracing::warn!(target, %error, "the browser host of a panel is unavailable");
+                RemoteHostFailure::for_channel_error(&error)
+            })
+    })
+}
+
 impl HostChannel for SshChannel {
     fn take_streams(&mut self) -> Option<(Box<dyn io::Write + Send>, Box<dyn io::BufRead + Send>)> {
         let input = self.0.take_input()?;
@@ -174,19 +209,18 @@ impl BrowserPanelState {
     /// A remote panel keeps no local browser and no local profile: the frames,
     /// the page and its cookies stay on the machine of the host.
     ///
-    /// # Errors
-    /// No host runs at the SSH target of `backend`, or its channel cannot start.
+    /// This call returns at once. The record of the host is read, and its server
+    /// is started, on the worker thread of the panel, so a host that drops
+    /// packets never holds the caller. Whether the host answers is a state of the
+    /// panel: `status`, `remote_status` and [`Self::remote_host_failure`] give the
+    /// typed reason, and a retry opens a new channel.
+    #[must_use]
     pub fn start_remote_host(
         panel_local_id: impl Into<String>,
         config: &super::BrowserConfig,
         initial_url: Option<String>,
         backend: &RemoteHostBackend,
-    ) -> crate::error::Result<Self> {
-        let channel = horizon_browser_control::remote_host::RemoteChannel::open(backend.ssh_target(), PANEL_ACTOR)
-            .map_err(|error| {
-                tracing::warn!(target = backend.ssh_target(), %error, "the browser host of a panel is unavailable");
-                crate::error::Error::Config(RemoteHostFailure::UNREACHABLE.message.to_string())
-            })?;
+    ) -> Self {
         let mut state = Self::inert();
         state.panel_local_id = panel_local_id.into();
         state.config = config.clone();
@@ -200,18 +234,18 @@ impl BrowserPanelState {
             profile: backend.profile().map(str::to_string),
         };
         let view = HostView::start(
-            Box::new(SshChannel(channel)),
+            ssh_opener(backend.ssh_target().to_string()),
             page,
             config.backend,
             std::sync::Arc::clone(&state.frame_slot),
-        )
-        .map_err(|failure| crate::error::Error::Config(failure.message.to_string()))?;
+        );
         state.remote_host = Some(RemoteHostSlot {
             view: Some(view),
             target: backend.ssh_target().to_string(),
             profile: backend.profile().map(str::to_string),
+            failure: None,
         });
-        Ok(state)
+        state
     }
 
     /// Whether the page of this panel belongs to a browser host on another
@@ -231,6 +265,13 @@ impl BrowserPanelState {
     #[must_use]
     pub fn remote_host_profile(&self) -> Option<&str> {
         self.remote_host.as_ref().and_then(|host| host.profile.as_deref())
+    }
+
+    /// Why the last channel of this panel ended before its page was ready, as
+    /// the typed reason that the panel draws. `None` while a channel is live.
+    #[must_use]
+    pub fn remote_host_failure(&self) -> Option<RemoteHostFailure> {
+        self.remote_host.as_ref().and_then(|host| host.failure)
     }
 
     /// The typed reason a command does not reach the page of a browser host.
@@ -276,6 +317,9 @@ impl BrowserPanelState {
     /// the last page that this panel showed. A retry that cannot open the
     /// channel keeps the backend of the panel, so the next retry still names
     /// the host and never starts a browser of this computer.
+    ///
+    /// This call returns at once and never waits on `ssh`: the record of the
+    /// host is read on the worker thread of the view.
     pub(super) fn relaunch_remote_host(&mut self) {
         let Some(host) = self.remote_host.take() else {
             return;
@@ -289,29 +333,22 @@ impl BrowserPanelState {
             url: self.relaunch_target(),
             profile: host.profile.clone(),
         };
-        let started = horizon_browser_control::remote_host::RemoteChannel::open(&host.target, PANEL_ACTOR)
-            .ok()
-            .and_then(|channel| {
-                HostView::start(
-                    Box::new(SshChannel(channel)),
-                    page,
-                    self.config.backend,
-                    std::sync::Arc::clone(&self.frame_slot),
-                )
-                .ok()
-            });
-        self.loading = started.is_none();
-        self.status = if started.is_some() {
-            BrowserStatus::Starting
-        } else {
-            BrowserStatus::Error {
-                message: RemoteHostFailure::UNREACHABLE.message.to_string(),
-            }
-        };
+        // The new channel opens on the worker thread of the view, so a retry
+        // returns at once and the panel keeps painting while a dead host is
+        // being contacted. The outcome arrives as the state of the panel.
+        let view = HostView::start(
+            ssh_opener(host.target.clone()),
+            page,
+            self.config.backend,
+            std::sync::Arc::clone(&self.frame_slot),
+        );
+        self.loading = true;
+        self.status = BrowserStatus::Starting;
         self.remote_host = Some(RemoteHostSlot {
-            view: started,
+            view: Some(view),
             target: host.target,
             profile: host.profile,
+            failure: None,
         });
     }
 
@@ -348,6 +385,9 @@ impl BrowserPanelState {
         self.config.backend = state.backend;
         self.loading = !state.ready && state.failure.is_none();
         if let Some(failure) = state.failure {
+            if let Some(host) = self.remote_host.as_mut() {
+                host.failure = Some(failure);
+            }
             self.navigation_error = state.note;
             self.remote_status = Some(format!(
                 "browser host {}: {}",
@@ -398,4 +438,7 @@ pub(super) struct RemoteHostSlot {
     view: Option<HostView>,
     target: String,
     profile: Option<String>,
+    /// Why the last channel of this panel ended before its page was ready, as the
+    /// typed reason that the panel draws.
+    failure: Option<RemoteHostFailure>,
 }
