@@ -164,9 +164,20 @@ the host file.
 `host.example.yaml` shows a commented profile with
 `--proxy-server=socks5://host.docker.internal:1080`, which is the SOCKS5 proxy
 of `ssh -N -D 1080` on the home machine.
+A container on Linux does not resolve `host.docker.internal` unless the start
+names the gateway of the Docker host, so add this option to the command of
+section 5 when a profile uses that proxy:
+
+```sh
+--add-host=host.docker.internal:host-gateway
+```
+
+A profile that uses a proxy on another machine, for example a tailnet address,
+does not need that option.
 Any other profile uses the network of the Docker host.
 
-The egress of issue 1780 is a rule of a later pull request.
+Issue 1780 uses the SOCKS5 proxy of the home machine as the egress, so this
+image needs no proxy rule of its own.
 Do not depend on this image to stop a profile that has no proxy.
 
 ## 8. Limits
