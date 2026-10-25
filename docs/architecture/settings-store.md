@@ -27,7 +27,7 @@ The store has schema version 1.
 
 | Table | Rows |
 |---|---|
-| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `presets`, `workspaces`. |
+| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `browser_host`, `presets`, `workspaces`. |
 | `meta` | `schema_version`, `saved_at`, and `mirror_sha256` (the hash of the canonical YAML of the last save). |
 
 Each `settings` row has a `format` column. This build writes `json`. A build that

@@ -396,6 +396,77 @@ listener. Its clients reach it only through the private coordination files of
 the runtime root, so each client must run on the same computer, as the same
 user, with the same root.
 
+## Remote host bridge
+
+An agent that runs on the computer of the person can use the profile host of
+another machine. Horizon writes one setting, `browser_host`, with the SSH target
+of that machine and an optional profile name. It then gives each agent this MCP
+entry, which runs the bridge of this computer:
+
+```text
+<horizon> --browser-mcp --remote <ssh-target> [--profile <name>]
+```
+
+The bridge starts the server of the other machine through one `ssh` call and
+forwards the JSON-RPC lines of both directions. The same bridge is available
+from the CLI, which is how the tests and a script reach it:
+
+```bash
+horizon-browser mcp --connect --inline-screenshots --remote browser-vm --profile mail
+```
+
+The process on the other machine is:
+
+```text
+env HORIZON_BROWSER_ACTOR=<actor of the agent> \
+    HORIZON_BROWSER_HOST_INSTANCE=<instance of the remote host> \
+    horizon-browser mcp --connect --inline-screenshots
+```
+
+- The actor is the identity of the agent panel on this computer. The remote host
+  stamps each page for it, so one agent sees the pages that it opened.
+- The host instance is the one that the remote host wrote in its
+  `profile-host.json`. The bridge reads it over the same SSH transport before it
+  forwards a line, and it refuses with a typed reason when no host runs there or
+  when the named profile is not in the host file of that machine.
+- The runtime root of the remote host is its default, `$HOME/.horizon`. To use
+  another root, set `HORIZON_BROWSER_REMOTE_ROOT` to that path on the remote
+  machine.
+- The remote server runs the `horizon-browser` program of that machine. To name
+  another program, or a path that the login shell of the target does not find on
+  its `PATH`, set `HORIZON_BROWSER_REMOTE_EXECUTABLE`.
+- The SSH target must answer without a prompt, because the bridge runs inside an
+  agent turn. Run the first connection of a target from a terminal.
+
+Two results name a file, and a file of one computer is not a file of the other,
+so the bridge changes exactly two things:
+
+1. `browser_act` with `set_files` or `drop_files` names files of this computer.
+   The bridge stages each file under `<remote root>/browser-staging/call-<id>/`
+   on the remote machine with `ssh`, then forwards the remote paths. A page
+   reads the staged copy, which keeps the name of the file. The bridge removes
+   the folder of the call when its answer arrives, and it also removes a folder
+   when a staging step fails, so a failed call leaves no copy.
+   - Only files under the work root of the agent (`HORIZON_WORK_ROOT`, else the
+     working directory) or a root in `HORIZON_BROWSER_ATTACHMENT_ROOTS` are
+     staged. A path outside those roots is refused with the message that a local
+     call gives.
+   - One file keeps the local attachment limit of 512 MiB, and one call stages
+     at most 512 MiB in total.
+   - A staged file exists on the remote machine for the duration of the call.
+     The person trusts that machine with the file, as for any other file of that
+     machine.
+2. `browser_video` and `browser_network` write a private file on the remote
+   machine. When such a result names a file of at most 8 MiB, the bridge adds
+   its bytes to the result as an MCP resource block, with `video/webm` or
+   `application/x-ndjson`. A larger capture stays a path on the remote machine
+   and the result says so.
+
+Every other tool and every other result crosses the bridge unchanged, and
+`tools/list` of the bridge is the `tools/list` of the remote host. A screenshot
+crosses as an image block, because the remote server already runs with
+`--inline-screenshots`.
+
 ## Dependency boundary
 
 The CLI consumes browser coordination and runtime paths through

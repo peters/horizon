@@ -12,9 +12,11 @@ use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 
+mod browser_host;
 mod presets;
 mod remote_hosts;
 
+pub use browser_host::BrowserHostConfig;
 pub use presets::PresetConfig;
 use presets::default_presets;
 pub(crate) use presets::{
@@ -42,6 +44,8 @@ pub struct Config {
     pub browser: crate::browser::BrowserConfig,
     #[serde(default)]
     pub remote_hosts: RemoteHostsConfig,
+    #[serde(default)]
+    pub browser_host: BrowserHostConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -66,6 +70,7 @@ impl Default for Config {
             features: FeaturesConfig::default(),
             browser: crate::browser::BrowserConfig::default(),
             remote_hosts: RemoteHostsConfig::default(),
+            browser_host: BrowserHostConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -568,6 +573,7 @@ impl Config {
         let shortcuts = self.shortcuts.resolve()?;
         crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
         self.remote_hosts.validate()?;
+        self.browser_host.validate()?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }

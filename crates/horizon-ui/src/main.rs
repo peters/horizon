@@ -64,13 +64,10 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
-    if browser_mcp_mode_requested() {
-        run_browser_mcp_server();
+    if let Some(mode) = browser_mcp_mode() {
+        run_browser_mcp_server(mode);
         return Ok(());
     }
-
-    let agent_integrations = AgentIntegrations::from_environment();
-    let _agent_plugin_host = agent_integrations.install_plugins(&horizon_home);
 
     let cli_args = match parse_cli_args(std::env::args().skip(1)) {
         Ok(args) => args,
@@ -82,6 +79,10 @@ fn main() -> eframe::Result {
     };
     let resolved_config_path =
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
+
+    let agent_integrations = AgentIntegrations::from_environment();
+    let browser_host = plugin_install::browser_host_setting(&resolved_config_path);
+    let _agent_plugin_host = agent_integrations.install_plugins(&horizon_home, browser_host.as_ref());
     if let Some(command) = cli_args.command.as_ref() {
         run_command(command, &resolved_config_path);
     }
@@ -157,18 +158,87 @@ fn main() -> eframe::Result {
     )
 }
 
-fn browser_mcp_mode_requested() -> bool {
-    let mut args = std::env::args_os().skip(1);
-    args.next().is_some_and(|argument| argument == "--browser-mcp") && args.next().is_none()
+/// The browser MCP server of this process: the local one, or the bridge to the
+/// profile host of another machine that the agent integration names.
+#[derive(Debug, PartialEq, Eq)]
+enum BrowserMcpMode {
+    Local,
+    Remote { target: String, profile: Option<String> },
 }
 
-fn run_browser_mcp_server() {
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build();
-    let result = match runtime {
-        Ok(runtime) => runtime
-            .block_on(horizon_browser_mcp::serve_stdio())
-            .map_err(|error| error.to_string()),
-        Err(error) => Err(format!("could not start browser MCP runtime: {error}")),
+fn browser_mcp_mode() -> Option<BrowserMcpMode> {
+    match parse_browser_mcp_args(std::env::args_os().skip(1)) {
+        Ok(mode) => mode,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// The browser MCP mode of these arguments, or `None` when they are not this
+/// mode at all. A `--remote` that names no target is an error: an agent must
+/// never fall back to the browser of this computer when its entry names a host.
+fn parse_browser_mcp_args(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<Option<BrowserMcpMode>, String> {
+    if args.next().is_none_or(|argument| argument != "--browser-mcp") {
+        return Ok(None);
+    }
+    let mut target: Option<String> = None;
+    let mut profile: Option<String> = None;
+    let mut remote_seen = false;
+    let mut profile_seen = false;
+    while let Some(argument) = args.next() {
+        // One flag takes one value; a value that this mode does not know ends the
+        // mode, so the normal start reports the argument.
+        let value = args
+            .next()
+            .and_then(|value| value.into_string().ok())
+            .filter(|value| !value.trim().is_empty() && !value.starts_with('-'));
+        match argument.to_str() {
+            Some("--remote") if !remote_seen => {
+                remote_seen = true;
+                target = value;
+                if target.is_none() {
+                    return Err("--remote requires one SSH target".to_string());
+                }
+            }
+            Some("--profile") if !profile_seen => {
+                profile_seen = true;
+                profile = value;
+                if profile.is_none() {
+                    return Err("--profile requires one profile name".to_string());
+                }
+            }
+            _ => return Ok(None),
+        }
+    }
+    if profile_seen && !remote_seen {
+        return Err("--profile names a profile of the host that --remote reaches".to_string());
+    }
+    Ok(Some(match target {
+        Some(target) => BrowserMcpMode::Remote { target, profile },
+        None => BrowserMcpMode::Local,
+    }))
+}
+
+fn run_browser_mcp_server(mode: BrowserMcpMode) {
+    let result = match mode {
+        BrowserMcpMode::Local => {
+            let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build();
+            match runtime {
+                Ok(runtime) => runtime
+                    .block_on(horizon_browser_mcp::serve_stdio())
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(format!("could not start browser MCP runtime: {error}")),
+            }
+        }
+        // The bridge owns the standard streams of this process and starts no
+        // browser of this computer, so it needs no runtime of its own.
+        BrowserMcpMode::Remote { target, profile } => {
+            horizon_browser_mcp::remote::serve(&target, profile.as_deref()).map_err(|error| error.to_string())
+        }
     };
     if let Err(error) = result {
         tracing::error!(%error, "Horizon browser MCP server stopped with an error");
@@ -698,7 +768,39 @@ mod cli_args_tests {
 mod tests {
     use horizon_core::{SessionSummary, StartupChooser, StartupPromptReason};
 
-    use super::{startup_chooser_window_config, summarize_adapter, wgpu};
+    use super::{BrowserMcpMode, parse_browser_mcp_args, startup_chooser_window_config, summarize_adapter, wgpu};
+
+    fn mode(arguments: &[&str]) -> Result<Option<BrowserMcpMode>, String> {
+        parse_browser_mcp_args(arguments.iter().map(std::ffi::OsString::from))
+    }
+
+    #[test]
+    fn the_browser_mcp_mode_is_local_unless_the_entry_names_a_remote_host() {
+        assert_eq!(mode(&["--browser-mcp"]), Ok(Some(BrowserMcpMode::Local)));
+        assert_eq!(
+            mode(&["--browser-mcp", "--remote", "browser-vm"]),
+            Ok(Some(BrowserMcpMode::Remote {
+                target: "browser-vm".to_string(),
+                profile: None,
+            }))
+        );
+        assert_eq!(
+            mode(&["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]),
+            Ok(Some(BrowserMcpMode::Remote {
+                target: "browser-vm".to_string(),
+                profile: Some("mail".to_string()),
+            }))
+        );
+        assert_eq!(mode(&["--config", "/etc/horizon.yaml"]), Ok(None), "another start");
+        assert_eq!(mode(&["--browser-mcp", "--verbose"]), Ok(None), "an unknown flag");
+        for refused in [
+            &["--browser-mcp", "--remote"][..],
+            &["--browser-mcp", "--remote", "-oProxyCommand=evil"],
+            &["--browser-mcp", "--profile", "mail"],
+        ] {
+            assert!(mode(refused).is_err(), "{refused:?}");
+        }
+    }
 
     fn chooser_with_sessions(session_count: usize) -> StartupChooser {
         StartupChooser {

@@ -9,6 +9,7 @@
 mod controller;
 mod model;
 mod network_watch;
+pub mod remote;
 mod screenshot;
 mod server;
 

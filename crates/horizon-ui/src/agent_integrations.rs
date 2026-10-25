@@ -5,7 +5,7 @@
 
 use std::ffi::OsStr;
 
-use horizon_core::HorizonHome;
+use horizon_core::{BrowserHostConfig, HorizonHome};
 
 use crate::plugin_install::{self, AgentPluginHostGuard};
 
@@ -29,9 +29,14 @@ impl AgentIntegrations {
     }
 
     /// Installs the agent skills and plugins and takes their leases, unless the switch is off.
-    pub(crate) fn install_plugins(&self, horizon_home: &HorizonHome) -> Option<AgentPluginHostGuard> {
+    /// `browser_host` is the remote browser host that the settings name, when there is one.
+    pub(crate) fn install_plugins(
+        &self,
+        horizon_home: &HorizonHome,
+        browser_host: Option<&BrowserHostConfig>,
+    ) -> Option<AgentPluginHostGuard> {
         self.enabled
-            .then(|| plugin_install::install_agent_plugins(horizon_home))
+            .then(|| plugin_install::install_agent_plugins(horizon_home, browser_host))
     }
 
     #[cfg(target_os = "linux")]

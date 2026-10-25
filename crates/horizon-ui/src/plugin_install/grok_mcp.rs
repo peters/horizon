@@ -6,26 +6,58 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use horizon_core::BrowserHostConfig;
 use toml_edit::{DocumentMut, Item, Value};
 
-const REGISTRATION: &str = r#"
+/// The registration, with the arguments that a named remote browser host needs.
+/// Without a host the text is the local server of this computer.
+fn registration(browser_host: Option<&BrowserHostConfig>) -> String {
+    format!(
+        r#"
 # Horizon browser tools receive their executable and workspace identity at launch.
 [mcp_servers.horizon-browser]
-command = "${HORIZON_BROWSER_MCP_EXECUTABLE:-}"
-args = ["--browser-mcp"]
+command = "${{HORIZON_BROWSER_MCP_EXECUTABLE:-}}"
+args = [{args}]
 enabled = true
 startup_timeout_sec = 30
 tool_timeout_sec = 3660
 [mcp_servers.horizon-browser.env]
-HORIZON_BROWSER_ACTOR = "${HORIZON_BROWSER_ACTOR:-}"
-HORIZON_BROWSER_HOST_INSTANCE = "${HORIZON_BROWSER_HOST_INSTANCE:-}"
-"#;
+HORIZON_BROWSER_ACTOR = "${{HORIZON_BROWSER_ACTOR:-}}"
+HORIZON_BROWSER_HOST_INSTANCE = "${{HORIZON_BROWSER_HOST_INSTANCE:-}}"
+"#,
+        args = browser_mcp_args(browser_host)
+            .iter()
+            .map(|argument| format!("\"{}\"", argument.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
 
-pub(super) fn bind_browser_skill(home: &Path, host_id: &std::ffi::OsStr) -> io::Result<Vec<super::SkillRootLease>> {
+/// The arguments of the browser MCP server: the local server of this computer,
+/// or the bridge to the profile host that the settings name.
+fn browser_mcp_args(browser_host: Option<&BrowserHostConfig>) -> Vec<String> {
+    let mut args = vec!["--browser-mcp".to_string()];
+    let Some(browser_host) = browser_host.filter(|browser_host| browser_host.names_host()) else {
+        return args;
+    };
+    if let Some(target) = browser_host.ssh_target() {
+        args.extend(["--remote".to_string(), target.to_string()]);
+    }
+    if let Some(profile) = browser_host.profile() {
+        args.extend(["--profile".to_string(), profile.to_string()]);
+    }
+    args
+}
+
+pub(super) fn bind_browser_skill(
+    home: &Path,
+    host_id: &std::ffi::OsStr,
+    browser_host: Option<&BrowserHostConfig>,
+) -> io::Result<Vec<super::SkillRootLease>> {
     let dir = home.join("skills").join(super::HORIZON_BROWSER_SKILL);
     let lease = super::user_skills::bind_prepared_skill_root(host_id, dir.clone(), validate_browser_skill, || {
         validate_browser_skill(&dir)?;
-        register(home)?;
+        register(home, browser_host)?;
         install_browser_skill(&dir)
     })?;
     Ok(vec![lease])
@@ -51,7 +83,7 @@ fn validate_browser_skill(dir: &Path) -> io::Result<()> {
     super::mcp_skills::validate_skill_files(dir, super::BROWSER_SKILL_FILES)
 }
 
-pub(super) fn register(home: &Path) -> io::Result<bool> {
+pub(super) fn register(home: &Path, browser_host: Option<&BrowserHostConfig>) -> io::Result<bool> {
     fs::create_dir_all(home)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -76,7 +108,7 @@ pub(super) fn register(home: &Path) -> io::Result<bool> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error),
     };
-    let Some(updated) = append_registration(&original)? else {
+    let Some(updated) = append_registration(&original, browser_host)? else {
         return Ok(false);
     };
     let mut temporary = tempfile::NamedTempFile::new_in(home)?;
@@ -122,9 +154,10 @@ fn lock_config(file: &fs::File) -> io::Result<()> {
     }
 }
 
-fn append_registration(original: &str) -> io::Result<Option<String>> {
+fn append_registration(original: &str, browser_host: Option<&BrowserHostConfig>) -> io::Result<Option<String>> {
     let mut document = parse(original)?;
-    let expected = parse(REGISTRATION)?;
+    let registration = registration(browser_host);
+    let expected = parse(&registration)?;
     if let Some(servers) = document.get("mcp_servers") {
         let Some(servers) = servers.as_table_like() else {
             return Err(io::Error::other(
@@ -150,7 +183,7 @@ fn append_registration(original: &str) -> io::Result<Option<String>> {
         servers.insert("horizon-browser", Value::InlineTable(registration));
         return Ok(Some(document.to_string()));
     }
-    let updated = format!("{original}\n{REGISTRATION}");
+    let updated = format!("{original}\n{registration}");
     // Inline/dotted table declarations can forbid appending a child table.
     // Validate the combined document before touching the user's file.
     parse(&updated)?;
