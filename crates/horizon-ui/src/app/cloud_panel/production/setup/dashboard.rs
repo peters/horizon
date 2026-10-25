@@ -163,7 +163,7 @@ impl Readiness {
             && !draft.settings.azure_configured()
         {
             return attention(if draft.settings.docker_hosts.is_empty() {
-                "Paste a RunPod or Hetzner key, add a Docker host, or add an azure section to the settings file, so clouds have somewhere to run.".into()
+                "Paste a RunPod or Hetzner key, add a Docker host or an azure section, so a cloud can run.".into()
             } else {
                 "Your Docker hosts are switched off, so new clouds have nowhere to run.".into()
             });
