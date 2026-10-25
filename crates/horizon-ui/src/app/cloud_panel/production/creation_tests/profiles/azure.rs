@@ -236,6 +236,53 @@ fn azure_says_why_its_settings_cannot_be_used_instead_of_asking_for_them_again()
 }
 
 #[test]
+fn a_profile_written_for_azure_settles_while_another_providers_prices_fail() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    // The repository's own profile runs on Azure, and nobody clicked a provider in the heading.
+    let config = CloudConfig::parse(
+        "version: 1\ndefault: azure\nprofiles:\n  azure:\n    provider: azure\n    image: example.invalid/worker\n    cpu: 4\n    memory_gb: 16\n",
+    )
+    .unwrap();
+    let form = &mut app.cloud_prototype.production;
+    form.profiles = Some(config);
+    form.selected_profile = "azure".into();
+    form.provider = None;
+    form.placement = horizon_core::cloud_panel::Placement::default();
+    // RunPod's key is rejected, so its prices are unavailable and its rows are not listed.
+    // The azure section is this machine's, and its prices are current.
+    form.prices.list = None;
+    form.prices.list_error = Some("Provider authentication failed; check the machine-local credential".into());
+    azure_binding(&mut app);
+
+    let text = painted(&tall_frame(&ctx, &mut app));
+    let form = &app.cloud_prototype.production;
+    assert_eq!(
+        form.provider.map(|provider| provider.id),
+        Some("azure"),
+        "the profile's provider is the cloud's provider: {text}"
+    );
+    assert_eq!(form.placement.cpu_types, ["Standard_D4s_v3"], "{text}");
+    assert_eq!(form.placement.data_centers, ["northeurope"], "{text}");
+    assert!(!text.contains("Choose an Azure VM size and region."), "{text}");
+    assert!(
+        !text.contains("Choose an exact worker and location."),
+        "no row is needed for a section that decides both: {text}"
+    );
+
+    // Start records the VM size and region the section allows, without a click on a row.
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Start cloud").center());
+    finish_creation(&ctx, &mut app);
+    let launch = app.cloud_prototype.groups.0.last().unwrap().remote.as_ref().unwrap();
+    assert_eq!(launch.profile.provider, "azure");
+    assert_eq!(launch.placement.cpu_types, ["Standard_D4s_v3"]);
+    assert_eq!(launch.placement.data_centers, ["northeurope"]);
+}
+
+#[test]
 fn the_heading_starts_an_azure_cloud_on_the_size_and_region_the_settings_allow() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),

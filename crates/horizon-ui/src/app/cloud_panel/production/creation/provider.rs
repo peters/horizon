@@ -177,15 +177,19 @@ fn unavailable(prices: &State, provider: &Description) -> Option<String> {
 /// Keeps a cloud that runs on a provider whose placement is a settings section on the
 /// cheapest worker that section allows, while the person has chosen no row of their own.
 /// Its prices can arrive after the provider was chosen, and the section decides the size
-/// and region either way, so the dialog never waits for a choice it already has.
+/// and region either way, so the dialog never waits for a choice it already has. A profile
+/// written for that provider counts as the choice: it reaches the same placement, and its
+/// row list can be missing while another provider's prices are unavailable.
 pub(in crate::app::cloud_panel) fn settle(form: &mut Production) {
-    let waiting = selector::profile(form).is_some_and(|profile| {
-        form.provider
-            .is_some_and(|provider| provider.needs_settings && provider.supports(profile))
-            && form.placement.cpu_types.is_empty()
-            && form.placement.data_centers.is_empty()
-    });
-    if let Some(provider) = form.provider.filter(|_| waiting) {
+    let Some(profile) = selector::profile(form) else {
+        return;
+    };
+    let provider = current(form.provider, profile);
+    let waiting = provider.needs_settings
+        && provider.supports(profile)
+        && form.placement.cpu_types.is_empty()
+        && form.placement.data_centers.is_empty();
+    if waiting {
         choose(form, provider);
     }
 }
