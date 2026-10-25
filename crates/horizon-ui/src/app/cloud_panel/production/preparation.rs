@@ -134,6 +134,7 @@ impl HorizonApp {
         }
         // An agent's create request prepares its cloud here too, before it allocates.
         self.poll_cloud_create_requests(ctx);
+        self.poll_cloud_delete_requests(ctx);
     }
 
     fn apply_preparation(&mut self, id: u32, report: Report, ctx: &egui::Context) {

@@ -17,6 +17,9 @@ Cancellation cannot interrupt blocking OS I/O. Retain that record's job slot unt
 its channel disconnects. Remove anyway preserves the original record and refuses
 an operation that still holds its lock. Pending is not a failed removal, including
 automatic close after deletion. This UI change adds no provider action or MCP grant.
+The `cloud_delete` tool of an agent deletes provider resources and grants no
+discard authority: it leaves the record and the card, which this removal flow
+still owns. See `cloud-delete-request.md`.
 Dismissal must clear automatic-close intent and restore hidden panels, so a blocked
 AfterDelete read cannot restart removal after Cancel or Escape. A Ready watch is
 not a busy operation: explicit Remove anyway must pass its receiver-only guards,

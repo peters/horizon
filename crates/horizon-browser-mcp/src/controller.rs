@@ -17,6 +17,7 @@ use crate::model::{BrowserPanel, ProtocolKind};
 
 mod admission;
 pub(crate) mod cloud_create;
+pub(crate) mod cloud_delete;
 pub(crate) mod cloud_list;
 pub(crate) mod companion;
 mod device;

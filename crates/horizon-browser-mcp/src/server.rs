@@ -274,6 +274,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_delete",
+        description = "Delete one cloud's provider resources permanently, without a person, on the machine's own provider credentials. operation submit starts it and needs cloud, the ID cloud_list reports in your workspace. Horizon answers once it accepted the operation: poll operation status with the same operation_id, because a delete takes minutes and cannot be recalled. A delete may already be in progress as soon as submit answers, so a cancel cannot undo it and answers that the delete may already have started; run cloud_list and cloud_delete status instead of deleting again. Horizon deletes only a cloud that an agent panel created for the same actor as yours: a cloud a person created, or one that another agent created, is refused with cloud_delete_refused, and the person deletes it on its card. A cloud another operation owns is cloud_delete_busy. status reports the stage, the provider, absent, and absence, which states what the provider's own recorded confirmation proves: absent is true only when the record and the provider journal confirm that nothing the cloud created remains, and otherwise absence says what is unconfirmed; confirm with the provider's API if absence is not proven. This tool deletes no credential and removes no card: the person removes the deleted cloud from the list. No provider, force, repository or worker argument."
+    )]
+    async fn cloud_delete(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::CloudDeleteRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_delete(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "cloud_list",
         description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. worker_image and image_publication describe that cloud's retained image and publisher metadata when its matching runtime is loaded, otherwise null. An unresolved image is null too. Registry publisher metadata includes its opaque nonsecret grant ID, never credential values or paths. They read no credentials and do not prove current registry access. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
@@ -945,6 +959,7 @@ mod tests {
                 "cloud_companion_uncheck",
                 "cloud_companions",
                 "cloud_create",
+                "cloud_delete",
                 "cloud_image_destination",
                 "cloud_list",
                 "cloud_offers",

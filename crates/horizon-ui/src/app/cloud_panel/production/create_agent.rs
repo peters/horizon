@@ -133,6 +133,14 @@ impl State {
             .map_or_else(Vec::new, |(_, receiver)| receiver.try_iter().collect())
     }
 
+    /// Whether an agent's create operation owns the cloud with this ID, whose delete
+    /// another host operation refuses while it runs.
+    pub(super) fn owns_cloud(&self, cloud: &str) -> bool {
+        self.operations
+            .values()
+            .any(|operation| operation.cloud == cloud && !operation.phase.done())
+    }
+
     /// Whether an agent's create operation owns this cloud's deployment. The card's own
     /// start paths refuse while one does, so a cloud is never deployed twice.
     pub(super) fn owns(&self, card: u32) -> bool {
@@ -143,6 +151,28 @@ impl State {
 
     fn running(&self) -> bool {
         self.operations.values().any(|operation| !operation.phase.done())
+    }
+
+    /// Records an unfinished create operation of `cloud`, as one that is still rolling out
+    /// holds it, so another host module's test can assert what it refuses meanwhile.
+    #[cfg(test)]
+    pub(super) fn hold_cloud_for_test(&mut self, cloud: &str) {
+        self.operations.insert(
+            cloud.into(),
+            Operation {
+                id: cloud.into(),
+                actor: "horizon:agent".into(),
+                workspace: String::new(),
+                cloud: cloud.into(),
+                name: cloud.into(),
+                phase: Phase::RollingOut,
+                card: None,
+                ready: None,
+                error: None,
+                cancel: None,
+                skip_sign_in: false,
+            },
+        );
     }
 
     /// Whether this operation ended, or a cancel already asked it to stop. Nothing it
@@ -248,9 +278,14 @@ impl HorizonApp {
         let sender = state.sender();
         let ctx = ctx.clone();
         let (thread_id, thread_cloud) = (id.clone(), cloud.clone());
+        // The agent that asks is the cloud's creator, and so the only agent that deletes it.
+        let creator = (
+            actor.to_owned(),
+            self.active_session.as_ref().map(|session| session.session_id.clone()),
+        );
         // The settings, the repository, its commit and its price are read off this thread.
         std::thread::spawn(move || {
-            let answer = prepare(&root, (&repository, thread_cloud), &cancel);
+            let answer = prepare(&root, (&repository, thread_cloud), creator, &cancel);
             let message = match answer {
                 Ok((request, skip_sign_in)) => Message::Prepared {
                     operation: thread_id,
@@ -583,6 +618,7 @@ fn folder_name(repository: &str) -> String {
 fn prepare(
     root: &Path,
     (repository, cloud): (&str, String),
+    (actor, session): (String, Option<String>),
     cancel: &Cancellation,
 ) -> Result<(Box<Request>, bool), String> {
     let settings = Settings::for_cloud(&root.join("settings.json"), &Placement::default())
@@ -623,7 +659,8 @@ fn prepare(
         profile,
         state_root,
         settings,
-    );
+    )
+    .with_creator(&actor, session);
     request.profile_name = Some(profile_name);
     Ok((Box::new(request), skip_sign_in))
 }

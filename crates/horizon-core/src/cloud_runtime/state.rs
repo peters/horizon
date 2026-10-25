@@ -47,6 +47,18 @@ impl Session {
         }
     }
 }
+/// The agent panel that created a cloud, and the Horizon session that names it. A cloud
+/// without one was made by a person on its card, so no agent may delete it.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Creator {
+    /// The panel's actor, as `browser_actor` spells it.
+    pub actor: String,
+    /// The Horizon session that named the cloud when it was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ReadyHistory {
     #[default]
@@ -127,6 +139,10 @@ pub struct Deployment {
     /// lays exactly the confirmed files over the commit. Omitted otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_copy: Option<super::repository::uncommitted::Confirmed>,
+    /// The agent panel that created this cloud, which is the only caller that may delete
+    /// it. Omitted for a cloud a person created, so earlier records keep their encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Creator>,
 }
 
 /// A rebuilt image whose build context held uncommitted files: the commit they change and

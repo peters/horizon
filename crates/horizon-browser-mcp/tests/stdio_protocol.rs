@@ -415,6 +415,31 @@ fn assert_create_tool_contract(tools: &Value) {
     }
 }
 
+fn assert_delete_tool_contract(tools: &Value) {
+    let delete = listed_tool(tools, "cloud_delete");
+    let properties = &delete["inputSchema"]["properties"];
+    for field in ["operation", "operation_id", "cloud"] {
+        assert!(properties.get(field).is_some(), "cloud_delete schema lacks {field}");
+    }
+    for forbidden in ["provider", "force", "repository", "worker", "settings", "credentials"] {
+        assert!(
+            properties.get(forbidden).is_none(),
+            "cloud_delete does not let a caller choose {forbidden}"
+        );
+    }
+    let description = delete["description"].as_str().unwrap_or_default();
+    for phrase in [
+        "without a person",
+        "cannot be recalled",
+        "cloud_delete_refused",
+        "may already have started",
+        "absent is true only when",
+        "confirm with the provider's API",
+    ] {
+        assert!(description.contains(phrase), "cloud_delete description lacks {phrase}");
+    }
+}
+
 fn assert_orientation_contract(tools: &Value) {
     let rotation = listed_tool(tools, "browser_orientation");
     for field in ["panel_id", "orientation", "timeout_millis"] {
@@ -476,7 +501,7 @@ fn assert_credential_request_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(37));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(38));
     assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
@@ -484,6 +509,7 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert_provider_tools_contract(tools);
     assert_companion_tools_contract(tools);
     assert_create_tool_contract(tools);
+    assert_delete_tool_contract(tools);
     assert_orientation_contract(tools);
     assert_screenshot_contract(tools);
     assert_resize_contract(tools);

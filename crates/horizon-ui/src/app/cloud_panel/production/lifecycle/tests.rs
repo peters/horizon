@@ -248,6 +248,7 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         siblings: None,
         uncommitted_image: None,
         working_copy: None,
+        created_by: None,
     };
     store.save(&state).unwrap();
     app.remove_deleted_cloud(1, &ctx);

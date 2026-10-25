@@ -9,6 +9,7 @@ mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
+mod delete_agent;
 mod dialog_hover;
 #[cfg(debug_assertions)]
 mod failure_preview;
@@ -124,6 +125,8 @@ pub(super) struct Production {
     companions: companions::State,
     /// Cloud create operations of agents, answered in the next frame.
     create_agent: create_agent::State,
+    /// Cloud delete operations of agents, answered in the next frame.
+    delete_agent: delete_agent::State,
     /// Prices sent to ready workers for their agents' cloud offers.
     offer_publication: offer_publication::State,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
