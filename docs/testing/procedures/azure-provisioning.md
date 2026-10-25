@@ -681,16 +681,21 @@ image() { jq -r .spec.image_digest "$RB/deployment.json"; }
 
    Result: `power` is `VM running`. `managedBy` ends with `/virtualMachines/worker`. Record `vmId`, `ip`, `uniqueId` and the image digest as the values of step 2.
 
-3. Write a marker on the workspace and record the host key of the worker.
+3. Write a marker on the workspace, record the filesystem identity of the workspace disk and record the host
+   key of the worker.
 
    ```sh
    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$AZV/known_hosts" \
      -i "$HOME/.ssh/id_ed25519" root@<ip> \
      'head -c 32 /dev/urandom > /workspace/rebuild-marker; sha256sum /workspace/rebuild-marker'
+   az vm run-command invoke -g "$RG" -n worker --command-id RunShellScript --scripts \
+     'dev=$(readlink -f /dev/disk/azure/scsi1/lun0); blkid "$dev"; tune2fs -l "$dev" | grep -E "^(Filesystem UUID|Filesystem created|Filesystem volume name)"'
    ssh-keygen -F <ip> -f "$AZV/known_hosts"
    ```
 
-   Result: The command prints one SHA-256. Record it. `ssh-keygen` prints the host key line.
+   Result: The SSH command prints one SHA-256. Record it. The run command prints the labelled `ext4` device, its
+   `Filesystem UUID`, its `Filesystem created` time and the volume name `horizon-ws`. Record the UUID and the
+   creation time. `ssh-keygen` prints the host key line.
 
 4. Change the image recipe and commit the change.
 
@@ -728,14 +733,18 @@ image() { jq -r .spec.image_digest "$RB/deployment.json"; }
    - The VM count is `1`. The disks are `worker-os` and `worker-workspace`.
    - `azure-release.json` is `{"held": true}`.
 
-7. Make sure that `/workspace` and the host key stayed.
+7. Make sure that `/workspace`, its filesystem and the host key stayed.
 
    ```sh
    ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$AZV/known_hosts" \
      -i "$HOME/.ssh/id_ed25519" root@<ip> 'findmnt /workspace; sha256sum /workspace/rebuild-marker; cat /etc/azv-l3'
+   az vm run-command invoke -g "$RG" -n worker --command-id RunShellScript --scripts \
+     'dev=$(readlink -f /dev/disk/azure/scsi1/lun0); tune2fs -l "$dev" | grep -E "^(Filesystem UUID|Filesystem created)"'
    ```
 
-   Result: SSH accepts the host key of step 3. `/workspace` is a mount. The SHA-256 is the value of step 3. The last line is `azv-l3-1`.
+   Result: SSH accepts the host key of step 3. `/workspace` is a mount. The SHA-256 is the value of step 3. The
+   last line is `azv-l3-1`. The `Filesystem UUID` and the `Filesystem created` time are the values of step 3,
+   because a host that formatted the disk again would show a later creation time.
 
 8. Make sure that Horizon deleted only the VM and its OS disk.
 
