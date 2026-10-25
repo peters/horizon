@@ -55,9 +55,9 @@ pub use board::{
     WorkspaceLayout,
 };
 pub use config::{
-    AppearanceConfig, AppearanceTheme, Config, FeaturesConfig, OverlaysConfig, PresetConfig, RemoteHostsConfig,
-    ShortcutsConfig, SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig,
-    WindowConfig, WorkspaceConfig,
+    AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, FeaturesConfig, OverlaysConfig, PresetConfig,
+    RemoteHostsConfig, ShortcutsConfig, SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask,
+    TerminalConfig, WindowConfig, WorkspaceConfig, browser_host, browser_mcp_args, configure_browser_host,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};

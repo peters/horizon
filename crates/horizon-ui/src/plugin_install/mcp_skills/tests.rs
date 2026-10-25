@@ -1,4 +1,4 @@
-use super::super::{AgentPluginHostLease, install_agent_plugins_impl, user_skill_lease_dirs};
+use super::super::{AgentMcpEntry, AgentPluginHostLease, install_agent_plugins_impl, user_skill_lease_dirs};
 use super::*;
 
 fn assert_files(dir: &Path, files: &[EmbeddedFile]) {
@@ -25,7 +25,10 @@ fn installs_complete_skills_into_bundles_and_custom_roots_idempotently() {
             Some(&user),
             Some(&grok),
             Some(&codex),
-            Path::new("/opt/horizon"),
+            AgentMcpEntry {
+                command: Path::new("/opt/horizon"),
+                browser_host: None,
+            },
             None,
         )
     };
@@ -102,7 +105,10 @@ fn refuses_user_skill_leases_and_preserves_user_content_on_install_and_exit() {
         Some(&user),
         None,
         None,
-        Path::new("/opt/horizon"),
+        AgentMcpEntry {
+            command: Path::new("/opt/horizon"),
+            browser_host: None,
+        },
         Some(&lease),
     )
     .expect("install");
@@ -127,7 +133,10 @@ fn complete_reference_trees_survive_until_last_host_and_preserve_later_edits() {
         Some(&user),
         None,
         None,
-        Path::new("/opt/horizon"),
+        AgentMcpEntry {
+            command: Path::new("/opt/horizon"),
+            browser_host: None,
+        },
         Some(&first),
     )
     .expect("install");
@@ -230,7 +239,10 @@ fn unmanaged_or_invalid_grok_server_never_receives_additional_mcp_skills() {
         Some(&user),
         None,
         None,
-        Path::new("/opt/horizon"),
+        AgentMcpEntry {
+            command: Path::new("/opt/horizon"),
+            browser_host: None,
+        },
         None,
     )
     .expect("other targets install");
@@ -296,7 +308,7 @@ fn private_integration_upgrade_removes_retired_unrecorded_references() {
         sync_plugin_files(dir, &old).expect("prior unrecorded integration");
         assert!(!dir.join(".horizon-owned.json").exists());
     }
-    let install = || sync_mcp_skills(&home, &plugin, None, None, None, None);
+    let install = || sync_mcp_skills(&home, &plugin, None, None, None, None, None);
     install().expect("upgrade integration");
     for dir in &dirs {
         assert!(!dir.join("legacy").exists());

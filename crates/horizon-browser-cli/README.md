@@ -400,11 +400,11 @@ user, with the same root.
 
 An agent that runs on the computer of the person can use the profile host of
 another machine. Horizon writes one setting, `browser_host`, with the SSH target
-of that machine. It then gives each agent this MCP entry, which runs the bridge
-of this computer:
+of that machine and an optional profile name. It then gives each agent this MCP
+entry, which runs the bridge of this computer:
 
 ```text
-<horizon> --browser-mcp --remote <ssh-target>
+<horizon> --browser-mcp --remote <ssh-target> [--profile <name>]
 ```
 
 The bridge starts the server of the other machine through one `ssh` call and
@@ -412,7 +412,7 @@ forwards the JSON-RPC lines of both directions. The same bridge is available
 from the CLI, which is how the tests and a script reach it:
 
 ```bash
-horizon-browser mcp --connect --inline-screenshots --remote browser-vm
+horizon-browser mcp --connect --inline-screenshots --remote browser-vm --profile mail
 ```
 
 The process on the other machine is:
@@ -428,11 +428,17 @@ env HORIZON_BROWSER_ACTOR=<actor of the agent> \
 - The host instance is the one that the remote host wrote in its
   `profile-host.json`. The bridge reads it over the same SSH transport before it
   forwards a line, and it refuses with a typed reason when no host runs there.
-- The bridge takes no profile and names none. A caller names a profile of the
-  host as the `browser_create` target, and the host refuses a profile that its
-  host file does not name with its own reason (`target_unknown`). A folder under
-  `browser-profiles` of that machine is not proof that the host serves the
+- The profile of the entry is the profile that a `browser_create` opens when the
+  call names no `target`. The bridge adds the profile as the `target` of that
+  call, so every page of the agent lands in the profile that the person chose,
+  and the agent does not have to know the profile name. A create that names its
+  own `target` keeps it. The bridge does not check the profile against the host:
+  the host refuses a profile that its host file does not name with its own
+  reason (`target_unknown`), and that reason crosses unchanged. A folder under
+  `browser-profiles` of that machine is no proof that the host serves the
   profile, because the host never deletes a profile folder.
+- `--profile` without `--remote` is an error, because a profile is a profile of
+  a host.
 - The runtime root of the remote host is its default, `$HOME/.horizon`. To use
   another root, set `HORIZON_BROWSER_REMOTE_ROOT` to that path on the remote
   machine.
@@ -442,10 +448,12 @@ env HORIZON_BROWSER_ACTOR=<actor of the agent> \
 - The SSH target must answer without a prompt, because the bridge runs inside an
   agent turn. Run the first connection of a target from a terminal.
 
-Two results name a file, and a file of one computer is not a file of the other,
-so the bridge changes exactly two things:
+One call names a profile, and two results name a file. A file of one computer
+is not a file of the other, so the bridge changes exactly three things:
 
-1. `browser_act` with `set_files` or `drop_files` names files of this computer.
+1. `browser_create` without a `target` gets the profile of the entry as its
+   `target`. A create that names a target keeps it.
+2. `browser_act` with `set_files` or `drop_files` names files of this computer.
    The bridge stages each file under `<remote root>/browser-staging/call-<id>/`
    on the remote machine with `ssh`, then forwards the remote paths. A page
    reads the staged copy, which keeps the name of the file. The bridge removes
@@ -460,7 +468,7 @@ so the bridge changes exactly two things:
    - A staged file exists on the remote machine for the duration of the call.
      The person trusts that machine with the file, as for any other file of that
      machine.
-2. `browser_video` and `browser_network` write a private file on the remote
+3. `browser_video` and `browser_network` write a private file on the remote
    machine. When such a result names a file of at most 8 MiB, the bridge adds
    its bytes to the result as an MCP resource block, with `video/webm` or
    `application/x-ndjson`. A larger capture stays a path on the remote machine

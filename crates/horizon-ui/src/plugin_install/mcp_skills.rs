@@ -190,9 +190,11 @@ pub(super) fn sync_mcp_skills(
     grok_home: Option<&Path>,
     codex_home: Option<&Path>,
     lease: Option<&AgentPluginHostLease>,
+    browser_host: Option<&horizon_core::BrowserHostConfig>,
 ) -> io::Result<usize> {
     let mut updated = 0;
-    let grok_root = provider_home(grok_home, user_home, ".grok").filter(|root| super::grok_mcp::register(root).is_ok());
+    let grok_root = provider_home(grok_home, user_home, ".grok")
+        .filter(|root| super::grok_mcp::register(root, browser_host).is_ok());
     let codex_root = provider_home(codex_home, user_home, ".codex");
     for skill in MCP_SKILLS {
         updated += sync_managed_skill_files(&claude_plugin_dir.join("skills").join(skill.name), skill.files)?;

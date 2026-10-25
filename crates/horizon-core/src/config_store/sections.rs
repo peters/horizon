@@ -56,6 +56,10 @@ pub(super) fn encode(config: &Config) -> Result<Vec<Row>> {
             data: json(&config.remote_hosts)?,
         },
         Row {
+            section: "browser_host",
+            data: json(&config.browser_host)?,
+        },
+        Row {
             section: "presets",
             data: json(&config.presets)?,
         },
@@ -76,6 +80,7 @@ pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         features,
         browser,
         remote_hosts,
+        browser_host,
         presets,
         workspaces,
     } = Config::default();
@@ -88,6 +93,7 @@ pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         features: section(rows, "features")?.unwrap_or(features),
         browser: section(rows, "browser")?.unwrap_or(browser),
         remote_hosts: section(rows, "remote_hosts")?.unwrap_or(remote_hosts),
+        browser_host: section(rows, "browser_host")?.unwrap_or(browser_host),
         presets: section(rows, "presets")?.unwrap_or(presets),
         workspaces: section(rows, "workspaces")?.unwrap_or(workspaces),
     })
@@ -146,6 +152,22 @@ mod tests {
         let decoded = decode(&rows(&config)).expect("decode");
 
         assert_eq!(decoded.to_yaml().expect("yaml"), config.to_yaml().expect("yaml"));
+    }
+
+    #[test]
+    fn a_named_remote_browser_host_survives_a_store_round_trip() {
+        let mut config = Config::default();
+        config.browser_host.ssh_target = Some("browser-vm".to_string());
+        config.browser_host.profile = Some("mail".to_string());
+
+        let stored = rows(&config);
+        let decoded = decode(&stored).expect("decode");
+
+        assert_eq!(decoded.browser_host, config.browser_host);
+        assert!(
+            stored["browser_host"].contains("browser-vm"),
+            "the entry is one row of the store"
+        );
     }
 
     #[test]
