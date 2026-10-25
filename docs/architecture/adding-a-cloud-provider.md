@@ -59,10 +59,12 @@ The provider list in **New cloud** derives its entries from the same policy the
 lifecycle admits a cloud with. `horizon_cloud::provider::Description` holds the
 one description per provider, and `Kind` makes an unhandled provider fail to
 compile. The dialog reads that description for the label, the mark and
-`supports(profile)`. It reads the machine's own bindings for the section that
-makes the provider usable (`prices::State::bound` in
-`crates/horizon-ui/src/app/cloud_panel/production/prices`), which the same
-settings file gives the lifecycle through `Settings::load` and
+`supports(profile)`. It reads the machine's own bindings for the account that
+makes the provider usable: `configured()` in
+`crates/horizon-ui/src/app/cloud_panel/production/creation/provider.rs` joins
+`prices::State::runpod_bound` with the `bound()` of each other provider's own
+prices state, such as `prices::azure::State::bound`. The same settings file
+gives the lifecycle that account through `Settings::load` and
 `Settings::for_cloud` (`crates/horizon-core/src/cloud_runtime/settings.rs`).
 Each provider's `preflight` in `crates/horizon-core/src/cloud_runtime/providers`
 then refuses a cloud whose profile its section cannot place.
@@ -72,9 +74,12 @@ Consequences of the rule:
 - A provider whose entries come from a second, dialog-local rule is a defect,
   even when the two rules agree today. The AWS-shaped mistake is a list of
   provider names in the dialog beside a provider list in the lifecycle.
-- The chooser never branches on a provider name. It shows what
-  `Description::ALL` and the machine's bindings give, and a new provider needs
-  one description entry, one `Kind` arm, and its own settings section.
+- The chooser never branches on a provider name. It shows what `provider::ALL`
+  and the machine's bindings give.
+- A new provider therefore extends the places that read the one description:
+  one `Description` entry, one `Kind` arm, one line in `configured()`, a
+  `bound()` on its prices state, and its own settings section. A provider that
+  skips the last three compiles and still never appears in **New cloud**.
 - A provider that a profile cannot run on is absent from the heading for that
   profile, because `supports(profile)` is the same test that the lifecycle
   applies to the profile.
