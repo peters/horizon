@@ -16,7 +16,6 @@ DOCKER = ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', '--config'
 SYSTEM_ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8'}
 ROOT = Path('/run/horizon-worker-ingress')
 DESTINATION = '/run/horizon-host-ingress'
-WORKSPACE = '/mnt/horizon-volume/workspace'
 IMAGE = '/etc/horizon-worker/image'
 ENVIRONMENT = '/etc/horizon-worker/worker.env'
 GENERATION_LABEL = 'io.horizon.ingress.generation'
@@ -170,8 +169,9 @@ def process(pid):
 
 
 class Original:
-    def __init__(self, image, allocation, shm):
+    def __init__(self, image, allocation, shm, workspace):
         self.image, self.allocation, self.shm = image, allocation, shm
+        self.workspace = workspace
         self.generation = str(uuid.uuid4())
         self.directory = ROOT / self.generation
         self.cid = None
@@ -192,7 +192,7 @@ class Original:
                         '-p', '22:22', '-p', '20000-20031:600-631/tcp',
                         '--shm-size', str(self.shm) + 'g', '--log-driver', 'local',
                         '--log-opt', 'max-size=10m', '--log-opt', 'max-file=5',
-                        '-v', WORKSPACE + ':/workspace', '--env-file', ENVIRONMENT,
+                        '-v', self.workspace + ':/workspace', '--env-file', ENVIRONMENT,
                         '--mount', f'type=bind,src={self.directory},dst={DESTINATION},readonly', self.image]
         self.creation_attempted = True
         cid = bounded(argv, time.monotonic() + 30, 128).decode().strip()
@@ -335,10 +335,11 @@ def main():
     owner = None
     result = 1
     try:
-        require(len(sys.argv) == 2 and sys.argv[1].isdigit() and 1 <= int(sys.argv[1]) <= 64)
+        require(len(sys.argv) == 3 and sys.argv[1].isdigit() and 1 <= int(sys.argv[1]) <= 64)
+        require(sys.argv[2].startswith('/') and ':' not in sys.argv[2])
         image, allocation = preflight()
         pull(image)
-        owner = Original(image, allocation, int(sys.argv[1]))
+        owner = Original(image, allocation, int(sys.argv[1]), sys.argv[2])
         owner.create()
         owner.attach = subprocess.Popen(DOCKER + ['start', '--attach', owner.cid],
                                         stdin=subprocess.DEVNULL, env=SYSTEM_ENV, start_new_session=True)

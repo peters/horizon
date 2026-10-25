@@ -33,7 +33,7 @@ fn parse(plan: &Plan) -> Value {
 fn protected_start_is_explicit_and_the_default_keeps_its_original_bootstrap_files() {
     let mut candidate = plan();
     let ordinary = parse(&candidate);
-    assert_eq!(content(&ordinary, START), start_script(2));
+    assert_eq!(content(&ordinary, START), start_script(2, Platform::Prepared));
     assert!(
         ordinary["write_files"]
             .as_sequence()
@@ -45,7 +45,7 @@ fn protected_start_is_explicit_and_the_default_keeps_its_original_bootstrap_file
     let protected = parse(&candidate);
     assert_eq!(
         content(&protected, START),
-        format!("#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} 2\n")
+        format!("#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} 2 {WORKSPACE}\n")
     );
     assert_eq!(content(&protected, INGRESS), include_str!("ingress.py"));
     assert_eq!(file(&protected, INGRESS)["permissions"], "0700");
@@ -378,28 +378,59 @@ fn an_azure_host_installs_docker_and_formats_only_a_blank_data_disk() {
         config["fs_setup"],
         serde_yaml::to_value([serde_json::json!({
             "label": "horizon-ws", "filesystem": "ext4", "device": AZURE_DATA_DISK,
-            "partition": "none", "overwrite": false
+            "partition": "none", "overwrite": false, "replace_fs": false
         })])
         .unwrap()
     );
     assert_eq!(config["mounts"][0][0].as_str(), Some(AZURE_DATA_DISK));
-    assert_eq!(config["mounts"][0][1].as_str(), Some(VOLUME_MOUNT));
-    // Everything else is the prepared host's bootstrap.
+    assert_eq!(config["mounts"][0][1].as_str(), Some(AZURE_VOLUME_MOUNT));
+    // Everything else is the prepared host's bootstrap, apart from the volume path that
+    // the Azure temporary disk at `/mnt` would hide.
     let prepared = parse(&plan());
-    for path in [ENVIRONMENT_FILE, IMAGE_FILE, SETUP, START, UNIT, REGISTRY_FILE] {
+    for path in [ENVIRONMENT_FILE, IMAGE_FILE, SETUP, REGISTRY_FILE] {
         assert_eq!(file(&config, path), file(&prepared, path), "{path}");
     }
     assert_eq!(config["runcmd"], prepared["runcmd"]);
+    let start = content(&config, START);
+    assert!(start.contains(&format!("-v {AZURE_VOLUME_MOUNT}/workspace:/workspace")));
+    let unit = content(&config, UNIT);
+    assert!(unit.contains(&format!("RequiresMountsFor={AZURE_VOLUME_MOUNT}")));
+    assert!(!unit.contains(VOLUME_MOUNT));
+}
+
+#[test]
+fn a_rebuilt_host_never_reformats_the_workspace_disk() {
+    let config = parse(&azure_plan());
+    let filesystem = &config["fs_setup"][0];
+    assert_eq!(filesystem["device"].as_str(), Some(AZURE_DATA_DISK));
+    for key in ["overwrite", "replace_fs"] {
+        assert_eq!(
+            filesystem[key],
+            Value::Bool(false),
+            "cloud-init must leave a device that already holds the workspace filesystem alone: {key}"
+        );
+    }
+    let document = azure_plan().cloud_config().unwrap();
+    for format in ["mkfs", "wipefs"] {
+        assert!(
+            !document.contains(format),
+            "the host never formats a device by itself: {format}"
+        );
+    }
 }
 
 #[test]
 fn an_azure_guard_closes_both_metadata_addresses_and_ipv6_before_every_start() {
     let config = parse(&azure_plan());
     let guard = content(&config, GUARD);
+    for line in PREPARED_GUARD.lines().filter(|line| !line.contains("horizon-volume")) {
+        assert!(guard.lines().any(|guard| guard == line), "{line}");
+    }
     assert!(
-        guard.starts_with(PREPARED_GUARD),
-        "the link-local rule, IMDS 169.254.169.254 included, stays"
+        guard.contains(&format!("mountpoint -q {AZURE_VOLUME_MOUNT} || {{")),
+        "an Azure host checks the mount point the temporary disk cannot shadow"
     );
+    assert!(guard.contains(&format!("mkdir -p {AZURE_VOLUME_MOUNT}/workspace")));
     for rule in [
         "iptables -C DOCKER-USER -d 168.63.129.16/32 -p tcp -m multiport --dports 80,32526 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 168.63.129.16/32 -p tcp -m multiport --dports 80,32526 -j DROP",
         "ip6tables -C FORWARD -i docker0 -j DROP 2>/dev/null || ip6tables -I FORWARD -i docker0 -j DROP",
