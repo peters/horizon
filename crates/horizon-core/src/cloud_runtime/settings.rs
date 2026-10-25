@@ -285,6 +285,13 @@ impl Settings {
     pub fn runpod_configured(&self) -> bool {
         self.runpod_key_file.is_file()
     }
+
+    /// Whether this machine has an `azure` section whose token it can read: a profile
+    /// written for Azure runs a cloud from it, with no key of another provider.
+    #[must_use]
+    pub fn azure_configured(&self) -> bool {
+        self.azure.as_ref().is_some_and(|azure| azure.credential().is_ok())
+    }
     /// # Errors
     /// Requires a private, readable API-key file.
     pub fn credential(&self) -> Result<Credential> {

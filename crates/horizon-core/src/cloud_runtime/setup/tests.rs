@@ -534,3 +534,46 @@ fn metadata_loading_refuses_malformed_existing_settings() {
     assert!(load_settings(root.path()).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"{broken");
 }
+
+/// A machine set up for Azure alone: an `azure` section and the SSH identity a worker is
+/// reached with, and no key, token or host of another provider.
+#[cfg(unix)]
+#[test]
+fn an_azure_section_is_somewhere_for_clouds_to_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let identity = root.path().join("worker_ed25519");
+    let status = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&identity)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let token = root.path().join("arm-token");
+    std::fs::write(&token, "synthetic-arm-token").unwrap();
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(
+        root.path().join("settings.json"),
+        serde_json::json!({
+            "ssh_identity_file": identity,
+            "azure": {
+                "token_file": token,
+                "subscription_id": "00000000-0000-4000-8000-000000000001",
+                "vm_sizes": ["Standard_D4s_v3"],
+                "regions": ["northeurope"],
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut draft = Draft::load(root.path()).unwrap();
+    draft.settings.default_agents = vec![Agent::Claude];
+    draft.anthropic_auth = Authentication::Subscription;
+    assert!(
+        draft.validate().is_ok(),
+        "the azure section is a provider this machine can run clouds on"
+    );
+    let saved = draft.save().unwrap();
+    assert!(saved.azure_configured());
+    assert!(!saved.runpod_configured());
+}
