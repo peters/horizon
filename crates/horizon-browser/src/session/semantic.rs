@@ -10,8 +10,8 @@ use crate::evaluation::EvaluationDeadline;
 use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
-    bounded_control_value, check_script_error, parse_target_rect, scroll_expression, target_rect_expression,
-    wait_scan_expression,
+    bounded_control_value, check_script_error, fill_readback_expression, parse_target_rect, scroll_expression,
+    target_rect_expression, wait_scan_expression,
 };
 use crate::semantic_files::{
     ATTACHED_FILES_FUNCTION, FILE_INPUT_PROBE_FUNCTION, check_attachment_request, element_handle_expression,
@@ -271,14 +271,16 @@ impl DriverState {
         let _ = parse_target_rect(&result)?;
         self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;
         self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
-        self.send_semantic_input(
-            link,
-            event_tx,
-            frame_slot,
-            BrowserInput::InsertText {
-                text: value.to_string(),
-            },
-        )?;
+        for input in crate::semantic_keys::text_inputs(value) {
+            self.send_semantic_input(link, event_tx, frame_slot, input)?;
+        }
+        let applied = self.evaluate_json(link, event_tx, frame_slot, &fill_readback_expression(&selector, value))?;
+        if applied != serde_json::Value::Bool(true) {
+            return Err(BrowserControlFailure::new(
+                "input_failed",
+                "the field did not keep the requested value; the page may have changed or rejected it",
+            ));
+        }
         Ok(BrowserControlValue::Accepted)
     }
 

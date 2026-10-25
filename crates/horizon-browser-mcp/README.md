@@ -179,14 +179,26 @@ shell commands, files, or other MCP servers.
   on local Firefox or classic Perform Actions on Safari and remote targets. A
   failed WebDriver call releases the held keys. It takes no target. Printable
   keys and `Space` are audited as `printable`, never as text.
-  Remote `fill` uses native Element Clear/Send Keys and reads the live field
-  back before reporting completion. An empty, reverted, missing, or otherwise
-  unequal value returns `input_failed`, even when the driver accepted the
-  commands. Clearing an input is verified too. This is an immediate value
-  postcondition, not a promise against later application changes or proof of
-  native-picker interaction. No JavaScript value-assignment fallback is used
-  for remote fill. Native date/time controls may reject a fill; inspect the
-  resulting field after a failure because clearing may already have occurred.
+  A local `fill` types the value as trusted key events, so a widget that
+  enables a control from `keydown` sees the filling as typing. It types at most
+  256 characters that way; a longer remainder, and characters a key cannot type
+  without another effect (line breaks, tabs, other control characters), are
+  inserted as trusted text. Remote `fill` uses native Element Clear/Send Keys.
+  Every `fill` reads the live field back before reporting completion. An empty,
+  reverted, missing, or otherwise unequal value returns `input_failed`, even
+  when the driver accepted the commands. Clearing an input is verified too.
+  This is an immediate value postcondition, not a promise against later
+  application changes or proof of native-picker interaction. No JavaScript
+  value-assignment fallback is used for remote fill. Native date/time controls
+  may reject a fill; inspect the resulting field after a failure because
+  clearing may already have occurred.
+  A child-frame `click` hit-tests the target's centre inside its own frame
+  first: a point another element owns returns `element_obstructed`, and a point
+  outside the frame viewport returns `element_not_hittable`, instead of a
+  reported completion. After the click the frame must hold the focus the target
+  took: `element_not_focused` or `input_failed` mean the frame received no
+  usable click. A verified frame click moves focus into the frame, so a
+  following `press` reaches the focused element there.
   `set_files` attaches host files to an `input[type=file]`: target the input
   itself (query it by selector when a styled button hides it) and pass
   `files` as absolute paths, at most 32. Each path must resolve to a regular

@@ -61,8 +61,9 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    `browser-profile-host`, `standalone-remote-host`, `native-client-file`,
    `checkout-search`, `docker-host-provider`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
-   drop a file or answer a passkey request. Boundaries: `browser-webauthn`,
-   `cloud-browser-uploads`, `cloud-file-drop`.
+   drop a file, answer a passkey request or judge a semantic action. Boundaries:
+   `browser-webauthn`, `browser-semantic-actions`, `cloud-browser-uploads`,
+   `cloud-file-drop`.
 3. **Cloud records and durable evidence** — saved JSON, journals and records
    that a later start reads again. Boundaries: `publication-records`,
    `exposure-records`, `one-device-admission-records`,

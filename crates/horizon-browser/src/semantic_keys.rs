@@ -1,7 +1,55 @@
-//! Key events for the semantic `press` action, shared by the Chromium and
-//! `WebDriver` engines so both deliver the same trusted key sequence.
+//! Key events for the semantic `press` and `fill` actions, shared by the
+//! Chromium and `WebDriver` engines so both deliver the same trusted key
+//! sequence.
 
 use crate::{BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers};
+
+/// How many characters a fill types as trusted key events. A longer value's
+/// remainder is inserted as one trusted text insertion, so a large fill stays
+/// bounded while a normal value still reaches `keydown` handlers.
+pub(crate) const MAX_TYPED_FILL_CHARS: usize = 256;
+
+/// The inputs that type `text` into the focused field. Each typeable character
+/// is one trusted press, so a widget that enables its control from `keydown`
+/// sees the filling as typing. Line breaks, tabs and other control characters
+/// are inserted as text: a key for them would move focus, submit a form, or
+/// add a character the text does not contain.
+pub(crate) fn text_inputs(text: &str) -> Vec<BrowserInput> {
+    let mut inputs = Vec::new();
+    let mut insertion = String::new();
+    let mut typed = 0;
+    for character in text.chars() {
+        match typed_key(character).filter(|_| typed < MAX_TYPED_FILL_CHARS) {
+            Some(key) => {
+                push_insertion(&mut inputs, &mut insertion);
+                inputs.extend(press_inputs(key, BrowserModifiers::none()));
+                typed += 1;
+            }
+            None => insertion.push(character),
+        }
+    }
+    push_insertion(&mut inputs, &mut insertion);
+    inputs
+}
+
+fn typed_key(character: char) -> Option<BrowserKey> {
+    if character.is_control() {
+        return None;
+    }
+    Some(if character == ' ' {
+        BrowserKey::Space
+    } else {
+        BrowserKey::Char(character)
+    })
+}
+
+fn push_insertion(inputs: &mut Vec<BrowserInput>, insertion: &mut String) {
+    if !insertion.is_empty() {
+        inputs.push(BrowserInput::InsertText {
+            text: std::mem::take(insertion),
+        });
+    }
+}
 
 /// The key-down and key-up of one press. The key-up releases the modifiers,
 /// so no modifier stays held for the next action or for the user.
@@ -33,6 +81,61 @@ pub(crate) fn press_inputs(key: BrowserKey, modifiers: BrowserModifiers) -> [Bro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sequence(text: &str) -> Vec<String> {
+        text_inputs(text)
+            .iter()
+            .map(|input| match input {
+                BrowserInput::KeyDown { text: Some(text), .. } => format!("down:{text}"),
+                BrowserInput::KeyDown { key, text: None, .. } => format!("raw:{key:?}"),
+                BrowserInput::KeyUp { key, .. } => format!("up:{key:?}"),
+                BrowserInput::InsertText { text } => format!("insert:{text:?}"),
+                other => panic!("unexpected fill input {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_fill_types_text_and_inserts_characters_a_key_cannot_type() {
+        assert_eq!(
+            sequence("a b\nc\td"),
+            [
+                "down:a",
+                "up:Char('a')",
+                "down: ",
+                "up:Space",
+                "down:b",
+                "up:Char('b')",
+                "insert:\"\\n\"",
+                "down:c",
+                "up:Char('c')",
+                "insert:\"\\t\"",
+                "down:d",
+                "up:Char('d')",
+            ]
+        );
+        assert_eq!(sequence(""), Vec::<String>::new());
+        assert_eq!(sequence("\n"), ["insert:\"\\n\""]);
+    }
+
+    #[test]
+    fn a_long_fill_types_a_bounded_prefix_and_inserts_the_rest() {
+        let text = "a".repeat(MAX_TYPED_FILL_CHARS + 3);
+        let inputs = text_inputs(&text);
+        assert_eq!(
+            inputs
+                .iter()
+                .filter(|input| matches!(input, BrowserInput::KeyDown { .. }))
+                .count(),
+            MAX_TYPED_FILL_CHARS
+        );
+        assert_eq!(
+            inputs.last(),
+            Some(&BrowserInput::InsertText {
+                text: "aaa".to_string()
+            })
+        );
+    }
 
     #[test]
     fn shifted_tab_holds_shift_for_the_key_down_and_releases_it() {
