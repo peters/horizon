@@ -10,6 +10,7 @@ mod cloud_slots;
 mod core;
 mod disposal;
 mod layout;
+mod panel_working_directory;
 mod reordering;
 mod workspace;
 mod workspace_separation;

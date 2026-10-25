@@ -75,14 +75,6 @@ fn inherit_workspace_cwd(options: &mut PanelOptions, workspace_cwd: Option<&Path
     }
 }
 
-fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: Option<&PathBuf>) {
-    if let Some(path) = path
-        && let Some(workspace) = workspace
-    {
-        workspace.cwd = Some(path.clone());
-    }
-}
-
 /// Align attached workspaces into a horizontal row in sidebar order.
 pub(super) fn align_attached_workspaces(
     board: &mut horizon_core::Board,
@@ -139,7 +131,7 @@ mod tests {
     use std::path::PathBuf;
 
     use egui::{Color32, Pos2, Rect};
-    use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig, Workspace, WorkspaceId};
+    use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig};
 
     use super::layout::{
         canvas_rect_for_layout, estimated_settings_bar_rect, estimated_settings_panel_rect,
@@ -151,7 +143,7 @@ mod tests {
     };
     use super::{
         DetachedWorkspaceViewportState, add_panel_position, align_attached_workspaces, inherit_workspace_cwd,
-        update_workspace_cwd, workspace_cwd,
+        workspace_cwd,
     };
     use crate::app::TOOLBAR_HEIGHT;
     use crate::app::root_chrome::effective_sidebar_width;
@@ -179,27 +171,6 @@ mod tests {
         inherit_workspace_cwd(&mut options, Some(&workspace_path));
 
         assert_eq!(options.cwd, Some(panel_path));
-    }
-
-    #[test]
-    fn update_workspace_cwd_promotes_selected_panel_directory() {
-        let mut workspace = Workspace::new(WorkspaceId(1), "alpha".to_string(), 0);
-        let selected_path = PathBuf::from("/repo");
-
-        update_workspace_cwd(Some(&mut workspace), Some(&selected_path));
-
-        assert_eq!(workspace.cwd, Some(selected_path));
-    }
-
-    #[test]
-    fn update_workspace_cwd_keeps_existing_directory_when_picker_is_skipped() {
-        let existing_path = PathBuf::from("/repo");
-        let mut workspace = Workspace::new(WorkspaceId(1), "alpha".to_string(), 0);
-        workspace.cwd = Some(existing_path.clone());
-
-        update_workspace_cwd(Some(&mut workspace), None);
-
-        assert_eq!(workspace.cwd, Some(existing_path));
     }
 
     #[test]

@@ -229,6 +229,27 @@ impl Default for PanelOptions {
     }
 }
 
+/// Whether a panel of `kind` runs its process on this computer, where its working
+/// directory decides where that process starts. A remote panel starts a shell
+/// elsewhere, so a local directory that no longer exists must not stop it.
+fn panel_runs_a_local_process(kind: PanelKind) -> bool {
+    kind != PanelKind::Ssh
+}
+
+impl PanelOptions {
+    #[must_use]
+    pub(crate) fn runs_a_local_process(&self) -> bool {
+        if !panel_runs_a_local_process(self.kind) {
+            return false;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_connection.is_some() {
+            return false;
+        }
+        true
+    }
+}
+
 /// Why a restored member panel of a cloud does not run its process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloudWait {
@@ -515,7 +536,7 @@ impl Panel {
         let Some((rows, cols)) = size else {
             return Ok(false);
         };
-        let replacement = spawn::placeholder_terminal(self, rows, cols, wait)?;
+        let replacement = spawn::placeholder_terminal(self, rows, cols, spawn::Placeholder::Cloud(wait))?;
         if let PanelContent::Terminal(mut old) =
             std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
         {
@@ -523,6 +544,59 @@ impl Panel {
         }
         self.cloud_wait = Some(wait);
         Ok(true)
+    }
+
+    /// Follow the new directory of this workspace.
+    ///
+    /// A panel that runs in the directory of its workspace keeps that directory
+    /// when the person sets another one. A panel with its own directory keeps
+    /// its own directory. A panel that could not start says to set the directory
+    /// of its workspace and restart it, which must then start the panel.
+    pub(crate) fn follow_workspace_directory(
+        &mut self,
+        previous: Option<&std::path::Path>,
+        directory: &std::path::Path,
+    ) {
+        if !panel_runs_a_local_process(self.kind) || self.launch_cwd.as_deref() != previous {
+            return;
+        }
+        tracing::info!(
+            panel_id = self.id.0,
+            from = ?self.launch_cwd,
+            to = %directory.display(),
+            "panel follows the new directory of its workspace"
+        );
+        self.launch_cwd = Some(directory.to_path_buf());
+    }
+
+    /// The directory this panel cannot start its process in, if any.
+    fn working_directory_failure(&self) -> Option<spawn::UnusableWorkingDirectory> {
+        if !panel_runs_a_local_process(self.kind) {
+            return None;
+        }
+        let failure = spawn::usable_working_directory(self.launch_cwd.as_deref()).err()?;
+        tracing::warn!(
+            panel_id = self.id.0,
+            directory = %failure.path,
+            reason = %failure.reason,
+            "panel cannot start in its working directory"
+        );
+        Some(failure)
+    }
+
+    /// Replace the process this panel cannot start with what went wrong.
+    fn show_working_directory_failure(&mut self, failure: &spawn::UnusableWorkingDirectory) -> Result<()> {
+        let Some((rows, cols)) = self.terminal().map(|terminal| (terminal.rows(), terminal.cols())) else {
+            return Ok(());
+        };
+        let placeholder = spawn::Placeholder::for_working_directory(failure);
+        let replacement = spawn::placeholder_terminal(self, rows, cols, placeholder)?;
+        if let PanelContent::Terminal(mut old) =
+            std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
+        {
+            old.request_shutdown();
+        }
+        Ok(())
     }
 
     /// What this panel says while its cloud does not run it.

@@ -8,7 +8,7 @@ use terminal::{disconnected_snapshot_launch_command, prepare_transcript_restore}
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
@@ -129,6 +129,51 @@ impl StaticPanelSeed {
             ssh_connection: None,
             ssh_status: None,
         }
+    }
+}
+
+/// A working directory that a process of this computer cannot start in.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::panel) struct UnusableWorkingDirectory {
+    /// The directory the panel asked for.
+    pub(in crate::panel) path: String,
+    /// Why a process cannot enter it.
+    pub(in crate::panel) reason: String,
+}
+
+/// Refuse a working directory that a local process cannot enter.
+///
+/// A spawned process inherits Horizon's own working directory, and the PTY layer
+/// ignores a `chdir` that fails. Without this check, a panel whose directory was
+/// renamed or deleted runs its agent in Horizon's checkout instead of saying so.
+/// `canonicalize` resolves every path component, so it fails for a missing path
+/// and for one this process may not enter: the conditions that break `chdir`.
+pub(in crate::panel) fn usable_working_directory(
+    cwd: Option<&Path>,
+) -> std::result::Result<(), UnusableWorkingDirectory> {
+    let Some(path) = cwd.filter(|path| !path.as_os_str().is_empty()) else {
+        return Ok(());
+    };
+
+    let resolved = path.canonicalize().map_err(|error| {
+        let reason = match error.kind() {
+            std::io::ErrorKind::NotFound => "the directory does not exist".to_string(),
+            std::io::ErrorKind::PermissionDenied => "permission denied".to_string(),
+            _ => error.to_string(),
+        };
+        unusable_working_directory(path, &reason)
+    })?;
+    if resolved.is_dir() {
+        Ok(())
+    } else {
+        Err(unusable_working_directory(path, "the path is not a directory"))
+    }
+}
+
+fn unusable_working_directory(path: &Path, reason: &str) -> UnusableWorkingDirectory {
+    UnusableWorkingDirectory {
+        path: path.display().to_string(),
+        reason: reason.to_string(),
     }
 }
 
@@ -812,6 +857,55 @@ pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_working_directory_is_refused_with_its_path() {
+        let state = tempfile::tempdir().expect("owned fixture state");
+        let missing = state.path().join("renamed-away");
+
+        let failure = usable_working_directory(Some(&missing)).expect_err("a missing directory is refused");
+
+        assert_eq!(failure.path, missing.display().to_string());
+        assert_eq!(failure.reason, "the directory does not exist");
+    }
+
+    #[test]
+    fn a_file_working_directory_is_refused() {
+        let state = tempfile::tempdir().expect("owned fixture state");
+        let file = state.path().join("not-a-directory");
+        std::fs::write(&file, b"x").expect("write fixture file");
+
+        let failure = usable_working_directory(Some(&file)).expect_err("a file is not a working directory");
+
+        assert_eq!(failure.path, file.display().to_string());
+        assert_eq!(failure.reason, "the path is not a directory");
+    }
+
+    #[test]
+    fn an_existing_directory_and_no_directory_are_usable() {
+        let state = tempfile::tempdir().expect("owned fixture state");
+
+        usable_working_directory(Some(state.path())).expect("an existing directory is usable");
+        usable_working_directory(None).expect("no requested directory is usable");
+        usable_working_directory(Some(Path::new(""))).expect("an empty path requests no directory");
+    }
+
+    #[test]
+    fn a_remote_panel_needs_no_local_directory() {
+        let ssh = PanelOptions {
+            kind: PanelKind::Ssh,
+            ..PanelOptions::default()
+        };
+        let shell = PanelOptions::default();
+        let editor = PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        };
+
+        assert!(!ssh.runs_a_local_process(), "an SSH panel runs its shell elsewhere");
+        assert!(shell.runs_a_local_process(), "a shell runs in its directory here");
+        assert!(editor.runs_a_local_process(), "an editor has no remote shell to reach");
+    }
 
     #[test]
     fn restored_generated_name_stays_non_custom() {

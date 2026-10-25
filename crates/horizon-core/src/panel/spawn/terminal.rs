@@ -44,8 +44,20 @@ struct TerminalPanelBuildArgs {
 pub(in crate::panel) enum Placeholder<'a> {
     /// The process could not start; the text is the error.
     RestoreFailure(&'a str),
+    /// The panel cannot start its process in its working directory.
+    WorkingDirectory { path: &'a str, reason: &'a str },
     /// The cloud of the panel does not run it now.
     Cloud(CloudWait),
+}
+
+impl<'a> Placeholder<'a> {
+    /// What a panel says instead of running in `failure`'s directory.
+    pub(in crate::panel) fn for_working_directory(failure: &'a super::UnusableWorkingDirectory) -> Self {
+        Self::WorkingDirectory {
+            path: &failure.path,
+            reason: &failure.reason,
+        }
+    }
 }
 
 pub(in crate::panel) fn placeholder_panel(
@@ -145,12 +157,33 @@ pub(in crate::panel) fn placeholder_panel(
     Ok(panel)
 }
 
+/// The directory this panel cannot start its process in, if any.
+///
+/// A panel whose directory was renamed or deleted must not keep Horizon's own
+/// directory: its agent would work in another repository without a warning.
+fn working_directory_failure(id: PanelId, opts: &PanelOptions) -> Option<super::UnusableWorkingDirectory> {
+    if !opts.runs_a_local_process() {
+        return None;
+    }
+    let failure = super::usable_working_directory(opts.cwd.as_deref()).err()?;
+    tracing::warn!(
+        panel_id = id.0,
+        directory = %failure.path,
+        reason = %failure.reason,
+        "panel cannot start in its working directory"
+    );
+    Some(failure)
+}
+
 pub(super) fn spawn_terminal(
     id: PanelId,
     workspace_id: WorkspaceId,
     local_id: String,
     opts: PanelOptions,
 ) -> Result<Panel> {
+    if let Some(failure) = working_directory_failure(id, &opts) {
+        return placeholder_panel(id, workspace_id, opts, Placeholder::for_working_directory(&failure));
+    }
     let (transcript, replay_bytes, had_persisted_transcript_state) =
         prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);
     let resolved_launch = resolve_spawn_launch(id, &opts, transcript.as_ref());
@@ -327,14 +360,19 @@ fn spawn_restore_failure_snapshot_terminal(
     Ok(terminal)
 }
 
-/// The terminal of a cloud placeholder for `panel` that says `wait`.
-pub(in crate::panel) fn placeholder_terminal(panel: &Panel, rows: u16, cols: u16, wait: CloudWait) -> Result<Terminal> {
+/// The terminal of a placeholder for `panel` that says `placeholder`.
+pub(in crate::panel) fn placeholder_terminal(
+    panel: &Panel,
+    rows: u16,
+    cols: u16,
+    placeholder: Placeholder<'_>,
+) -> Result<Terminal> {
     spawn_restore_failure_snapshot_terminal(
         panel.id,
         panel.kind,
         rows,
         cols,
-        placeholder_replay_bytes(&panel.title, Placeholder::Cloud(wait)),
+        placeholder_replay_bytes(&panel.title, placeholder),
     )
 }
 
@@ -357,6 +395,18 @@ fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8
             ),
             title = title,
             error_message = error_message
+        ),
+        Placeholder::WorkingDirectory { path, reason } => format!(
+            concat!(
+                "Horizon could not start this panel.\r\n\r\n",
+                "Panel: {title}\r\n",
+                "Directory: {path}\r\n",
+                "Reason: {reason}\r\n\r\n",
+                "Set the directory of this workspace, then restart the panel.\r\n"
+            ),
+            title = title,
+            path = path,
+            reason = reason
         ),
         Placeholder::Cloud(CloudWait::Reconnecting) => format!(
             concat!(
