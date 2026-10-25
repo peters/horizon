@@ -52,6 +52,13 @@ impl State {
             .and_then(|metadata| metadata.modified())
             .ok();
         let retry = self.binding_failed_at.is_some_and(|at| at.elapsed() >= RETRY_FAILED);
+        // No settings file at all: this machine has no `azure` section, and none is read.
+        if saved.is_none() && self.binding_job.is_none() {
+            self.binding = Some(Ok(None));
+            self.settings_saved = None;
+            self.binding_failed_at = None;
+            return;
+        }
         if self.binding_job.is_none() && (saved != self.settings_saved || retry) {
             self.binding_failed_at = None;
             self.settings_saved = saved;
