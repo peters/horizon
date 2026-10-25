@@ -370,7 +370,43 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
    Result: The Azure row and its prices come back without a restart.
 
-### 6.10 ANC-L1 — Start one Azure cloud
+### 6.10 ANC-9 — Start a cloud from a profile written for Azure
+
+1. Put a `runpod_key_file` in `$CLOUD/settings.json` that holds a key `RunPod`
+   rejects, such as the text `invalid-runpod-key`. Keep the `azure` section.
+
+   Result: The file is valid JSON, and the key file has mode `0600`.
+
+2. Open the test repository in **New cloud**. Its `azure` profile is written
+   `provider: azure`. Do not click a provider in the heading.
+
+   Result: The **Azure** entry is the cloud's provider. The dialog shows
+   "Prices are unavailable: Provider authentication failed" and lists no
+   worker row. The summary still shows `northeurope` and **VM size**
+   `Standard_D4s_v3`, because the `azure` section decides both. The checks
+   pass. **Start cloud** is enabled.
+
+   A profile written for Azure reaches the placement that a heading choice
+   reaches. It does not wait for a click, and a provider whose prices cannot
+   be fetched does not take the Azure rows with it.
+
+3. Click **Start cloud**.
+
+   Result: The cloud card shows the worker on `northeurope` and
+   `Standard_D4s_v3`. It reaches its ready state.
+
+4. Delete the cloud from its card, and prove that its resource group is
+   absent.
+
+   Result: `az group exists -n horizon-ws-<cloud id>` is false, and no
+   `horizon-ws-*` group remains.
+
+5. Remove the rejected `runpod_key_file` from the settings, or put back the
+   saved settings file.
+
+   Result: The dialog lists the worker rows again.
+
+### 6.11 ANC-L1 — Start one Azure cloud
 
 > **CAUTION:** THIS TASK RENTS COMPUTE IN THE AZURE SUBSCRIPTION. Delete the
 > cloud at the end of the task.
@@ -408,6 +444,9 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 - A settings file that cannot be read, or a machine with no settings file, each
   show their own reason. No message describes an ordinary state as an I/O
   failure.
+- A profile written `provider: azure` starts on the VM size and region that its
+  section allows, with no click in the heading, also while another provider's
+  prices cannot be fetched.
 - With a valid section, the heading's Azure entry starts the cloud on the
   cheapest VM size and region that the section allows.
 - With a valid section, the dialog lists only the VM sizes and regions of the
