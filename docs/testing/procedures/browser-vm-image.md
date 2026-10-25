@@ -239,6 +239,47 @@ sign-in of that profile after a restart of the container.
    Result: The exit code is not `0`, and the log holds
    `the profile host stopped with the status <N>`.
 
+### 6.8 BVM-STALE: The start recovers from a stop without the stop path
+
+1. Start the container, then kill it, so that the stop path does not run.
+
+   ```sh
+   docker start hz-bvm-$RUN
+   sleep 8
+   docker kill hz-bvm-$RUN
+   ```
+
+   Result: The container stops, and its writable layer keeps the lock file and
+   the socket of the display.
+
+2. Examine the files that the kill left behind.
+
+   ```sh
+   docker diff hz-bvm-$RUN | grep -E 'X11-unix|X99-lock'
+   ```
+
+   Result: The output holds `A /tmp/.X11-unix/X99` and `A /tmp/.X99-lock`.
+
+3. Start the same container again.
+
+   ```sh
+   docker start hz-bvm-$RUN
+   sleep 8
+   docker logs --since 20s hz-bvm-$RUN
+   ```
+
+   Result: The log holds `removed the lock file and the socket of an earlier
+   run of :99`, then the start lines of task BVM-START.
+
+4. Examine that the container now serves a live display.
+
+   ```sh
+   docker exec hz-bvm-$RUN xdpyinfo -display :99 | head -2
+   ```
+
+   Result: The command prints `name of display:    :99` and the version number.
+   The message `unable to open display` is a failure.
+
 ## 7. Pass criteria
 
 - The container starts the display, the VNC server and the profile host.
@@ -251,6 +292,8 @@ sign-in of that profile after a restart of the container.
   instance does not change.
 - The container stops with the code 0 after a termination signal, and with a
   code other than 0 when the profile host dies.
+- A start after a stop without the stop path removes the lock file and the
+  socket of the display, and reaches a live display.
 
 ## 8. Cleanup
 

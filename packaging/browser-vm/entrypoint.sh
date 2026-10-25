@@ -70,11 +70,39 @@ if [[ ! -f "$HOST_FILE" ]]; then
     log "wrote the example host file to $HOST_FILE"
 fi
 
-Xvfb "$DISPLAY" -screen 0 "$SCREEN" -nolisten tcp -ac >/dev/null 2>&1 &
+# The container owns the files of its display. A container that stops without
+# this stop path, for example from a kill that skips it or from an out-of-memory
+# kill, keeps the lock file and the socket in its writable layer, and the next
+# start must not take them for a running server.
+clear_stale_display() {
+    local lock_file="/tmp/.X${DISPLAY_NUMBER}-lock"
+    local socket_file="/tmp/.X11-unix/X${DISPLAY_NUMBER}"
+    local lock_owner=""
+    if [[ ! -e "$lock_file" && ! -e "$socket_file" ]]; then
+        return 0
+    fi
+    if [[ -f "$lock_file" ]]; then
+        lock_owner="$(tr -cd '[:digit:]' <"$lock_file" || true)"
+    fi
+    if [[ -n "$lock_owner" ]] && kill -0 "$lock_owner" 2>/dev/null; then
+        log "the lock file $lock_file names the running process $lock_owner"
+        return 0
+    fi
+    rm -f "$lock_file" "$socket_file"
+    log "removed the lock file and the socket of an earlier run of $DISPLAY"
+}
+
+# The log of Xvfb names the reason of a start that fails, for example a lock
+# file that it cannot use.
+xvfb_log="/tmp/.X${DISPLAY_NUMBER}-xvfb.log"
+clear_stale_display
+Xvfb "$DISPLAY" -screen 0 "$SCREEN" -nolisten tcp -ac >"$xvfb_log" 2>&1 &
 xvfb_pid=$!
+# The socket appears only after the removal above, so the socket of this wait
+# belongs to this Xvfb.
 display_ready=0
 for _ in {1..100}; do
-    if [[ -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]]; then
+    if [[ -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
         display_ready=1
         break
     fi
@@ -84,7 +112,14 @@ for _ in {1..100}; do
     sleep 0.1
 done
 if [[ "$display_ready" -ne 1 ]]; then
-    log "the display $DISPLAY did not start"
+    if kill -0 "$xvfb_pid" 2>/dev/null; then
+        log "the display $DISPLAY did not appear within 10 s"
+    else
+        log "the display $DISPLAY did not start, Xvfb stopped"
+    fi
+    while IFS= read -r line; do
+        log "Xvfb: $line"
+    done <"$xvfb_log"
     exit 1
 fi
 log "the display $DISPLAY runs ${SCREEN}"
