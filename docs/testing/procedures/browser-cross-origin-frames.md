@@ -46,7 +46,7 @@ The test does not use the developer's browser session.
    The directory must not have a name that starts with a dot.
    Firefox and geckodriver must both have access to it.
 2. On Linux, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live -- --ignored --nocapture`.
-   The run includes the frame-verification test of task 6.8.
+   The run includes the frame-verification test of task 6.7.
 3. On macOS, run `cargo test -p horizon-browser-mcp --test cross_origin_frames_live mcp_safari_preserves_top_level_input_and_frame_boundaries -- --ignored --nocapture`.
    Run the selected test alone. Each test uses its own coordination root.
 
@@ -54,7 +54,7 @@ The test does not use the developer's browser session.
 
 ## 6. Tasks
 
-On Linux, use tasks 6.1 through 6.6. On macOS, use tasks 6.6 and 6.7.
+On Linux, use tasks 6.1 through 6.7. On macOS, use tasks 6.6 and 6.8.
 
 ### 6.1 FRAME-INPUT — Fill and submit the form
 
