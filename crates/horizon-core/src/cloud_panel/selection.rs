@@ -39,9 +39,6 @@ impl From<&Offer> for WorkerChoice {
     }
 }
 
-const AZURE_PLACEMENT: &str =
-    "An Azure cloud runs on the VM sizes and regions of the azure cloud settings; start it without a worker choice";
-
 impl WorkerChoice {
     /// Bind the chosen worker, preserving the repository's minimum requirements.
     /// # Errors
@@ -84,18 +81,21 @@ impl WorkerChoice {
                 }
             }
             provider::Kind::DockerHost => placement.data_centers = vec![self.id.clone()],
-            provider::Kind::Hetzner => {
+            // One server type or VM size in one location; for Azure, `Settings::for_cloud`
+            // narrows the settings to it, so no other size or region is tried.
+            provider::Kind::Hetzner | provider::Kind::Azure => {
                 let location = self
                     .location
                     .as_ref()
                     .filter(|location| !location.is_empty())
-                    .ok_or(Error::Invalid("Choose an exact Hetzner worker location"))?;
+                    .ok_or(Error::Invalid(if provider.kind == provider::Kind::Azure {
+                        "Choose an exact Azure VM size and region"
+                    } else {
+                        "Choose an exact Hetzner worker location"
+                    }))?;
                 placement.cpu_types = vec![self.id.clone()];
                 placement.data_centers = vec![location.clone()];
             }
-            // Provisioning tries the settings' VM sizes and regions in order and honours
-            // no single offer, so choosing one would promise a placement it may not get.
-            provider::Kind::Azure => return Err(Error::Invalid(AZURE_PLACEMENT)),
         }
         Ok(ChosenWorker {
             provider,
@@ -109,25 +109,39 @@ impl WorkerChoice {
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_azure_worker_choice_is_refused_for_the_settings_placement() {
-        let cpu: Profile = serde_json::from_value(
-            serde_json::json!({"provider":"azure","image":"registry.example/worker","cpu":4,"memory_gb":8}),
-        )
-        .unwrap();
-        assert!(provider::AZURE.supports(&cpu), "the refusal is not the profile's");
-        let choice = WorkerChoice {
+    fn choice(location: Option<&str>) -> WorkerChoice {
+        WorkerChoice {
             provider: provider::AZURE.id.into(),
             id: "Standard_D4s_v3".into(),
             kind: "cpu".into(),
             vcpu: Some(4),
             memory_gb: Some(16),
             gpu_memory_gb: None,
-            location: Some("northeurope".into()),
-        };
-        let Err(error) = choice.for_profile(&cpu) else {
-            panic!("an Azure worker was chosen");
-        };
-        assert_eq!(error.to_string(), AZURE_PLACEMENT);
+            location: location.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_azure_worker_is_placed_by_its_size_and_region() {
+        let cpu: Profile = serde_json::from_value(
+            serde_json::json!({"provider":"azure","image":"registry.example/worker","cpu":4,"memory_gb":8}),
+        )
+        .unwrap();
+        let chosen = choice(Some("northeurope")).for_profile(&cpu).unwrap();
+        assert_eq!(chosen.provider.kind, provider::Kind::Azure);
+        assert_eq!(chosen.size, Some((4, 16)));
+        assert_eq!(chosen.placement.cpu_types, ["Standard_D4s_v3"]);
+        assert_eq!(chosen.placement.data_centers, ["northeurope"]);
+        for location in [None, Some("")] {
+            let Err(error) = choice(location).for_profile(&cpu) else {
+                panic!("an Azure worker without a region was chosen");
+            };
+            assert_eq!(error.to_string(), "Choose an exact Azure VM size and region");
+        }
+        let large = Profile { cpu: 8, ..cpu };
+        assert!(
+            choice(Some("northeurope")).for_profile(&large).is_err(),
+            "a size below the profile is refused"
+        );
     }
 }

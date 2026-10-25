@@ -6,7 +6,8 @@
 //!
 //! `providers::preflight` admits an Azure cloud that the settings can make, and
 //! `offers::AZURE_DEPLOYABLE` lets every caller create one. A worker is placed by
-//! the settings' VM sizes and regions, never by a single chosen offer.
+//! the settings' VM sizes and regions, which `Settings::for_cloud` narrows to the
+//! one size and region a worker choice names.
 mod lifecycle;
 mod provision;
 #[cfg(test)]

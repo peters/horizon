@@ -1,9 +1,9 @@
 //! Azure offers, ranked from its retail price catalog in US dollars. An estimate adds
 //! the managed OS disk, the workspace data disk and the Standard static public address
 //! to the compute. A deallocated cloud keeps both disks and the address, so they make
-//! its stopped cost. Horizon creates an Azure cloud on the VM sizes and regions of
-//! the machine's `azure` settings, in their order, and cannot place one on a single
-//! offer yet, so the section is deployable and each offer is informational.
+//! its stopped cost. The section is deployable, but an offer is only a price: the
+//! machine's `azure` settings decide the VM sizes and regions a cloud may use, so
+//! each offer is informational and a chosen worker comes from `Workers::add_azure`.
 use super::{
     AZURE_DEPLOYABLE, DEFAULT_LIMIT, DEFAULT_STORAGE_GB, MAX_HOURS, MAX_LIMIT, MONTH_HOURS, Offer, Requirements,
     normalize,
@@ -121,7 +121,7 @@ fn priced(
         regions_in_stock: Vec::new(),
         host: "provider_operated",
         interruptible: false,
-        // `WorkerChoice::for_profile` refuses an exact Azure offer.
+        // Only the `azure` settings make a size and region rentable on this machine.
         rentable: false,
     })
 }

@@ -1,9 +1,10 @@
 //! Complete provider catalogs for a repository profile, before browsing filters.
-use super::{Offer, Place, Requirements, catalog, comparison::Rank, hetzner, hetzner_catalog, places};
+use super::{Offer, Place, Requirements, azure_catalog, catalog, comparison::Rank, hetzner, hetzner_catalog, places};
 use crate::{
     Profile,
+    azure::catalog::Catalog as AzureCatalog,
     hetzner::catalog::Catalog,
-    prices::{Preferences, PriceList},
+    prices::{Availability, Preferences, PriceList},
     provider,
 };
 
@@ -29,6 +30,50 @@ impl Workers {
             section.sort_by(|(a_total, a, _), (b_total, b, _)| Rank::of(a, *a_total).order(&Rank::of(b, *b_total)));
         }
         (self.offers, self.places) = rows.into_iter().map(|(_, offer, places)| (offer, places)).unzip();
+    }
+
+    /// Adds the Azure offers of `catalog` in the VM sizes and regions the machine's
+    /// `azure` settings allow, matching ones beside the other matching workers. Azure
+    /// confirms quota only when the cloud starts, so each place reads as advisory.
+    pub fn add_azure(
+        &mut self,
+        profile: &Profile,
+        hours: f64,
+        catalog: &AzureCatalog,
+        sizes: &[String],
+        regions: &[String],
+    ) {
+        if !provider::AZURE.supports(profile) {
+            return;
+        }
+        let requirements = Requirements {
+            hours: Some(hours),
+            ..Requirements::for_profile(profile)
+        };
+        let browsing = Requirements {
+            min_vcpu: None,
+            min_memory_gb: None,
+            ..requirements.clone()
+        };
+        let allowed = azure_catalog(catalog, &browsing).into_iter().filter(|offer| {
+            sizes.contains(&offer.id) && offer.location.as_ref().is_some_and(|region| regions.contains(region))
+        });
+        let (matching, excluded): (Vec<_>, Vec<_>) =
+            allowed.partition(|offer| requirements.resource_reason(offer).is_none());
+        let place = |offer: &Offer| {
+            let id = offer.location.clone().unwrap_or_default();
+            vec![Place {
+                region: catalog.regions.get(&id).cloned().unwrap_or_default(),
+                id,
+                availability: Availability::Low,
+            }]
+        };
+        let at = self.matching.min(self.offers.len());
+        self.matching = at + matching.len();
+        self.places.splice(at..at, matching.iter().map(place));
+        self.offers.splice(at..at, matching);
+        self.places.extend(excluded.iter().map(place));
+        self.offers.extend(excluded);
     }
 }
 
@@ -230,5 +275,75 @@ mod tests {
                 .iter()
                 .all(|offer| offer.provider == "Hetzner")
         );
+    }
+
+    fn azure_prices() -> AzureCatalog {
+        let offer = |size: &str, region: &str, vcpu: u16, memory_gb: u16, hourly: f64| {
+            serde_json::json!({"size": size, "region": region, "vcpu": vcpu, "memory_gb": memory_gb,
+                "hourly_usd": hourly})
+        };
+        let disks = serde_json::json!({"32": 5.28, "64": 10.21, "128": 19.71});
+        serde_json::from_value(serde_json::json!({
+            "offers": [offer("Standard_D2s_v3", "northeurope", 2, 8, 0.107),
+                offer("Standard_D4s_v3", "northeurope", 4, 16, 0.214),
+                offer("Standard_D4s_v3", "westeurope", 4, 16, 0.2),
+                offer("Standard_D8s_v3", "northeurope", 8, 32, 0.428)],
+            "disk_month_usd": {"northeurope": disks, "westeurope": disks},
+            "static_ip_hour_usd": {"northeurope": 0.005, "westeurope": 0.005},
+            "regions": {"northeurope": "EUROPE", "westeurope": "EUROPE"},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn azure_workers_are_only_the_sizes_and_regions_the_settings_allow() {
+        let profile: Profile = serde_json::from_value(
+            serde_json::json!({"provider": "azure", "image": "registry.example/worker", "cpu": 4, "memory_gb": 8}),
+        )
+        .unwrap();
+        let mut workers = workers(&profile, 1.0, None, Some(&hetzner()));
+        let hetzner_matching = workers.matching;
+        let allowed = |names: &[&str]| names.iter().map(|&name| name.to_owned()).collect::<Vec<_>>();
+        workers.add_azure(
+            &profile,
+            1.0,
+            &azure_prices(),
+            &allowed(&["Standard_D2s_v3", "Standard_D4s_v3"]),
+            &allowed(&["northeurope"]),
+        );
+        let listed: Vec<_> = workers
+            .offers
+            .iter()
+            .enumerate()
+            .filter(|(_, offer)| offer.provider == "Azure")
+            .map(|(index, offer)| (index < workers.matching, identity(offer).1, identity(offer).2))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (true, "Standard_D4s_v3".to_owned(), Some("northeurope".to_owned())),
+                (false, "Standard_D2s_v3".to_owned(), Some("northeurope".to_owned())),
+            ],
+            "a size or region the settings leave out is never listed"
+        );
+        assert_eq!(workers.matching, hetzner_matching + 1);
+        assert_eq!(workers.offers.len(), workers.places.len());
+        for (offer, places) in workers.offers.iter().zip(&workers.places) {
+            assert_eq!(places.len(), 1);
+            assert_eq!(Some(&places[0].id), offer.location.as_ref());
+        }
+        let gpu = Profile {
+            gpu: true,
+            ..profile.clone()
+        };
+        let mut none = super::workers(&gpu, 1.0, None, None);
+        none.add_azure(
+            &gpu,
+            1.0,
+            &azure_prices(),
+            &allowed(&["Standard_D4s_v3"]),
+            &allowed(&["northeurope"]),
+        );
+        assert!(none.offers.is_empty(), "Azure offers no GPU workers");
     }
 }

@@ -320,18 +320,20 @@ Do the tasks in order. Each task has a stable ID for the report.
 
 ### 6.17 AZV-17 — Check that Azure is a provider Horizon creates on
 
-1. Run the provider, offer, selection and cost tests.
+1. Run the provider, offer, worker list, selection, settings and cost tests.
 
    ```sh
-   cargo test -p horizon-cloud --lib -- provider::tests::an_azure offers::azure
-   cargo test -p horizon-core --lib -- cloud_panel::selection cloud_runtime::cost::tests::a_stopped_azure
+   cargo test -p horizon-cloud --lib -- provider::tests::an_azure offers::azure offers::workers
+   cargo test -p horizon-core --lib -- cloud_panel::selection cloud_runtime::settings cloud_runtime::cost::tests::a_stopped_azure
    cargo test -p horizon-ui --bin horizon -- creation::checks::tests::an_azure
    ```
 
    Result: All tests pass. These tests examine the items that follow:
    - `AZURE.creatable` and `offers::AZURE_DEPLOYABLE` are `true`.
    - The Azure section of `cloud_offers` has `deployable: true`. Each Azure offer has `rentable: false`.
-   - A worker choice of an Azure offer is refused with "An Azure cloud runs on the VM sizes and regions of the azure cloud settings; start it without a worker choice".
+   - A worker choice of an Azure offer gives one VM size in `cpu_types` and one region in `data_centers`. A choice without a region is refused with "Choose an exact Azure VM size and region". A VM size below the profile is refused.
+   - `Workers::add_azure` lists only the Azure VM sizes and regions of the `azure` section. A size that meets the profile is listed with the matching workers, and a smaller size after them. A GPU profile gets no Azure worker.
+   - `Settings::for_cloud` narrows the `azure` section to the chosen VM size and region. A placement of another provider leaves the section whole. A chosen size or region that the section does not have is refused before work starts.
    - The rate text of an Azure cloud says that Azure reports no hourly rate, and that a stop deallocates the VM and ends the compute charge while the disks and the static address bill until the cloud is deleted.
    - In New cloud, an Azure profile does not stay at a pending "Checking the Azure account" row. When the `azure` settings pass, the row fails with "New cloud cannot start an Azure profile on this machine yet". Without the `azure` section, the row names the missing section. Start stays off, and the dialog shows no RunPod or Hetzner key form for the Azure profile. A Hetzner profile in the same configuration is checked as before.
 

@@ -85,7 +85,7 @@ fn restrict_locations(catalog: &mut HetznerCatalog, locations: &[String]) -> Het
 
 /// Azure's VM size, disk and static address prices from the public retail price list.
 /// It reads no credential and no binding, so a machine without Azure settings still
-/// prices Azure. Horizon cannot create an Azure cloud yet, so its offers are not rentable.
+/// prices Azure. Its offers are not rentable: the `azure` settings decide where a cloud goes.
 /// # Errors
 /// Fails on transport and provider errors, a page not in US dollars and a malformed
 /// answer.
