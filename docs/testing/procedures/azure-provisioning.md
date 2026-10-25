@@ -79,13 +79,14 @@ Do the tasks in order. Each task has a stable ID for the report.
 1. Run the Azure host tests.
 
    ```sh
-   cargo test -p horizon-cloud --lib -- host::tests::an_azure_host_installs_docker_and_formats_only_a_blank_data_disk host::tests::an_azure_host_formats_no_device_but_its_data_disk
+   cargo test -p horizon-cloud --lib -- host::tests::an_azure_host_leaves_every_filesystem_to_its_own_script host::tests::an_azure_host_formats_no_device_but_its_data_disk host::tests::a_rebuilt_host_never_reformats_the_workspace_disk
    ```
 
-   Result: 2 tests pass. These tests examine the items that follow:
+   Result: 3 tests pass. These tests examine the items that follow:
    - cloud-init updates the package lists and installs `docker.io`.
-   - cloud-init formats `/dev/disk/azure/scsi1/lun0` as ext4 only when it has no file system (`overwrite: false`).
-   - The host mounts that disk at `/mnt/horizon-volume`.
+   - cloud-init has no `fs_setup`, so it formats no device of its own.
+   - The setup script formats `/dev/disk/azure/scsi1/lun0` as ext4 only when `blkid -o value -s TYPE` reports no file system, then mounts it.
+   - The host mounts that disk at `/horizon-volume`.
    - The other files, the service and the setup command are the same as on a prepared host.
    - An Azure plan refuses each other device. A prepared plan refuses the Azure device.
 
@@ -405,10 +406,10 @@ Do this task on the computer that has the Azure subscription. Use a new cloud id
 
    ```sh
    az vm run-command invoke -g horizon-ws-azv-l1-01 -n worker --command-id RunShellScript --scripts \
-     'ls -l /dev/disk/azure/scsi1/; findmnt /mnt/horizon-volume; iptables -S DOCKER-USER; ip6tables -S FORWARD; wc -c /var/lib/cloud/instance/user-data.txt'
+     'ls -l /dev/disk/azure/scsi1/; findmnt /horizon-volume; iptables -S DOCKER-USER; ip6tables -S FORWARD; wc -c /var/lib/cloud/instance/user-data.txt'
    ```
 
-   Result: `lun0` exists. `/mnt/horizon-volume` is ext4 on that disk. `DOCKER-USER` drops `169.254.0.0/16` and `168.63.129.16/32`. `FORWARD` drops IPv6 from `docker0`. Record the size of the user data.
+   Result: `lun0` exists. `/horizon-volume` is ext4 on that disk. `DOCKER-USER` drops `169.254.0.0/16` and `168.63.129.16/32`. `FORWARD` drops IPv6 from `docker0`. Record the size of the user data.
 
 8. Make sure that the container cannot reach the metadata addresses.
 
