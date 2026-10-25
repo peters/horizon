@@ -534,7 +534,28 @@ guarantee that the code gives, and what the code does not guarantee.
     examine the token; an image layer's session environment must not set
     `CLAUDE_CODE_OAUTH_TOKEN`; the token reaches no worker whose profile does
     not permit Claude.
-
+- [`cloud-create-request`](trust-boundaries/cloud-create-request.md) (added after
+  this audit, with this change)
+  - Untrusted: the `cloud_create` request of an agent panel and its repository
+    path, the Git content of that repository, the provider's price and its
+    GitHub sign-in prompt, and the saved cloud record.
+  - Guarantees: only a live agent panel of this Horizon answers, in its own
+    workspace; the machine's `agent_lifecycle` section decides every create, and
+    a repository, a provider or a rate it does not allow is a refusal; a rate
+    that cannot be quoted is a refusal; quick start alone is offered, and a
+    commit with its own `.horizon/cloud.yml` is refused; the settings file is
+    read on the operation's thread; the card is registered and the record that
+    names the cloud is durable before any worker is rented; one operation owns
+    one cloud, so the card's start and restore paths refuse while it runs; the
+    outcome reaches the agent before the card's watch, so a ready cloud is done
+    while that watch runs; a cancel never replaces a cancelled token; a GitHub
+    sign-in prompt gets the non-UI skip only when the policy allows it.
+  - Does not guarantee: a cancel cannot recall a provider request that left this
+    computer; the policy is not read again on the deployment thread; the price
+    is one quote and excludes storage and other charges; the operation table is
+    in memory, so a restart answers `cloud_create_unknown_operation`; no worker
+    choice, plan token, sibling, publishing selection or CLI plan entry is
+    offered.
 ## Follow-up work
 
 - Closed: `AGENTS.md` named `.github/` as the home of the review instructions,

@@ -4,6 +4,7 @@ mod capabilities;
 pub(super) mod cards;
 mod close;
 mod companions;
+mod create_agent;
 mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
@@ -121,6 +122,8 @@ pub(super) struct Production {
     session_id: Option<String>,
     pub runtimes: HashMap<u32, Runtime>,
     companions: companions::State,
+    /// Cloud create operations of agents, answered in the next frame.
+    create_agent: create_agent::State,
     /// Prices sent to ready workers for their agents' cloud offers.
     offer_publication: offer_publication::State,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
@@ -484,6 +487,18 @@ impl Runtime {
         if self.receiver.is_some() && self.stage != Some(Stage::Ready) {
             return;
         }
+        let (tx, cancel) = self.begin_deployment(&request);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, &ctx));
+    }
+
+    /// Takes this card for a deployment this Horizon starts, as Start and an agent's
+    /// create both need it, and returns the channel its thread reports on and the
+    /// cancellation that stops it.
+    pub(super) fn begin_deployment(
+        &mut self,
+        request: &Request,
+    ) -> (std::sync::mpsc::Sender<Event>, cloud_runtime::Cancellation) {
         if let Some(cancel) = self.cancel.take() {
             cancel.cancel();
         }
@@ -507,8 +522,15 @@ impl Runtime {
         self.sender = Some(tx.clone());
         self.error = None;
         self.state_unavailable = false;
-        let ctx = ctx.clone();
-        std::thread::spawn(move || run_deployment_with_siblings(&request, &siblings, &cancel, &tx, &ctx));
+        (tx, cancel)
+    }
+
+    /// The last `lines` of this cloud's output, newest last: the held-aside lines of a
+    /// reader who scrolled up included, so a status answer never reads stale output.
+    pub(super) fn log_tail(&self, lines: usize) -> Vec<String> {
+        let all: Vec<&LogLine> = self.logs.iter().chain(self.pending_logs.iter()).collect();
+        let start = all.len().saturating_sub(lines);
+        all[start..].iter().map(|line| line.text.clone()).collect()
     }
 
     /// Only a Ready cloud shows its current run; other stages report their own progress.
