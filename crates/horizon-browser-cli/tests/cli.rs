@@ -906,9 +906,10 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(38));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(39));
     assert!(tools.to_string().contains("cloud_create"));
     assert!(tools.to_string().contains("cloud_delete"));
+    assert!(tools.to_string().contains("cloud_exec"));
     assert!(tools.to_string().contains("tailnet_api_credential"));
     assert!(tools.to_string().contains("browser_zoom"));
     assert!(tools.to_string().contains("cloud_image_destination"));

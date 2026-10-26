@@ -87,6 +87,10 @@ impl HorizonApp {
                 self.queue_cloud_delete(request);
                 continue;
             }
+            if request.cloud_exec.is_some() {
+                self.queue_cloud_exec(request, ctx);
+                continue;
+            }
             if request.cloud_offers.is_some() {
                 self.browser_create_host.cloud_offers.push(request);
                 continue;
@@ -211,6 +215,23 @@ impl HorizonApp {
     #[cfg(feature = "cloud-workspaces")]
     fn queue_cloud_list(&mut self, request: UsageRequest) {
         self.queue_cloud_list_request(request);
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    fn queue_cloud_exec(&mut self, request: UsageRequest, ctx: &egui::Context) {
+        self.start_cloud_exec(request, ctx);
+    }
+
+    #[cfg(not(feature = "cloud-workspaces"))]
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    fn queue_cloud_exec(&mut self, request: UsageRequest, _ctx: &egui::Context) {
+        let result = request.result(
+            Vec::new(),
+            Some("cloud_exec_unavailable: this Horizon build has no cloud support".into()),
+        );
+        if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
+            tracing::warn!(kind = ?error.kind(), "could not answer a cloud command request");
+        }
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]

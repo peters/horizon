@@ -66,7 +66,7 @@ See docs/testing/procedures/publication-records.md.
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
-`cloud_list`, `cloud_create`, `cloud_delete`, `cloud_companions`,
+`cloud_list`, `cloud_create`, `cloud_delete`, `cloud_exec`, `cloud_companions`,
 `cloud_companion_ensure_ready`, `cloud_companion_stop`, `cloud_companion_uncheck`,
 `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require
 the owning Horizon to run.
@@ -677,6 +677,62 @@ The refusals:
 
 This version takes no provider, force flag, repository or worker argument, and it
 has no CLI plan entry.
+
+## One command in a worker
+
+`cloud_exec` runs one bounded command inside a cloud worker as its unprivileged
+agent user (uid `10001`). Pass a cloud ID from `cloud_list`, one command text of
+at most 8192 bytes, and an optional `timeout_millis` from 1000 to 120000
+(default 30000). The worker runs the text with `/bin/sh -c` in `/workspace`, so
+`git commit`, `git push` and `gh pr merge` use the worker's own brokered GitHub
+access and no token is in the process. That makes a commit and a merge possible
+with no person at the keyboard.
+
+`cloud_exec` spends no compute by itself and starts no worker. It does run code
+that can: the command has the whole authority of that agent account inside the
+worker, so it can change every file the agent owns there, push to a granted
+repository and merge a pull request. Horizon does not parse, allow-list or
+restrict the command. Use it only for work the person asked for, and prefer one
+command per task with a bound that fits it.
+
+The answer holds `exit_status`, `uid`, `stdout`, `stderr` and `duration_millis`.
+A non-zero `exit_status` is a result, not a tool error: read the streams and the
+status. `exit_status` is the status the worker reported for the command itself, so
+no output can change it and a command that exits 20, 21, 22 or 255 keeps its own
+code. Text that a process the command started writes after the command exits still
+arrives in `stdout` or `stderr`, so wait for such a process inside the command when
+its output matters. A command that writes more than 256 KiB to either stream is a
+failure, not a cut answer. A command that outlives its bound is stopped with its
+children and answers `cloud_exec_timed_out`.
+
+There is no user, uid, environment or shell flag. The account is always the
+worker's agent user. These refusals are typed and run nothing:
+
+- `cloud_exec_refused: user switch`: the command starts `su`, `sudo`, `doas`,
+  `setpriv`, `runuser`, `pkexec`, `nsenter` or `chroot`, also after a path or an
+  environment assignment. Do not try to work around it; the agent account is the
+  boundary.
+- `cloud_exec_refused: no agent isolation`: the worker image has no
+  `/run/horizon-tailnet/agent-isolation` marker. Rebuild the cloud with a current
+  image.
+- `cloud_exec_refused: not root`, `cloud_exec_refused: uid 10001` with another
+  value: the route did not arrive as the account Horizon expected. Report it.
+- `cloud_exec_not_ready: <stage>`: the cloud is not `Ready`, so no command runs.
+- `cloud_exec_unknown_cloud`, `cloud_exec_ambiguous_cloud`: the cloud is not in
+  your workspace, or two saved clouds share the ID. Read `cloud_list` first.
+- `cloud_exec_unavailable: requires a Horizon agent panel`: your identity is not
+  a live agent panel of the owning Horizon.
+- `cloud_exec_expired`: the request expired before Horizon started the command.
+  Nothing ran; send it again if the person still needs it.
+- `cloud_exec_failed: worker contract`, `cloud_exec_failed: transport`: the route
+  or the worker broke. Report it and do not repeat the command blindly.
+
+Horizon records one private journal line for each call: the actor, the cloud ID,
+the byte length and a SHA-256 digest of the command, the outcome, the exit
+status, the account and the duration. It never records the command text, so
+**never put a credential in a command**: it goes to the worker, and a journal
+digest cannot bring it back, but the worker's own history still holds it. There
+is no operation ID, so a repeat runs the command again.
 
 ## GitHub access
 

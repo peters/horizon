@@ -13,10 +13,20 @@ use std::{
 };
 /// The error of a local command that outlived its timeout.
 pub(super) const TIMED_OUT: &str = "Local operation timed out";
+/// The error of a command whose output passed its bound.
+pub(super) const OUTPUT_BOUND: &str = "Command output exceeded its bound";
 pub struct Runner<'a> {
     pub cancel: &'a Cancellation,
     pub emit: &'a dyn Fn(Event),
     pub secrets: Vec<String>,
+}
+/// The answer of a bounded command whose exit status is part of the answer: a non-zero
+/// exit is a result, not a failure. Each stream is capped; output beyond its cap is an
+/// error, so a caller never receives a silently cut answer.
+pub struct Captured {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_status: Option<i32>,
 }
 impl Runner<'_> {
     /// # Errors
@@ -56,11 +66,51 @@ impl Runner<'_> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut output = Vec::new();
-        self.capture(name, command, timeout, 4 * 1024 * 1024, false, |bytes| {
-            output.extend_from_slice(bytes);
+        self.capture_success(name, command, timeout, 4 * 1024 * 1024, false, |is_stdout, bytes| {
+            if is_stdout {
+                output.extend_from_slice(bytes);
+            }
             Ok(())
         })?;
         Ok(self.redact(String::from_utf8_lossy(&output).into_owned()))
+    }
+    /// Like [`Runner::run`] for a command whose answer is its output and its exit status:
+    /// a non-zero exit is part of the answer, not an error. Each stream is capped at `limit`
+    /// and output beyond it is an error, as in [`Runner::run`].
+    ///
+    /// # Errors
+    /// Reports spawn failure, cancellation, timeout, an unreadable stream and output that
+    /// exceeded its bound.
+    pub fn run_captured(
+        &self,
+        name: &'static str,
+        command: &mut Command,
+        limit: u64,
+        timeout: Duration,
+    ) -> Result<Captured> {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        // Stdout is capped by `capture`; stderr takes the same bound here.
+        let status = self.capture(name, command, timeout, limit, false, |is_stdout, bytes| {
+            if !is_stdout {
+                if bytes.len() as u64 > limit.saturating_sub(stderr.len() as u64) {
+                    return Err(Error::Invalid(OUTPUT_BOUND));
+                }
+                stderr.extend_from_slice(bytes);
+                return Ok(());
+            }
+            stdout.extend_from_slice(bytes);
+            Ok(())
+        })?;
+        Ok(Captured {
+            stdout: self.redact(String::from_utf8_lossy(&stdout).into_owned()),
+            stderr: self.redact(String::from_utf8_lossy(&stderr).into_owned()),
+            exit_status: status.code(),
+        })
     }
     /// # Errors
     /// Sends a caller-selected private file on stdin without exposing it in argv or output.
@@ -182,8 +232,10 @@ impl Runner<'_> {
         limit: usize,
     ) -> Result<Vec<u8>> {
         let mut output = Vec::new();
-        self.capture(name, command, timeout, limit as u64, true, |bytes| {
-            output.extend_from_slice(bytes);
+        self.capture_success(name, command, timeout, limit as u64, true, |is_stdout, bytes| {
+            if is_stdout {
+                output.extend_from_slice(bytes);
+            }
             Ok(())
         })?;
         Ok(output)
@@ -198,14 +250,42 @@ impl Runner<'_> {
     ) -> Result<u64> {
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut length = 0;
-        self.capture("Bounded source export", command, timeout, limit, false, |bytes| {
-            output.write_all(bytes)?;
-            length += bytes.len() as u64;
-            Ok(())
-        })?;
+        self.capture_success(
+            "Bounded source export",
+            command,
+            timeout,
+            limit,
+            false,
+            |is_stdout, bytes| {
+                if is_stdout {
+                    output.write_all(bytes)?;
+                    length += bytes.len() as u64;
+                }
+                Ok(())
+            },
+        )?;
         Ok(length)
     }
 
+    fn capture_success(
+        &self,
+        name: &'static str,
+        command: &mut Command,
+        timeout: Duration,
+        limit: u64,
+        log_stdout: bool,
+        consume: impl FnMut(bool, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let status = self.capture(name, command, timeout, limit, log_stdout, consume)?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(Error::Command(name))
+        }
+    }
+
+    /// Runs one command in its own process group, hands each stream to `consume` and
+    /// returns how it exited, also when it failed.
     fn capture(
         &self,
         name: &'static str,
@@ -213,8 +293,8 @@ impl Runner<'_> {
         timeout: Duration,
         limit: u64,
         log_stdout: bool,
-        mut consume: impl FnMut(&[u8]) -> Result<()>,
-    ) -> Result<()> {
+        mut consume: impl FnMut(bool, &[u8]) -> Result<()>,
+    ) -> Result<std::process::ExitStatus> {
         self.cancel.check()?;
         (self.emit)(Event::Progress(super::progress::Progress::activity(name)));
         #[cfg(unix)]
@@ -239,9 +319,9 @@ impl Runner<'_> {
                         if stdout {
                             if bytes.len() as u64 > limit.saturating_sub(output_length) {
                                 stop(&mut child);
-                                return Err(Error::Invalid("Command output exceeded its bound"));
+                                return Err(Error::Invalid(OUTPUT_BOUND));
                             }
-                            if let Err(error) = consume(&bytes) {
+                            if let Err(error) = consume(true, &bytes) {
                                 stop(&mut child);
                                 return Err(error);
                             }
@@ -249,6 +329,9 @@ impl Runner<'_> {
                             if !log_stdout {
                                 continue;
                             }
+                        } else if let Err(error) = consume(false, &bytes) {
+                            stop(&mut child);
+                            return Err(error);
                         }
                         let pending = if stdout {
                             &mut pending_stdout
@@ -289,11 +372,7 @@ impl Runner<'_> {
             {
                 self.log(&pending_stdout);
                 self.log(&pending_stderr);
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err(Error::Command(name))
-                };
+                return Ok(status);
             }
             if !received {
                 thread::sleep(Duration::from_millis(20));

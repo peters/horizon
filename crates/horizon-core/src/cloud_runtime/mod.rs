@@ -6,6 +6,7 @@ pub mod bootstrap_initialization;
 pub mod bootstrap_recovery;
 pub mod browser_auth;
 pub mod claude_token;
+pub mod cloud_exec;
 pub mod codex_login;
 pub mod command;
 pub mod companions;

@@ -1,4 +1,5 @@
 mod codex_login_sync;
+mod exec;
 mod fullscreen;
 #[cfg(feature = "cloud-workspaces")]
 mod image_destinations;

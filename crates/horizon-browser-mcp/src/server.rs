@@ -302,6 +302,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_exec",
+        description = "Run one bounded command inside a cloud worker as its unprivileged agent user (uid 10001), and return its exit status, its stdout and stderr, its duration and the account it ran as. The agent user's git and GitHub CLI are the brokered ones, so a commit, a push and a merge that the worker's grants allow need no token in the process and no person at the keyboard. Pass a cloud ID from cloud_list and one command text of at most 8192 bytes; the worker runs it with /bin/sh -c in /workspace. timeout_millis bounds the command from 1000 to 120000 ms and defaults to 30000. A non-zero exit status is a result, not a tool error: read exit_status and stderr. The command is arbitrary code with that agent's whole authority inside the worker, so it can change every file the agent owns there; Horizon does not parse or restrict it beyond refusing a direct user switch. There is no user, uid, environment or shell flag: the account is always the worker's agent user, and a cloud whose worker is not ready, is not isolated, or whose host key Horizon has not pinned is refused. A command that writes more than 256 KiB is a failure, not a cut answer. Horizon records the length and a digest of the command, never its text, which must not carry a secret. Requires the running Horizon that owns the cloud."
+    )]
+    async fn cloud_exec(
+        &self,
+        Parameters(input): Parameters<crate::controller::exec::CloudExecInput>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_exec(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "browser_provider_devices",
         description = "Discover any browser, OS and device combination currently offered by a configured remote provider account, without allocating a session. Pass provider and optional search words and offset. Returns at most 50 combinations and next_offset; pass a returned target to browser_create with backend omitted. No preconfigured device target is needed. Availability in this catalog is not account entitlement, live capacity or a reservation. The host uses only its configured or explicitly granted credentials; never supply credentials, endpoints or raw capabilities."
     )]
@@ -960,6 +974,7 @@ mod tests {
                 "cloud_companions",
                 "cloud_create",
                 "cloud_delete",
+                "cloud_exec",
                 "cloud_image_destination",
                 "cloud_list",
                 "cloud_offers",

@@ -5,6 +5,11 @@ pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operatio
 pub use super::cloud_create::{CloudCreateOperation, CloudCreateRequest};
 pub use super::cloud_delete::{CloudDeleteOperation, CloudDeleteRequest};
 pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
+pub use super::exec::{
+    ANSWER_HEADROOM_MILLIS, CloudExecAudit, CloudExecOutcome, CloudExecRequest, DEFAULT_TIMEOUT_MILLIS,
+    MAX_COMMAND_BYTES, MAX_TIMEOUT_MILLIS, MIN_TIMEOUT_MILLIS, append_cloud_exec_audit, cloud_exec_audit_path,
+    command_sha256,
+};
 pub use super::image_destination::{Action as ImageDestinationAction, ImageDestinationRequest};
 use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 pub use super::tailnet_credential::{CredentialOperation, CredentialRequest};
@@ -50,6 +55,9 @@ pub struct UsageRequest {
     /// host's own thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_delete: Option<CloudDeleteRequest>,
+    /// One bounded command for a cloud's worker, run by the host's recorded route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_exec: Option<CloudExecRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<CredentialRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,6 +88,9 @@ pub struct UsageResult {
     /// The host's answer to a cloud delete request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_delete: Option<serde_json::Value>,
+    /// The host's answer to a cloud command: its exit status, both streams and its account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_exec: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet_credential: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +112,7 @@ impl UsageRequest {
             cloud_list: None,
             cloud_create: None,
             cloud_delete: None,
+            cloud_exec: None,
             tailnet_credential: None,
             image_destination: None,
             error,
@@ -318,6 +330,37 @@ fn enqueue_cloud_delete_at(
     )
 }
 
+/// Queues one bounded command for a cloud's worker, which the host runs as the worker's
+/// agent user through its recorded route. The host answers the exit status, both streams
+/// and the account; nothing here spends compute or names a user.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_exec(identity: AgentIdentity<'_>, request: CloudExecRequest) -> std::io::Result<String> {
+    enqueue_cloud_exec_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_cloud_exec_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudExecRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud exec request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            deadline_millis: Some(request.answer_millis()),
+            cloud_exec: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 /// Queue only a request for an owner decision; never accepts credential bytes.
 /// # Errors
 /// Invalid metadata, missing live host identity or unavailable bounded queue.
@@ -392,8 +435,11 @@ struct Ask {
     cloud_list: Option<CloudListRequest>,
     cloud_create: Option<CloudCreateRequest>,
     cloud_delete: Option<CloudDeleteRequest>,
+    cloud_exec: Option<CloudExecRequest>,
     tailnet_credential: Option<CredentialRequest>,
     image_destination: Option<ImageDestinationRequest>,
+    /// How long the caller waits, when it differs from the shared request deadline.
+    deadline_millis: Option<i64>,
 }
 
 fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std::io::Result<String> {
@@ -405,8 +451,10 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_list,
         cloud_create,
         cloud_delete,
+        cloud_exec,
         tailnet_credential,
         image_destination,
+        deadline_millis,
     } = ask;
     if catalog.as_ref().is_some_and(|q| !q.valid()) {
         return Err(std::io::Error::new(
@@ -446,7 +494,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         actor: identity.actor.to_string(),
         host_instance: host.unwrap_or_default().to_string(),
         provider,
-        deadline_at_millis: super::now_millis() + REQUEST_DEADLINE_MILLIS,
+        deadline_at_millis: super::now_millis() + deadline_millis.unwrap_or(REQUEST_DEADLINE_MILLIS),
         claimed: false,
         catalog,
         cloud_offers,
@@ -454,6 +502,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_list,
         cloud_create,
         cloud_delete,
+        cloud_exec,
         tailnet_credential,
         image_destination,
     };
@@ -780,6 +829,48 @@ mod tests {
             assert!(enqueue_cloud_delete_at(root.path(), identity, invalid).is_err());
         }
         assert!(enqueue_cloud_delete_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
+    }
+
+    #[test]
+    fn a_cloud_command_waits_for_its_own_bound_and_keeps_the_actor_scope() {
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let request = CloudExecRequest {
+            cloud: "cloud-1".into(),
+            command: "git commit -am 'work'".into(),
+            timeout_millis: 90_000,
+        };
+        let queued_at = super::super::now_millis();
+        let id = enqueue_cloud_exec_at(root.path(), identity, request.clone()).unwrap();
+        let claimed = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(claimed.cloud_exec.as_ref(), Some(&request));
+        // The command's own bound plus the headroom, not the shared 15 s request deadline.
+        assert!(
+            claimed.deadline_at_millis >= queued_at + 90_000 + ANSWER_HEADROOM_MILLIS,
+            "{}",
+            claimed.deadline_at_millis
+        );
+        let mut result = claimed.result(Vec::new(), None);
+        result.cloud_exec = Some(serde_json::json!({"exit_status": 0, "uid": 10001}));
+        complete_at(root.path(), &result).unwrap();
+        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id).unwrap().unwrap().cloud_exec,
+            Some(serde_json::json!({"exit_status": 0, "uid": 10001}))
+        );
+        for invalid in [
+            CloudExecRequest {
+                command: "   ".into(),
+                ..request.clone()
+            },
+            CloudExecRequest {
+                timeout_millis: 0,
+                ..request.clone()
+            },
+        ] {
+            assert!(enqueue_cloud_exec_at(root.path(), identity, invalid).is_err());
+        }
+        assert!(enqueue_cloud_exec_at(root.path(), AgentIdentity::new("horizon:agent", None), request).is_err());
     }
 
     #[test]

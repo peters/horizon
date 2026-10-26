@@ -589,6 +589,34 @@ guarantee that the code gives, and what the code does not guarantee.
     record check and the deletion is deleted with the cloud; another process may
     hold the Store lock; the tool removes no card and holds no discard authority;
     the operation table is in memory.
+
+### Worker command authority
+
+- [`cloud-exec-request`](trust-boundaries/cloud-exec-request.md)
+  - Untrusted: the command, which is arbitrary code, and everything it prints.
+  - Guarantees: the command runs as the agent user `10001` and never as `root`,
+    because the worker launcher refuses a worker without the agent-isolation
+    marker and the dropped process reports its own `id -u` in a frame line that
+    Horizon checks; the transport is the pinned recorded route with
+    `StrictHostKeyChecking=yes` and no enrollment; the command and the frame
+    reach a shell only as single-quoted words, and a NUL, an empty text and more
+    than 8192 bytes are refused; a direct user switch is refused; the wrapper ends
+    with `exec /bin/sh -c`, so the SSH client's own exit code is the command's and
+    no stream, background process or later writer can change it; the bound kills
+    the process group of the SSH client; the journal keeps a length and a digest
+    of the command and never its text.
+  - Does not guarantee: what the command does with the authority of the agent
+    account, its brokered `git` and `gh` included; that the agent user holds no
+    token, which is a property of the image; that the output is honest beyond the
+    account line and the exit status; that this user is unique to one session;
+    that the launcher handoff has no side effect on a staged sibling transfer;
+    that a repeated call runs the command only once; that a crashed append keeps
+    its last journal line.
+
+> The `cloud-exec-request` page was added after the audit above, in its own
+> change. Its row records the boundary as that change wrote it and does not
+> claim a new full audit.
+
 ## Follow-up work
 
 - Closed: `AGENTS.md` named `.github/` as the home of the review instructions,
