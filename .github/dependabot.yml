@@ -94,3 +94,11 @@ updates:
     schedule:
       interval: daily
       time: "04:00"
+
+  - package-ecosystem: docker
+    directory: "/packaging/browser-vm"
+    cooldown:
+      default-days: 3
+    schedule:
+      interval: daily
+      time: "04:00"
