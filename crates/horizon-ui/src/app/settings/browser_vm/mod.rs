@@ -117,6 +117,14 @@ impl Panel {
         }
     }
 
+    /// Why the recorded run failed, when the record names a reason. A run that starts and
+    /// then fails inside the provider answers its beginning, so its reason is only in the
+    /// record; a person must still read it.
+    fn failure(&self) -> Option<&str> {
+        let status = self.status.as_ref()?;
+        status.error.as_deref().filter(|reason| !reason.trim().is_empty())
+    }
+
     /// The SSH target of the machine, `root@<address>`, when the record names one.
     fn ssh_target(&self) -> Option<&str> {
         self.status.as_ref().and_then(|status| status.ssh_target.as_deref())

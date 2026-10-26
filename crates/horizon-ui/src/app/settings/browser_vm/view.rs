@@ -44,6 +44,10 @@ fn machine_card(ui: &mut Ui, panel: &mut Panel, offered: &Offered) {
             ui.add_space(8.0);
             ui.add(egui::Label::new(egui::RichText::new(error).color(theme::PALETTE_RED()).size(11.0)).wrap());
         }
+        if let Some(reason) = panel.failure() {
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(egui::RichText::new(reason).color(theme::PALETTE_RED()).size(11.0)).wrap());
+        }
         if panel.busy {
             ui.add_space(8.0);
             dim_label(

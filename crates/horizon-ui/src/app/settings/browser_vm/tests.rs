@@ -506,3 +506,35 @@ fn absent_cloud_settings_are_the_typed_refusal_not_a_file_error() {
         "a person reads why cloud support is unavailable, not a path error: {reason}"
     );
 }
+
+#[test]
+fn a_run_that_failed_inside_the_provider_shows_its_recorded_reason() {
+    let mut panel = Panel::default();
+    let reason = "The state volume is in another location";
+    panel.absorb(
+        BrowserVmAction::Deploy,
+        Ok(Status {
+            phase: Phase::Failed,
+            ssh_target: None,
+            error: Some(reason.into()),
+            ..ready()
+        }),
+        None,
+    );
+
+    assert_eq!(panel.failure(), Some(reason), "a person reads why the run failed");
+    let shown = drawn(&mut Config::default(), &mut panel);
+    assert!(
+        shown.iter().any(|(label, _)| label.contains(reason)),
+        "the reason reaches the section: {shown:?}"
+    );
+}
+
+#[test]
+fn a_run_that_has_not_failed_shows_no_reason() {
+    let mut panel = Panel::default();
+    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
+    assert_eq!(panel.failure(), None);
+    let empty = Panel::default();
+    assert_eq!(empty.failure(), None, "an unread section shows no reason");
+}
