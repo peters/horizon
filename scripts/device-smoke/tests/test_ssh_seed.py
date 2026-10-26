@@ -104,6 +104,13 @@ class SeedSshTest(unittest.TestCase):
         box = sandbox.prepare(self.state)
         sandbox.seed_ssh(box.private_home, self.config, self.identity)
 
+        supports_namespace = subprocess.run(
+            [*box.namespace, 'true'], capture_output=True, text=True, timeout=60)
+        if supports_namespace.returncode != 0:
+            self.skipTest(
+                'this machine cannot create the user namespace that the fixture uses: '
+                + supports_namespace.stderr.strip().splitlines()[-1])
+
         result = subprocess.run(
             [*box.namespace, 'ssh', '-G', 'browser-vm'],
             capture_output=True, text=True, timeout=60)
