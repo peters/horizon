@@ -17,13 +17,13 @@ mod volumes;
 
 const OPERATION: &str = "op-1";
 
-pub(super) type Requests = Arc<Mutex<Vec<String>>>;
+pub(crate) type Requests = Arc<Mutex<Vec<String>>>;
 
 /// A provider answering each connection with the next scripted response. A
 /// response containing `@PUBLIC_KEY@` echoes the public key of the request it
 /// answers, as Hetzner does for a new SSH key. A response the caller never asks
 /// for ends the script after a few seconds.
-pub(super) fn provider(responses: Vec<(u16, Value)>) -> (Hetzner, Requests, thread::JoinHandle<()>) {
+pub(crate) fn provider(responses: Vec<(u16, Value)>) -> (Hetzner, Requests, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));

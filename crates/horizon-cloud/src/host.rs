@@ -14,7 +14,7 @@ pub mod pull;
 use crate::{CloudError, Credential, valid_image};
 use base64::Engine as _;
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Write as _};
+use std::{borrow::Cow, collections::BTreeMap, fmt::Write as _};
 
 /// The largest user data providers accept (Hetzner's limit).
 pub const USER_DATA_LIMIT: usize = 32 * 1024;
@@ -44,6 +44,17 @@ const WORKSPACE_LABEL: &str = "horizon-ws";
 /// Azure's platform address (`WireServer`). It serves the VM's goal state, which
 /// carries the custom data and so any registry login in it.
 pub const AZURE_WIRESERVER: &str = "168.63.129.16";
+/// Where a browser VM host mounts its state volume. The image keeps the host file
+/// and one folder of browser profiles for each named profile under it.
+pub const BROWSER_VM_STATE: &str = "/state";
+/// The publish form of the browser VM's VNC port: the loopback of the host only,
+/// because the VNC server has no password and the SSH route is the way in.
+pub const BROWSER_VM_VNC_PUBLISH: &str = "127.0.0.1:5900:5900";
+const BROWSER_VM_IMAGE_FILE: &str = "/etc/horizon-browser-vm/image";
+const BROWSER_VM_SETUP: &str = "/usr/local/sbin/horizon-browser-vm-setup";
+const BROWSER_VM_GUARD: &str = "/usr/local/sbin/horizon-browser-vm-guard";
+const BROWSER_VM_START: &str = "/usr/local/sbin/horizon-browser-vm-start";
+const BROWSER_VM_UNIT: &str = "/etc/systemd/system/horizon-browser-vm.service";
 
 /// A private registry the host logs in to before pulling the image.
 #[derive(Debug)]
@@ -98,6 +109,21 @@ pub struct Plan {
     /// Explicitly requested only when this new host is provisioned.
     pub exposure_ingress: bool,
     pub platform: Platform,
+    pub purpose: Purpose,
+}
+
+/// What the container on this host is. Each purpose has its own ports, volume and
+/// way in, so a host renders the bootstrap of exactly one of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Purpose {
+    /// The unchanged worker image: the container owns port 22 and `/workspace`,
+    /// and the host keeps no SSH route of its own.
+    #[default]
+    Worker,
+    /// The browser VM image of `packaging/browser-vm`: the container owns the VNC
+    /// port on the loopback and the state volume at [`BROWSER_VM_STATE`], and the
+    /// host keeps its SSH route so the person signs in on the display.
+    BrowserVm,
 }
 
 /// Serialized in field order; `write_files` is last so the registry login can be
@@ -132,54 +158,44 @@ impl Plan {
         // Contents that may carry secrets stay in zeroizing storage until encoded.
         let environment = zeroize::Zeroizing::new(self.environment_file());
         let registry = self.registry.as_ref().map(registry_config).transpose()?;
-        let (image, setup, guard, start, unit) = (
-            format!("{}\n", self.image),
-            setup_script(self.platform, &self.workspace_device),
-            guard_script(self.platform),
-            if self.exposure_ingress {
-                format!(
-                    "#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} {} {}\n",
-                    self.shm_gb,
-                    workspace(self.platform)
-                )
-            } else {
-                start_script(self.shm_gb, self.platform)
-            },
-            unit(self.platform),
-        );
-        let file = |path, permissions, content| WriteFile {
-            path,
-            owner: "root:root",
-            permissions,
-            content,
-        };
-        let mut write_files = vec![
-            file(ENVIRONMENT_FILE, "0600", environment.as_str()),
-            file(IMAGE_FILE, "0600", &image),
-            file(SETUP, "0700", &setup),
-            file(GUARD, "0700", &guard),
-            file(START, "0700", &start),
-            file(UNIT, "0644", &unit),
-        ];
-        if self.exposure_ingress {
-            write_files.push(file(INGRESS, "0700", include_str!("host/ingress.py")));
+        // Each file is owned here, or borrowed from zeroizing storage, and the
+        // serialized configuration only borrows it.
+        let mut written: Vec<(&str, &str, Cow<'_, str>)> = Vec::new();
+        if self.purpose == Purpose::Worker {
+            written.push((ENVIRONMENT_FILE, "0600", Cow::Borrowed(environment.as_str())));
         }
+        written.push((self.image_file(), "0600", Cow::Owned(format!("{}\n", self.image))));
+        written.extend(self.scripts());
+        if self.exposure_ingress && self.purpose == Purpose::Worker {
+            written.push((INGRESS, "0700", Cow::Borrowed(include_str!("host/ingress.py"))));
+        }
+        let write_files: Vec<WriteFile<'_>> = written
+            .iter()
+            .map(|(path, permissions, content)| WriteFile {
+                path,
+                owner: "root:root",
+                permissions,
+                content: content.as_ref(),
+            })
+            .collect();
         let azure = self.platform == Platform::Azure;
         let config = CloudConfig {
             package_update: azure,
             packages: if azure { &["docker.io"] } else { &[] },
             ssh_pwauth: false,
-            disable_root: true,
+            // A browser VM host keeps its SSH route for the person, who signs in on the
+            // display of the machine; the worker host has none, so root never logs in.
+            disable_root: self.purpose == Purpose::Worker,
             write_files,
             mounts: vec![[
                 &self.workspace_device,
-                volume_mount(self.platform),
+                self.mount(),
                 "ext4",
                 "defaults,nofail,discard",
                 "0",
                 "2",
             ]],
-            runcmd: vec![vec![SETUP]],
+            runcmd: vec![vec![self.setup_path()]],
         };
         let yaml = zeroize::Zeroizing::new(
             serde_yaml::to_string(&config)
@@ -263,6 +279,68 @@ impl Plan {
             let _ = writeln!(file, "{name}={value}");
             file
         })
+    }
+
+    /// Where this host mounts its volume.
+    fn mount(&self) -> &'static str {
+        match self.purpose {
+            Purpose::Worker => volume_mount(self.platform),
+            Purpose::BrowserVm => BROWSER_VM_STATE,
+        }
+    }
+
+    /// The file the host reads this container's image from.
+    fn image_file(&self) -> &'static str {
+        match self.purpose {
+            Purpose::Worker => IMAGE_FILE,
+            Purpose::BrowserVm => BROWSER_VM_IMAGE_FILE,
+        }
+    }
+
+    /// The script cloud-init runs once on first boot.
+    fn setup_path(&self) -> &'static str {
+        match self.purpose {
+            Purpose::Worker => SETUP,
+            Purpose::BrowserVm => BROWSER_VM_SETUP,
+        }
+    }
+
+    /// The guard, the start script and the unit that keep the container running.
+    fn scripts(&self) -> Vec<(&'static str, &'static str, Cow<'static, str>)> {
+        match self.purpose {
+            Purpose::Worker => vec![
+                (
+                    SETUP,
+                    "0700",
+                    Cow::Owned(setup_script(self.platform, &self.workspace_device)),
+                ),
+                (GUARD, "0700", Cow::Owned(guard_script(self.platform))),
+                (
+                    START,
+                    "0700",
+                    Cow::Owned(if self.exposure_ingress {
+                        format!(
+                            "#!/bin/sh\nset -eu\nexec /usr/bin/python3 -I {INGRESS} {} {}\n",
+                            self.shm_gb,
+                            workspace(self.platform)
+                        )
+                    } else {
+                        start_script(self.shm_gb, self.platform)
+                    }),
+                ),
+                (UNIT, "0644", Cow::Owned(unit(self.platform))),
+            ],
+            Purpose::BrowserVm => vec![
+                (BROWSER_VM_SETUP, "0700", Cow::Borrowed(BROWSER_VM_SETUP_SCRIPT)),
+                (BROWSER_VM_GUARD, "0700", Cow::Borrowed(BROWSER_VM_GUARD_SCRIPT)),
+                (
+                    BROWSER_VM_START,
+                    "0700",
+                    Cow::Owned(browser_vm_start_script(self.shm_gb)),
+                ),
+                (BROWSER_VM_UNIT, "0644", Cow::Borrowed(BROWSER_VM_UNIT_FILE)),
+            ],
+        }
     }
 }
 
@@ -571,6 +649,66 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
+"
+    )
+}
+
+/// Runs once on first boot of a browser VM host. The host keeps its SSH route, because
+/// the person signs in to the sites on the machine's display through it, and root logs
+/// in with the key that was registered for the server and no password.
+const BROWSER_VM_SETUP_SCRIPT: &str = "#!/bin/sh
+set -eu
+passwd --lock root
+systemctl daemon-reload
+systemctl enable --now horizon-browser-vm.service
+";
+
+/// Runs before every container start. The state volume holds the profiles and their
+/// sign-ins, so a host without it must not start a container that would make new ones.
+const BROWSER_VM_GUARD_SCRIPT: &str = "#!/bin/sh
+set -eu
+command -v docker >/dev/null || { echo 'horizon-browser-vm: Docker is not installed on this host' >&2; exit 1; }
+mountpoint -q /state || { echo 'horizon-browser-vm: the state volume is not mounted at /state' >&2; exit 1; }
+";
+
+/// The unit that keeps the browser VM container running.
+const BROWSER_VM_UNIT_FILE: &str = "[Unit]
+Description=Horizon browser VM container
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/state
+
+[Service]
+Environment=DOCKER_CONFIG=/root/.docker
+ExecStartPre=/usr/local/sbin/horizon-browser-vm-guard
+ExecStartPre=-/usr/bin/docker rm --force horizon-browser-vm
+ExecStart=/usr/local/sbin/horizon-browser-vm-start
+ExecStop=/usr/bin/docker stop horizon-browser-vm
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+";
+
+/// Pulls the image once, retrying, and runs it with the state volume at `/state`.
+/// The VNC port is published on the loopback of the host only: the VNC server has no
+/// password, and the SSH route of the Device panel reaches that loopback.
+fn browser_vm_start_script(shm_gb: u8) -> String {
+    format!(
+        "#!/bin/sh
+set -eu
+image=$(cat {BROWSER_VM_IMAGE_FILE})
+attempt=0
+until docker image inspect \"$image\" >/dev/null 2>&1 || docker pull --quiet \"$image\"; do
+  attempt=$((attempt + 1))
+  [ \"$attempt\" -lt 10 ] || {{ echo 'horizon-browser-vm: the image could not be pulled' >&2; exit 1; }}
+  sleep 15
+done
+exec docker run --rm --name horizon-browser-vm --pull never -p {BROWSER_VM_VNC_PUBLISH} --shm-size {shm_gb}g \\
+  --log-driver local --log-opt max-size=10m --log-opt max-file=5 \\
+  -v {BROWSER_VM_STATE}:{BROWSER_VM_STATE} \"$image\"
 "
     )
 }

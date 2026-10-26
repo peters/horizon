@@ -288,6 +288,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_vm",
+        description = "Rent, stop, resume or delete the one browser VM of this Horizon: a dedicated Hetzner server that runs the browser image of issue 1780 with a state volume at /state, so the sign-ins of its browser profiles stay. operation deploy rents the machine from the Hetzner settings of this computer, with the person's own SSH key and the server's SSH route, and returns at once with the phase; it needs an immutable image reference (name@sha256:..., never a tag) and a dedicated ccx server type such as ccx13, and it uses the first location the settings allow and the cloud default state volume unless you name them. The SSH target it returns is what the setting browser_host names, at root@<address>. A person must sign in to the sites on that machine's display: after the phase is ready, call device_panel with the ssh host and user and vnc 127.0.0.1:5900 from this answer and ask the person to sign in there. An agent cannot do that step, and it writes no cookie of its own. operation stop releases the server and keeps the state volume, so the sign-ins stay; operation resume rents a new server on that volume; operation delete removes the server and the volume, and it is the only operation that removes a sign-in. Every operation reads the phase it started and returns at once: poll operation status, which touches no provider, until the phase is ready, stopped or deleted. A failed run keeps its record, so it is retried or deleted, never rented twice, and a deploy while another run is in progress is refused. The record is local to this Horizon; a cloud worker has none."
+    )]
+    async fn browser_vm(
+        &self,
+        Parameters(input): Parameters<crate::controller::browser_vm::BrowserVmInput>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .browser_vm(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "cloud_list",
         description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it. worker_image and image_publication describe that cloud's retained image and publisher metadata when its matching runtime is loaded, otherwise null. An unresolved image is null too. Registry publisher metadata includes its opaque nonsecret grant ID, never credential values or paths. They read no credentials and do not prove current registry access. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
@@ -964,6 +978,7 @@ mod tests {
                 "browser_snapshot",
                 "browser_video",
                 "browser_visibility",
+                "browser_vm",
                 "browser_wait",
                 "browser_zoom",
                 "cast",

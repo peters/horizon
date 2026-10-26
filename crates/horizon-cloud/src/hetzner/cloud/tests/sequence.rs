@@ -7,6 +7,7 @@ use crate::{
         cloud::{Journal, Policy, Records, Request, provision},
         tests::provider,
     },
+    host,
 };
 use serde_json::{Value, json};
 
@@ -147,6 +148,7 @@ fn run_spec(
         policy: &policy,
         login: None,
         fresh,
+        purpose: host::Purpose::Worker,
     };
     // What the caller had recorded before: a run is judged only by what it records.
     let (recorded_operation, recorded_journal) = (operation.clone(), journal.clone());
@@ -344,6 +346,7 @@ fn failing_save(fail_at: usize, responses: Vec<(u16, Value)>) -> (Journal, usize
         policy: &policy,
         login: None,
         fresh: true,
+        purpose: host::Purpose::Worker,
     };
     let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
     let mut records = Flaky {
@@ -397,6 +400,7 @@ fn an_uncertain_volume_request_moves_the_callers_fence_too() {
         policy: &policy,
         login: None,
         fresh: true,
+        purpose: host::Purpose::Worker,
     };
     let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
     let result = provision(
@@ -433,6 +437,7 @@ fn a_login_for_another_registry_is_refused_before_any_request() {
             password: crate::Credential::new("secret".into()).unwrap(),
         }),
         fresh: true,
+        purpose: host::Purpose::Worker,
     };
     let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
     let mut kept = Kept::default();
@@ -554,6 +559,7 @@ fn a_sold_out_location_moves_a_new_cloud_to_the_next_allowed_one() {
         policy: &policy,
         login: None,
         fresh: true,
+        purpose: host::Purpose::Worker,
     };
     let (mut operation, mut journal) = (CreateState::Prepared, Journal::default());
     let worker = provision(
@@ -753,6 +759,7 @@ fn the_pull_login_is_checked_before_a_server_is_created_and_never_on_a_reconnect
         policy: &policy,
         login: Some(login),
         fresh: true,
+        purpose: host::Purpose::Worker,
     };
     // A new server: the refused login stops everything before the first request.
     let (client, requests, task) = provider(Vec::new());

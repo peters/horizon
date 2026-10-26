@@ -110,6 +110,22 @@ guarantee that the code gives, and what the code does not guarantee.
     profile; a compromised remote machine can send any PNG as a frame; a process
     of the same operating-system user on the remote machine can write a request
     as any actor.
+- [`browser-vm-deploy`](trust-boundaries/browser-vm-deploy.md) (added
+  after this audit, with #1780)
+  - Untrusted: the tool call of an agent, the Hetzner account and the image it
+    names, the provider answers, and the SSH identity the cloud settings name.
+  - Guarantees: the image needs a digest, the server type is a dedicated `ccx`
+    type, the location is one the settings allow and the volume is 10 to
+    10,240 GB, each checked before any request; the volume is named after the
+    operation and mounted at `/state`; the VNC port is published on the loopback
+    of the host only; the machine accepts the person's own key for root and no
+    password; each record is saved before the request it guards, so a lost
+    answer is reconciled and never repeated; one run at a time; a stop keeps the
+    state volume and only a delete removes the server and the volume, each
+    proven absent.
+  - Does not guarantee: that the machine runs the image after it starts, that the
+    image reference names the image the person built, and that two Horizon
+    windows do not race on the record of one computer.
 - [`standalone-remote-host`](trust-boundaries/standalone-remote-host.md)
   - Untrusted: the MCP client and its tool calls.
   - Guarantees: the client cannot supply an endpoint, a capability or a

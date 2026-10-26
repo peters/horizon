@@ -13,6 +13,8 @@ mod browser_remote_create;
 mod browser_request_claims;
 mod browser_requests;
 mod browser_visibility_requests;
+#[cfg(feature = "cloud-workspaces")]
+mod browser_vm_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_gesture;

@@ -25,7 +25,7 @@ pub mod servers;
 pub mod volumes;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Larger error bodies are not provider explanations worth parsing.
 const FAILURE_BODY_LIMIT: u64 = 8 * 1024;
