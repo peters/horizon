@@ -1,0 +1,79 @@
+name: Browser VM image
+
+# Publishes ghcr.io/peters/browser-vm: the browser machine of issue 1780, which the
+# `browser_vm` deploy entry of Horizon rents a Hetzner server with (pull request
+# #1849 of this issue; until it merges, this workflow has no caller). The deploy refuses
+# a mutable tag, so this workflow publishes a digest and prints the reference to copy.
+#
+# The image is linux/amd64 only: the deploy rents a Hetzner ccx server, which is x86_64,
+# so an arm64 leg would publish an architecture that no browser VM can pull. Do not add
+# one to this workflow.
+#
+# Only main publishes. A dispatch on another branch builds and pushes nothing.
+on:
+  push:
+    branches: [main]
+    # The image recipe, and the sources that its first stage compiles into the image.
+    paths:
+      - packaging/browser-vm/**
+      - crates/horizon-browser-cli/**
+      - crates/horizon-browser/**
+      - .github/workflows/browser-vm-image.yml
+  workflow_dispatch:
+
+# A running publication always finishes, so two pushes cannot move `latest` in the
+# wrong order. GitHub keeps only the newest waiting run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish browser VM image
+    if: github.repository == 'peters/horizon' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      IMAGE: ghcr.io/peters/browser-vm
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Dockerfile.dockerignore replaces the ignore file of the repository root for
+      # this context, so the sources of the CLI reach the first stage.
+      - name: Build
+        run: docker build --file packaging/browser-vm/Dockerfile --tag "$IMAGE:sha-$REVISION" .
+      - name: Publish
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          examples/cloud-worker/registry-tag.sh require-absent "$IMAGE:sha-$REVISION"
+          docker push "$IMAGE:sha-$REVISION" | tee "$RUNNER_TEMP/push.log"
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RUNNER_TEMP/push.log" | tail -n 1 | cut -d' ' -f2)
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          # The digest line goes to the summary before the mutable tag moves, so a failed
+          # `latest` push still leaves the reference of the published image to copy.
+          {
+            echo "Published \`$IMAGE:sha-$REVISION\` for linux/amd64."
+            echo
+            echo "Set the image of a browser VM deploy to:"
+            echo
+            echo "\`$IMAGE@$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          docker tag "$IMAGE:sha-$REVISION" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+          echo "Moved \`$IMAGE:latest\` to this image." >> "$GITHUB_STEP_SUMMARY"
