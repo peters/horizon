@@ -289,6 +289,12 @@ def main():
         help='JSON list of extra workspace panels the fixture opens at start, such as an '
              'agent panel that runs a scripted MCP client')
     parser.add_argument(
+        '--cloud-settings',
+        metavar='DIR',
+        help='Cloud settings folder copied to ~/.horizon/cloud in the private home at 0700, '
+             'so a procedure that rents, stops or deletes a cloud machine has the account '
+             'settings of the fixture')
+    parser.add_argument(
         '--ssh-config',
         type=Path,
         help='SSH configuration of the fixture, copied to ~/.ssh/config in its private home at '
@@ -313,6 +319,7 @@ def main():
         extra_ro_binds.append(args.tools.resolve())
     box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds)
     sandbox.seed_ssh(box.private_home, ssh_config, ssh_identity)
+    cloud_files = sandbox.seed_cloud_settings(box.private_home, args.cloud_settings)
     data = box.data
     namespace = box.namespace
     host_env = box.host_env
@@ -395,6 +402,7 @@ def main():
                     'vnc_address': f'127.0.0.1:{vnc_port}', 'app': str(app),
                     'pids': [p.pid for p in children], 'fixture': 'horizon-debug',
                     'session': 'saved' if args.saved_session else 'ephemeral',
+                    'cloud_settings_files': cloud_files,
                     'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))
