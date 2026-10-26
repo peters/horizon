@@ -9,7 +9,7 @@
 #
 #   docker build -f packaging/browser-vm/Dockerfile -t horizon-browser-vm .
 
-FROM rust:1.99.0-bookworm AS profile-host
+FROM rust:1.99.1-bookworm AS profile-host
 
 # rav1e, the video encoder of the browser engine, needs NASM on x86_64.
 RUN apt-get update \
