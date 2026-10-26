@@ -257,10 +257,7 @@ impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
     fn queue_browser_vm(&mut self, request: UsageRequest, _ctx: &egui::Context) {
-        let result = request.result(
-            Vec::new(),
-            Some("browser_vm_unavailable: this Horizon build has no cloud support".into()),
-        );
+        let result = request.result(Vec::new(), Some(super::settings::BROWSER_VM_UNAVAILABLE.into()));
         if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
             tracing::warn!(kind = ?error.kind(), "could not answer a browser VM request");
         }

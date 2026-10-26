@@ -55,6 +55,15 @@ impl CloudPrototype {
     }
 }
 
+#[cfg(test)]
+impl CloudPrototype {
+    /// Points the cloud settings directory of this window at `root`, for a test of a host
+    /// request that needs no cloud panel.
+    pub(super) fn use_root(&mut self, root: Option<PathBuf>) {
+        self.root = root;
+    }
+}
+
 impl HorizonApp {
     /// The cloud settings directory of this Horizon, when cloud support has one. A
     /// browser VM keeps its record and reads the provider credential beside it.

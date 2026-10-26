@@ -1,4 +1,6 @@
 mod bar;
+#[cfg(feature = "cloud-workspaces")]
+pub(in crate::app) mod browser_vm;
 mod general;
 mod presets;
 mod remote_browsers;
@@ -31,12 +33,18 @@ pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
 
 const TAB_CORNER_RADIUS: f32 = 8.0;
 
+/// The refusal that a build without cloud support answers for a browser VM request. The
+/// section shows it as text, because such a build has no host bridge to ask.
+#[cfg(not(feature = "cloud-workspaces"))]
+pub(super) const BROWSER_VM_UNAVAILABLE: &str = "browser_vm_unavailable: this Horizon build has no cloud support";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
     General,
     Shortcuts,
     Presets,
     RemoteBrowsers,
+    BrowserVm,
     RemoteDevices,
     Yaml,
     #[cfg(feature = "cloud-workspaces")]
@@ -50,6 +58,7 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
             Self::RemoteBrowsers => "Remote browsers",
+            Self::BrowserVm => "Browser VM",
             Self::RemoteDevices => "Remote Devices",
             Self::Yaml => "YAML",
             #[cfg(feature = "cloud-workspaces")]
@@ -62,6 +71,7 @@ impl SettingsTab {
         Self::Shortcuts,
         Self::Presets,
         Self::RemoteBrowsers,
+        Self::BrowserVm,
         Self::RemoteDevices,
         Self::Yaml,
         #[cfg(feature = "cloud-workspaces")]
@@ -87,6 +97,8 @@ pub(super) struct SettingsEditor {
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) browser_vm: browser_vm::Panel,
     #[cfg(feature = "cloud-workspaces")]
     tailnets: super::tailnets::State,
     #[cfg(target_os = "linux")]
@@ -148,6 +160,8 @@ impl HorizonApp {
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
+                #[cfg(feature = "cloud-workspaces")]
+                browser_vm: browser_vm::Panel::default(),
                 #[cfg(feature = "cloud-workspaces")]
                 tailnets,
                 #[cfg(target_os = "linux")]
@@ -227,6 +241,8 @@ impl HorizonApp {
                 })
                 .collect();
         }
+        #[cfg(feature = "cloud-workspaces")]
+        self.refresh_browser_vm_settings(ui.ctx());
         if let Some(editor) = self.settings.as_mut() {
             let action = render_settings_panel(
                 ui,
@@ -243,6 +259,8 @@ impl HorizonApp {
         }
         #[cfg(target_os = "linux")]
         self.apply_remote_device_action(ui.ctx());
+        #[cfg(feature = "cloud-workspaces")]
+        self.apply_browser_vm_settings(ui.ctx());
     }
 
     #[cfg(target_os = "linux")]
@@ -582,6 +600,8 @@ fn render_gui_tab(
         portable_profile,
         provider_usage,
         buffer,
+        #[cfg(feature = "cloud-workspaces")]
+        browser_vm,
         ..
     } = editor;
     let Some(config) = editing_config else {
@@ -611,6 +631,13 @@ fn render_gui_tab(
                         portable_profile,
                         provider_usage,
                     )
+                }
+                #[cfg(feature = "cloud-workspaces")]
+                SettingsTab::BrowserVm => browser_vm::render(ui, config, browser_vm),
+                #[cfg(not(feature = "cloud-workspaces"))]
+                SettingsTab::BrowserVm => {
+                    dim_label(ui, BROWSER_VM_UNAVAILABLE);
+                    return;
                 }
                 // Yaml is handled before this function is called.
                 SettingsTab::Yaml | SettingsTab::RemoteDevices => return,
