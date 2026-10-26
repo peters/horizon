@@ -6,6 +6,7 @@ use horizon_core::{PanelKind, PanelOptions, SshConnection};
 
 use super::{Action, READ_INTERVAL};
 use crate::app::HorizonApp;
+use crate::app::browser_vm_requests::DeviceRoute;
 use crate::app::settings::SettingsTab;
 
 /// The name of the Device panel that the section opens for the one-time sign-in.
@@ -69,15 +70,15 @@ impl HorizonApp {
             );
             return;
         };
+        let identity = self
+            .settings
+            .as_ref()
+            .and_then(|editor| editor.browser_vm.device_identity().map(str::to_string));
         let options = PanelOptions {
             name: Some(DEVICE_PANEL_NAME.to_string()),
             kind: PanelKind::Device,
-            command: Some(route.vnc),
-            ssh_connection: Some(SshConnection {
-                host: route.host,
-                user: Some(route.user),
-                ..SshConnection::default()
-            }),
+            command: Some(route.vnc.clone()),
+            ssh_connection: Some(device_connection(&route, identity.as_deref())),
             ..PanelOptions::default()
         };
         match self.create_panel_with_options(options, workspace) {
@@ -95,5 +96,16 @@ impl HorizonApp {
         if let Some(editor) = self.settings.as_mut() {
             editor.browser_vm.refuse(text);
         }
+    }
+}
+
+/// The SSH route of the Device panel. The deploy installs one key for root, so the panel
+/// names that key: the person's own `~/.ssh` configuration cannot open the machine.
+pub(super) fn device_connection(route: &DeviceRoute, identity: Option<&str>) -> SshConnection {
+    SshConnection {
+        host: route.host.clone(),
+        user: Some(route.user.clone()),
+        identity_file: identity.map(str::to_string),
+        ..SshConnection::default()
     }
 }

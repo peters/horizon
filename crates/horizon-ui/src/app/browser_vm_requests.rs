@@ -46,8 +46,12 @@ impl Drop for Job {
 }
 
 enum Answer {
-    /// The run is recorded, with the phase it starts in.
-    Begun(Result<Status, String>),
+    /// The run is recorded, with the phase it starts in, and the identity that opens the
+    /// machine: the key the deploy installed, read on this thread while the UI thread draws.
+    Begun {
+        result: Result<Status, String>,
+        identity: Option<String>,
+    },
     /// The run ended, with the phase it reached.
     Finished,
 }
@@ -106,8 +110,9 @@ impl HorizonApp {
         let repaint = ctx.clone();
         let recorded = action.clone();
         std::thread::spawn(move || {
-            let begun = work(&root, &action, &worker_cancel, &mut run_provider);
-            let _ = sender.send(Answer::Begun(begun));
+            let result = work(&root, &action, &worker_cancel, &mut run_provider);
+            let identity = ssh_identity(&root);
+            let _ = sender.send(Answer::Begun { result, identity });
             repaint.request_repaint();
             let _ = sender.send(Answer::Finished);
             repaint.request_repaint();
@@ -131,7 +136,9 @@ impl HorizonApp {
             for job in &mut state.jobs {
                 while let Ok(answer) = job.answers.try_recv() {
                     match answer {
-                        Answer::Begun(result) => answers.push((job.tool.clone(), job.action.action, result)),
+                        Answer::Begun { result, identity } => {
+                            answers.push((job.tool.clone(), job.action.action, result, identity));
+                        }
                         Answer::Finished => job.finished = true,
                     }
                 }
@@ -139,10 +146,10 @@ impl HorizonApp {
             }
             state.jobs.retain(|job| !job.finished);
         }
-        for (tool, action, result) in answers {
+        for (tool, action, result, identity) in answers {
             match tool {
-                Some(request) => self.answer_browser_vm(&request, result),
-                None => self.show_browser_vm(action, result),
+                Some(request) => self.answer_browser_vm(&request, result, identity),
+                None => self.show_browser_vm(action, result, identity),
             }
         }
         if finished {
@@ -154,7 +161,7 @@ impl HorizonApp {
         }
     }
 
-    fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>) {
+    fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>, identity: Option<String>) {
         let mut answer = request.result(Vec::new(), None);
         match &result {
             Ok(status) => answer.browser_vm = Some(describe(status)),
@@ -165,22 +172,22 @@ impl HorizonApp {
             .browser_vm
             .as_ref()
             .map_or(BrowserVmAction::Status, |request| request.action);
-        self.show_browser_vm(action, result);
+        self.show_browser_vm(action, result, identity);
     }
 
     /// Shows the answer of one request in the Settings section, which is the only place a
     /// person reads the phase and the refusals.
-    fn show_browser_vm(&mut self, action: BrowserVmAction, result: Result<Status, String>) {
+    fn show_browser_vm(&mut self, action: BrowserVmAction, result: Result<Status, String>, identity: Option<String>) {
         if let Some(editor) = self.settings.as_mut() {
-            editor.browser_vm.absorb(action, result);
+            editor.browser_vm.absorb(action, result, identity);
         }
     }
 
     /// Answers a request that was refused before any thread started.
     fn refuse_browser_vm(&mut self, tool: Option<UsageRequest>, reason: String) {
         match tool {
-            Some(request) => self.answer_browser_vm(&request, Err(reason)),
-            None => self.show_browser_vm(BrowserVmAction::Status, Err(reason)),
+            Some(request) => self.answer_browser_vm(&request, Err(reason), None),
+            None => self.show_browser_vm(BrowserVmAction::Status, Err(reason), None),
         }
     }
 }
@@ -228,6 +235,14 @@ fn run_provider(root: &Path, cancel: &Cancellation) {
     // A stop and a delete report no step the person can act on, so their progress is read
     // from the record with `status`. The phase a run ends in is in that record too.
     let _ = browser_vm::run(root, cancel, &mut |_| {});
+}
+
+/// The identity that opens the machine: the key the deploy installed as the only login of
+/// its root user. Read on the job thread, never on the UI thread.
+pub(in crate::app) fn ssh_identity(root: &Path) -> Option<String> {
+    Settings::load(&root.join("settings.json"))
+        .ok()
+        .map(|settings| settings.ssh_identity_file.to_string_lossy().into_owned())
 }
 
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.

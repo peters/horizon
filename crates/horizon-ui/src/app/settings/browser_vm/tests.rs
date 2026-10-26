@@ -10,8 +10,10 @@ use horizon_core::browser::manifest::provider_usage::{BrowserVmAction, BrowserVm
 use horizon_core::cloud_runtime::browser_vm::{Phase, Status};
 use tempfile::TempDir;
 
+use super::app::device_connection;
 use super::{Action, Panel, hourly_line, phase_label};
 use crate::app::HorizonApp;
+use crate::app::browser_vm_requests::{DeviceRoute, ssh_identity};
 use crate::app::settings::SettingsTab;
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::test_egui::DiscardTextures;
@@ -200,7 +202,7 @@ fn a_run_in_flight_leaves_the_start_disabled() {
     assert!(offered.refresh, "a read is answered while a run is in flight");
     assert!(!offered.delete && !offered.stop && !offered.resume);
 
-    panel.absorb(BrowserVmAction::Status, Ok(ready()));
+    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
     assert!(!panel.offered().start, "a ready machine is not rented again");
     panel.sync(true, false);
     assert!(panel.offered().stop, "a ready machine can be stopped");
@@ -277,7 +279,7 @@ fn a_rent_without_cloud_support_shows_the_refusal_as_text() {
 #[test]
 fn a_ready_machine_offers_the_device_panel_and_the_settings_write() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Deploy, Ok(ready()));
+    panel.absorb(BrowserVmAction::Deploy, Ok(ready()), None);
     assert!(panel.offered().sign_in, "a ready machine offers the one-time sign-in");
 
     let route = panel.device_route().expect("the display has an SSH route");
@@ -302,6 +304,7 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
             phase: Phase::Deploying,
             ..ready()
         }),
+        None,
     );
     let offered = panel.offered();
     assert!(offered.start, "a recorded rent is taken over by a start");
@@ -313,6 +316,7 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
             phase: Phase::Deleting,
             ..ready()
         }),
+        None,
     );
     let offered = panel.offered();
     assert!(!offered.start, "a recorded delete is not a rent");
@@ -322,7 +326,7 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
 #[test]
 fn a_delete_waits_for_a_second_press() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()));
+    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
     assert!(panel.offered().delete);
     assert!(!panel.confirms_delete);
 
@@ -376,7 +380,7 @@ fn only_a_rent_names_the_machine() {
 #[test]
 fn the_section_draws_the_phase_the_cost_and_the_sign_in_of_a_ready_machine() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()));
+    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
     let shown = drawn(&mut Config::default(), &mut panel);
 
     for expected in [
@@ -404,7 +408,7 @@ fn the_section_draws_the_phase_the_cost_and_the_sign_in_of_a_ready_machine() {
 #[test]
 fn the_section_draws_a_run_in_flight_with_start_disabled() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()));
+    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
     panel.sync(true, true);
     let shown = drawn(&mut Config::default(), &mut panel);
 
@@ -428,10 +432,67 @@ fn the_section_draws_no_sign_in_before_a_machine_is_ready() {
             hourly_net: None,
             error: None,
         }),
+        None,
     );
     let shown = drawn(&mut Config::default(), &mut panel);
 
     assert!(!disabled(&shown, "Start"), "an idle section offers the rent: {shown:?}");
     assert!(!shown.iter().any(|(text, _)| text == "Open Device panel"), "{shown:?}");
     assert!(!shown.iter().any(|(text, _)| text == "Delete"), "{shown:?}");
+}
+
+#[test]
+fn the_sign_in_panel_names_the_identity_the_deploy_installed() {
+    let route = DeviceRoute {
+        host: "203.0.113.10".into(),
+        user: "root".into(),
+        vnc: "127.0.0.1:5900".into(),
+    };
+    let without = device_connection(&route, None).to_command_args();
+    assert!(!without.contains(&"-i".to_string()));
+
+    let identity = "/home/person/.horizon/cloud/identity/ed25519";
+    let connection = device_connection(&route, Some(identity));
+    let args = connection.to_command_args();
+    let index = args.iter().position(|argument| argument == "-i");
+    assert_eq!(
+        index.map(|index| args.get(index + 1).map(String::as_str)),
+        Some(Some(identity)),
+        "the panel presents the one key that the machine accepts: {args:?}"
+    );
+    assert_eq!(connection.host, "203.0.113.10");
+    assert_eq!(connection.user.as_deref(), Some("root"));
+}
+
+#[test]
+fn the_identity_of_the_machine_comes_from_the_cloud_settings() {
+    let root = TempDir::new().expect("temp root");
+    let identity = root.path().join("identity");
+    std::fs::write(&identity, b"key").expect("write identity");
+    std::fs::write(
+        root.path().join("settings.json"),
+        serde_json::to_vec(&serde_json::json!({ "ssh_identity_file": identity })).expect("json"),
+    )
+    .expect("write settings");
+
+    assert_eq!(
+        ssh_identity(root.path()).as_deref(),
+        Some(identity.to_string_lossy().as_ref())
+    );
+    let empty = TempDir::new().expect("temp root");
+    assert_eq!(ssh_identity(empty.path()), None, "no settings, no identity");
+}
+
+#[test]
+fn a_recorded_machine_keeps_the_identity_that_opened_it() {
+    let mut panel = Panel::default();
+    panel.absorb(BrowserVmAction::Status, Ok(ready()), Some("/keys/ed25519".into()));
+    assert_eq!(panel.device_identity(), Some("/keys/ed25519"));
+
+    panel.absorb(BrowserVmAction::Status, Err("busy".into()), None);
+    assert_eq!(
+        panel.device_identity(),
+        Some("/keys/ed25519"),
+        "a refusal does not forget the key the machine takes"
+    );
 }

@@ -52,6 +52,9 @@ pub(in crate::app) struct Panel {
     last_read: Option<Instant>,
     /// Whether the person changed a field, so a recorded machine never overwrites them.
     edited: bool,
+    /// The identity that opens the machine, as the bridge read it off the UI thread. The
+    /// Device panel of the sign-in step names it, because the deploy installs only that key.
+    identity: Option<String>,
     actions: Vec<Action>,
 }
 
@@ -70,6 +73,7 @@ impl Default for Panel {
             confirms_delete: false,
             last_read: None,
             edited: false,
+            identity: None,
             actions: Vec::new(),
         }
     }
@@ -140,7 +144,15 @@ impl Panel {
 
     /// Shows the answer of one request. A read keeps the refusal of an earlier action
     /// visible until the next action answers.
-    pub(in crate::app) fn absorb(&mut self, action: BrowserVmAction, result: Result<Status, String>) {
+    pub(in crate::app) fn absorb(
+        &mut self,
+        action: BrowserVmAction,
+        result: Result<Status, String>,
+        identity: Option<String>,
+    ) {
+        if identity.is_some() {
+            self.identity = identity;
+        }
         match result {
             Ok(status) => {
                 if action != BrowserVmAction::Status {
@@ -224,6 +236,11 @@ impl Panel {
     /// The route of the Device panel of the ready machine, for the one-time sign-in.
     fn device_route(&self) -> Option<DeviceRoute> {
         self.status.as_ref().and_then(DeviceRoute::of)
+    }
+
+    /// The identity file the Device panel presents to the machine, when the bridge read one.
+    fn device_identity(&self) -> Option<&str> {
+        self.identity.as_deref()
     }
 
     /// Writes the SSH target of the ready machine into the settings entry `browser_host`,
