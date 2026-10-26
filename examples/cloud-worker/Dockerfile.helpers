@@ -35,7 +35,7 @@ RUN cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.99.0 CARGO_HOME=/tmp/hel
     && rm -rf /src /tmp/helper-cargo
 
 # Same reviewed patch and builder as standalone worker contexts.
-FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS tailnet-runtime
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS tailnet-runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl patch python3 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=source /src/examples/cloud-worker/tailscale/ /runtime-build/
