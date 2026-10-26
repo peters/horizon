@@ -52,7 +52,7 @@ horizon-terminal.workspace = true
 rusqlite.workspace = true
 libc.workspace = true
 uuid.workspace = true
-comrak = { version = "0.56", default-features = false }
+comrak = { version = "0.57", default-features = false }
 git2.workspace = true
 sha2.workspace = true
 atomicwrites.workspace = true
