@@ -423,6 +423,7 @@ fn an_open_form_keeps_saving_after_connect_github_saved_the_app() {
         slug: "horizon-example".into(),
         client_id: "Iv23synthetic".into(),
         client_secret_file: root.path().join("credentials/github-app"),
+        private_key_file: None,
         mode: crate::cloud_runtime::github::Mode::Ask,
     };
     let committed = save_github(
@@ -463,6 +464,7 @@ fn connect_github_saves_before_any_provider_is_set_up() {
         slug: "horizon-example".into(),
         client_id: "Iv23synthetic".into(),
         client_secret_file: root.path().join("credentials/github-app-42"),
+        private_key_file: None,
         mode: crate::cloud_runtime::github::Mode::Ask,
     };
     let cancelled = crate::cloud_runtime::Cancellation::default();
@@ -492,6 +494,7 @@ fn a_github_save_applies_only_while_the_settings_name_the_shown_app() {
         slug: format!("horizon-example-{app_id}"),
         client_id: "Iv23synthetic".into(),
         client_secret_file: root.path().join(format!("credentials/github-app-{app_id}")),
+        private_key_file: None,
         mode: crate::cloud_runtime::github::Mode::Ask,
     };
     let cancel = crate::cloud_runtime::Cancellation::default();

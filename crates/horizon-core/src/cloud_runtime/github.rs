@@ -71,17 +71,26 @@ pub struct Settings {
     pub client_id: String,
     /// A private file with the app's client secret.
     pub client_secret_file: PathBuf,
+    /// A private file with the app's private key, which mints an installation token. Omitted
+    /// until a person gives one, so every settings file written before it still loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_file: Option<PathBuf>,
     #[serde(default)]
     pub mode: Mode,
 }
 
 impl Settings {
     /// # Errors
-    /// A relative secret path or a malformed app identity.
+    /// A relative secret or key path, or a malformed app identity.
     pub fn validate(&self) -> Result<()> {
         if !self.client_secret_file.is_absolute() {
             return Err(Error::Invalid(
                 "The GitHub App secret must use an absolute machine-local path",
+            ));
+        }
+        if self.private_key_file.as_ref().is_some_and(|path| !path.is_absolute()) {
+            return Err(Error::Invalid(
+                "The GitHub App private key must use an absolute machine-local path",
             ));
         }
         let slug =
@@ -104,6 +113,25 @@ impl Settings {
     #[must_use]
     pub fn visibility_url(&self) -> String {
         format!("https://github.com/settings/apps/{}/advanced", self.slug)
+    }
+
+    /// The app's private key, from the private file this machine names, to mint an
+    /// installation token without a sign-in.
+    /// # Errors
+    /// This machine names no key file, the file is not a private regular file readable
+    /// only by this user, or it does not hold an unencrypted RSA private key in PEM form.
+    pub fn private_key(&self) -> Result<horizon_cloud::github::PrivateKey> {
+        let Some(path) = &self.private_key_file else {
+            return Err(Error::Invalid(
+                "This machine has no GitHub App private key. Give the app's private key file in cloud settings.",
+            ));
+        };
+        validate_private_key_file(path)?;
+        // Checked while borrowed, so no copy of the key outlives this call unwiped, even
+        // when the key is refused.
+        let pem = zeroize::Zeroizing::new(std::fs::read_to_string(path)?);
+        horizon_cloud::github::PrivateKey::from_pem(&pem)
+            .map_err(|_| Error::Invalid("The GitHub App private key file is not an RSA private key in PEM form"))
     }
 
     fn client_secret(&self) -> Result<Secret> {

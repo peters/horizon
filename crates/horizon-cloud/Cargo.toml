@@ -32,6 +32,12 @@ keyring-core.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+# A synthetic 2048-bit RSA key for the GitHub App installation token tests: `ring`
+# signs with an RSA key but cannot make one, and no private key belongs in the
+# repository.
+rsa = { workspace = true, features = ["getrandom"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store.workspace = true
 

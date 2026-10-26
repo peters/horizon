@@ -9,6 +9,7 @@ fn account() -> Account {
             slug: "horizon-example".into(),
             client_id: "Iv23synthetic".into(),
             client_secret_file: PathBuf::from("/synthetic/secret"),
+            private_key_file: None,
             mode: github::Mode::Ask,
         },
         job: None,

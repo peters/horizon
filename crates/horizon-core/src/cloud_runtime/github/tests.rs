@@ -18,6 +18,7 @@ fn settings(mode: Mode, secret: &std::path::Path) -> Settings {
         slug: "horizon-example".into(),
         client_id: "Iv23synthetic".into(),
         client_secret_file: secret.into(),
+        private_key_file: None,
         mode,
     }
 }
@@ -66,8 +67,56 @@ fn settings_need_an_absolute_secret_path_and_a_clean_identity() {
     .unwrap();
     assert_eq!(parsed.mode, Mode::Ask, "Ask is the default mode");
     assert_eq!(
+        parsed.private_key_file, None,
+        "a settings file written before the key file still loads"
+    );
+    assert_eq!(
         parsed.installation_url(),
         "https://github.com/apps/horizon-example/installations/new"
+    );
+}
+
+/// A private file at `dir/name` with `pem` in it and the mode `mode`.
+fn key_file(dir: &std::path::Path, name: &str, pem: &str, mode: u32) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, pem).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    path
+}
+
+#[test]
+fn the_app_private_key_is_read_only_from_a_private_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut github = settings(Mode::Ask, &dir.path().join("secret"));
+    assert!(
+        github.private_key().is_err(),
+        "a machine that names no key file has no key"
+    );
+    github.private_key_file = Some(dir.path().join("absent"));
+    assert!(
+        github.private_key().is_err(),
+        "a key file that does not exist is no key"
+    );
+    github.private_key_file = Some("credentials/github-app-key".into());
+    assert!(github.validate().is_err(), "a relative key path is refused");
+    let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n";
+    github.private_key_file = Some(key_file(dir.path(), "github-app-key", pem, 0o644));
+    assert!(github.validate().is_ok());
+    #[cfg(unix)]
+    assert!(
+        github.private_key().is_err(),
+        "a key file that other users can read is refused"
+    );
+    github.private_key_file = Some(key_file(dir.path(), "github-app-key", pem, 0o600));
+    assert!(
+        github.private_key().is_err(),
+        "a private file that is not an RSA private key is refused"
     );
 }
 

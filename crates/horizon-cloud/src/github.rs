@@ -1,11 +1,13 @@
 //! User tokens of a person's own GitHub App: device sign-in, the code exchange of a
-//! web sign-in, renewal, and the manifest conversion that creates the app.
+//! web sign-in, renewal, and the manifest conversion that creates the app. Also the
+//! installation tokens of the app itself, which its private key mints.
 //!
-//! A token acts as the person, limited to the app's permissions and the repositories
+//! A user token acts as the person, limited to the app's permissions and the repositories
 //! it is installed on. With **Expire user access tokens** on, an access token lasts
 //! 8 hours and its refresh token about 6 months. A refresh replaces both, so each
 //! holder keeps its own chain. A chain from the device sign-in renews with the client
 //! ID alone; a chain from a web sign-in also needs the client secret.
+//! An installation token has no refresh token, so only the key that mints it renews it.
 //! Secrets never appear in `Debug` output or in errors.
 use serde::Deserialize;
 use std::{
@@ -17,6 +19,10 @@ use zeroize::Zeroizing;
 
 mod api;
 pub use api::{User, valid_repository};
+mod installation;
+pub use installation::{Bot, InstallationToken, PrivateKey};
+#[cfg(test)]
+mod fake;
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +58,30 @@ pub enum Error {
     Refused(String),
     #[error("The GitHub App has more installations or repositories than Horizon reads.")]
     TooMany,
+    #[error(
+        "The GitHub App's private key cannot be used on this computer. Give the app's private key file, unencrypted and readable only by you."
+    )]
+    PrivateKey,
+    #[error(
+        "GitHub refused the GitHub App's ID or private key. Check that the private key file is the key of this app."
+    )]
+    AppKey,
+    #[error("This computer's clock is not set. Set the date and time, then try again.")]
+    Clock,
+    #[error("An installation token needs at least one repository.")]
+    NoRepository,
+    #[error("A repository must be a lowercase owner/name, as GitHub names it.")]
+    InvalidRepository,
+    #[error(
+        "The GitHub App installs on each account separately, and one installation token reaches one account. Give the token the repositories of one account at a time."
+    )]
+    SeparateAccounts,
+    #[error("The GitHub App is not installed on this account. Install it on GitHub and try again.")]
+    NotInstalled,
+    #[error(
+        "The GitHub App does not reach one of the requested repositories, or does not hold the permissions the token asked for. Check the app's installation and permissions on GitHub."
+    )]
+    NotCovered,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 

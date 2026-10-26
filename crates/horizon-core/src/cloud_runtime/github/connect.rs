@@ -229,6 +229,7 @@ fn created(code: &Secret, root: &Path) -> Result<Settings> {
         slug: app.slug,
         client_id: app.client_id,
         client_secret_file: path,
+        private_key_file: None,
         mode: Mode::Ask,
     };
     settings.validate()?;

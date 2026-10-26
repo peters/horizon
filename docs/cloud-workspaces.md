@@ -391,6 +391,14 @@ files, while retaining ChatGPT and subscription login state. Existing agent
 processes can retain authentication already loaded into memory or their
 environment; start a new session to apply the changed authentication choice.
 
+Optional `github.private_key_file` names the private key of the GitHub App. The
+file has an absolute path and mode 0600 on Unix. Horizon signs as the app on this
+computer with that key and mints an installation token. The token reaches only the
+repositories of one account, with contents and pull requests at write access and
+metadata at read access. The key never goes into a settings file, a cloud record or
+a worker. This build reads the setting and does not use it for a cloud yet.
+**Connect GitHub** keeps the sign-in path.
+
 Optional repository Git authentication uses explicit `git_credentials` bindings.
 With [Connect GitHub](#connect-github), a binding is a fallback for the
 repositories that the app does not reach. See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
@@ -497,7 +505,9 @@ with no token to create or copy.
 
 1. Horizon opens GitHub in your browser with a GitHub App already described.
    You click **Create GitHub App**. Horizon keeps the app's client
-   secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
+   secret in `credentials/github-app-<app>` (0600) and never keeps the private key
+   that GitHub makes at the same time. Optional `github.private_key_file` names a
+   private key file that you give Horizon yourself.
    The app is named **Horizon for <login>** when Horizon already knows your GitHub
    login from an earlier sign-in on this computer and no public app has that name;
    otherwise it is **Horizon** and a short random suffix. Horizon cannot see a
