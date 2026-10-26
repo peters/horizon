@@ -20,7 +20,7 @@ permissions:
 # A new run waits for the current one and never cancels it, so the label stays
 # until its own run removes it and two runs cannot count the same free round.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}-${{ github.event.label.name || github.event.action }}
+  group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
