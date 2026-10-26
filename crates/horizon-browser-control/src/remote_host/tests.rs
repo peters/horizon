@@ -141,16 +141,37 @@ fn a_call_that_never_answers_is_killed_at_its_deadline() {
     );
 }
 
+/// Whether the transport refused the program because another process still held
+/// the file open for writing. `exec` reports `ETXTBSY`; the condition clears as
+/// soon as that process closes the descriptor or exits.
+fn is_text_file_busy(error: &RemoteChannelError) -> bool {
+    matches!(error, RemoteChannelError::Transport { reason, .. } if reason.contains("Text file busy"))
+}
+
 #[test]
 fn a_probe_of_a_stand_in_ssh_that_never_answers_is_a_typed_no_answer() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let program = directory.path().join("ssh");
     std::fs::write(&program, "#!/bin/sh\nsleep 30\n").expect("stand-in ssh");
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("mode");
-    let started = Instant::now();
-    let error = super::probe_with("browser-vm", None, &program.to_string_lossy(), Duration::from_secs(1))
-        .expect_err("a host that never answers");
-    let elapsed = started.elapsed();
+    // Another test thread can fork while this stand-in is still open for writing,
+    // and the forked child inherits that descriptor, so `exec` refuses the file
+    // with ETXTBSY for a moment. That refusal says nothing about the probe, so it
+    // is retried; the deadline still starts at the attempt that runs.
+    let mut attempt = 0;
+    let (error, elapsed) = loop {
+        let started = Instant::now();
+        let probe = super::probe_with("browser-vm", None, &program.to_string_lossy(), Duration::from_secs(1));
+        let elapsed = started.elapsed();
+        match probe {
+            Ok(_) => panic!("a host that never answers"),
+            Err(error) if is_text_file_busy(&error) && attempt < 20 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => break (error, elapsed),
+        }
+    };
     assert!(
         matches!(&error, RemoteChannelError::NoAnswer { target, seconds } if target == "browser-vm" && *seconds == 1),
         "{error}"
