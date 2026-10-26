@@ -104,66 +104,95 @@ window removes the machine and the state volume.
 
 ### 6.2 D2: the person drives the machine from the Settings window
 
-1. Open the Settings window, and click the `Browser VM` tab.
+1. Open the Settings window with `Ctrl+Shift+Comma`, and click the `Browser VM`
+   tab.
 
    Result: The section shows the phase `Ready`, the machine size `ccx13`, the
-   location `fsn1`, the SSH target `root@<address>` and the hourly cost. The State
-   volume line shows `20 GB`.
+   location, the SSH target `root@<address>` and the hourly cost. The `State
+   volume` line shows `20 GB`.
 
 2. Read the hourly cost line.
 
    Result: The line ends with `/h net`. The amount is the Hetzner price of the
-   server type, without VAT.
+   server type, without VAT. The note under it says that the state volume, the
+   primary IPv4 address and traffic bill separately.
 
-3. Click `Stop`.
+3. Click `Use this host for new panels`, then click `Save`.
 
-   Result: The section shows `Stopping`. Start, Stop, Resume and Delete are not
-   available while the run continues. The phase becomes `Stopped` by itself, and
-   the SSH target line says `none yet`.
+   Result: The button becomes unavailable, the card says that new browser panels
+   already use this machine, and the `YAML` tab shows `browser_host:
+   ssh_target: root@<address>`. The entry applies at the next start of Horizon.
 
-4. Click `Resume`, and wait until the phase is `Ready`.
+4. Trust the host key of the machine one time, in a terminal panel of the
+   isolated desktop:
 
-   Result: The section shows the new SSH target of the machine, and the hourly
-   cost of its server type.
+   ```sh
+   ssh-keyscan -T 10 <address> >> ~/.ssh/known_hosts
+   ```
+
+   Result: `known_hosts` holds the keys of the machine. This step is necessary
+   because a Device panel refuses a host key that it has never seen, by design.
 
 5. Click `Open Device panel`.
 
-   Result: A native Device panel shows the desktop of the machine. The panel
-   reaches the display through the SSH route that the section shows.
+   Result: A native Device panel named `Browser VM` shows `127.0.0.1:5900 via
+   root@<address>`, the connection state `Connected` and the VNC name of the
+   machine. The desktop of the machine is a plain window manager until a page
+   opens there.
 
-6. Close the Device panel of step 5.
+6. Click `Stop`.
 
-   Result: The panel closes, and the machine keeps running.
+   Result: The section shows `Stopping`, and Start, Stop, Resume and Delete are
+   not available while the run continues. The phase becomes `Stopped` by itself.
+   The SSH target line says `none yet`, and the state volume line still shows
+   `20 GB`.
 
-7. Click `Use this host for new panels`, then click `Save`.
+7. Click `Resume`, and wait until the phase is `Ready`.
 
-   Result: The settings entry `browser_host.ssh_target` holds `root@<address>`.
-   Open the `YAML` tab to see it. The entry applies at the next start of Horizon.
+   Result: The section shows the new SSH target of the machine, and the hourly
+   cost of its server type. The state volume is the same volume, so the sites
+   that a person signed in to are still signed in.
+
+   > **CAUTION:** Resume rents a machine. Stop it or delete it when the check is
+   > complete.
+
+8. Click `Delete`, then `Delete the machine and its volume`.
+
+   Result: The section shows `Deleting` and then `Deleted`. The warning before
+   the second press says that every saved sign-in is lost. The account then
+   shows no server and no volume.
+
+   > **CAUTION:** Delete removes the server and the state volume of the machine.
+   > Every saved sign-in is lost.
 
 ### 6.3 D3: a person signs in one time
 
-1. Call `device_panel` with the SSH route of the machine. The `SSH target` line of
-   the `Browser VM` section shows its address, after the resume of step 6.2.4:
+1. Open the Device panel with `Open Device panel` in the section, not with the
+   `device_panel` tool. The deploy installs one key for the root user, and the
+   section names it; the tool cannot name a key, which
+   [#1878](https://github.com/peters/horizon/issues/1878) tracks.
 
-   ```json
-   {"ssh": {"host": "<address>", "user": "root", "vnc": "127.0.0.1:5900"}}
-   ```
+   Result: The panel shows the desktop of the machine and the connection state
+   `Connected`.
 
-   Result: A native Device panel shows the desktop of the machine.
+2. Ask an agent to open `SITE` on the browser host of the machine, so that its
+   browser window appears on that desktop. The desktop has a window manager and
+   Chromium, and no window until a page opens.
 
-2. In that desktop, open the browser and sign in to `SITE`.
+   Result: A browser window appears on the desktop of the machine, and the frame
+   counter of the panel advances.
 
-   Result: The site shows the signed-in page. The frame counter of the panel
-   advances while you click.
+3. Sign in to `SITE` in that window.
 
-3. In the browser of that desktop, open the file browser and write a file in the
-   profile folder:
+   Result: The site shows the signed-in page.
+
+4. Write a file in the state volume:
 
    ```sh
    touch /state/signin-marker
    ```
 
-   Result: The command creates the file on the state volume.
+   Result: The file exists in `/state` of the machine.
 
 ### 6.4 D4: a stop and a resume keep the sign-in
 
