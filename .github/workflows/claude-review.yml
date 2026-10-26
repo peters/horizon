@@ -17,14 +17,14 @@ on:
 permissions:
   contents: read
 
-# A new run waits for the current one and never cancels it, so the label stays
-# until its own run removes it and two runs cannot count the same free round.
-concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   review:
+    if: github.event.action != 'labeled' || github.event.label.name == 'claude-review'
+    # A new run waits for the current one and never cancels it, so the label stays
+    # until its own run removes it and two runs cannot count the same free round.
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     uses: fintermobilityas/review/.github/workflows/claude-review.yml@3df2a13620889c358e9839088f14e19ccac95f1b
     permissions:
       contents: read
