@@ -33,17 +33,13 @@ pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
 
 const TAB_CORNER_RADIUS: f32 = 8.0;
 
-/// The refusal that a build without cloud support answers for a browser VM request. The
-/// section shows it as text, because such a build has no host bridge to ask.
-#[cfg(not(feature = "cloud-workspaces"))]
-pub(super) const BROWSER_VM_UNAVAILABLE: &str = "browser_vm_unavailable: this Horizon build has no cloud support";
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
     General,
     Shortcuts,
     Presets,
     RemoteBrowsers,
+    #[cfg(feature = "cloud-workspaces")]
     BrowserVm,
     RemoteDevices,
     Yaml,
@@ -58,6 +54,7 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
             Self::RemoteBrowsers => "Remote browsers",
+            #[cfg(feature = "cloud-workspaces")]
             Self::BrowserVm => "Browser VM",
             Self::RemoteDevices => "Remote Devices",
             Self::Yaml => "YAML",
@@ -71,6 +68,7 @@ impl SettingsTab {
         Self::Shortcuts,
         Self::Presets,
         Self::RemoteBrowsers,
+        #[cfg(feature = "cloud-workspaces")]
         Self::BrowserVm,
         Self::RemoteDevices,
         Self::Yaml,
@@ -634,11 +632,6 @@ fn render_gui_tab(
                 }
                 #[cfg(feature = "cloud-workspaces")]
                 SettingsTab::BrowserVm => browser_vm::render(ui, config, browser_vm),
-                #[cfg(not(feature = "cloud-workspaces"))]
-                SettingsTab::BrowserVm => {
-                    dim_label(ui, BROWSER_VM_UNAVAILABLE);
-                    return;
-                }
                 // Yaml is handled before this function is called.
                 SettingsTab::Yaml | SettingsTab::RemoteDevices => return,
                 #[cfg(feature = "cloud-workspaces")]

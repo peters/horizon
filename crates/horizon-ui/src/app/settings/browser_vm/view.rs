@@ -53,7 +53,7 @@ fn machine_card(ui: &mut Ui, panel: &mut Panel, offered: &Offered) {
         }
         ui.add_space(10.0);
         run_buttons(ui, panel, offered);
-        delete_confirmation(ui, panel);
+        delete_confirmation(ui, panel, offered);
     });
 }
 
@@ -109,8 +109,10 @@ fn run_buttons(ui: &mut Ui, panel: &mut Panel, offered: &Offered) {
 }
 
 /// The second press of a delete, inside the section and never in a modal window.
-fn delete_confirmation(ui: &mut Ui, panel: &mut Panel) {
-    if !panel.confirms_delete {
+fn delete_confirmation(ui: &mut Ui, panel: &mut Panel, offered: &Offered) {
+    // A run in flight takes every provider action away, including a delete that was armed
+    // before it started.
+    if !panel.confirms_delete || !offered.delete {
         return;
     }
     ui.add_space(8.0);
