@@ -2,7 +2,7 @@
 //! request is answered as soon as its run is recorded, and the caller polls `status`.
 //! Every run happens on its own thread: no provider request or record write reaches the
 //! UI thread.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 
 use horizon_core::browser::manifest::provider_usage::{BrowserVmAction, BrowserVmRequest, UsageRequest};
@@ -94,9 +94,12 @@ impl HorizonApp {
     }
 
     fn start_browser_vm(&mut self, tool: Option<UsageRequest>, action: BrowserVmRequest, ctx: &egui::Context) {
-        let Some(root) = self.cloud_root() else {
-            self.refuse_browser_vm(tool, UNAVAILABLE.to_owned());
-            return;
+        let root = match cloud_settings_root(self, action.action) {
+            Ok(root) => root,
+            Err(refusal) => {
+                self.refuse_browser_vm(tool, refusal);
+                return;
+            }
         };
         let running = self.browser_create_host.provider_usage.browser_vm.running();
         if let Some(refusal) = refusal(action.action, running) {
@@ -237,6 +240,22 @@ fn run_provider(root: &Path, cancel: &Cancellation) {
     let _ = browser_vm::run(root, cancel, &mut |_| {});
 }
 
+/// The cloud settings directory of the browser VM. A cloud board sets the root of the cloud
+/// panel, but the browser VM reads its own settings, so it falls back to the home of this
+/// Horizon when no cloud board runs. The home comes from the session store, which is the
+/// home this process was started with, so a test never reads the home of the developer.
+fn cloud_settings_root(app: &HorizonApp, action: BrowserVmAction) -> Result<PathBuf, String> {
+    let root = app
+        .cloud_root()
+        .unwrap_or_else(|| app.session_store.home().root().join("cloud"));
+    // A read answers the record of this Horizon and reaches no provider, so it needs no
+    // cloud settings; every action that rents, stops, resumes or deletes needs them.
+    if action != BrowserVmAction::Status && !root.join("settings.json").is_file() {
+        return Err(UNAVAILABLE.to_owned());
+    }
+    Ok(root)
+}
+
 /// The identity that opens the machine: the key the deploy installed as the only login of
 /// its root user. Read on the job thread, never on the UI thread.
 pub(in crate::app) fn ssh_identity(root: &Path) -> Option<String> {
@@ -246,8 +265,8 @@ pub(in crate::app) fn ssh_identity(root: &Path) -> Option<String> {
 }
 
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.
-fn first_location(root: &Path) -> Result<String, String> {
-    let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
+pub(in crate::app) fn first_location(root: &Path) -> Result<String, String> {
+    let settings = Settings::load(&root.join("settings.json")).map_err(|_| UNAVAILABLE.to_owned())?;
     settings
         .hetzner
         .as_ref()

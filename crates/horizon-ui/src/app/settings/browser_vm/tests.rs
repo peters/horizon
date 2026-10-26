@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use super::app::device_connection;
 use super::{Action, Panel, hourly_line, phase_label};
 use crate::app::HorizonApp;
-use crate::app::browser_vm_requests::{DeviceRoute, ssh_identity};
+use crate::app::browser_vm_requests::{DeviceRoute, first_location, ssh_identity};
 use crate::app::settings::SettingsTab;
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::test_egui::DiscardTextures;
@@ -494,5 +494,15 @@ fn a_recorded_machine_keeps_the_identity_that_opened_it() {
         panel.device_identity(),
         Some("/keys/ed25519"),
         "a refusal does not forget the key the machine takes"
+    );
+}
+
+#[test]
+fn absent_cloud_settings_are_the_typed_refusal_not_a_file_error() {
+    let root = TempDir::new().expect("temp root");
+    let reason = first_location(root.path()).expect_err("no settings to read");
+    assert!(
+        reason.starts_with("browser_vm_unavailable:"),
+        "a person reads why cloud support is unavailable, not a path error: {reason}"
     );
 }
