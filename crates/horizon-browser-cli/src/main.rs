@@ -71,7 +71,7 @@ COMMANDS:
            only) also returns the PNG of each browser_screenshot of a profile
            host as an image block, for a client on another computer than the
            host. The screenshots of a Horizon host stay a path. --remote
-           relays the same contract over `ssh -Tq <SSH-TARGET>` to the profile
+           relays the same contract over `ssh -T <SSH-TARGET>` to the profile
            host of another machine, stages the files of set_files there, and
            returns a bounded video or network capture inline. --profile names
            the profile that a browser_create without a target opens in.

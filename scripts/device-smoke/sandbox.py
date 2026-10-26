@@ -11,6 +11,9 @@ import time
 BUS_SOCKET_NAME = 'bus'
 APPARMOR_ACCESS = Path('/sys/kernel/security/apparmor/.access')
 X11_SOCKET_DIR = Path('/tmp/.X11-unix')
+SSH_FOLDER = '.ssh'
+SSH_CONFIG_NAME = 'config'
+SSH_SYSTEM_INCLUDE = '/etc/ssh/ssh_config.d'
 HOST_SESSION_KEYS = (
     'DBUS_SESSION_BUS_ADDRESS',
     'DBUS_STARTER_ADDRESS',
@@ -153,6 +156,51 @@ class Sandbox:
         self.apparmor = apparmor
 
 
+def ssh_sources(config=None, identity=None):
+    """The SSH configuration and identity that the fixture seeds, or `(None, None)`.
+
+    The two files come together or not at all: a configuration without its key
+    cannot answer, and a key without a configuration names no host. Each must be
+    a regular file that exists, because a directory or a missing path is a
+    mistake of the procedure and would seed a home that `ssh` cannot use.
+    """
+    if (config is None) != (identity is None):
+        raise ValueError('the SSH configuration and the SSH identity are seeded together, or not at all')
+    if config is None:
+        return None, None
+    config, identity = Path(config), Path(identity)
+    for flag, path in (('--ssh-config', config), ('--ssh-identity', identity)):
+        if not path.is_file():
+            raise ValueError(f'{flag} must name a regular file that exists: {path}')
+    if identity.name == SSH_CONFIG_NAME:
+        raise ValueError(f'--ssh-identity must not be named {SSH_CONFIG_NAME}, which is the configuration of the fixture')
+    return config, identity
+
+
+def seed_ssh(private_home, config=None, identity=None):
+    """Copy the SSH files of a procedure into the private home of the fixture.
+
+    The app of the fixture runs with `HOME` bound to `private_home`, which holds
+    no configuration, so `ssh` finds no alias and no key there. The copy stays
+    private: the folder is 0700 and each file 0600, as `ssh` requires of a
+    configuration that a person owns. The identity keeps its own file name, so a
+    configuration that names `IdentityFile ~/.ssh/<name>` reads it.
+
+    Returns the names of the files that the fixture seeded, in `~/.ssh`.
+    """
+    config, identity = ssh_sources(config, identity)
+    if config is None:
+        return []
+    folder = Path(private_home) / SSH_FOLDER
+    folder.mkdir(mode=0o700, exist_ok=True)
+    folder.chmod(0o700)
+    seeded = [(config, folder / SSH_CONFIG_NAME), (identity, folder / identity.name)]
+    for source, target in seeded:
+        target.write_bytes(source.read_bytes())
+        target.chmod(0o600)
+    return [target.name for _, target in seeded]
+
+
 def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=()):
     """Create private dirs, bwrap prefix, host env, and sandbox env.
 
@@ -195,6 +243,15 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=()):
         seen.add(resolved)
         namespace += ['--ro-bind', resolved, resolved]
     namespace += ['--ro-bind-try', str(X11_SOCKET_DIR), str(X11_SOCKET_DIR)]
+    # A user namespace shows every file that root owns as `nobody`, and OpenSSH
+    # refuses a system configuration file that root does not own: the machine
+    # include of the systemd SSH proxy failed every `ssh` of the fixture with
+    # "Bad owner or permissions", before the connection started. An empty
+    # folder takes its place, and the seeded `~/.ssh/config` of a procedure is
+    # the configuration that the fixture reads. A machine without that folder
+    # has nothing to hide, and bwrap cannot create one under a read-only root.
+    if Path(SSH_SYSTEM_INCLUDE).is_dir():
+        namespace += ['--tmpfs', SSH_SYSTEM_INCLUDE]
     namespace += access_bind
     namespace += ['--chdir', str(data), '--']
     base = dict(environ if environ is not None else os.environ)

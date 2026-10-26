@@ -288,7 +288,21 @@ def main():
         type=Path,
         help='JSON list of extra workspace panels the fixture opens at start, such as an '
              'agent panel that runs a scripted MCP client')
+    parser.add_argument(
+        '--ssh-config',
+        type=Path,
+        help='SSH configuration of the fixture, copied to ~/.ssh/config in its private home at '
+             '0600, so a host that the fixture names over SSH is reachable. Needs --ssh-identity')
+    parser.add_argument(
+        '--ssh-identity',
+        type=Path,
+        help='Private key of the fixture, copied to ~/.ssh/<its own file name> in its private '
+             'home at 0600. Needs --ssh-config, which names it as IdentityFile')
     args = parser.parse_args()
+    try:
+        ssh_config, ssh_identity = sandbox.ssh_sources(args.ssh_config, args.ssh_identity)
+    except ValueError as problem:
+        parser.error(str(problem))
     if args.browser_host_profile and not args.browser_host:
         parser.error('--browser-host-profile needs --browser-host')
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -298,6 +312,7 @@ def main():
     if args.tools:
         extra_ro_binds.append(args.tools.resolve())
     box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds)
+    sandbox.seed_ssh(box.private_home, ssh_config, ssh_identity)
     data = box.data
     namespace = box.namespace
     host_env = box.host_env

@@ -127,6 +127,44 @@ panel needs a string `name`, a `kind` from the panel kinds, string `command`,
 `cwd` and `args` items, two numbers for `position` and `size`, and a `resume`
 value Horizon reads. Any other value stops the fixture with an error.
 
+`--ssh-config FILE` and `--ssh-identity FILE` give the app in the fixture an
+SSH configuration and an identity, so a feature that names a host over SSH can
+reach it. Give the two flags together, or give neither one:
+
+```sh
+python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
+  --native-view --state /tmp/horizon-device-target \
+  --ssh-config /tmp/fixture-ssh/config --ssh-identity /tmp/fixture-ssh/fixture_key
+```
+
+The app reads `ssh` from its private home, and that home starts empty: it holds
+no alias, no identity and no known host. The fixture copies the configuration to
+`~/.ssh/config` and the identity to `~/.ssh/<file name of the identity>` of that
+home. The folder mode is 0700 and the file mode is 0600, because `ssh` refuses a
+configuration that another user can read. The identity keeps its own file name,
+so the configuration names it:
+
+```
+Host browser-vm
+  HostName 127.0.0.1
+  Port 2225
+  User runner
+  IdentityFile ~/.ssh/fixture_key
+  StrictHostKeyChecking accept-new
+```
+
+The fixture stops with an error before it creates its state when it gets one of
+the two flags alone, when a path is not a regular file, or when the identity is
+named `config`. Without the two flags the fixture seeds nothing, and a board
+that needs no SSH host stays as it is. `ssh` writes `known_hosts` into the same
+private home, and the fixture removes that file with the rest of its state.
+
+The fixture never reads `~/.ssh` of the developer. Give an explicit path for
+each file, and keep the source copy in the evidence directory of the task. A
+run must not pass because a configuration of this computer happened to hold the
+host. The app log states the words of `ssh` when a host is not reachable, so a
+refused host names its reason instead of an empty one.
+
 `--browser-host TARGET` names a browser host in the fixture settings, so a
 browser panel that the fixture creates opens on that host instead of the local
 browser. `--browser-host-profile PROFILE` adds the profile of that host, and it

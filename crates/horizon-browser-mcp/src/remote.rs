@@ -2,7 +2,7 @@
 //!
 //! `horizon-browser mcp --connect --inline-screenshots --remote <target>` and
 //! `horizon --browser-mcp --remote <target>` run on the computer of the person.
-//! They start `ssh -Tq <target> horizon-browser mcp --connect
+//! They start `ssh -T <target> horizon-browser mcp --connect
 //! --inline-screenshots` on the machine of the profile host and forward the
 //! JSON-RPC lines of both directions. The pages, the profiles and the cookies
 //! stay on that machine, and the person signs in there one time.

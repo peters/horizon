@@ -357,8 +357,10 @@ A profile host on another computer is reachable over SSH. Horizon writes the
 horizon-browser mcp --connect --inline-screenshots --remote <ssh-target>
 ```
 
-The bridge runs `ssh -Tq <ssh-target> horizon-browser mcp --connect
+The bridge runs `ssh -T <ssh-target> horizon-browser mcp --connect
 --inline-screenshots` and forwards the MCP lines of both directions unchanged.
+A refusal of the transport carries the words of `ssh`, so a name that does not
+resolve, or a connection that is refused, states that reason.
 The pages, the profiles and the cookies stay on that machine. Your actor
 identity crosses, so the host stamps each page for you, and the host instance
 comes from the `profile-host.json` of that machine.
