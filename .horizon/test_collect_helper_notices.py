@@ -14,6 +14,7 @@ SPEC.loader.exec_module(collector)
 RMCP_341 = '9427a929959e665e0d12e9395f674026baf4bd48'
 RMCP_350 = '0cde3c5cf3e6aff0cc852ce6045f107e95991f48'
 RMCP_351 = '79437f291b2c44053d00dcd5db969fd0cca7c887'
+RMCP_370 = '5d6a11f2ae022f513aec0f6e0f10f89a57891a7f'
 
 
 class HelperNoticeTests(unittest.TestCase):
@@ -63,16 +64,24 @@ class HelperNoticeTests(unittest.TestCase):
 
     def test_current_rmcp_and_macros_use_their_reviewed_revision(self):
         for name in ('rmcp', 'rmcp-macros'):
+            self.crate(name, '3.7.0', RMCP_370)
+        collector.collect_notices(self.root, self.output)
+        for name in ('rmcp', 'rmcp-macros'):
+            destination = self.output / f'{name}-3.7.0'
+            self.assertIn(RMCP_370, (destination / 'LICENSE').read_text())
+            provenance = json.loads((destination / 'provenance.json').read_text())
+            self.assertEqual(provenance['source_revision']['git']['sha1'], RMCP_370)
+        self.assertEqual(self.urlopen.call_args_list, [
+            mock.call(f'https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/{RMCP_370}/LICENSE', timeout=60)
+        ] * 2)
+
+    def test_previous_rmcp_and_macros_keep_their_reviewed_revision(self):
+        for name in ('rmcp', 'rmcp-macros'):
             self.crate(name, '3.5.1', RMCP_351)
         collector.collect_notices(self.root, self.output)
         for name in ('rmcp', 'rmcp-macros'):
             destination = self.output / f'{name}-3.5.1'
             self.assertIn(RMCP_351, (destination / 'LICENSE').read_text())
-            provenance = json.loads((destination / 'provenance.json').read_text())
-            self.assertEqual(provenance['source_revision']['git']['sha1'], RMCP_351)
-        self.assertEqual(self.urlopen.call_args_list, [
-            mock.call(f'https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/{RMCP_351}/LICENSE', timeout=60)
-        ] * 2)
 
     def test_previous_rmcp_uses_its_own_reviewed_revision(self):
         self.crate('rmcp', '3.5.0', RMCP_350)
