@@ -15,7 +15,7 @@ use horizon_core::cloud_runtime::prices::Profile;
 use horizon_core::cloud_runtime::{
     Cancellation, Event,
     deployment::Request,
-    github::Prompt,
+    github::{self, Prompt},
     prices,
     repository::launch::{self, Configuration},
     settings::{AgentLifecycleRefusal, Settings},
@@ -43,6 +43,13 @@ const CARD_REMOVED: &str =
 const NEEDS_SESSION: &str = "cloud_create_needs_persistent_session: a quick-start cloud belongs to a saved session; save this workspace in a Horizon session first";
 const INVALID: &str = "cloud_create_invalid_request: operation_id is one lowercase UUID, and submit needs a repository and quick_start true";
 const UNAVAILABLE: &str = "cloud_create_unavailable: requires a Horizon agent panel";
+
+/// The GitHub App access of an agent's cloud, as this machine mints it. A test replaces it,
+/// because minting reads the app's private key and calls GitHub.
+type Mint = for<'a, 'b, 'c> fn(
+    &'a Settings,
+    &'b cloud_runtime::command::Runner<'c>,
+) -> std::result::Result<Option<github::Installation>, github::InstallationRefusal>;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -283,9 +290,16 @@ impl HorizonApp {
             actor.to_owned(),
             self.active_session.as_ref().map(|session| session.session_id.clone()),
         );
-        // The settings, the repository, its commit and its price are read off this thread.
+        // The settings, the repository, its commit, its price and the app's installation token
+        // are read and minted off this thread.
         std::thread::spawn(move || {
-            let answer = prepare(&root, (&repository, thread_cloud), creator, &cancel);
+            let answer = prepare(
+                &root,
+                (&repository, thread_cloud),
+                creator,
+                &cancel,
+                github::for_agent_cloud,
+            );
             let message = match answer {
                 Ok((request, skip_sign_in)) => Message::Prepared {
                     operation: thread_id,
@@ -620,6 +634,7 @@ fn prepare(
     (repository, cloud): (&str, String),
     (actor, session): (String, Option<String>),
     cancel: &Cancellation,
+    mint: Mint,
 ) -> Result<(Box<Request>, bool), String> {
     let settings = Settings::for_cloud(&root.join("settings.json"), &Placement::default())
         .map_err(|error| format!("cloud_create_refused: the cloud settings could not be read: {error}"))?;
@@ -650,6 +665,7 @@ fn prepare(
     policy
         .admits(&prepared.repository, &profile.provider, hourly)
         .map_err(|refusal| refused(refusal, hourly, policy.max_hourly))?;
+    installation_access(&settings, &runner, mint)?;
     let state_root = cloud_runtime::state::cloud_directory(root, &cloud).map_err(|error| error.to_string())?;
     let skip_sign_in = policy.allow_github_sign_in_skip;
     let mut request = Request::new(
@@ -684,6 +700,24 @@ fn refused(refusal: AgentLifecycleRefusal, hourly: Option<f64>, max_hourly: f64)
         ),
         _ => format!("cloud_create_refused: {}", refusal.message()),
     }
+}
+
+/// The GitHub App access this cloud's worker will be given, or the refusal that stops the
+/// create before a card exists or a worker is rented. Without the app's private key, or
+/// without a repository in the policy, an agent's cloud keeps the person's sign-in path, and
+/// `allow_github_sign_in_skip` still decides whether it continues without GitHub access.
+///
+/// The token that is minted here is dropped. The deployment mints the one the worker holds, so
+/// that token lasts an hour from the install rather than from this answer, which a long image
+/// build may already have spent.
+fn installation_access(
+    settings: &Settings,
+    runner: &cloud_runtime::command::Runner<'_>,
+    mint: Mint,
+) -> Result<(), String> {
+    mint(settings, runner)
+        .map(drop)
+        .map_err(|refusal| format!("cloud_create_refused: {refusal}"))
 }
 
 /// What this operation answers when a worker asks for a GitHub sign-in: the line the card's

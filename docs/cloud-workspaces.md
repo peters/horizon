@@ -396,8 +396,10 @@ file has an absolute path and mode 0600 on Unix. Horizon signs as the app on thi
 computer with that key and mints an installation token. The token reaches only the
 repositories of one account, with contents and pull requests at write access and
 metadata at read access. The key never goes into a settings file, a cloud record or
-a worker. This build reads the setting and does not use it for a cloud yet.
-**Connect GitHub** keeps the sign-in path.
+a worker. The create of an agent's cloud mints a token for the repositories of the
+agent lifecycle policy, so that create asks for no sign-in. The token lasts at most
+one hour and the worker cannot renew it. **Connect GitHub** keeps the sign-in path
+for every other cloud.
 
 Optional repository Git authentication uses explicit `git_credentials` bindings.
 With [Connect GitHub](#connect-github), a binding is a fallback for the

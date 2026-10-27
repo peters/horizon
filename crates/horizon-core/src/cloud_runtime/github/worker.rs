@@ -1,6 +1,6 @@
 //! The worker's root GitHub service: its status, and the chain Horizon gives it.
 //! The payload travels on SSH stdin from memory and never enters argv, output or a named file.
-use super::{Error, Grant, Result, Runner, Settings};
+use super::{Error, Grant, Result, Runner, Settings, installation::Installation};
 use crate::cloud_runtime::ssh::Connection;
 use horizon_cloud::github::{Chain, Secret, User};
 use serde::{Deserialize, Serialize, Serializer};
@@ -8,6 +8,9 @@ use std::time::Duration;
 
 const STATUS: &str = "if command -v horizon-worker-github >/dev/null 2>&1; then horizon-worker-github status; \
      else printf '{\"state\":\"unsupported\"}'; fi";
+
+/// The chain kind of payload version 2, which carries no refresh token.
+const INSTALLATION_KIND: &str = "installation";
 
 /// What the worker holds for the cloud.
 #[derive(Debug, PartialEq, Eq)]
@@ -18,16 +21,30 @@ pub(super) enum Status {
     Absent,
     /// A stored chain whose service is not running, so Git and `gh` get no token.
     Unavailable,
+    /// An installation token that ended. The worker holds no refresh token for it, so
+    /// nothing there renews it: only this machine installs a new one.
+    Expired,
     /// A chain that renews, acting as `login`, for these lowercase repositories.
     /// `requests` is whether the service takes agents' access requests.
     /// `checkouts` are the repositories granted for this cloud's checkouts; the others in
     /// `repositories` were allowed for the whole cloud on an agent's request.
+    /// `renewal` is whether the worker renews the chain itself.
     Current {
         login: String,
         repositories: Vec<String>,
         checkouts: Vec<String>,
         requests: bool,
+        renewal: Renewal,
     },
+}
+
+/// Who gives the worker its next token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Renewal {
+    /// The worker renews its own chain from its refresh token.
+    Worker,
+    /// An installation token has no refresh token, so only this machine installs the next one.
+    Host,
 }
 
 pub(super) fn status(connection: &Connection, runner: &Runner<'_>) -> Result<Status> {
@@ -63,6 +80,10 @@ pub(super) fn parse_status(output: &str) -> Status {
         serving: Option<bool>,
         #[serde(default)]
         pending_requests: Option<u64>,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        renewal: Option<String>,
     }
     let Some(fields) = output
         .lines()
@@ -70,6 +91,13 @@ pub(super) fn parse_status(output: &str) -> Status {
         .find_map(|line| serde_json::from_str::<Fields>(line.trim()).ok())
     else {
         return Status::Absent;
+    };
+    // An installation token has no refresh token. The worker names both the chain kind and
+    // who renews it, and an image from before them names neither, which is a person chain.
+    let renewal = if fields.renewal.as_deref() == Some("host") || fields.kind.as_deref() == Some(INSTALLATION_KIND) {
+        Renewal::Host
+    } else {
+        Renewal::Worker
     };
     let held: Vec<(String, bool)> = fields
         .repositories
@@ -89,6 +117,9 @@ pub(super) fn parse_status(output: &str) -> Status {
         .collect();
     match fields.state.as_str() {
         "unsupported" => Status::Unsupported,
+        // Named before a stopped service: a restart serves an ended installation token no
+        // more than the stopped service did, and only this machine installs a new one.
+        "installation_token_expired" => Status::Expired,
         // A service that is not running serves no chain, stored or new.
         _ if fields.serving == Some(false) => Status::Unavailable,
         "ok" if !repositories.is_empty() => Status::Current {
@@ -96,6 +127,7 @@ pub(super) fn parse_status(output: &str) -> Status {
             repositories,
             checkouts,
             requests: fields.pending_requests.is_some(),
+            renewal,
         },
         _ => Status::Absent,
     }
@@ -138,6 +170,26 @@ struct PayloadChain<'a> {
     refresh_expires_at: u64,
 }
 
+/// The payload of an installation chain: the same fields as version 1, and a chain with no
+/// refresh token. An image from before version 2 refuses the version instead of guessing.
+#[derive(Serialize)]
+struct InstallationPayload<'a> {
+    version: u32,
+    client_id: &'a str,
+    login: &'a str,
+    author_name: &'a str,
+    author_email: &'a str,
+    grants: Vec<PayloadGrant<'a>>,
+    chain: InstallationChain<'a>,
+}
+
+#[derive(Serialize)]
+struct InstallationChain<'a> {
+    access_token: Exposed<'a>,
+    access_expires_at: u64,
+    kind: &'static str,
+}
+
 fn unix(at: std::time::SystemTime) -> u64 {
     at.duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
@@ -171,6 +223,38 @@ pub(super) fn payload(
             access_expires_at: unix(chain.access_expires_at),
             refresh_token: Exposed(&chain.refresh_token),
             refresh_expires_at: unix(chain.refresh_expires_at),
+        },
+    };
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(256 * 1024));
+    serde_json::to_writer(Bounded(&mut bytes), &payload).map_err(|_| Error::Json)?;
+    Ok(bytes)
+}
+
+/// The payload for `horizon-worker-github install` of an installation token, cleared from
+/// memory when it drops. The chain is the marker and the token alone: the worker has no
+/// refresh token, and the app's key stays on this computer.
+pub(super) fn installation_payload(
+    installation: &Installation,
+    grants: &[Grant],
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    let payload = InstallationPayload {
+        version: 2,
+        client_id: &installation.client_id,
+        login: &installation.bot.login,
+        author_name: &installation.bot.name,
+        author_email: &installation.bot.email,
+        grants: grants
+            .iter()
+            .map(|grant| PayloadGrant {
+                repository: &grant.repository,
+                target: grant.target.clone().into(),
+                access: "push",
+            })
+            .collect(),
+        chain: InstallationChain {
+            access_token: Exposed(&installation.token),
+            access_expires_at: unix(installation.expires_at),
+            kind: INSTALLATION_KIND,
         },
     };
     let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(256 * 1024));
@@ -216,5 +300,17 @@ pub(super) fn install(
     chain: &Chain,
 ) -> Result<()> {
     let payload = payload(settings, client_secret, user, grants, chain)?;
+    runner.private_bytes(&mut connection.command("horizon-worker-github install"), &payload)
+}
+
+/// Gives the worker the installation token of `grants`. The token has no refresh token, so the
+/// worker serves it until it ends and never renews it.
+pub(super) fn install_installation(
+    connection: &Connection,
+    runner: &Runner<'_>,
+    installation: &Installation,
+    grants: &[Grant],
+) -> Result<()> {
+    let payload = installation_payload(installation, grants)?;
     runner.private_bytes(&mut connection.command("horizon-worker-github install"), &payload)
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::cloud_runtime::Cancellation;
-use horizon_cloud::github::Chain;
+use horizon_cloud::github::{Bot, Chain};
 use std::{
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
@@ -122,7 +122,7 @@ fn the_app_private_key_is_read_only_from_a_private_file() {
 
 #[test]
 fn worker_status_is_read_from_its_last_json_line() {
-    use worker::{Status, parse_status};
+    use worker::{Renewal, Status, parse_status};
     assert_eq!(parse_status("{\"state\":\"unsupported\"}"), Status::Unsupported);
     assert_eq!(
         parse_status("{\"state\":\"revoked\",\"repositories\":[\"a/b\"]}"),
@@ -139,7 +139,8 @@ fn worker_status_is_read_from_its_last_json_line() {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into()],
             checkouts: vec!["acme/web".into()],
-            requests: false
+            requests: false,
+            renewal: Renewal::Worker
         },
         "the worker reports each grant as an object"
     );
@@ -149,14 +150,15 @@ fn worker_status_is_read_from_its_last_json_line() {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into()],
             checkouts: vec!["acme/web".into()],
-            requests: false
+            requests: false,
+            renewal: Renewal::Worker
         }
     );
 }
 
 #[test]
 fn a_service_that_is_not_running_is_not_current_and_requests_need_support() {
-    use worker::{Status, parse_status};
+    use worker::{Renewal, Status, parse_status};
     assert_eq!(
         parse_status("{\"state\":\"absent\",\"serving\":false,\"repositories\":[]}"),
         Status::Unavailable,
@@ -174,8 +176,59 @@ fn a_service_that_is_not_running_is_not_current_and_requests_need_support() {
             login: "octo-cat".into(),
             repositories: vec!["acme/web".into()],
             checkouts: vec!["acme/web".into()],
-            requests: true
+            requests: true,
+            renewal: Renewal::Worker
         }
+    );
+}
+
+#[test]
+fn an_installation_token_status_names_its_end_and_who_renews_the_chain() {
+    use worker::{Renewal, Status, parse_status};
+    // The worker names the chain kind and who renews it. An installation chain cannot renew
+    // itself, so the worker says the host installs the next token.
+    assert_eq!(
+        parse_status(
+            "{\"state\":\"ok\",\"serving\":true,\"login\":\"horizon-example[bot]\",\"kind\":\"installation\",\"renewal\":\"host\",\"repositories\":[{\"repository\":\"acme/web\",\"target\":\"primary\"}]}"
+        ),
+        Status::Current {
+            login: "horizon-example[bot]".into(),
+            repositories: vec!["acme/web".into()],
+            checkouts: vec!["acme/web".into()],
+            requests: false,
+            renewal: Renewal::Host
+        }
+    );
+    // Either field alone says the worker cannot renew the chain, and a field Horizon does not
+    // know is ignored as before.
+    for report in [
+        "{\"state\":\"ok\",\"login\":\"horizon-example[bot]\",\"kind\":\"installation\",\"repositories\":[\"acme/web\"]}",
+        "{\"state\":\"ok\",\"login\":\"horizon-example[bot]\",\"renewal\":\"host\",\"repositories\":[\"acme/web\"]}",
+        "{\"state\":\"ok\",\"login\":\"horizon-example[bot]\",\"renewal\":\"host\",\"kind\":\"installation\",\"repositories\":[\"acme/web\"],\"unknown_field\":{\"a\":1}}",
+    ] {
+        assert!(
+            matches!(
+                parse_status(report),
+                Status::Current {
+                    renewal: Renewal::Host,
+                    ..
+                }
+            ),
+            "{report}"
+        );
+    }
+    // An ended installation token is its own status, not a missing or a stopped chain: no
+    // restart and no refresh gives the worker another one.
+    for report in [
+        "{\"state\":\"installation_token_expired\",\"serving\":true,\"kind\":\"installation\",\"renewal\":\"host\",\"repositories\":[\"acme/web\"]}",
+        "{\"state\":\"installation_token_expired\",\"serving\":false,\"kind\":\"installation\",\"renewal\":\"host\"}",
+    ] {
+        assert_eq!(parse_status(report), Status::Expired, "{report}");
+    }
+    // A state this Horizon does not know is the absent chain it has always been.
+    assert_eq!(
+        parse_status("{\"state\":\"something_new\",\"kind\":\"person\",\"repositories\":[\"acme/web\"]}"),
+        Status::Absent
     );
 }
 
@@ -220,6 +273,59 @@ fn the_payload_carries_the_secret_only_in_automatic_mode() {
     ));
 }
 
+/// An installation token of the app's bot for `acme/web`, as this machine mints it.
+fn installation() -> Installation {
+    Installation {
+        client_id: "Iv23synthetic".into(),
+        token: Secret::new("ghs_synthetic_installation".into()),
+        expires_at: SystemTime::UNIX_EPOCH + Duration::from_mins(50),
+        bot: Bot {
+            login: "horizon-example[bot]".into(),
+            name: "horizon-example[bot]".into(),
+            email: "horizon-example[bot]@users.noreply.github.com".into(),
+        },
+        repositories: vec!["acme/web".into()],
+    }
+}
+
+#[test]
+fn an_installation_payload_names_its_kind_and_carries_no_refresh_token() {
+    let grants = [
+        Grant {
+            repository: "acme/web".into(),
+            target: Target::Primary,
+        },
+        Grant {
+            repository: "acme/api".into(),
+            target: Target::try_from("sibling:api".to_owned()).unwrap(),
+        },
+    ];
+    let payload = worker::installation_payload(&installation(), &grants).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(value["version"], 2, "version 2 is an installation chain");
+    assert_eq!(value["client_id"], "Iv23synthetic");
+    assert_eq!(value["login"], "horizon-example[bot]");
+    assert_eq!(value["author_name"], "horizon-example[bot]");
+    assert_eq!(value["author_email"], "horizon-example[bot]@users.noreply.github.com");
+    assert_eq!(
+        value["chain"],
+        serde_json::json!({
+            "access_token": "ghs_synthetic_installation",
+            "access_expires_at": 3_000,
+            "kind": "installation",
+        }),
+        "the chain is the marker and the token alone: no refresh field, so the worker cannot renew it"
+    );
+    assert_eq!(value["grants"][0]["access"], "push");
+    assert_eq!(value["grants"][1]["target"], "sibling:api");
+    assert!(
+        value.get("client_secret").is_none(),
+        "an installation chain needs no client secret: only the key mints the next token"
+    );
+    let printed = format!("{:?}", installation());
+    assert!(!printed.contains("ghs_"), "the token is never printed: {printed}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_secret_file_others_can_read_is_refused() {
@@ -234,14 +340,24 @@ fn runner_parts() -> (Cancellation, Arc<Mutex<Vec<Event>>>) {
     (Cancellation::default(), Arc::default())
 }
 
-#[test]
-fn grants_take_the_primary_from_its_github_origin_and_siblings_by_name() {
-    let checkout = tempfile::tempdir().unwrap();
+/// A quiet runner for the reads of this module: they emit nothing.
+fn quiet(cancel: &Cancellation) -> Runner<'_> {
+    Runner {
+        cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    }
+}
+
+/// A Git checkout of `origin`, which is the local repository of a policy path.
+fn checkout(directory: &std::path::Path, name: &str, origin: &str) -> PathBuf {
+    let path = directory.join(name);
+    std::fs::create_dir_all(&path).unwrap();
     let git = |args: &[&str]| {
         assert!(
             Command::new("git")
                 .arg("-C")
-                .arg(checkout.path())
+                .arg(&path)
                 .args(args)
                 .status()
                 .unwrap()
@@ -249,13 +365,118 @@ fn grants_take_the_primary_from_its_github_origin_and_siblings_by_name() {
         );
     };
     git(&["init", "--quiet"]);
-    git(&["remote", "add", "origin", "git@github.com:Acme/Web.git"]);
+    git(&["remote", "add", "origin", origin]);
+    path
+}
+
+/// This machine's cloud settings, with the GitHub App and an agent policy that lists
+/// `repositories`. `key` is the app's private key file, which this machine names only when an
+/// agent's cloud mints a token.
+fn machine(
+    directory: &std::path::Path,
+    key: Option<&std::path::Path>,
+    repositories: &[&std::path::Path],
+) -> crate::cloud_runtime::settings::Settings {
+    let value = serde_json::json!({
+        "runpod_key_file": directory.join("runpod-key"),
+        "ssh_identity_file": directory.join("identity"),
+        "docker_config": directory.join("docker"),
+        "registry_pull_auth_id": null,
+        "cpu_flavors": ["cpu3c"], "gpu_types": [], "data_centers": ["US-MO-2"],
+        "github": {
+            "app_id": 42,
+            "slug": "horizon-example",
+            "client_id": "Iv23synthetic",
+            "client_secret_file": directory.join("client-secret"),
+            "private_key_file": key,
+        },
+        "agent_lifecycle": {
+            "providers": ["runpod"],
+            "max_hourly": 0.5,
+            "repositories": repositories,
+            "allow_github_sign_in_skip": false,
+        },
+    });
+    let path = directory.join("settings.json");
+    std::fs::write(&path, value.to_string()).unwrap();
+    crate::cloud_runtime::settings::Settings::load(&path).unwrap()
+}
+
+#[test]
+fn an_agent_cloud_without_the_apps_key_or_a_policy_repository_keeps_the_person_sign_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let web = checkout(directory.path(), "web", "git@github.com:Acme/Web.git");
+    let (cancel, _) = runner_parts();
+    let runner = quiet(&cancel);
+    // The person's sign-in stays when this machine names no key: nothing is minted.
+    assert!(
+        for_agent_cloud(&machine(directory.path(), None, &[&web]), &runner)
+            .unwrap()
+            .is_none(),
+        "the create asks a person to sign in as before"
+    );
+    // A key alone names no repository that a token could reach.
+    let mut without_policy = machine(directory.path(), Some(&directory.path().join("app.pem")), &[&web]);
+    without_policy.agent_lifecycle = None;
+    assert!(for_agent_cloud(&without_policy, &runner).unwrap().is_none());
+    let mut without_repository = machine(directory.path(), Some(&directory.path().join("app.pem")), &[&web]);
+    if let Some(policy) = without_repository.agent_lifecycle.as_mut() {
+        policy.repositories.clear();
+    }
+    assert!(for_agent_cloud(&without_repository, &runner).unwrap().is_none());
+}
+
+#[test]
+fn a_policy_path_without_a_github_remote_is_refused_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let elsewhere = checkout(directory.path(), "elsewhere", "https://gitlab.com/acme/web");
+    let settings = machine(directory.path(), Some(&directory.path().join("app.pem")), &[&elsewhere]);
+    let (cancel, _) = runner_parts();
+    assert_eq!(
+        for_agent_cloud(&settings, &quiet(&cancel)).err(),
+        Some(InstallationRefusal::NoRemote { path: elsewhere }),
+        "a token reaches no repository without a GitHub remote, so the policy path is named"
+    );
+}
+
+#[test]
+fn a_policy_of_two_accounts_is_refused_by_the_repository_of_the_other_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let web = checkout(directory.path(), "web", "git@github.com:acme/web.git");
+    let api = checkout(directory.path(), "api", "https://github.com/other/api");
+    let settings = machine(directory.path(), Some(&directory.path().join("app.pem")), &[&web, &api]);
+    let (cancel, _) = runner_parts();
+    assert_eq!(
+        for_agent_cloud(&settings, &quiet(&cancel)).err(),
+        Some(InstallationRefusal::SeparateAccounts {
+            account: "acme".into(),
+            repository: "other/api".into(),
+        }),
+        "one installation token reaches one account, and the refusal names the second repository"
+    );
+}
+
+#[test]
+fn grants_take_the_primary_from_its_github_origin_and_siblings_by_name() {
+    let checkout = tempfile::tempdir().unwrap();
+    let web = self::checkout(checkout.path(), "web", "git@github.com:Acme/Web.git");
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&web)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
     let config = horizon_cloud::CloudConfig::parse(
         "version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n",
     )
     .unwrap();
     let mut state: Deployment = serde_json::from_value(serde_json::json!({
-        "version": 1, "cloud_id": "fixture", "repository": checkout.path(), "revision": "a".repeat(40),
+        "version": 1, "cloud_id": "fixture", "repository": web, "revision": "a".repeat(40),
         "profile": config.profiles["dev"], "stage": "Provision", "operation": {"state": "prepared"},
         "spec": null, "worker": null, "sessions": []
     }))

@@ -3,9 +3,9 @@
 This procedure shows that a cloud worker reads and writes GitHub with a GitHub App
 installation token, and that no person signs in to GitHub for that worker.
 
-Steps 1 to 3 run with the change that adds the token minting. Steps 4 to 8 run after the
-agent cloud path gives the token to a cloud, in the pull request that follows it. A run of
-this procedure before that change stops after step 3 and records steps 4 to 8 as not run.
+Steps 1 to 3 set up the app. Step 4 shows the refusal of a repository that the app does
+not reach, before anything is rented. Steps 5 to 9 show the create of an agent's cloud,
+which gives the token to the worker, the proof that the worker uses it, and the delete.
 
 Use a test repository that holds no important data, and a test GitHub App.
 
@@ -52,16 +52,29 @@ Use a test repository that holds no important data, and a test GitHub App.
    never stops the settings from loading. To see that refusal, change the key's mode to 0644
    and run step 4: the answer names the key file as not a private file. Restore mode 0600.
 
-4. Start the agent cloud.
+4. Refuse a repository that the app does not reach.
 
-   CAUTION: this step rents a paid cloud. Delete it in step 8.
+   Add a second repository to `repositories` of `agent_lifecycle` in the cloud settings.
+   This repository must be a local checkout of a GitHub repository that the app is not
+   installed on. Then call `cloud_create` with `submit` for it, and poll `cloud_create` with
+   `status`.
+
+   Result: the phase is `failed`, the answer starts with `cloud_create_refused`, and the
+   text names the GitHub repository. The provider shows no new worker: the refusal comes
+   before anything is rented.
+
+   Remove that repository from `repositories` again.
+
+5. Start the agent cloud.
+
+   CAUTION: this step rents a paid cloud. Delete it in step 9.
 
    From an agent panel or an outside MCP client, call `cloud_create` with `submit` for the
    test repository. Poll `cloud_create` with `status` until the phase is `ready`.
 
    Result: the phase is `ready`, and no card asked for a GitHub sign-in.
 
-5. Read the worker's GitHub state.
+6. Read the worker's GitHub state.
 
    In the cloud's terminal, run:
 
@@ -72,19 +85,19 @@ Use a test repository that holds no important data, and a test GitHub App.
    Result: the answer names the app's bot login (`<slug>[bot]`) and the test repository, and
    it does not name a person's login.
 
-6. Prove a push and a pull request without a sign-in.
+7. Prove a push and a pull request without a sign-in.
 
    In the cloud's terminal, commit one file and push a branch, then open a pull request.
 
    Result: the push succeeds, and GitHub shows the pull request from `<slug>[bot]`.
 
-7. Prove the token is limited.
+8. Prove the token is limited.
 
    In the cloud's terminal, try to push to a repository that the agent policy does not list.
 
    Result: GitHub refuses the push, and the refusal names the permission or the repository.
 
-8. Delete the cloud.
+9. Delete the cloud.
 
    CAUTION: this step ends the paid cloud and its workspace.
 
@@ -98,11 +111,17 @@ Use a test repository that holds no important data, and a test GitHub App.
 - The `cloud_create` and `cloud_delete` transcripts, with the phases.
 - The `horizon-worker-github status` answer, with the bot login.
 - The pull request URL and the commit author line.
-- The refusal of step 7.
+- The refusal of step 4, and the refusal of step 8.
 
 ## Limits
 
-- An installation token ends after one hour. A cloud that Horizon did not touch for longer
-  than that has no GitHub access until Horizon mints the next token.
+- An installation token ends after one hour. The worker then serves no token, its status
+  reports `installation_token_expired`, and only this computer installs a new one. A person
+  selects **Connect GitHub again** on the cloud's card, which signs the cloud in as that
+  person. This procedure does not wait one hour to show that state.
 - A commit from the app names the bot but GitHub does not attribute it to the bot account.
-- This procedure does not test a person's sign-in path, which stays as it is.
+- This procedure does not test a person's sign-in path. Without `github.private_key_file`,
+  an agent's cloud keeps that path, and `allow_github_sign_in_skip` still decides whether it
+  continues without GitHub access.
+- The token reaches every repository of the agent lifecycle policy, and not only the
+  repository of the cloud.
