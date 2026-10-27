@@ -186,7 +186,10 @@ An Azure image rebuild deletes the VM and starts a new one on the same workspace
 disk and static address. An Azure stop deallocates the VM: the compute charge
 ends, but its disks and static address keep billing until the cloud is deleted.
 Azure placement comes from the machine's `azure` settings, not from an offer
-(`rentable: false`); see `references/cloud.md`.
+(`rentable: false`); see `references/cloud.md`. In New cloud, an Azure profile
+settles on that section without a heading click, even when another provider's
+prices fail. This automatic placement follows later provider edits in the profile;
+an explicit heading or worker choice stays selected while it supports the profile.
 `error during placement` reports a provider placement refusal after the image
 steps. A prior `invoke-rc.d: policy-rc.d denied execution of start.` notice
 reports a skipped service action during package installation, not that refusal.

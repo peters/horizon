@@ -130,6 +130,8 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
      no I/O failure.
    - With a section whose token cannot be read, the dialog shows the reason and
      no Azure row.
+   - Automatic Azure placement follows a provider edit in the profile. An explicit
+     heading or worker choice stays selected while it supports that profile.
    - With a valid section, the heading's Azure entry starts the cloud on the
      cheapest VM size and region that the section allows, also when the prices
      arrive after the choice.
@@ -406,7 +408,32 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
    Result: The dialog lists the worker rows again.
 
-### 6.11 ANC-L1 — Start one Azure cloud
+### 6.11 ANC-10 — Follow a profile provider edit
+
+1. Open a profile written `provider: azure` with a valid `azure` settings
+   section. Do not click a provider or worker row.
+
+   Result: The summary shows the VM size and region that the section allows.
+
+2. Keep the dialog open. Change the same profile to `provider: runpod` in
+   `.horizon/cloud.yml`. Wait for the automatic reread.
+
+   Result: The heading selects **RunPod**. The Azure VM size and region are
+   cleared. No cloud starts.
+
+3. Change the profile back to `provider: azure`. Wait for its placement, then
+   click **Azure** in the heading. Change the file to `provider: runpod`
+   again.
+
+   Result: The heading keeps **Azure**, with its VM size and region. The
+   explicit provider choice takes precedence over the profile. No cloud starts.
+
+4. Close the dialog. Open the profile again.
+
+   Result: The heading selects **RunPod**, as the file now requests. The
+   explicit choice belonged to the previous dialog only.
+
+### 6.12 ANC-L1 — Start one Azure cloud
 
 > **CAUTION:** THIS TASK RENTS COMPUTE IN THE AZURE SUBSCRIPTION. Delete the
 > cloud at the end of the task.
@@ -447,6 +474,8 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 - A profile written `provider: azure` starts on the VM size and region that its
   section allows, with no click in the heading, also while another provider's
   prices cannot be fetched.
+- Automatic Azure placement follows a provider edit in the profile. An explicit
+  heading or worker choice stays selected while it supports that profile.
 - With a valid section, the heading's Azure entry starts the cloud on the
   cheapest VM size and region that the section allows.
 - With a valid section, the dialog lists only the VM sizes and regions of the

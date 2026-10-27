@@ -2,7 +2,9 @@
 //! rows: the machine's `azure` settings decide the VM sizes and regions a cloud may use.
 use super::providers::{painted, provider_filter, selected};
 use super::*;
-use crate::app::cloud_panel::production::creation::selector;
+use crate::app::cloud_panel::production::creation::{provider, selector};
+
+mod reread;
 
 fn azure_catalog() -> horizon_core::cloud_runtime::prices::AzureCatalog {
     let offer = |size: &str, region: &str, vcpu: u16, memory_gb: u16, hourly: f64| serde_json::json!({"size": size, "region": region, "vcpu": vcpu, "memory_gb": memory_gb, "hourly_usd": hourly});
@@ -260,9 +262,17 @@ fn a_profile_written_for_azure_settles_while_another_providers_prices_fail() {
     let text = painted(&tall_frame(&ctx, &mut app));
     let form = &app.cloud_prototype.production;
     assert_eq!(
-        form.provider.map(|provider| provider.id),
-        Some("azure"),
+        provider::current(
+            form.provider,
+            &form.profiles.as_ref().unwrap().profiles[&form.selected_profile]
+        )
+        .id,
+        "azure",
         "the profile's provider is the cloud's provider: {text}"
+    );
+    assert!(
+        form.provider.is_none(),
+        "automatic placement does not override the profile"
     );
     assert_eq!(form.placement.cpu_types, ["Standard_D4s_v3"], "{text}");
     assert_eq!(form.placement.data_centers, ["northeurope"], "{text}");
