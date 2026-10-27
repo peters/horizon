@@ -199,7 +199,7 @@ def plan(store, repository, access, now, static=static_binding, holders=lambda: 
         book, state, holders)) if state is not None else (None, repository)
     if granted is not None and agents.covered(granted, access):
         if state['chain']['access_expires_at'] - now <= common.SERVE_MARGIN:
-            raise refusal(503, 'the GitHub access token expired and this worker could not refresh it yet.')
+            raise refusal(503, common.expired_reason(state['chain']))
         return Plan(name, token=state['chain']['access_token'], source='chain')
     if granted is not None:
         raise refusal(403, '%s is granted for reading only. Ask for push access with the github_access tool.'
