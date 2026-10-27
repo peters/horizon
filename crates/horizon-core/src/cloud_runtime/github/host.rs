@@ -8,10 +8,26 @@ use super::{
     stored::{self, Kept},
 };
 use crate::cloud_runtime::Cancellation;
-use horizon_cloud::github::{Client, Secret};
+use horizon_cloud::github::{Chain, Client, Secret, User};
 use std::path::{Path, PathBuf};
 
 const DISCONNECTED: &str = "GitHub was disconnected in Horizon's settings. Connect it again there to use it here.";
+
+/// What this computer's sign-in gives an agent's cloud.
+#[derive(Debug)]
+pub enum PersonChain {
+    /// The chain as it is stored now, with the account it acts as and the client secret that a
+    /// renewal on the worker needs.
+    Chain {
+        user: User,
+        chain: Chain,
+        client_secret: Option<Secret>,
+    },
+    /// This computer holds no sign-in for the app: one sign-in gives one.
+    SignedOut,
+    /// GitHub ended the stored sign-in, which is now forgotten: the person signs in again.
+    Rejected,
+}
 
 /// The start of the name of each sign-in of this computer, where a cloud's sign-in uses its
 /// cloud. Each sign-in has its own, so nothing that ends one ends another.
@@ -73,9 +89,65 @@ fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(
         let _ = stored::forget(&listed(root, settings));
         return forgotten;
     }
+    signed_in(root, settings, client).map(|found| {
+        found.map(|(user, token, _)| {
+            // Still under the lock: the stored account is this very sign-in's.
+            let stored = stored::load(&path(root, settings)).map_or(user.login.clone(), |chain| chain.login);
+            (stored, token)
+        })
+    })
+}
+
+/// The chain of this computer's own GitHub sign-in for the app of `settings`, renewed when it
+/// is close to its expiry, with the account it acts as. An agent's cloud that takes the
+/// person's chain instead of an installation token holds this one.
+/// # Errors
+/// GitHub out of reach or not confirming the sign-in, which is then kept, or a local file
+/// that cannot be read.
+pub fn person_chain(root: &Path, settings: &Settings) -> Result<PersonChain> {
+    person_chain_at(root, settings, &Client::new())
+}
+
+pub(super) fn person_chain_at(root: &Path, settings: &Settings, client: &Client) -> Result<PersonChain> {
+    let path = path(root, settings);
+    let _lock = lock(root, settings)?;
+    if !configured(root, settings) {
+        let _ = stored::forget(&path);
+        return Ok(PersonChain::SignedOut);
+    }
+    if stored::load(&path).is_none() {
+        return Ok(PersonChain::SignedOut);
+    }
+    let Some((user, _, client_secret)) = signed_in(root, settings, client)? else {
+        // The chain was there and GitHub ended it, or its refresh token ran out: both are a
+        // sign-in again, and the stored chain is gone either way.
+        return Ok(PersonChain::Rejected);
+    };
+    // Read again under the lock: a renewal above stored the chain that replaced this one, and
+    // GitHub has already ended the chain it replaced.
+    let Some(stored) = stored::load(&path) else {
+        return Ok(PersonChain::Rejected);
+    };
+    Ok(PersonChain::Chain {
+        user,
+        chain: Chain {
+            access_token: stored.access_token,
+            access_expires_at: stored.access_expires_at,
+            refresh_token: stored.refresh_token,
+            refresh_expires_at: stored.refresh_expires_at,
+        },
+        client_secret,
+    })
+}
+
+/// This computer's sign-in for the app of `settings`, renewed and checked with GitHub, with the
+/// client secret a chain from a web sign-in renews with. Held under the sign-in's lock by both
+/// callers. `None` when GitHub ended it, or when its refresh token ran out.
+fn signed_in(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(User, Secret, Option<Secret>)>> {
     // A chain from a web sign-in renews with the secret whatever the setting says now; a
     // device chain needs none, and the secret is then not read.
-    let signed_in = stored::current(
+    let web = stored::load(&path(root, settings)).is_some_and(|chain| chain.web);
+    let found = stored::current_user(
         &path(root, settings),
         client,
         &settings.client_id,
@@ -86,11 +158,11 @@ fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(
         Kept::Unconfirmed => Error::Invalid("GitHub did not confirm this computer's sign-in. Try again."),
         Kept::Local(error) => error,
     })?;
-    // Still under the lock: the stored account is this very sign-in's.
-    Ok(signed_in.map(|(live, token)| {
-        let stored = stored::load(&path(root, settings)).map_or(live, |chain| chain.login);
-        (stored, token)
-    }))
+    let Some((user, token)) = found else {
+        return Ok(None);
+    };
+    let client_secret = if web { Some(settings.client_secret()?) } else { None };
+    Ok(Some((user, token, client_secret)))
 }
 
 /// Signs this computer in for the app of `settings`. `show` gets the code to approve, or
@@ -100,6 +172,17 @@ fn renewed(root: &Path, settings: &Settings, client: &Client) -> Result<Option<(
 /// # Errors
 /// A local file that cannot be written, or a cancelled sign-in, which stores nothing.
 pub fn sign_in(
+    root: &Path,
+    settings: &Settings,
+    cancel: &Cancellation,
+    show: &dyn Fn(Prompt),
+) -> Result<std::result::Result<(String, Secret), String>> {
+    sign_in_at(&Client::new(), root, settings, cancel, show)
+}
+
+/// [`sign_in`] against `client`, so that a test signs in to a fake GitHub.
+pub(super) fn sign_in_at(
+    client: &Client,
     root: &Path,
     settings: &Settings,
     cancel: &Cancellation,
@@ -119,9 +202,8 @@ pub fn sign_in(
         emit: &emit,
         secrets: Vec::new(),
     };
-    let client = Client::new();
     let name = format!("{SIGN_IN}-{}", uuid::Uuid::new_v4().simple());
-    let chain = match signin::chain(settings, &name, &client, &runner) {
+    let chain = match signin::chain(settings, &name, client, &runner) {
         Ok(chain) => chain,
         Err(signin::Ended::Error(error)) => return Err(error),
         Err(signin::Ended::Skipped) => return Ok(Err("Skipped.".into())),

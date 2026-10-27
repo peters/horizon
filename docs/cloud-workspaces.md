@@ -391,6 +391,20 @@ files, while retaining ChatGPT and subscription login state. Existing agent
 processes can retain authentication already loaded into memory or their
 environment; start a new session to apply the changed authentication choice.
 
+**Connect GitHub** signs this computer in for that app and keeps the chain in
+`credentials/github-host-<APP-ID>.json` under the cloud root, a private file with
+mode 0600. A cloud takes that chain, and its worker renews the chain from its refresh
+token, so the chain lasts as long as GitHub honours the refresh token, which is about
+six months. The worker's commits and pull requests are authored as the account of the
+sign-in.
+
+The create of an agent's cloud takes the same chain for the repositories of the
+`agent_lifecycle` policy, so it asks for no sign-in when this computer holds one. When
+this computer holds no chain and `allow_github_sign_in_skip` is false, the create runs
+that one sign-in itself: its status reports the device code, and the create continues
+when the person approves it. With `allow_github_sign_in_skip: true`, a create without
+a chain continues without GitHub access instead.
+
 Optional repository Git authentication uses explicit `git_credentials` bindings.
 With [Connect GitHub](#connect-github), a binding is a fallback for the
 repositories that the app does not reach. See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)

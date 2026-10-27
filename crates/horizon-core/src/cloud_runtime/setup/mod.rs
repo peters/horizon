@@ -417,6 +417,7 @@ fn defaults(root: &Path) -> Settings {
         github: None,
         agent_lifecycle: None,
         placement: None,
+        root: None,
         codex_home: None,
     }
 }

@@ -31,7 +31,8 @@ time.
   - a `.horizon/cloud.yml` profile, a worker choice, a plan token, siblings or a
     publishing selection. This version does not offer them.
   - the CLI. This version has no CLI plan entry for a create.
-  - GitHub sign-in with a person. That step belongs to the cloud card procedure.
+  - a GitHub sign-in that another step of the run already made. A2 needs a stored
+    GitHub sign-in, and A10 makes one when this computer has none.
   - stop, delete and removal of a cloud. Use the cloud card procedure and the
     delete tool procedure.
 
@@ -51,6 +52,7 @@ time.
 - A Git repository on this computer with a committed revision and no
   `.horizon/cloud.yml` in that commit.
 - A RunPod API key in Cloud settings, as `runpod_key_file`.
+- A GitHub sign-in of this computer in Cloud settings, so that A2 needs no person.
 - A saved Horizon session for the workspace of the agent panel. An ephemeral
   session refuses a create.
 - The cloud settings file, at `HORIZON_HOME/cloud/settings.json`.
@@ -245,9 +247,74 @@ time.
    `cloud_create_refused: no offer was found from the providers an agent may rent on (azure)`.
    No cloud card appears, and `cloud_list` stays the same.
 
+### 6.10 A10 — An agent's create asks for the one GitHub sign-in
+
+> **CAUTION:** THIS TASK SHOWS A DEVICE CODE THAT ANY HOLDER OF THE PAGE CANNOT
+> USE WITHOUT THE ACCOUNT'S APPROVAL. KEEP THE CODE AND THE ACCOUNT OUT OF THE
+> REPOSITORY.
+
+1. Read the GitHub sign-in of this computer in Cloud settings, and note the file
+   `HORIZON_HOME/cloud/credentials/github-host-<APP-ID>.json`.
+
+   Result: A2 installed that chain, so the create of A2 needed no person. The
+   worker of A2 renews the chain itself, and its commits and pull requests are
+   authored as the account of the sign-in, never as the app's bot.
+
+2. Move that file to a path outside the repository, so that this computer holds
+   no sign-in.
+
+   Result: Cloud settings still names the app.
+
+3. Call `cloud_create` with `operation submit`, a new `operation_id` and the
+   `repository` of A2. Then poll `status` every 10 seconds.
+
+   Result: `lines` gains one line that starts
+   `GitHub sign-in needed: open https://github.com/login/device in a browser and enter the code`
+   and holds the device code. `phase` stays `submitted` until the sign-in ends,
+   and no cloud card appears.
+
+4. Enter that code at `https://github.com/login/device` as the account of the
+   app, and approve the sign-in.
+
+   Result: The create continues without another request, and `phase` moves to
+   `rolling_out`. `HORIZON_HOME/cloud/credentials/github-host-<APP-ID>.json`
+   exists again, and the cloud is `ready`.
+
+5. Delete the cloud of step 4 on its card, and wait for the deletion.
+
+   Result: `cloud_list` shows no cloud of this step.
+
+### 6.11 A11 — A policy that allows a skip asks no person
+
+1. Set `allow_github_sign_in_skip: true` in the `agent_lifecycle` section, and
+   move the file `HORIZON_HOME/cloud/credentials/github-host-<APP-ID>.json` to a
+   path outside the repository.
+
+   Result: `Settings::load` accepts the file, and this computer holds no sign-in.
+
+2. Call `cloud_create` with `operation submit`, a new `operation_id` and the
+   `repository` of A2. Then poll `status` until `done` is true.
+
+   Result: `lines` holds no `GitHub sign-in needed:` line, and the create asks no
+   person. `phase` is `ready`, and the output says that the cloud continues
+   without GitHub access, as the policy allows.
+
+3. Delete the cloud of step 2 on its card, and wait for the deletion.
+
+   Result: `cloud_list` shows no cloud of this step.
+
+4. Set `allow_github_sign_in_skip` back, and put the sign-in file of step 1 back.
+
+   Result: Cloud settings shows the sign-in again, so another run needs no
+   person.
+
 ## 7. Pass criteria
 
-- A1, A5, A6 and A8 rent nothing and add no card.
+- A1, A5, A6, A8 and A11 rent nothing that the run does not delete.
+- A10 needs one person: the device code of the operation is its `lines` line, and
+  the create continues by itself after the approval.
+- A11 asks no person, and its cloud says that it continues without GitHub
+  access.
 - A7 step 3 rents nothing and leaves no card: a cancel before allocation removes
   the card the operation registered.
 - A2 rents exactly one worker, and its card exists in the agent's workspace

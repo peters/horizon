@@ -83,6 +83,9 @@ pub enum Error {
     Sibling(#[from] siblings::SiblingError),
     #[error(transparent)]
     Uncommitted(#[from] repository::uncommitted::Refusal),
+    /// This computer's GitHub sign-in gives no access for an agent's cloud.
+    #[error(transparent)]
+    PersonChain(#[from] github::PersonChainRefusal),
     /// The configured API-key or setup-token file of an agent is unusable. A rebuild checks
     /// every agent of the new profile, so its refusal says that a reconnect needs the file too.
     #[error(

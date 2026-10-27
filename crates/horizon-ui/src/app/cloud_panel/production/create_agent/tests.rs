@@ -4,6 +4,7 @@ use horizon_core::{
 };
 use std::path::{Path, PathBuf};
 
+mod person_chain;
 mod pinned_worker;
 
 const ID: &str = "27d497e2-1f54-4bc4-b746-ab2a3d9efad5";
@@ -114,6 +115,7 @@ fn accept(app: &mut HorizonApp, actor: &str, workspace: &str, cloud: &str) {
             error: None,
             cancel: Some(Cancellation::default()),
             skip_sign_in: false,
+            sign_in: None,
         },
     );
 }
@@ -745,6 +747,7 @@ fn a_status_answer_carries_the_stage_output_and_what_a_ready_cloud_is() {
             error: None,
             cancel: None,
             skip_sign_in: false,
+            sign_in: None,
         },
     );
     let answer = answer(
@@ -892,6 +895,7 @@ fn a_cancel_answers_that_the_worker_may_have_been_rented() {
             error: None,
             cancel: Some(cancel.clone()),
             skip_sign_in: false,
+            sign_in: None,
         },
     );
     let cancel_request = build_request(
@@ -942,6 +946,7 @@ fn the_operation_of_another_agent_is_unknown_and_the_repository_names_the_cloud(
             error: None,
             cancel: None,
             skip_sign_in: false,
+            sign_in: None,
         },
     );
     for operation in [

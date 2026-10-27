@@ -553,6 +553,16 @@ cannot read offers nothing, so a missing binding for one listed provider does no
 refuse a create on another. Horizon reads the settings on its own thread, so `submit`
 answers first and `status` then reports the refusal.
 
+An agent's cloud takes the chain of this computer's own GitHub sign-in, so its worker
+renews its access itself and its commits and pull requests are authored as that
+person's account, never as the GitHub App's bot. The chain lasts as long as GitHub
+honours its refresh token, which is about six months. When this computer holds no
+chain, the create asks for one sign-in: `status` then reports a `lines` entry that
+starts `GitHub sign-in needed:` and holds the device code or the authorize page, and
+the create continues by itself when the person approves it. When
+`allow_github_sign_in_skip` is true and this computer holds no chain, the create asks
+nobody and the cloud continues without GitHub access.
+
 Horizon registers the cloud on its card in your workspace before it rents the worker,
 and that card shows the same progress. The card cannot start a second deployment
 while the operation runs. `status` returns `phase` (`submitted`, `rolling_out`,
@@ -578,11 +588,13 @@ no work beyond the request itself:
   rented; send a new request.
 - `cloud_create_unknown_operation`: this ID is not an operation of your agent panel.
   Read the operation ID you submitted, or use a new one.
-- `cloud_create_refused`: the machine policy does not allow this create, or none of
-  the providers that it lists has an offer for the quick-start requirements; the
-  message names the providers it lists. The machine owner sets `agent_lifecycle`, the
-  repository and `max_hourly` in Cloud settings, and adds the binding of a provider
-  whose offers Horizon reads.
+- `cloud_create_refused`: the machine policy does not allow this create, none of the
+  providers that it lists has an offer for the quick-start requirements, or the GitHub
+  sign-in that the cloud needs did not finish. The message names what to fix: the
+  providers it lists, a repository that the policy must add, or a sign-in that must be
+  approved again. The machine owner sets `agent_lifecycle`, the repository and
+  `max_hourly` in Cloud settings, adds the binding of a provider whose offers Horizon
+  reads, and signs in to GitHub there.
 - `cloud_create_needs_persistent_session`: save the workspace in a Horizon session
   first. A quick-start cloud belongs to a saved session.
 - `cloud_create_busy`: your workspace already has a cloud for this repository. Use
