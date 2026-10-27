@@ -21,7 +21,7 @@ COPY . /src
 RUN cargo build --release --locked -p horizon-browser-cli \
     && install -m 0755 target/release/horizon-browser /usr/local/bin/horizon-browser
 
-FROM debian:12-slim AS browser-vm
+FROM debian:13-slim AS browser-vm
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
