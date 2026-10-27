@@ -94,13 +94,7 @@ impl HorizonApp {
     }
 
     fn start_browser_vm(&mut self, tool: Option<UsageRequest>, action: BrowserVmRequest, ctx: &egui::Context) {
-        let root = match cloud_settings_root(self, action.action) {
-            Ok(root) => root,
-            Err(refusal) => {
-                self.refuse_browser_vm(tool, refusal);
-                return;
-            }
-        };
+        let root = cloud_settings_root(self);
         let running = self.browser_create_host.provider_usage.browser_vm.running();
         if let Some(refusal) = refusal(action.action, running) {
             self.refuse_browser_vm(tool, refusal.to_owned());
@@ -222,10 +216,13 @@ fn work(
     let Some(mut operation) = operation(request) else {
         return browser_vm::status(root).map_err(|error| error.to_string());
     };
+    // Every action that rents, stops, resumes or deletes reaches the provider and needs the
+    // account settings; a read reaches only the record of this Horizon and needs none.
+    let settings = runs_provider(request.action).then(|| run_settings(root)).transpose()?;
     if let Operation::Deploy(deploy) = &mut operation
         && deploy.location.is_empty()
     {
-        deploy.location = first_location(root)?;
+        deploy.location = first_location(settings.as_ref())?;
     }
     let begun = browser_vm::begin(root, &operation).map_err(|error| error.to_string())?;
     if runs_provider(request.action) {
@@ -244,16 +241,23 @@ fn run_provider(root: &Path, cancel: &Cancellation) {
 /// panel, but the browser VM reads its own settings, so it falls back to the home of this
 /// Horizon when no cloud board runs. The home comes from the session store, which is the
 /// home this process was started with, so a test never reads the home of the developer.
-fn cloud_settings_root(app: &HorizonApp, action: BrowserVmAction) -> Result<PathBuf, String> {
-    let root = app
-        .cloud_root()
-        .unwrap_or_else(|| app.session_store.home().root().join("cloud"));
-    // A read answers the record of this Horizon and reaches no provider, so it needs no
-    // cloud settings; every action that rents, stops, resumes or deletes needs them.
-    if action != BrowserVmAction::Status && !root.join("settings.json").is_file() {
+///
+/// This names a path and reads nothing: the settings file is opened on the job thread.
+fn cloud_settings_root(app: &HorizonApp) -> PathBuf {
+    app.cloud_root()
+        .unwrap_or_else(|| app.session_store.home().root().join("cloud"))
+}
+
+/// The cloud settings a provider run needs, read on the job thread. A missing file is the
+/// typed refusal of a Horizon that has no cloud support, and a file that cannot be read says
+/// so instead, because a person who broke the file must not be told to set cloud up again.
+pub(in crate::app) fn run_settings(root: &Path) -> Result<Settings, String> {
+    let path = root.join("settings.json");
+    if !path.is_file() {
         return Err(UNAVAILABLE.to_owned());
     }
-    Ok(root)
+    Settings::load(&path)
+        .map_err(|error| format!("browser_vm_settings_unreadable: the cloud settings cannot be read ({error})"))
 }
 
 /// The identity that opens the machine: the key the deploy installed as the only login of
@@ -265,8 +269,10 @@ pub(in crate::app) fn ssh_identity(root: &Path) -> Option<String> {
 }
 
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.
-pub(in crate::app) fn first_location(root: &Path) -> Result<String, String> {
-    let settings = Settings::load(&root.join("settings.json")).map_err(|_| UNAVAILABLE.to_owned())?;
+/// The location a deploy uses when it names none: the first the Hetzner settings allow.
+/// The settings were already read on this thread by the run that asks.
+fn first_location(settings: Option<&Settings>) -> Result<String, String> {
+    let settings = settings.ok_or_else(|| UNAVAILABLE.to_owned())?;
     settings
         .hetzner
         .as_ref()
@@ -359,6 +365,17 @@ mod tests {
             ..Record::default()
         }
         .save(root.path())
+        .unwrap();
+        // Every action that reaches the provider needs the account settings, so the fixture
+        // of an admission test holds them. The key files they name need not exist.
+        std::fs::write(
+            root.path().join("settings.json"),
+            serde_json::json!({
+                "ssh_identity_file": root.path().join("identity"),
+                "hetzner": {"token_file": root.path().join("token"), "server_types": ["ccx13"], "locations": ["fsn1"]},
+            })
+            .to_string(),
+        )
         .unwrap();
         root
     }

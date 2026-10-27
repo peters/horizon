@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use super::app::device_connection;
 use super::{Action, Panel, hourly_line, phase_label};
 use crate::app::HorizonApp;
-use crate::app::browser_vm_requests::{DeviceRoute, first_location, ssh_identity};
+use crate::app::browser_vm_requests::{DeviceRoute, run_settings, ssh_identity};
 use crate::app::settings::SettingsTab;
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::test_egui::DiscardTextures;
@@ -500,10 +500,21 @@ fn a_recorded_machine_keeps_the_identity_that_opened_it() {
 #[test]
 fn absent_cloud_settings_are_the_typed_refusal_not_a_file_error() {
     let root = TempDir::new().expect("temp root");
-    let reason = first_location(root.path()).expect_err("no settings to read");
+    let reason = run_settings(root.path()).expect_err("no settings to read");
     assert!(
         reason.starts_with("browser_vm_unavailable:"),
         "a person reads why cloud support is unavailable, not a path error: {reason}"
+    );
+}
+
+#[test]
+fn settings_that_cannot_be_read_do_not_claim_cloud_support_is_missing() {
+    let root = TempDir::new().expect("temp root");
+    std::fs::write(root.path().join("settings.json"), b"{ not json").expect("broken settings");
+    let reason = run_settings(root.path()).expect_err("the file is broken");
+    assert!(
+        reason.starts_with("browser_vm_settings_unreadable:"),
+        "a broken file names itself instead of asking for a cloud setup: {reason}"
     );
 }
 
