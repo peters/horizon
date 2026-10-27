@@ -70,9 +70,12 @@ impl Default for HostKeyScan {
     fn default() -> Self {
         Self {
             program: PathBuf::from("ssh-keyscan"),
-            attempts: 4,
+            // A machine that Hetzner reports as running has not necessarily started its sshd:
+            // a live resume failed every attempt of a four attempt scan, so the scan waits long
+            // enough to cover boot to sshd and stops as soon as a key arrives.
+            attempts: 24,
             connect_timeout_secs: 5,
-            pause: Duration::from_secs(3),
+            pause: Duration::from_secs(5),
         }
     }
 }
@@ -155,7 +158,7 @@ impl<'a> Entry<'a> {
         }
         Ok(format!(
             "{BEGIN}\nHost {ALIAS}\n  HostName {address}\n  User {USER}\n  IdentityFile {}\n  \
-             IdentitiesOnly yes\n  UserKnownHostsFile {}\n{END}\n",
+             IdentitiesOnly yes\n  UserKnownHostsFile {}\n  HostKeyAlias {ALIAS}\n{END}\n",
             values[1], values[2]
         )
         .into_bytes())
@@ -299,8 +302,10 @@ fn names_alias(line: &str) -> bool {
             .any(|pattern| pattern.eq_ignore_ascii_case(ALIAS))
 }
 
-/// The key lines of a scan, keyed by the alias. ssh looks up the name that it was given, which
-/// is the alias of the entry and never the address behind it.
+/// The key lines of a scan, keyed by the alias. ssh checks the key of a host against the name it
+/// connected to, which is the address behind the entry, so the block names `HostKeyAlias`; the
+/// alias is then both what a route types and what ssh looks the key up by, and the keys of a new
+/// machine replace the keys of the last one without changing the file that other routes name.
 fn host_keys(output: &[u8]) -> Vec<u8> {
     let mut keys = String::new();
     for line in line_text(output).lines() {

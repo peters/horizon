@@ -85,7 +85,8 @@ fn expected_block(root: &Path, address: &str, identity: &str) -> String {
          User root\n  \
          IdentityFile {identity}\n  \
          IdentitiesOnly yes\n  \
-         UserKnownHostsFile {}\n\
+         UserKnownHostsFile {}\n  \
+         HostKeyAlias horizon-browser-vm\n\
          # <<< horizon browser vm\n",
         known.display()
     )
@@ -222,6 +223,39 @@ fn the_folder_and_both_files_are_private() {
 }
 
 #[test]
+fn a_machine_whose_sshd_is_not_up_yet_is_scanned_again_until_it_answers() {
+    // A live resume showed the failure this covers: Hetzner reported the server as running
+    // while its sshd still refused connections, so a short scan wrote the entry with no key
+    // and every route failed with "Host key verification failed". The scan now keeps asking.
+    let home = home(None);
+    let root = tempfile::tempdir().expect("a temporary cloud root");
+    let counter = root.path().join("attempts");
+    let (folder, mut scan) = scanner(&format!(
+        r#"count=$(cat "{counter}" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "{counter}"; if [ "$count" -ge 5 ]; then printf '%s\n' '{ADDRESS} ssh-ed25519 {KEY}'; fi"#,
+        counter = counter.display()
+    ));
+    scan.program = folder.path().join("ssh-keyscan");
+    // The harness keeps its stand-ins at two attempts; this one needs five to answer.
+    scan.attempts = 6;
+
+    let trust = entry(home.path(), root.path(), &scan)
+        .write(ADDRESS, Path::new(IDENTITY))
+        .expect("the entry");
+
+    assert_eq!(trust.note, None, "the fifth attempt is the one that answers");
+    assert_eq!(
+        std::fs::read_to_string(&counter).expect("the attempts").trim(),
+        "5",
+        "the scan stopped as soon as a key arrived"
+    );
+    assert!(
+        std::fs::read_to_string(root.path().join(KNOWN_HOSTS))
+            .expect("the managed known_hosts")
+            .contains(KEY)
+    );
+}
+
+#[test]
 fn a_machine_that_is_already_trusted_needs_no_new_key() {
     let home = home(Some(PERSON));
     let root = tempfile::tempdir().expect("a temporary cloud root");
@@ -310,6 +344,26 @@ fn resolved(config: &Path, alias: &str) -> Vec<String> {
         })
         .map(str::to_owned)
         .collect()
+}
+
+#[test]
+fn the_entry_names_its_own_host_key_alias_because_ssh_keys_the_address_it_connects_to() {
+    // ssh checks the host key against the name it connected to, which is `HostName` and not the
+    // alias of the block. Kipping the keys under the alias without `HostKeyAlias` makes every
+    // route fail with "Host key verification failed", which a live machine showed and `ssh -G`
+    // cannot: it parses the configuration and never verifies a key.
+    let home = home(None);
+    let root = tempfile::tempdir().expect("a temporary cloud root");
+    let (_scan, scan) = trusted();
+    entry(home.path(), root.path(), &scan)
+        .write(ADDRESS, Path::new(IDENTITY))
+        .expect("the entry");
+
+    let written = config(home.path());
+    assert!(
+        written.contains("\n  HostKeyAlias horizon-browser-vm\n"),
+        "the block names the alias that its known_hosts file is keyed by: {written}"
+    );
 }
 
 #[test]
