@@ -16,7 +16,7 @@ use horizon_core::cloud_runtime::{
     Cancellation, Event,
     deployment::Request,
     github::{self, Prompt},
-    prices,
+    prices::{self, agent::Chosen},
     repository::launch::{self, Configuration},
     settings::{AgentLifecycleRefusal, Settings},
 };
@@ -34,6 +34,7 @@ const RING_LINES: usize = 200;
 const POLL_REPAINT: Duration = Duration::from_millis(200);
 
 const REFUSED: &str = "cloud_create_refused: no agent lifecycle policy is configured";
+const UNPINNED: &str = "cloud_create_refused: the offer an agent's policy admitted could not be pinned to one worker";
 const NEEDS_PERSON: &str = "cloud_create_needs_person: the worker asked for a GitHub sign-in and the policy does not allow continuing without one; a worker may already exist, so run cloud_list and stop it if it exists, then sign in on its card";
 const SKIPPED_SIGN_IN: &str = "Continuing without GitHub access, as this machine's agent policy allows";
 const CANCELLED: &str =
@@ -409,7 +410,9 @@ impl HorizonApp {
             revision: request.revision.clone(),
             profile_name: request.profile_name.clone().unwrap_or_default(),
             profile: request.profile.clone(),
-            placement: Placement::default(),
+            // The placement the admitted offer pinned, so the card's own start asks for the
+            // same worker as this deployment.
+            placement: request.settings.placement.clone().unwrap_or_default(),
         };
         let card = self
             .add_cloud_group(name, workspace, request.repository.clone(), launch, Vec::new(), None)
@@ -626,9 +629,10 @@ fn folder_name(repository: &str) -> String {
         .map_or_else(|| repository.to_owned(), |name| name.to_string_lossy().into_owned())
 }
 
-/// Reads this machine's settings, the repository, its commit, the profile and its price,
-/// and refuses a cloud this machine's policy does not admit. Nothing is recorded and
-/// nothing is rented. It runs on a worker thread, because it reads files.
+/// Reads this machine's settings, the repository, its commit, the profile, and the
+/// provider and rate an agent may rent on, and refuses a cloud this machine's policy does
+/// not admit. Nothing is recorded and nothing is rented. It runs on a worker thread,
+/// because it reads files and prices.
 fn prepare(
     root: &Path,
     (repository, cloud): (&str, String),
@@ -636,9 +640,11 @@ fn prepare(
     cancel: &Cancellation,
     mint: Mint,
 ) -> Result<(Box<Request>, bool), String> {
-    let settings = Settings::for_cloud(&root.join("settings.json"), &Placement::default())
+    let settings_path = root.join("settings.json");
+    // The offers are ranked on this machine's own settings, as New cloud lists them.
+    let machine = Settings::for_cloud(&settings_path, &Placement::default())
         .map_err(|error| format!("cloud_create_refused: the cloud settings could not be read: {error}"))?;
-    let policy = settings.agent_lifecycle.clone().ok_or(REFUSED)?;
+    let policy = machine.agent_lifecycle.clone().ok_or(REFUSED)?;
     let runner = cloud_runtime::command::Runner {
         cancel,
         emit: &|_| {},
@@ -661,10 +667,15 @@ fn prepare(
         .get(&profile_name)
         .cloned()
         .ok_or("cloud_create_needs_profile: the built-in quick-start profile is invalid")?;
-    let hourly = quote(&profile, &settings, cancel);
+    // An agent's cloud runs on the provider its policy allows that offers the cheapest
+    // worker, not on the provider the profile names.
+    let chosen = prices::agent::choose(&profile, &policy.providers, &machine, cancel)
+        .ok_or_else(|| no_offer(&policy.providers))?;
     policy
-        .admits(&prepared.repository, &profile.provider, hourly)
-        .map_err(|refusal| refused(refusal, hourly, policy.max_hourly))?;
+        .admits(&prepared.repository, chosen.provider.id, Some(chosen.hourly))
+        .map_err(|refusal| refused(refusal, chosen.hourly, policy.max_hourly))?;
+    // The offer whose rate the policy admits is the worker that is rented.
+    let (profile, settings) = pinned_offer(&settings_path, &profile, &chosen)?;
     installation_access(&settings, &runner, mint)?;
     let state_root = cloud_runtime::state::cloud_directory(root, &cloud).map_err(|error| error.to_string())?;
     let skip_sign_in = policy.allow_github_sign_in_skip;
@@ -681,20 +692,30 @@ fn prepare(
     Ok((Box::new(request), skip_sign_in))
 }
 
-/// What this machine may be charged for `profile` per hour, from the provider's own
-/// prices. A cloud cannot be checked against the policy limit without one.
-fn quote(profile: &Profile, settings: &Settings, cancel: &Cancellation) -> Option<f64> {
-    let (list, preferences) = prices::price_list(settings, cancel).ok()?;
-    prices::watch::Selection {
-        profile: profile.clone(),
-        placement: Placement::default(),
-    }
-    .hourly(&list, &preferences)
+/// The profile and the settings a deployment of `chosen` rents: that offer's provider and
+/// size, and this machine's settings narrowed to that offer's placement, so the deployment
+/// asks for the worker whose rate the policy admitted. A server type, a size or a location
+/// from the machine's fallback settings is then never requested instead of it.
+fn pinned_offer(settings_path: &Path, profile: &Profile, chosen: &Chosen) -> Result<(Profile, Settings), String> {
+    let profile = super::creation::provider::sized(chosen.provider, profile, chosen.size)
+        .map_err(|error| format!("{UNPINNED}: {error}"))?;
+    let settings =
+        Settings::for_cloud(settings_path, &chosen.placement).map_err(|error| format!("{UNPINNED}: {error}"))?;
+    Ok((profile, settings))
 }
 
-fn refused(refusal: AgentLifecycleRefusal, hourly: Option<f64>, max_hourly: f64) -> String {
-    match (refusal, hourly) {
-        (AgentLifecycleRefusal::Above, Some(hourly)) => format!(
+/// The refusal of an agent's create when none of the providers its policy allows has a
+/// worker the quick-start profile can run on.
+fn no_offer(allowed: &[String]) -> String {
+    format!(
+        "cloud_create_refused: no offer was found from the providers an agent may rent on ({})",
+        allowed.join(", ")
+    )
+}
+
+fn refused(refusal: AgentLifecycleRefusal, hourly: f64, max_hourly: f64) -> String {
+    match refusal {
+        AgentLifecycleRefusal::Above => format!(
             "cloud_create_refused: {} ({hourly:.2} per hour is above {max_hourly:.2})",
             refusal.message()
         ),

@@ -541,10 +541,17 @@ sets the card title; the repository folder name is the default.
 The machine must allow the create. Cloud settings has an optional `agent_lifecycle`
 section with `providers`, `max_hourly`, `repositories` and
 `allow_github_sign_in_skip`. Without that section no create rents anything. Horizon
-also refuses a repository, a provider or a quoted hourly rate that the section does
-not allow, and a machine that cannot quote a rate rents nothing. Horizon reads the
-settings on its own thread, so `submit` answers first and `status` then reports the
-refusal.
+refuses a repository that the section does not allow, a rate above `max_hourly`, and
+a machine that cannot quote a rate. Horizon chooses the provider itself, from the
+offers of the providers that the section lists: the cheapest offer that meets the
+quick-start requirements wins, and the rate it compares with `max_hourly` is that
+offer's hourly price in the provider's own currency. Horizon rents the worker of that
+offer: its size and its location go with the request, so the fallback server types and
+locations of the cloud settings do not replace it. The provider that the profile names
+does not decide where the cloud runs. A provider whose prices the machine
+cannot read offers nothing, so a missing binding for one listed provider does not
+refuse a create on another. Horizon reads the settings on its own thread, so `submit`
+answers first and `status` then reports the refusal.
 
 Horizon registers the cloud on its card in your workspace before it rents the worker,
 and that card shows the same progress. The card cannot start a second deployment
@@ -571,8 +578,11 @@ no work beyond the request itself:
   rented; send a new request.
 - `cloud_create_unknown_operation`: this ID is not an operation of your agent panel.
   Read the operation ID you submitted, or use a new one.
-- `cloud_create_refused`: the machine policy does not allow this create. The machine
-  owner sets `agent_lifecycle`, the repository and `max_hourly` in Cloud settings.
+- `cloud_create_refused`: the machine policy does not allow this create, or none of
+  the providers that it lists has an offer for the quick-start requirements; the
+  message names the providers it lists. The machine owner sets `agent_lifecycle`, the
+  repository and `max_hourly` in Cloud settings, and adds the binding of a provider
+  whose offers Horizon reads.
 - `cloud_create_needs_persistent_session`: save the workspace in a Horizon session
   first. A quick-start cloud belongs to a saved session.
 - `cloud_create_busy`: your workspace already has a cloud for this repository. Use
@@ -595,8 +605,8 @@ no work beyond the request itself:
 - `cloud_create_result_unavailable`: Horizon's answer could not be read. Poll `status`
   with the same `operation_id`.
 
-This version does not choose a worker, a plan token, siblings or a publishing
-destination, and it has no CLI plan entry.
+You cannot choose a worker, a plan token, siblings or a publishing destination in
+this version, and it has no CLI plan entry.
 
 ## Delete a cloud without a person
 

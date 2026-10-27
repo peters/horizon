@@ -5,6 +5,7 @@ use horizon_core::{
 use std::path::{Path, PathBuf};
 
 mod github_app;
+mod pinned_worker;
 
 const ID: &str = "27d497e2-1f54-4bc4-b746-ab2a3d9efad5";
 const OTHER: &str = "9b2c4b0e-6f18-4d3a-9f0a-0e8f7b6d1c22";
@@ -208,6 +209,19 @@ fn a_machine_without_an_agent_lifecycle_policy_rents_nothing() {
     assert!(operation.card.is_none(), "nothing is registered");
     assert!(app.cloud_prototype.groups.0.is_empty());
     assert!(app.cloud_prototype.production.runtimes.is_empty());
+}
+
+#[test]
+fn the_refusal_for_no_allowed_offer_names_every_provider_an_agent_may_rent_on() {
+    assert_eq!(
+        no_offer(&["hetzner".to_owned(), "runpod".to_owned()]),
+        "cloud_create_refused: no offer was found from the providers an agent may rent on (hetzner, runpod)"
+    );
+    // The sentence is about the offers, not about one provider the profile names.
+    assert_ne!(
+        no_offer(&["hetzner".to_owned()]),
+        format!("cloud_create_refused: {}", AgentLifecycleRefusal::Provider.message())
+    );
 }
 
 #[test]

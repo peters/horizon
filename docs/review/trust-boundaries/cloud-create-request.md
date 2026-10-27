@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-ui/src/app/cloud_panel/production/create_agent.rs,crates/horizon-ui/src/app/cloud_panel/production/create_agent/**,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-browser-control/src/manifest/cloud_create.rs,crates/horizon-browser-mcp/src/controller/cloud_create.rs,crates/horizon-core/src/cloud_runtime/settings/agent_lifecycle.rs"
+applyTo: "crates/horizon-ui/src/app/cloud_panel/production/create_agent.rs,crates/horizon-ui/src/app/cloud_panel/production/create_agent/**,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-browser-control/src/manifest/cloud_create.rs,crates/horizon-browser-mcp/src/controller/cloud_create.rs,crates/horizon-core/src/cloud_runtime/settings/agent_lifecycle.rs,crates/horizon-core/src/cloud_runtime/prices/agent.rs"
 ---
 
 # Cloud create request boundary
@@ -27,6 +27,21 @@ and the machine settings section in
   section, no agent rents a cloud. The listed repositories, the listed providers
   and the hourly limit are refusals, never warnings. A rate that Horizon cannot
   quote is a refusal, so an unknown price never passes the limit.
+- The provider of an agent's cloud is chosen from the offers of the providers the
+  section allows: the cheapest offer that meets the quick-start requirements
+  wins, by the one order `cloud_offers` uses, and a tie keeps the first offer of
+  that order. The provider is never the one the profile names unless its offer
+  wins, and an offer of a provider the section does not list is never chosen. A
+  provider whose prices this machine cannot read offers nothing, and a policy
+  whose providers have no offer is a refusal that names the providers it lists.
+  The rate the policy compares with its limit is the hourly price of the chosen
+  offer, in the currency of its provider.
+- The offer that the policy admits is the worker that the deployment requests.
+  The chosen offer's server type or GPU type, its location and, on a provider
+  that bills by flavor, its size go into the deployment request, and the card
+  keeps that placement. The fallback server types, sizes and locations of the
+  machine's own settings never replace them. An offer that Horizon cannot pin to
+  one worker is a refusal, and the create rents nothing.
 - The settings file is read on the operation's own thread, never on the frame
   thread, so the answer to a `submit` is `submitted` and every refusal of the
   policy, the repository and the price is the `status` answer that follows.
@@ -66,6 +81,11 @@ and the machine settings section in
   such an edit reads no new policy.
 - The price is the provider's own quote at that moment. Storage and other
   provider charges are outside `max_hourly`.
+- The placement of the admitted offer is a request, not a reservation. A provider
+  that has no stock of that server type or location at that moment fails the
+  deployment; Horizon does not rent another worker instead. The rate that the
+  worker bills can still differ from the quote, because a price can change after
+  Horizon reads it.
 - The operation table is in memory. After a Horizon restart, the cloud is on its
   card, and its operation ID answers `cloud_create_unknown_operation`.
 - This version gives an agent no worker choice, no plan token, no siblings, no
