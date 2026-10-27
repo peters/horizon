@@ -4,6 +4,8 @@ use horizon_core::{
 };
 use std::path::{Path, PathBuf};
 
+mod github_app;
+
 const ID: &str = "27d497e2-1f54-4bc4-b746-ab2a3d9efad5";
 const OTHER: &str = "9b2c4b0e-6f18-4d3a-9f0a-0e8f7b6d1c22";
 

@@ -87,11 +87,12 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    publication, its receipt reader and the one-device endpoint.
    Boundaries: `protected-host-ingress`, `protected-ingress-reader`,
    `one-service-gateway`, `one-device-owner-admission`.
-8. **Image publishing, the setup agent and an agent's cloud spend** — the
-   publication destination, the proof of a setup, the Claude setup token, and the
-   create and delete operations that rent and delete a cloud on this machine's
-   credentials. Boundaries: `image-publishing`, `repository-setup`,
-   `claude-setup-token`, `cloud-create-request`, `cloud-delete-request`.
+8. **Image publishing, the setup agent and an agent's cloud** — the publication
+   destination, the proof of a setup, the Claude setup token, the GitHub token that
+   an agent's cloud worker holds, and the create and delete operations that rent
+   and delete a cloud on this machine's credentials. Boundaries:
+   `image-publishing`, `repository-setup`, `claude-setup-token`,
+   `cloud-worker-github-token`, `cloud-create-request`, `cloud-delete-request`.
 9. **Worker command authority** — an agent runs one command in a worker as the
    unprivileged agent user. Boundaries: `cloud-exec-request`.
 

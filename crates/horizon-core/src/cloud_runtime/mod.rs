@@ -83,6 +83,9 @@ pub enum Error {
     Sibling(#[from] siblings::SiblingError),
     #[error(transparent)]
     Uncommitted(#[from] repository::uncommitted::Refusal),
+    /// The GitHub App gives no access to the repositories of the agent lifecycle policy.
+    #[error(transparent)]
+    Installation(#[from] github::InstallationRefusal),
     /// The configured API-key or setup-token file of an agent is unusable. A rebuild checks
     /// every agent of the new profile, so its refusal says that a reconnect needs the file too.
     #[error(
