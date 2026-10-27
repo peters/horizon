@@ -52,20 +52,6 @@ def installation(**overrides):
     return value
 
 
-APP_TOKEN = 'ghs_synthetic-installation-token'
-
-
-def app_chain(access=APP_TOKEN, start_in=3600):
-    """An installation chain: an access token and its end, and the marker that names it."""
-    return {'access_token': access, 'access_expires_at': NOW + start_in, 'kind': 'installation'}
-
-
-def app_installation(**overrides):
-    value = installation(chain=app_chain(), version=2)
-    value.update(overrides)
-    return value
-
-
 class FakeGitHub(http.server.ThreadingHTTPServer):
     """Answers each refresh with the next queued (status, body) and records the forms."""
 
@@ -381,105 +367,6 @@ class InstallationTests(ServiceTestCase):
     def configured_grant(self):
         return {'repository': 'example/project', 'target': 'primary', 'author_name': 'Test Author',
                 'author_email': 'author@example.invalid'}
-
-
-class InstallationChainTests(ServiceTestCase):
-    def test_the_bot_login_of_an_app_token_is_accepted(self):
-        # A GitHub App's token acts as `<slug>[bot]`, and the host sends exactly that login.
-        report = self.install(app_installation(login='horizon-example[bot]'))
-        self.assertEqual(report['login'], 'horizon-example[bot]')
-        for refused in ('horizon-example[Bot]', 'horizon-example[bot]x', 'horizon-example[]', '[bot]'):
-            with self.assertRaises(ValueError):
-                self.install(app_installation(login=refused))
-
-    def test_an_installation_chain_installs_and_serves_its_token(self):
-        report = self.install(app_installation())
-        self.assertEqual((report['state'], report['kind'], report['renewal']), ('ok', 'installation', 'host'))
-        self.assertIsNone(report['refresh_expires_at'])
-        self.assertIsNone(report['last_refresh_at'])
-        self.assertTrue(report['persistent'])
-        self.assertEqual(self.stored()['chain'], app_chain())
-        restarted = service.Store(self.store.persistent, self.root / 'run/restarted')
-        self.assertEqual(restarted.load()[0]['chain'], app_chain(), 'the kind survives a restart')
-        self.assertEqual(service.status(restarted, lambda: NOW + 600)['kind'], 'installation')
-        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, NOW + 600)
-        self.assertEqual((reply['token'], reply['repository']), (APP_TOKEN, 'example/project'))
-        for written in (json.dumps(self.configured), json.dumps(report)):
-            self.assertNotIn(APP_TOKEN, written)
-
-    def test_an_installation_chain_never_asks_github_to_refresh(self):
-        self.install(app_installation())
-        github, post = self.fake_github()
-        near, ended = app_chain()['access_expires_at'] - 60, NOW + 7200
-        self.assertEqual(service.refresh_once(self.store, lambda: near, post), 'host_only')
-        self.assertEqual(service.refresh_once(self.store, lambda: ended, post), 'host_only')
-        self.assertEqual(github.forms, [], 'no refresh request is made, near the expiry or past it')
-        self.assertEqual(service.next_check(self.store, near), service.POLL_SECONDS)
-        delay, failures = service.refresh_step(self.store, 3, lambda: near, post, jitter=lambda: 0,
-                                              log=lambda *args, **kwargs: None)
-        self.assertEqual((delay, failures), (service.POLL_SECONDS, 0))
-        self.assertEqual(github.forms, [])
-        self.assertEqual(self.stored()['state'], 'ok', 'the chain is left as it is for the host')
-        self.assertEqual(self.stored()['chain'], app_chain())
-
-    def test_an_ended_installation_token_is_not_served_and_status_says_only_the_host_renews_it(self):
-        self.install(app_installation())
-        ended = app_chain()['access_expires_at'] + 1
-        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, ended)
-        self.assertFalse(reply['ok'])
-        self.assertEqual(reply['state'], 'installation_token_expired')
-        self.assertIn('only the host', reply['message'])
-        with self.assertRaisesRegex(service.gitproxy.relay.Refusal, 'only the host'):
-            service.gitproxy.plan(self.store, 'example/project', 'push', ended, static=lambda repository: None)
-        found, _ = service.broker.candidates(self.store, ended, static=lambda: None)
-        self.assertFalse(found[0].usable)
-        self.assertIn('only the host', found[0].reason)
-        report = service.status(self.store, lambda: ended)
-        self.assertEqual((report['state'], report['kind'], report['renewal']),
-                         ('installation_token_expired', 'installation', 'host'))
-        self.assertEqual(report['access_expires_at'], app_chain()['access_expires_at'])
-        # Within the serve margin the token is withheld too, while the chain itself is still ok.
-        margin = app_chain()['access_expires_at'] - 30
-        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, margin)
-        self.assertEqual((reply['ok'], reply['state']), (False, 'ok'))
-        self.assertIn('only the host', reply['message'])
-        self.assertEqual(service.status(self.store, lambda: margin)['state'], 'ok')
-
-    def test_a_chain_with_the_installation_marker_and_refresh_fields_is_refused(self):
-        with self.assertRaises(ValueError):
-            common.validate_chain(dict(chain(), kind='installation'))
-        with self.assertRaises(ValueError):
-            service.validate_install(installation(chain=dict(chain(), kind='installation')), NOW)
-        # The payload version names the kind, so neither combination is guessed.
-        for value in (app_installation(chain=chain()), installation(chain=app_chain()),
-                      app_installation(chain=dict(chain(), kind='installation')),
-                      app_installation(chain=dict(app_chain(), refresh_token=REFRESH)),
-                      app_installation(chain=dict(app_chain(), refresh_expires_at=NOW + 60)),
-                      app_installation(chain=dict(app_chain(), kind='person')),
-                      app_installation(chain=dict(app_chain(), access_expires_at=True)),
-                      app_installation(chain=app_chain(access='ghs_token\nline'))):
-            with self.assertRaises(ValueError) as refused:
-                service.validate_install(value, NOW)
-            self.assertNotIn('synthetic', str(refused.exception))
-            with self.assertRaises(ValueError):
-                self.install(value)
-        with self.assertRaisesRegex(ValueError, 'the host must install a fresh one'):
-            service.validate_install(app_installation(chain=app_chain(start_in=0)), NOW)
-        self.assertEqual(self.configured, [])
-        self.assertIsNone(self.stored())
-
-    def test_a_person_chain_says_that_this_worker_renews_it(self):
-        report = self.install()
-        self.assertEqual((report['state'], report['kind'], report['renewal']), ('ok', 'person', 'worker'))
-        self.assertEqual(report['refresh_expires_at'], chain()['refresh_expires_at'])
-        github, post = self.fake_github((200, rotated(2)))
-        due = chain()['access_expires_at'] - 1800
-        self.assertEqual(service.refresh_once(self.store, lambda: due, post), 'refreshed')
-        self.assertEqual(len(github.forms), 1)
-        reply, _ = self.answer({'request': 'gh-token', 'repository': 'example/project'}, due)
-        self.assertEqual(reply['token'], 'ghu_synthetic-access-2')
-        absent = service.status(service.Store(self.root / 'none', self.root / 'none-run'))
-        self.assertEqual((absent['state'], absent['kind'], absent['renewal']), ('absent', None, None))
 
 
 class RefreshTests(ServiceTestCase):

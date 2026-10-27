@@ -70,9 +70,6 @@ ring = "0.17.14"
 # AES-128 block cipher for Cast Streaming frame encryption (counter mode on top).
 aes = "0.9.3"
 ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
-# Tests of the GitHub App installation token make their own RSA key, so that the
-# repository holds no private key. Signing itself uses `ring`.
-rsa = "0.9.10"
 horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.2.7" }
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
 vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "773ec2351241c80bbab88ffedae73f1972e0a4c1" }

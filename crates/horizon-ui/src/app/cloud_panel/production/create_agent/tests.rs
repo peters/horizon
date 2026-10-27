@@ -4,7 +4,6 @@ use horizon_core::{
 };
 use std::path::{Path, PathBuf};
 
-mod github_app;
 mod pinned_worker;
 
 const ID: &str = "27d497e2-1f54-4bc4-b746-ab2a3d9efad5";

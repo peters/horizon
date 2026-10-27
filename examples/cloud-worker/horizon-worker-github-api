@@ -50,7 +50,7 @@ REFUSED_SECONDS = 1
 TIMEOUT = 300
 MAX_GRAPHQL_REQUEST = 1 << 20
 MAX_GRAPHQL_REPLY = 64 << 20
-EXPIRED = common.EXPIRED
+EXPIRED = 'the GitHub access token expired and this worker could not refresh it yet.'
 REQUEST_FIELDS = {'accept', 'accept-encoding', 'content-type', 'user-agent', 'x-github-api-version', 'time-zone',
                   'if-none-match', 'if-modified-since', 'graphql-features', 'range', 'if-range'}
 REPLY_FIELDS = {'cache-control', 'content-disposition', 'content-encoding', 'content-range', 'content-type',
@@ -87,12 +87,10 @@ class Candidate:
     """A token and the repositories it may be used for: the chain's grants, or one static
     binding from cloud settings, whose token's own permissions decide what it may do. A chain
     whose token expires within SERVE_MARGIN is not `usable`, but its grants still come first:
-    a repository that it grants gets the expiry refusal, never the static binding's token.
-    `reason` says why an unusable candidate sends nothing."""
+    a repository that it grants gets the expiry refusal, never the static binding's token."""
 
-    def __init__(self, token, allowed, source, usable=True, reason=EXPIRED):
-        self.token, self.allowed, self.source = token, allowed, source
-        self.usable, self.reason = usable, reason
+    def __init__(self, token, allowed, source, usable=True):
+        self.token, self.allowed, self.source, self.usable = token, allowed, source, usable
 
 
 def candidates(store, now, static=None, pid=None):
@@ -107,10 +105,9 @@ def candidates(store, now, static=None, pid=None):
             granted, _ = agents.granted_access(state, repository, task)
             return granted is not None and agents.covered(granted, access)
         usable = state['chain']['access_expires_at'] - now > common.SERVE_MARGIN
-        reason = common.expired_reason(state['chain'])
-        found.append(Candidate(state['chain']['access_token'], chain_allowed, 'chain', usable, reason))
+        found.append(Candidate(state['chain']['access_token'], chain_allowed, 'chain', usable))
         if not usable:
-            problem = reason
+            problem = EXPIRED
     try:
         loaded = (static or auth.read_grants)()
     except (OSError, ValueError, RecursionError, UnicodeDecodeError):
@@ -212,13 +209,13 @@ def choose(broker, route, pid=None, sent=lambda: None):
     for candidate in found:
         if all(candidate.allowed(name, route.access) for name in wanted):
             if not candidate.usable:
-                raise refusal(503, candidate.reason)
+                raise refusal(503, EXPIRED)
             return candidate, wanted[0]
         # The chain's grant comes first, as for Git: a repository that the chain grants for
         # reading only is not pushed to with the static binding's token.
         if candidate.source == 'chain' and all(candidate.allowed(name, 'read') for name in wanted):
             if not candidate.usable:
-                raise refusal(503, candidate.reason)
+                raise refusal(503, EXPIRED)
             break
     missing = [name for name in wanted if not any(candidate.allowed(name, 'read') for candidate in found)]
     if missing:
@@ -376,7 +373,7 @@ class Exchange:
         except policy.Refused as error:
             raise elsewhere(error, named) from None
         if not candidate.usable:
-            raise policy.Refused(candidate.reason)
+            raise policy.Refused(EXPIRED)
         looked = None
         if plan.ids:
             # The ID lookup carries the token too: checked again right before it.

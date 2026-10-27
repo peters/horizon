@@ -3,6 +3,7 @@
 //! public app has a slug, can also be read without one. Also the scopes of an OAuth token.
 use super::{Client, Error, Result, Secret, read};
 use serde::Deserialize;
+use std::fmt::Write as _;
 use zeroize::Zeroizing;
 
 /// The most pages read of installations, and of each installation's repositories; 100
@@ -164,7 +165,7 @@ impl Client {
             self.agent
                 .get(format!("{}{path}", self.api))
                 .header("Accept", "application/vnd.github+json")
-                .header("Authorization", bearer(token.expose()).as_str())
+                .header("Authorization", bearer(token).as_str())
                 .call(),
         )?;
         match answer.status {
@@ -201,7 +202,7 @@ impl Client {
             .header("Accept", "application/vnd.github+json");
         let auth;
         if let Some(token) = token {
-            auth = bearer(token.expose());
+            auth = bearer(token);
             request = request.header("Authorization", auth.as_str());
         }
         let response = request.call();
@@ -217,12 +218,11 @@ impl Client {
 /// What GitHub writes when an organization's OAuth app restrictions refuse a token.
 const OAUTH_RESTRICTED: &str = "organization has enabled OAuth App access restrictions";
 
-/// The `Authorization` value for a token or a JWT, in a buffer that is wiped on drop and
-/// never moves while it holds the credential.
-pub(super) fn bearer(token: &str) -> Zeroizing<String> {
-    let mut auth = Zeroizing::new(String::with_capacity(token.len() + 7));
-    auth.push_str("Bearer ");
-    auth.push_str(token);
+/// The `Authorization` value for `token`, in a buffer that is wiped on drop and never
+/// moves while it holds the token.
+fn bearer(token: &Secret) -> Zeroizing<String> {
+    let mut auth = Zeroizing::new(String::with_capacity(token.expose().len() + 7));
+    let _ = write!(auth, "Bearer {}", token.expose());
     auth
 }
 
@@ -239,8 +239,7 @@ fn valid_package(name: &str) -> bool {
         })
 }
 
-/// A GitHub account login, as GitHub accepts it in a repository name.
-pub(super) fn valid_login(login: &str) -> bool {
+fn valid_login(login: &str) -> bool {
     (1..=39).contains(&login.len())
         && !login.starts_with('-')
         && !login.ends_with('-')

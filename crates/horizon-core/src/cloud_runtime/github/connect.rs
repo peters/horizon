@@ -2,31 +2,28 @@
 //!
 //! Horizon serves a page on a loopback port that posts the manifest to GitHub. The
 //! person clicks **Create GitHub App**; GitHub redirects back with a one-time code,
-//! which becomes the app's identity, client secret and private key. Both go to private
-//! files on this computer, and the settings name them. The key stays here and mints the
-//! app's installation tokens; it never goes to a cloud or a worker.
+//! which becomes the app's identity and client secret. The secret goes to a private
+//! file; the app's private key is never kept.
 use super::{Mode, Settings};
 use crate::cloud_runtime::{Error, Result};
-use horizon_cloud::github::{App, Client, Error as GitHubError, Secret};
+use horizon_cloud::github::{Client, Error as GitHubError, Secret};
 use std::{
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
-    path::Path,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, channel},
     time::{Duration, Instant},
 };
 
 /// How long Horizon waits for the person to create the app.
 const TIMEOUT: Duration = Duration::from_mins(10);
-/// The directory in the cloud root for the app's private files; each app has its own
-/// files, so a new app never replaces the secret or key of the app that the saved settings
-/// name.
+/// The directory in the cloud root for client secrets; each app has its own file, so a
+/// new app never replaces the secret of the app that the saved settings name.
 const SECRET_DIRECTORY: &str = "credentials";
 /// Shown as the app's homepage on GitHub.
 const HOMEPAGE: &str = "https://github.com/peters/horizon";
 /// Shown on the app's page on GitHub, which allows 140 characters.
-const DESCRIPTION: &str =
-    "Horizon publishes images and gives an agent's cloud GitHub access with an App key that stays on your computer.";
+const DESCRIPTION: &str = "Gives Horizon cloud workers short-lived access to the repositories you choose. Horizon never stores its private key.";
 const _: () = assert!(DESCRIPTION.len() <= 140);
 /// The longest app name GitHub accepts.
 const MAX_NAME: usize = 34;
@@ -224,117 +221,24 @@ fn created(code: &Secret, root: &Path) -> Result<Settings> {
     let app = Client::new()
         .convert_manifest(code)
         .map_err(|error| github_error(&error))?;
-    app_files(&app, root)
-}
-
-/// Writes the app's client secret and private key to their private files under `root`, and
-/// the settings that name them. An entry that is already at the key path is kept, never
-/// replaced: it is this app's key, and a cloud that mints tokens with it must not lose it.
-/// The kept file is logged, and the settings name the file that is there. A failure leaves
-/// no file that this call wrote.
-pub(super) fn app_files(app: &App, root: &Path) -> Result<Settings> {
-    app_files_with(app, root, write_private)
-}
-
-/// [`app_files`] with `write` in place of [`write_private`], so that a test can fail the key
-/// write after the client secret file is written.
-pub(super) fn app_files_with(app: &App, root: &Path, write: impl Fn(&Path, &str) -> Result<()>) -> Result<Settings> {
     // Named by the app's immutable ID, which no later app reuses.
-    let directory = root.join(SECRET_DIRECTORY);
-    let secret_file = directory.join(format!("github-app-{}", app.id));
-    let key_file = directory.join(format!("github-app-{}.pem", app.id));
-    // The files that this call wrote, so that a connect it refuses leaves none of them. A
-    // key file that was already there is not written here, so a later failure keeps it as it
-    // is.
-    let mut written = Vec::new();
-    match write_files(app, &secret_file, &key_file, &write, &mut written) {
-        Ok(settings) => Ok(settings),
-        // The person sees the failure that refused the connect, with what could not be
-        // undone beside it.
-        Err(primary) => match remove_files(&written) {
-            Ok(()) => Err(primary),
-            Err(cleanup) => Err(Error::Cleanup {
-                primary: Box::new(primary),
-                cleanup: Box::new(cleanup),
-            }),
-        },
-    }
-}
-
-/// Writes both files of the app and gives back the settings that name them, adding to
-/// `written` each file that this call wrote.
-fn write_files<'a>(
-    app: &App,
-    secret_file: &'a Path,
-    key_file: &'a Path,
-    write: &impl Fn(&Path, &str) -> Result<()>,
-    written: &mut Vec<&'a Path>,
-) -> Result<Settings> {
-    match write(secret_file, app.client_secret.expose()) {
-        Ok(()) => written.push(secret_file),
-        Err(error) => {
-            // A write that failed after its entry was made leaves a file that is not the
-            // secret; an entry that was already there is not this call's to remove.
-            if !already_there(&error) {
-                written.push(secret_file);
-            }
-            return Err(error);
-        }
-    }
-    // A write that finds an entry, a link included, is refused rather than followed, so the
-    // key file it names is the one that is already there.
-    match write(key_file, app.pem.expose()) {
-        Ok(()) => written.push(key_file),
-        Err(error) if already_there(&error) => {
-            tracing::info!(path = %key_file.display(), "the GitHub App private key file was already there; kept it");
-        }
-        Err(error) => {
-            written.push(key_file);
-            return Err(error);
-        }
-    }
+    let path = root.join(SECRET_DIRECTORY).join(format!("github-app-{}", app.id));
+    write_private(&path, app.client_secret.expose())?;
     let settings = Settings {
         app_id: app.id,
-        slug: app.slug.clone(),
-        client_id: app.client_id.clone(),
-        client_secret_file: secret_file.to_owned(),
-        private_key_file: Some(key_file.to_owned()),
+        slug: app.slug,
+        client_id: app.client_id,
+        client_secret_file: path,
         mode: Mode::Ask,
+        retired_private_key_file: None,
     };
     settings.validate()?;
     Ok(settings)
 }
 
-/// Whether `error` is a write that found an entry at its path, which this call did not make.
-fn already_there(error: &Error) -> bool {
-    matches!(error, Error::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists)
-}
-
-/// Removes the files of a connect that wrote them, naming the first removal that failed.
-fn remove_files(files: &[&Path]) -> Result<()> {
-    let mut failed: Option<std::io::Error> = None;
-    for path in files {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            // A write that failed before it made its entry leaves nothing to remove.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                failed.get_or_insert(std::io::Error::new(
-                    error.kind(),
-                    format!("{}: {error}", path.display()),
-                ));
-            }
-        }
-    }
-    match failed {
-        Some(error) => Err(error.into()),
-        None => Ok(()),
-    }
-}
-
-/// Removes the client secret and private key of an app whose settings were not saved. A save
-/// can fail after the settings file in `root` already names the app; then, and whenever that
-/// file cannot be read, both files stay, so saved settings never name a missing file.
+/// Removes the client secret of an app whose settings were not saved. A save can fail
+/// after the settings file in `root` already names the app; then, and whenever that
+/// file cannot be read, the secret stays, so saved settings never name a missing file.
 pub fn discard(root: &Path, settings: &Settings) {
     // Only the path matters here, so settings that fail validation still count.
     let saved = match std::fs::read(root.join("settings.json")) {
@@ -348,9 +252,69 @@ pub fn discard(root: &Path, settings: &Settings) {
     };
     if !saved {
         let _ = std::fs::remove_file(&settings.client_secret_file);
-        if let Some(key_file) = &settings.private_key_file {
-            let _ = std::fs::remove_file(key_file);
+    }
+}
+
+/// The App private key file that Connect GitHub wrote while Horizon minted installation
+/// tokens, and what removing it did.
+///
+/// The file held the App's RSA signing key, which mints an installation token for every
+/// repository the App is installed on. Horizon mints nothing from it now, so a copy that
+/// outlives the settings entry which named it is an orphaned long-lived credential.
+#[derive(Debug)]
+#[must_use]
+pub(in crate::cloud_runtime) enum KeyFileRetirement {
+    /// Nothing this feature wrote is there any more, so there is nothing to say.
+    Nothing,
+    /// The file is gone from this machine.
+    Removed(PathBuf),
+    /// The file is still there, with the reason. Horizon keeps loading.
+    Kept(PathBuf, std::io::Error),
+}
+
+impl KeyFileRetirement {
+    /// Says in the log what became of the file. A file that stays is named with its path, so
+    /// a person can delete it by hand.
+    pub(in crate::cloud_runtime) fn report(self) {
+        match self {
+            Self::Nothing => {}
+            Self::Removed(path) => tracing::warn!(
+                path = %path.display(),
+                "removed the GitHub App private key file that Horizon no longer mints installation tokens with"
+            ),
+            Self::Kept(path, error) => tracing::warn!(
+                path = %path.display(),
+                %error,
+                "could not remove the GitHub App private key file that Horizon no longer uses; the file is still there and must be deleted by hand"
+            ),
         }
+    }
+}
+
+/// Removes the App private key file that Connect GitHub wrote for `app`, in the credentials
+/// directory of the settings file at `settings_path`.
+///
+/// Only the exact file this feature wrote is removed: `github-app-<id>.pem`, named by the
+/// app's immutable ID, in the cloud root that the settings file sits in. A link, a
+/// directory, another name, another app's file and a cloud root elsewhere are left alone,
+/// and a link is never followed. A disk that refuses the unlink is reported, never raised:
+/// a machine whose disk refuses the unlink must still start.
+pub(in crate::cloud_runtime) fn retire_private_key_file(settings_path: &Path, app: &Settings) -> KeyFileRetirement {
+    let Some(root) = settings_path.parent().filter(|root| !root.as_os_str().is_empty()) else {
+        return KeyFileRetirement::Nothing;
+    };
+    let path = root
+        .join(SECRET_DIRECTORY)
+        .join(format!("github-app-{}.pem", app.app_id));
+    match std::fs::symlink_metadata(&path) {
+        // A regular file is the only entry this feature wrote, so it is the only one removed.
+        Ok(info) if info.file_type().is_file() => match std::fs::remove_file(&path) {
+            Ok(()) => KeyFileRetirement::Removed(path),
+            Err(error) => KeyFileRetirement::Kept(path, error),
+        },
+        Ok(_) => KeyFileRetirement::Nothing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => KeyFileRetirement::Nothing,
+        Err(error) => KeyFileRetirement::Kept(path, error),
     }
 }
 

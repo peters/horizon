@@ -391,16 +391,6 @@ files, while retaining ChatGPT and subscription login state. Existing agent
 processes can retain authentication already loaded into memory or their
 environment; start a new session to apply the changed authentication choice.
 
-Optional `github.private_key_file` names the private key of the GitHub App. The
-file has an absolute path and mode 0600 on Unix. Horizon signs as the app on this
-computer with that key and mints an installation token. The token reaches only the
-repositories of one account, with contents and pull requests at write access and
-metadata at read access. The key never goes into a settings file, a cloud record or
-a worker. The create of an agent's cloud mints a token for the repositories of the
-agent lifecycle policy, so that create asks for no sign-in. The token lasts at most
-one hour and the worker cannot renew it. **Connect GitHub** keeps the sign-in path
-for every other cloud.
-
 Optional repository Git authentication uses explicit `git_credentials` bindings.
 With [Connect GitHub](#connect-github), a binding is a fallback for the
 repositories that the app does not reach. See the [worker credential setup](../examples/cloud-worker/README.md#optional-git-credentials)
@@ -507,19 +497,20 @@ with no token to create or copy.
 
 1. Horizon opens GitHub in your browser with a GitHub App already described.
    You click **Create GitHub App**. Horizon keeps the app's client
-   secret in `credentials/github-app-<app>` (0600) and the private key that GitHub
-   makes at the same time in `credentials/github-app-<app>.pem` (0600). It sets
-   `github.private_key_file` to that key file, so that the key that GitHub made
-   needs no manual step. The key stays on this computer: Horizon signs as the app
-   with it and never sends it to a cloud or a worker. A key file that is already
-   there is kept. Optional `github.private_key_file` can also name a
-   private key file that you make and give Horizon yourself.
+   secret in `credentials/github-app-<app>` (0600) and never keeps its private key.
    The app is named **Horizon for <login>** when Horizon already knows your GitHub
    login from an earlier sign-in on this computer and no public app has that name;
    otherwise it is **Horizon** and a short random suffix. Horizon cannot see a
    private app, so a private app with the same name is not detected. Then GitHub's
    form says that the name is taken: change the name there and click **Create GitHub
    App** again. GitHub's form also lets you change the name in other cases.
+
+   A Horizon build from before this removal kept that private key at
+   `credentials/github-app-<app>.pem` beside the client secret, and named it in
+   `github.private_key_file`. This build deletes that file when it reads cloud settings
+   that name the app, and the log says that it did. Delete the key pair in the app's
+   GitHub settings too: the key on GitHub is the other half, and it stays valid after
+   the file is gone.
 2. GitHub shows the installation page. You choose the repositories that clouds
    may reach. **Choose repositories** on the card opens this page again. To give
    clouds the repositories of an organization, install the app on that

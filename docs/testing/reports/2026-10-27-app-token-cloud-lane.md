@@ -8,6 +8,8 @@ lanes: [agent-cloud, github-app-token]
 
 # GitHub App installation-token cloud lane, 2026-10-27
 
+> **This lane was removed afterwards.** Horizon removed the GitHub App installation-token path later on 2026-10-27, because an installation token lasts one hour, and this report is kept as the history of a run that happened.
+
 ## 1. Summary
 
 An agent rented a cloud, ran commands in it, committed, pushed, opened a pull request, merged it

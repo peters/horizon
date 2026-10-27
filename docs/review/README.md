@@ -57,11 +57,10 @@ subsystem, not the crate that holds it. [`trust-boundary-audit.md`](trust-bounda
 gives the untrusted input, the guarantee and the limit of each boundary.
 
 1. **Local host and private files** — a program on this computer reads a
-   private file, a host file or a Docker host, or signs as this machine's GitHub
-   App with a private key. Boundaries:
+   private file, a host file or a Docker host. Boundaries:
    `browser-profile-host`, `browser-remote-bridge`, `browser-remote-panel`,
    `standalone-remote-host`, `native-client-file`, `checkout-search`,
-   `docker-host-provider`, `github-installation-token`.
+   `docker-host-provider`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
    drop a file, answer a passkey request or judge a semantic action. Boundaries:
    `browser-webauthn`, `browser-semantic-actions`, `cloud-browser-uploads`,
@@ -87,12 +86,11 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    publication, its receipt reader and the one-device endpoint.
    Boundaries: `protected-host-ingress`, `protected-ingress-reader`,
    `one-service-gateway`, `one-device-owner-admission`.
-8. **Image publishing, the setup agent and an agent's cloud** — the publication
-   destination, the proof of a setup, the Claude setup token, the GitHub token that
-   an agent's cloud worker holds, and the create and delete operations that rent
-   and delete a cloud on this machine's credentials. Boundaries:
-   `image-publishing`, `repository-setup`, `claude-setup-token`,
-   `cloud-worker-github-token`, `cloud-create-request`, `cloud-delete-request`.
+8. **Image publishing, the setup agent and an agent's cloud spend** — the
+   publication destination, the proof of a setup, the Claude setup token, and the
+   create and delete operations that rent and delete a cloud on this machine's
+   credentials. Boundaries: `image-publishing`, `repository-setup`,
+   `claude-setup-token`, `cloud-create-request`, `cloud-delete-request`.
 9. **Worker command authority** — an agent runs one command in a worker as the
    unprivileged agent user. Boundaries: `cloud-exec-request`.
 
