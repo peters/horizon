@@ -507,9 +507,13 @@ with no token to create or copy.
 
 1. Horizon opens GitHub in your browser with a GitHub App already described.
    You click **Create GitHub App**. Horizon keeps the app's client
-   secret in `credentials/github-app-<app>` (0600) and never keeps the private key
-   that GitHub makes at the same time. Optional `github.private_key_file` names a
-   private key file that you give Horizon yourself.
+   secret in `credentials/github-app-<app>` (0600) and the private key that GitHub
+   makes at the same time in `credentials/github-app-<app>.pem` (0600). It sets
+   `github.private_key_file` to that key file, so that the key that GitHub made
+   needs no manual step. The key stays on this computer: Horizon signs as the app
+   with it and never sends it to a cloud or a worker. A key file that is already
+   there is kept. Optional `github.private_key_file` can also name a
+   private key file that you make and give Horizon yourself.
    The app is named **Horizon for <login>** when Horizon already knows your GitHub
    login from an earlier sign-in on this computer and no public app has that name;
    otherwise it is **Horizon** and a short random suffix. Horizon cannot see a

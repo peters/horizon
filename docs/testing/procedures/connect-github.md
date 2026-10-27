@@ -468,7 +468,9 @@ this task and G11 use.
 
 ## 7. Pass criteria
 
-- The app secret file is private, and Horizon keeps no private key of the app.
+- The app secret file and the app private key file are private: mode 0600, in
+  `credentials/` under the cloud root, and both named by cloud settings. The key
+  stays on the computer and goes to no cloud and no worker.
 - In Ask mode a new cloud needs one Authorize click. In Automatic mode only the first
   sign-in of the app needs one, and later clouds need none.
 - A reconnect does not ask again.

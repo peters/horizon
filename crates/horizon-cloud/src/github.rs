@@ -143,14 +143,15 @@ pub struct Chain {
     pub refresh_expires_at: SystemTime,
 }
 
-/// A GitHub App created from a manifest. Its private key is not kept: Horizon uses
-/// only user tokens, which need no key.
+/// A GitHub App created from a manifest. Its client secret and private key go into private
+/// files on this computer: the key mints an installation token and never leaves it.
 #[derive(Debug)]
 pub struct App {
     pub id: u64,
     pub slug: String,
     pub client_id: String,
     pub client_secret: Secret,
+    pub pem: Secret,
     pub html_url: String,
 }
 
@@ -314,7 +315,7 @@ impl Client {
     }
 
     /// Completes the manifest flow: the `code` GitHub sent to the manifest's redirect
-    /// URL becomes the new app's identity and client secret.
+    /// URL becomes the new app's identity, client secret and private key.
     /// # Errors
     /// A malformed code, transport failures, or GitHub's refusal (an expired code).
     pub fn convert_manifest(&self, code: &Secret) -> Result<App> {
@@ -324,6 +325,7 @@ impl Client {
             slug: String,
             client_id: String,
             client_secret: Secret,
+            pem: Secret,
             html_url: String,
         }
         let code = code.expose();
@@ -341,11 +343,15 @@ impl Client {
         if answer.status != 201 {
             return Err(Error::Refused(format!("HTTP {}", answer.status)));
         }
-        // Only these fields are read: the private key and webhook secret in the same
-        // answer stay in the wiped response buffer.
+        // Only these fields are read: the webhook secret in the same answer stays in the
+        // wiped response buffer.
         let fields: Fields = answer.parse()?;
-        let client_secret = fields.client_secret;
-        if !valid_slug(&fields.slug) || !valid_client_id(&fields.client_id) || !safe_https_url(&fields.html_url) {
+        let (client_secret, pem) = (fields.client_secret, fields.pem);
+        if !valid_slug(&fields.slug)
+            || !valid_client_id(&fields.client_id)
+            || !safe_https_url(&fields.html_url)
+            || !installation::valid_pem(&pem)
+        {
             return Err(Error::InvalidResponse);
         }
         Ok(App {
@@ -353,6 +359,7 @@ impl Client {
             slug: fields.slug,
             client_id: fields.client_id,
             client_secret,
+            pem,
             html_url: fields.html_url,
         })
     }
