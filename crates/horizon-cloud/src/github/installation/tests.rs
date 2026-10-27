@@ -85,10 +85,10 @@ fn an_installation_token_is_limited_to_the_requested_repositories_and_permission
     assert_eq!(
         serde_json::from_str::<Value>(&requests[1].body).unwrap(),
         json!({
-            "repositories": ["acme/web"],
+            "repositories": ["web"],
             "permissions": {"contents": "write", "metadata": "read", "pull_requests": "write"},
         }),
-        "the request names the repositories and exactly these permissions"
+        "the request names the repositories by their name alone, and exactly these permissions"
     );
 
     assert_eq!(token.token.expose(), "ghs_synthetic_installation");
