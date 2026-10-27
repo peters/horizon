@@ -1,61 +1,6 @@
+use super::fake::github;
 use super::*;
 use serde_json::{Value, json};
-use std::{
-    io::Write,
-    net::TcpListener,
-    sync::{Arc, Mutex},
-    thread,
-};
-
-/// Each request, as its request line and its body.
-pub(super) type Requests = Arc<Mutex<Vec<(String, String)>>>;
-
-/// A fake GitHub answering each connection with the next scripted response.
-pub(super) fn github(responses: Vec<(u16, Value)>) -> (Client, Requests, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let client = Client::loopback(listener.local_addr().unwrap()).unwrap();
-    let requests = Requests::default();
-    let observed = requests.clone();
-    let task = thread::spawn(move || {
-        for (status, body) in responses {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            let mut input = Vec::new();
-            let mut buffer = [0; 4096];
-            let (head, body_start, length) = loop {
-                let read = stream.read(&mut buffer).unwrap();
-                input.extend_from_slice(&buffer[..read]);
-                if let Some(end) = input.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let head = String::from_utf8_lossy(&input[..end]).into_owned();
-                    let length = head
-                        .lines()
-                        .find_map(|line| {
-                            line.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse::<usize>().unwrap())
-                        })
-                        .unwrap_or(0);
-                    break (head, end + 4, length);
-                }
-            };
-            while input.len() < body_start + length {
-                let read = stream.read(&mut buffer).unwrap();
-                input.extend_from_slice(&buffer[..read]);
-            }
-            let line = head.lines().next().unwrap_or_default().to_owned();
-            let sent = String::from_utf8_lossy(&input[body_start..body_start + length]).into_owned();
-            observed.lock().unwrap().push((line, sent));
-            let text = body.to_string();
-            write!(
-                stream,
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
-                text.len()
-            )
-            .unwrap();
-        }
-    });
-    (client, requests, task)
-}
 
 fn tokens() -> Value {
     json!({
@@ -124,9 +69,12 @@ fn a_device_sign_in_waits_slows_down_and_returns_an_expiring_chain() {
     assert!(chain.access_expires_at <= in_8h && chain.access_expires_at + Duration::from_secs(60) > in_8h);
     assert!(!format!("{chain:?}").contains("ghu_") && !format!("{chain:?}").contains("ghr_"));
     let requests = requests.lock().unwrap();
-    assert_eq!(requests[0].0, "POST /login/device/code HTTP/1.1");
-    assert_eq!(fields(&requests[0].1), [("client_id".into(), "Iv23synthetic".into())]);
-    let poll = fields(&requests[1].1);
+    assert_eq!(requests[0].line, "POST /login/device/code HTTP/1.1");
+    assert_eq!(
+        fields(&requests[0].body),
+        [("client_id".into(), "Iv23synthetic".into())]
+    );
+    let poll = fields(&requests[1].body);
     assert!(poll.contains(&("grant_type".into(), DEVICE_GRANT.into())));
     assert!(poll.contains(&("device_code".into(), "dc-synthetic".into())));
     assert!(!poll.iter().any(|(key, _)| key == "client_secret"));
@@ -199,11 +147,11 @@ fn a_refresh_sends_the_secret_only_when_given_and_returns_the_new_chain() {
     client.refresh("Iv23synthetic", Some(&secret), &refresh).unwrap();
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    let without = fields(&requests[0].1);
+    let without = fields(&requests[0].body);
     assert!(without.contains(&("grant_type".into(), "refresh_token".into())));
     assert!(without.contains(&("refresh_token".into(), "ghr_old".into())));
     assert!(!without.iter().any(|(key, _)| key == "client_secret"));
-    assert!(fields(&requests[1].1).contains(&("client_secret".into(), "synthetic-client-secret".into())));
+    assert!(fields(&requests[1].body).contains(&("client_secret".into(), "synthetic-client-secret".into())));
 }
 
 #[test]
@@ -246,7 +194,7 @@ fn a_web_sign_in_code_is_exchanged_with_the_secret_and_verifier() {
         .unwrap();
     task.join().unwrap();
     assert_eq!(chain.access_token.expose(), "ghu_synthetic_access");
-    let sent = fields(&requests.lock().unwrap()[0].1);
+    let sent = fields(&requests.lock().unwrap()[0].body);
     assert!(sent.contains(&("client_secret".into(), "synthetic-client-secret".into())));
     assert!(sent.contains(&("code_verifier".into(), "verifier-synthetic".into())));
     assert!(sent.contains(&("redirect_uri".into(), "http:%2F%2F127.0.0.1:47614%2Fcallback".into())));
@@ -269,7 +217,7 @@ fn a_manifest_code_becomes_the_app_without_its_private_key() {
     assert_eq!(app.client_secret.expose(), "synthetic-client-secret");
     assert!(!format!("{app:?}").contains("synthetic-client-secret"));
     assert_eq!(
-        requests.lock().unwrap()[0].0,
+        requests.lock().unwrap()[0].line,
         "POST /app-manifests/abc123/conversions HTTP/1.1"
     );
     assert_eq!(
@@ -333,7 +281,7 @@ fn a_public_app_slug_is_found_and_a_missing_one_is_not() {
     );
     task.join().unwrap();
     let requests = requests.lock().unwrap();
-    assert_eq!(requests[0].0, "GET /apps/horizon-for-octo-cat HTTP/1.1");
+    assert_eq!(requests[0].line, "GET /apps/horizon-for-octo-cat HTTP/1.1");
     assert_eq!(
         client.app_exists("../user"),
         Err(Error::InvalidResponse),
@@ -432,7 +380,7 @@ fn the_user_is_named_with_github_private_commit_address() {
     );
     assert_eq!(client.user(&token).unwrap_err(), Error::Revoked);
     task.join().unwrap();
-    assert_eq!(requests.lock().unwrap()[0].0, "GET /user HTTP/1.1");
+    assert_eq!(requests.lock().unwrap()[0].line, "GET /user HTTP/1.1");
 }
 
 #[test]
@@ -468,7 +416,12 @@ fn installed_repositories_reads_every_page_of_every_installation() {
     task.join().unwrap();
     assert_eq!(names.len(), 202);
     assert!(names.contains(&"acme/two-100".to_owned()), "lowercased");
-    let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
+    let lines: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.line.clone())
+        .collect();
     assert_eq!(
         lines[4],
         "GET /user/installations/2/repositories?per_page=100&page=2 HTTP/1.1"
@@ -531,14 +484,14 @@ fn a_device_sign_in_asks_for_a_scope_only_when_given_one() {
     task.join().unwrap();
     let sent = requests.lock().unwrap();
     assert_eq!(
-        fields(&sent[0].1),
+        fields(&sent[0].body),
         [
             ("client_id".to_owned(), "Ov23synthetic".to_owned()),
             ("scope".to_owned(), "write:packages".to_owned())
         ]
     );
     assert_eq!(
-        fields(&sent[1].1),
+        fields(&sent[1].body),
         [("client_id".to_owned(), "Iv23synthetic".to_owned())]
     );
 }
@@ -550,7 +503,12 @@ fn a_repository_size_is_read_in_bytes_with_or_without_a_token() {
     let token = Secret::new("ghu_synthetic".into());
     assert_eq!(client.repository_size("acme/private", Some(&token)).unwrap(), 1024);
     task.join().unwrap();
-    let lines: Vec<String> = requests.lock().unwrap().iter().map(|(line, _)| line.clone()).collect();
+    let lines: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.line.clone())
+        .collect();
     assert_eq!(
         lines,
         ["GET /repos/acme/web HTTP/1.1", "GET /repos/acme/private HTTP/1.1"]
@@ -581,7 +539,7 @@ fn an_organization_that_limits_oauth_apps_says_so_for_its_package() {
     task.join().unwrap();
     let requests = requests.lock().unwrap();
     assert_eq!(
-        requests[0].0, "GET /orgs/acme/packages/container/sdk%2Fruntime HTTP/1.1",
+        requests[0].line, "GET /orgs/acme/packages/container/sdk%2Fruntime HTTP/1.1",
         "a nested name is one path segment"
     );
     assert_eq!(

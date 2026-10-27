@@ -57,10 +57,11 @@ subsystem, not the crate that holds it. [`trust-boundary-audit.md`](trust-bounda
 gives the untrusted input, the guarantee and the limit of each boundary.
 
 1. **Local host and private files** — a program on this computer reads a
-   private file, a host file or a Docker host. Boundaries:
+   private file, a host file or a Docker host, or signs as this machine's GitHub
+   App with a private key. Boundaries:
    `browser-profile-host`, `browser-remote-bridge`, `browser-remote-panel`,
    `standalone-remote-host`, `native-client-file`, `checkout-search`,
-   `docker-host-provider`.
+   `docker-host-provider`, `github-installation-token`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
    drop a file, answer a passkey request or judge a semantic action. Boundaries:
    `browser-webauthn`, `browser-semantic-actions`, `cloud-browser-uploads`,
