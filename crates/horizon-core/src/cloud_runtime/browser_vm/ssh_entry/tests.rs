@@ -71,6 +71,19 @@ fn entry<'a>(home: &'a Path, root: &'a Path, scan: &HostKeyScan) -> Entry<'a> {
     Entry::with_scan(home, root, scan.clone())
 }
 
+/// What `ssh -G` resolves for `host` with the configuration of this home.
+fn ssh_configuration(home: &Path, host: &str) -> String {
+    let output = std::process::Command::new("ssh")
+        .arg("-G")
+        .arg("-F")
+        .arg(home.join(".ssh").join("config"))
+        .arg(host)
+        .output()
+        .expect("ssh resolves the configuration");
+    assert!(output.status.success(), "ssh -G failed for {host}");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 fn config(home: &Path) -> String {
     std::fs::read_to_string(home.join(".ssh").join("config")).unwrap_or_default()
 }
@@ -115,6 +128,72 @@ fn the_block_goes_to_the_top_and_the_hosts_of_the_person_stay_byte_for_byte() {
         known,
         format!("horizon-browser-vm ssh-ed25519 {KEY}\nhorizon-browser-vm ssh-rsa {RSA}\n"),
         "ssh looks up the alias, never the address behind it"
+    );
+}
+
+#[test]
+fn the_options_above_the_first_host_still_apply_to_the_hosts_of_the_person() {
+    // A comment does not end a Host section, so a block written above these options would take
+    // them for itself and the person's own hosts would quietly lose them.
+    let person = "ServerAliveInterval 60\nIdentityFile ~/.ssh/work\nHost foo\n  HostName foo.example\n";
+    let home = home(Some(person));
+    let root = tempfile::tempdir().expect("a temporary cloud root");
+    let (_scan, scan) = trusted();
+
+    let before = ssh_configuration(home.path(), "foo");
+    entry(home.path(), root.path(), &scan)
+        .write(ADDRESS, Path::new(IDENTITY))
+        .expect("the entry");
+    let after = ssh_configuration(home.path(), "foo");
+
+    assert_eq!(before, after, "the host of the person resolves as it did");
+    let written = config(home.path());
+    let block = written.find("# >>> horizon browser vm").expect("the block");
+    assert!(
+        block
+            > written
+                .find("ServerAliveInterval 60")
+                .expect("the option of the person"),
+        "the options above the first host section stay above the block: {written}"
+    );
+    assert!(
+        block < written.find("Host foo").expect("the host of the person"),
+        "the block stands before the first host section and never after it: {written}"
+    );
+}
+
+#[test]
+fn a_configuration_that_is_a_link_into_a_dotfiles_tool_stays_a_link() {
+    let home = home(None);
+    let root = tempfile::tempdir().expect("a temporary cloud root");
+    let dotfiles = tempfile::tempdir().expect("a temporary dotfiles repository");
+    let target = dotfiles.path().join("config");
+    std::fs::write(&target, "Host foo\n  HostName foo.example\n").expect("the dotfiles file");
+    let folder = home.path().join(".ssh");
+    std::fs::create_dir_all(&folder).expect("the ssh folder");
+    std::os::unix::fs::symlink(&target, folder.join("config")).expect("the link");
+    let (_scan, scan) = trusted();
+
+    entry(home.path(), root.path(), &scan)
+        .write(ADDRESS, Path::new(IDENTITY))
+        .expect("the entry");
+
+    let link = std::fs::symlink_metadata(folder.join("config")).expect("the configuration");
+    assert!(link.file_type().is_symlink(), "a dotfiles link is never replaced");
+    assert!(
+        std::fs::read_to_string(&target)
+            .expect("the target")
+            .contains("Host horizon-browser-vm"),
+        "the write reaches the file that the link names"
+    );
+
+    entry(home.path(), root.path(), &scan).remove().expect("the removal");
+    let link = std::fs::symlink_metadata(folder.join("config")).expect("the configuration");
+    assert!(link.file_type().is_symlink(), "the link survives a removal");
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("the target"),
+        "Host foo\n  HostName foo.example\n",
+        "the file returns to its own bytes"
     );
 }
 

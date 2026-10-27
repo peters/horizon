@@ -89,19 +89,26 @@ impl<'a> Entry<'a> {
         }
     }
 
-    /// Writes the block for `address` at the top of the ssh configuration, so that the first
-    /// matching value of each keyword is the value of Horizon even below a `Host *`, and puts
-    /// the host keys of that address in the `known_hosts` file of this Horizon.
+    /// Writes the block for `address` where the first host section of the ssh configuration
+    /// begins, so that its values win over a `Host *` below it while the options that a person
+    /// sets for every host stay above it, and puts the host keys of that address in the
+    /// `known_hosts` file of this Horizon.
     /// # Errors
     /// Refuses a configuration that already names the alias outside the block, and reports a
     /// configuration, or a `known_hosts` file, that cannot be made durable.
     pub(super) fn write(&self, address: &str, identity: &Path) -> Result<Trust> {
-        let config = self.config();
+        let config = self.target()?;
         let existing = read(&config)?;
         let block = self.block(address, identity)?;
         let kept = without_block(&existing)?;
-        let mut written = block;
-        written.extend_from_slice(&kept);
+        // The block goes where the first host section begins, never above the options that a
+        // person sets for every host: a comment does not end a Host section, so a block that
+        // came first would take those options for itself.
+        let at = first_host_section(&kept).unwrap_or(0);
+        let mut written = Vec::with_capacity(block.len() + kept.len());
+        written.extend_from_slice(&kept[..at]);
+        written.extend_from_slice(&block);
+        written.extend_from_slice(&kept[at..]);
         if written != existing {
             private_folder(&self.folder())?;
             store(&config, &written)?;
@@ -117,7 +124,7 @@ impl<'a> Entry<'a> {
     /// Refuses a configuration that names the alias outside the block, and reports a
     /// configuration that cannot be made durable.
     pub(super) fn remove(&self) -> Result<()> {
-        let config = self.config();
+        let config = self.target()?;
         let existing = read(&config)?;
         let kept = without_block(&existing)?;
         if kept != existing {
@@ -136,6 +143,19 @@ impl<'a> Entry<'a> {
 
     fn config(&self) -> PathBuf {
         self.folder().join("config")
+    }
+
+    /// The file that holds the configuration: the target of the link when the person manages
+    /// `.ssh/config` with a dotfiles tool, so a write reaches their repository and the link is
+    /// never replaced by a regular file.
+    fn target(&self) -> Result<PathBuf> {
+        let config = self.config();
+        match std::fs::symlink_metadata(&config) {
+            Ok(metadata) if metadata.file_type().is_symlink() => std::fs::canonicalize(&config).map_err(Error::from),
+            Ok(_) => Ok(config),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(config),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn known_hosts(&self) -> PathBuf {
@@ -252,6 +272,17 @@ fn without_block(config: &[u8]) -> Result<Vec<u8>> {
             kept
         }
         None => config.to_vec(),
+    })
+}
+
+/// Where the first host section of a configuration begins, so a block can go there without
+/// changing what the lines above it mean. A file with no section has no place to keep, so a
+/// block that follows it stands at the top.
+fn first_host_section(config: &[u8]) -> Option<usize> {
+    lines(config).find_map(|(offset, line)| {
+        let line = line_text(line);
+        let keyword = line.split('#').next()?.trim().split_once(char::is_whitespace)?.0;
+        (keyword.eq_ignore_ascii_case("host") || keyword.eq_ignore_ascii_case("match")).then_some(offset)
     })
 }
 
