@@ -70,15 +70,11 @@ impl HorizonApp {
             );
             return;
         };
-        let identity = self
-            .settings
-            .as_ref()
-            .and_then(|editor| editor.browser_vm.device_identity().map(str::to_string));
         let options = PanelOptions {
             name: Some(DEVICE_PANEL_NAME.to_string()),
             kind: PanelKind::Device,
             command: Some(route.vnc.clone()),
-            ssh_connection: Some(device_connection(&route, identity.as_deref())),
+            ssh_connection: Some(device_connection(&route)),
             ..PanelOptions::default()
         };
         match self.create_panel_with_options(options, workspace) {
@@ -99,13 +95,13 @@ impl HorizonApp {
     }
 }
 
-/// The SSH route of the Device panel. The deploy installs one key for root, so the panel
-/// names that key: the person's own `~/.ssh` configuration cannot open the machine.
-pub(super) fn device_connection(route: &DeviceRoute, identity: Option<&str>) -> SshConnection {
+/// The SSH route of the Device panel. It names the managed entry of the machine, and the entry
+/// of the ssh configuration carries the key that the deploy installed together with the host
+/// keys that Horizon trusted, so the panel presents no key of its own.
+pub(super) fn device_connection(route: &DeviceRoute) -> SshConnection {
     SshConnection {
         host: route.host.clone(),
         user: Some(route.user.clone()),
-        identity_file: identity.map(str::to_string),
         ..SshConnection::default()
     }
 }

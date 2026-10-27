@@ -13,11 +13,13 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that an agent rents a browser machine from Horizon with one
-tool call. It proves that the `Browser VM` section of the Settings window shows
-that machine, stops it, resumes it, opens its Device panel and writes the settings
-entry `browser_host`. A person signs in to a site on the display of the machine
-one time, and a stop and a resume keep that sign-in. A delete from the Settings
-window removes the machine and the state volume.
+tool call. It proves that Horizon writes the ssh entry `horizon-browser-vm` and
+trusts the host keys of the machine, so every route reaches the machine with no
+copy of a key. It proves that the `Browser VM` section of the Settings window
+shows that machine, stops it, resumes it, opens its Device panel and writes the
+settings entry `browser_host`. A person signs in to a site on the display of the
+machine one time, and a stop and a resume keep that sign-in. A delete from the
+Settings window removes the machine and the state volume.
 
 ## 2. Applicability
 
@@ -56,6 +58,9 @@ window removes the machine and the state volume.
   registry that the rented machine can pull. Name it `IMAGE` in this procedure. A
   private image needs the `registry_pull` binding of the cloud settings.
 - A site with a sign-in page for step 6.3. Name it `SITE` in this procedure.
+- An ssh configuration at `~/.ssh/config` that holds no `Host horizon-browser-vm`
+  block of its own. If it holds one, Horizon writes nothing, because that name
+  belongs to the person, and the answer holds an `ssh_note` that says so.
 
 ## 5. Setup
 
@@ -89,9 +94,9 @@ window removes the machine and the state volume.
 2. Ask the agent to call `browser_vm` with `{"operation": "status"}` until the
    phase is `ready`.
 
-   Result: The answer holds `phase` `ready`, `ssh_target` `root@<address>`,
+   Result: The answer holds `phase` `ready`, `ssh_target` `horizon-browser-vm`,
    `hourly_net`, `device_panel` and `person_step`. The `person_step` says that a
-   person must sign in.
+   person must sign in through the entry that Horizon wrote.
 
 3. Examine the record.
 
@@ -100,7 +105,40 @@ window removes the machine and the state volume.
    ```
 
    Result: The file holds the image, the server type, the location, the volume
-   size, the SSH target, the server identity and the volume identity.
+   size, `ssh_target` `horizon-browser-vm`, the server identity and the volume
+   identity. The file holds no `ssh_note`, because the entry is complete.
+
+4. Examine the ssh entry that Horizon wrote.
+
+   ```sh
+   head -8 ~/.ssh/config
+   ls -l ~/.ssh/config ~/.horizon/cloud/browser-vm-known-hosts
+   ```
+
+   Result: The first lines of `~/.ssh/config` are the block of this procedure,
+   below. The folder `~/.ssh` is `drwx------`, and both files are `-rw-------`.
+   The managed file holds one line for each host key, and each line starts with
+   `horizon-browser-vm`.
+
+   ```text
+   # >>> horizon browser vm; written by Horizon, do not edit
+   Host horizon-browser-vm
+     HostName <address>
+     User root
+     IdentityFile <absolute ssh_identity_file of the cloud settings>
+     IdentitiesOnly yes
+     UserKnownHostsFile <absolute path of ~/.horizon/cloud/browser-vm-known-hosts>
+   # <<< horizon browser vm
+   ```
+
+5. Ask the agent to run a command on the machine through the entry.
+
+   ```sh
+   ssh horizon-browser-vm true
+   ```
+
+   Result: The command exits with the code 0. It asked for no key and no host
+   key, because the entry names both.
 
 ### 6.2 D2: the person drives the machine from the Settings window
 
@@ -108,7 +146,7 @@ window removes the machine and the state volume.
    tab.
 
    Result: The section shows the phase `Ready`, the machine size `ccx13`, the
-   location, the SSH target `root@<address>` and the hourly cost. The `State
+   location, the SSH target `horizon-browser-vm` and the hourly cost. The `State
    volume` line shows `20 GB`.
 
 2. Read the hourly cost line.
@@ -121,37 +159,42 @@ window removes the machine and the state volume.
 
    Result: The button becomes unavailable, the card says that new browser panels
    already use this machine, and the `YAML` tab shows `browser_host:
-   ssh_target: root@<address>`. The entry applies at the next start of Horizon.
+   ssh_target: horizon-browser-vm`. The entry applies at the next start of
+   Horizon. The entry names the machine, so it also applies after a resume with
+   a new address.
 
-4. Trust the host key of the machine one time, in a terminal panel of the
-   isolated desktop:
-
-   ```sh
-   ssh-keyscan -T 10 <address> >> ~/.ssh/known_hosts
-   ```
-
-   Result: `known_hosts` holds the keys of the machine. This step is necessary
-   because a Device panel refuses a host key that it has never seen, by design.
-
-5. Click `Open Device panel`.
+4. Click `Open Device panel`.
 
    Result: A native Device panel named `Browser VM` shows `127.0.0.1:5900 via
-   root@<address>`, the connection state `Connected` and the VNC name of the
-   machine. The desktop of the machine is a plain window manager until a page
-   opens there.
+   root@horizon-browser-vm`, the connection state `Connected` and the VNC name of
+   the machine. The panel asks for no key and for no host key, because the entry
+   carries both. The desktop of the machine is a plain window manager until a
+   page opens there.
 
-6. Click `Stop`.
+5. Click `Stop`.
 
    Result: The section shows `Stopping`, and Start, Stop, Resume and Delete are
    not available while the run continues. The phase becomes `Stopped` by itself.
    The SSH target line says `none yet`, and the state volume line still shows
    `20 GB`.
 
+6. Examine the ssh entry after the stop.
+
+   ```sh
+   grep -c 'horizon browser vm' ~/.ssh/config
+   ls ~/.horizon/cloud/browser-vm-known-hosts
+   ```
+
+   Result: The first command prints `0`, and the second reports that the file
+   does not exist. The other hosts and comments of `~/.ssh/config` are as they
+   were before the deploy.
+
 7. Click `Resume`, and wait until the phase is `Ready`.
 
-   Result: The section shows the new SSH target of the machine, and the hourly
-   cost of its server type. The state volume is the same volume, so the sites
-   that a person signed in to are still signed in.
+   Result: The section shows the SSH target `horizon-browser-vm` again, and the
+   hourly cost of its server type. The entry names the new address of the
+   machine. The state volume is the same volume, so the sites that a person
+   signed in to are still signed in.
 
    > **CAUTION:** Resume rents a machine. Stop it or delete it when the check is
    > complete.
@@ -167,13 +210,16 @@ window removes the machine and the state volume.
 
 ### 6.3 D3: a person signs in one time
 
-1. Open the Device panel with `Open Device panel` in the section, not with the
-   `device_panel` tool. The deploy installs one key for the root user, and the
-   section names it; the tool cannot name a key, which
-   [#1878](https://github.com/peters/horizon/issues/1878) tracks.
+1. Ask an agent to call `device_panel` with the ssh route of the answer.
+
+   ```json
+   {"ssh": {"host": "horizon-browser-vm", "user": "root", "vnc": "127.0.0.1:5900"}}
+   ```
 
    Result: The panel shows the desktop of the machine and the connection state
-   `Connected`.
+   `Connected`. The tool needs no key, because the entry carries the key that
+   the deploy installed and the host keys of the machine. `Open Device panel` in
+   the section opens the same route.
 
 2. Ask an agent to open `SITE` on the browser host of the machine, so that its
    browser window appears on that desktop. The desktop has a window manager and
@@ -215,14 +261,14 @@ window removes the machine and the state volume.
 
    Result: The site shows the signed-in page without a new sign-in.
 
-5. Read the marker from the new machine through its SSH route.
+5. Read the marker from the new machine through its SSH entry.
 
    ```sh
-   ssh root@<new-address> ls /state/signin-marker
+   ssh horizon-browser-vm ls /state/signin-marker
    ```
 
    Result: The command prints the path, so the state volume kept the file across
-   the stop and the resume.
+   the stop and the resume, and the entry names the new address.
 
 ### 6.5 D5: a delete from the Settings window removes the machine and the volume
 
@@ -276,10 +322,13 @@ window removes the machine and the state volume.
 
 ## 7. Pass criteria
 
-- D1 rents one machine, and its state volume is mounted at `/state`.
+- D1 rents one machine, and its state volume is mounted at `/state`. Horizon
+  writes the ssh entry `horizon-browser-vm` with the key of the deploy and the
+  host keys of the machine, and `ssh horizon-browser-vm` reaches the machine
+  without a copy of a key and without a host-key step.
 - D2 shows the phase, the machine and the net hourly cost in the Settings window,
   stops and resumes the machine there, opens the Device panel there and writes
-  the settings entry.
+  the settings entry. A stop removes the ssh entry and a resume writes it again.
 - D3 signs in one time, and the Device panel shows the desktop.
 - D4 keeps the sign-in and the file across a stop and a resume.
 - D5 deletes the machine from the Settings window, and leaves no server and no
@@ -302,6 +351,17 @@ window removes the machine and the state volume.
 3. Close the Device panel of the machine.
 
    Result: The panel closes. The machine is already gone.
+
+4. Examine the ssh entry after the delete.
+
+   ```sh
+   grep -c 'horizon browser vm' ~/.ssh/config
+   ls ~/.horizon/cloud/browser-vm-known-hosts
+   ```
+
+   Result: The first command prints `0`, and the second reports that the file
+   does not exist. The other hosts and comments of `~/.ssh/config` are as they
+   were before the deploy.
 
 ## 9. Record of results
 

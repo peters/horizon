@@ -48,6 +48,10 @@ fn machine_card(ui: &mut Ui, panel: &mut Panel, offered: &Offered) {
             ui.add_space(8.0);
             ui.add(egui::Label::new(egui::RichText::new(reason).color(theme::PALETTE_RED()).size(11.0)).wrap());
         }
+        if let Some(note) = panel.ssh_note() {
+            ui.add_space(8.0);
+            dim_label(ui, note);
+        }
         if panel.busy {
             ui.add_space(8.0);
             dim_label(

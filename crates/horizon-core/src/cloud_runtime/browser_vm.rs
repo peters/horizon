@@ -8,6 +8,11 @@
 //!
 //! Every function here runs off the UI thread. The record is saved before each provider
 //! request it guards, so an interrupted run is resumed or deleted, never repeated blindly.
+//!
+//! While the machine runs, Horizon keeps the ssh entry that reaches it: one host block in the
+//! ssh configuration of the person, which names the key the machine was rented with, and the
+//! host keys of the machine. Every route that runs `ssh <target>` then reaches the machine
+//! without a copy of a key and without a manual host-key step.
 use std::path::{Path, PathBuf};
 
 use horizon_cloud::{
@@ -22,6 +27,8 @@ use horizon_cloud::{
 use serde::{Deserialize, Serialize};
 
 use super::{Error, Result, settings::Settings};
+
+mod ssh_entry;
 
 /// The state volume a first rent creates, in GB. The image and its browser profiles
 /// need far less, and the volume can grow later.
@@ -80,8 +87,12 @@ pub struct Deploy {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub phase: Phase,
-    /// The SSH target, `root@<address>`, that the settings entry `browser_host` names.
+    /// The SSH target that every route names: the alias `horizon-browser-vm` while the managed
+    /// ssh entry exists, else `root@<address>`. The settings entry `browser_host` names it.
     pub ssh_target: Option<String>,
+    /// Why the managed ssh entry is missing, or what the machine is not yet trusted for, when
+    /// that is the case. The run itself succeeded when the machine is in [`Phase::Ready`].
+    pub ssh_note: Option<String>,
     pub image: Option<String>,
     pub server_type: Option<String>,
     pub location: Option<String>,
@@ -93,13 +104,14 @@ pub struct Status {
 }
 
 impl Status {
-    /// The SSH host of the machine, without the user that the target names. A Device
-    /// panel names the host and the user separately.
+    /// The SSH host of the machine: the alias while the managed entry exists, else the address
+    /// behind the `root@` target. A Device panel names the host and the user separately.
     #[must_use]
     pub fn ssh_host(&self) -> Option<&str> {
-        self.ssh_target
-            .as_deref()
-            .and_then(|target| target.split_once('@').map(|(_, host)| host))
+        self.ssh_target.as_deref().map(|target| match target.split_once('@') {
+            Some((_, host)) => host,
+            None => target,
+        })
     }
 }
 
@@ -120,6 +132,8 @@ pub struct Record {
     pub volume_gb: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +161,7 @@ impl Default for Record {
             location: None,
             volume_gb: None,
             ssh_target: None,
+            ssh_note: None,
             server_id: None,
             hourly_net: None,
             error: None,
@@ -190,6 +205,7 @@ impl Record {
         Status {
             phase: self.phase,
             ssh_target: self.ssh_target.clone(),
+            ssh_note: self.ssh_note.clone(),
             image: self.image.clone(),
             server_type: self.server_type.clone(),
             location: self.location.clone(),
@@ -278,22 +294,33 @@ pub fn begin(root: &Path, operation: &Operation) -> Result<Status> {
     }
     record.phase = operation.phase();
     record.error = None;
+    // The note of the machine that was recorded says nothing about the run that starts now.
+    record.ssh_note = None;
     record.save(root)?;
     Ok(record.status())
 }
 
 /// Carries the recorded run out and records the phase it ends in. `Stop` and `Delete`
 /// are given no progress callback: the provider runtime reports their steps as none.
+///
+/// `home` is the directory that holds the ssh configuration of the person. This run writes
+/// the managed entry there and removes it again when the machine is gone; `None` leaves every
+/// route at the plain address of the machine.
 /// # Errors
 /// Reports provider and persistence failures. A failed run keeps its record, so it is
 /// retried or deleted.
-pub fn run(root: &Path, cancel: &Cancellation, progress: &mut dyn FnMut(Progress)) -> Result<Status> {
+pub fn run(
+    root: &Path,
+    home: Option<&Path>,
+    cancel: &Cancellation,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Status> {
     let record = Record::load(root)?;
     match record.phase {
         Phase::Deploying | Phase::Resuming => {
             let deploy = recorded_deploy(&record)?;
-            let (client, request, login) = admission(root, &deploy)?;
-            place(&client, &request, login, cancel, progress, Saved::new(root, record))
+            let admitted = admission(root, &deploy)?;
+            place(admitted, home, cancel, progress, Saved::new(root, record))
         }
         Phase::Stopping => {
             let client = client(root)?;
@@ -311,7 +338,7 @@ pub fn run(root: &Path, cancel: &Cancellation, progress: &mut dyn FnMut(Progress
             );
             saved.keep_journal(&journal);
             let stopped = saved.finish(stopped);
-            saved.settled(stopped, Phase::Stopped)
+            saved.settled(stopped, Phase::Stopped, home)
         }
         Phase::Deleting => {
             let client = client(root)?;
@@ -330,7 +357,7 @@ pub fn run(root: &Path, cancel: &Cancellation, progress: &mut dyn FnMut(Progress
             saved.record.operation = operation;
             saved.record.journal = journal;
             let deleted = saved.finish(deleted);
-            saved.settled(deleted, Phase::Deleted)
+            saved.settled(deleted, Phase::Deleted, home)
         }
         Phase::Ready | Phase::Stopped | Phase::Deleted | Phase::Failed | Phase::Idle => Err(Error::Invalid(
             "No browser VM run is recorded; begin one before running it",
@@ -357,19 +384,25 @@ fn recorded_deploy(record: &Record) -> Result<Deploy> {
     })
 }
 
-/// Places the recorded machine through the shared rental code and records what it is.
+/// Places the recorded machine through the shared rental code and records what it is, and the
+/// ssh entry that reaches it.
 fn place(
-    client: &Hetzner,
-    request: &Request,
-    login: Option<RegistryLogin>,
+    admitted: Admitted,
+    home: Option<&Path>,
     cancel: &Cancellation,
     progress: &mut dyn FnMut(Progress),
     mut saved: Saved<'_>,
 ) -> Result<Status> {
-    let (mut operation, mut journal) = saved.parts();
-    let placed = browser_vm::deploy(
+    let Admitted {
         client,
         request,
+        login,
+        identity,
+    } = admitted;
+    let (mut operation, mut journal) = saved.parts();
+    let placed = browser_vm::deploy(
+        &client,
+        &request,
         login,
         Fences {
             operation: &mut operation,
@@ -383,16 +416,26 @@ fn place(
     saved.record.operation = operation;
     saved.record.journal = journal;
     if let Ok(machine) = &placed {
-        saved.record.ssh_target = Some(machine.ssh_target.clone());
+        let (target, note) = ssh_entry::machine_route(home, saved.root, &machine.ssh_target, &identity);
+        saved.record.ssh_target = Some(target);
+        saved.record.ssh_note = note;
         saved.record.server_id = Some(machine.server_id.clone());
         saved.record.hourly_net = machine.hourly_net;
     }
     let placed = saved.finish(placed);
-    saved.settled(placed, Phase::Ready)
+    saved.settled(placed, Phase::Ready, home)
 }
 
-/// The settings of this machine, checked before any request is made.
-fn admission(root: &Path, deploy: &Deploy) -> Result<(Hetzner, Request, Option<RegistryLogin>)> {
+/// The settings of this machine, checked before any request is made: the client, the request,
+/// the login of a private image, and the identity that opens the machine.
+struct Admitted {
+    client: Hetzner,
+    request: Request,
+    login: Option<RegistryLogin>,
+    identity: PathBuf,
+}
+
+fn admission(root: &Path, deploy: &Deploy) -> Result<Admitted> {
     if !deploy.server_type.starts_with(SERVER_TYPE_PREFIX) {
         return Err(Error::Invalid(
             "A browser VM needs a dedicated ccx server type; the shared cores of a Hetzner account are exhausted, and the image needs a real machine",
@@ -424,7 +467,12 @@ fn admission(root: &Path, deploy: &Deploy) -> Result<(Hetzner, Request, Option<R
     // The spec is built here, so a request the provider would refuse names its reason
     // before the record claims a run.
     request.spec()?;
-    Ok((Hetzner::new(hetzner.credential()?), request, login))
+    Ok(Admitted {
+        client: Hetzner::new(hetzner.credential()?),
+        request,
+        login,
+        identity: settings.ssh_identity_file.clone(),
+    })
 }
 
 fn client(root: &Path) -> Result<Hetzner> {
@@ -481,8 +529,10 @@ impl<'a> Saved<'a> {
         self.record.save(self.root)
     }
 
-    /// Saves the phase that `result` ends in, or the failure, and reports the status.
-    fn settled<T>(mut self, result: Result<T>, phase: Phase) -> Result<Status> {
+    /// Saves the phase that `result` ends in, or the failure, and reports the status. A run
+    /// that ends in a phase without a machine removes the ssh entry of that machine, so no
+    /// route names a host that is gone.
+    fn settled<T>(mut self, result: Result<T>, phase: Phase, home: Option<&Path>) -> Result<Status> {
         match result {
             Ok(_) => {
                 self.record.phase = phase;
@@ -490,6 +540,7 @@ impl<'a> Saved<'a> {
                 if phase != Phase::Ready {
                     self.record.ssh_target = None;
                     self.record.server_id = None;
+                    self.record.ssh_note = ssh_entry::withdraw(home, self.root);
                 }
             }
             Err(error) => {
