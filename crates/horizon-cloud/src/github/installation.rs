@@ -127,8 +127,14 @@ impl Client {
         let Some(installation) = self.installation(&jwt, &account)? else {
             return Err(Error::NotInstalled);
         };
+        // GitHub names a repository in this request by its name alone: the installation already
+        // fixes the account, and an `owner/name` value is refused as unknown.
+        let names: Vec<&str> = repositories
+            .iter()
+            .filter_map(|repository| repository.split_once('/').map(|(_, name)| name))
+            .collect();
         let body = serde_json::json!({
-            "repositories": repositories,
+            "repositories": names,
             "permissions": PERMISSIONS.iter().copied().collect::<BTreeMap<_, _>>(),
         })
         .to_string();
