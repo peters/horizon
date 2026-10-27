@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use super::app::device_connection;
 use super::{Action, Panel, hourly_line, phase_label};
 use crate::app::HorizonApp;
-use crate::app::browser_vm_requests::{DeviceRoute, run_settings, ssh_identity};
+use crate::app::browser_vm_requests::{DeviceRoute, run_settings};
 use crate::app::settings::SettingsTab;
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::test_egui::DiscardTextures;
@@ -31,7 +31,8 @@ fn app() -> (TempDir, Context, HorizonApp) {
 fn ready() -> Status {
     Status {
         phase: Phase::Ready,
-        ssh_target: Some("root@203.0.113.10".into()),
+        ssh_target: Some("horizon-browser-vm".into()),
+        ssh_note: None,
         image: Some(IMAGE.into()),
         server_type: Some("ccx13".into()),
         location: Some("fsn1".into()),
@@ -202,7 +203,7 @@ fn a_run_in_flight_leaves_the_start_disabled() {
     assert!(offered.refresh, "a read is answered while a run is in flight");
     assert!(!offered.delete && !offered.stop && !offered.resume);
 
-    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
+    panel.absorb(BrowserVmAction::Status, Ok(ready()));
     assert!(!panel.offered().start, "a ready machine is not rented again");
     panel.sync(true, false);
     assert!(panel.offered().stop, "a ready machine can be stopped");
@@ -279,17 +280,21 @@ fn a_rent_without_cloud_support_shows_the_refusal_as_text() {
 #[test]
 fn a_ready_machine_offers_the_device_panel_and_the_settings_write() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Deploy, Ok(ready()), None);
+    panel.absorb(BrowserVmAction::Deploy, Ok(ready()));
     assert!(panel.offered().sign_in, "a ready machine offers the one-time sign-in");
 
     let route = panel.device_route().expect("the display has an SSH route");
-    assert_eq!(route.host, "203.0.113.10");
+    assert_eq!(route.host, "horizon-browser-vm");
     assert_eq!(route.user, "root");
     assert_eq!(route.vnc, "127.0.0.1:5900");
 
     let mut config = Config::default();
     assert_eq!(panel.use_host(&mut config), Ok(true));
-    assert_eq!(config.browser_host.ssh_target.as_deref(), Some("root@203.0.113.10"));
+    assert_eq!(
+        config.browser_host.ssh_target.as_deref(),
+        Some("horizon-browser-vm"),
+        "the settings entry names the managed entry, so a new address keeps it"
+    );
     assert_eq!(panel.use_host(&mut config), Ok(false), "the entry is written one time");
 }
 
@@ -304,7 +309,6 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
             phase: Phase::Deploying,
             ..ready()
         }),
-        None,
     );
     let offered = panel.offered();
     assert!(offered.start, "a recorded rent is taken over by a start");
@@ -316,7 +320,6 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
             phase: Phase::Deleting,
             ..ready()
         }),
-        None,
     );
     let offered = panel.offered();
     assert!(!offered.start, "a recorded delete is not a rent");
@@ -326,7 +329,7 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
 #[test]
 fn a_delete_waits_for_a_second_press() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
+    panel.absorb(BrowserVmAction::Status, Ok(ready()));
     assert!(panel.offered().delete);
     assert!(!panel.confirms_delete);
 
@@ -380,13 +383,13 @@ fn only_a_rent_names_the_machine() {
 #[test]
 fn the_section_draws_the_phase_the_cost_and_the_sign_in_of_a_ready_machine() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
+    panel.absorb(BrowserVmAction::Status, Ok(ready()));
     let shown = drawn(&mut Config::default(), &mut panel);
 
     for expected in [
         phase_label(Phase::Ready),
         hourly_line(0.0689).as_str(),
-        "root@203.0.113.10",
+        "horizon-browser-vm",
         "ccx13",
         "fsn1",
     ] {
@@ -408,7 +411,7 @@ fn the_section_draws_the_phase_the_cost_and_the_sign_in_of_a_ready_machine() {
 #[test]
 fn the_section_draws_a_run_in_flight_with_start_disabled() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
+    panel.absorb(BrowserVmAction::Status, Ok(ready()));
     panel.sync(true, true);
     let shown = drawn(&mut Config::default(), &mut panel);
 
@@ -431,8 +434,8 @@ fn the_section_draws_no_sign_in_before_a_machine_is_ready() {
             volume_gb: None,
             hourly_net: None,
             error: None,
+            ssh_note: None,
         }),
-        None,
     );
     let shown = drawn(&mut Config::default(), &mut panel);
 
@@ -442,59 +445,76 @@ fn the_section_draws_no_sign_in_before_a_machine_is_ready() {
 }
 
 #[test]
-fn the_sign_in_panel_names_the_identity_the_deploy_installed() {
+fn the_sign_in_panel_names_the_managed_entry_and_no_key() {
+    // The entry of the ssh configuration carries the key that the deploy installed, so the
+    // panel presents none of its own and ssh reads the entry.
     let route = DeviceRoute {
-        host: "203.0.113.10".into(),
+        host: "horizon-browser-vm".into(),
         user: "root".into(),
         vnc: "127.0.0.1:5900".into(),
     };
-    let without = device_connection(&route, None).to_command_args();
-    assert!(!without.contains(&"-i".to_string()));
-
-    let identity = "/home/person/.horizon/cloud/identity/ed25519";
-    let connection = device_connection(&route, Some(identity));
+    let connection = device_connection(&route);
     let args = connection.to_command_args();
-    let index = args.iter().position(|argument| argument == "-i");
-    assert_eq!(
-        index.map(|index| args.get(index + 1).map(String::as_str)),
-        Some(Some(identity)),
-        "the panel presents the one key that the machine accepts: {args:?}"
-    );
-    assert_eq!(connection.host, "203.0.113.10");
+
+    assert!(!args.contains(&"-i".to_string()), "no key of its own: {args:?}");
+    assert_eq!(connection.host, "horizon-browser-vm");
     assert_eq!(connection.user.as_deref(), Some("root"));
+    assert_eq!(args.last().map(String::as_str), Some("root@horizon-browser-vm"));
 }
 
 #[test]
-fn the_identity_of_the_machine_comes_from_the_cloud_settings() {
-    let root = TempDir::new().expect("temp root");
-    let identity = root.path().join("identity");
-    std::fs::write(&identity, b"key").expect("write identity");
-    std::fs::write(
-        root.path().join("settings.json"),
-        serde_json::to_vec(&serde_json::json!({ "ssh_identity_file": identity })).expect("json"),
-    )
-    .expect("write settings");
-
-    assert_eq!(
-        ssh_identity(root.path()).as_deref(),
-        Some(identity.to_string_lossy().as_ref())
-    );
-    let empty = TempDir::new().expect("temp root");
-    assert_eq!(ssh_identity(empty.path()), None, "no settings, no identity");
-}
-
-#[test]
-fn a_recorded_machine_keeps_the_identity_that_opened_it() {
+fn a_machine_without_an_entry_keeps_the_address_of_the_machine() {
+    // Without an entry, or without the home that holds its configuration, Horizon names the
+    // address that the provider returned, and says why the entry is missing.
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()), Some("/keys/ed25519".into()));
-    assert_eq!(panel.device_identity(), Some("/keys/ed25519"));
-
-    panel.absorb(BrowserVmAction::Status, Err("busy".into()), None);
-    assert_eq!(
-        panel.device_identity(),
-        Some("/keys/ed25519"),
-        "a refusal does not forget the key the machine takes"
+    panel.absorb(
+        BrowserVmAction::Status,
+        Ok(Status {
+            ssh_target: Some("root@203.0.113.10".into()),
+            ssh_note: Some("the name horizon-browser-vm is taken".into()),
+            ..ready()
+        }),
     );
+
+    let route = panel.device_route().expect("a ready machine has a route");
+    assert_eq!(route.host, "203.0.113.10");
+    assert_eq!(route.user, "root");
+    let shown = drawn(&mut Config::default(), &mut panel);
+    assert!(
+        shown.iter().any(|(text, _)| text == "root@203.0.113.10"),
+        "the section names the address it has: {shown:?}"
+    );
+
+    let mut config = Config::default();
+    assert_eq!(panel.use_host(&mut config), Ok(true));
+    assert_eq!(
+        config.browser_host.ssh_target.as_deref(),
+        Some("root@203.0.113.10"),
+        "the settings entry names the route that is recorded"
+    );
+}
+
+#[test]
+fn the_section_shows_why_the_managed_entry_is_missing() {
+    let mut panel = Panel::default();
+    let note = "Horizon did not write the ssh entry horizon-browser-vm: this computer names it already";
+    panel.absorb(
+        BrowserVmAction::Status,
+        Ok(Status {
+            ssh_note: Some(note.into()),
+            ..ready()
+        }),
+    );
+
+    assert_eq!(panel.ssh_note(), Some(note));
+    let shown = drawn(&mut Config::default(), &mut panel);
+    assert!(
+        shown.iter().any(|(label, _)| label.contains(note)),
+        "a person reads why the entry is missing: {shown:?}"
+    );
+    let mut plain = Panel::default();
+    plain.absorb(BrowserVmAction::Status, Ok(ready()));
+    assert_eq!(plain.ssh_note(), None, "an entry of the plain case says nothing");
 }
 
 #[test]
@@ -530,7 +550,6 @@ fn a_run_that_failed_inside_the_provider_shows_its_recorded_reason() {
             error: Some(reason.into()),
             ..ready()
         }),
-        None,
     );
 
     assert_eq!(panel.failure(), Some(reason), "a person reads why the run failed");
@@ -544,7 +563,7 @@ fn a_run_that_failed_inside_the_provider_shows_its_recorded_reason() {
 #[test]
 fn a_run_that_has_not_failed_shows_no_reason() {
     let mut panel = Panel::default();
-    panel.absorb(BrowserVmAction::Status, Ok(ready()), None);
+    panel.absorb(BrowserVmAction::Status, Ok(ready()));
     assert_eq!(panel.failure(), None);
     let empty = Panel::default();
     assert_eq!(empty.failure(), None, "an unread section shows no reason");

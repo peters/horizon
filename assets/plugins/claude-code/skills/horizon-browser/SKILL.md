@@ -441,12 +441,24 @@ Copy needed evidence before panel close or host exit; only eight exports remain.
 - `stop` releases the server and keeps the state volume, so the sign-ins stay.
   `resume` rents a new server on that volume. `delete` removes the server and
   the volume, and it is the only operation that removes a sign-in.
-- A `ready` answer holds `ssh_target` (`root@<address>`), a route for the native
-  Device panel and a `person_step`. A person must sign in: open that panel as the
-  `horizon-device` skill describes, with the `ssh` route of the answer, and ask
-  the person to sign in to the sites on the display. An agent cannot do that step.
+- A `ready` answer holds `ssh_target` (`horizon-browser-vm`), a route for the
+  native Device panel and a `person_step`. Horizon writes the ssh entry
+  `horizon-browser-vm` into the ssh configuration of the person, so that entry
+  names the machine with the key of the deploy and the host keys that Horizon
+  trusted. Every route that runs `ssh horizon-browser-vm` then reaches the
+  machine, with no copy of a key and no manual host-key step. A person must sign
+  in: open the panel as the `horizon-device` skill describes, with the `ssh`
+  route of the answer, and ask the person to sign in to the sites on the
+  display. An agent cannot do that step.
 - The `ssh_target` is the `browser_host` entry of the Settings window. It
-  applies at the next start of Horizon.
+  applies at the next start of Horizon. A `stop` removes the ssh entry and a
+  `resume` writes it again, so the entry survives a new address of the machine.
+- `ssh_note` explains the answer when the entry is not the plain case: the name
+  `horizon-browser-vm` is taken by a host block of the person, this Horizon does
+  not know the home directory of the person, or the host keys of the machine
+  were not scanned yet. `ssh_target` is then `root@<address>` for the missing
+  entry, and the routes of that answer use the address. Do not edit the ssh
+  configuration of the person to make room.
 - One run at a time. A second run is refused with `browser_vm_busy`. A failed
   run keeps its record, so you retry or delete it, and never rent twice.
 

@@ -4,6 +4,8 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f";
+/// The identity that the cloud settings name, as the ssh entry writes it.
+const IDENTITY: &str = "/home/person/.horizon/cloud/identity";
 const IMAGE: &str =
     "ghcr.io/example/browser-vm@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -271,7 +273,7 @@ fn a_delete_and_a_stop_with_nothing_refuse() {
     let stop = super::begin(root.path(), &Operation::Stop).unwrap_err();
     assert!(stop.to_string().contains("nothing to stop"), "{stop}");
     // A run with nothing recorded is refused rather than renting something.
-    assert!(super::run(root.path(), &Cancellation::default(), &mut |_| {}).is_err());
+    assert!(super::run(root.path(), None, &Cancellation::default(), &mut |_| {}).is_err());
 }
 
 #[test]
@@ -279,6 +281,7 @@ fn the_ssh_target_names_the_person_who_signs_in() {
     let status = Status {
         phase: Phase::Ready,
         ssh_target: Some("root@203.0.113.10".into()),
+        ssh_note: None,
         image: None,
         server_type: None,
         location: None,
@@ -289,4 +292,128 @@ fn the_ssh_target_names_the_person_who_signs_in() {
     assert_eq!(status.ssh_host(), Some("203.0.113.10"));
     // A Device panel reaches the display on the loopback of that host.
     assert_eq!(VNC_ADDRESS, "127.0.0.1:5900");
+}
+
+#[test]
+fn an_alias_of_the_managed_entry_is_its_own_ssh_host() {
+    // The settings entry `browser_host` and the Device panel route both take this host, and
+    // the block in the ssh configuration of the person turns it into the machine.
+    let status = Status {
+        phase: Phase::Ready,
+        ssh_target: Some(ssh_entry::ALIAS.into()),
+        ssh_note: None,
+        image: None,
+        server_type: None,
+        location: None,
+        volume_gb: None,
+        hourly_net: None,
+        error: None,
+    };
+    assert_eq!(status.ssh_host(), Some("horizon-browser-vm"));
+}
+
+/// A home of a person with one host of their own, and a cloud root beside it.
+fn entry_home() -> (tempfile::TempDir, tempfile::TempDir) {
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(ssh.join("config"), "Host laptop\n  HostName 192.0.2.44\n").unwrap();
+    (home, tempfile::tempdir().unwrap())
+}
+
+/// A scan that offers no key at all, so a test never runs a scan of a machine.
+fn silent_scan() -> ssh_entry::HostKeyScan {
+    ssh_entry::HostKeyScan {
+        program: PathBuf::from("true"),
+        attempts: 1,
+        connect_timeout_secs: 1,
+        pause: std::time::Duration::ZERO,
+    }
+}
+
+#[test]
+fn a_horizon_that_does_not_know_the_home_writes_no_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let (target, note) = ssh_entry::machine_route(None, root.path(), "root@203.0.113.10", Path::new(IDENTITY));
+
+    assert_eq!(
+        target, "root@203.0.113.10",
+        "every route keeps the address of the machine"
+    );
+    let note = note.expect("the reason the entry is missing is recorded");
+    assert!(note.contains("horizon-browser-vm"), "{note}");
+    assert!(note.contains("home"), "{note}");
+}
+
+#[test]
+fn the_name_of_a_person_is_reported_rather_than_taken_over() {
+    // A configuration that already names the alias outside the block belongs to the person.
+    let (home, root) = entry_home();
+    let taken = format!(
+        "Host laptop\n  HostName 192.0.2.44\nHost {}\n  HostName 192.0.2.45\n",
+        ssh_entry::ALIAS
+    );
+    std::fs::write(home.path().join(".ssh").join("config"), &taken).unwrap();
+
+    let (target, note) =
+        ssh_entry::machine_route(Some(home.path()), root.path(), "root@203.0.113.10", Path::new(IDENTITY));
+
+    assert_eq!(target, "root@203.0.113.10", "the deploy still names a route");
+    let note = note.expect("the reason the entry is missing is recorded");
+    assert!(note.contains(ssh_entry::ALIAS), "{note}");
+    assert_eq!(
+        std::fs::read_to_string(home.path().join(".ssh").join("config")).unwrap(),
+        taken,
+        "the configuration of the person is unchanged"
+    );
+}
+
+#[test]
+fn a_deploy_names_the_alias_and_a_stop_removes_the_entry() {
+    let (home, root) = entry_home();
+    let scan = silent_scan();
+
+    // The deploy writes the block and records the alias.
+    let (target, note) = ssh_entry::route(
+        &ssh_entry::Entry::with_scan(home.path(), root.path(), scan.clone()),
+        "root@203.0.113.10",
+        Path::new(IDENTITY),
+    );
+    assert_eq!(target, ssh_entry::ALIAS);
+    assert!(
+        note.is_some(),
+        "a scan that offers no key is reported, and the entry stays"
+    );
+    let written = std::fs::read_to_string(home.path().join(".ssh").join("config")).unwrap();
+    assert!(written.contains("  HostName 203.0.113.10\n"), "{written}");
+
+    let ready = Record {
+        phase: Phase::Ready,
+        ssh_target: Some(target.clone()),
+        ssh_note: note,
+        ..Record::default()
+    };
+    ready.save(root.path()).unwrap();
+
+    // A stop records a machine that is gone, and takes the entry with it.
+    let stopped = Saved::new(root.path(), ready).settled::<()>(Ok(()), Phase::Stopped, Some(home.path()));
+    let stopped = stopped.unwrap();
+    assert_eq!(stopped.ssh_target, None);
+    let config = std::fs::read_to_string(home.path().join(".ssh").join("config")).unwrap();
+    assert_eq!(
+        config, "Host laptop\n  HostName 192.0.2.44\n",
+        "the host of the person stays"
+    );
+    assert_eq!(super::status(root.path()).unwrap().ssh_target, None, "a read agrees");
+
+    // A resume writes the entry again, so the route of the person survives a new address.
+    let (resumed, _) = ssh_entry::route(
+        &ssh_entry::Entry::with_scan(home.path(), root.path(), scan),
+        "root@198.51.100.7",
+        Path::new(IDENTITY),
+    );
+    assert_eq!(resumed, ssh_entry::ALIAS);
+    let written = std::fs::read_to_string(home.path().join(".ssh").join("config")).unwrap();
+    assert!(written.contains("  HostName 198.51.100.7\n"), "{written}");
 }

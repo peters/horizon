@@ -46,12 +46,8 @@ impl Drop for Job {
 }
 
 enum Answer {
-    /// The run is recorded, with the phase it starts in, and the identity that opens the
-    /// machine: the key the deploy installed, read on this thread while the UI thread draws.
-    Begun {
-        result: Result<Status, String>,
-        identity: Option<String>,
-    },
+    /// The run is recorded, with the phase it starts in.
+    Begun(Result<Status, String>),
     /// The run ended, with the phase it reached.
     Finished,
 }
@@ -107,9 +103,11 @@ impl HorizonApp {
         let repaint = ctx.clone();
         let recorded = action.clone();
         std::thread::spawn(move || {
-            let result = work(&root, &action, &worker_cancel, &mut run_provider);
-            let identity = ssh_identity(&root);
-            let _ = sender.send(Answer::Begun { result, identity });
+            // The home of the person is read on this thread: the ssh entry of the machine
+            // lives in its `.ssh` folder, and no file of the UI thread is touched for it.
+            let home = horizon_core::user_home_dir();
+            let result = work(&root, home.as_deref(), &action, &worker_cancel, &mut run_provider);
+            let _ = sender.send(Answer::Begun(result));
             repaint.request_repaint();
             let _ = sender.send(Answer::Finished);
             repaint.request_repaint();
@@ -133,8 +131,8 @@ impl HorizonApp {
             for job in &mut state.jobs {
                 while let Ok(answer) = job.answers.try_recv() {
                     match answer {
-                        Answer::Begun { result, identity } => {
-                            answers.push((job.tool.clone(), job.action.action, result, identity));
+                        Answer::Begun(result) => {
+                            answers.push((job.tool.clone(), job.action.action, result));
                         }
                         Answer::Finished => job.finished = true,
                     }
@@ -143,10 +141,10 @@ impl HorizonApp {
             }
             state.jobs.retain(|job| !job.finished);
         }
-        for (tool, action, result, identity) in answers {
+        for (tool, action, result) in answers {
             match tool {
-                Some(request) => self.answer_browser_vm(&request, result, identity),
-                None => self.show_browser_vm(action, result, identity),
+                Some(request) => self.answer_browser_vm(&request, result),
+                None => self.show_browser_vm(action, result),
             }
         }
         if finished {
@@ -158,7 +156,7 @@ impl HorizonApp {
         }
     }
 
-    fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>, identity: Option<String>) {
+    fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>) {
         let mut answer = request.result(Vec::new(), None);
         match &result {
             Ok(status) => answer.browser_vm = Some(describe(status)),
@@ -169,22 +167,22 @@ impl HorizonApp {
             .browser_vm
             .as_ref()
             .map_or(BrowserVmAction::Status, |request| request.action);
-        self.show_browser_vm(action, result, identity);
+        self.show_browser_vm(action, result);
     }
 
     /// Shows the answer of one request in the Settings section, which is the only place a
     /// person reads the phase and the refusals.
-    fn show_browser_vm(&mut self, action: BrowserVmAction, result: Result<Status, String>, identity: Option<String>) {
+    fn show_browser_vm(&mut self, action: BrowserVmAction, result: Result<Status, String>) {
         if let Some(editor) = self.settings.as_mut() {
-            editor.browser_vm.absorb(action, result, identity);
+            editor.browser_vm.absorb(action, result);
         }
     }
 
     /// Answers a request that was refused before any thread started.
     fn refuse_browser_vm(&mut self, tool: Option<UsageRequest>, reason: String) {
         match tool {
-            Some(request) => self.answer_browser_vm(&request, Err(reason), None),
-            None => self.show_browser_vm(BrowserVmAction::Status, Err(reason), None),
+            Some(request) => self.answer_browser_vm(&request, Err(reason)),
+            None => self.show_browser_vm(BrowserVmAction::Status, Err(reason)),
         }
     }
 }
@@ -209,9 +207,10 @@ fn operation(request: &BrowserVmRequest) -> Option<Operation> {
 /// interrupted run is finished by an explicit deploy, stop or delete.
 fn work(
     root: &Path,
+    home: Option<&Path>,
     request: &BrowserVmRequest,
     cancel: &Cancellation,
-    run: &mut dyn FnMut(&Path, &Cancellation),
+    run: &mut dyn FnMut(&Path, Option<&Path>, &Cancellation),
 ) -> Result<Status, String> {
     let Some(mut operation) = operation(request) else {
         return browser_vm::status(root).map_err(|error| error.to_string());
@@ -226,15 +225,15 @@ fn work(
     }
     let begun = browser_vm::begin(root, &operation).map_err(|error| error.to_string())?;
     if runs_provider(request.action) {
-        run(root, cancel);
+        run(root, home, cancel);
     }
     Ok(begun)
 }
 
-fn run_provider(root: &Path, cancel: &Cancellation) {
+fn run_provider(root: &Path, home: Option<&Path>, cancel: &Cancellation) {
     // A stop and a delete report no step the person can act on, so their progress is read
     // from the record with `status`. The phase a run ends in is in that record too.
-    let _ = browser_vm::run(root, cancel, &mut |_| {});
+    let _ = browser_vm::run(root, home, cancel, &mut |_| {});
 }
 
 /// The cloud settings directory of the browser VM. A cloud board sets the root of the cloud
@@ -260,14 +259,6 @@ pub(in crate::app) fn run_settings(root: &Path) -> Result<Settings, String> {
         .map_err(|error| format!("browser_vm_settings_unreadable: the cloud settings cannot be read ({error})"))
 }
 
-/// The identity that opens the machine: the key the deploy installed as the only login of
-/// its root user. Read on the job thread, never on the UI thread.
-pub(in crate::app) fn ssh_identity(root: &Path) -> Option<String> {
-    Settings::load(&root.join("settings.json"))
-        .ok()
-        .map(|settings| settings.ssh_identity_file.to_string_lossy().into_owned())
-}
-
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.
 /// The settings were already read on this thread by the run that asks.
@@ -280,9 +271,11 @@ fn first_location(settings: Option<&Settings>) -> Result<String, String> {
         .ok_or_else(|| "browser_vm_unavailable: the Hetzner settings name no location; name one in the request".into())
 }
 
-/// The route of the Device panel of a ready machine: the VNC address on the loopback of the
-/// machine's host, which a panel reaches through the SSH route of that host. The tool answer
-/// and the Settings section name the same route.
+/// The route of the Device panel of a ready machine: the SSH target that the record names,
+/// which is the managed entry `horizon-browser-vm`, and the VNC address on the loopback of the
+/// machine, which a panel reaches through that entry. The tool answer and the Settings section
+/// name the same route. The entry carries the key and the host keys of the machine, so the
+/// route names no key of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::app) struct DeviceRoute {
     pub host: String,
@@ -315,6 +308,7 @@ fn describe(status: &Status) -> Value {
     let mut answer = json!({
         "phase": status.phase,
         "ssh_target": status.ssh_target,
+        "ssh_note": status.ssh_note,
         "image": status.image,
         "server_type": status.server_type,
         "location": status.location,
@@ -327,7 +321,7 @@ fn describe(status: &Status) -> Value {
             "ssh": {"host": route.host, "user": route.user, "vnc": route.vnc}
         });
         answer["person_step"] = json!(
-            "A person must sign in now: call device_panel with the ssh route above and sign in to the sites on the display of the machine. The state volume keeps those sign-ins across a stop and a resume. An agent cannot do this step."
+            "A person must sign in now: call device_panel with the ssh route above, which is the ssh entry horizon-browser-vm that Horizon wrote, and sign in to the sites on the display of the machine. The entry names the key of the machine and the host keys that Horizon trusted, so the route needs no key and no host-key step of its own. The state volume keeps those sign-ins across a stop and a resume. An agent cannot do this step."
         );
         answer["browser_host"] = json!({
             "ssh_target": status.ssh_target,
@@ -422,9 +416,10 @@ mod tests {
         let mut started = 0;
         let answered = work(
             root.path(),
+            None,
             &request(BrowserVmAction::Status),
             &Cancellation::default(),
-            &mut |_, _| started += 1,
+            &mut |_, _, _| started += 1,
         )
         .unwrap();
         assert_eq!(answered.phase, Phase::Deploying);
@@ -442,9 +437,10 @@ mod tests {
         let mut started = 0;
         let answered = work(
             root.path(),
+            None,
             &request(BrowserVmAction::Stop),
             &Cancellation::default(),
-            &mut |_, _| started += 1,
+            &mut |_, _, _| started += 1,
         )
         .unwrap();
         assert_eq!(answered.phase, Phase::Stopping);
@@ -458,9 +454,10 @@ mod tests {
         let mut started = 0;
         let refused = work(
             root.path(),
+            None,
             &request(BrowserVmAction::Delete),
             &Cancellation::default(),
-            &mut |_, _| started += 1,
+            &mut |_, _, _| started += 1,
         )
         .unwrap_err();
         assert!(refused.contains("nothing to delete"), "{refused}");
@@ -470,7 +467,8 @@ mod tests {
     fn ready() -> Status {
         Status {
             phase: Phase::Ready,
-            ssh_target: Some("root@203.0.113.10".into()),
+            ssh_target: Some("horizon-browser-vm".into()),
+            ssh_note: None,
             image: Some("ghcr.io/example/browser-vm@sha256:synthetic".into()),
             server_type: Some("ccx13".into()),
             location: Some("fsn1".into()),
@@ -484,8 +482,8 @@ mod tests {
     fn a_ready_machine_names_the_route_a_person_signs_in_through() {
         let answer = describe(&ready());
         assert_eq!(answer["phase"], "ready");
-        assert_eq!(answer["ssh_target"], "root@203.0.113.10");
-        assert_eq!(answer["device_panel"]["ssh"]["host"], "203.0.113.10");
+        assert_eq!(answer["ssh_target"], "horizon-browser-vm");
+        assert_eq!(answer["device_panel"]["ssh"]["host"], "horizon-browser-vm");
         assert_eq!(answer["device_panel"]["ssh"]["user"], "root");
         assert_eq!(answer["device_panel"]["ssh"]["vnc"], "127.0.0.1:5900");
         assert!(
@@ -495,7 +493,7 @@ mod tests {
                 .contains("A person must sign in"),
             "the step where a person is needed is stated plainly"
         );
-        assert_eq!(answer["browser_host"]["ssh_target"], "root@203.0.113.10");
+        assert_eq!(answer["browser_host"]["ssh_target"], "horizon-browser-vm");
     }
 
     #[test]
