@@ -15,6 +15,7 @@ use horizon_cloud::{hetzner::Hetzner, runpod::RunPod};
 
 pub use horizon_cloud::runpod::volumes::Tier as StorageTier;
 
+pub mod agent;
 pub mod freshness;
 pub mod watch;
 

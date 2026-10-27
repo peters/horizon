@@ -22,8 +22,11 @@ time.
 
 - Candidate: a Horizon build with the `cloud_create` MCP tool, from
   `cargo build` on this checkout.
-- Platforms: Linux. The cloud provider is the one the profile names. Quick start
-  uses RunPod.
+- Platforms: Linux. The create chooses the cloud provider from the offers of
+  the providers that the policy allows: the cheapest offer wins. The quick-start
+  profile names RunPod, but the create does not use that name. Horizon ranks the
+  offers of RunPod and Hetzner for a create, so a policy that allows only
+  another provider has no offer to choose.
 - This procedure does not test:
   - a `.horizon/cloud.yml` profile, a worker choice, a plan token, siblings or a
     publishing selection. This version does not offer them.
@@ -192,6 +195,56 @@ time.
 
    Result: The tool answers `cloud_create_unknown_operation`.
 
+### 6.9 A9 — The policy chooses the provider
+
+> **CAUTION:** EVERY DELETE THAT THIS TASK STARTS IS PERMANENT. THIS TASK ALSO
+> RENTS A PAID CLOUD ON HETZNER. Delete the clouds of steps 1 and 4 as those
+> steps say, and stop and delete the cloud of this task before you end the run.
+
+1. Delete every cloud that this run created for the repository of A2, on its
+   card, and wait for each deletion.
+
+   Result: `cloud_list` shows none of them, so the repository is free for the
+   next submit.
+
+2. Read the current Hetzner price of a CPU server that meets the requirements of
+   the quick-start profile. Add a `hetzner` binding to the cloud settings file
+   if the file has none, set `providers: ["hetzner"]` in the `agent_lifecycle`
+   section, and set `max_hourly` above that price but below the price of every
+   `server_types` entry. Put a dearer type first in `server_types`, for example
+   `ccx33`.
+
+   Result: `Settings::load` accepts the file, and Cloud settings shows the
+   Hetzner binding.
+
+3. Call `cloud_create` with `operation submit`, a new `operation_id` and the
+   `repository` of A2. Then poll `status` until `done` is true.
+
+   Result: `phase` is `ready`. The machine line of the new card names a Hetzner
+   location, such as `hel1`, and **Stop** asks
+   `Stop this cloud? Running processes will end and its server is deleted. The workspace volume is kept and stays billable.`
+   A RunPod cloud asks about kept storage instead. The quick-start profile names
+   RunPod, so this cloud runs on the provider that the policy allows, not on the
+   provider that the profile names. The `hourly` of `ready` is not above
+   `max_hourly`, because Horizon rents the type of the cheapest offer and not
+   the type that `server_types` lists first.
+
+4. Delete the cloud of step 3 on its card, and wait for the deletion.
+
+   Result: `cloud_list` shows no cloud of this run.
+
+5. Set `providers: ["azure"]` in the `agent_lifecycle` section, and keep the
+   rest of the section as it was.
+
+   Result: `Settings::load` accepts the file.
+
+6. Call `cloud_create` with `operation submit`, a new `operation_id` and the
+   `repository` of A2. Then poll `status` until `done` is true.
+
+   Result: `phase` is `failed`, and `error` is
+   `cloud_create_refused: no offer was found from the providers an agent may rent on (azure)`.
+   No cloud card appears, and `cloud_list` stays the same.
+
 ## 7. Pass criteria
 
 - A1, A5, A6 and A8 rent nothing and add no card.
@@ -205,6 +258,10 @@ time.
 - A4 adds no second cloud for the same repository.
 - A7 answers the cancel sentence, and the created cloud is stopped in the same
   run.
+- A9 rents one Hetzner cloud on a policy that allows Hetzner only, and refuses a
+  policy with no offer to choose, with its allowed providers in the sentence.
+  A9 step 3 rents the server type of the admitted offer: `ready` reports an
+  `hourly` that is not above `max_hourly`.
 - `cloud_list` shows every cloud that the run created.
 
 ## 8. Cleanup

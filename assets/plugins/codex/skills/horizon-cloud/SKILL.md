@@ -21,13 +21,14 @@ server types are fallback preferences; they do not restrict explicit worker choi
 
 `cloud_create` is the only cloud tool that spends money without a person. It rents a
 quick-start cloud in your workspace on the machine's own provider credentials, and
-only when cloud settings allow that in its `agent_lifecycle` section. It answers at
-once: poll `status` with the same `operation_id` until `done` is true. The cloud
-appears on a card in your workspace and the card shows the same progress; stop it
-there, or read it with `cloud_list`. A cancel cannot recall a rented worker, so then
-read `cloud_list` and stop that cloud if it exists. This version has no worker choice,
-plan token, siblings or publishing choice. Read `references/cloud.md` before you
-submit.
+only when cloud settings allow that in its `agent_lifecycle` section. Horizon chooses
+the provider from the offers of the providers that section lists, and the cheapest
+offer of the quick-start requirements wins. It answers at once: poll `status` with the
+same `operation_id` until `done` is true. The cloud appears on a card in your workspace
+and the card shows the same progress; stop it there, or read it with `cloud_list`. A
+cancel cannot recall a rented worker, so then read `cloud_list` and stop that cloud if
+it exists. You cannot choose a worker, plan token, siblings or publishing choice in
+this version. Read `references/cloud.md` before you submit.
 
 `cloud_delete` deletes one cloud's provider resources without a person. It is
 irreversible: a provider request that Horizon sent cannot be recalled, so a delete
