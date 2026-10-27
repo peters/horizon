@@ -14,29 +14,8 @@ pub(super) fn configure_git_auth(
 ) -> Result<()> {
     let legacy = git_auth.is_some();
     let github = request.settings.github.as_ref();
-    // The create of an agent's cloud mints the app's installation token here, on this
-    // deployment thread and never on the frame thread: minting reads the app's private key
-    // file and calls GitHub. It is minted now, and not when the create was answered, because
-    // the worker refuses a token that ended and an image build may outlast the hour a token
-    // lasts. A person who asks the card to connect GitHub again signs in as before.
-    let mint = || -> Result<Option<crate::cloud_runtime::github::Installation>> {
-        if request.created_by.is_some() && !request.renew_github {
-            return Ok(crate::cloud_runtime::github::for_agent_cloud(
-                &request.settings,
-                runner,
-            )?);
-        }
-        Ok(None)
-    };
-    let served = crate::cloud_runtime::github::configure(
-        github,
-        &mint,
-        state,
-        connection,
-        runner,
-        legacy,
-        request.renew_github,
-    )?;
+    let served =
+        crate::cloud_runtime::github::configure(github, state, connection, runner, legacy, request.renew_github)?;
     match git_auth {
         Some(git_auth) if !served => git_auth.install(connection, runner),
         _ => runner

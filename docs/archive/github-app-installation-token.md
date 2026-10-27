@@ -1,5 +1,10 @@
 # Test procedure: GitHub App installation token for an agent cloud
 
+> **Archived 2026-10-27.** Horizon removed the GitHub App installation-token path, because an
+> installation token lasts one hour and an agent's cloud must keep pushing for longer than that
+> without a person. A cloud now uses this computer's stored GitHub sign-in chain, which its worker
+> renews. This procedure is kept as a record. It does not apply to the repository any more.
+
 This procedure shows that a cloud worker reads and writes GitHub with a GitHub App
 installation token, and that no person signs in to GitHub for that worker.
 

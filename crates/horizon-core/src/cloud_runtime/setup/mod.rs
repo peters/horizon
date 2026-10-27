@@ -76,6 +76,7 @@ fn read_settings(root: &Path) -> Result<LocalSettings> {
         |bytes| serde_json::from_slice(bytes).map_err(|_| Error::Json),
     )?;
     settings.validate()?;
+    settings.retire_github_key(&path);
     Ok(LocalSettings { original, settings })
 }
 

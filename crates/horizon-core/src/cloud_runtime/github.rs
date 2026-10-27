@@ -7,11 +7,6 @@
 //! hands the chain to the worker's root service, which renews it from then on.
 //! Signing in is optional for a cloud: a declined, expired or skipped sign-in leaves
 //! the cloud without GitHub access and the deployment continues.
-//!
-//! The create of an agent's cloud has nobody to sign in: when cloud settings hold the
-//! app's private key, [`installation`] mints an installation token for the repositories
-//! of the agent lifecycle policy instead. The worker cannot renew that token, so only
-//! this machine installs a new one.
 use super::{
     Error, Event, Result, command::Runner, git_auth::Target, settings::validate_private_key_file, ssh::Connection,
     state::Deployment,
@@ -24,7 +19,6 @@ use std::path::PathBuf;
 
 pub mod connect;
 pub mod host;
-mod installation;
 pub mod publish;
 pub mod requests;
 mod signin;
@@ -33,16 +27,11 @@ mod stored;
 mod tests;
 mod worker;
 
-pub use installation::{Installation, Refusal as InstallationRefusal, for_agent_cloud};
 pub use signin::{Prompt, WEB_SIGNIN_WINDOW, skip};
 
 /// Why a worker whose GitHub service is not running has no GitHub access.
 const SERVICE_DOWN: &str = "The worker's GitHub service is not running, so Git and gh have no GitHub access. \
                             Restart the worker to start it again.";
-
-/// What an installation token that ended means for the cloud. Nothing on the worker renews it.
-const INSTALLATION_ENDED: &str = "the GitHub App installation token ended, and only this machine installs a new one. \
-                                   Connect GitHub again on the cloud's card to give this cloud access.";
 
 /// The most grants `horizon-worker-github install` accepts.
 const WORKER_GRANTS: usize = 16;
@@ -82,26 +71,22 @@ pub struct Settings {
     pub client_id: String,
     /// A private file with the app's client secret.
     pub client_secret_file: PathBuf,
-    /// A private file with the app's private key, which mints an installation token. Omitted
-    /// until a person gives one, so every settings file written before it still loads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub private_key_file: Option<PathBuf>,
     #[serde(default)]
     pub mode: Mode,
+    /// The app's private key file that a settings file written while Horizon minted
+    /// installation tokens names. Nothing mints from it now, so it is read past and never
+    /// used: the file still loads, and the next save no longer names it.
+    #[serde(default, rename = "private_key_file", skip_serializing)]
+    pub retired_private_key_file: Option<PathBuf>,
 }
 
 impl Settings {
     /// # Errors
-    /// A relative secret or key path, or a malformed app identity.
+    /// A relative secret path or a malformed app identity.
     pub fn validate(&self) -> Result<()> {
         if !self.client_secret_file.is_absolute() {
             return Err(Error::Invalid(
                 "The GitHub App secret must use an absolute machine-local path",
-            ));
-        }
-        if self.private_key_file.as_ref().is_some_and(|path| !path.is_absolute()) {
-            return Err(Error::Invalid(
-                "The GitHub App private key must use an absolute machine-local path",
             ));
         }
         let slug =
@@ -124,25 +109,6 @@ impl Settings {
     #[must_use]
     pub fn visibility_url(&self) -> String {
         format!("https://github.com/settings/apps/{}/advanced", self.slug)
-    }
-
-    /// The app's private key, from the private file this machine names, to mint an
-    /// installation token without a sign-in.
-    /// # Errors
-    /// This machine names no key file, the file is not a private regular file readable
-    /// only by this user, or it does not hold an unencrypted RSA private key in PEM form.
-    pub fn private_key(&self) -> Result<horizon_cloud::github::PrivateKey> {
-        let Some(path) = &self.private_key_file else {
-            return Err(Error::Invalid(
-                "This machine has no GitHub App private key. Give the app's private key file in cloud settings.",
-            ));
-        };
-        validate_private_key_file(path)?;
-        // Checked while borrowed, so no copy of the key outlives this call unwiped, even
-        // when the key is refused.
-        let pem = zeroize::Zeroizing::new(std::fs::read_to_string(path)?);
-        horizon_cloud::github::PrivateKey::from_pem(&pem)
-            .map_err(|_| Error::Invalid("The GitHub App private key file is not an RSA private key in PEM form"))
     }
 
     fn client_secret(&self) -> Result<Secret> {
@@ -205,7 +171,7 @@ pub fn grants(state: &Deployment, runner: &Runner<'_>) -> Result<Vec<Grant>> {
 /// The GitHub `owner/name` of a checkout's origin, or `None` when it has no origin or
 /// one elsewhere. A lookup that fails is an error, never `None`: an empty grant set
 /// removes the worker's access.
-pub(super) fn github_origin(checkout: &std::path::Path, runner: &Runner<'_>) -> Result<Option<String>> {
+fn github_origin(checkout: &std::path::Path, runner: &Runner<'_>) -> Result<Option<String>> {
     // The origin URL may embed a credential, so nothing of it is emitted.
     let quiet = Runner {
         cancel: runner.cancel,
@@ -239,15 +205,10 @@ pub(super) fn github_origin(checkout: &std::path::Path, runner: &Runner<'_>) -> 
 /// access fails the deployment. Returns whether the worker serves access from the app
 /// for every repository of the cloud, which then replaces any credential binding from
 /// cloud settings; a repository the app does not reach keeps that binding.
-///
-/// `mint` gives the app's installation token when this cloud takes one instead of a
-/// sign-in, and is called only when a new access is given: a worker that already holds
-/// current access costs no mint.
 /// # Errors
 /// The worker refused the access it was given.
 pub fn configure(
     settings: Option<&Settings>,
-    mint: &dyn Fn() -> Result<Option<Installation>>,
     state: &Deployment,
     connection: &Connection,
     runner: &Runner<'_>,
@@ -299,12 +260,6 @@ pub fn configure(
             end(SERVICE_DOWN.into(), false);
             return Ok(false);
         }
-        // An installation token that ended is no access: a new one comes from this machine,
-        // never from a refresh the worker could do itself.
-        worker::Status::Expired => {
-            say(INSTALLATION_ENDED);
-            None
-        }
         // A repository the worker does not reach stays out until the person chooses
         // Connect GitHub again, so a reconnect never asks for a sign-in by itself.
         worker::Status::Current {
@@ -312,14 +267,8 @@ pub fn configure(
             repositories,
             checkouts,
             requests,
-            renewal,
         } if !renew && !narrower(&checkouts, &grants, &say) => {
-            say(match renewal {
-                worker::Renewal::Worker => "the worker holds current access.",
-                worker::Renewal::Host => {
-                    "the worker holds current access from a GitHub App installation token, which it cannot renew: only this machine installs the next one."
-                }
-            });
+            say("the worker holds current access.");
             for grant in grants.iter().filter(|grant| !covers(&repositories, grant)) {
                 say(&format!(
                     "{} is not in this cloud's access. Use Connect GitHub again on the cloud card to add it.",
@@ -342,22 +291,20 @@ pub fn configure(
     let kept_complete = kept
         .as_ref()
         .is_some_and(|(_, repositories, _)| complete(repositories, &grants));
-    let given = match mint()? {
-        Some(installation) => installation::install(&installation, grants, connection, runner)?,
-        None => sign_in(settings, state, grants, connection, runner)?,
-    };
-    Ok(match settle(given, kept) {
-        Settled::Signed { complete } => complete,
-        Settled::Kept(reason, (login, repositories, requests)) => {
-            say(&format!("{reason} The cloud keeps its current GitHub access."));
-            connected(login, repositories, requests);
-            kept_complete
-        }
-        Settled::Ended { reason, renewable } => {
-            end(reason, renewable);
-            false
-        }
-    })
+    Ok(
+        match settle(sign_in(settings, state, grants, connection, runner)?, kept) {
+            Settled::Signed { complete } => complete,
+            Settled::Kept(reason, (login, repositories, requests)) => {
+                say(&format!("{reason} The cloud keeps its current GitHub access."));
+                connected(login, repositories, requests);
+                kept_complete
+            }
+            Settled::Ended { reason, renewable } => {
+                end(reason, renewable);
+                false
+            }
+        },
+    )
 }
 
 /// A worker's access while GitHub is disconnected here: it keeps what it holds, which the
@@ -378,8 +325,7 @@ fn disconnected(
         } => Some((login, repositories, requests)),
         // A stopped service may still store a chain that a restart would serve again.
         worker::Status::Unavailable => None,
-        // Nothing on this path installs the next installation token, so the cloud keeps none.
-        worker::Status::Expired | worker::Status::Absent | worker::Status::Unsupported => return Ok(false),
+        worker::Status::Absent | worker::Status::Unsupported => return Ok(false),
     };
     // The cloud's grants are read only to compare them.
     let all = grants(state, runner);
@@ -458,7 +404,7 @@ fn settle(signed: Signed, kept: Option<Held>) -> Settled {
 
 /// How a sign-in for a cloud ended, other than an error.
 #[derive(Debug)]
-pub(super) enum Signed {
+enum Signed {
     /// The worker serves the new chain; `complete` when the app reaches every repository.
     In { complete: bool },
     /// Refused before the worker got anything; the worker keeps what it held.
@@ -516,9 +462,14 @@ fn sign_in(
     ));
     // Connected only when the service serves the chain it now holds; it also reports
     // whether it takes agents' requests.
-    let requests = match serving(connection, runner)? {
-        Serves::Requests(requests) => requests,
-        Serves::Nothing(reason) => return Ok(Signed::Unserved(reason.into())),
+    let requests = match worker::status(connection, runner)? {
+        worker::Status::Current { requests, .. } => requests,
+        worker::Status::Unavailable => return Ok(Signed::Unserved(SERVICE_DOWN.into())),
+        worker::Status::Absent | worker::Status::Unsupported => {
+            return Ok(Signed::Unserved(
+                "The worker did not keep the GitHub access it was given.".into(),
+            ));
+        }
     };
     (runner.emit)(Event::GitHub(Prompt::Connected {
         login: user.login,
@@ -528,25 +479,6 @@ fn sign_in(
     }));
     Ok(Signed::In {
         complete: missing.is_empty(),
-    })
-}
-
-/// What the worker says about the access it was just given.
-pub(super) enum Serves {
-    /// It serves the access, and `requests` says whether it takes agents' access requests.
-    Requests(bool),
-    /// It serves nothing, for this reason.
-    Nothing(&'static str),
-}
-
-/// Reads the worker's answer to the chain or token it was just given.
-pub(super) fn serving(connection: &Connection, runner: &Runner<'_>) -> Result<Serves> {
-    Ok(match worker::status(connection, runner)? {
-        worker::Status::Current { requests, .. } => Serves::Requests(requests),
-        worker::Status::Unavailable => Serves::Nothing(SERVICE_DOWN),
-        worker::Status::Expired | worker::Status::Absent | worker::Status::Unsupported => {
-            Serves::Nothing("The worker did not keep the GitHub access it was given.")
-        }
     })
 }
 

@@ -203,9 +203,6 @@ def credential_answer(request, state, now, task=None):
         return refusal('ok', 'Git reaches GitHub through this worker\'s Git proxy, which hands out no token.'), None
     chain = state['chain']
     if chain['access_expires_at'] - now <= common.SERVE_MARGIN:
-        if common.chain_kind(chain) == common.INSTALLATION:
-            return refusal(common.token_state(state, now), 'The GitHub installation token ended, or ends within a '
-                                                          'minute, and only the host can install a new one.'), None
         return refusal('ok', 'The GitHub access token has expired or expires within a minute, and this worker '
                              'could not refresh it yet.'), None
     repository = request.get('repository')

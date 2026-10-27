@@ -186,7 +186,18 @@ impl Settings {
         value.validate()?;
         value.codex_home = path.parent().map(super::codex_login::home);
         super::github::remember(value.github.is_some());
+        value.retire_github_key(path);
         Ok(value)
+    }
+
+    /// Retires the App private key file that Connect GitHub wrote while Horizon minted
+    /// installation tokens. The settings file's own directory is the cloud root, so the only
+    /// file this can remove is the one Connect GitHub wrote there for the app these settings
+    /// name, and it runs wherever saved settings are read.
+    pub(in crate::cloud_runtime) fn retire_github_key(&self, settings_path: &Path) {
+        if let Some(app) = &self.github {
+            super::github::connect::retire_private_key_file(settings_path, app).report();
+        }
     }
 
     /// Whether New cloud and `cloud_offers` offer the saved Docker hosts.
@@ -824,6 +835,37 @@ mod tests {
                 .unwrap()
                 .settings
                 .portable_image_publishing
+        );
+    }
+
+    #[test]
+    fn a_settings_file_that_still_names_the_github_app_private_key_loads() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let absolute = |name: &str| root.path().join(name);
+        let raw = serde_json::json!({
+            "runpod_key_file": absolute("key"), "ssh_identity_file": absolute("identity"),
+            "docker_config": absolute("docker"),
+            "github": {
+                "app_id": 42, "slug": "horizon-example", "client_id": "Iv23synthetic",
+                "client_secret_file": absolute("credentials/github-app-42"),
+                "private_key_file": absolute("credentials/github-app-42.pem"),
+            },
+        });
+        std::fs::write(&path, raw.to_string()).unwrap();
+        // Nothing mints from an installation token now, so the entry is read past: no key
+        // file is needed, and the one the entry names does not exist.
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.github.as_ref().map(|github| github.app_id), Some(42));
+        assert!(
+            serde_json::to_value(&loaded).unwrap()["github"]
+                .get("private_key_file")
+                .is_none(),
+            "the next save no longer names the retired private key"
+        );
+        assert!(
+            super::super::setup::Draft::load(root.path()).is_ok(),
+            "Cloud settings loads the same file"
         );
     }
 }

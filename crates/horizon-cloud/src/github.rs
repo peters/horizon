@@ -1,13 +1,11 @@
 //! User tokens of a person's own GitHub App: device sign-in, the code exchange of a
-//! web sign-in, renewal, and the manifest conversion that creates the app. Also the
-//! installation tokens of the app itself, which its private key mints.
+//! web sign-in, renewal, and the manifest conversion that creates the app.
 //!
-//! A user token acts as the person, limited to the app's permissions and the repositories
+//! A token acts as the person, limited to the app's permissions and the repositories
 //! it is installed on. With **Expire user access tokens** on, an access token lasts
 //! 8 hours and its refresh token about 6 months. A refresh replaces both, so each
 //! holder keeps its own chain. A chain from the device sign-in renews with the client
 //! ID alone; a chain from a web sign-in also needs the client secret.
-//! An installation token has no refresh token, so only the key that mints it renews it.
 //! Secrets never appear in `Debug` output or in errors.
 use serde::Deserialize;
 use std::{
@@ -19,10 +17,6 @@ use zeroize::Zeroizing;
 
 mod api;
 pub use api::{User, valid_repository};
-mod installation;
-pub use installation::{Bot, InstallationToken, PrivateKey};
-#[cfg(test)]
-mod fake;
 #[cfg(test)]
 mod tests;
 
@@ -58,30 +52,6 @@ pub enum Error {
     Refused(String),
     #[error("The GitHub App has more installations or repositories than Horizon reads.")]
     TooMany,
-    #[error(
-        "The GitHub App's private key cannot be used on this computer. Give the app's private key file, unencrypted and readable only by you."
-    )]
-    PrivateKey,
-    #[error(
-        "GitHub refused the GitHub App's ID or private key. Check that the private key file is the key of this app."
-    )]
-    AppKey,
-    #[error("This computer's clock is not set. Set the date and time, then try again.")]
-    Clock,
-    #[error("An installation token needs at least one repository.")]
-    NoRepository,
-    #[error("A repository must be a lowercase owner/name, as GitHub names it.")]
-    InvalidRepository,
-    #[error(
-        "The GitHub App installs on each account separately, and one installation token reaches one account. Give the token the repositories of one account at a time."
-    )]
-    SeparateAccounts,
-    #[error("The GitHub App is not installed on this account. Install it on GitHub and try again.")]
-    NotInstalled,
-    #[error(
-        "The GitHub App does not reach one of the requested repositories, or does not hold the permissions the token asked for. Check the app's installation and permissions on GitHub."
-    )]
-    NotCovered,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -143,15 +113,14 @@ pub struct Chain {
     pub refresh_expires_at: SystemTime,
 }
 
-/// A GitHub App created from a manifest. Its client secret and private key go into private
-/// files on this computer: the key mints an installation token and never leaves it.
+/// A GitHub App created from a manifest. Its private key is not kept: Horizon uses
+/// only user tokens, which need no key.
 #[derive(Debug)]
 pub struct App {
     pub id: u64,
     pub slug: String,
     pub client_id: String,
     pub client_secret: Secret,
-    pub pem: Secret,
     pub html_url: String,
 }
 
@@ -315,7 +284,7 @@ impl Client {
     }
 
     /// Completes the manifest flow: the `code` GitHub sent to the manifest's redirect
-    /// URL becomes the new app's identity, client secret and private key.
+    /// URL becomes the new app's identity and client secret.
     /// # Errors
     /// A malformed code, transport failures, or GitHub's refusal (an expired code).
     pub fn convert_manifest(&self, code: &Secret) -> Result<App> {
@@ -325,7 +294,6 @@ impl Client {
             slug: String,
             client_id: String,
             client_secret: Secret,
-            pem: Secret,
             html_url: String,
         }
         let code = code.expose();
@@ -343,15 +311,11 @@ impl Client {
         if answer.status != 201 {
             return Err(Error::Refused(format!("HTTP {}", answer.status)));
         }
-        // Only these fields are read: the webhook secret in the same answer stays in the
-        // wiped response buffer.
+        // Only these fields are read: the private key and webhook secret in the same
+        // answer stay in the wiped response buffer.
         let fields: Fields = answer.parse()?;
-        let (client_secret, pem) = (fields.client_secret, fields.pem);
-        if !valid_slug(&fields.slug)
-            || !valid_client_id(&fields.client_id)
-            || !safe_https_url(&fields.html_url)
-            || !installation::valid_pem(&pem)
-        {
+        let client_secret = fields.client_secret;
+        if !valid_slug(&fields.slug) || !valid_client_id(&fields.client_id) || !safe_https_url(&fields.html_url) {
             return Err(Error::InvalidResponse);
         }
         Ok(App {
@@ -359,7 +323,6 @@ impl Client {
             slug: fields.slug,
             client_id: fields.client_id,
             client_secret,
-            pem,
             html_url: fields.html_url,
         })
     }
