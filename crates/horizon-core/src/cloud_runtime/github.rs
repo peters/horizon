@@ -7,6 +7,13 @@
 //! hands the chain to the worker's root service, which renews it from then on.
 //! Signing in is optional for a cloud: a declined, expired or skipped sign-in leaves
 //! the cloud without GitHub access and the deployment continues.
+//!
+//! The create of an agent's cloud has nobody to sign in at the card, so that cloud takes
+//! the chain of this computer's own GitHub sign-in for the app instead
+//! ([`person_chain`]). The worker renews that chain from its refresh token, so the cloud
+//! keeps its access while this computer is off, and the chain's account makes every commit
+//! and pull request of the worker the person's own. A create that finds no stored chain runs
+//! that sign-in once, which is the only moment of the whole loop that needs a person.
 use super::{
     Error, Event, Result, command::Runner, git_auth::Target, settings::validate_private_key_file, ssh::Connection,
     state::Deployment,
@@ -19,6 +26,7 @@ use std::path::PathBuf;
 
 pub mod connect;
 pub mod host;
+mod person_chain;
 pub mod publish;
 pub mod requests;
 mod signin;
@@ -27,6 +35,7 @@ mod stored;
 mod tests;
 mod worker;
 
+pub use person_chain::{PersonAccess, Refusal as PersonChainRefusal, for_agent_cloud};
 pub use signin::{Prompt, WEB_SIGNIN_WINDOW, skip};
 
 /// Why a worker whose GitHub service is not running has no GitHub access.
@@ -209,6 +218,7 @@ fn github_origin(checkout: &std::path::Path, runner: &Runner<'_>) -> Result<Opti
 /// The worker refused the access it was given.
 pub fn configure(
     settings: Option<&Settings>,
+    mint: &dyn Fn() -> Result<Given>,
     state: &Deployment,
     connection: &Connection,
     runner: &Runner<'_>,
@@ -291,20 +301,26 @@ pub fn configure(
     let kept_complete = kept
         .as_ref()
         .is_some_and(|(_, repositories, _)| complete(repositories, &grants));
-    Ok(
-        match settle(sign_in(settings, state, grants, connection, runner)?, kept) {
-            Settled::Signed { complete } => complete,
-            Settled::Kept(reason, (login, repositories, requests)) => {
-                say(&format!("{reason} The cloud keeps its current GitHub access."));
-                connected(login, repositories, requests);
-                kept_complete
-            }
-            Settled::Ended { reason, renewable } => {
-                end(reason, renewable);
-                false
-            }
-        },
-    )
+    let given = match mint()? {
+        Given::Stored(access) => person_chain::install(&access, grants, connection, runner)?,
+        Given::Person => sign_in(settings, state, grants, connection, runner)?,
+        // The cloud is already rented, so a GitHub answer that arrives too late or not at
+        // all leaves the cloud without GitHub access instead of failing it: a person can
+        // connect it again from the card, and the rent is not wasted.
+        Given::Unavailable(reason) => Signed::Unserved(reason),
+    };
+    Ok(match settle(given, kept) {
+        Settled::Signed { complete } => complete,
+        Settled::Kept(reason, (login, repositories, requests)) => {
+            say(&format!("{reason} The cloud keeps its current GitHub access."));
+            connected(login, repositories, requests);
+            kept_complete
+        }
+        Settled::Ended { reason, renewable } => {
+            end(reason, renewable);
+            false
+        }
+    })
 }
 
 /// A worker's access while GitHub is disconnected here: it keeps what it holds, which the
@@ -480,6 +496,16 @@ fn sign_in(
     Ok(Signed::In {
         complete: missing.is_empty(),
     })
+}
+
+/// What a create gives its worker instead of this computer's own sign-in.
+pub enum Given {
+    /// This computer's stored sign-in, for the repositories of the agent policy.
+    Stored(Box<PersonAccess>),
+    /// Nothing: sign in as a person, which is what the card's Connect GitHub does.
+    Person,
+    /// Nothing, and not even a sign-in: the cloud continues without GitHub access.
+    Unavailable(String),
 }
 
 /// What to do for a repository the app is not installed on. Another account, such as an

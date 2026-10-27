@@ -1,6 +1,6 @@
 use super::*;
 use crate::cloud_runtime::Cancellation;
-use horizon_cloud::github::Chain;
+use horizon_cloud::github::{Chain, User};
 use std::{
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
@@ -10,6 +10,7 @@ use std::{
 };
 
 mod asks;
+mod chain;
 mod manifest;
 mod retired_key;
 
@@ -187,6 +188,35 @@ fn runner_parts() -> (Cancellation, Arc<Mutex<Vec<Event>>>) {
     (Cancellation::default(), Arc::default())
 }
 
+/// A runner that reports nothing and holds no secret, for a test that only needs the calls.
+fn quiet(cancel: &Cancellation) -> Runner<'_> {
+    Runner {
+        cancel,
+        emit: &|_| {},
+        secrets: Vec::new(),
+    }
+}
+
+/// A Git checkout of `origin`, which stands for the local repository of a policy path.
+fn checkout(directory: &std::path::Path, name: &str, origin: &str) -> std::path::PathBuf {
+    let path = directory.join(name);
+    std::fs::create_dir_all(&path).unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "--quiet"]);
+    git(&["remote", "add", "origin", origin]);
+    path
+}
+
 #[test]
 fn grants_take_the_primary_from_its_github_origin_and_siblings_by_name() {
     let checkout = tempfile::tempdir().unwrap();
@@ -356,16 +386,23 @@ pub(in crate::cloud_runtime::github) fn read_request(stream: &mut TcpStream) -> 
 pub(in crate::cloud_runtime::github) fn github(
     responses: Vec<serde_json::Value>,
 ) -> (horizon_cloud::github::Client, std::thread::JoinHandle<()>) {
+    github_answers(responses.into_iter().map(|body| (200, body)).collect())
+}
+
+/// A fake GitHub that answers each connection with the next scripted status and JSON body.
+pub(in crate::cloud_runtime::github) fn github_answers(
+    responses: Vec<(u16, serde_json::Value)>,
+) -> (horizon_cloud::github::Client, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let client = horizon_cloud::github::Client::loopback(listener.local_addr().unwrap()).unwrap();
     let task = std::thread::spawn(move || {
-        for body in responses {
+        for (status, body) in responses {
             let (mut stream, _) = listener.accept().unwrap();
             read_request(&mut stream);
             let text = body.to_string();
             write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
                 text.len()
             )
             .unwrap();

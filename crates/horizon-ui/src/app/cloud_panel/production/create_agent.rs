@@ -15,7 +15,7 @@ use horizon_core::cloud_runtime::prices::Profile;
 use horizon_core::cloud_runtime::{
     Cancellation, Event,
     deployment::Request,
-    github::Prompt,
+    github::{self, Prompt},
     prices::{self, agent::Chosen},
     repository::launch::{self, Configuration},
     settings::{AgentLifecycleRefusal, Settings},
@@ -45,6 +45,14 @@ const NEEDS_SESSION: &str = "cloud_create_needs_persistent_session: a quick-star
 const INVALID: &str = "cloud_create_invalid_request: operation_id is one lowercase UUID, and submit needs a repository and quick_start true";
 const UNAVAILABLE: &str = "cloud_create_unavailable: requires a Horizon agent panel";
 
+/// The GitHub access of an agent's cloud: the chain of this computer's own sign-in, which the
+/// worker renews itself. A test replaces it, because the chain is read from this computer and
+/// calls GitHub.
+type Mint = for<'a, 'b, 'c> fn(
+    &'a Settings,
+    &'b cloud_runtime::command::Runner<'c>,
+) -> std::result::Result<Option<github::PersonAccess>, github::PersonChainRefusal>;
+
 #[derive(Default)]
 pub(super) struct State {
     queued: Vec<UsageRequest>,
@@ -71,6 +79,8 @@ struct Operation {
     /// Whether this machine's policy continues a cloud whose worker asks for a GitHub
     /// sign-in, instead of failing the operation.
     skip_sign_in: bool,
+    /// The GitHub sign-in this operation waits for, as its status shows it.
+    sign_in: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +125,8 @@ enum Message {
     Durable { operation: String, request: Box<Request> },
     /// Nothing was rented, and why.
     Refused { operation: String, error: String },
+    /// The GitHub sign-in that this operation needs from the person, as its status shows it.
+    SignIn { operation: String, line: String },
     /// The deployment ended: the ready cloud, or why it failed.
     Finished {
         operation: String,
@@ -172,6 +184,7 @@ impl State {
                 error: None,
                 cancel: None,
                 skip_sign_in: false,
+                sign_in: None,
             },
         );
     }
@@ -274,6 +287,7 @@ impl HorizonApp {
                 error: None,
                 cancel: Some(cancel.clone()),
                 skip_sign_in: false,
+                sign_in: None,
             },
         );
         let sender = state.sender();
@@ -284,9 +298,27 @@ impl HorizonApp {
             actor.to_owned(),
             self.active_session.as_ref().map(|session| session.session_id.clone()),
         );
-        // The settings, the repository, its commit and its price are read off this thread.
+        // The settings, the repository, its commit, its price and this computer's GitHub chain
+        // are read off this thread, which is also where the one sign-in an agent's cloud may
+        // need waits for the person.
         std::thread::spawn(move || {
-            let answer = prepare(&root, (&repository, thread_cloud), creator, &cancel);
+            let signing = (thread_id.clone(), sender.clone(), ctx.clone());
+            let report = |line: String| {
+                let (operation, sender, ctx) = &signing;
+                let _ = sender.send(Message::SignIn {
+                    operation: operation.clone(),
+                    line,
+                });
+                ctx.request_repaint();
+            };
+            let answer = prepare(
+                &root,
+                (&repository, thread_cloud),
+                creator,
+                &cancel,
+                github::for_agent_cloud,
+                &report,
+            );
             let message = match answer {
                 Ok((request, skip_sign_in)) => Message::Prepared {
                     operation: thread_id,
@@ -323,6 +355,8 @@ impl HorizonApp {
                     .get_mut(&operation)
                 {
                     running.skip_sign_in = skip_sign_in;
+                    // The reading thread reports again if it still needs a sign-in.
+                    running.sign_in = None;
                 }
                 match self.register_create_cloud(&operation, &request) {
                     Ok((_card, durability)) => {
@@ -342,6 +376,17 @@ impl HorizonApp {
                 }
             }
             Message::Refused { operation, error } => self.fail_create(&operation, error),
+            Message::SignIn { operation, line } => {
+                if let Some(running) = self
+                    .cloud_prototype
+                    .production
+                    .create_agent
+                    .operations
+                    .get_mut(&operation)
+                {
+                    running.sign_in = Some(line);
+                }
+            }
             Message::Durable { operation, request } => self.start_create_deployment(&operation, request, ctx),
             Message::Finished {
                 operation,
@@ -438,6 +483,7 @@ impl HorizonApp {
             running.phase = Phase::Failed;
             running.error = Some(error);
             running.cancel = None;
+            running.sign_in = None;
             discard
         };
         if let Some(card) = discard {
@@ -582,6 +628,11 @@ impl HorizonApp {
 
 /// The answer one operation gives: what it is, where it stands, and its last output.
 fn status(running: &Operation, runtime: Option<&Runtime>) -> Value {
+    let mut lines = runtime.map_or_else(Vec::new, |runtime| runtime.log_tail(RING_LINES));
+    // A sign-in this operation waits for is what its agent must show the person first.
+    if let Some(sign_in) = &running.sign_in {
+        lines.push(sign_in.clone());
+    }
     json!({
         "operation_id": running.id,
         "phase": running.phase.label(),
@@ -589,9 +640,7 @@ fn status(running: &Operation, runtime: Option<&Runtime>) -> Value {
         "cloud": running.cloud,
         "name": running.name,
         "stage": runtime.and_then(|runtime| runtime.stage).map(Stage::label),
-        "lines": runtime.map_or_else(Vec::new, |runtime| {
-            runtime.log_tail(RING_LINES)
-        }),
+        "lines": lines,
         "ready": running.ready,
         "error": running.error,
     })
@@ -624,15 +673,24 @@ fn prepare(
     (repository, cloud): (&str, String),
     (actor, session): (String, Option<String>),
     cancel: &Cancellation,
+    mint: Mint,
+    show: &dyn Fn(String),
 ) -> Result<(Box<Request>, bool), String> {
     let settings_path = root.join("settings.json");
     // The offers are ranked on this machine's own settings, as New cloud lists them.
     let machine = Settings::for_cloud(&settings_path, &Placement::default())
         .map_err(|error| format!("cloud_create_refused: the cloud settings could not be read: {error}"))?;
     let policy = machine.agent_lifecycle.clone().ok_or(REFUSED)?;
+    // Only a GitHub sign-in reports anything here: the reads of this thread stay quiet, and the
+    // one sign-in an agent's cloud needs reaches the agent as its status.
+    let emit = |event: Event| {
+        if let Event::GitHub(prompt) = event {
+            show(sign_in_line(&prompt));
+        }
+    };
     let runner = cloud_runtime::command::Runner {
         cancel,
-        emit: &|_| {},
+        emit: &emit,
         secrets: Vec::new(),
     };
     let prepared = launch::prepare_with_configuration(repository, "HEAD", Configuration::QuickStart, &runner).map_err(
@@ -661,6 +719,7 @@ fn prepare(
         .map_err(|refusal| refused(refusal, chosen.hourly, policy.max_hourly))?;
     // The offer whose rate the policy admits is the worker that is rented.
     let (profile, settings) = pinned_offer(&settings_path, &profile, &chosen)?;
+    github_access(&settings, &runner, mint)?;
     let state_root = cloud_runtime::state::cloud_directory(root, &cloud).map_err(|error| error.to_string())?;
     let skip_sign_in = policy.allow_github_sign_in_skip;
     let mut request = Request::new(
@@ -704,6 +763,37 @@ fn refused(refusal: AgentLifecycleRefusal, hourly: f64, max_hourly: f64) -> Stri
             refusal.message()
         ),
         _ => format!("cloud_create_refused: {}", refusal.message()),
+    }
+}
+
+/// The GitHub access this cloud's worker will be given, or the refusal that stops the create
+/// before a card exists or a worker is rented. The chain of this computer's sign-in is read
+/// here, and an agent's create signs in once when no chain is stored and
+/// `allow_github_sign_in_skip` does not let it continue without GitHub access.
+///
+/// The chain that is read here is dropped. The deployment installs the one the worker holds,
+/// which it renews itself from its refresh token.
+fn github_access(settings: &Settings, runner: &cloud_runtime::command::Runner<'_>, mint: Mint) -> Result<(), String> {
+    mint(settings, runner)
+        .map(drop)
+        .map_err(|refusal| format!("cloud_create_refused: {refusal}"))
+}
+
+/// The line an operation reports while it waits for the person's GitHub sign-in, which the
+/// agent shows the person.
+fn sign_in_line(prompt: &Prompt) -> String {
+    match prompt {
+        Prompt::Device {
+            user_code,
+            verification_uri,
+            ..
+        } => format!(
+            "GitHub sign-in needed: open {verification_uri} in a browser and enter the code {user_code}. This cloud continues when the sign-in is approved."
+        ),
+        Prompt::Web { url } => format!(
+            "GitHub sign-in needed: open {url} in a browser that is signed in to GitHub. This cloud continues when the sign-in is approved."
+        ),
+        _ => "GitHub sign-in needed: waiting for the person.".to_owned(),
     }
 }
 

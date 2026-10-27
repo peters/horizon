@@ -94,6 +94,10 @@ pub struct Settings {
     /// that read it themselves. Never stored.
     #[serde(skip)]
     pub placement: Option<crate::cloud_panel::Placement>,
+    /// The directory of the settings file, where this computer's GitHub sign-in and the
+    /// private files of the app are kept. Set by [`Settings::load`]; never stored.
+    #[serde(skip)]
+    pub root: Option<PathBuf>,
     /// The Codex home of this computer's `ChatGPT` login, beside the settings file. Set
     /// by [`Settings::load`]; never stored.
     #[serde(skip)]
@@ -185,6 +189,7 @@ impl Settings {
         let mut value: Self = serde_json::from_slice(bytes).map_err(|_| Error::Json)?;
         value.validate()?;
         value.codex_home = path.parent().map(super::codex_login::home);
+        value.root = path.parent().map(Path::to_owned);
         super::github::remember(value.github.is_some());
         value.retire_github_key(path);
         Ok(value)
