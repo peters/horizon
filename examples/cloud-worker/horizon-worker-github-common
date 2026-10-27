@@ -52,25 +52,70 @@ MAX_STATE = 131072
 ACCESS = ('push', 'read')
 # A token this close to its expiry is refused: Git or gh would fail with it mid-operation.
 SERVE_MARGIN = 60
+# A chain has one of two kinds. A person chain renews itself with its refresh token. An
+# installation chain is a GitHub App installation token, which has no refresh token, because
+# only the host holds the app's key: only the host can mint the next one. The marker field
+# keeps the kinds apart, and each kind is exactly its own fields, so a chain that carries the
+# marker together with refresh fields is neither kind and is refused.
+PERSON = 'person'
+INSTALLATION = 'installation'
+KIND = 'kind'
+# Who can give this worker a new token: its own refresh, or only the host.
+RENEWAL = {PERSON: 'worker', INSTALLATION: 'host'}
+# The state of an installation chain whose access token ended. No refresh follows it, so the
+# chain stays as it is until the host installs a new token.
+INSTALLATION_EXPIRED = 'installation_token_expired'
+# Why a token that ends within SERVE_MARGIN is not served.
+EXPIRED = 'the GitHub access token expired and this worker could not refresh it yet.'
+EXPIRED_INSTALLATION = 'the GitHub installation token ended and only the host can install a new one.'
 # What an agent's gh holds instead of a token: gh reaches GitHub through the API broker, which
 # drops it and adds the token of the grant that covers each request.
 PLACEHOLDER = auth.PLACEHOLDER
 # Tests only: a fake GitHub on the loopback address. Nothing else is accepted.
 TEST_URL = 'HORIZON_WORKER_GITHUB_TEST_URL'
 CHAIN_FIELDS = {'access_token', 'access_expires_at', 'refresh_token', 'refresh_expires_at'}
+INSTALLATION_FIELDS = {'access_token', 'access_expires_at', KIND}
 
 
 def timestamp(value):
     return type(value) is int and 0 < value < 1 << 40
 
 
+def chain_kind(chain):
+    """`PERSON` or `INSTALLATION` of a validated chain; `validate_chain` refuses a chain that
+    is not exactly one of the two kinds."""
+    return INSTALLATION if isinstance(chain, dict) and chain.get(KIND) == INSTALLATION else PERSON
+
+
 def validate_chain(chain):
-    if not isinstance(chain, dict) or set(chain) != CHAIN_FIELDS:
+    if not isinstance(chain, dict):
+        raise ValueError('Invalid GitHub token chain')
+    if set(chain) == INSTALLATION_FIELDS:
+        if chain[KIND] != INSTALLATION or not (auth.valid_token(chain['access_token'])
+                                              and timestamp(chain['access_expires_at'])):
+            raise ValueError('Invalid GitHub token chain')
+        return chain
+    if set(chain) != CHAIN_FIELDS:
         raise ValueError('Invalid GitHub token chain')
     if not (auth.valid_token(chain['access_token']) and auth.valid_token(chain['refresh_token'])
             and timestamp(chain['access_expires_at']) and timestamp(chain['refresh_expires_at'])):
         raise ValueError('Invalid GitHub token chain')
     return chain
+
+
+def token_state(state, now):
+    """The state of the stored chain `state` at `now`. An installation token that ended has
+    none of its own to store: nothing on this worker can renew it, so a report names its end."""
+    if (state['state'] == 'ok' and chain_kind(state['chain']) == INSTALLATION
+            and state['chain']['access_expires_at'] <= now):
+        return INSTALLATION_EXPIRED
+    return state['state']
+
+
+def expired_reason(chain):
+    """Why a chain's token is not served once it ends within `SERVE_MARGIN`: its own refresh is
+    due, or only the host can install the next installation token."""
+    return EXPIRED_INSTALLATION if chain_kind(chain) == INSTALLATION else EXPIRED
 
 
 def stronger(first, second):

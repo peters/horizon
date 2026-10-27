@@ -2,8 +2,9 @@
 """Root service that keeps a GitHub App user token chain fresh while the host is offline. Git
 reaches GitHub through its loopback proxy, which adds the access token only to requests for
 granted repositories, so Git never holds the token. Agents never hold the refresh token; gh
-still gets an access token for a granted repository until the API broker replaces that. Never
-prints a token. Root
+still gets an access token for a granted repository until the API broker replaces that. An
+installation chain has no refresh token, so this service never refreshes it: when its token
+ends, the service serves nothing until the host installs a new one. Never prints a token. Root
 operations: install (JSON on stdin), serve (started by horizon-worker-supervise), status,
 clear, requests and decide. Agents run `mcp` for the github_access tool."""
 import contextlib
@@ -64,6 +65,9 @@ ERROR_CODE = re.compile(r'[a-z0-9_]{1,64}')
 INSTALL_FIELDS = {'version', 'client_id', 'client_secret', 'login', 'author_name', 'author_email', 'grants', 'chain'}
 # Fields an installation may leave out.
 OPTIONAL_FIELDS = {'client_secret', 'login'}
+# The payload version names the chain kind, so an image from before an installation chain
+# refuses it at the version check, not inside the chain validator.
+INSTALL_VERSIONS = {1: common.PERSON, 2: common.INSTALLATION}
 LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?')
 GRANT_FIELDS = {'repository', 'target', 'access'}
 
@@ -75,8 +79,9 @@ class Transient(Exception):
 def validate_install(value, now):
     if not isinstance(value, dict) or not INSTALL_FIELDS - OPTIONAL_FIELDS <= set(value) <= INSTALL_FIELDS:
         raise ValueError('Invalid GitHub chain installation')
-    if type(value['version']) is not int or value['version'] != 1:
+    if type(value['version']) is not int or value['version'] not in INSTALL_VERSIONS:
         raise ValueError('Unsupported GitHub chain installation version')
+    kind = INSTALL_VERSIONS[value['version']]
     if not isinstance(value['client_id'], str) or not CLIENT_ID.fullmatch(value['client_id']):
         raise ValueError('Invalid GitHub App client')
     if 'client_secret' in value and not auth.valid_token(value['client_secret']):
@@ -84,7 +89,13 @@ def validate_install(value, now):
     if 'login' in value and not (isinstance(value['login'], str) and LOGIN.fullmatch(value['login'])):
         raise ValueError('Invalid GitHub login')
     chain = common.validate_chain(value['chain'])
-    if chain['refresh_expires_at'] <= now:
+    if common.chain_kind(chain) != kind:
+        raise ValueError('The GitHub chain kind does not match the installation version')
+    if kind == common.INSTALLATION:
+        # Only the host mints an installation token, and it cannot renew one that ended.
+        if chain['access_expires_at'] <= now:
+            raise ValueError('The GitHub installation token ended; the host must install a fresh one')
+    elif chain['refresh_expires_at'] <= now:
         raise ValueError('The GitHub token chain expired')
     grants = value['grants']
     if not isinstance(grants, list) or not 1 <= len(grants) <= auth.MAX_GRANTS:
@@ -143,15 +154,19 @@ def rotated_chain(reply, now):
 
 
 def refresh_once(store, now=time.time, post=post_refresh):
-    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed' or 'retry'."""
+    """One refresh check: 'absent', 'revoked', 'fresh', 'refreshed', 'host_only' or 'retry'."""
     with store.lock():
         state, _ = store.load()
         if state is None:
             return 'absent'
         if state['state'] != 'ok':
             return 'revoked'
-        started = int(now())
         chain = state['chain']
+        if common.chain_kind(chain) == common.INSTALLATION:
+            # An installation token has no refresh token, and the app's key stays on the host:
+            # only the host mints the next token, so this check asks GitHub nothing.
+            return 'host_only'
+        started = int(now())
         if chain['refresh_expires_at'] <= started:
             store.save(dict(state, state='revoked', last_error='refresh_expired'))
             return 'revoked'
@@ -190,6 +205,10 @@ def retry_delay(failures, jitter=random.random):
 def next_check(store, now):
     state, _ = store.load()
     if state is None or state['state'] != 'ok':
+        return POLL_SECONDS
+    if common.chain_kind(state['chain']) == common.INSTALLATION:
+        # Nothing to renew: the access expiry would otherwise poll every second after the
+        # margin, and the loop still needs its pending write and intent checks.
         return POLL_SECONDS
     due = state['chain']['access_expires_at'] - REFRESH_MARGIN - now
     return max(1, min(POLL_SECONDS, due))
@@ -458,16 +477,19 @@ def status(store, now=time.time):
     state, persistent = store.load()
     pending = len(agents.requests_report(agents.Book(store.runtime), state, now)['requests'])
     if state is None:
-        return {'version': 1, 'state': 'absent', 'persistent': False, 'pending_write': False, 'login': None,
-                'access_expires_at': None, 'refresh_expires_at': None, 'last_refresh_at': None, 'last_error': None,
-                'repositories': [], 'pending_requests': pending}
+        return {'version': 1, 'state': 'absent', 'kind': None, 'renewal': None, 'persistent': False,
+                'pending_write': False, 'login': None, 'access_expires_at': None, 'refresh_expires_at': None,
+                'last_refresh_at': None, 'last_error': None, 'repositories': [], 'pending_requests': pending}
+    kind = common.chain_kind(state['chain'])
+    current = now()
     # A cloud grant routes credentials only; it has no target repository on the worker.
     repositories = [{key: grant[key] for key in ('repository', 'target', 'access')} for grant in state['grants']]
     repositories += [{'repository': grant['repository'], 'target': None, 'access': grant['access']}
                      for grant in state.get('cloud_grants', [])]
-    return {'version': 1, 'state': state['state'], 'persistent': persistent, 'pending_write': store.pending_write(),
+    return {'version': 1, 'state': common.token_state(state, current), 'kind': kind,
+            'renewal': common.RENEWAL[kind], 'persistent': persistent, 'pending_write': store.pending_write(),
             'login': state.get('login'), 'access_expires_at': state['chain']['access_expires_at'],
-            'refresh_expires_at': state['chain']['refresh_expires_at'],
+            'refresh_expires_at': state['chain'].get('refresh_expires_at'),
             'last_refresh_at': state.get('last_refresh_at'), 'last_error': state.get('last_error'),
             'repositories': repositories, 'pending_requests': pending}
 
