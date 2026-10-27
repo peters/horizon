@@ -11,6 +11,7 @@ import time
 BUS_SOCKET_NAME = 'bus'
 APPARMOR_ACCESS = Path('/sys/kernel/security/apparmor/.access')
 X11_SOCKET_DIR = Path('/tmp/.X11-unix')
+CLOUD_SETTINGS_FOLDER = '.horizon/cloud'
 SSH_FOLDER = '.ssh'
 SSH_CONFIG_NAME = 'config'
 SSH_SYSTEM_INCLUDE = '/etc/ssh/ssh_config.d'
@@ -199,6 +200,42 @@ def seed_ssh(private_home, config=None, identity=None):
         target.write_bytes(source.read_bytes())
         target.chmod(0o600)
     return [target.name for _, target in seeded]
+
+
+def seed_cloud_settings(private_home, source=None):
+    """Copy a cloud settings folder into the private home of the fixture.
+
+    The app of the fixture runs with `HOME` bound to `private_home`, so it reads
+    its cloud settings from `<private_home>/.horizon/cloud`. A procedure that
+    rents, stops or deletes needs the settings of the account there: the
+    credentials, the identity and the image pins. The copy stays private
+    (folders 0700, files 0600) and never leaves the fixture state.
+
+    Returns the number of files that the fixture seeded.
+    """
+    if source is None:
+        return 0
+    source = Path(source).resolve()
+    if not source.is_dir():
+        raise ValueError(f'--cloud-settings must be a folder: {source}')
+    target_root = Path(private_home) / CLOUD_SETTINGS_FOLDER
+    seeded = 0
+    for path in sorted(source.rglob('*')):
+        relative = path.relative_to(source)
+        target = target_root / relative
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError(f'--cloud-settings holds {relative}, which is not a regular file or folder')
+        if path.is_dir():
+            target.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.chmod(0o700)
+            continue
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.write_bytes(path.read_bytes())
+        target.chmod(0o600)
+        seeded += 1
+    target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target_root.chmod(0o700)
+    return seeded
 
 
 def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=()):

@@ -297,7 +297,7 @@ pub struct HorizonApp {
     rename_buffer: String,
     renaming_panel: Option<PanelId>,
     panel_rename_buffer: String,
-    session_store: SessionStore,
+    pub(in crate::app) session_store: SessionStore,
     active_session: Option<ActiveSession>,
     startup_chooser: Option<StartupChooserState>,
     config_path: PathBuf,

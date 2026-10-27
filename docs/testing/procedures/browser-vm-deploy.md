@@ -13,9 +13,11 @@ owner: peters
 ## 1. Purpose
 
 This procedure proves that an agent rents a browser machine from Horizon with one
-tool call, that a person signs in to a site on the display of that machine one
-time, and that a stop and a resume keep that sign-in. It also proves that a
-delete removes the machine and the state volume.
+tool call. It proves that the `Browser VM` section of the Settings window shows
+that machine, stops it, resumes it, opens its Device panel and writes the settings
+entry `browser_host`. A person signs in to a site on the display of the machine
+one time, and a stop and a resume keep that sign-in. A delete from the Settings
+window removes the machine and the state volume.
 
 ## 2. Applicability
 
@@ -44,7 +46,8 @@ delete removes the machine and the state volume.
 
 ## 4. Equipment and preconditions
 
-- A computer that runs Horizon, with an agent panel in a workspace.
+- A computer that runs Horizon, with an agent panel in a workspace and an open
+  Settings window.
 - A cloud settings file at `~/.horizon/cloud/settings.json` with a `hetzner`
   section: a token file, at least one location such as `fsn1`, and an SSH identity
   pair whose `.pub` file is beside it. The `hetzner` `server_types` list is not used
@@ -52,7 +55,7 @@ delete removes the machine and the state volume.
 - An image reference with a digest for the image of `packaging/browser-vm`, on a
   registry that the rented machine can pull. Name it `IMAGE` in this procedure. A
   private image needs the `registry_pull` binding of the cloud settings.
-- A site with a sign-in page for step 6.2. Name it `SITE` in this procedure.
+- A site with a sign-in page for step 6.3. Name it `SITE` in this procedure.
 
 ## 5. Setup
 
@@ -72,7 +75,7 @@ delete removes the machine and the state volume.
 
 ## 6. Tasks
 
-### 6.1 D1 — an agent rents the machine
+### 6.1 D1: an agent rents the machine
 
 1. Ask the agent to call `browser_vm` with these arguments:
 
@@ -99,31 +102,99 @@ delete removes the machine and the state volume.
    Result: The file holds the image, the server type, the location, the volume
    size, the SSH target, the server identity and the volume identity.
 
-### 6.2 D2 — a person signs in one time
+### 6.2 D2: the person drives the machine from the Settings window
 
-1. Call `device_panel` with the `device_panel` route of the answer of step 6.1:
+1. Open the Settings window with `Ctrl+Shift+Comma`, and click the `Browser VM`
+   tab.
 
-   ```json
-   {"ssh": {"host": "<address>", "user": "root", "vnc": "127.0.0.1:5900"}}
+   Result: The section shows the phase `Ready`, the machine size `ccx13`, the
+   location, the SSH target `root@<address>` and the hourly cost. The `State
+   volume` line shows `20 GB`.
+
+2. Read the hourly cost line.
+
+   Result: The line ends with `/h net`. The amount is the Hetzner price of the
+   server type, without VAT. The note under it says that the state volume, the
+   primary IPv4 address and traffic bill separately.
+
+3. Click `Use this host for new panels`, then click `Save`.
+
+   Result: The button becomes unavailable, the card says that new browser panels
+   already use this machine, and the `YAML` tab shows `browser_host:
+   ssh_target: root@<address>`. The entry applies at the next start of Horizon.
+
+4. Trust the host key of the machine one time, in a terminal panel of the
+   isolated desktop:
+
+   ```sh
+   ssh-keyscan -T 10 <address> >> ~/.ssh/known_hosts
    ```
 
-   Result: A native Device panel shows the desktop of the machine.
+   Result: `known_hosts` holds the keys of the machine. This step is necessary
+   because a Device panel refuses a host key that it has never seen, by design.
 
-2. In that desktop, open the browser and sign in to `SITE`.
+5. Click `Open Device panel`.
 
-   Result: The site shows the signed-in page. The frame counter of the panel
-   advances while you click.
+   Result: A native Device panel named `Browser VM` shows `127.0.0.1:5900 via
+   root@<address>`, the connection state `Connected` and the VNC name of the
+   machine. The desktop of the machine is a plain window manager until a page
+   opens there.
 
-3. In the browser of that desktop, open the file browser and write a file in the
-   profile folder:
+6. Click `Stop`.
+
+   Result: The section shows `Stopping`, and Start, Stop, Resume and Delete are
+   not available while the run continues. The phase becomes `Stopped` by itself.
+   The SSH target line says `none yet`, and the state volume line still shows
+   `20 GB`.
+
+7. Click `Resume`, and wait until the phase is `Ready`.
+
+   Result: The section shows the new SSH target of the machine, and the hourly
+   cost of its server type. The state volume is the same volume, so the sites
+   that a person signed in to are still signed in.
+
+   > **CAUTION:** Resume rents a machine. Stop it or delete it when the check is
+   > complete.
+
+8. Click `Delete`, then `Delete the machine and its volume`.
+
+   Result: The section shows `Deleting` and then `Deleted`. The warning before
+   the second press says that every saved sign-in is lost. The account then
+   shows no server and no volume.
+
+   > **CAUTION:** Delete removes the server and the state volume of the machine.
+   > Every saved sign-in is lost.
+
+### 6.3 D3: a person signs in one time
+
+1. Open the Device panel with `Open Device panel` in the section, not with the
+   `device_panel` tool. The deploy installs one key for the root user, and the
+   section names it; the tool cannot name a key, which
+   [#1878](https://github.com/peters/horizon/issues/1878) tracks.
+
+   Result: The panel shows the desktop of the machine and the connection state
+   `Connected`.
+
+2. Ask an agent to open `SITE` on the browser host of the machine, so that its
+   browser window appears on that desktop. The desktop has a window manager and
+   Chromium, and no window until a page opens.
+
+   Result: A browser window appears on the desktop of the machine, and the frame
+   counter of the panel advances.
+
+3. Sign in to `SITE` in that window.
+
+   Result: The site shows the signed-in page.
+
+4. Write a file in the state volume:
 
    ```sh
    touch /state/signin-marker
    ```
 
-   Result: The command creates the file on the state volume.
+   Result: The file exists in `/state` of the machine.
 
-### 6.3 D3 — a stop and a resume keep the sign-in
+### 6.4 D4: a stop and a resume keep the sign-in
 
 1. Ask the agent to call `browser_vm` with `{"operation": "stop"}`.
 
@@ -153,18 +224,27 @@ delete removes the machine and the state volume.
    Result: The command prints the path, so the state volume kept the file across
    the stop and the resume.
 
-### 6.4 D4 — a delete removes the machine and the volume
+### 6.5 D5: a delete from the Settings window removes the machine and the volume
 
-1. Ask the agent to call `browser_vm` with `{"operation": "delete"}`.
+> **CAUTION:** STEP 6.5.3 DELETES THE SERVER AND THE STATE VOLUME OF THIS
+> PROCEDURE. Every saved sign-in is lost. Delete must leave no server and no
+> volume in the Hetzner project.
 
-   Result: The tool returns `phase` `deleting`.
+1. Open the `Browser VM` tab, and click `Delete`.
 
-2. Ask the agent to call `browser_vm` with `{"operation": "status"}` until the
-   phase is `deleted`.
+   Result: The section asks again, in the section and not in a modal window. The
+   machine still runs.
 
-   Result: The answer holds `phase` `deleted` and no `ssh_target`.
+2. Click `Keep the machine`.
 
-3. Examine the Hetzner project with the token file of the cloud settings.
+   Result: The question closes, and the phase stays `Ready`.
+
+3. Click `Delete`, then click `Delete the machine and its volume`.
+
+   Result: The phase is `Deleting`, and then `Deleted`. The SSH target line says
+   `none yet`, and Start is available again.
+
+4. Examine the Hetzner project with the token file of the cloud settings.
 
    ```sh
    curl --silent --header "Authorization: Bearer $(cat <token file>)" \
@@ -175,30 +255,47 @@ delete removes the machine and the state volume.
 
    Result: Both commands print `[]`. No server and no volume of the run remains.
 
-### 6.5 D5 — a mutable tag is refused
+### 6.6 D6: a mutable tag is refused
 
-1. Ask the agent to call `browser_vm` with `{"operation": "deploy", "image":
+> **CAUTION:** STEP 6.6.1 PRESSES START, WHICH RENTS A DEDICATED SERVER AND A
+> STATE VOLUME. The request carries a tag and not a digest, so Horizon must
+> refuse it and rent nothing. If the phase changes to `Starting`, click `Delete`
+> at once and do step 6.5.3.
+
+1. In the `Browser VM` tab, type `example/browser-vm:1780` into `Image`, and click
+   `Start`.
+
+   Result: The section shows the refusal that names the digest. The phase stays
+   `Deleted`, and nothing is rented.
+
+2. Ask the agent to call `browser_vm` with `{"operation": "deploy", "image":
    "example/browser-vm:1780", "server_type": "ccx13"}`.
 
-   Result: The tool refuses with a message that names the digest, and the Hetzner
-   project holds no new server.
+   Result: The tool refuses with the same reason, and the Hetzner project holds
+   no new server.
 
 ## 7. Pass criteria
 
 - D1 rents one machine, and its state volume is mounted at `/state`.
-- D2 signs in one time, and the Device panel shows the desktop.
-- D3 keeps the sign-in and the file across a stop and a resume.
-- D4 leaves no server and no volume in the Hetzner project.
-- D5 refuses a mutable tag before any request.
+- D2 shows the phase, the machine and the net hourly cost in the Settings window,
+  stops and resumes the machine there, opens the Device panel there and writes
+  the settings entry.
+- D3 signs in one time, and the Device panel shows the desktop.
+- D4 keeps the sign-in and the file across a stop and a resume.
+- D5 deletes the machine from the Settings window, and leaves no server and no
+  volume in the Hetzner project.
+- D6 refuses a mutable tag in the Settings window and in the tool, before any
+  request.
 
 ## 8. Cleanup
 
-1. If any step of task D4 did not reach `deleted`, ask the agent to call
-   `browser_vm` with `{"operation": "delete"}` again, and poll `status`.
+1. If any step of task D5 did not reach `deleted`, click `Delete` and then
+   `Delete the machine and its volume` again, and wait until the phase is
+   `Deleted`.
 
    Result: The phase is `deleted`.
 
-2. Examine the Hetzner project as step 6.4 does.
+2. Examine the Hetzner project as step 6.5.4 does.
 
    Result: Both commands print `[]`.
 

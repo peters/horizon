@@ -2,7 +2,7 @@
 //! request is answered as soon as its run is recorded, and the caller polls `status`.
 //! Every run happens on its own thread: no provider request or record write reaches the
 //! UI thread.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 
 use horizon_core::browser::manifest::provider_usage::{BrowserVmAction, BrowserVmRequest, UsageRequest};
@@ -15,6 +15,9 @@ use serde_json::{Value, json};
 
 use super::HorizonApp;
 
+/// Why a build with cloud support that has none set up refuses a run.
+const UNAVAILABLE: &str = "browser_vm_unavailable: cloud support is not set up on this Horizon";
+
 /// The requests of this Horizon that are on their own thread.
 #[derive(Default)]
 pub(super) struct State {
@@ -22,7 +25,11 @@ pub(super) struct State {
 }
 
 struct Job {
-    request: UsageRequest,
+    /// The tool request whose answer goes back through the provider usage queue. A request
+    /// of the Settings window has no caller to answer.
+    tool: Option<UsageRequest>,
+    /// The request this job runs, so its answer reaches the Settings section too.
+    action: BrowserVmRequest,
     answers: Receiver<Answer>,
     cancel: Cancellation,
     /// Whether this job runs provider work, so a second one must wait for it.
@@ -39,15 +46,19 @@ impl Drop for Job {
 }
 
 enum Answer {
-    /// The run is recorded, with the phase it starts in.
-    Begun(Result<Status, String>),
+    /// The run is recorded, with the phase it starts in, and the identity that opens the
+    /// machine: the key the deploy installed, read on this thread while the UI thread draws.
+    Begun {
+        result: Result<Status, String>,
+        identity: Option<String>,
+    },
     /// The run ended, with the phase it reached.
     Finished,
 }
 
 impl State {
     /// Whether a provider run of this Horizon is in flight.
-    fn running(&self) -> bool {
+    pub(super) fn running(&self) -> bool {
         self.jobs.iter().any(|job| job.mutating)
     }
 }
@@ -67,24 +78,26 @@ fn runs_provider(action: BrowserVmAction) -> bool {
 }
 
 impl HorizonApp {
-    /// Starts a browser VM request on its own thread, or refuses a provider run while one
-    /// of this Horizon is in flight.
+    /// Starts a browser VM request of a tool on its own thread, or refuses it as text.
     pub(in crate::app) fn queue_browser_vm(&mut self, request: UsageRequest, ctx: &egui::Context) {
-        let Some(root) = self.cloud_root() else {
-            self.answer_browser_vm(
-                &request,
-                Err("browser_vm_unavailable: cloud support is not set up on this Horizon".into()),
-            );
-            return;
-        };
         let Some(action) = request.browser_vm.clone() else {
             return;
         };
-        if let Some(refusal) = refusal(
-            action.action,
-            self.browser_create_host.provider_usage.browser_vm.running(),
-        ) {
-            self.answer_browser_vm(&request, Err(refusal.into()));
+        self.start_browser_vm(Some(request), action, ctx);
+    }
+
+    /// Starts a browser VM request of the Settings window. It shares the queue, the refusals
+    /// and the run threads of a tool request; only the reply target differs, because no
+    /// caller waits for it.
+    pub(in crate::app) fn queue_settings_browser_vm(&mut self, action: BrowserVmRequest, ctx: &egui::Context) {
+        self.start_browser_vm(None, action, ctx);
+    }
+
+    fn start_browser_vm(&mut self, tool: Option<UsageRequest>, action: BrowserVmRequest, ctx: &egui::Context) {
+        let root = cloud_settings_root(self);
+        let running = self.browser_create_host.provider_usage.browser_vm.running();
+        if let Some(refusal) = refusal(action.action, running) {
+            self.refuse_browser_vm(tool, refusal.to_owned());
             return;
         }
         let mutating = runs_provider(action.action);
@@ -92,15 +105,18 @@ impl HorizonApp {
         let cancel = Cancellation::default();
         let worker_cancel = cancel.clone();
         let repaint = ctx.clone();
+        let recorded = action.clone();
         std::thread::spawn(move || {
-            let begun = work(&root, &action, &worker_cancel, &mut run_provider);
-            let _ = sender.send(Answer::Begun(begun));
+            let result = work(&root, &action, &worker_cancel, &mut run_provider);
+            let identity = ssh_identity(&root);
+            let _ = sender.send(Answer::Begun { result, identity });
             repaint.request_repaint();
             let _ = sender.send(Answer::Finished);
             repaint.request_repaint();
         });
         self.browser_create_host.provider_usage.browser_vm.jobs.push(Job {
-            request,
+            tool,
+            action: recorded,
             answers,
             cancel,
             mutating,
@@ -111,34 +127,65 @@ impl HorizonApp {
     /// Answers every recorded run, and drops a job when its thread ended.
     pub(in crate::app) fn poll_browser_vm(&mut self, ctx: &egui::Context) {
         let mut answers = Vec::new();
+        let mut finished = false;
         {
             let state = &mut self.browser_create_host.provider_usage.browser_vm;
             for job in &mut state.jobs {
                 while let Ok(answer) = job.answers.try_recv() {
                     match answer {
-                        Answer::Begun(result) => answers.push((job.request.clone(), result)),
+                        Answer::Begun { result, identity } => {
+                            answers.push((job.tool.clone(), job.action.action, result, identity));
+                        }
                         Answer::Finished => job.finished = true,
                     }
                 }
+                finished |= job.finished;
             }
             state.jobs.retain(|job| !job.finished);
         }
-        if answers.is_empty() {
-            return;
+        for (tool, action, result, identity) in answers {
+            match tool {
+                Some(request) => self.answer_browser_vm(&request, result, identity),
+                None => self.show_browser_vm(action, result, identity),
+            }
         }
-        for (request, result) in answers {
-            self.answer_browser_vm(&request, result);
+        if finished {
+            // The phase a run ended in is in the record: read it once more.
+            if let Some(editor) = self.settings.as_mut() {
+                editor.browser_vm.read_again();
+            }
+            ctx.request_repaint();
         }
-        ctx.request_repaint();
     }
 
-    fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>) {
+    fn answer_browser_vm(&mut self, request: &UsageRequest, result: Result<Status, String>, identity: Option<String>) {
         let mut answer = request.result(Vec::new(), None);
-        match result {
-            Ok(status) => answer.browser_vm = Some(describe(&status)),
-            Err(error) => answer.error = Some(error),
+        match &result {
+            Ok(status) => answer.browser_vm = Some(describe(status)),
+            Err(error) => answer.error = Some(error.clone()),
         }
         self.publish_host_usage_result(answer);
+        let action = request
+            .browser_vm
+            .as_ref()
+            .map_or(BrowserVmAction::Status, |request| request.action);
+        self.show_browser_vm(action, result, identity);
+    }
+
+    /// Shows the answer of one request in the Settings section, which is the only place a
+    /// person reads the phase and the refusals.
+    fn show_browser_vm(&mut self, action: BrowserVmAction, result: Result<Status, String>, identity: Option<String>) {
+        if let Some(editor) = self.settings.as_mut() {
+            editor.browser_vm.absorb(action, result, identity);
+        }
+    }
+
+    /// Answers a request that was refused before any thread started.
+    fn refuse_browser_vm(&mut self, tool: Option<UsageRequest>, reason: String) {
+        match tool {
+            Some(request) => self.answer_browser_vm(&request, Err(reason), None),
+            None => self.show_browser_vm(BrowserVmAction::Status, Err(reason), None),
+        }
     }
 }
 
@@ -169,10 +216,13 @@ fn work(
     let Some(mut operation) = operation(request) else {
         return browser_vm::status(root).map_err(|error| error.to_string());
     };
+    // Every action that rents, stops, resumes or deletes reaches the provider and needs the
+    // account settings; a read reaches only the record of this Horizon and needs none.
+    let settings = runs_provider(request.action).then(|| run_settings(root)).transpose()?;
     if let Operation::Deploy(deploy) = &mut operation
         && deploy.location.is_empty()
     {
-        deploy.location = first_location(root)?;
+        deploy.location = first_location(settings.as_ref())?;
     }
     let begun = browser_vm::begin(root, &operation).map_err(|error| error.to_string())?;
     if runs_provider(request.action) {
@@ -187,14 +237,77 @@ fn run_provider(root: &Path, cancel: &Cancellation) {
     let _ = browser_vm::run(root, cancel, &mut |_| {});
 }
 
+/// The cloud settings directory of the browser VM. A cloud board sets the root of the cloud
+/// panel, but the browser VM reads its own settings, so it falls back to the home of this
+/// Horizon when no cloud board runs. The home comes from the session store, which is the
+/// home this process was started with, so a test never reads the home of the developer.
+///
+/// This names a path and reads nothing: the settings file is opened on the job thread.
+fn cloud_settings_root(app: &HorizonApp) -> PathBuf {
+    app.cloud_root()
+        .unwrap_or_else(|| app.session_store.home().root().join("cloud"))
+}
+
+/// The cloud settings a provider run needs, read on the job thread. A missing file is the
+/// typed refusal of a Horizon that has no cloud support, and a file that cannot be read says
+/// so instead, because a person who broke the file must not be told to set cloud up again.
+pub(in crate::app) fn run_settings(root: &Path) -> Result<Settings, String> {
+    let path = root.join("settings.json");
+    if !path.is_file() {
+        return Err(UNAVAILABLE.to_owned());
+    }
+    Settings::load(&path)
+        .map_err(|error| format!("browser_vm_settings_unreadable: the cloud settings cannot be read ({error})"))
+}
+
+/// The identity that opens the machine: the key the deploy installed as the only login of
+/// its root user. Read on the job thread, never on the UI thread.
+pub(in crate::app) fn ssh_identity(root: &Path) -> Option<String> {
+    Settings::load(&root.join("settings.json"))
+        .ok()
+        .map(|settings| settings.ssh_identity_file.to_string_lossy().into_owned())
+}
+
 /// The location a deploy uses when it names none: the first the Hetzner settings allow.
-fn first_location(root: &Path) -> Result<String, String> {
-    let settings = Settings::load(&root.join("settings.json")).map_err(|error| error.to_string())?;
+/// The location a deploy uses when it names none: the first the Hetzner settings allow.
+/// The settings were already read on this thread by the run that asks.
+fn first_location(settings: Option<&Settings>) -> Result<String, String> {
+    let settings = settings.ok_or_else(|| UNAVAILABLE.to_owned())?;
     settings
         .hetzner
         .as_ref()
         .and_then(|hetzner| hetzner.locations.first().cloned())
         .ok_or_else(|| "browser_vm_unavailable: the Hetzner settings name no location; name one in the request".into())
+}
+
+/// The route of the Device panel of a ready machine: the VNC address on the loopback of the
+/// machine's host, which a panel reaches through the SSH route of that host. The tool answer
+/// and the Settings section name the same route.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::app) struct DeviceRoute {
+    pub host: String,
+    pub user: String,
+    pub vnc: String,
+}
+
+impl DeviceRoute {
+    /// The route of `status`, or nothing unless a machine runs and the record names its host.
+    pub(in crate::app) fn of(status: &Status) -> Option<Self> {
+        if status.phase != Phase::Ready {
+            return None;
+        }
+        let host = status.ssh_host()?;
+        let user = status
+            .ssh_target
+            .as_deref()
+            .and_then(|target| target.split_once('@'))
+            .map_or("root", |(user, _)| user);
+        Some(Self {
+            host: host.to_string(),
+            user: user.to_string(),
+            vnc: browser_vm::VNC_ADDRESS.to_string(),
+        })
+    }
 }
 
 /// The answer of one browser VM request, as the tools read it.
@@ -209,11 +322,9 @@ fn describe(status: &Status) -> Value {
         "hourly_net": status.hourly_net,
         "error": status.error,
     });
-    if status.phase == Phase::Ready
-        && let Some(host) = status.ssh_host()
-    {
+    if let Some(route) = DeviceRoute::of(status) {
         answer["device_panel"] = json!({
-            "ssh": {"host": host, "user": "root", "vnc": browser_vm::VNC_ADDRESS}
+            "ssh": {"host": route.host, "user": route.user, "vnc": route.vnc}
         });
         answer["person_step"] = json!(
             "A person must sign in now: call device_panel with the ssh route above and sign in to the sites on the display of the machine. The state volume keeps those sign-ins across a stop and a resume. An agent cannot do this step."
@@ -254,6 +365,17 @@ mod tests {
             ..Record::default()
         }
         .save(root.path())
+        .unwrap();
+        // Every action that reaches the provider needs the account settings, so the fixture
+        // of an admission test holds them. The key files they name need not exist.
+        std::fs::write(
+            root.path().join("settings.json"),
+            serde_json::json!({
+                "ssh_identity_file": root.path().join("identity"),
+                "hetzner": {"token_file": root.path().join("token"), "server_types": ["ccx13"], "locations": ["fsn1"]},
+            })
+            .to_string(),
+        )
         .unwrap();
         root
     }
