@@ -68,7 +68,9 @@ OPTIONAL_FIELDS = {'client_secret', 'login'}
 # The payload version names the chain kind, so an image from before an installation chain
 # refuses it at the version check, not inside the chain validator.
 INSTALL_VERSIONS = {1: common.PERSON, 2: common.INSTALLATION}
-LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?')
+# A GitHub App's token acts as its bot account, whose login carries the `[bot]` suffix that a
+# person's login never does. Both are one account name, so the pattern accepts the suffix.
+LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?')
 GRANT_FIELDS = {'repository', 'target', 'access'}
 
 

@@ -384,6 +384,14 @@ class InstallationTests(ServiceTestCase):
 
 
 class InstallationChainTests(ServiceTestCase):
+    def test_the_bot_login_of_an_app_token_is_accepted(self):
+        # A GitHub App's token acts as `<slug>[bot]`, and the host sends exactly that login.
+        report = self.install(app_installation(login='horizon-example[bot]'))
+        self.assertEqual(report['login'], 'horizon-example[bot]')
+        for refused in ('horizon-example[Bot]', 'horizon-example[bot]x', 'horizon-example[]', '[bot]'):
+            with self.assertRaises(ValueError):
+                self.install(app_installation(login=refused))
+
     def test_an_installation_chain_installs_and_serves_its_token(self):
         report = self.install(app_installation())
         self.assertEqual((report['state'], report['kind'], report['renewal']), ('ok', 'installation', 'host'))
