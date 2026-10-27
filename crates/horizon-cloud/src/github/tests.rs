@@ -201,12 +201,13 @@ fn a_web_sign_in_code_is_exchanged_with_the_secret_and_verifier() {
 }
 
 #[test]
-fn a_manifest_code_becomes_the_app_without_its_private_key() {
+fn a_manifest_code_becomes_the_app_with_its_private_key() {
     let (client, requests, task) = github(vec![(
         201,
         json!({"id": 42, "slug": "horizon-synthetic", "client_id": "Iv23synthetic",
                "client_secret": "synthetic-client-secret", "html_url": "https://github.com/apps/horizon-synthetic",
-               "pem": "-----BEGIN RSA PRIVATE KEY-----synthetic", "webhook_secret": null}),
+               "pem": "-----BEGIN RSA PRIVATE KEY-----\nsynthetic\n-----END RSA PRIVATE KEY-----\n",
+               "webhook_secret": null}),
     )]);
     let app = client.convert_manifest(&Secret::new("abc123".into())).unwrap();
     task.join().unwrap();
@@ -215,7 +216,16 @@ fn a_manifest_code_becomes_the_app_without_its_private_key() {
         (42, "horizon-synthetic", "Iv23synthetic")
     );
     assert_eq!(app.client_secret.expose(), "synthetic-client-secret");
-    assert!(!format!("{app:?}").contains("synthetic-client-secret"));
+    assert!(
+        app.pem.expose().contains("-----BEGIN RSA PRIVATE KEY-----"),
+        "the key is kept, so that a private file can hold it"
+    );
+    let printed = format!("{app:?}");
+    assert!(
+        !printed.contains("synthetic-client-secret"),
+        "no client secret is printed"
+    );
+    assert!(!printed.contains("synthetic\n"), "no private key is printed");
     assert_eq!(
         requests.lock().unwrap()[0].line,
         "POST /app-manifests/abc123/conversions HTTP/1.1"
@@ -225,6 +235,28 @@ fn a_manifest_code_becomes_the_app_without_its_private_key() {
         Error::InvalidResponse,
         "no path injection"
     );
+}
+
+#[test]
+fn a_manifest_answer_without_a_keepable_private_key_is_refused() {
+    let oversized = "a".repeat(4097);
+    let answer = |pem: serde_json::Value| {
+        json!({"id": 42, "slug": "horizon-synthetic", "client_id": "Iv23synthetic",
+               "client_secret": "synthetic-client-secret", "html_url": "https://github.com/apps/horizon-synthetic",
+               "pem": pem, "webhook_secret": null})
+    };
+    let (client, _requests, task) = github(vec![
+        (201, answer(serde_json::Value::Null)),
+        (201, answer(oversized.into())),
+    ]);
+    for expected in ["no key", "a key larger than a key file"] {
+        assert_eq!(
+            client.convert_manifest(&Secret::new("abc123".into())).unwrap_err(),
+            Error::InvalidResponse,
+            "{expected} is a malformed answer"
+        );
+    }
+    task.join().unwrap();
 }
 
 #[test]

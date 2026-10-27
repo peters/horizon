@@ -36,8 +36,9 @@ mod tests;
 const MAX_PAGES: u32 = 20;
 /// The largest page of 100 full installation objects read, in bytes.
 const PAGE_LIMIT: u64 = 1024 * 1024;
-/// The largest private key PEM read, as for the other private files of settings.
-const MAX_PEM: usize = 4096;
+/// The largest private key PEM read, as for the other private files of settings, and the
+/// largest the manifest answer may carry into one.
+pub(super) const MAX_PEM: usize = 4096;
 /// GitHub accepts a JWT that was issued at most 60 seconds ago, and one that expires at
 /// most 10 minutes from now. The lifetime below stays inside both limits.
 const ISSUED_BEFORE: u64 = 60;
@@ -241,6 +242,19 @@ enum Encoding {
     Pkcs1,
     /// `BEGIN PRIVATE KEY`.
     Pkcs8,
+}
+
+/// Whether `pem` is private key text that a key file can hold: non-empty, no larger than
+/// [`MAX_PEM`], and text. Whether it holds a usable RSA key is decided when the key is used,
+/// by [`PrivateKey::from_pem`], so an app that GitHub created is never refused for the shape
+/// of the key it answered with.
+pub(super) fn valid_pem(pem: &Secret) -> bool {
+    let pem = pem.expose();
+    !pem.is_empty()
+        && pem.len() <= MAX_PEM
+        && pem
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace())
 }
 
 /// The DER bytes of a PEM private key, in a buffer that is wiped on drop.
