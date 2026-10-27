@@ -146,6 +146,8 @@ pub fn valid_placement_name(name: &str) -> bool {
 
 /// The location of an existing workspace volume. The policy can change while a
 /// cloud has a volume, so a location it no longer allows is refused rather than used.
+/// Provisioning uses [`volume_placement`] instead: a volume that holds what the
+/// cloud must not lose places the cloud where it is, within what Hetzner offers.
 /// # Errors
 /// Refuses a missing or no longer allowed location.
 pub fn location(recorded: Option<&str>, policy: &Policy) -> Result<String, CloudError> {
@@ -158,6 +160,52 @@ pub fn location(recorded: Option<&str>, policy: &Policy) -> Result<String, Cloud
             "This cloud's workspace volume has no recorded location",
         )),
     }
+}
+
+/// The location an existing state volume fixes, and the policy widened to it.
+///
+/// The volume is the durable half of a cloud: a worker's workspace, and a browser
+/// VM's sign-ins on `/state`, so a deploy follows the volume's location instead of
+/// renting elsewhere and leaving it behind. The returned policy keeps its own
+/// locations and adds the volume's, so the server placed there is still admitted.
+/// `offers` is the catalog while the cloud can rent; it is `None` when the run only
+/// reconnects to a server that was placed already, which the catalog need not offer
+/// any more.
+/// # Errors
+/// Refuses a volume with no recorded or malformed location, and a volume whose
+/// location offers no requested server type, naming the volume's location.
+pub fn volume_placement(
+    recorded: Option<&str>,
+    offers: Option<&[Offer]>,
+    spec: &WorkerSpec,
+    policy: &Policy,
+) -> Result<(String, Policy), CloudError> {
+    let Some(volume_location) = recorded else {
+        return Err(CloudError::StateVolume(format!(
+            "The state volume's location is unknown, so it cannot place the cloud where the request puts it ({}); delete the machine and its volume, and deploy again",
+            policy.locations.join(", ")
+        )));
+    };
+    if !valid_placement_name(volume_location) {
+        return Err(CloudError::StateVolume(format!(
+            "The state volume names the location {volume_location}, which is not a Hetzner location; delete the machine and its volume, and deploy again"
+        )));
+    }
+    let mut widened = policy.clone();
+    if !widened.locations.iter().any(|name| name == volume_location) {
+        // The volume cannot be replaced without losing what it holds, so a location that
+        // cannot host the request leaves the person to choose what gives way.
+        if let Some(offers) = offers
+            && fit(offers, spec, &policy.server_types, volume_location).is_err()
+        {
+            return Err(CloudError::StateVolume(format!(
+                "The state volume is in {volume_location} and cannot host the requested server type {}; delete the machine and its volume, or name a server type that {volume_location} offers",
+                policy.server_types.join(", ")
+            )));
+        }
+        widened.locations.push(volume_location.to_owned());
+    }
+    Ok((volume_location.to_owned(), widened))
 }
 
 /// For a cloud without a volume: the first allowed location, in order, where a

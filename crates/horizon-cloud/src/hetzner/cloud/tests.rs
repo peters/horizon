@@ -247,6 +247,62 @@ fn a_volume_fixes_its_location_only_while_the_settings_allow_it() {
 }
 
 #[test]
+fn a_state_volume_in_another_allowed_location_places_the_cloud_there() {
+    // The volume is the durable half, so a request that resolved to another location must
+    // not leave it behind: a live deploy failed on exactly this, and blamed the settings.
+    let spec = spec();
+    let offers = [offer("cx33", "fsn1", 4, 8.0), offer("cx33", "hel1", 4, 8.0)];
+    // The browser VM names exactly the location that it resolved, so the volume's location is
+    // the one that has to be admitted.
+    let policy = allowing(&["hel1"], &["cx33"]);
+
+    let (location, widened) = volume_placement(Some("fsn1"), Some(&offers), &spec, &policy).unwrap();
+
+    assert_eq!(location, "fsn1", "the volume decides where the cloud runs");
+    assert!(
+        widened.locations.contains(&"fsn1".to_owned()),
+        "the placed location is admitted by the widened policy: {:?}",
+        widened.locations
+    );
+    assert_eq!(
+        widened.locations.len(),
+        policy.locations.len() + 1,
+        "the settings keep their own locations and gain the volume's"
+    );
+    assert_eq!(widened.server_types, policy.server_types);
+}
+
+#[test]
+fn a_state_volume_that_cannot_host_the_request_names_both_of_them() {
+    let spec = spec();
+    let offers = [offer("cx33", "hel1", 4, 8.0)];
+    let policy = allowing(&["hel1"], &["cx33"]);
+
+    let refused = volume_placement(Some("fsn1"), Some(&offers), &spec, &policy).unwrap_err();
+
+    let text = refused.to_string();
+    assert!(text.contains("fsn1"), "the volume's location is named: {text}");
+    assert!(text.contains("cx33"), "the requested type is named: {text}");
+    assert!(
+        !text.contains("Hetzner settings"),
+        "the settings are not the cause, so the message must not blame them: {text}"
+    );
+}
+
+#[test]
+fn a_state_volume_without_a_location_is_refused_rather_than_placed_elsewhere() {
+    let spec = spec();
+    let policy = allowing(&["hel1"], &["cx33"]);
+    let offers = [offer("cx33", "hel1", 4, 8.0)];
+
+    let refused = volume_placement(None, Some(&offers), &spec, &policy).unwrap_err();
+    assert!(refused.to_string().contains("location is unknown"), "{refused}");
+
+    let refused = volume_placement(Some("not a place!"), Some(&offers), &spec, &policy).unwrap_err();
+    assert!(refused.to_string().contains("not a Hetzner location"), "{refused}");
+}
+
+#[test]
 fn without_a_volume_the_first_allowed_location_that_fits_is_chosen() {
     let spec = spec();
     let offers = [

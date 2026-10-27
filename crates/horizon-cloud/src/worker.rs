@@ -512,6 +512,10 @@ impl std::fmt::Display for Progress {
 pub enum CloudError {
     #[error("{0}")]
     Invalid(&'static str),
+    /// A refusal that names the state volume and the request it conflicts with, such
+    /// as the location the volume is in and the server type that location lacks.
+    #[error("{0}")]
+    StateVolume(String),
     #[error("Operation cancelled; any existing worker remains allocated")]
     Cancelled,
     #[error("Provider transport failed; reconcile before retrying")]

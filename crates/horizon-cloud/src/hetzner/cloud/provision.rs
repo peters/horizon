@@ -1,8 +1,8 @@
 //! Requests the key, the workspace volume and the server, each behind a durable
 //! record so a lost response never creates a second billed resource.
 use super::{
-    HOST_IMAGE, Journal, PROBE_DEVICE, Policy, admitted, allowed, check_login, first_fit, fit, holds, location, plan,
-    supported, throwaway_public_key, worker,
+    HOST_IMAGE, Journal, PROBE_DEVICE, Policy, admitted, allowed, check_login, first_fit, fit, holds, plan, supported,
+    throwaway_public_key, volume_placement, worker,
 };
 use crate::{
     Cancellation, CloudError, CreateState, Progress, Worker, WorkerSpec,
@@ -85,7 +85,6 @@ pub fn provision(
     spec.validate()?;
     supported(spec)?;
     let policy = policy.for_spec(spec)?;
-    let policy = &policy;
     // A login for another registry would only fail the host's pull after the server
     // is billed. Whether the image needs one is the caller's to decide.
     check_login(login.as_ref(), false, &spec.image_digest)?;
@@ -114,44 +113,15 @@ pub fn provision(
     }
     // Checked after that cleanup, so a refused login never keeps an empty volume billed.
     check_pull_login(client, &host, operation, spec, cancel)?;
-    // The cloud may move only while it has no volume, neither recorded nor found
-    // by label; a found one is adopted and holds whatever the workspace held.
     let found = if journal.volume == CreateState::Prepared {
         client.find_volumes(operation_id, cancel)?
     } else {
         Vec::new()
     };
+    let (candidates, policy) = candidates(client, spec, journal, &found, &policy, operation, cancel)?;
+    // The cloud may move only while it has no volume, neither recorded nor found by label; a
+    // found one is adopted and holds whatever the workspace held.
     let movable = journal.volume == CreateState::Prepared && found.is_empty();
-    let candidates = if movable {
-        let offers = client.catalog(cancel)?.offers;
-        let fitting: Vec<(String, Vec<Placement>)> = policy
-            .locations
-            .iter()
-            .filter_map(|location| {
-                fit(&offers, spec, &policy.server_types, location)
-                    .ok()
-                    .map(|placements| (location.clone(), placements))
-            })
-            .collect();
-        if fitting.is_empty() {
-            // The same refusal as before, naming what does not fit.
-            first_fit(&offers, spec, policy)?;
-        }
-        fitting
-    } else {
-        // A volume found by label fixes the location when the journal lost it.
-        let recorded = journal
-            .location
-            .clone()
-            .or_else(|| found.first().map(|volume| volume.location.name.clone()));
-        let location = location(recorded.as_deref(), policy)?;
-        let placements = if *operation == CreateState::Prepared {
-            fit(&client.catalog(cancel)?.offers, spec, &policy.server_types, &location)?
-        } else {
-            allowed(&policy.server_types, &location)
-        };
-        vec![(location, placements)]
-    };
     // Each journal change is saved before the caller's journal takes it, so a
     // failed save leaves the journal as it is on disk and a retry saves it again.
     record_key(spec, journal, records, purpose)?;
@@ -179,7 +149,7 @@ pub fn provision(
             &mut progress,
         );
         match placed {
-            Ok((server, volume)) => return settle(client, spec, policy, &location, &server, &volume, cancel),
+            Ok((server, volume)) => return settle(client, spec, &policy, &location, &server, &volume, cancel),
             // Every type is sold out here and no server ever held the volume, so it
             // holds nothing: delete it and move on.
             Err(CloudError::Capacity(reason)) if journal.unused && *operation == CreateState::Prepared => {
@@ -190,6 +160,65 @@ pub fn provision(
         }
     }
     Err(CloudError::Capacity(sold_out.unwrap_or_default()))
+}
+
+/// The locations a run may place the cloud in, each with the placements that fit there.
+type Candidates = Vec<(String, Vec<Placement>)>;
+
+/// Where the cloud may run: every allowed location that fits while it can move, or the one
+/// location that its state volume fixes. The policy that comes back is widened to that
+/// location, so the server placed there is admitted.
+fn candidates(
+    client: &Hetzner,
+    spec: &WorkerSpec,
+    journal: &Journal,
+    found: &[Volume],
+    policy: &Policy,
+    operation: &CreateState,
+    cancel: &Cancellation,
+) -> Result<(Candidates, Policy), CloudError> {
+    let mut policy = policy.clone();
+    if journal.volume == CreateState::Prepared && found.is_empty() {
+        let offers = client.catalog(cancel)?.offers;
+        let fitting: Candidates = policy
+            .locations
+            .iter()
+            .filter_map(|location| {
+                fit(&offers, spec, &policy.server_types, location)
+                    .ok()
+                    .map(|placements| (location.clone(), placements))
+            })
+            .collect();
+        if fitting.is_empty() {
+            // The same refusal as before, naming what does not fit.
+            first_fit(&offers, spec, &policy)?;
+        }
+        return Ok((fitting, policy));
+    }
+    // A volume found by label fixes the location when the journal lost it, and its own
+    // location decides where the cloud runs: the requested location places the cloud only
+    // while it has no volume.
+    let recorded = journal
+        .location
+        .clone()
+        .or_else(|| found.first().map(|volume| volume.location.name.clone()));
+    let catalog = if *operation == CreateState::Prepared {
+        Some(client.catalog(cancel)?)
+    } else {
+        None
+    };
+    let (location, widened) = volume_placement(
+        recorded.as_deref(),
+        catalog.as_ref().map(|read| read.offers.as_slice()),
+        spec,
+        &policy,
+    )?;
+    policy = widened;
+    let placements = match &catalog {
+        Some(read) => fit(&read.offers, spec, &policy.server_types, &location)?,
+        None => allowed(&policy.server_types, &location),
+    };
+    Ok((vec![(location, placements)], policy))
 }
 
 /// Records the key the host registers, before it is registered, so a lost answer of the

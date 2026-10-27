@@ -233,7 +233,9 @@ fn machine(worker: &Worker, request: &Request, journal: &Journal) -> Result<Mach
         volume_id,
         volume_gb: u32::from(request.volume_gb),
         server_type: request.server_type.clone(),
-        location: request.location.clone(),
+        // The state volume fixes where the machine runs; the request's location places
+        // nothing once a volume exists.
+        location: journal.location.clone().unwrap_or_else(|| request.location.clone()),
         hourly_net: worker.cost_per_hr,
     })
 }
