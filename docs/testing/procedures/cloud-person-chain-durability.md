@@ -23,8 +23,15 @@ can run in the evening and the next morning.
 - A shell on this computer that can read the state directory.
 
 > **CAUTION:** THIS PROCEDURE RENTS A CLOUD AND LEAVES IT RUNNING OVERNIGHT. IT COSTS ABOUT
-> 10 CENTS FOR 12 HOURS ON A HETZNER `cx23`. DELETE THE CLOUD BEFORE YOU STOP THE HORIZON
-> INSTANCE, OR THE DEPLOYMENT KEY AND THE CLOUD RECORD ARE LOST WITH ITS STATE DIRECTORY.
+> 10 CENTS FOR 12 HOURS ON A HETZNER `cx23`. THE CLOUD OUTLIVES THE HORIZON INSTANCE HERE,
+> AND THE INSTANCE REMOVES ITS STATE DIRECTORY WHEN IT STOPS. COPY THE DEPLOYMENT KEY AND THE
+> CLOUD RECORD OUT OF THAT DIRECTORY IN STEP 4, BEFORE ANY STOP, OR THE CLOUD CANNOT BE
+> REACHED AND MUST BE DELETED AT THE PROVIDER.
+
+This procedure stops its Horizon instance while its cloud runs, which is what step 7 shows.
+It therefore deletes the cloud at the provider in step 8. A run that must delete the cloud
+through its card instead keeps the instance, deletes the cloud at step 8, and does not run
+step 7; that run does not show the property of step 7.
 
 ## Steps
 
@@ -49,16 +56,20 @@ can run in the evening and the next morning.
 
    ```bash
    STATE=<state directory>
-   cp -a "$STATE/data/creds/ed25519" /var/tmp/lane/ed25519
+   cp -a "$STATE/data/creds" /var/tmp/lane/creds
    cp -a "$STATE/data/home/.horizon/cloud" /var/tmp/lane/cloud-record
    ```
 
-   Result: both copies exist. The key has mode 0600.
+   The settings of the instance name files inside its state directory, and that directory goes
+   when the instance stops. The copy therefore holds the deployment key **and** the provider
+   token, and the later steps read both from it.
+
+   Result: both copies exist. The deployment key has mode 0600.
 
 5. Read the chain status in the worker, as root, and note the three times.
 
    ```bash
-   ssh -i /var/tmp/lane/ed25519 -o IdentitiesOnly=yes root@<worker address> \
+   ssh -i /var/tmp/lane/creds/ed25519 -o IdentitiesOnly=yes root@<worker address> \
      'horizon-worker-github status'
    ```
 
@@ -81,7 +92,7 @@ can run in the evening and the next morning.
    c. In the worker, as root, run one push and one `gh` command as the agent user:
 
    ```bash
-   ssh -i /var/tmp/lane/ed25519 -o IdentitiesOnly=yes root@<worker address> \
+   ssh -i /var/tmp/lane/creds/ed25519 -o IdentitiesOnly=yes root@<worker address> \
      'setpriv --reuid=10001 --regid=10001 --init-groups env HOME=/workspace/home \
         PATH=/usr/local/bin:/usr/bin:/bin sh -c \
         "cd /workspace/checkout && git checkout -B no-horizon && \
@@ -100,19 +111,28 @@ can run in the evening and the next morning.
 
 8. Delete the cloud at its provider, and prove that nothing remains.
 
+   Read the token file and the server ID from the copy of step 4, so that the step works on
+   any machine and never names a credential of one computer:
+
    ```bash
-   TOKEN=$(cat "$HOME/.horizon/cloud/credentials/hetzner-kpTX7W")
+   RECORD=/var/tmp/lane/cloud-record
+   TOKEN=$(cat "/var/tmp/lane/creds/$(basename "$(python3 -c \
+     'import json,sys; print(json.load(open(sys.argv[1]))["hetzner"]["token_file"])' \
+     "$RECORD/settings.json")")")
+   SERVER=$(python3 -c \
+     'import glob,json,sys; print(json.load(open(glob.glob(sys.argv[1] + "/*/deployment.json")[0]))["worker"]["id"])' \
+     "$RECORD")
    curl -s -H "Authorization: Bearer $TOKEN" \
-     "https://api.hetzner.cloud/v1/servers/<server id>"
+     "https://api.hetzner.cloud/v1/servers/$SERVER"
    curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
-     "https://api.hetzner.cloud/v1/servers/<server id>"
+     "https://api.hetzner.cloud/v1/servers/$SERVER"
    ```
 
-   Result: the first call answers `200` and the delete answers `200`. A further call answers
-   `404`, and the list of servers of the account holds no server of this cloud.
+   Result: the read answers `200`, the delete answers `200`, a further read answers `404`, and
+   the list of servers holds no server of this cloud.
 
-   A run that keeps its instance running uses the card of the cloud, which deletes it through
-   `cloud_delete` instead. Delete the cloud **before** step 7a in that case.
+   A run that keeps its instance running deletes the cloud on its card with `cloud_delete`
+   instead, and does not run step 7.
 
 9. Remove the copies of step 4.
 

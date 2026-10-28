@@ -57,7 +57,7 @@ The procedure now says to delete the cloud before the instance stops.
 
 | Step | Result |
 |---|---|
-| Cloud | `8108146a-0261-451f-9395-e5cca6952013`, Hetzner server `172934820`, created 2026-10-28T02:22Z, about ten minutes of work |
+| Cloud | `8108146a-0261-451f-9395-e5cca6952013`, Hetzner server `172934820`, created 2026-10-28T01:22Z, about ten minutes of work |
 | Sign-in | The same `authorize` line, approved in the same browser, with no other action |
 | Commit and pull request | Pull request `#4`, author `peters` |
 | State kept before the stop | The deployment key `ed25519` and the cloud record, copied out of the state directory |
