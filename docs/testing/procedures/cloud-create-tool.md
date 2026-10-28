@@ -268,13 +268,18 @@ time.
 3. Call `cloud_create` with `operation submit`, a new `operation_id` and the
    `repository` of A2. Then poll `status` every 10 seconds.
 
-   Result: `lines` gains one line that starts
-   `GitHub sign-in needed: open https://github.com/login/device in a browser and enter the code`
-   and holds the device code. `phase` stays `submitted` until the sign-in ends,
-   and no cloud card appears.
+   Result: `lines` gains one line that starts `GitHub sign-in needed: open` and
+   holds either form of the sign-in, which the `mode` of the app decides:
 
-4. Enter that code at `https://github.com/login/device` as the account of the
-   app, and approve the sign-in.
+   - `automatic`: an address that starts
+     `https://github.com/login/oauth/authorize`, which a browser that is signed in
+     to GitHub opens to approve the sign-in.
+   - `ask`: `https://github.com/login/device` and the device code to enter there.
+
+   `phase` stays `submitted` until the sign-in ends, and no cloud card appears.
+
+4. Approve the sign-in as the account of the app: enter the device code at
+   `https://github.com/login/device`, or open the `authorize` address from step 3.
 
    Result: The create continues without another request, and `phase` moves to
    `rolling_out`. `HORIZON_HOME/cloud/credentials/github-host-<APP-ID>.json`
