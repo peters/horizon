@@ -32,7 +32,11 @@ impl HorizonApp {
             self.cloud_prototype.production.pending_creation = None;
             self.cloud_prototype.production.close.reset();
             self.cloud_prototype.production.session_id = session;
-            self.cloud_prototype.root = Some(horizon_core::HorizonHome::resolve().root().join("cloud"));
+            // One cloud settings folder serves every session, so a root that this window
+            // already reads stays.
+            self.cloud_prototype
+                .root
+                .get_or_insert_with(|| horizon_core::HorizonHome::resolve().root().join("cloud"));
             self.cloud_prototype.groups = self.board.cloud_groups.clone();
             self.cloud_prototype.production.runtimes.clear();
             self.cloud_prototype.ready = true;

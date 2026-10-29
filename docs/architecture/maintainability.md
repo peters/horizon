@@ -1099,8 +1099,10 @@ The New cloud dialog (`cloud_panel/production/creation.rs`) never discards a dra
 when it is dismissed. `cloud_panel/new_cloud_draft.rs` owns the parked draft: it draws
 the card in the workspace, reopens the dialog, and holds the card's two actions.
 `production/draft.rs` owns what a parked draft keeps and the per-frame work that goes
-on while it is parked; `production/creation_job.rs` keeps checking a repository whose
-Start is in flight. Only `close_cloud_creation` discards a draft.
+on while it is parked; `production/draft_store.rs` keeps the saved records in memory,
+reads them once for each session and saves them, both on worker threads, so no frame
+opens the file; `production/creation_job.rs` keeps checking a repository whose Start is
+in flight. Only `close_cloud_creation` discards a draft.
 
 Cloud settings (`cloud_panel/production/setup`) is one page, not tabs. `setup.rs` owns the dialog, the background load, save and registry threads; `setup/dashboard.rs` owns the shared look (status words, cards, the readiness banner and its `Readiness` rule); `setup/fields.rs` renders the provider, agent and workspace cards; `setup/registry.rs` renders the container registry card. A repository counts as verified only from a saved journal validation for its current pull grant, read on open without asking a provider and updated by Validate, Status and Reconcile; Revoke drops it.
 

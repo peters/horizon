@@ -14,7 +14,8 @@ owner: peters
 
 This procedure proves that Escape and a click on the backdrop of **New cloud** put the dialog out of view and park
 its draft in the workspace. It proves that the draft keeps every choice, that **Continue** opens the dialog again
-and that **Cancel** ends the draft. It proves that a parked draft keeps its setup agent working.
+and that **Cancel** ends the draft. It proves that a parked draft keeps its setup agent working. It proves that a
+parked draft survives a quit and a session switch.
 
 ## 2. Applicability
 
@@ -145,24 +146,41 @@ and that **Cancel** ends the draft. It proves that a parked draft keeps its setu
 3. Open **Menu** › **Cloud** › **Add cloud here**.
    Result: The dialog opens again with the same progress. One card shows, and the count is the same.
 
-### 6.8 ND-8 — A session switch saves the board and ends the draft
-1. In the toolbar, click **+ New cloud**. Type `Saved draft` in **Cloud title**.
-2. Press Escape.
+### 6.8 ND-8 — A parked draft survives a session switch
+1. In the toolbar, click **+ New cloud**. Type `Saved draft` in **Cloud title**, then press Escape.
    Result: The card is in the workspace, and its first line is `Saved draft`.
+2. Examine the file `<home>/.horizon/cloud/drafts.json`.
+   Result: A moment after the park, the file holds one record for the workspace of the card. Its
+   `title` is `Saved draft`, it names the session that holds the board, and it holds no token,
+   check, clone or publishing choice.
 3. Open **Menu** › **Sessions**. Click **Open New Session**.
-   Result: The candidate shows the board of the new session. The card is out of view.
-4. Open **Menu** › **Sessions**. Click the session that holds the card. Click **Switch Selected**.
-   Result: The board comes back with the workspace of that session. No card is in it, because
-   this change keeps a draft only while Horizon runs.
+   Result: The candidate shows the board of the new session. No card is in it.
+4. Open **Menu** › **Sessions**. Click the session that holds the card, then **Switch Selected**.
+   Result: The board of that session comes back, and the card shows in its workspace. Its first line
+   is `Saved draft`.
+5. Open **Menu** › **Sessions**. Click the new session of step 3, then **Switch Selected**.
+   Result: The board of the new session holds no card of `Saved draft`. Examine `drafts.json`:
+   the record of the card is still there.
+6. Repeat step 4.
+   Result: The card shows again in its workspace, and its first line is `Saved draft`.
+7. Click **Continue** on the card.
+   Result: The dialog is in view, and **Cloud title** shows `Saved draft`.
+8. Press Escape, then click **Cancel** on the card.
+   Result: The card is out of view. Examine `drafts.json` again: the record of that workspace is gone.
 
 Note: the fixture removes its private home when it stops, so a run cannot restart it in the same
-state. Do not plan a quit step in this procedure.
+state. A quit uses the same saved record and the same restore path as the session switch of step 4;
+the automated test that restores a parked draft into a fresh app covers it.
 
 ## 7. Pass criteria
 
 - Each task gives the result that its steps name, and no step starts a worker or a new provider resource.
 - **Escape** and a click on the backdrop never lose a choice of the person.
 - Only **Cancel** ends a draft, and it removes a workspace that held nothing.
+- A session switch ends the card that is in the form, also a card that a record brought back, and
+  the record waits for the session that owns it.
+- The card of a parked draft comes back after a session switch and after a quit, and it keeps the title and the
+  repository of the draft.
 - Examine these items in each screenshot and in the recording:
   - The card does not cover a cloud panel or a panel of its workspace.
   - The card moves and scales with its workspace when the board pans and zooms.

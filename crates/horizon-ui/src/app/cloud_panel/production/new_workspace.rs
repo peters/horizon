@@ -51,16 +51,7 @@ impl HorizonApp {
                 chosen_for: None,
                 no_gpu: false,
                 choices: Choices::default(),
-                loading: root.clone().map(|root| {
-                    let slot = Arc::new(Mutex::new(None));
-                    let (filled, wake) = (Arc::clone(&slot), ctx.clone());
-                    std::thread::spawn(move || {
-                        let choices = Choices::load(&root);
-                        *filled.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(choices);
-                        wake.request_repaint();
-                    });
-                    slot
-                }),
+                loading: root.clone().map(|root| loading_choices(root, ctx)),
                 root,
                 keep: false,
                 error: None,
@@ -91,15 +82,28 @@ impl HorizonApp {
         }
     }
 
-    /// Ends an open New cloud dialog before a session switch saves the board, also while it
-    /// waits behind the account setup of a first cloud, which ends with it.
+    /// Ends the New cloud draft that is in the form before a session switch saves the board,
+    /// also while the dialog waits behind the account setup of a first cloud, which ends with
+    /// it. A draft belongs to the session it was parked in, whether the dialog is open over it
+    /// or its card came back from a record, so it leaves the form: its workspace and its saved
+    /// choices stay with that session, and its card comes back with the record when that session
+    /// does. An open dialog that holds no draft ends as a cancelled one does, which takes its
+    /// empty workspace and its record away.
     pub(in crate::app) fn close_cloud_creation_for_session_switch(&mut self) {
-        let form = &mut self.cloud_prototype.production;
-        let waiting = form.setup.open && form.setup.resumes_creation();
+        let (waiting, carded, creating) = {
+            let form = &self.cloud_prototype.production;
+            (
+                form.setup.open && form.setup.resumes_creation(),
+                form.draft.is_some(),
+                form.creating,
+            )
+        };
         if waiting {
-            form.setup.reset_form();
+            self.cloud_prototype.production.setup.reset_form();
         }
-        if form.creating || waiting {
+        if carded {
+            self.close_parked_cloud_draft();
+        } else if waiting || creating {
             self.close_cloud_creation();
         }
     }
@@ -174,6 +178,19 @@ pub(super) fn gpu_profile(form: &mut Production, config: &CloudConfig) -> Option
     Some(found.unwrap_or_else(|| config.default.clone()))
 }
 
+/// Reads the kept choices under `root` on a worker thread. A frame never reads the file: the
+/// slot holds the choices once the thread filled it, and the thread wakes the window.
+pub(super) fn loading_choices(root: PathBuf, ctx: &Context) -> Arc<Mutex<Option<Choices>>> {
+    let slot = Arc::new(Mutex::new(None));
+    let (filled, wake) = (Arc::clone(&slot), ctx.clone());
+    std::thread::spawn(move || {
+        let choices = Choices::load(&root);
+        *filled.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(choices);
+        wake.request_repaint();
+    });
+    slot
+}
+
 /// What the dialog says above its fields for a workspace from New workspace, and the This PC
 /// choice of a repository whose `cloud.yml` asks for it. True when the person chose This PC.
 pub(super) fn notes(ui: &mut Ui, form: &mut Production) -> bool {
@@ -239,6 +256,26 @@ pub(super) mod machine;
 mod tests;
 
 impl Intent {
+    /// The workspace New workspace made, as a saved draft record reports it: Cancel takes its
+    /// empty workspace away, while the earlier dialog's GPU choice and its kept choice of where
+    /// the repository runs are not known and start fresh. A worker thread reads the kept choices,
+    /// as the open dialog reads them, so a restored card costs the frame no read of the file.
+    pub(super) fn restored(workspace: WorkspaceId, root: Option<PathBuf>, ctx: &Context) -> Self {
+        let loading = root.as_ref().map(|root| loading_choices(root.clone(), ctx));
+        Self {
+            workspace,
+            gpu: false,
+            chosen_for: None,
+            no_gpu: false,
+            choices: Choices::default(),
+            loading,
+            root,
+            keep: false,
+            error: None,
+            looked_up: None,
+        }
+    }
+
     /// Takes the kept choices once their read finished. False while it still runs.
     fn settle(&mut self) -> bool {
         let read = self

@@ -168,20 +168,57 @@ fn a_cancelled_cloud_takes_away_only_the_empty_workspace_new_workspace_made() {
 }
 
 #[test]
-fn a_session_switch_ends_the_dialog_and_its_empty_workspace_before_saving() {
-    let (_temp, mut app) = test_app();
+fn a_session_switch_keeps_a_parked_draft_and_ends_an_open_dialog() {
+    let (temp, mut app) = test_app();
     let ctx = egui::Context::default();
+    let root = temp.path().join("clouds");
+    app.cloud_prototype.use_root(Some(root.clone()));
     app.cloud_prototype.ready = true;
     let _existing = app.board.create_workspace("existing workspace");
     let before = app.board.workspaces.len();
+    // A parked draft is what the next start of this session saves: its workspace and its
+    // saved choices stay.
     app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
     assert_eq!(app.board.workspaces.len(), before + 1);
+    app.hide_cloud_creation(&ctx);
+    let parked = app
+        .cloud_prototype
+        .production
+        .creation_workspace()
+        .expect("the parked draft's workspace");
     app.close_cloud_creation_for_session_switch();
     assert!(!app.cloud_prototype.production.creating);
     assert_eq!(
         app.board.workspaces.len(),
-        before,
+        before + 1,
+        "the workspace of a parked draft is saved with its card"
+    );
+    app.settle_cloud_drafts();
+    assert!(
+        horizon_core::cloud_runtime::draft::Drafts::load(&root)
+            .get(&parked)
+            .is_some(),
+        "the record waits for the session that comes back"
+    );
+    // A dialog that a switch ends takes its empty workspace and its record with it.
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    assert_eq!(app.board.workspaces.len(), before + 2);
+    let open = app
+        .cloud_prototype
+        .production
+        .creation_workspace()
+        .expect("the open dialog's workspace");
+    app.close_cloud_creation_for_session_switch();
+    assert!(!app.cloud_prototype.production.creating);
+    assert_eq!(
+        app.board.workspaces.len(),
+        before + 1,
         "nothing empty is saved with the board"
+    );
+    assert!(
+        horizon_core::cloud_runtime::draft::Drafts::load(&root)
+            .get(&open)
+            .is_none()
     );
     // A dialog that another way opened has no workspace to take away.
     let workspace = app.board.create_workspace("plain");

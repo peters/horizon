@@ -287,6 +287,18 @@ submits goes ahead too, and the card says **Starting the cloud**. When that star
 needs cloud accounts, Horizon says so on the board; it opens no dialog below the
 parked card.
 
+The card survives a quit and a session switch. Horizon keeps the choices of a parked
+draft in `drafts.json` in the cloud settings folder, beside `repository-choices.json`.
+A worker thread reads that file once for each session and writes it, so a frame never
+waits for the disk.
+The next start of that session shows the card again. Horizon keeps only the choices of
+the person: a clone, a token, a check, a chosen sibling, and a cloud that is already
+started do not come back. Each draft belongs to one session, and another session shows
+no card for it. A session switch ends the card that is in the form, also a card that a
+record brought back, and the record stays for the session it belongs to: that session
+shows the card again when you switch back. The card of a workspace that is removed does
+not come back.
+
 Only **Cancel** discards a draft. When you cancel **New cloud** for a workspace that
 **+ New cloud** made, the empty workspace goes too, unless it is the only workspace
 on the board. One draft exists at a time: **+ New cloud**, **Menu > Add cloud here**

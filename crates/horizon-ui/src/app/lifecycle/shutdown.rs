@@ -93,6 +93,12 @@ impl HorizonApp {
         if self.session_saves_hold_exit() {
             return;
         }
+        // A draft that a frame just parked reaches the file on a worker thread. The frames of
+        // the exit wait for that write, within the shutdown limit.
+        #[cfg(feature = "cloud-workspaces")]
+        if !timed_out && self.cloud_drafts_hold_exit() {
+            return;
+        }
         self.abandon_device_reveals("Horizon is exiting");
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();

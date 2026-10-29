@@ -73,6 +73,7 @@ fn a_parked_draft_starts_the_cloud_its_watch_waited_for() {
     app.cloud_prototype.production.draft = Some(crate::app::cloud_panel::new_cloud_draft::Draft {
         workspace: None,
         position: [0.0, 0.0],
+        restored: false,
     });
     answer(&mut app.cloud_prototype.production, Availability::Low);
     app.poll_parked_cloud_draft(&ctx);

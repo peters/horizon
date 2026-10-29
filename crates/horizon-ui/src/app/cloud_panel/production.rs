@@ -12,6 +12,7 @@ mod creation_tests;
 mod delete_agent;
 mod dialog_hover;
 mod draft;
+mod draft_store;
 #[cfg(debug_assertions)]
 mod failure_preview;
 mod first_panel;
@@ -135,6 +136,9 @@ pub(super) struct Production {
     /// Where a dismissal parked the draft: its workspace and the card that brings it back.
     /// The dialog, its choices and a check it started stay as they were until Cancel.
     pub(in crate::app) draft: Option<super::new_cloud_draft::Draft>,
+    /// The drafts that a quit or a session switch left in the cloud settings folder: one map in
+    /// memory, read once for the session it belongs to and saved by worker threads.
+    drafts: draft_store::Store,
 }
 
 impl Production {
