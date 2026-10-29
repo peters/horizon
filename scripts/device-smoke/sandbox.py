@@ -238,24 +238,46 @@ def seed_cloud_settings(private_home, source=None):
     return seeded
 
 
-def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=()):
+def prepare_state(state, reuse=False):
+    """Make the fixture state directory, or accept the one that an earlier run left.
+
+    Without `reuse`, a state path must be new: a stale private home must never
+    reach a run that did not ask for it. With `reuse`, the directory may exist
+    and its `data/` is kept, so a run can stop and start again in the same
+    private home. Only a state path that this person owns belongs here.
+    """
+    state = Path(state)
+    if reuse:
+        state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    else:
+        state.mkdir(mode=0o700, parents=True, exist_ok=False)
+    return state
+
+
+def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), reuse=False):
     """Create private dirs, bwrap prefix, host env, and sandbox env.
 
     `state` must already exist. Host processes keep XDG_RUNTIME_DIR on the
     fixture path. Namespaced processes see the standard `/run/user/<uid>` path
     backed by that same directory, plus a private writable `/tmp`.
     `extra_ro_binds` are re-mounted after that `/tmp` overlay so documented
-    executable and tools paths under `/tmp` stay visible.
+    executable and tools paths under `/tmp` stay visible. `reuse` keeps the
+    private dirs and everything in them, so an earlier run's home comes back.
     """
     state = Path(state).resolve()
     data = state / 'data'
     private_home = data / 'home'
     runtime = data / 'runtime'
     private_tmp = data / 'tmp'
-    data.mkdir()
-    private_home.mkdir(mode=0o700)
-    runtime.mkdir(mode=0o700)
-    private_tmp.mkdir(mode=0o700)
+    if reuse:
+        for directory in (data, private_home, runtime, private_tmp):
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory.chmod(0o700)
+    else:
+        data.mkdir()
+        private_home.mkdir(mode=0o700)
+        runtime.mkdir(mode=0o700)
+        private_tmp.mkdir(mode=0o700)
     dest = runtime_dest()
     address = bus_address()
     access_bind = []
