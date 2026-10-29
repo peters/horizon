@@ -98,9 +98,10 @@ const MENU: &[MenuEntry] = &[
 ];
 
 impl HorizonApp {
-    /// "+ New cloud" makes a workspace and opens New cloud for it. Cancel takes the empty
-    /// workspace away again. The tooltip shows the machine of a quick start and its price,
-    /// asked for only while the pointer is on the button.
+    /// "+ New cloud" makes a workspace and opens New cloud for it, and brings back a draft a
+    /// dismissal parked. Cancel ends the draft and takes its workspace away when it is empty.
+    /// The tooltip shows the machine of a quick start and its price, asked for only while the
+    /// pointer is on the button.
     pub(super) fn render_toolbar_new_cloud(&mut self, ui: &mut Ui, compact: bool) {
         let width = if compact {
             ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH
@@ -201,8 +202,11 @@ impl HorizonApp {
             MenuChoice::Action(action) => self.perform_toolbar_action(ctx, action),
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::NewCloud => {
-                let workspace = self.board.ensure_workspace();
-                self.open_cloud_for_workspace(ctx, workspace);
+                // A draft that a dismissal parked comes back instead of a second one.
+                if !self.reopen_cloud_draft(ctx) {
+                    let workspace = self.board.ensure_workspace();
+                    self.open_cloud_for_workspace(ctx, workspace);
+                }
             }
             #[cfg(feature = "cloud-workspaces")]
             MenuChoice::SetupBoard => self.open_setup_board(ctx, true),

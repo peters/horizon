@@ -518,7 +518,8 @@ Shared by both form dialogs:
 - Heading at 26 strong, then a one-line description in `FG_SOFT`, then 16 of
   space.
 - Body scrolls; the action bar stays pinned below it.
-- Escape and a click on the backdrop dismiss.
+- Escape and a click on the backdrop dismiss the dialog. A dismissal parks the
+  dialog's draft in its workspace; it never discards a choice.
 - Footer: right-aligned primary and `Cancel`, 40 high, primary radius 10.
 
 Cloud creation dialog specifics:
@@ -533,6 +534,11 @@ Cloud creation dialog specifics:
 - Enter in the first text field submits when the form is valid.
 - While the repository picker is open above it, the dialog is disabled and the
   picker owns Escape and outside clicks.
+- Escape parks the draft, also while the setup agent works; a footer line says so
+  and points at **Show agent** for an interrupt.
+- A parked draft shows a card in its workspace: title, repository, one status line,
+  and **Continue** and **Cancel**. It uses the cloud panel frame and the accent
+  stroke of a cloud that is not deployed yet.
 
 Cloud accounts dialog specifics:
 
@@ -777,8 +783,9 @@ Focus behavior:
   press is in flight. Focus returns to the launching field when a child picker
   closes.
 - Escape closes the top-most overlay or dialog and is consumed so it does not
-  also reach a panel beneath. Enter in a dialog's title field submits a valid
-  form.
+  also reach a panel beneath. Escape on the cloud creation dialog parks its draft;
+  that draft's card is the way back. Enter in a dialog's title field submits a
+  valid form.
 - Keep every action reachable with the keyboard as well as the pointer:
   custom-drawn controls such as selectable cards take keyboard focus and
   respond to Enter and Space.

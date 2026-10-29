@@ -89,13 +89,30 @@ fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
         "the machine line in the tooltip"
     );
 
-    // + New cloud makes a workspace and opens New cloud for it; Cancel takes it away.
+    // + New cloud makes a workspace and opens New cloud for it. Escape parks the draft
+    // there, and + New cloud brings it back; only Cancel takes the workspace away.
     click(&ctx, &mut app, cloud);
     assert!(app.cloud_prototype.production.creating, "+ New cloud opens New cloud");
     assert_eq!(app.board.workspaces.len(), workspaces + 1);
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    assert!(!app.cloud_creation_open());
+    assert!(!app.cloud_creation_open(), "Escape takes the dialog out of view");
+    assert!(
+        app.cloud_prototype.production.draft.is_some(),
+        "and parks the draft in its workspace"
+    );
+    assert_eq!(
+        app.board.workspaces.len(),
+        workspaces + 1,
+        "its workspace stays with the draft"
+    );
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    click(&ctx, &mut app, cloud);
+    assert!(app.cloud_creation_open(), "+ New cloud brings the parked draft back");
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    click(&ctx, &mut app, label_position(&output, "Cancel"));
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    assert!(!app.cloud_prototype.production.creating, "Cancel ends the draft");
     assert_eq!(app.board.workspaces.len(), workspaces, "the cancelled workspace goes");
 }
 

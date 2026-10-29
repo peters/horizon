@@ -3,6 +3,7 @@ mod exec;
 mod fullscreen;
 #[cfg(feature = "cloud-workspaces")]
 mod image_destinations;
+mod new_cloud_draft;
 mod new_cloud_view;
 mod ownership;
 mod production;
@@ -73,8 +74,10 @@ impl HorizonApp {
 }
 
 impl CloudPrototype {
+    /// Whether a cloud dialog covers the board. A draft that a dismissal parked in its
+    /// workspace is not one: its card leaves the canvas, and its errors, in view.
     pub(super) fn creation_open(&self) -> bool {
-        self.production.creating || self.production.setup.open
+        self.production.creation_dialog_open() || self.production.setup.open
     }
 }
 

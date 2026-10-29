@@ -17,7 +17,7 @@ pub(in crate::app::cloud_panel::production) struct Confirmation {
     selection: Selection,
 }
 
-pub(super) fn update(form: &mut Production, root: Option<&Path>, ctx: &egui::Context) {
+pub(in crate::app::cloud_panel::production) fn update(form: &mut Production, root: Option<&Path>, ctx: &egui::Context) {
     // Existing app tests never read the developer's real cloud settings.
     if cfg!(test) {
         return;

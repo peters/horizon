@@ -512,6 +512,20 @@ impl HorizonApp {
             return;
         };
         let events = ui.ctx().input(|input| input.events.clone());
+        // Escape parks the dialog, so it is not the agent's here. Its own panel, from Show
+        // agent, keeps Escape for an interrupt.
+        let events: Vec<egui::Event> = events
+            .into_iter()
+            .filter(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Escape,
+                        ..
+                    }
+                )
+            })
+            .collect();
         let events = crate::input::terminal_input_events(&events, Vec::new());
         Frame::new()
             .fill(theme::PANEL_BG())

@@ -330,7 +330,7 @@ fn a_pasted_link_waits_for_continue() {
 }
 
 #[test]
-fn closing_the_dialog_forgets_what_was_typed_in_the_source_field() {
+fn a_dismissal_keeps_what_was_typed_in_the_source_field() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -344,7 +344,11 @@ fn closing_the_dialog_forgets_what_was_typed_in_the_source_field() {
     assert!(!app.cloud_prototype.production.source.input().is_empty());
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
     assert!(!app.cloud_creation_open());
-    assert!(app.cloud_prototype.production.source.input().is_empty());
+    assert_eq!(
+        app.cloud_prototype.production.source.input(),
+        "github.com/demo-org/demo-atlas",
+        "a dismissal parks the draft with what it held"
+    );
 }
 
 #[test]

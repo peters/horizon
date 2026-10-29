@@ -59,13 +59,17 @@ impl HorizonApp {
     }
 
     /// Makes a workspace where `choice` says, at `canvas_pos` or where new workspaces go. A
-    /// cloud workspace opens New cloud for it.
+    /// cloud workspace opens New cloud for it; a draft a dismissal parked comes back first.
     pub(in crate::app) fn create_new_workspace(
         &mut self,
         ctx: &Context,
         choice: NewWorkspace,
         canvas_pos: Option<[f32; 2]>,
     ) {
+        #[cfg(feature = "cloud-workspaces")]
+        if choice.is_cloud() && self.cloud_launch_ready() && self.reopen_cloud_draft(ctx) {
+            return;
+        }
         let name = format!("Workspace {}", self.board.workspaces.len() + 1);
         let workspace = match canvas_pos {
             Some(position) => self.create_workspace_at_visible(ctx, &name, position),

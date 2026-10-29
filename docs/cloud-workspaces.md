@@ -277,15 +277,27 @@ profile with `gpu: true`. When the repository has no GPU profile, the dialog say
 so and keeps the default profile on a CPU worker. The presets under **This PC** in
 that picker make a workspace on this computer with a panel.
 
-When you cancel **New cloud** for a workspace that **+ New cloud** made, the
-empty workspace goes too, unless it is the only workspace on the board. When cloud
-workspaces are not ready on this computer, **+ New cloud** is dimmed.
+A dismissal never discards a draft. Escape, a click on the backdrop, or **Close**
+takes **New cloud** out of view and parks the draft in its workspace. A card in that
+workspace shows the title, the repository and what the draft does now. Click
+**Continue** to open the dialog again with every choice it held. A repository check
+that **Start cloud** began goes on while the draft is parked, and the cloud it
+creates takes the place of the card.
+
+Only **Cancel** discards a draft. When you cancel **New cloud** for a workspace that
+**+ New cloud** made, the empty workspace goes too, unless it is the only workspace
+on the board. One draft exists at a time: **+ New cloud**, **Menu > Add cloud here**
+and **New Cloud** on the empty canvas open a parked draft again. To start a cloud
+for another repository, cancel the draft first. A setup agent keeps working after
+**Cancel**; the **Setup board** shows it.
+
+When cloud workspaces are not ready on this computer, **+ New cloud** is dimmed.
 
 A repository can ask for This PC with `placement: local` at the top level of
 `.horizon/cloud.yml` (the default is `placement: cloud`). **New cloud** then shows
-**This repository runs on This PC** with **Open on This PC**, which opens a
-terminal in the repository in that workspace and closes the dialog. You can still
-start a cloud for it.
+**This repository runs on This PC** with **Open on This PC**. That action ends the
+draft and opens a terminal in the repository in that workspace. It leaves no card.
+You can still start a cloud for it.
 
 In **New cloud** from **+ New cloud**, select **Keep my choice for this
 repository** to keep where the repository runs. **Start cloud** keeps **Cloud**,
@@ -806,15 +818,18 @@ Write Dockerfile, Build image, Run CI in image, Fast rerun, Desktop preview), ea
 with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
-**Stop** closes the agent. **Close** keeps it working, and **New cloud** shows it
-again for the same repository. A live preview outlives **Close** while its
-Device panel is open; closing that panel ends the desktop, so no container runs where
-nobody watches it.
+**Stop** closes the agent. **Close** keeps it working: it parks the draft in its
+workspace, and **Continue** on the card shows the setup again. Escape does the same,
+also while the agent works. The dialog says so, because an agent that needs an
+interrupt takes Escape in its own panel: click **Show agent**. A live preview
+outlives **Close** while its Device panel is open; closing that panel ends the
+desktop, so no container runs where nobody watches it.
 
 Several repositories can be set up at the same time, each with its own agent. Click
-**Close** while a setup works, open **New cloud** again, choose another repository
-and start its setup. **New cloud** shows the setup of the repository that it opens
-for, so open it for the first repository to see that setup again.
+**Close** while a setup works, cancel the draft, and start the setup of another
+repository from the **Setup board**, with **Set up a repository**. The first agent
+keeps working. **New cloud** shows the setup of the repository that it opens for, so
+open it for the first repository to see that setup again.
 
 The **Setup board** panel shows every setup in one place. It opens with the first setup,
 beside the setup agents in a local workspace (the active one, else a workspace named

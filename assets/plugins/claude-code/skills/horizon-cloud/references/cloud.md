@@ -837,9 +837,12 @@ reads or changes it, and agents work only with the repositories the cloud was gi
   the dialog does not offer it and an MCP tool cannot start it. Use **Quick start**
   or write `.horizon` yourself.
 - Several repositories can be set up at the same time, each with its own setup agent.
-  The person clicks **Close** while a setup works, opens **New cloud** again for
-  another repository and starts its setup; **New cloud** opened for the first
-  repository shows that setup again. One folder has one setup at a time: a second
+  **Close**, Escape and a click on the backdrop park the draft in its workspace and
+  keep the setup agent working; **Continue** on the card of that workspace shows it
+  again. Only **Cancel** discards a draft. One draft exists at a time: to set up
+  another repository, cancel the draft and start the setup from the **Setup board**
+  with **Set up a repository**. **New cloud** opened for the first repository shows
+  that setup again. One folder has one setup at a time: a second
   setup of the same folder, also through a symbolic link, is refused until the first
   one stops. The image build, the CI in the image and the fast rerun run for a few
   setups at a time on one Docker (one for each 16 processors, one to four, or

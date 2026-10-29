@@ -173,9 +173,11 @@ impl HorizonApp {
         Ok(())
     }
 
-    pub(super) fn poll_cloud_creation(&mut self, ctx: &egui::Context) {
+    pub(in crate::app::cloud_panel) fn poll_cloud_creation(&mut self, ctx: &egui::Context) {
         let form = &mut self.cloud_prototype.production;
         let Some(pending) = &form.pending_creation else { return };
+        // A parked draft keeps `creating`, so a dismissal never cancels its check; a closed
+        // dialog has none left.
         if !form.creating || pending.session != self.active_session.as_ref().map(|session| session.session_id.clone()) {
             pending.cancel.0.cancel();
             self.close_cloud_creation();
@@ -233,6 +235,8 @@ impl HorizonApp {
             pending.working_copy.map(|(_, confirmed)| confirmed),
         )?;
         self.cloud_prototype.production.creating = false;
+        // The cloud's own card replaces the draft a dismissal may have parked.
+        self.cloud_prototype.production.draft = None;
         // The workspace New workspace made now holds the cloud.
         self.cloud_prototype.production.new_workspace = None;
         // What this dialog held (a clone, a token, a typed key, its checks) does not outlive it.

@@ -261,7 +261,7 @@ fn initialized_current_session_can_persist_removing_the_last_cloud() {
 }
 
 #[test]
-fn escape_wins_over_a_result_delivered_in_the_same_frame() {
+fn a_parked_dialog_still_lands_the_start_it_checked() {
     use crate::test_egui::DiscardTextures;
     let (temp, mut app) = test_app();
     let ctx = egui::Context::default();
@@ -287,9 +287,19 @@ fn escape_wins_over_a_result_delivered_in_the_same_frame() {
     let _ = ctx
         .run_ui(event, |ui| app.render_cloud_creation(ui.ctx()))
         .discard_textures();
-    assert!(!app.cloud_prototype.production.creating);
+    assert!(
+        app.cloud_prototype.production.creating,
+        "Escape parks the dialog; it does not cancel the start"
+    );
+    assert!(app.cloud_prototype.production.pending_creation.is_some());
+    // The parked draft keeps checking, so the cloud it started appears.
+    app.poll_cloud_creation(&ctx);
     assert!(app.cloud_prototype.production.pending_creation.is_none());
-    assert!(app.cloud_prototype.groups.0.is_empty());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
+    assert!(
+        app.cloud_prototype.production.draft.is_none(),
+        "the cloud's card replaces it"
+    );
 }
 
 #[test]
