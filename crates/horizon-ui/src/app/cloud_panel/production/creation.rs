@@ -21,7 +21,7 @@ pub(super) mod siblings;
 pub(super) mod source;
 mod storage;
 pub(super) mod uncommitted;
-mod watch;
+pub(in crate::app::cloud_panel::production) mod watch;
 
 /// The configuration summary's width beside the catalog.
 const SUMMARY_WIDTH: f32 = 330.0;
@@ -53,7 +53,10 @@ fn measure_on_open(ctx: &Context, id: Id) -> bool {
 struct Actions {
     repository: RepositoryAction,
     create: bool,
+    /// Ends the draft: its workspace goes when it held nothing, and what was typed is lost.
     cancel: bool,
+    /// A dismissal: the workspace keeps the draft, and its card brings the dialog back.
+    hide: bool,
     /// The repository's `cloud.yml` asks for This PC, and the person chose it.
     this_pc: bool,
 }
@@ -77,7 +80,7 @@ enum RepositoryAction {
 impl HorizonApp {
     /// Closes the dialog. A setup of its repository goes on after it, so the setup
     /// board shows it with the others.
-    fn close_cloud_creation_to_board(&mut self, ctx: &Context) {
+    pub(in crate::app) fn close_cloud_creation_to_board(&mut self, ctx: &Context) {
         let setup = super::repository_setup::running_here(&self.cloud_prototype.production);
         self.close_cloud_creation();
         if setup {
@@ -86,7 +89,7 @@ impl HorizonApp {
     }
 
     pub(in crate::app::cloud_panel) fn render_cloud_creation(&mut self, ctx: &Context) {
-        if !self.cloud_prototype.production.creating {
+        if !self.cloud_prototype.production.creation_dialog_open() {
             return;
         }
         let viewport = ctx.content_rect();
@@ -141,13 +144,25 @@ impl HorizonApp {
                 self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
                 ui.add_space(12.0);
                 self.cloud_creation_footer(ui, &mut actions, preparing, refused.as_deref());
+                // Escape is this dialog's here, not the agent's: the person needs a way out of
+                // a dialog that a working setup keeps open for minutes.
+                if preparing && super::repository_setup::working_here(&self.cloud_prototype.production) {
+                    ui.label(
+                        RichText::new("Escape returns to the workspace. Show agent keeps Escape for an interrupt.")
+                            .size(11.5)
+                            .color(theme::FG_DIM()),
+                    );
+                }
             });
         ctx.move_to_top(response.response.layer_id);
-        // Escape is the agent's while its live terminal shows and it still works.
-        let terminal_live =
-            width >= TWO_COLUMNS && super::repository_setup::working_here(&self.cloud_prototype.production);
-        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape && !terminal_live);
-        if dismissed || actions.cancel {
+        // Escape and a click on the backdrop put the draft back in its workspace, with every
+        // choice in it. The setup agent keeps an interrupt of its own: its panel, from Show agent.
+        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
+        if dismissed || actions.hide {
+            self.hide_cloud_creation(ctx);
+            return;
+        }
+        if actions.cancel {
             self.close_cloud_creation_to_board(ctx);
             return;
         }
@@ -270,7 +285,8 @@ impl HorizonApp {
         if preparing {
             match preparing_footer(ui, &self.cloud_prototype.production, refused) {
                 super::repository_setup::Footer::None => {}
-                super::repository_setup::Footer::Close => actions.cancel = true,
+                // Close parks the draft, as Escape does: the setup agent works on either way.
+                super::repository_setup::Footer::Close => actions.hide = true,
                 super::repository_setup::Footer::Run(action) => {
                     actions.repository = RepositoryAction::SetupRun(action);
                 }
@@ -280,12 +296,13 @@ impl HorizonApp {
         }
     }
 
-    /// Closes the dialog. A clone still running stops, and a token or key that was typed but not
-    /// used is forgotten.
-    pub(in crate::app::cloud_panel::production) fn close_cloud_creation(&mut self) {
+    /// Ends the draft: a clone still running stops, a token or key that was typed but not
+    /// used is forgotten, and the workspace goes when it held nothing.
+    pub(in crate::app) fn close_cloud_creation(&mut self) {
         // A workspace New workspace made for a cloud that never came goes with the dialog.
         self.discard_new_cloud_workspace();
         let form = &mut self.cloud_prototype.production;
+        form.draft = None;
         form.creating = false;
         form.pending_creation = None;
         form.launch = super::launch::State::default();
@@ -414,10 +431,9 @@ impl HorizonApp {
         escape: bool,
     ) -> bool {
         if !picking {
-            // `escape` is false while the agent's live terminal has Escape: Codex and Claude
-            // use it to interrupt. Close and the backdrop still close the dialog.
-            let pressed = ctx.input(|input| input.key_pressed(egui::Key::Escape));
-            let dismissed = response.should_close() && (escape || !pressed);
+            // Escape and a click on the backdrop dismiss the dialog. Both park the draft, so a
+            // held key or a stray click can never take what was typed, chosen or started.
+            let dismissed = response.should_close();
             if dismissed && escape {
                 self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Escape));
             }

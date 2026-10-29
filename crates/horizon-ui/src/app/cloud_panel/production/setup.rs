@@ -304,6 +304,7 @@ impl HorizonApp {
             })
             .flatten();
         self.cloud_prototype.production.creating = false;
+        self.cloud_prototype.production.draft = None;
         self.cloud_prototype.production.publishing = super::creation::publishing::State::default();
         self.cloud_prototype.production.pending_creation = None;
         if continuation == Continuation::ReturnForReview {

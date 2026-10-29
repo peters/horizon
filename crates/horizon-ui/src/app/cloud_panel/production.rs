@@ -11,6 +11,7 @@ mod creation_job;
 mod creation_tests;
 mod delete_agent;
 mod dialog_hover;
+mod draft;
 #[cfg(debug_assertions)]
 mod failure_preview;
 mod first_panel;
@@ -131,6 +132,9 @@ pub(super) struct Production {
     offer_publication: offer_publication::State,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
     new_workspace: Option<new_workspace::Intent>,
+    /// Where a dismissal parked the draft: its workspace and the card that brings it back.
+    /// The dialog, its choices and a check it started stay as they were until Cancel.
+    pub(in crate::app) draft: Option<super::new_cloud_draft::Draft>,
 }
 
 impl Production {
@@ -138,8 +142,14 @@ impl Production {
     /// one chosen earlier.
     pub(super) fn open_creation(&mut self) {
         self.creating = true;
+        self.draft = None;
         self.focus_title_on_open = true;
         self.setup_build_on.read_again();
+    }
+
+    /// Whether the dialog itself covers the board: a draft parked in its workspace does not.
+    pub(in crate::app) fn creation_dialog_open(&self) -> bool {
+        self.creating && self.draft.is_none()
     }
 }
 #[derive(Default, PartialEq, Eq)]

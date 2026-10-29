@@ -1095,6 +1095,13 @@ Canvas Ctrl/Cmd double-click recognition lives in `app/canvas_gesture.rs`, befor
 - `cloud_panel/production/cards/toolbar.rs` renders the persistent state, spending and layout summary; `details.rs` renders configuration, activity and management windows. `sizing.rs` owns profile details and pre-allocation size choices; `cards.rs` orchestrates presentation and lifecycle actions. Shared cloud geometry reserves toolbar space and restores older manual layouts without overlapping members. The production `resize` leaf owns resource-edit confirmation, background core calls, retained-target recovery and presentation synchronization.
 
 
+The New cloud dialog (`cloud_panel/production/creation.rs`) never discards a draft
+when it is dismissed. `cloud_panel/new_cloud_draft.rs` owns the parked draft: it draws
+the card in the workspace, reopens the dialog, and holds the card's two actions.
+`production/draft.rs` owns what a parked draft keeps and the per-frame work that goes
+on while it is parked; `production/creation_job.rs` keeps checking a repository whose
+Start is in flight. Only `close_cloud_creation` discards a draft.
+
 Cloud settings (`cloud_panel/production/setup`) is one page, not tabs. `setup.rs` owns the dialog, the background load, save and registry threads; `setup/dashboard.rs` owns the shared look (status words, cards, the readiness banner and its `Readiness` rule); `setup/fields.rs` renders the provider, agent and workspace cards; `setup/registry.rs` renders the container registry card. A repository counts as verified only from a saved journal validation for its current pull grant, read on open without asking a provider and updated by Validate, Status and Reconcile; Revoke drops it.
 
 ### Companion lifecycle service

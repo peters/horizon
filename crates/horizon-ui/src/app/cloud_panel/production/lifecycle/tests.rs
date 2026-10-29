@@ -523,7 +523,14 @@ fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
         "the open creation keeps its target"
     );
 
+    // Escape parks the draft; Cancel is what ends it and releases the hold.
     frame(&mut app, true);
+    assert!(
+        app.cloud_prototype.production.draft.is_some(),
+        "Escape parks the open creation"
+    );
+    app.close_cloud_creation();
+    frame(&mut app, false);
     assert!(!app.cloud_prototype.production.creating);
     assert!(
         app.cloud_prototype.creation_holds.is_empty(),

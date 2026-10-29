@@ -44,7 +44,7 @@ pub(super) fn arm(form: &mut Production) {
     form.launch.watch = Some(selection);
 }
 
-pub(super) fn poll(form: &mut Production) {
+pub(in crate::app::cloud_panel::production) fn poll(form: &mut Production) {
     let Some(watch) = &form.launch.watch else {
         return;
     };
