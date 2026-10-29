@@ -118,16 +118,7 @@ impl HorizonApp {
         if !self.cloud_prototype.production.creation_dialog_open() {
             return;
         }
-        let Some(surface) = self.cloud_creation_surface(ctx) else {
-            if Self::cloud_creation_surface_was_shown(ctx) {
-                // The workspace that holds the form left the canvas, so the form cannot follow
-                // it: the draft parks in the workspace, and its card brings the form back.
-                self.hide_cloud_creation(ctx);
-            } else {
-                // The form opened on a workspace that is off the canvas, so that workspace comes
-                // into view: the form opens on it and follows the pan.
-                self.reveal_cloud_creation_workspace(ctx);
-            }
+        let Some(surface) = self.cloud_creation_surface_now(ctx) else {
             return;
         };
         // A setup agent of this repository shows its output; large surfaces give it room.
@@ -496,6 +487,27 @@ impl HorizonApp {
         surface.intersects(canvas).then_some(surface)
     }
 
+    /// The rect the form draws on now, or `None` when it draws nothing this frame: the draft
+    /// parks, or the workspace that holds it comes into view first. A draft whose workspace
+    /// cannot show the form and cannot be brought into view loses that workspace, so that the
+    /// form sits on the canvas where the person can still finish or cancel it.
+    fn cloud_creation_surface_now(&mut self, ctx: &Context) -> Option<Rect> {
+        match self.cloud_creation_surface(ctx) {
+            Some(surface) => Some(surface),
+            None if Self::cloud_creation_surface_was_shown(ctx) => {
+                self.hide_cloud_creation(ctx);
+                None
+            }
+            None => {
+                if self.reveal_cloud_creation_workspace(ctx) {
+                    return None;
+                }
+                self.cloud_prototype.production.forget_creation_workspace();
+                Some(self.canvas_rect(ctx))
+            }
+        }
+    }
+
     /// Whether the form drew itself in the previous frame. A form that did and can no longer sit
     /// on its workspace is parked; one that did not is still opening, and its workspace comes
     /// into view instead.
@@ -504,8 +516,9 @@ impl HorizonApp {
         ctx.memory(|memory| memory.areas().visible_last_frame(&layer))
     }
 
-    /// Brings the workspace that holds the draft into view, so the form opens on it.
-    fn reveal_cloud_creation_workspace(&mut self, ctx: &Context) {
+    /// Brings the workspace that holds the draft into view, so the form opens on it. False when
+    /// that workspace cannot show the form: it is detached, or it is gone.
+    fn reveal_cloud_creation_workspace(&mut self, ctx: &Context) -> bool {
         let Some(workspace) = self
             .cloud_prototype
             .production
@@ -513,9 +526,9 @@ impl HorizonApp {
             .as_deref()
             .and_then(|local| self.board.workspace_id_by_local_id(local))
         else {
-            return;
+            return false;
         };
-        self.focus_workspace_visible(ctx, workspace, false);
+        self.focus_workspace_visible(ctx, workspace, false)
     }
 
     /// Makes `path` the repository and reads its profiles: a folder that was typed, or a fresh clone.

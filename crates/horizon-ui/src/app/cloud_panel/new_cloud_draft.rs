@@ -36,10 +36,11 @@ impl HorizonApp {
             self.cloud_prototype.groups.next_position(workspace, &self.board)
         });
         let workspace = workspace.filter(|local| {
-            // The card belongs to that workspace, so the person sees it land there.
+            // The card belongs to that workspace, so the person sees it land there. A detached
+            // workspace shows it again when it rejoins the board, which takes no view change.
             self.board
                 .workspace_id_by_local_id(local)
-                .is_some_and(|id| self.focus_workspace_visible(ctx, id, false))
+                .is_some_and(|id| self.workspace_is_detached(id) || self.focus_workspace_visible(ctx, id, false))
         });
         self.cloud_prototype.production.draft = Some(Draft {
             workspace,

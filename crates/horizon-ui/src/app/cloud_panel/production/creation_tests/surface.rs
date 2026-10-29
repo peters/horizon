@@ -316,3 +316,77 @@ fn a_workspace_off_the_canvas_parks_the_draft_and_its_card_returns_the_form() {
     );
     assert!(form_rect(&ctx).is_some(), "the form is drawn on its workspace");
 }
+
+#[test]
+fn a_detached_workspace_parks_the_draft_and_a_reopen_puts_the_form_on_the_canvas() {
+    let (_temp, ctx, mut app) = ready_app();
+    open_new_cloud(&ctx, &mut app);
+    app.cloud_prototype.production.title = "Atlas cloud".into();
+    let workspace = app
+        .board
+        .workspace_id_by_local_id(
+            app.cloud_prototype
+                .production
+                .creation_workspace()
+                .as_deref()
+                .expect("the form belongs to a workspace"),
+        )
+        .expect("the workspace is on the board");
+    // A workspace that moves to its own window cannot show the form, so the draft parks.
+    app.detach_workspace(workspace);
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    assert!(
+        app.cloud_prototype.production.draft.is_some(),
+        "the draft waits in its workspace"
+    );
+    assert!(!app.cloud_creation_open(), "no form is drawn while it waits");
+    // The card kept the workspace, which shows it again when it rejoins the board.
+    assert_eq!(
+        app.cloud_prototype
+            .production
+            .draft
+            .as_ref()
+            .and_then(|draft| draft.workspace.clone()),
+        app.board
+            .workspace(workspace)
+            .map(|workspace| workspace.local_id.clone()),
+        "the card keeps the workspace it belongs to"
+    );
+    // **+ New cloud** reopens the draft, and the form sits on the canvas rather than stay hidden.
+    app.reopen_cloud_draft(&ctx);
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(app.cloud_creation_open(), "the reopened form is open");
+    assert!(
+        app.cloud_prototype.production.creation_workspace().is_none(),
+        "the form forgets the workspace that cannot show it"
+    );
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    assert!(has_label(&output, "Cloud title"), "the form draws on the canvas");
+    assert!(has_label(&output, "Atlas cloud"), "with the choice it kept");
+    // The workspace comes back to the board, which keeps the form where it is: the draft
+    // forgot that workspace.
+    app.reattach_workspace(&ctx, workspace);
+    for _ in 0..4 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(
+        app.cloud_prototype.production.creation_workspace().is_none(),
+        "the form stays on the canvas"
+    );
+    // Cancel is reachable, so the draft cannot be stuck without a way out.
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let cancel = label_position(&output, "Cancel");
+    assert_eq!(
+        order_at(&ctx, cancel),
+        Some(egui::Order::Middle),
+        "no overlay covers the footer of the form on the canvas"
+    );
+    click(&ctx, &mut app, cancel);
+    assert!(
+        !app.cloud_prototype.production.creating,
+        "a click on the canvas form reaches Cancel"
+    );
+    assert!(app.cloud_prototype.production.draft.is_none(), "Cancel ends the draft");
+}
