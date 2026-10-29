@@ -49,11 +49,14 @@ in both runs. The first run leaves its private home, so sessions, cloud settings
 and saved records stay. The second run starts in that home and shows the boards
 of the earlier run.
 
-1. Start the fixture with `--reuse-state` and a state path that this task owns.
+1. Start the fixture with `--saved-session`, `--reuse-state` and a state path that
+   this task owns. An ephemeral run writes no session file, so a later run has no
+   board to open.
 2. Quit the candidate with the close button of the window manager.
    Result: The candidate exits. The harness also exits, and it keeps the private
    home.
-3. Start the fixture again with the same state path and `--reuse-state`.
+3. Start the fixture again with the same state path, `--saved-session` and
+   `--reuse-state`.
    Result: The harness uses a new display and viewer endpoint, and the candidate
    reads the private home of the earlier run.
 4. Open the saved board through **Menu** › **Sessions** when the candidate starts
@@ -543,7 +546,9 @@ owned viewer with `device_panel` operation `close`. Closing the viewer only
 releases the VNC connection; it does not stop the fixture. Ctrl-C stops only the
 harness's owned children, expires `target.json` and removes private application
 state. A run with `--reuse-state` keeps that state instead, so a later run can
-start in it. Logs and evidence remain. Normal application exit also completes
+start in it. Logs and evidence remain: the first run writes `<name>.log`, and a
+later run in the same state writes `<name>.2.log`, `<name>.3.log` and so on, so no
+run truncates the log of another. Normal application exit also completes
 the harness; unexpected child failure fails it and triggers cleanup.
 
 ## Agent registration

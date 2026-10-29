@@ -347,8 +347,29 @@ def main():
         raise SystemExit('Missing noVNC assets')
     children, logs = [], []
 
+    def log_path(name):
+        """The log file of this run: a reused state keeps the logs of the earlier runs.
+
+        The first run writes `<name>.log`; a later run in the same state writes
+        `<name>.2.log`, `<name>.3.log` and so on, so no run truncates the evidence of
+        another.
+        """
+        path = args.state / f'{name}.log'
+        run = 2
+        while path.exists():
+            path = args.state / f'{name}.{run}.log'
+            run += 1
+        return path
+
     def spawn(name, command, child_env=env):
-        log = (args.state / f'{name}.log').open('wb')
+        log = log_path(name).open('wb')
+        logs.append(log)
+        process = sandbox.start(namespace + command, env=child_env, stdout=log, stderr=log)
+        children.append(process)
+        return process
+
+    def spawn_with_log(name, command, log, child_env=env):
+        """Spawn with a log file that the caller keeps, such as one it reads from."""
         logs.append(log)
         process = sandbox.start(namespace + command, env=child_env, stdout=log, stderr=log)
         children.append(process)
@@ -361,7 +382,7 @@ def main():
     try:
         # Xvfb chooses and locks an unused display atomically.
         read_fd, write_fd = os.pipe()
-        log = (args.state / 'xvfb.log').open('wb')
+        log = log_path('xvfb').open('wb')
         logs.append(log)
         xvfb = sandbox.start(['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
                                  '1600x1000x24', '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
@@ -391,10 +412,11 @@ def main():
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session))
-        vnc = spawn('vnc', ['x11vnc', '-norc', '-no6', '-display', env['DISPLAY'],
-                           '-localhost', '-autoport', '40000', '-viewonly', '-forever',
-                           '-shared', '-nopw', '-noxdamage', '-noshm'])
-        vnc_port = bound_port(vnc, args.state / 'vnc.log', r'^PORT=(\d+)$')
+        vnc_log = log_path('vnc').open('wb')
+        vnc = spawn_with_log('vnc', ['x11vnc', '-norc', '-no6', '-display', env['DISPLAY'],
+                                    '-localhost', '-autoport', '40000', '-viewonly', '-forever',
+                                    '-shared', '-nopw', '-noxdamage', '-noshm'], vnc_log)
+        vnc_port = bound_port(vnc, Path(vnc_log.name), r'^PORT=(\d+)$')
         url = None
         if not args.native_view:
             port_file = args.state / 'web-port'
