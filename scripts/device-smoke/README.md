@@ -38,7 +38,31 @@ python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
   --native-view --state /tmp/horizon-device-target
 ```
 
-Use a new state path if it already exists. Pass `--firefox-system-access` only
+Use a new state path if it already exists. Pass `--reuse-state` to start a run
+in the private home that the earlier run at that state path left, and to keep
+that home when the run stops. Use it only for a state path that this task owns.
+
+### Restart the candidate in the same state
+
+A procedure that quits the candidate and starts it again needs `--reuse-state`
+in both runs. The first run leaves its private home, so sessions, cloud settings
+and saved records stay. The second run starts in that home and shows the boards
+of the earlier run.
+
+1. Start the fixture with `--reuse-state` and a state path that this task owns.
+2. Quit the candidate with the close button of the window manager.
+   Result: The candidate exits. The harness also exits, and it keeps the private
+   home.
+3. Start the fixture again with the same state path and `--reuse-state`.
+   Result: The harness uses a new display and viewer endpoint, and the candidate
+   reads the private home of the earlier run.
+4. Open the saved board through **Menu** › **Sessions** when the candidate starts
+   in a new session.
+
+> **CAUTION:** A reused private home holds the credentials, sessions and records
+> of the earlier run. Delete the state path when the task ends.
+
+Pass `--firefox-system-access` only
 with the Firefox disclosure procedure. The flag sets `browser.backend` to
 `firefox` and `browser.firefox_system_access` to true. It also opens the
 Google sign-in page and the X login page. Other runs leave that field false.
@@ -518,8 +542,9 @@ Close the test application normally and confirm it exited, then close its
 owned viewer with `device_panel` operation `close`. Closing the viewer only
 releases the VNC connection; it does not stop the fixture. Ctrl-C stops only the
 harness's owned children, expires `target.json` and removes private application
-state. Logs and evidence remain. Normal application exit also completes the
-harness; unexpected child failure fails it and triggers cleanup.
+state. A run with `--reuse-state` keeps that state instead, so a later run can
+start in it. Logs and evidence remain. Normal application exit also completes
+the harness; unexpected child failure fails it and triggers cleanup.
 
 ## Agent registration
 

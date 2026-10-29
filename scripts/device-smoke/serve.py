@@ -270,6 +270,11 @@ def main():
         help='Set browser.firefox_system_access in the fixture config. Firefox disclosure procedure only.')
     parser.add_argument('--state', type=Path, required=True, help='New private evidence directory')
     parser.add_argument(
+        '--reuse-state', action='store_true',
+        help='Reuse the private home and data that an earlier run left at --state, and keep them '
+             'when this run stops, so a procedure can quit the candidate and start it again in '
+             'the same state. Use only a state path that this person owns.')
+    parser.add_argument(
         '--saved-session', action='store_true',
         help='Keep the session of the fixture in its private home, which starting a cloud needs')
     parser.add_argument(
@@ -311,13 +316,12 @@ def main():
         parser.error(str(problem))
     if args.browser_host_profile and not args.browser_host:
         parser.error('--browser-host-profile needs --browser-host')
-    args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
-    args.state = args.state.resolve()
+    args.state = sandbox.prepare_state(args.state, reuse=args.reuse_state).resolve()
     app = args.horizon.resolve(strict=True)
     extra_ro_binds = [app]
     if args.tools:
         extra_ro_binds.append(args.tools.resolve())
-    box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds)
+    box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds, reuse=args.reuse_state)
     sandbox.seed_ssh(box.private_home, ssh_config, ssh_identity)
     cloud_files = sandbox.seed_cloud_settings(box.private_home, args.cloud_settings)
     data = box.data
@@ -431,7 +435,9 @@ def main():
             sandbox.end(child)
         for log in logs:
             log.close()
-        shutil.rmtree(args.state / 'data', ignore_errors=True)
+        # A reused state is what the next run starts from; a fresh one leaves nothing.
+        if not args.reuse_state:
+            shutil.rmtree(args.state / 'data', ignore_errors=True)
 
 
 if __name__ == '__main__':
