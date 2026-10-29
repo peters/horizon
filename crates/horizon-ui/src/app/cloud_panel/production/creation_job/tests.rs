@@ -353,7 +353,17 @@ fn remove_cloud_from_creation_target(app: &mut HorizonApp, temp: &std::path::Pat
 fn next_frames(app: &mut HorizonApp) {
     let ctx = egui::Context::default();
     app.release_workspaces_after_creation(&ctx);
-    app.normalize_workspace_state(&ctx);
+    // A worker thread reads the drafts of the session, and an empty workspace stays until that
+    // read says whether it holds a card, so these frames wait for it.
+    for _ in 0..200 {
+        app.normalize_workspace_state(&ctx);
+        if !app.cloud_drafts_hold_workspaces() {
+            return;
+        }
+        // The worker thread that reads the records needs the processor to answer.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("the drafts of the session are not read");
 }
 
 fn press_escape_in_creation(app: &mut HorizonApp) {

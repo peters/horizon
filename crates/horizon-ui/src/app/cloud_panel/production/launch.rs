@@ -12,6 +12,7 @@ use std::{
 };
 
 mod reread;
+mod restored;
 
 struct Loaded {
     prepared: Prepared,

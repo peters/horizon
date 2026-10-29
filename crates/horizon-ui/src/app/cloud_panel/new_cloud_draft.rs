@@ -16,6 +16,9 @@ pub(in crate::app) struct Draft {
     pub(in crate::app) workspace: Option<String>,
     /// Where the card sits in that workspace, from the workspace's top-left corner.
     pub(in crate::app) position: [f32; 2],
+    /// A card that a saved record brought back: its dialog has read nothing in this session,
+    /// so Continue reads its repository before it shows the choices again.
+    pub(in crate::app) restored: bool,
 }
 
 impl HorizonApp {
@@ -38,7 +41,14 @@ impl HorizonApp {
                 .workspace_id_by_local_id(local)
                 .is_some_and(|id| self.focus_workspace_visible(ctx, id, false))
         });
-        self.cloud_prototype.production.draft = Some(Draft { workspace, position });
+        self.cloud_prototype.production.draft = Some(Draft {
+            workspace,
+            position,
+            restored: false,
+        });
+        // The card outlives this session, so a worker thread saves its choices beside the
+        // cloud settings and this frame keeps them in memory.
+        self.keep_cloud_draft_record(ctx);
         ctx.request_repaint();
     }
 
@@ -50,6 +60,11 @@ impl HorizonApp {
         };
         self.cloud_prototype.production.creating = true;
         self.cloud_prototype.production.focus_title_on_open = true;
+        // A restored draft reads its repository only now: the choices it kept, such as the
+        // profile, apply to the settings that arrive.
+        if draft.restored {
+            self.read_restored_cloud_draft(ctx);
+        }
         if let Some(workspace) = draft
             .workspace
             .as_deref()

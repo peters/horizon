@@ -301,8 +301,20 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn normalize_workspace_state(&mut self, ctx: &Context) {
+        // A card that a saved record brings back holds its empty workspace, so it comes before
+        // the cleanup that would take the workspace away. A worker thread reads the records, so
+        // the cleanup waits the frames of that read instead of the frame waiting for the file.
+        #[cfg(feature = "cloud-workspaces")]
+        let records_wait = {
+            self.restore_cloud_drafts(ctx);
+            self.cloud_drafts_hold_workspaces() && !self.board.workspaces.is_empty()
+        };
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let records_wait = false;
         let count_before = self.board.workspaces.len();
-        self.board.remove_empty_workspaces();
+        if !records_wait {
+            self.board.remove_empty_workspaces();
+        }
         let count_after = self.board.workspaces.len();
         let detached_before = self.detached_workspaces.len();
         self.detached_workspaces

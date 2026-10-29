@@ -237,6 +237,7 @@ impl HorizonApp {
         self.cloud_prototype.production.creating = false;
         // The cloud's own card replaces the draft a dismissal may have parked.
         self.cloud_prototype.production.draft = None;
+        self.forget_cloud_draft_record();
         // The workspace New workspace made now holds the cloud.
         self.cloud_prototype.production.new_workspace = None;
         // What this dialog held (a clone, a token, a typed key, its checks) does not outlive it.

@@ -176,8 +176,9 @@ not durable.
   exit, it queues the last session save. The session writer thread makes it
   durable, and the frames of the exit check for it. The window shows
   **Closing Horizon…**. The exit waits up to `MAX_SHUTDOWN_WAIT` (10 s)
-  for the panels, for each cloud session save (`cloud_sessions_recorded`) and
-  for the session writer.
+  for the panels, for each cloud session save (`cloud_sessions_recorded`), for
+  the session writer and for a save of a parked cloud draft's record
+  (`draft_store::Store`).
   If the browsers did not stop in that time, it stops them by force, which
   can take 3 s more. Then it waits up to 2 s (`EXIT_FLUSH`) for the jobs of
   the browser coordination worker thread. The window paints during these waits.

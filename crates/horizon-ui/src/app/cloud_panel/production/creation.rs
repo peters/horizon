@@ -297,8 +297,27 @@ impl HorizonApp {
     }
 
     /// Ends the draft: a clone still running stops, a token or key that was typed but not
-    /// used is forgotten, and the workspace goes when it held nothing.
+    /// used is forgotten, the saved choices of a parked draft go, and the workspace goes when
+    /// it held nothing.
     pub(in crate::app) fn close_cloud_creation(&mut self) {
+        // The record is what a later start would show as a card, and this draft is over.
+        self.forget_cloud_draft_record();
+        self.close_cloud_form();
+    }
+
+    /// Ends what the dialog holds and keeps the saved choices of its parked draft: a session
+    /// switch saves the board that shows the card, and the record brings the card back with
+    /// that session.
+    pub(in crate::app) fn close_parked_cloud_draft(&mut self) {
+        // The empty workspace stays with the card. Its Intent names the board that goes, so the
+        // record restores it instead.
+        self.cloud_prototype.production.new_workspace = None;
+        self.close_cloud_form();
+    }
+
+    /// Ends what the dialog holds, and the workspace New workspace made for it when that
+    /// workspace held nothing.
+    fn close_cloud_form(&mut self) {
         // A workspace New workspace made for a cloud that never came goes with the dialog.
         self.discard_new_cloud_workspace();
         let form = &mut self.cloud_prototype.production;
