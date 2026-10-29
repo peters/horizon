@@ -63,8 +63,8 @@ panel, a workspace or a cloud card.
 
 2. Move the pointer over the icon.
 
-   Result: The icon shows the accent color. A hint says that the cast shares the
-   whole window.
+   Result: The button background gets lighter. The icon keeps its normal color.
+   A hint says that the cast shares the whole window.
 
 ### 6.2 OPEN — A first click without a known TV
 
@@ -128,9 +128,30 @@ Do this task when the candidate has no remembered whole-window TV.
 
 4. Click the cast icon in the root toolbar.
 
-   Result: The picker closes.
+   Result: The panel's picker closes. The Cast picker opens under the root
+   toolbar icon on **Entire Horizon**. The icon shows the accent color.
 
-### 6.5 EDGE — A narrow window
+5. Click the cast icon in the root toolbar again.
+
+   Result: The picker closes. The icon loses the accent color.
+
+### 6.5 RUNNING — The chooser shows a running cast
+
+1. Start a whole-window cast from the root toolbar. Switch to another workspace
+   with at least one panel.
+
+   Result: The TV keeps the picture of the window. The cast icon stays in the
+   accent color.
+
+2. Hold **Shift** and click the cast icon.
+
+   Result: The picker opens on the running session. It shows **Stop**.
+
+3. Click **Stop**.
+
+   Result: The cast stops. The icon loses the accent color.
+
+### 6.6 EDGE — A narrow window
 
 1. Resize the window until its width is about 900 pixels.
 
@@ -152,7 +173,8 @@ Do this task when the candidate has no remembered whole-window TV.
   whole-window source, and the same click closes it.
 - A click with a remembered TV starts the cast without a picker, and a click
   during that cast stops it.
-- Shift-click and right-click open the picker.
+- Shift-click and right-click open the picker. While a cast runs, that picker
+  shows the running session and can stop it.
 - A whole-window session shows the window as it appears, and the icon shows the
   session state.
 - A picker that covers the window pauses the picture and does not stop the

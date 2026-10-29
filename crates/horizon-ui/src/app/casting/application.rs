@@ -21,7 +21,8 @@ impl HorizonApp {
 
     /// One click on the root toolbar starts a whole-window cast on the remembered TV, and a
     /// click while it runs stops that cast. `chooser` opens the picker instead, for another
-    /// TV, another quality or a first pairing.
+    /// TV, another quality or a first pairing; while a cast runs it opens that cast's own
+    /// picker, so the person can stop it or change its settings.
     pub(in crate::app) fn toggle_application_cast(&mut self, button: Rect, ctx: &Context, chooser: bool) {
         if self
             .casting
@@ -33,11 +34,15 @@ impl HorizonApp {
             self.casting.pending_application_start = None;
             return;
         }
+        if chooser {
+            self.toggle_application_cast_picker(button, ctx);
+            return;
+        }
         if self.application_cast_running() {
             self.stop_application_cast();
             return;
         }
-        let Some(workspace) = self.board.active_workspace else {
+        let Some(workspace) = self.application_target_workspace() else {
             return;
         };
         if !chooser && let Some(receiver_id) = self.application_start_receiver() {
@@ -99,7 +104,7 @@ impl HorizonApp {
     /// it. The picker keeps its session bookkeeping and its consent for agents in the active
     /// workspace, so it does not open without one.
     pub(in crate::app) fn toggle_application_cast_picker(&mut self, button: Rect, ctx: &Context) {
-        let Some(workspace) = self.board.active_workspace else {
+        let Some(workspace) = self.application_target_workspace() else {
             return;
         };
         self.casting.toggle_picker(
@@ -109,6 +114,19 @@ impl HorizonApp {
             Some(button),
             ctx,
         );
+    }
+
+    /// The workspace that this button uses for session records and consent: the workspace of
+    /// a running whole-window cast, so the button's picker can stop that cast after the person
+    /// switched to another workspace, else the active workspace.
+    fn application_target_workspace(&self) -> Option<horizon_core::WorkspaceId> {
+        self.casting
+            .sessions
+            .iter()
+            .rev()
+            .find(|session| matches!(session.source, CastSource::Application {}) && !session.worker.finished())
+            .map(|session| session.workspace)
+            .or(self.board.active_workspace)
     }
 
     fn application_cast_running(&self) -> bool {
@@ -429,6 +447,42 @@ mod tests {
             app.casting.notice
         );
         assert!(app.casting.picker.is_some(), "the person can still choose a TV");
+    }
+
+    #[test]
+    fn the_picker_binds_to_the_workspace_of_a_running_cast() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState {
+                workspaces: vec![
+                    editor_workspace_state("first", [0.0, 0.0]),
+                    editor_workspace_state("second", [600.0, 0.0]),
+                ],
+                active_workspace_local_id: Some("first".into()),
+                ..RuntimeState::default()
+            }),
+        });
+        let peer = application_session(&mut app, "127.245.13.17");
+        let casting_workspace = app.casting.sessions[0].workspace;
+        let other = app
+            .board
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id != casting_workspace)
+            .expect("a second workspace")
+            .id;
+        app.board.focus_workspace(other);
+        assert_eq!(app.board.active_workspace, Some(other));
+        pending_discovery(&mut app);
+        app.toggle_application_cast(toolbar_button(), &ctx, true);
+        let picker = app.casting.picker.as_ref().expect("the chooser opens the picker");
+        assert_eq!(
+            picker.workspace, casting_workspace,
+            "the picker of a running cast stays on its own workspace"
+        );
+        assert!(picker.binding.is_some(), "the picker can stop the running cast");
+        app.casting.close_picker(&ctx);
+        app.casting.stop_and_wait(Duration::from_secs(5));
+        peer.join().expect("synthetic receiver");
     }
 
     #[test]
