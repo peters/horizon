@@ -51,8 +51,14 @@ fn collect_minimap_workspace_labels<'a>(
 
         let is_active =
             app.board.active_workspace == Some(workspace.id) || scope == MinimapScope::Workspace(workspace.id);
-        let workspace_rect =
-            workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds);
+        let workspace_rect = workspace_minimap_screen_rect(
+            origin,
+            model,
+            workspace.id,
+            workspace.position,
+            workspace_bounds,
+            app.empty_workspace_size(workspace.id),
+        );
         let title_strip_rect = minimap_workspace_title_strip_rect(workspace_rect, model.scale_y);
 
         labels.push(MinimapWorkspaceLabel {

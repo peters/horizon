@@ -1,6 +1,6 @@
 ---
 procedure: new-cloud-draft
-feature: The New cloud draft that a dismissal parks in its workspace
+feature: The New cloud draft that a parked surface leaves in its workspace
 platforms: [linux]
 cost: none
 destructive: no
@@ -12,20 +12,21 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that Escape and a click on the backdrop of **New cloud** put the dialog out of view and park
-its draft in the workspace. It proves that the draft keeps every choice, that **Continue** opens the dialog again
-and that **Cancel** ends the draft. It proves that a parked draft keeps its setup agent working. It proves that a
-parked draft survives a quit and a session switch.
+This procedure proves that **New cloud** is a form on its workspace and not a dialog over the board. It proves
+that a click outside the form and Escape change nothing. It proves that a draft parks in its workspace when that
+workspace leaves the canvas, that the draft keeps every choice, that **Continue** shows the form again and that
+**Cancel** ends the draft. It proves that a parked draft keeps its setup agent working. It proves that a parked
+draft survives a quit and a session switch.
 
 ## 2. Applicability
 
-- Candidate: each candidate that changes **New cloud**, its dismissal or the draft card in a workspace.
+- Candidate: each candidate that changes **New cloud**, its surface, its parking or the draft card in a workspace.
 - Platforms: Linux, in an isolated desktop with a live view. This procedure starts no worker, and it needs no
   provider credential. A provider key shows the worker cards of **Machine**; the catalog procedures test those.
 - This procedure does not test: the start of a cloud, the proof of a setup agent and the commit of
   `.horizon`, or the Escape key of a cloud panel.
 - Task ND-6 is optional. It needs a Linux computer with a systemd user session and a local agent login. Without
-  them, the dialog shows the platform note and the task is skipped.
+  them, the form shows the platform note and the task is skipped.
 
 ## 3. Safety
 
@@ -70,84 +71,93 @@ parked draft survives a quit and a session switch.
 
 ## 6. Tasks
 
-### 6.1 ND-1 — New cloud makes a workspace and opens its dialog
+### 6.1 ND-1 — New cloud makes a workspace and shows its form on it
 1. In the toolbar, click **+ New cloud**.
-   Result: A new workspace appears on the board, and the **New cloud** dialog covers the board.
-2. Examine the dialog.
-   Result: It shows **Where is your code?** and **Cloud title**. Its footer shows **Continue** and **Cancel**.
+   Result: A new workspace appears on the board. The **New cloud** form shows on that workspace, at its top-left
+   corner. The board stays visible around the form, and the minimap does not show.
+2. Examine the form.
+   Result: It shows **Where is your code?** and **Cloud title**. Its footer shows **Continue** and **Cancel**. The
+   worker catalog is on the left and the summary is on the right.
+3. Drag an empty part of the canvas a short distance.
+   Result: The workspace moves. The form stays at the top-left corner of the workspace, and it moves with it.
+4. Examine the footer of the form.
+   Result: No minimap or other overlay covers **Continue** or **Cancel**.
 
-### 6.2 ND-2 — Escape parks the draft and the workspace shows it
+### 6.2 ND-2 — A workspace that leaves the canvas parks the draft
 1. Type `<home>/smoke/atlas-app` in **Where is your code?**
 2. Click **Continue**.
-   Result: The dialog shows **Profile**, **Machine**, **Start cloud** and **Cancel**.
+   Result: The form shows **Profile**, **Machine**, **Start cloud** and **Cancel**.
 3. Type `Atlas cloud` in **Cloud title**.
 4. Click `atlas-large` under **Profile**.
    Result: `atlas-large` is highlighted.
-5. Press Escape.
-   Result: The dialog is out of view, and the workspace shows a card.
+5. Drag an empty part of the canvas until the workspace is off the canvas.
+   Result: The form is out of view. The view moves back to the workspace, and the workspace shows a card.
 6. Examine the card.
    Result: Line 1 is `Atlas cloud`, line 2 is `atlas-app · nothing rented yet`, line 3 is `Not started. Continue to finish the choices.` The card shows **Continue** and **Cancel**.
 
-### 6.3 ND-3 — Continue and the backdrop keep every choice
+### 6.3 ND-3 — A click outside the form and Escape keep every choice
 1. Click **Continue** on the card.
-   Result: The dialog opens again and covers the board. The card is out of view.
+   Result: The form shows again on its workspace. The card is out of view.
 2. Examine **Cloud title**, **Where is your code?** and **Profile**.
    Result: The title, the repository and the profile `atlas-large` are the same as in ND-2.
-3. Click the board outside the dialog.
-   Result: The dialog is out of view, and the card is in the workspace again.
-4. Click **Continue** on the card.
-   Result: The dialog opens again, and every choice of step 2 is the same.
+3. Click an empty part of the canvas outside the form.
+   Result: The form stays in view, and no card shows in the workspace.
+4. Press Escape.
+   Result: The form stays in view, and no card shows in the workspace.
+5. Examine **Cloud title** and **Profile**.
+   Result: The title and the profile `atlas-large` are the same as in step 2.
 
 ### 6.4 ND-4 — Cancel ends the draft and takes its empty workspace
 1. Count the workspaces in the sidebar. Make a note of the count.
-2. Press Escape.
-   Result: The dialog is out of view, and the card is in the workspace.
+2. Drag an empty part of the canvas until the workspace of the form is off the canvas.
+   Result: The form is out of view, and the card is in the workspace.
 3. Click **Cancel** on the card.
    Result: The card is out of view, and the count of the sidebar is one less.
 
 ### 6.5 ND-5 — Escape closes only the folder picker
 1. In the toolbar, click **+ New cloud**.
-   Result: A new workspace appears, and the dialog shows **Where is your code?**.
+   Result: A new workspace appears, and the form shows **Where is your code?**.
 2. Type `https://github.com/peters/horizon.git` in **Where is your code?**
 3. Click **Choose folder…**.
-   Result: A picker with the heading **Select repository directory** covers the dialog.
+   Result: A picker with the heading **Select repository directory** covers the form.
 4. Press Escape.
-   Result: The picker is out of view. The dialog stays in view, and the link is still in the field.
-5. Click **Cancel** in the footer of the dialog.
-   Result: The dialog is out of view, and the count of the sidebar is one less.
+   Result: The picker is out of view. The form stays in view, and the link is still in the field.
+5. Click **Cancel** in the footer of the form.
+   Result: The form is out of view, and the count of the sidebar is one less.
 
 ### 6.6 ND-6 — A parked draft keeps its setup agent working (optional)
 1. In the toolbar, click **+ New cloud**.
-   Result: A new workspace appears, and the dialog shows **Where is your code?**.
+   Result: A new workspace appears, and the form shows **Where is your code?**.
 2. Type `<home>/smoke/setup-app` in **Where is your code?**
 3. Click **Continue**.
-   Result: The dialog shows a card with the heading **Set up from CI** and the button **Set up with Claude**.
+   Result: The form shows a card with the heading **Set up from CI** and the button **Set up with Claude**.
 4. Click **Set up with Claude**.
-   Result: The last line of the dialog says `Escape returns to the workspace. Show agent keeps Escape for an interrupt.` The footer shows **Close**.
-5. Press Escape.
-   Result: The dialog is out of view. The card says `Its setup agent is working; the agent's panel stays open`.
+   Result: The last line of the form says `Close returns to the workspace. Show agent keeps Escape for an interrupt.` The footer shows **Close**.
+5. Click **Close**.
+   Result: The form is out of view. The card says `Its setup agent is working; the agent's panel stays open`.
 6. Open **Menu** › **Setup board**.
    Result: After 30 seconds the list shows one setup for `setup-app`, and the agent kept working.
 7. Press Escape to close the setup board.
 8. Click **Continue** on the card.
-   Result: The dialog opens again and shows the progress of the same agent.
+   Result: The form shows again, with the progress of the same agent.
 9. Click **Show agent**.
    Result: The panel of the agent opens with the keyboard focus in its terminal.
 10. Press Escape in the terminal of the agent.
-   Result: The terminal of the agent shows an interrupt, and the dialog stays in view.
-11. Press Escape. Count the workspaces in the sidebar. Make a note of the count.
-   Result: The dialog is out of view, and the card shows the setup status.
+   Result: The terminal of the agent shows an interrupt, and the form stays in view.
+11. Click **Close** in the footer of the setup view. Count the workspaces in the sidebar. Make a note of the count.
+   Result: The form is out of view, and the card shows the setup status.
 
 ### 6.7 ND-7 — The toolbar and the menu reopen the parked draft
 1. In the toolbar, click **+ New cloud**.
-   Result: The dialog opens again with the same progress. The count is the same as in ND-6.
-2. Press Escape.
-   Result: The dialog is out of view, and the card shows the setup status.
+   Result: The form shows again with the same progress. The count is the same as in ND-6.
+2. Click **Close**.
+   Result: The form is out of view, and the card shows the setup status.
 3. Open **Menu** › **Cloud** › **Add cloud here**.
-   Result: The dialog opens again with the same progress. One card shows, and the count is the same.
+   Result: The form shows again with the same progress. One card shows, and the count is the same.
 
 ### 6.8 ND-8 — A parked draft survives a session switch
-1. In the toolbar, click **+ New cloud**. Type `Saved draft` in **Cloud title**, then press Escape.
+1. In the toolbar, click **+ New cloud**. Type `Saved draft` in **Cloud title**. Drag an empty part of the
+   canvas until the workspace of the form is off the canvas.
    Result: The card is in the workspace, and its first line is `Saved draft`.
 2. Examine the file `<home>/.horizon/cloud/drafts.json`.
    Result: A moment after the park, the file holds one record for the workspace of the card. Its
@@ -164,8 +174,9 @@ parked draft survives a quit and a session switch.
 6. Repeat step 4.
    Result: The card shows again in its workspace, and its first line is `Saved draft`.
 7. Click **Continue** on the card.
-   Result: The dialog is in view, and **Cloud title** shows `Saved draft`.
-8. Press Escape, then click **Cancel** on the card.
+   Result: The form is in view, and **Cloud title** shows `Saved draft`.
+8. Drag an empty part of the canvas until the workspace of the form is off the canvas, then click **Cancel** on the
+   card.
    Result: The card is out of view. Examine `drafts.json` again: the record of that workspace is gone.
 
 Note: the fixture removes its private home when it stops, so a run cannot restart it in the same
@@ -175,7 +186,7 @@ the automated test that restores a parked draft into a fresh app covers it.
 ## 7. Pass criteria
 
 - Each task gives the result that its steps name, and no step starts a worker or a new provider resource.
-- **Escape** and a click on the backdrop never lose a choice of the person.
+- A click outside the form, and Escape, never lose a choice of the person and never park the draft.
 - Only **Cancel** ends a draft, and it removes a workspace that held nothing.
 - A session switch ends the card that is in the form, also a card that a record brought back, and
   the record waits for the session that owns it.
@@ -185,7 +196,8 @@ the automated test that restores a parked draft into a fresh app covers it.
   - The card does not cover a cloud panel or a panel of its workspace.
   - The card moves and scales with its workspace when the board pans and zooms.
   - The accent border of the card is on all four sides, with no clipped edge.
-  - The dialog opens again in the centre of the window, and no text of it is cut at 1600 × 1000.
+  - The form opens again on its workspace, no text of it is cut at 1600 × 1000, and no overlay covers its
+    footer.
   - The card text is readable in the dark palette and in the light palette of **Settings**.
 
 ## 8. Cleanup

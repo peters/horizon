@@ -184,7 +184,7 @@ fn new_cloud_dialog_press_on_a_lower_control_reaches_it() {
         .expect("the dialog shows its title field")
         .rect
         .center();
-    let layer = LayerId::new(Order::Tooltip, Id::unique("cloud-creation"));
+    let layer = LayerId::new(Order::Middle, Id::unique("cloud-creation"));
     assert_press_reaches_lower_control(
         &ctx,
         layer,

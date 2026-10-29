@@ -3,7 +3,7 @@
 use super::*;
 use crate::app::sidebar::NewWorkspace;
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, epaint::Shape};
+use egui::{Event, Modifiers, PointerButton, Pos2, epaint::Shape};
 use horizon_core::{RuntimeState, StartupDecision};
 
 fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<Event>, modifiers: Modifiers) {
@@ -12,23 +12,6 @@ fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<Event>, modifier
         .chain(events)
         .collect();
     run_app_frame_with_input(ctx, app, input);
-}
-
-fn key(ctx: &egui::Context, app: &mut HorizonApp, key: Key) {
-    for pressed in [true, false] {
-        frame(
-            ctx,
-            app,
-            vec![Event::Key {
-                key,
-                physical_key: Some(key),
-                pressed,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            }],
-            Modifiers::NONE,
-        );
-    }
 }
 
 /// Frames until the worker threads that read and write the records of the active session
@@ -69,6 +52,17 @@ fn click(ctx: &egui::Context, app: &mut HorizonApp, position: Pos2) {
     }
 }
 
+/// Parks the open draft the way the frame does: the workspace that holds it leaves the canvas,
+/// so the surface cannot show it any more and its card becomes the way back.
+fn park_off_the_canvas(ctx: &egui::Context, app: &mut HorizonApp) {
+    app.canvas_view.set_pan_offset([-100_000.0, -100_000.0]);
+    frame(ctx, app, Vec::new(), Modifiers::NONE);
+    assert!(
+        app.cloud_prototype.production.draft.is_some(),
+        "the draft is parked in its workspace"
+    );
+}
+
 /// An app that can start a cloud, with the workspace **+ New cloud** makes for one.
 fn parked_draft(ctx: &egui::Context, app: &mut HorizonApp, temp: &std::path::Path, workspaces: usize) {
     app.cloud_prototype.root = Some(temp.join("clouds"));
@@ -87,7 +81,7 @@ fn parked_draft(ctx: &egui::Context, app: &mut HorizonApp, temp: &std::path::Pat
         "a workspace holds the draft"
     );
     app.cloud_prototype.production.set_draft_title("Atlas cloud");
-    key(ctx, app, Key::Escape);
+    park_off_the_canvas(ctx, app);
     // Parking takes the view to the workspace that holds the card; its pan settles first.
     for _ in 0..20 {
         frame(ctx, app, Vec::new(), Modifiers::NONE);
@@ -109,10 +103,10 @@ fn ready_app() -> (tempfile::TempDir, egui::Context, HorizonApp, usize) {
 }
 
 #[test]
-fn escape_parks_the_draft_in_its_workspace_with_its_choices() {
+fn a_parked_draft_stays_in_its_workspace_with_its_choices() {
     let (temp, ctx, mut app, workspaces) = ready_app();
     parked_draft(&ctx, &mut app, temp.path(), workspaces);
-    assert!(!app.cloud_creation_open(), "the dialog is out of view");
+    assert!(!app.cloud_creation_open(), "the form is out of view");
     assert!(
         app.cloud_prototype.production.creating,
         "a parked draft is not a cancelled one"
@@ -166,27 +160,6 @@ fn cancel_on_the_card_ends_the_draft_and_takes_its_empty_workspace() {
     );
 }
 
-#[test]
-fn a_backdrop_click_parks_instead_of_ending_the_draft() {
-    let (temp, ctx, mut app, workspaces) = ready_app();
-    app.cloud_prototype.root = Some(temp.path().join("clouds"));
-    app.cloud_prototype.ready = true;
-    for _ in 0..2 {
-        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    }
-    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
-    for _ in 0..3 {
-        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    }
-    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    // A control of the board, well outside the dialog.
-    let outside = label_position(&output, "Menu").expect("the toolbar's Menu");
-    click(&ctx, &mut app, outside);
-    assert!(!app.cloud_creation_open(), "a click outside dismisses the dialog");
-    assert!(app.cloud_prototype.production.creating, "and parks its draft");
-    assert_eq!(app.board.workspaces.len(), workspaces + 1, "its workspace stays");
-}
-
 /// A parked draft, its workspace, and the folder its choices were saved in.
 fn parked_draft_beside_a_root() -> (tempfile::TempDir, egui::Context, HorizonApp, String, std::path::PathBuf) {
     let (temp, ctx, mut app, _workspaces) = ready_app();
@@ -200,7 +173,7 @@ fn parked_draft_beside_a_root() -> (tempfile::TempDir, egui::Context, HorizonApp
     app.cloud_prototype
         .production
         .set_draft_repository("/synthetic/smoke/atlas-app");
-    key(&ctx, &mut app, Key::Escape);
+    park_off_the_canvas(&ctx, &mut app);
     for _ in 0..20 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
@@ -427,7 +400,7 @@ fn a_draft_survives_a_switch_away_and_back() {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     app.cloud_prototype.production.set_draft_title("Atlas cloud");
-    key(&ctx, &mut app, Key::Escape);
+    park_off_the_canvas(&ctx, &mut app);
     for _ in 0..5 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
@@ -491,8 +464,7 @@ fn a_frame_that_parks_a_draft_writes_no_file_and_the_worker_saves_it() {
         .creation_workspace()
         .expect("the draft belongs to the workspace + New cloud made");
 
-    key(&ctx, &mut app, Key::Escape);
-    assert!(app.cloud_prototype.production.draft.is_some(), "the draft is parked");
+    park_off_the_canvas(&ctx, &mut app);
     assert_eq!(
         app.cloud_draft_record(&workspace).map(|kept| kept.title.as_str()),
         Some("Atlas cloud"),
@@ -536,7 +508,7 @@ fn a_restored_card_ends_on_a_switch_so_the_next_session_shows_its_own() {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     app.cloud_prototype.production.set_draft_title("Atlas cloud");
-    key(&ctx, &mut app, Key::Escape);
+    park_off_the_canvas(&ctx, &mut app);
     for _ in 0..5 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
@@ -557,7 +529,7 @@ fn a_restored_card_ends_on_a_switch_so_the_next_session_shows_its_own() {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     app.cloud_prototype.production.set_draft_title("Beta cloud");
-    key(&ctx, &mut app, Key::Escape);
+    park_off_the_canvas(&ctx, &mut app);
     for _ in 0..5 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }

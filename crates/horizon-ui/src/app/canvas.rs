@@ -40,9 +40,22 @@ pub(super) struct CanvasGridCache {
     offset: Vec2,
 }
 
+/// Whether the New cloud form covers the canvas HUD, so that nothing of the HUD paints over the
+/// form. Both rects are the last ones drawn; the form follows its workspace every frame.
+#[cfg(feature = "cloud-workspaces")]
+fn canvas_hud_covered_by_new_cloud(ctx: &Context) -> bool {
+    let form = ctx.memory(|memory| memory.area_rect(Id::unique("cloud-creation")));
+    let hud = ctx.memory(|memory| memory.area_rect(Id::unique("canvas_hud")));
+    form.zip(hud).is_some_and(|(form, hud)| form.intersects(hud))
+}
+
 impl HorizonApp {
     pub(super) fn render_canvas_hud(&self, ctx: &Context) {
         if !self.hud_visible {
+            return;
+        }
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.new_cloud_surface() && canvas_hud_covered_by_new_cloud(ctx) {
             return;
         }
 

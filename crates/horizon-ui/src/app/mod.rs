@@ -101,6 +101,10 @@ const RESIZE_HANDLE_SIZE: f32 = 18.0;
 const WS_BG_PAD: f32 = 16.0;
 const WS_TITLE_HEIGHT: f32 = 38.0;
 const WS_EMPTY_SIZE: [f32; 2] = [304.0, 154.0];
+/// The frame of the workspace New cloud made to hold its form: the form's widest width plus its
+/// margins, and room for its heading, body and action bar.
+#[cfg(feature = "cloud-workspaces")]
+const WS_CLOUD_FORM_SIZE: [f32; 2] = [1244.0, 820.0];
 const WS_LABEL_HEIGHT: f32 = 30.0;
 const WS_LABEL_MIN_WIDTH: f32 = 110.0;
 const WS_LABEL_MAX_WIDTH: f32 = 260.0;

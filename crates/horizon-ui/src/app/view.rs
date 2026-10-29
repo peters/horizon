@@ -370,9 +370,21 @@ impl HorizonApp {
         self.board.workspace(workspace_id).map(|workspace| {
             (
                 Pos2::new(workspace.position[0], workspace.position[1]),
-                Vec2::new(super::WS_EMPTY_SIZE[0], super::WS_EMPTY_SIZE[1]),
+                self.empty_workspace_size(workspace_id),
             )
         })
+    }
+
+    /// The frame an empty workspace is drawn at. New cloud's own workspace holds its form, and
+    /// every other empty workspace, also one the person made, keeps the empty size.
+    pub(super) fn empty_workspace_size(&self, workspace_id: WorkspaceId) -> Vec2 {
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.holds_cloud_form(workspace_id) {
+            return Vec2::new(super::WS_CLOUD_FORM_SIZE[0], super::WS_CLOUD_FORM_SIZE[1]);
+        }
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let _ = workspace_id;
+        Vec2::new(super::WS_EMPTY_SIZE[0], super::WS_EMPTY_SIZE[1])
     }
 }
 

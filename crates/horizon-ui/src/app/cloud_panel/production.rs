@@ -151,7 +151,7 @@ impl Production {
         self.setup_build_on.read_again();
     }
 
-    /// Whether the dialog itself covers the board: a draft parked in its workspace does not.
+    /// Whether the New cloud form is drawn on the board: a draft parked in its workspace is not.
     pub(in crate::app) fn creation_dialog_open(&self) -> bool {
         self.creating && self.draft.is_none()
     }

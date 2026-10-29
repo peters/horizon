@@ -74,10 +74,21 @@ impl HorizonApp {
 }
 
 impl CloudPrototype {
-    /// Whether a cloud dialog covers the board. A draft that a dismissal parked in its
-    /// workspace is not one: its card leaves the canvas, and its errors, in view.
+    /// Whether the New cloud form is drawn on the board, or the cloud accounts form is open.
+    /// A draft that its card parks in its workspace is neither: its card leaves the canvas,
+    /// and its errors, in view.
     pub(super) fn creation_open(&self) -> bool {
         self.production.creation_dialog_open() || self.production.setup.open
+    }
+
+    /// Whether the New cloud form is drawn on the board, which owns the board's HUD meanwhile.
+    pub(super) fn new_cloud_surface(&self) -> bool {
+        self.production.creation_dialog_open()
+    }
+
+    /// Whether the empty `workspace` is the one that holds the New cloud form drawn now.
+    pub(super) fn holds_cloud_form(&self, workspace: WorkspaceId) -> bool {
+        self.production.holds_cloud_form(workspace)
     }
 }
 

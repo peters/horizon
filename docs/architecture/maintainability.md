@@ -1095,9 +1095,14 @@ Canvas Ctrl/Cmd double-click recognition lives in `app/canvas_gesture.rs`, befor
 - `cloud_panel/production/cards/toolbar.rs` renders the persistent state, spending and layout summary; `details.rs` renders configuration, activity and management windows. `sizing.rs` owns profile details and pre-allocation size choices; `cards.rs` orchestrates presentation and lifecycle actions. Shared cloud geometry reserves toolbar space and restores older manual layouts without overlapping members. The production `resize` leaf owns resource-edit confirmation, background core calls, retained-target recovery and presentation synchronization.
 
 
-The New cloud dialog (`cloud_panel/production/creation.rs`) never discards a draft
-when it is dismissed. `cloud_panel/new_cloud_draft.rs` owns the parked draft: it draws
-the card in the workspace, reopens the dialog, and holds the card's two actions.
+The New cloud creation surface (`cloud_panel/production/creation.rs`) is an
+`Order::Middle` area on the frame of the workspace that holds the draft, not a
+modal: it computes that rect from `workspace_focus_frame` and
+`canvas_scene_transform`, sizes the form from it, parks the draft when the
+workspace cannot show the form, and never takes a click, Escape or backdrop of its
+own. It never discards a draft when it is dismissed.
+`cloud_panel/new_cloud_draft.rs` owns the parked draft: it draws
+the card in the workspace, reopens the form, and holds the card's two actions.
 `production/draft.rs` owns what a parked draft keeps and the per-frame work that goes
 on while it is parked; `production/draft_store.rs` keeps the saved records in memory,
 reads them once for each session and saves them, both on worker threads, so no frame

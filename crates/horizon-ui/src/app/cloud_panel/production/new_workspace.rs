@@ -12,6 +12,18 @@ use horizon_core::{
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+impl Production {
+    /// Whether `workspace` is the empty workspace that this draft's form is drawn in: New
+    /// workspace made it to hold the form, so it is drawn at the form's own size.
+    pub(in crate::app) fn holds_cloud_form(&self, workspace: WorkspaceId) -> bool {
+        self.creation_dialog_open()
+            && self
+                .new_workspace
+                .as_ref()
+                .is_some_and(|intent| intent.workspace == workspace)
+    }
+}
+
 /// The workspace New workspace made for the cloud, and what it asked for.
 #[derive(Clone, Debug)]
 pub(super) struct Intent {
