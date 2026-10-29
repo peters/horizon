@@ -32,6 +32,10 @@ pub(super) struct CastState {
     sessions: Vec<Session>,
     retiring: Vec<Session>,
     picker: Option<Picker>,
+    /// The TV of the last whole-window cast, which the root toolbar button starts again.
+    last_application_receiver: Option<String>,
+    /// A toolbar click that waits for discovery to find the TV it starts on.
+    pending_application_start: Option<PendingApplicationStart>,
     control_menus: Option<[egui::LayerId; 2]>,
     notice: Option<String>,
     notification: Option<String>,
@@ -50,6 +54,15 @@ struct Session {
     scaling: Option<scaling::Scaler>,
     failure_notified: bool,
     agent_controlled: bool,
+}
+/// A click on the root toolbar that waits for discovery, then starts on `receiver_id`.
+#[derive(Clone, Debug)]
+pub(super) struct PendingApplicationStart {
+    workspace: WorkspaceId,
+    receiver_id: String,
+    orientation: CastOrientation,
+    resolution: CastResolution,
+    deadline: Instant,
 }
 /// What opened the picker. Choosing the same control again closes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

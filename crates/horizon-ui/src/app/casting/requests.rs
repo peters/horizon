@@ -6,7 +6,10 @@ use horizon_cast::{CastSession, CastStatus, PairingStore};
 use horizon_core::WorkspaceId;
 use horizon_core::browser::manifest::{
     self,
-    cast::{self, CastOperation, CastOutcome, CastReceiver, CastSessionInfo, CastSource, CastSourceInfo},
+    cast::{
+        self, CastOperation, CastOrientation, CastOutcome, CastReceiver, CastResolution, CastSessionInfo, CastSource,
+        CastSourceInfo,
+    },
 };
 use std::path::Path;
 
@@ -14,6 +17,14 @@ use std::path::Path;
 enum CastCaller {
     WorkspaceAgent,
     User,
+}
+/// The parts of a `CastOperation::Start` that `start_cast` needs.
+#[derive(Clone, Copy)]
+struct StartRequest<'a> {
+    receiver_id: &'a str,
+    source: &'a CastSource,
+    orientation: CastOrientation,
+    resolution: CastResolution,
 }
 
 impl HorizonApp {
@@ -102,48 +113,17 @@ impl HorizonApp {
                     source,
                     orientation,
                     resolution,
-                } => {
-                    self.validate_cast_start(workspace, source, receiver_id, ctx, caller)?;
-                    let receiver = self
-                        .casting
-                        .receivers
-                        .iter()
-                        .find(|receiver| receiver.id == *receiver_id)
-                        .ok_or("Discover and select an Apple TV first")?;
-                    let store = PairingStore::new(
-                        self.casting.pairing_directory.clone(),
-                        receiver.id.clone(),
-                        receiver.name.clone(),
-                    );
-                    let format = super::video_format(*orientation, *resolution);
-                    let (width, height) = format.dimensions();
-                    let repaint = ctx.clone();
-                    let scaling = super::scaling::Scaler::new((usize::from(width), usize::from(height)), move || {
-                        repaint.request_repaint();
-                    })
-                    .map_err(|error| error.to_string())?;
-                    let worker = CastSession::start_remembered(receiver.address, format, store)
-                        .map_err(|error| error.to_string())?;
-                    self.casting
-                        .sessions
-                        .retain(|session| session.receiver_id != *receiver_id);
-                    self.casting.sessions.push(Session {
-                        generation: std::time::Instant::now(),
-                        receiver_id: receiver_id.clone(),
-                        workspace,
-                        source: source.clone(),
+                } => self.start_cast(
+                    workspace,
+                    StartRequest {
+                        receiver_id,
+                        source,
                         orientation: *orientation,
                         resolution: *resolution,
-                        worker,
-                        scaling: Some(scaling),
-                        failure_notified: false,
-                        agent_controlled: caller == CastCaller::WorkspaceAgent,
-                    });
-                    self.casting.notice = None;
-                    if caller == CastCaller::WorkspaceAgent && matches!(source, CastSource::Application { .. }) {
-                        self.close_application_cast_controls(ctx);
-                    }
-                }
+                    },
+                    ctx,
+                    caller,
+                )?,
                 CastOperation::Pair { receiver_id, pin } => {
                     let session = self
                         .casting
@@ -181,6 +161,64 @@ impl HorizonApp {
             .flatten()
         });
         outcome
+    }
+    fn start_cast(
+        &mut self,
+        workspace: WorkspaceId,
+        request: StartRequest<'_>,
+        ctx: &egui::Context,
+        caller: CastCaller,
+    ) -> Result<(), String> {
+        let StartRequest {
+            receiver_id,
+            source,
+            orientation,
+            resolution,
+        } = request;
+        self.validate_cast_start(workspace, source, receiver_id, ctx, caller)?;
+        let receiver = self
+            .casting
+            .receivers
+            .iter()
+            .find(|receiver| receiver.id == *receiver_id)
+            .ok_or("Discover and select an Apple TV first")?;
+        let store = PairingStore::new(
+            self.casting.pairing_directory.clone(),
+            receiver.id.clone(),
+            receiver.name.clone(),
+        );
+        let format = super::video_format(orientation, resolution);
+        let (width, height) = format.dimensions();
+        let repaint = ctx.clone();
+        let scaling = super::scaling::Scaler::new((usize::from(width), usize::from(height)), move || {
+            repaint.request_repaint();
+        })
+        .map_err(|error| error.to_string())?;
+        let worker =
+            CastSession::start_remembered(receiver.address, format, store).map_err(|error| error.to_string())?;
+        self.casting
+            .sessions
+            .retain(|session| session.receiver_id != *receiver_id);
+        self.casting.sessions.push(Session {
+            generation: std::time::Instant::now(),
+            receiver_id: receiver_id.to_owned(),
+            workspace,
+            source: source.clone(),
+            orientation,
+            resolution,
+            worker,
+            scaling: Some(scaling),
+            failure_notified: false,
+            agent_controlled: caller == CastCaller::WorkspaceAgent,
+        });
+        self.casting.notice = None;
+        if matches!(source, CastSource::Application {}) {
+            self.casting.last_application_receiver = Some(receiver_id.to_owned());
+        }
+        if caller == CastCaller::WorkspaceAgent && matches!(source, CastSource::Application {}) {
+            self.close_application_cast_controls(ctx);
+        }
+        Ok(())
     }
     fn close_application_cast_controls(&mut self, ctx: &egui::Context) {
         self.casting.dismiss_picker(ctx);

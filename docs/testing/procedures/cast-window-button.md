@@ -66,7 +66,9 @@ panel, a workspace or a cloud card.
    Result: The icon shows the accent color. A hint says that the cast shares the
    whole window.
 
-### 6.2 OPEN — The picker opens under the icon
+### 6.2 OPEN — A first click without a known TV
+
+Do this task when the candidate has no remembered whole-window TV.
 
 1. Click the cast icon.
 
@@ -81,46 +83,52 @@ panel, a workspace or a cloud card.
 
    Result: The icon stays in the accent color while the picker is open.
 
-### 6.3 CLOSE — The same button closes the picker
-
-1. Click the cast icon again.
+4. Click the cast icon again.
 
    Result: The picker closes. The icon loses the accent color.
 
-2. Click the cast icon of a panel.
+### 6.3 START — One click on the remembered TV
 
-   Result: The picker opens next to that panel. The root toolbar icon does not
-   change its state.
+1. Select the Apple TV in the picker and start one whole-window cast. Stop it.
 
-3. Click the cast icon in the root toolbar.
+   Result: The candidate now remembers this TV for the whole window.
 
-   Result: The picker closes. The picker of the panel does not open.
+2. Click the cast icon.
 
-### 6.4 START — The whole window streams
+   Result: The cast starts on the same TV. The picker does not open.
 
-1. Click the cast icon. In the picker, select the paired Apple TV.
-
-   Result: The picker closes after the cast starts.
-
-2. Look at the TV and at the root toolbar.
+3. Look at the TV.
 
    Result: The TV shows the whole window with the active workspace, its panels,
    the sidebar and the toolbar. The cast icon stays in the accent color.
 
-3. Compare the TV picture with the window.
+4. Compare the TV picture with the window.
 
    Result: The picture has the same layout. A second workspace is not in the
    picture, because the window does not show it.
 
-4. Click the cast icon.
-
-   Result: The picker opens. It shows the running session of the whole window.
-
-   Result: The TV picture pauses while the picker covers the source.
-
-5. Click **Stop**.
+5. Click the cast icon.
 
    Result: The cast stops. The cast icon loses the accent color.
+
+### 6.4 CHOOSER — Shift-click opens the picker
+
+1. Hold **Shift** and click the cast icon.
+
+   Result: The picker opens. No cast starts.
+
+2. Right-click the cast icon.
+
+   Result: The picker closes.
+
+3. Click the cast icon of a panel.
+
+   Result: The picker opens next to that panel. The root toolbar icon does not
+   change its state.
+
+4. Click the cast icon in the root toolbar.
+
+   Result: The picker closes.
 
 ### 6.5 EDGE — A narrow window
 
@@ -140,8 +148,11 @@ panel, a workspace or a cloud card.
 ## 7. Pass criteria
 
 - The cast icon is in the root toolbar on Linux, and no other platform shows it.
-- One click opens the picker under the icon with the whole-window source.
-- The same click closes the picker.
+- A first click without a known TV opens the picker under the icon with the
+  whole-window source, and the same click closes it.
+- A click with a remembered TV starts the cast without a picker, and a click
+  during that cast stops it.
+- Shift-click and right-click open the picker.
 - A whole-window session shows the window as it appears, and the icon shows the
   session state.
 - A picker that covers the window pauses the picture and does not stop the

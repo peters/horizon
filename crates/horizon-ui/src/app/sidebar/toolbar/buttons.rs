@@ -156,10 +156,12 @@ impl HorizonApp {
             let icon = Rect::from_center_size(rect.center(), Vec2::splat(16.0));
             crate::app::casting::paint_cast_icon(painter, icon, ink);
         });
-        let button = button
-            .on_hover_text("Cast the whole Horizon window, with every workspace and panel on screen, to an Apple TV.");
-        if button.clicked() {
-            self.toggle_application_cast_picker(rect, ui.ctx());
+        let button = button.on_hover_text(
+            "Cast the whole Horizon window, with every workspace and panel on screen, to your Apple TV. Shift-click or right-click to choose another TV or quality.",
+        );
+        let chooser = ui.input(|input| input.modifiers.shift) || button.secondary_clicked();
+        if button.clicked() || button.secondary_clicked() {
+            self.toggle_application_cast(rect, ui.ctx(), chooser);
         }
     }
 
