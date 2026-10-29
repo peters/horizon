@@ -1,3 +1,4 @@
+mod application;
 mod capture;
 mod cloud;
 mod controls;
@@ -57,6 +58,8 @@ enum Anchor {
     Panel(horizon_core::PanelId),
     /// The cast button in a workspace's toolbar.
     Workspace,
+    /// The cast button in the root toolbar, which casts the whole Horizon window.
+    Application,
     /// **Cast…** in the Manage tab of the cloud with this issue number.
     Cloud(u32),
 }
@@ -64,12 +67,15 @@ impl Anchor {
     fn panel(self) -> Option<horizon_core::PanelId> {
         match self {
             Self::Panel(id) => Some(id),
-            Self::Workspace | Self::Cloud(_) => None,
+            Self::Workspace | Self::Application | Self::Cloud(_) => None,
         }
     }
 }
 struct Picker {
     anchor: Anchor,
+    /// The toolbar button that opened an `Anchor::Application` picker. That anchor has no
+    /// panel, card or workspace on the canvas to sit next to.
+    anchor_rect: Option<egui::Rect>,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,

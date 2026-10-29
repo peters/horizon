@@ -26,7 +26,7 @@ impl HorizonApp {
             return;
         };
         self.casting
-            .toggle_picker(Anchor::Workspace, workspace, CastSource::Workspace { id }, ctx);
+            .toggle_picker(Anchor::Workspace, workspace, CastSource::Workspace { id }, None, ctx);
     }
 }
 

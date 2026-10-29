@@ -87,6 +87,11 @@ impl HorizonApp {
                     match *item {
                         ToolbarItem::FpsMeter => self.render_toolbar_fps_meter(ui),
                         ToolbarItem::NewCloud { compact } => self.render_toolbar_new_cloud(ui, compact),
+                        // Casting is Linux-only, so no other build lists this item.
+                        #[cfg(target_os = "linux")]
+                        ToolbarItem::Cast => self.render_toolbar_cast(ui),
+                        #[cfg(not(target_os = "linux"))]
+                        ToolbarItem::Cast => {}
                         ToolbarItem::Menu => self.render_toolbar_menu(ui),
                     }
                 }

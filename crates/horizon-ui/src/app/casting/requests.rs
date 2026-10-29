@@ -378,6 +378,7 @@ pub(super) mod tests {
                 .map_or(super::super::Anchor::Workspace, |panel| {
                     super::super::Anchor::Panel(panel.id)
                 }),
+            anchor_rect: None,
             workspace,
             source: CastSource::Application {},
             receiver: Some(receiver.into()),

@@ -15,6 +15,8 @@ pub(super) const ROOT_TOOLBAR_FPS_WIDTH: f32 = 72.0;
 pub(super) const ROOT_TOOLBAR_NEW_CLOUD_WIDTH: f32 = 108.0;
 pub(super) const ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH: f32 = 82.0;
 pub(super) const ROOT_TOOLBAR_MENU_WIDTH: f32 = 82.0;
+/// The whole-window Cast icon button; casting is Linux-only.
+pub(super) const ROOT_TOOLBAR_CAST_WIDTH: f32 = 34.0;
 const ROOT_TOOLBAR_NAME_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 152.0;
 const SIDEBAR_WIDTH_RATIO: f32 = 0.18;
@@ -40,6 +42,8 @@ pub(super) enum ToolbarItem {
     NewCloud {
         compact: bool,
     },
+    /// Casts the whole Horizon window. Only a Linux build puts it in the toolbar.
+    Cast,
     Menu,
 }
 
@@ -49,6 +53,7 @@ impl ToolbarItem {
             Self::FpsMeter => ROOT_TOOLBAR_FPS_WIDTH,
             Self::NewCloud { compact: false } => ROOT_TOOLBAR_NEW_CLOUD_WIDTH,
             Self::NewCloud { compact: true } => ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
+            Self::Cast => ROOT_TOOLBAR_CAST_WIDTH,
             Self::Menu => ROOT_TOOLBAR_MENU_WIDTH,
         }
     }
@@ -119,12 +124,15 @@ fn layout_candidate(
         };
     let brand_rect = Rect::from_min_size(content_rect.min, Vec2::new(brand_width, content_rect.height()));
 
-    let mut visible_items = Vec::with_capacity(3);
+    let mut visible_items = Vec::with_capacity(4);
     if show_fps {
         visible_items.push(ToolbarItem::FpsMeter);
     }
     if cfg!(feature = "cloud-workspaces") {
         visible_items.push(ToolbarItem::NewCloud { compact });
+    }
+    if cfg!(target_os = "linux") {
+        visible_items.push(ToolbarItem::Cast);
     }
     visible_items.push(ToolbarItem::Menu);
 
@@ -212,11 +220,32 @@ mod tests {
                 |wanted: fn(&ToolbarItem) -> bool| layout.visible_items.iter().filter(|item| wanted(item)).count();
             let clouds = count(|item| matches!(item, ToolbarItem::NewCloud { .. }));
             assert_eq!(clouds, usize::from(cfg!(feature = "cloud-workspaces")), "{width}");
+            let casts = count(|item| matches!(item, ToolbarItem::Cast));
+            assert_eq!(casts, usize::from(cfg!(target_os = "linux")), "{width}");
             assert!(layout.search_rect.width() >= 180.0, "{width}");
             assert_eq!(layout.visible_items.last(), Some(&ToolbarItem::Menu), "{width}");
             assert!(layout.brand_rect.max.x <= layout.search_rect.min.x);
             assert!(layout.search_rect.max.x <= layout.actions_rect.min.x);
             assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn toolbar_puts_the_cast_button_directly_before_the_menu() {
+        for width in [800.0, 1024.0, 1440.0] {
+            let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)));
+            let menu = layout
+                .visible_items
+                .iter()
+                .position(|item| *item == ToolbarItem::Menu)
+                .expect("the menu");
+            let before = menu.checked_sub(1).map(|index| layout.visible_items[index]);
+            if cfg!(target_os = "linux") {
+                assert_eq!(before, Some(ToolbarItem::Cast), "{width}");
+                assert!(layout.search_rect.width() >= 180.0, "{width}");
+            } else {
+                assert_ne!(before, Some(ToolbarItem::Cast), "{width}");
+            }
         }
     }
 }
