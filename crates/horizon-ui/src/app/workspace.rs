@@ -12,7 +12,7 @@ use horizon_core::{WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 use crate::theme;
 
 use super::util::{OverlayExclusion, workspace_label_width};
-use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_EMPTY_SIZE, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
+use super::{HorizonApp, RenameEditAction, WS_BG_PAD, WS_LABEL_HEIGHT, WS_TITLE_HEIGHT};
 
 use self::render::render_workspace_visual;
 use self::toolbar::workspace_layout_toolbar_rect;
@@ -339,7 +339,7 @@ impl HorizonApp {
                     } else {
                         let canvas_rect_local = Rect::from_min_size(
                             Pos2::new(workspace.position[0], workspace.position[1]),
-                            Vec2::new(WS_EMPTY_SIZE[0], WS_EMPTY_SIZE[1]),
+                            self.empty_workspace_size(workspace.id),
                         );
                         let screen_rect = Rect::from_min_size(
                             self.canvas_to_screen(canvas_rect, canvas_rect_local.min),

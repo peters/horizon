@@ -1,8 +1,9 @@
 //! Presentation of the existing repository-backed cloud creation flow.
 use super::{HorizonApp, Production};
+use crate::app::view::canvas_scene_transform;
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
 use crate::theme;
-use egui::{Align, Context, Frame, Id, Key, LayerId, Layout, Order, RichText, Stroke, TextEdit, Ui, Vec2};
+use egui::{Align, Context, Frame, Id, Key, Layout, Order, Pos2, Rect, RichText, Stroke, TextEdit, Ui, Vec2};
 use horizon_core::{
     ShortcutBinding, ShortcutKey, ShortcutModifiers, cloud_panel::Placement,
     cloud_runtime::repository::launch::Configuration,
@@ -26,27 +27,45 @@ pub(in crate::app::cloud_panel::production) mod watch;
 /// The configuration summary's width beside the catalog.
 const SUMMARY_WIDTH: f32 = 330.0;
 const GUTTER: f32 = 24.0;
-/// The narrowest dialog that still shows the summary beside the catalog.
+/// The narrowest form that still shows the summary beside the catalog.
 const TWO_COLUMNS: f32 = 800.0;
 /// Room for the heading and the action bar around the body.
-const CHROME_HEIGHT: f32 = 270.0;
-const BODY_MIN_HEIGHT: f32 = 120.0;
+pub(super) const CHROME_HEIGHT: f32 = 270.0;
+/// The narrowest form that stays usable, also in a workspace the person made small.
+pub(super) const FORM_MIN_WIDTH: f32 = 640.0;
+/// The lowest body, so that the fields never collapse to a sliver.
+const BODY_MIN_HEIGHT: f32 = 320.0;
+/// Room for the form's own margins beside its content, both sides together.
+const SIDE_MARGIN: f32 = 64.0;
 
-/// The dialog body's height, in one column or two, taken from the window alone.
-pub(super) fn body_height(viewport: egui::Rect) -> f32 {
-    (viewport.height() - CHROME_HEIGHT).max(BODY_MIN_HEIGHT)
+/// The height the body takes in a window of `window`, which is also the tallest body.
+fn body_ceiling(window: egui::Rect) -> f32 {
+    (window.height() - CHROME_HEIGHT).max(BODY_MIN_HEIGHT)
 }
 
-/// Whether the dialog `id` is measured before it is drawn: when it opens in a window of another
-/// size than the one it was last shown in, so the size egui remembers cannot place the first
-/// visible frame.
-fn measure_on_open(ctx: &Context, id: Id) -> bool {
-    let window = ctx.content_rect().size();
-    let key = id.with("shown-in");
-    let shown_in = ctx.data(|data| data.get_temp::<Vec2>(key));
-    ctx.data_mut(|data| data.insert_temp(key, window));
-    let opening = !ctx.memory(|memory| memory.areas().visible_last_frame(&LayerId::new(Order::Tooltip, id)));
-    opening && shown_in != Some(window)
+/// The form on `surface`: the width and body height it takes there, and where its frame starts. It
+/// fills the workspace that holds it between its own floor and the size the dialog had as a modal,
+/// and it stays on `canvas`, where an edge moves it back inside.
+fn form_layout(surface: Rect, canvas: Rect, ceiling: f32, widest: f32) -> (f32, f32, Pos2) {
+    let width = (surface.width() - SIDE_MARGIN)
+        .clamp(FORM_MIN_WIDTH, widest)
+        .min(canvas.width() - SIDE_MARGIN);
+    let body = (surface.height() - CHROME_HEIGHT).clamp(BODY_MIN_HEIGHT, ceiling);
+    // The form draws its own chrome, so the room kept below the workspace's top is the body plus
+    // that reserve, which also covers a heading and an action bar taller than this dialog's.
+    let origin = Pos2::new(
+        surface
+            .min
+            .x
+            .min(canvas.right() - (width + SIDE_MARGIN))
+            .max(canvas.left()),
+        surface
+            .min
+            .y
+            .min(canvas.bottom() - (body + CHROME_HEIGHT))
+            .max(canvas.top()),
+    );
+    (width, body, origin)
 }
 
 #[derive(Default)]
@@ -55,7 +74,7 @@ struct Actions {
     create: bool,
     /// Ends the draft: its workspace goes when it held nothing, and what was typed is lost.
     cancel: bool,
-    /// A dismissal: the workspace keeps the draft, and its card brings the dialog back.
+    /// Puts the form away: the workspace keeps the draft, and its card brings the form back.
     hide: bool,
     /// The repository's `cloud.yml` asks for This PC, and the person chose it.
     this_pc: bool,
@@ -88,77 +107,78 @@ impl HorizonApp {
         }
     }
 
+    /// Draws the New cloud form on the workspace that holds the draft, or parks the draft.
+    ///
+    /// The form is a screen-space area of `Order::Middle`, not a modal: it has no backdrop, no
+    /// top layer and no dismissal of its own, so a click on the board or Escape leaves it and its
+    /// choices as they are. Its rect is the on-screen frame of the draft workspace, so a pan moves
+    /// it with that workspace. While that workspace cannot show it, the draft waits in the
+    /// workspace and its card is the way back.
     pub(in crate::app::cloud_panel) fn render_cloud_creation(&mut self, ctx: &Context) {
         if !self.cloud_prototype.production.creation_dialog_open() {
             return;
         }
-        let viewport = ctx.content_rect();
-        // A setup agent of this repository shows its output; large windows give it room.
+        let Some(surface) = self.cloud_creation_surface_now(ctx) else {
+            return;
+        };
+        // A setup agent of this repository shows its output; large surfaces give it room.
         let widest = if super::repository_setup::running_here(&self.cloud_prototype.production) {
             1480.0
         } else {
             1180.0
         };
-        let width = (viewport.width() - 64.0).clamp(240.0, widest);
-        let body_height = body_height(viewport);
+        let (width, body_height, origin) =
+            form_layout(surface, self.canvas_rect(ctx), body_ceiling(ctx.content_rect()), widest);
         let mut actions = Actions::default();
-        let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let picking = self.dir_picker.is_some();
         let refocus_repository = self.prepare_cloud_creation(ctx, picking);
         self.sync_cloud_creation_choices(ctx);
         // A refused Start shows in the footer that holds the Start button. In the body it
         // landed under the fields, below the fold of a scrolling column, which reads as no
-        // answer at all; the board's toast cannot show through this modal either.
+        // answer at all.
         let refused = self.cloud_prototype.error.clone();
-        let id = Id::unique("cloud-creation");
-        let sizing_pass = measure_on_open(ctx, id);
-        // Root chrome uses Tooltip order; raise this modal last to contain its input too.
-        let response = egui::Modal::new(id)
-            .area(
-                egui::Modal::default_area(id)
-                    .order(Order::Tooltip)
-                    .sizing_pass(sizing_pass),
-            )
-            .frame(
+        egui::Area::new(Id::unique("cloud-creation"))
+            .order(Order::Middle)
+            .fixed_pos(origin)
+            .constrain(false)
+            .show(ctx, |ui| {
                 Frame::new()
                     .fill(theme::BG_ELEVATED())
                     .stroke(Stroke::new(1.0, theme::BORDER_STRONG()))
                     .corner_radius(16)
-                    .inner_margin(24),
-            )
-            .show(ctx, |ui| {
-                ui.set_width(width);
-                if picking {
-                    ui.disable();
-                }
-                ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
-                // While a setup agent prepares the repository, nothing is rented yet: the
-                // dialog is a preparation view with its own heading and footer.
-                let preparing = super::repository_setup::running_here(&self.cloud_prototype.production);
-                if preparing {
-                    super::repository_setup::heading(ui, &self.cloud_prototype.production);
-                } else {
-                    heading(ui, &mut self.cloud_prototype.production);
-                }
-                ui.add_space(16.0);
-                self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
-                ui.add_space(12.0);
-                self.cloud_creation_footer(ui, &mut actions, preparing, refused.as_deref());
-                // Escape is this dialog's here, not the agent's: the person needs a way out of
-                // a dialog that a working setup keeps open for minutes.
-                if preparing && super::repository_setup::working_here(&self.cloud_prototype.production) {
-                    ui.label(
-                        RichText::new("Escape returns to the workspace. Show agent keeps Escape for an interrupt.")
-                            .size(11.5)
-                            .color(theme::FG_DIM()),
-                    );
-                }
+                    .inner_margin(24)
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        if picking {
+                            ui.disable();
+                        }
+                        ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
+                        // While a setup agent prepares the repository, nothing is rented yet: the
+                        // form is a preparation view with its own heading and footer.
+                        let preparing = super::repository_setup::running_here(&self.cloud_prototype.production);
+                        if preparing {
+                            super::repository_setup::heading(ui, &self.cloud_prototype.production);
+                        } else {
+                            heading(ui, &mut self.cloud_prototype.production);
+                        }
+                        ui.add_space(16.0);
+                        self.cloud_creation_columns(ui, width, body_height, &mut actions, refocus_repository);
+                        ui.add_space(12.0);
+                        self.cloud_creation_footer(ui, &mut actions, preparing, refused.as_deref());
+                        // The setup agent keeps an interrupt of its own, in its panel, and Close
+                        // parks the draft: nothing here needs Escape.
+                        if preparing && super::repository_setup::working_here(&self.cloud_prototype.production) {
+                            ui.label(
+                                RichText::new(
+                                    "Close returns to the workspace. Show agent keeps Escape for an interrupt.",
+                                )
+                                .size(11.5)
+                                .color(theme::FG_DIM()),
+                            );
+                        }
+                    });
             });
-        ctx.move_to_top(response.response.layer_id);
-        // Escape and a click on the backdrop put the draft back in its workspace, with every
-        // choice in it. The setup agent keeps an interrupt of its own: its panel, from Show agent.
-        let dismissed = self.cloud_creation_dismissed(ctx, &response, picking, escape);
-        if dismissed || actions.hide {
+        if actions.hide {
             self.hide_cloud_creation(ctx);
             return;
         }
@@ -441,36 +461,74 @@ impl HorizonApp {
         production.prices.request(root, &sized, ctx);
     }
 
-    /// The directory picker drawn above this dialog owns Escape and outside clicks until it closes.
-    fn cloud_creation_dismissed(
-        &mut self,
-        ctx: &Context,
-        response: &egui::ModalResponse<()>,
-        picking: bool,
-        escape: bool,
-    ) -> bool {
-        if !picking {
-            // Escape and a click on the backdrop dismiss the dialog. Both park the draft, so a
-            // held key or a stray click can never take what was typed, chosen or started.
-            let dismissed = response.should_close();
-            if dismissed && escape {
-                self.consume_navigation_key(ctx, navigation_key(ShortcutKey::Escape));
+    /// The screen-space rect the form sits on: the on-screen frame of the workspace that holds
+    /// the draft, so the form moves with a pan. `None` while that frame is off the canvas or the
+    /// workspace is detached. A draft that no workspace holds sits on the canvas.
+    fn cloud_creation_surface(&self, ctx: &Context) -> Option<Rect> {
+        let canvas = self.canvas_rect(ctx);
+        let Some(local) = self.cloud_prototype.production.creation_workspace() else {
+            return Some(canvas);
+        };
+        let workspace = self.board.workspace_id_by_local_id(&local)?;
+        if self.workspace_is_detached(workspace) {
+            return None;
+        }
+        let (position, size) = self.workspace_focus_frame(workspace)?;
+        let frame = canvas_scene_transform(canvas, self.canvas_view) * Rect::from_min_size(position, size);
+        // The frame starts above the workspace's name badge, and the form must not cover the
+        // workspace it sits on, so the form's part starts below that badge.
+        let surface = Rect::from_min_max(
+            Pos2::new(
+                frame.min.x,
+                frame.min.y + crate::app::WS_TITLE_HEIGHT + crate::app::WS_BG_PAD,
+            ),
+            frame.max,
+        );
+        surface.intersects(canvas).then_some(surface)
+    }
+
+    /// The rect the form draws on now, or `None` when it draws nothing this frame: the draft
+    /// parks, or the workspace that holds it comes into view first. A draft whose workspace
+    /// cannot show the form and cannot be brought into view loses that workspace, so that the
+    /// form sits on the canvas where the person can still finish or cancel it.
+    fn cloud_creation_surface_now(&mut self, ctx: &Context) -> Option<Rect> {
+        match self.cloud_creation_surface(ctx) {
+            Some(surface) => Some(surface),
+            None if Self::cloud_creation_surface_was_shown(ctx) => {
+                self.hide_cloud_creation(ctx);
+                None
             }
-            return dismissed;
+            None => {
+                if self.reveal_cloud_creation_workspace(ctx) {
+                    return None;
+                }
+                self.cloud_prototype.production.forget_creation_workspace();
+                Some(self.canvas_rect(ctx))
+            }
         }
-        if escape {
-            // The picker, drawn later this frame, still cancels on this press; held repeats must not
-            // reach the dialog once the picker has closed.
-            self.hold_navigation_key(navigation_key(ShortcutKey::Escape));
-        }
-        let clicked_body = ctx
-            .input(|input| input.pointer.primary_clicked().then(|| input.pointer.interact_pos()))
-            .flatten()
-            .is_some_and(|position| ctx.layer_id_at(position) == Some(response.response.layer_id));
-        if response.backdrop_response.clicked() || clicked_body {
-            self.dir_picker = None;
-        }
-        false
+    }
+
+    /// Whether the form drew itself in the previous frame. A form that did and can no longer sit
+    /// on its workspace is parked; one that did not is still opening, and its workspace comes
+    /// into view instead.
+    fn cloud_creation_surface_was_shown(ctx: &Context) -> bool {
+        let layer = egui::LayerId::new(Order::Middle, Id::unique("cloud-creation"));
+        ctx.memory(|memory| memory.areas().visible_last_frame(&layer))
+    }
+
+    /// Brings the workspace that holds the draft into view, so the form opens on it. False when
+    /// that workspace cannot show the form: it is detached, or it is gone.
+    fn reveal_cloud_creation_workspace(&mut self, ctx: &Context) -> bool {
+        let Some(workspace) = self
+            .cloud_prototype
+            .production
+            .creation_workspace()
+            .as_deref()
+            .and_then(|local| self.board.workspace_id_by_local_id(local))
+        else {
+            return false;
+        };
+        self.focus_workspace_visible(ctx, workspace, false)
     }
 
     /// Makes `path` the repository and reads its profiles: a folder that was typed, or a fresh clone.
@@ -576,8 +634,8 @@ fn heading(ui: &mut Ui, form: &mut Production) {
             .size(14.0)
             .color(theme::FG_SOFT()),
     );
-    // New cloud is a tooltip-order modal, so what a provider needs is drawn under the title
-    // rather than shown on hover, and only once that provider is the cloud's own.
+    // What a selected provider needs is drawn under the title, once that provider is the
+    // cloud's own, rather than shown on hover:
     if let Some(reason) = entries
         .iter()
         .find(|entry| entry.selected)
@@ -607,7 +665,6 @@ fn field(ui: &mut Ui, label: &str, id: &str, value: &mut String, hint: &str) -> 
 /// The cloud title, focused when the form opens; Enter submits a complete form.
 fn title_field(ui: &mut Ui, form: &mut Production, submit: &mut bool) {
     if form.focus_title_on_open
-        && !ui.is_sizing_pass()
         && ui.is_enabled()
         && !ui.input(|input| input.pointer.any_down() || input.pointer.any_released())
     {

@@ -505,7 +505,7 @@ fn keyboard_selects_prebuilt_without_reclaiming_cleared_focus() {
     }
     press(&mut app, Key::Space);
     assert_eq!(app.cloud_prototype.production.selected_profile, "prebuilt");
-    press(&mut app, Key::Escape);
+    app.close_cloud_creation();
     assert!(!app.cloud_creation_open());
     app.add_mock_cloud(&ctx);
     dialog_frame(&ctx, &mut app, Vec::new());

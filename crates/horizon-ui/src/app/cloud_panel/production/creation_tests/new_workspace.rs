@@ -89,14 +89,22 @@ fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
         "the machine line in the tooltip"
     );
 
-    // + New cloud makes a workspace and opens New cloud for it. Escape parks the draft
-    // there, and + New cloud brings it back; only Cancel takes the workspace away.
+    // + New cloud makes a workspace and opens New cloud for it. The draft parks when that
+    // workspace leaves the canvas, and + New cloud brings it back; only Cancel takes the
+    // workspace away.
     click(&ctx, &mut app, cloud);
     assert!(app.cloud_prototype.production.creating, "+ New cloud opens New cloud");
     assert_eq!(app.board.workspaces.len(), workspaces + 1);
-    key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
+    // The form opens on its workspace, which the view has to reach first.
+    let layer = egui::LayerId::new(egui::Order::Middle, Id::unique("cloud-creation"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ctx.memory(|memory| memory.areas().visible_last_frame(&layer)) {
+        assert!(Instant::now() < deadline, "the form never drew on its workspace");
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    app.canvas_view.set_pan_offset([-100_000.0, -100_000.0]);
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
-    assert!(!app.cloud_creation_open(), "Escape takes the dialog out of view");
+    assert!(!app.cloud_creation_open(), "a workspace off the canvas draws no form");
     assert!(
         app.cloud_prototype.production.draft.is_some(),
         "and parks the draft in its workspace"
@@ -106,7 +114,12 @@ fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
         workspaces + 1,
         "its workspace stays with the draft"
     );
-    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    // Parking brings the view back to that workspace, where the card waits.
+    for _ in 0..40 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let cloud = label_position(&output, "+  New cloud");
     click(&ctx, &mut app, cloud);
     assert!(app.cloud_creation_open(), "+ New cloud brings the parked draft back");
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));

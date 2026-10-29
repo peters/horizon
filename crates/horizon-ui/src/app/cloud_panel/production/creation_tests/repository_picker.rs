@@ -158,15 +158,21 @@ fn clicking_outside_the_picker_cancels_it_and_keeps_the_dialog() {
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     click(&ctx, &mut app, label_position(&output, "Choose folder…"));
     assert!(app.dir_picker.is_some(), "the clone folder opens the picker");
-    let outside = Pos2::new(8.0, 892.0);
+    // The picker ignores a click in the first moments after it opens, where its own opening
+    // click would land, so the test waits that out.
+    std::thread::sleep(Duration::from_millis(220));
+    // A point on the empty canvas: the picker's own backdrop owns the board, while the chrome
+    // above it, such as the sidebar, keeps its own layers.
+    let canvas = app.canvas_rect(&ctx);
+    let outside = Pos2::new(canvas.left() + 40.0, canvas.bottom() - 40.0);
     click(&ctx, &mut app, outside);
     assert!(app.dir_picker.is_none(), "an outside click cancels the picker");
-    assert!(app.cloud_creation_open(), "the dialog stays open behind the picker");
+    assert!(app.cloud_creation_open(), "the form stays open behind the picker");
     assert!(app.cloud_prototype.production.repository.is_empty());
     click(&ctx, &mut app, outside);
     assert!(
-        !app.cloud_creation_open(),
-        "the next outside click dismisses the dialog"
+        app.cloud_creation_open(),
+        "a click outside the form leaves it and its choices"
     );
 }
 
@@ -207,7 +213,7 @@ fn holding_enter_on_choose_folder_leaves_the_picker_open_and_empty() {
 }
 
 #[test]
-fn holding_escape_in_the_picker_keeps_the_dialog_open() {
+fn escape_in_the_picker_cancels_only_the_picker() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -218,12 +224,12 @@ fn holding_escape_in_the_picker_keeps_the_dialog_open() {
     assert!(app.dir_picker.is_some());
     hold(&ctx, &mut app, Key::Escape);
     assert!(app.dir_picker.is_none(), "the first press cancels the picker");
-    assert!(app.cloud_creation_open(), "repeats must not dismiss the dialog");
+    assert!(app.cloud_creation_open(), "the form stays open");
     release(&ctx, &mut app, Key::Escape);
     assert!(app.cloud_creation_open());
-    assert_eq!(app.cloud_prototype.production.title, "Held keys");
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
-    assert!(!app.cloud_creation_open(), "a fresh Escape still dismisses the dialog");
+    assert!(app.cloud_creation_open(), "Escape closes the form on no press");
+    assert_eq!(app.cloud_prototype.production.title, "Held keys");
 }
 
 #[test]
@@ -236,6 +242,7 @@ fn clicking_the_dialog_body_cancels_the_picker_and_keeps_the_dialog() {
     let cancel = label_position(&output, "Cancel");
     click(&ctx, &mut app, label_position(&output, "Choose folder…"));
     assert!(app.dir_picker.is_some(), "the clone folder opens the picker");
+    std::thread::sleep(Duration::from_millis(220));
     click(&ctx, &mut app, cancel);
     assert!(
         app.dir_picker.is_none(),
@@ -330,7 +337,7 @@ fn a_pasted_link_waits_for_continue() {
 }
 
 #[test]
-fn a_dismissal_keeps_what_was_typed_in_the_source_field() {
+fn escape_keeps_what_was_typed_in_the_source_field() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -343,11 +350,11 @@ fn a_dismissal_keeps_what_was_typed_in_the_source_field() {
     );
     assert!(!app.cloud_prototype.production.source.input().is_empty());
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
-    assert!(!app.cloud_creation_open());
+    assert!(app.cloud_creation_open(), "Escape closes nothing");
     assert_eq!(
         app.cloud_prototype.production.source.input(),
         "github.com/demo-org/demo-atlas",
-        "a dismissal parks the draft with what it held"
+        "and drops nothing"
     );
 }
 

@@ -20,6 +20,12 @@ impl Production {
         self.launch.workspace.clone()
     }
 
+    /// Drops the workspace that cannot show the form, so that the form falls back to the canvas
+    /// and the person can still finish or cancel the draft.
+    pub(in crate::app) fn forget_creation_workspace(&mut self) {
+        self.launch.workspace = None;
+    }
+
     /// The draft as its card says it: a title, the repository, and what it does now.
     pub(in crate::app) fn draft_card(&self) -> (String, String, &'static str) {
         let title = self.title.trim();

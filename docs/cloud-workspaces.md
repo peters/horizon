@@ -277,15 +277,31 @@ profile with `gpu: true`. When the repository has no GPU profile, the dialog say
 so and keeps the default profile on a CPU worker. The presets under **This PC** in
 that picker make a workspace on this computer with a panel.
 
-A dismissal never discards a draft. Escape, a click on the backdrop, or **Close**
-takes **New cloud** out of view and parks the draft in its workspace. A card in that
+**New cloud** is not a dialog over the board. It is a form on the workspace that holds
+the draft: it starts at the top-left corner of that workspace and moves with the
+canvas when you pan. **+ New cloud** makes that workspace large enough to hold the
+form. A workspace that you made keeps its own size, and the form stays usable in it.
+
+A click outside the form does nothing to it. Escape closes nothing and loses no
+choice; it only ends the search of a folder picker that is open. Only **Cancel**
+ends a draft. To put the form out of view, use **Close** in the setup view, or move
+the workspace off the canvas: the draft then parks in its workspace. A card in that
 workspace shows the title, the repository and what the draft does now. Click
-**Continue** to open the dialog again with every choice it held. A repository check
+**Continue** to show the form again with every choice it held. A repository check
 that **Start cloud** began goes on while the draft is parked, and the cloud it
 creates takes the place of the card. A start that a watch or a queued **Start cloud**
 submits goes ahead too, and the card says **Starting the cloud**. When that start
-needs cloud accounts, Horizon says so on the board; it opens no dialog below the
+needs cloud accounts, Horizon says so on the board; it opens no form below the
 parked card.
+
+While the form shows, the minimap does not show, and the canvas HUD shows only where
+the form does not cover it. No overlay can take a click that you aim at the form.
+Both return when the form goes.
+
+A workspace can move to its own window or leave the board while the form shows. The
+form then shows on the board itself, and the draft no longer names that workspace,
+so **Cancel** and every other action stay reachable. A parked draft keeps its
+workspace, and its card returns when that workspace rejoins the board.
 
 The card survives a quit and a session switch. Horizon keeps the choices of a parked
 draft in `drafts.json` in the cloud settings folder, beside `repository-choices.json`.
@@ -834,9 +850,9 @@ with a short detail and its elapsed time. The right column is the agent's own
 terminal without panel chrome. Click it to type to the agent, for example to
 answer a question or to change its plan. A question also shows above the steps.
 **Stop** closes the agent. **Close** keeps it working: it parks the draft in its
-workspace, and **Continue** on the card shows the setup again. Escape does the same,
-also while the agent works. The dialog says so, because an agent that needs an
-interrupt takes Escape in its own panel: click **Show agent**. A live preview
+workspace, and **Continue** on the card shows the setup again. Escape does not park
+the draft, also while the agent works. The form says so, because an agent that
+needs an interrupt takes Escape in its own panel: click **Show agent**. A live preview
 outlives **Close** while its Device panel is open; closing that panel ends the
 desktop, so no container runs where nobody watches it.
 
@@ -1329,8 +1345,10 @@ persisted operation identity.
 
 ### Choosing a worker
 
-New cloud is a wide dialog: the worker catalog on the left and a summary on the
-right, with **Start cloud** and **Cancel** in the action bar under both. Pick a
+New cloud is a wide form: the worker catalog on the left and a summary on the
+right, with **Start cloud** and **Cancel** in the action bar under both. Its width
+comes from the workspace that holds it, and the two columns show when that width
+allows them; a narrow workspace stacks them in one column. Pick a
 **Profile** from `.horizon/cloud.yml`; its kind decides between CPU and GPU workers.
 The profile's `min_cpu` and `min_memory_gb` are CPU resource minimums, and
 `min_gpu_memory_gb` is the GPU memory minimum. The picker names the limits and
@@ -1419,9 +1437,9 @@ the chosen worker or place. While it waits, the summary names the data center an
 the price shown when the watch started. Every 15 seconds it checks current stock
 for that worker there and starts this cloud once when stock returns, at no more
 than that price: while the price is higher the watch waits, and it needs a known
-price to start at all. A failed start does not retry. The watch lasts while the dialog stays open;
-closing it, Cancel or **Stop watching** ends it, and the fields stay locked until
-then.
+price to start at all. A failed start does not retry. The watch lasts while the draft
+stays open or parked; Cancel or **Stop watching** ends it, and the fields stay locked
+until then.
 
 Agents in Horizon panels can ask for the same prices through the `cloud_offers`
 tool of Horizon's MCP server, for example "the cheapest GPU with at least 24 GB in

@@ -11,6 +11,7 @@ mod new_workspace;
 mod profiles;
 mod reopening;
 mod repository_picker;
+mod surface;
 
 fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<Event>, modifiers: Modifiers) {
     let mut input = raw_input([1400.0, 900.0], None);
@@ -312,7 +313,7 @@ fn start_cloud_says_why_it_is_disabled() {
 }
 
 #[test]
-fn creation_tab_navigation_never_activates_the_toolbar() {
+fn creation_tab_navigation_reaches_the_surface_controls() {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -325,15 +326,9 @@ fn creation_tab_navigation_never_activates_the_toolbar() {
     }
     app.add_mock_cloud(&ctx);
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    // Tab leaves the surface freely; it must still reach the form's own controls.
     for _ in 0..16 {
         key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
-        if let Some(response) = ctx.memory(egui::Memory::focused).and_then(|id| ctx.read_response(id)) {
-            assert_eq!(
-                response.layer_id.id,
-                Id::unique("cloud-creation"),
-                "modal focus escaped to another layer"
-            );
-        }
     }
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let cancel = output
@@ -349,15 +344,19 @@ fn creation_tab_navigation_never_activates_the_toolbar() {
     for _ in 0..32 {
         key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
         let focused = ctx.memory(egui::Memory::focused).and_then(|id| ctx.read_response(id));
-        assert!(app.command_palette.is_none(), "modal focus reached Quick Nav");
-        assert!(app.settings.is_none(), "modal focus reached Settings");
-        if focused.is_some_and(|response| response.rect.contains(cancel)) {
+        assert!(app.command_palette.is_none(), "Tab reached Quick Nav");
+        assert!(app.settings.is_none(), "Tab reached Settings");
+        // The minimap and the HUD sit above the board, also above the form, so a control of the
+        // form is the focused one only inside its own layer.
+        if focused.is_some_and(|response| {
+            response.layer_id.id == Id::unique("cloud-creation") && response.rect.contains(cancel)
+        }) {
             key(&ctx, &mut app, Key::Space, Modifiers::NONE);
             assert!(!app.cloud_creation_open());
             return;
         }
     }
-    panic!("keyboard navigation did not reach the dialog's Cancel action");
+    panic!("keyboard navigation did not reach the form's Cancel action");
 }
 
 #[test]
@@ -442,7 +441,7 @@ fn creation_traversal_and_shortcuts_never_reach_the_focused_terminal() {
     assert!(app.dir_picker.is_none());
     assert!(app.cloud_creation_open(), "Escape closes only the picker");
     key(&ctx, &mut app, Key::Escape, Modifiers::NONE);
-    assert!(!app.cloud_creation_open());
+    assert!(app.cloud_creation_open(), "Escape closes nothing else");
     std::thread::sleep(Duration::from_millis(50));
     assert!(
         std::fs::read(&received).unwrap().is_empty(),

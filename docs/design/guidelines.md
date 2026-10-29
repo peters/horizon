@@ -503,26 +503,52 @@ There are four levels, from back to front:
 
 ## Components
 
-### Modal dialog
+### Form dialog and the New cloud surface
 
-Two form dialogs share one frame: the cloud creation dialog (up to 1180 wide)
-and the cloud accounts dialog (up to 1060 wide). Small confirmations (such as
-closing a cloud) and the browser file chooser keep egui's default modal frame
-from the theme instead: window fill `PANEL_BG`, 1 px `BORDER_SUBTLE` outline and
-the popup shadow, without the 24 px margin below.
+The cloud accounts dialog (up to 1060 wide) is a modal dialog. The New cloud form
+is not a modal: it is a surface on the workspace that holds its draft. Both share
+one frame. Small confirmations (such as closing a cloud) and the browser file
+chooser keep egui's default modal frame from the theme instead: window fill
+`PANEL_BG`, 1 px `BORDER_SUBTLE` outline and the popup shadow, without the 24 px
+margin below.
 
-Shared by both form dialogs:
+Shared by both forms:
 
 - Frame: fill `BG_ELEVATED`, stroke 1 px `BORDER_STRONG`, corner radius 16,
-  inner margin 24. Raise it above the toolbar with `Order::Tooltip`.
+  inner margin 24.
 - Heading at 26 strong, then a one-line description in `FG_SOFT`, then 16 of
   space.
 - Body scrolls; the action bar stays pinned below it.
-- Escape and a click on the backdrop dismiss the dialog. A dismissal parks the
-  dialog's draft in its workspace; it never discards a choice.
 - Footer: right-aligned primary and `Cancel`, 40 high, primary radius 10.
 
-Cloud creation dialog specifics:
+Modal dialog (cloud accounts):
+
+- Raise it above the toolbar with `Order::Tooltip`.
+- Escape and a click on the backdrop dismiss it.
+
+New cloud surface:
+
+- An `egui::Area` of `Order::Middle`, so the sidebar and toolbar stay above it and
+  usable. It takes no backdrop, no top layer and no `move_to_top`, so it is never
+  a modal and holds no input that the person did not aim at it.
+- Its rect is the on-screen frame of the draft workspace: `workspace_focus_frame`
+  for the scene rect, then `canvas_scene_transform`. A pan moves the form with its
+  workspace, and a workspace that leaves the canvas parks the draft in it; its card
+  is then the way back. A form that opens on a workspace that is off the canvas
+  brings that workspace into view instead of parking.
+- The workspace that **+ New cloud** makes is large enough to hold the form
+  (`WS_CLOUD_FORM_SIZE`); a workspace the person made keeps its own size.
+- Size from that rect, between a usable floor and the form's old ceiling: width
+  `(rect.width - 64).clamp(640, 1180)` and body height
+  `(rect.height - 270).clamp(320, window body)`. The form moves back inside the
+  canvas at an edge, so it never leaves the screen.
+- A click outside it does nothing. Escape closes nothing and loses no choice: it
+  only ends the search of an open folder picker. **Cancel** ends the draft, and the
+  setup view's **Close** parks it.
+- While the form shows, the minimap does not, and the canvas HUD shows only where
+  the form does not cover it, so no overlay takes a click aimed at the form.
+
+Cloud creation form specifics:
 
 - `item_spacing` (10, 8); the heading has a `PANEL_BG_ALT` info chip on the
   right (radius 8, margin 12 x 6, 13 `FG_SOFT`); the description is 14.
@@ -532,10 +558,10 @@ Cloud creation dialog specifics:
   `ACCENT` fill. A short reason or hint (13 `FG` or 11.5 `FG_DIM`) sits to the
   left when the primary is disabled.
 - Enter in the first text field submits when the form is valid.
-- While the repository picker is open above it, the dialog is disabled and the
-  picker owns Escape and outside clicks.
-- Escape parks the draft, also while the setup agent works; a footer line says so
-  and points at **Show agent** for an interrupt.
+- While the repository picker is open above it, the form is disabled and the
+  picker owns Escape and the clicks on the board.
+- The setup view's **Close** parks the draft, also while the setup agent works; the
+  form says so and points at **Show agent** for an interrupt.
 - A parked draft shows a card in its workspace: title, repository, one status line,
   and **Continue** and **Cancel**. It uses the cloud panel frame and the accent
   stroke of a cloud that is not deployed yet.
@@ -783,9 +809,9 @@ Focus behavior:
   press is in flight. Focus returns to the launching field when a child picker
   closes.
 - Escape closes the top-most overlay or dialog and is consumed so it does not
-  also reach a panel beneath. Escape on the cloud creation dialog parks its draft;
-  that draft's card is the way back. Enter in a dialog's title field submits a
-  valid form.
+  also reach a panel beneath. The New cloud form has no Escape action: the setup
+  view's **Close** parks its draft, and that draft's card is the way back. Enter in
+  a dialog's title field submits a valid form.
 - Keep every action reachable with the keyboard as well as the pointer:
   custom-drawn controls such as selectable cards take keyboard focus and
   respond to Enter and Space.

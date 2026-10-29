@@ -296,7 +296,14 @@ fn minimap_hit_target(
             .map(|workspace| {
                 (
                     MinimapHitTarget::Workspace(workspace.id),
-                    workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds),
+                    workspace_minimap_screen_rect(
+                        origin,
+                        model,
+                        workspace.id,
+                        workspace.position,
+                        workspace_bounds,
+                        app.empty_workspace_size(workspace.id),
+                    ),
                 )
             }),
     )

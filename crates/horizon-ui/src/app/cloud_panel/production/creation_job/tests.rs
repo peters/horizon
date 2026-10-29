@@ -276,20 +276,14 @@ fn a_parked_dialog_still_lands_the_start_it_checked() {
             .discard_textures();
     }
     sender.send(Ok(resolved(temp.path()))).unwrap();
-    let mut event = input();
-    event.events.push(egui::Event::Key {
-        key: egui::Key::Escape,
-        physical_key: Some(egui::Key::Escape),
-        pressed: true,
-        repeat: false,
-        modifiers: egui::Modifiers::NONE,
-    });
+    // Close parks the draft, as the footer does while a setup agent works: the start goes on.
+    app.hide_cloud_creation(&ctx);
     let _ = ctx
-        .run_ui(event, |ui| app.render_cloud_creation(ui.ctx()))
+        .run_ui(input(), |ui| app.render_cloud_creation(ui.ctx()))
         .discard_textures();
     assert!(
         app.cloud_prototype.production.creating,
-        "Escape parks the dialog; it does not cancel the start"
+        "a parked draft does not cancel the start"
     );
     assert!(app.cloud_prototype.production.pending_creation.is_some());
     // The parked draft keeps checking, so the cloud it started appears.

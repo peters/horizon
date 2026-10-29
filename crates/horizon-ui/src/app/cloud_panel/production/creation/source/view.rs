@@ -29,7 +29,6 @@ pub(in super::super) fn step(ui: &mut Ui, form: &mut Production, refocus: bool) 
     let empty = form.repository.trim().is_empty();
     if form.focus_title_on_open
         && empty
-        && !ui.is_sizing_pass()
         && ui.is_enabled()
         && !ui.input(|input| input.pointer.any_down() || input.pointer.any_released())
     {

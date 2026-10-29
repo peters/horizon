@@ -5,7 +5,7 @@ use horizon_core::{PanelId, WorkspaceId};
 
 use crate::theme;
 
-use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, WS_BG_PAD, WS_EMPTY_SIZE, WS_TITLE_HEIGHT};
+use super::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, WS_BG_PAD, WS_TITLE_HEIGHT};
 
 mod interaction;
 mod labels;
@@ -51,6 +51,12 @@ impl HorizonApp {
         ctx: &Context,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     ) {
+        // The New cloud form owns the board's HUD while it is drawn: no overlay may take a click
+        // aimed at its footer.
+        #[cfg(feature = "cloud-workspaces")]
+        if self.cloud_prototype.new_cloud_surface() {
+            return;
+        }
         render_scoped_minimap(
             self,
             ctx,
@@ -152,8 +158,14 @@ fn paint_minimap_workspaces(
         let is_active =
             app.board.active_workspace == Some(workspace.id) || scope == MinimapScope::Workspace(workspace.id);
         let is_hovered = hovered_workspace == Some(workspace.id);
-        let workspace_rect =
-            workspace_minimap_screen_rect(origin, model, workspace.id, workspace.position, workspace_bounds);
+        let workspace_rect = workspace_minimap_screen_rect(
+            origin,
+            model,
+            workspace.id,
+            workspace.position,
+            workspace_bounds,
+            app.empty_workspace_size(workspace.id),
+        );
 
         let (fill_alpha, stroke_alpha) = workspace_style_alpha(is_active, is_hovered);
         painter.rect_filled(
@@ -228,10 +240,11 @@ fn workspace_content_bounds(
         if !scope_includes_workspace(app, scope, workspace.id) {
             continue;
         }
+        let empty = app.empty_workspace_size(workspace.id);
         let (workspace_min, workspace_max) =
             workspace_minimap_bounds(workspace.id, workspace_bounds).unwrap_or_else(|| {
                 let pos = workspace.position;
-                (pos, [pos[0] + WS_EMPTY_SIZE[0], pos[1] + WS_EMPTY_SIZE[1]])
+                (pos, [pos[0] + empty.x, pos[1] + empty.y])
             });
         content_min[0] = content_min[0].min(workspace_min[0]);
         content_min[1] = content_min[1].min(workspace_min[1]);
@@ -274,15 +287,13 @@ fn workspace_minimap_screen_rect(
     workspace_id: WorkspaceId,
     workspace_position: [f32; 2],
     workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
+    empty: Vec2,
 ) -> Rect {
     let (workspace_min, workspace_max) =
         workspace_minimap_bounds(workspace_id, workspace_bounds).unwrap_or_else(|| {
             (
                 workspace_position,
-                [
-                    workspace_position[0] + WS_EMPTY_SIZE[0],
-                    workspace_position[1] + WS_EMPTY_SIZE[1],
-                ],
+                [workspace_position[0] + empty.x, workspace_position[1] + empty.y],
             )
         });
     Rect::from_min_max(
@@ -327,9 +338,8 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::WorkspaceId;
 
-    use super::{
-        MinimapModel, WS_EMPTY_SIZE, panel_minimap_screen_rect, workspace_minimap_screen_rect, workspace_style_alpha,
-    };
+    use super::{MinimapModel, panel_minimap_screen_rect, workspace_minimap_screen_rect, workspace_style_alpha};
+    use crate::app::WS_EMPTY_SIZE;
 
     fn test_model() -> MinimapModel {
         MinimapModel {
@@ -359,13 +369,14 @@ mod tests {
     }
 
     #[test]
-    fn workspace_minimap_screen_rect_falls_back_to_empty_size() {
+    fn workspace_minimap_screen_rect_falls_back_to_the_empty_size_it_is_given() {
         let rect = workspace_minimap_screen_rect(
             Pos2::new(10.0, 20.0),
             &test_model(),
             WorkspaceId(7),
             [100.0, 200.0],
             &HashMap::new(),
+            Vec2::new(WS_EMPTY_SIZE[0], WS_EMPTY_SIZE[1]),
         );
 
         assert_eq!(

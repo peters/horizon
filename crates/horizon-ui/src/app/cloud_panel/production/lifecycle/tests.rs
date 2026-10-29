@@ -492,30 +492,20 @@ fn removing_a_cloud_keeps_a_workspace_that_is_still_in_use() {
 #[test]
 fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
     let (temp, ctx, mut app) = live_cloud_app();
-    let frame = |app: &mut HorizonApp, escape: bool| {
-        let mut input = raw_input([1400.0, 900.0], None);
-        if escape {
-            input.events.push(egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: Some(egui::Key::Escape),
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            });
-        }
-        run_app_frame_with_input(&ctx, app, input);
+    let frame = |app: &mut HorizonApp| {
+        run_app_frame_with_input(&ctx, app, raw_input([1400.0, 900.0], None));
     };
     let local = app.board.create_workspace("Local");
     let remaining = add_editor(&mut app, local);
     let cloud = app.board.create_workspace("Cloud");
     app.board.workspace_mut(cloud).unwrap().cwd = Some(temp.path().into());
     add_unallocated_cloud(&mut app, 1, cloud);
-    frame(&mut app, false);
+    frame(&mut app);
     app.open_workspace_cloud(&ctx, cloud);
     app.remove_deleted_cloud(1, &ctx);
     app.settle_cloud_removals();
     for _ in 0..3 {
-        frame(&mut app, false);
+        frame(&mut app);
     }
     assert!(app.cloud_prototype.production.creating);
     assert!(
@@ -523,20 +513,20 @@ fn cancelling_a_creation_releases_the_workspace_of_its_removed_cloud() {
         "the open creation keeps its target"
     );
 
-    // Escape parks the draft; Cancel is what ends it and releases the hold.
-    frame(&mut app, true);
+    // Close parks the draft; Cancel is what ends it and releases the hold.
+    app.hide_cloud_creation(&ctx);
     assert!(
         app.cloud_prototype.production.draft.is_some(),
-        "Escape parks the open creation"
+        "Close parks the open creation"
     );
     app.close_cloud_creation();
-    frame(&mut app, false);
+    frame(&mut app);
     assert!(!app.cloud_prototype.production.creating);
     assert!(
         app.cloud_prototype.creation_holds.is_empty(),
         "the frame that ends the creation releases its hold"
     );
-    frame(&mut app, false);
+    frame(&mut app);
     assert!(app.board.workspace(cloud).is_none());
     assert_eq!(app.board.focused, Some(remaining));
     assert_eq!(app.board.active_workspace, Some(local));
