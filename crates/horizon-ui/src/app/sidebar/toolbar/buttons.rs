@@ -3,8 +3,10 @@
 use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
+#[cfg(target_os = "linux")]
+use crate::app::root_chrome::ROOT_TOOLBAR_CAST_WIDTH;
 use crate::app::root_chrome::{
-    ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_CAST_WIDTH, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
+    ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
     ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ToolbarAction,
 };
 use crate::app::sidebar::new_workspace::NewWorkspace;
