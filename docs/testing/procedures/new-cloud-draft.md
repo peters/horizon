@@ -145,21 +145,18 @@ and that **Cancel** ends the draft. It proves that a parked draft keeps its setu
 3. Open **Menu** › **Cloud** › **Add cloud here**.
    Result: The dialog opens again with the same progress. One card shows, and the count is the same.
 
-### 6.8 ND-8 — The board comes back as saved
-1. Press Escape.
-   Result: The card is in the workspace.
-2. Click **Cancel** on the card.
-   Result: The card is out of view, and the setup agent keeps working.
-3. In the toolbar, click **+ New cloud**. Type `Saved draft` in **Cloud title**.
-4. Press Escape.
+### 6.8 ND-8 — A session switch saves the board and ends the draft
+1. In the toolbar, click **+ New cloud**. Type `Saved draft` in **Cloud title**.
+2. Press Escape.
    Result: The card is in the workspace, and its first line is `Saved draft`.
-5. Close the window of the candidate with the close button of its window manager.
-   Result: The process of the candidate exits.
-6. Start the fixture again with the same state directory and `--native-view --saved-session`.
-7. Open a Device panel with the new `vnc_address`.
-   Result: The Device panel shows a live view of a new session.
-8. Open **Menu** › **Sessions**. Click the oldest session in the list.
-   Result: The board comes back with the workspace of the earlier start and no card, because Horizon does not save a draft.
+3. Open **Menu** › **Sessions**. Click **Open New Session**.
+   Result: The candidate shows the board of the new session. The card is out of view.
+4. Open **Menu** › **Sessions**. Click the session that holds the card. Click **Switch Selected**.
+   Result: The board comes back with the workspace of that session. No card is in it, because
+   this change keeps a draft only while Horizon runs.
+
+Note: the fixture removes its private home when it stops, so a run cannot restart it in the same
+state. Do not plan a quit step in this procedure.
 
 ## 7. Pass criteria
 
