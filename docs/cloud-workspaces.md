@@ -282,7 +282,10 @@ takes **New cloud** out of view and parks the draft in its workspace. A card in 
 workspace shows the title, the repository and what the draft does now. Click
 **Continue** to open the dialog again with every choice it held. A repository check
 that **Start cloud** began goes on while the draft is parked, and the cloud it
-creates takes the place of the card.
+creates takes the place of the card. A start that a watch or a queued **Start cloud**
+submits goes ahead too, and the card says **Starting the cloud**. When that start
+needs cloud accounts, Horizon says so on the board; it opens no dialog below the
+parked card.
 
 Only **Cancel** discards a draft. When you cancel **New cloud** for a workspace that
 **+ New cloud** made, the empty workspace goes too, unless it is the only workspace

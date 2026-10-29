@@ -19,12 +19,33 @@ impl Production {
         };
         let status = if self.pending_creation.is_some() {
             "Checking this repository before it starts"
+        } else if self.launch.submitted || self.launch.watch.is_some() {
+            "Starting the cloud"
         } else if repository_setup::running_here(self) {
             "Its setup agent is working; the agent's panel stays open"
         } else {
             "Not started. Continue to finish the choices."
         };
         (title, repository_line(self), status)
+    }
+}
+
+/// What a parked draft says when its queued start needs cloud accounts.
+pub(in crate::app) const PARKED_START_NEEDS_ACCOUNTS: &str =
+    "Starting this cloud needs cloud accounts. Continue and sign in, then start it again.";
+
+impl HorizonApp {
+    /// The account gate of a queued start. An open dialog opens the cloud settings, as it
+    /// always did; a parked draft says on the board what its start needs instead, because a
+    /// dialog that no one asked for would cover the workspace the person returned to.
+    pub(in crate::app) fn cloud_start_account_gate(&mut self, ctx: &Context) {
+        self.cloud_prototype.production.launch.submitted = false;
+        if self.cloud_prototype.production.draft.is_some() {
+            self.cloud_prototype.error = Some(PARKED_START_NEEDS_ACCOUNTS.to_owned());
+        } else {
+            self.open_cloud_accounts(ctx, true);
+            self.cloud_prototype.production.launch.submitted = true;
+        }
     }
 }
 
@@ -53,14 +74,18 @@ impl HorizonApp {
     /// publishing form, and the repository check a Start began. A parked draft is not a
     /// closed one, so none of them stops while its card shows.
     pub(in crate::app) fn poll_parked_cloud_draft(&mut self, ctx: &Context) {
-        self.poll_cloud_creation(ctx);
         let root = self.cloud_prototype.root.clone();
         let form = &mut self.cloud_prototype.production;
         creation_draft_ticks(form, root.as_deref(), ctx);
+        // A watch submits `launch.submitted`; the launch dispatch turns it into the cloud, as
+        // it does while the dialog is open.
+        self.poll_cloud_launch(ctx);
+        self.poll_cloud_creation(ctx);
     }
 }
 
-/// The parts of the dialog's per-frame work that outlive its view.
+/// The parts of the dialog's per-frame work that outlive its view, in the dialog's order: a
+/// stock watch, the launch it submits, and the repository check a Start began.
 fn creation_draft_ticks(form: &mut Production, root: Option<&std::path::Path>, ctx: &Context) {
     creation::watch::poll(form);
     creation::publishing::update(form, root, ctx);

@@ -309,9 +309,7 @@ impl HorizonApp {
             if !form.launch.accounts_checked
                 && (form.launch.accounts_edited || !form.launch.ready_profiles.contains(&form.selected_profile))
             {
-                form.launch.submitted = false;
-                self.open_cloud_accounts(ctx, true);
-                self.cloud_prototype.production.launch.submitted = true;
+                self.cloud_start_account_gate(ctx);
             } else if !super::creation_job::awaits_runpod(form) {
                 // A start queued while the checks are still running waits for them; one they turned
                 // down is dropped, so it has to be asked for again once the problem is fixed.

@@ -57,6 +57,46 @@ fn answer(form: &mut Production, availability: Availability) {
     );
 }
 
+/// A draft that a dismissal parked keeps starting the cloud its watch waited for: the
+/// parked frame dispatches the submitted launch, as the open dialog does.
+#[test]
+fn a_parked_draft_starts_the_cloud_its_watch_waited_for() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    let mut form = form();
+    answer(&mut form, Availability::None);
+    arm(&mut form);
+    poll(&mut form);
+    assert!(form.launch.watch.is_some());
+    app.cloud_prototype.production = form;
+    app.cloud_prototype.production.creating = true;
+    app.cloud_prototype.production.draft = Some(crate::app::cloud_panel::new_cloud_draft::Draft {
+        workspace: None,
+        position: [0.0, 0.0],
+    });
+    answer(&mut app.cloud_prototype.production, Availability::Low);
+    app.poll_parked_cloud_draft(&ctx);
+    assert!(
+        app.cloud_prototype.production.launch.watch.is_none(),
+        "the parked frame polls the watch"
+    );
+    // This fixture has no cloud accounts, so the dispatch stops there. What matters is that
+    // it ran: the parked frame says why on the board instead of opening the account dialog
+    // under the person.
+    assert!(
+        app.cloud_prototype
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("needs cloud accounts")),
+        "the parked launch dispatch reports the missing accounts: {:?}",
+        app.cloud_prototype.error
+    );
+    assert!(
+        !app.cloud_prototype.production.setup.open,
+        "a parked draft opens no dialog under the person"
+    );
+}
+
 #[test]
 fn only_an_armed_watch_submits_once_when_fresh_stock_returns() {
     let mut form = form();
