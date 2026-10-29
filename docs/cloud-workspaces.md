@@ -298,6 +298,11 @@ While the form shows, the minimap does not show, and the canvas HUD shows only w
 the form does not cover it. No overlay can take a click that you aim at the form.
 Both return when the form goes.
 
+A workspace can move to its own window or leave the board while the form shows. The
+form then shows on the board itself, and the draft no longer names that workspace,
+so **Cancel** and every other action stay reachable. A parked draft keeps its
+workspace, and its card returns when that workspace rejoins the board.
+
 The card survives a quit and a session switch. Horizon keeps the choices of a parked
 draft in `drafts.json` in the cloud settings folder, beside `repository-choices.json`.
 A worker thread reads that file once for each session and writes it, so a frame never

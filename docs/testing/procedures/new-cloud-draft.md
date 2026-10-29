@@ -79,7 +79,7 @@ draft survives a quit and a session switch.
    Result: It shows **Where is your code?** and **Cloud title**. Its footer shows **Continue** and **Cancel**. The
    worker catalog is on the left and the summary is on the right.
 3. Drag an empty part of the canvas a short distance.
-   Result: The workspace moves. The form stays at the top-left corner of the workspace, and it moves with it.
+   Result: The workspace moves. The form stays below the name badge of the workspace, and it moves with it.
 4. Examine the footer of the form.
    Result: No minimap or other overlay covers **Continue** or **Cancel**.
 
@@ -179,6 +179,16 @@ draft survives a quit and a session switch.
    card.
    Result: The card is out of view. Examine `drafts.json` again: the record of that workspace is gone.
 
+### 6.9 ND-9 — A workspace that leaves the board keeps the form reachable
+1. In the toolbar, click **+ New cloud**. Type `Moved draft` in **Cloud title**.
+2. Move the workspace of the form to its own window: right-click the workspace in the sidebar, then click
+   **Detach**, or use the workspace menu of the title bar.
+   Result: The form is out of view on the board.
+3. In the toolbar, click **+ New cloud**.
+   Result: The form shows on the board, not on a workspace, and **Cloud title** shows `Moved draft`.
+4. Click **Cancel**.
+   Result: The form is out of view, and the count of the sidebar is one less.
+
 Note: the fixture removes its private home when it stops, so a run cannot restart it in the same
 state. A quit uses the same saved record and the same restore path as the session switch of step 4;
 the automated test that restores a parked draft into a fresh app covers it.
@@ -188,6 +198,8 @@ the automated test that restores a parked draft into a fresh app covers it.
 - Each task gives the result that its steps name, and no step starts a worker or a new provider resource.
 - A click outside the form, and Escape, never lose a choice of the person and never park the draft.
 - Only **Cancel** ends a draft, and it removes a workspace that held nothing.
+- A draft whose workspace moved to its own window or left the board shows its form on the board, and
+  **Cancel** stays reachable.
 - A session switch ends the card that is in the form, also a card that a record brought back, and
   the record waits for the session that owns it.
 - The card of a parked draft comes back after a session switch and after a quit, and it keeps the title and the
