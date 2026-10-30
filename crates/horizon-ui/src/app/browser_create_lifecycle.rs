@@ -26,31 +26,41 @@ const STARTUP_NAVIGATION_BUDGET: Duration = Duration::from_secs(10);
 const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 
 /// How old the manifest snapshot of a starting create may be before the host
-/// asks the coordination worker for a fresh one. The read retries for up to
-/// two seconds on Windows, so no frame reads it; the snapshot lags by at most
-/// this interval, and the startup budget above and the deadline headroom leave
-/// room for that lag before the create deadline.
+/// asks the coordination worker for a fresh one. No frame reads the manifest
+/// itself; the snapshot lags by at most this interval, and the startup budget
+/// above and the deadline headroom leave room for that lag before the create
+/// deadline.
 const CREATE_MANIFEST_REFRESH: Duration = Duration::from_millis(250);
 
 pub(super) struct PendingBrowserCreate {
     pub(super) request: BrowserCreateRequest,
+    /// When the host claimed the request, for the reported startup latency.
+    pub(super) started_at: Instant,
+    pub(super) stage: CreateStage,
+    /// The board it was asked on; a create of a replaced board is not one of a restored panel.
+    pub(super) board: BoardFence,
+    /// The panel the create opened: `None` while a remote create still waits
+    /// for its credential values or its provider slot, so no panel exists.
+    pub(super) panel: Option<CreatedPanel>,
+    /// The OS-store credential values a remote create still waits for; `None`
+    /// once they are at hand, and for a create that reads none.
+    pub(super) remote_credentials: Option<super::browser_remote_credentials::RemoteCredentialRead>,
+}
+
+/// The panel a create opened, and what the host judges it by.
+pub(super) struct CreatedPanel {
     /// The panel, by its persisted id: board ids restart with a new session.
-    pub(super) panel_local_id: String,
+    pub(super) local_id: String,
     pub(super) backend: BackendKind,
     /// Resolved once from the launch plan; later configuration or device state
     /// must not change the orientation recorded for this creation.
     pub(super) startup_orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
-    /// When the host claimed the request, for the reported startup latency.
-    pub(super) started_at: Instant,
     /// When the backend first reported `Ready`, which starts the bounded
     /// startup-navigation wait.
     pub(super) ready_since: Option<Instant>,
     /// User navigations the panel had seen when the create started; more
     /// means the user took the panel over before the first page committed.
     pub(super) user_navigations_at_start: u32,
-    pub(super) stage: CreateStage,
-    /// The board it was asked on; a create of a replaced board is not one of a restored panel.
-    pub(super) board: BoardFence,
     /// The manifest the agent reads, as the coordination worker last read it:
     /// `None` until the first read lands, and while the file is missing.
     pub(super) manifest: Option<manifest::BrowserManifest>,
@@ -60,10 +70,31 @@ pub(super) struct PendingBrowserCreate {
     pub(super) manifest_reading: bool,
 }
 
+impl PendingBrowserCreate {
+    /// A remote create as it waits for the values only the OS store holds, and
+    /// then for its provider slot: no panel exists yet.
+    pub(super) fn resolving(request: BrowserCreateRequest, started_at: Instant, board: BoardFence) -> Self {
+        Self {
+            request,
+            started_at,
+            stage: CreateStage::ReadingCredentials,
+            board,
+            panel: None,
+            remote_credentials: None,
+        }
+    }
+}
+
 /// Where a pending create stands. Only a starting create is judged each
 /// poll; the others wait for their coordination work, which ends them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CreateStage {
+    /// A remote create's OS-store credential values are read on the workbench
+    /// thread; a later frame plans the request once the last value is at hand.
+    ReadingCredentials,
+    /// A remote create's provider slot lease runs on the coordination worker;
+    /// the panel opens when the lease applies.
+    Leasing,
     /// Its dispatch is being audited; an unaudited create never completes.
     Auditing,
     /// The browser starts.
@@ -170,10 +201,13 @@ impl HorizonApp {
         let Some(panel) = self.board.panel(panel_id) else {
             return false;
         };
-        self.browser_create_host
-            .pending
-            .iter()
-            .any(|pending| pending.panel_local_id == panel.local_id && pending.board.holds())
+        self.browser_create_host.pending.iter().any(|pending| {
+            pending
+                .panel
+                .as_ref()
+                .is_some_and(|created| created.local_id == panel.local_id)
+                && pending.board.holds()
+        })
     }
 
     pub(super) fn finish_pending_browser_creates(&mut self) -> bool {
@@ -183,9 +217,19 @@ impl HorizonApp {
         let mut changed = false;
         let mut waiting = Vec::new();
         for mut pending in std::mem::take(&mut self.browser_create_host.pending) {
-            if pending.stage != CreateStage::Starting {
-                waiting.push(pending);
-                continue;
+            match pending.stage {
+                CreateStage::ReadingCredentials | CreateStage::Leasing => {
+                    match self.advance_remote_create(pending) {
+                        Some(pending) => waiting.push(pending),
+                        None => changed = true,
+                    }
+                    continue;
+                }
+                CreateStage::Auditing | CreateStage::Finishing => {
+                    waiting.push(pending);
+                    continue;
+                }
+                CreateStage::Starting => {}
             }
             let io = &mut self.browser_create_host.io;
             if browser_create_is_terminal(&self.board, io, &pending) {
@@ -194,11 +238,16 @@ impl HorizonApp {
             }
             self.refresh_starting_create_manifest(&mut pending);
             let io = &mut self.browser_create_host.io;
-            match finish_ready_browser_create(&self.board, io, &mut pending) {
+            let Some(panel) = pending.panel.as_mut() else {
+                waiting.push(pending);
+                continue;
+            };
+            match finish_ready_browser_create(&self.board, io, &pending.request, panel, pending.started_at) {
                 BrowserCreateCompletion::Waiting => waiting.push(pending),
                 BrowserCreateCompletion::Completed => changed = true,
                 BrowserCreateCompletion::Failed => {
-                    if let Some(panel_id) = self.board.panel_id_by_local_id(&pending.panel_local_id) {
+                    let local_id = pending.panel.as_ref().map(|panel| panel.local_id.as_str());
+                    if let Some(panel_id) = local_id.and_then(|local_id| self.board.panel_id_by_local_id(local_id)) {
                         self.close_panel(panel_id);
                     }
                     changed = true;
@@ -210,20 +259,33 @@ impl HorizonApp {
                 }
             }
         }
-        self.browser_create_host.pending = waiting;
+        // A create that planned inside this loop already pushed the pending
+        // entry of its audit, so the surviving creates join it rather than
+        // replace the list.
+        self.browser_create_host.pending.extend(waiting);
         changed
     }
 
-    /// Refuses every create whose browser still starts, which nothing polls once Horizon exits or switches
-    /// sessions; the teardown closes its panel. A create whose coordination work runs ends with that work.
+    /// Refuses every create that still waits on this side of its coordination
+    /// work, which nothing polls once Horizon exits or switches sessions: a
+    /// create that starts its browser, and a remote create whose credential
+    /// values have not arrived. The teardown closes the panel of a starting
+    /// create; a create whose coordination work already runs ends with that
+    /// work, which refuses it once the board is retiring.
     pub(super) fn retire_starting_browser_creates(&mut self) {
         let host = &mut self.browser_create_host;
-        let (starting, waiting): (Vec<_>, _) = std::mem::take(&mut host.pending)
+        let (refused, waiting): (Vec<_>, _) = std::mem::take(&mut host.pending)
             .into_iter()
-            .partition(|pending| pending.stage == CreateStage::Starting);
+            .partition(|pending| matches!(pending.stage, CreateStage::Starting | CreateStage::ReadingCredentials));
         host.pending = waiting;
-        for pending in &starting {
-            record_and_complete_failure(&mut host.io, pending, HOST_RETIRING.0, HOST_RETIRING.1);
+        for pending in &refused {
+            record_and_complete_failure(
+                &mut host.io,
+                &pending.request,
+                pending.panel.as_ref(),
+                HOST_RETIRING.0,
+                HOST_RETIRING.1,
+            );
         }
     }
 
@@ -233,17 +295,15 @@ impl HorizonApp {
     /// reading the file, so a slow disk or a lock another process holds never
     /// stalls a frame.
     fn refresh_starting_create_manifest(&mut self, pending: &mut PendingBrowserCreate) {
+        let Some(panel) = pending.panel.as_mut() else { return };
         let now = Instant::now();
-        let due = pending
-            .manifest_read_at
-            .is_none_or(|read_at| now.saturating_duration_since(read_at) >= CREATE_MANIFEST_REFRESH);
-        if !due || pending.manifest_reading {
+        if !manifest_refresh_due(panel.manifest_read_at, panel.manifest_reading, now) {
             return;
         }
-        pending.manifest_reading = true;
-        pending.manifest_read_at = Some(now);
+        panel.manifest_reading = true;
+        panel.manifest_read_at = Some(now);
         let request_id = pending.request.request_id.clone();
-        let path = manifest::manifest_path_for_root(self.host_manifest_root(), &pending.panel_local_id);
+        let path = manifest::manifest_path_for_root(self.host_manifest_root(), &panel.local_id);
         self.browser_create_host.io.then(
             move || StartingCreateManifest(manifest::read_at(&path)),
             move |app, read| app.apply_starting_create_manifest(&request_id, read),
@@ -263,16 +323,18 @@ impl HorizonApp {
         else {
             return;
         };
-        let on_board = self
-            .board
-            .panel_id_by_local_id(&self.browser_create_host.pending[index].panel_local_id)
-            .is_some();
-        let pending = &mut self.browser_create_host.pending[index];
-        pending.manifest_reading = false;
+        let on_board = self.browser_create_host.pending[index]
+            .panel
+            .as_ref()
+            .is_some_and(|panel| self.board.panel_id_by_local_id(&panel.local_id).is_some());
+        let Some(panel) = self.browser_create_host.pending[index].panel.as_mut() else {
+            return;
+        };
+        panel.manifest_reading = false;
         if stale || !on_board {
             return;
         }
-        pending.manifest = read.and_then(|read| read.0);
+        panel.manifest = read.and_then(|read| read.0);
     }
 
     /// Ends a create whose publication finished; one that could not be
@@ -291,14 +353,16 @@ impl HorizonApp {
         }
         // A replaced board took the panel with it; a panel of the same id now is another one.
         if !self.browser_create_host.io.applying_stale()
-            && let Some(panel_id) = self.board.panel_id_by_local_id(&pending.panel_local_id)
+            && let Some(panel) = pending.panel.as_ref()
+            && let Some(panel_id) = self.board.panel_id_by_local_id(&panel.local_id)
         {
             self.close_panel(panel_id);
         }
         if published.is_none() {
             record_and_complete_failure(
                 &mut self.browser_create_host.io,
-                &pending,
+                &pending.request,
+                pending.panel.as_ref(),
                 "manifest_update_failed",
                 "Horizon could not publish the new browser panel's visibility and workspace",
             );
@@ -309,24 +373,30 @@ impl HorizonApp {
 fn finish_ready_browser_create(
     board: &Board,
     io: &mut HostIo,
-    pending: &mut PendingBrowserCreate,
+    request: &BrowserCreateRequest,
+    panel: &mut CreatedPanel,
+    started_at: Instant,
 ) -> BrowserCreateCompletion {
-    let Some(browser) = pending_panel(board, pending).and_then(|panel| panel.browser()) else {
+    let Some(browser) = board
+        .panel_id_by_local_id(&panel.local_id)
+        .and_then(|panel_id| board.panel(panel_id))
+        .and_then(|panel| panel.browser())
+    else {
         return BrowserCreateCompletion::Waiting;
     };
     let now = Instant::now();
     if browser.status == BrowserStatus::Ready {
-        pending.ready_since.get_or_insert(now);
+        panel.ready_since.get_or_insert(now);
     }
     // The driver writes its manifest before the backend is ready and before
     // the initial navigation commits, so the file's existence alone must not
     // complete the create. The host judges it on the snapshot that the
     // coordination worker last read, so a missing manifest keeps the create
     // waiting here, as the absent file did.
-    let Some(current) = pending.manifest.as_ref() else {
+    let Some(current) = panel.manifest.as_ref() else {
         return BrowserCreateCompletion::Waiting;
     };
-    let deadline = create_deadline(pending, now);
+    let deadline = create_deadline(request.deadline_at_millis, now);
     let CreateReadiness::Ready(navigation) = create_readiness(
         PageReadiness {
             status: &browser.status,
@@ -334,9 +404,9 @@ fn finish_ready_browser_create(
             manifest_url: &current.url,
             navigation_error: browser.navigation_error.as_deref(),
         },
-        pending.request.url.as_deref(),
-        browser.user_navigation_count() > pending.user_navigations_at_start,
-        pending.ready_since,
+        request.url.as_deref(),
+        browser.user_navigation_count() > panel.user_navigations_at_start,
+        panel.ready_since,
         deadline,
         now,
     ) else {
@@ -345,24 +415,27 @@ fn finish_ready_browser_create(
     let navigation_error = (navigation == CreateNavigation::Failed)
         .then(|| browser.navigation_error.clone())
         .flatten();
-    let startup_millis =
-        u64::try_from(now.saturating_duration_since(pending.started_at).as_millis()).unwrap_or(u64::MAX);
-    let Some(workspace) = pending_panel(board, pending).and_then(|panel| browser_workspace(board, panel.workspace_id))
+    let startup_millis = u64::try_from(now.saturating_duration_since(started_at).as_millis()).unwrap_or(u64::MAX);
+    let Some(workspace) = board
+        .panel_id_by_local_id(&panel.local_id)
+        .and_then(|panel_id| board.panel(panel_id))
+        .and_then(|panel| browser_workspace(board, panel.workspace_id))
     else {
         record_and_complete_failure(
             io,
-            pending,
+            request,
+            Some(panel),
             "workspace_unavailable",
             "Horizon could not determine the new browser panel's workspace",
         );
         return BrowserCreateCompletion::Failed;
     };
-    if !workspace.authorizes(host_identity(&pending.request.actor)) {
+    if !workspace.authorizes(host_identity(&request.actor)) {
         // The user moved a panel while the browser started. Keep the panel
         // where they put it and report the lost workspace instead of closing
         // it or handing an uncontrollable panel back as ready.
-        let (panel_local_id, visible) = (pending.panel_local_id.clone(), pending.request.visible);
-        let request_id = pending.request.request_id.clone();
+        let (panel_local_id, visible) = (panel.local_id.clone(), request.visible);
+        let request_id = request.request_id.clone();
         io.write_for_board(move || {
             if let Err(error) = publish_manifest_host_state(&panel_local_id, visible, &workspace) {
                 tracing::warn!(%request_id, %error, "could not stamp a moved browser panel");
@@ -370,25 +443,37 @@ fn finish_ready_browser_create(
         });
         record_and_complete_failure(
             io,
-            pending,
+            request,
+            Some(panel),
             "workspace_changed",
             "the browser panel left the requesting agent's workspace during creation and was left in place",
         );
         return BrowserCreateCompletion::Completed;
     }
     let result = BrowserCreateResult::ready(
-        &pending.request,
-        pending.panel_local_id.clone(),
+        request,
+        panel.local_id.clone(),
         navigation,
         navigation_error,
         startup_millis,
     );
-    let (panel, request, live) = (pending.panel_local_id.clone(), pending.request.clone(), io.live_fence());
-    let (backend, orientation) = (pending.backend, pending.startup_orientation);
+    let (panel_local_id, live) = (panel.local_id.clone(), io.live_fence());
+    let (backend, orientation) = (panel.backend, panel.startup_orientation);
+    let published_request = request.clone();
     io.then(
-        move || publish_requested_create(&live, &panel, &request, &workspace, backend, orientation, &result),
+        move || {
+            publish_requested_create(
+                &live,
+                &panel_local_id,
+                &published_request,
+                &workspace,
+                backend,
+                orientation,
+                &result,
+            )
+        },
         {
-            let request_id = pending.request.request_id.clone();
+            let request_id = request.request_id.clone();
             move |app, published| app.finish_published_create(&request_id, published)
         },
     );
@@ -397,15 +482,24 @@ fn finish_ready_browser_create(
 
 /// The pending create's panel on this board, if it still has one.
 fn pending_panel<'a>(board: &'a Board, pending: &PendingBrowserCreate) -> Option<&'a horizon_core::Panel> {
+    let panel = pending.panel.as_ref()?;
     board
-        .panel_id_by_local_id(&pending.panel_local_id)
+        .panel_id_by_local_id(&panel.local_id)
         .and_then(|panel_id| board.panel(panel_id))
+}
+
+/// Whether a starting create asks for a fresh manifest snapshot: never while a
+/// read of it runs, and not before [`CREATE_MANIFEST_REFRESH`] passed since the
+/// last ask. The snapshot lags by that interval at most, and the startup budget
+/// leaves room for it before the create deadline.
+fn manifest_refresh_due(read_at: Option<Instant>, reading: bool, now: Instant) -> bool {
+    !reading && read_at.is_none_or(|read_at| now.saturating_duration_since(read_at) >= CREATE_MANIFEST_REFRESH)
 }
 
 /// The create deadline as an `Instant`, derived from the request's wall-clock
 /// deadline relative to now.
-fn create_deadline(pending: &PendingBrowserCreate, now: Instant) -> Instant {
-    let remaining = pending.request.deadline_at_millis - manifest::now_millis();
+fn create_deadline(deadline_at_millis: i64, now: Instant) -> Instant {
+    let remaining = deadline_at_millis - manifest::now_millis();
     now + Duration::from_millis(u64::try_from(remaining).unwrap_or(0))
 }
 
@@ -413,18 +507,25 @@ fn browser_create_is_terminal(board: &Board, io: &mut HostIo, pending: &PendingB
     let Some(browser) = pending_panel(board, pending).and_then(|panel| panel.browser()) else {
         record_and_complete_failure(
             io,
-            pending,
+            &pending.request,
+            pending.panel.as_ref(),
             "panel_closed",
             "the requested browser panel closed before it became controllable",
         );
         return true;
     };
     if let Some((code, message)) = terminal_create_failure(browser) {
-        record_and_complete_failure(io, pending, code, message);
+        record_and_complete_failure(io, &pending.request, pending.panel.as_ref(), code, message);
         return true;
     }
     if pending.request.deadline_at_millis < manifest::now_millis() {
-        record_and_complete_failure(io, pending, CREATE_TIMEOUT.0, CREATE_TIMEOUT.1);
+        record_and_complete_failure(
+            io,
+            &pending.request,
+            pending.panel.as_ref(),
+            CREATE_TIMEOUT.0,
+            CREATE_TIMEOUT.1,
+        );
         return true;
     }
     false
@@ -442,17 +543,20 @@ mod tests {
         pub(in crate::app) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
             self.browser_create_host.pending.push(PendingBrowserCreate {
                 request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
-                panel_local_id: probe.panel_local_id,
-                backend: BackendKind::default(),
-                startup_orientation: None,
                 started_at: Instant::now(),
-                ready_since: None,
-                user_navigations_at_start: 0,
                 stage: CreateStage::Starting,
                 board: self.browser_create_host.io.board_fence(),
-                manifest: None,
-                manifest_read_at: None,
-                manifest_reading: false,
+                panel: Some(CreatedPanel {
+                    local_id: probe.panel_local_id,
+                    backend: BackendKind::default(),
+                    startup_orientation: None,
+                    ready_since: None,
+                    user_navigations_at_start: 0,
+                    manifest: None,
+                    manifest_read_at: None,
+                    manifest_reading: false,
+                }),
+                remote_credentials: None,
             });
         }
     }
@@ -659,7 +763,7 @@ mod tests {
             .browser_create_host
             .pending
             .iter()
-            .map(|pending| pending.panel_local_id.as_str())
+            .map(|pending| pending.panel.as_ref().map_or("", |panel| panel.local_id.as_str()))
             .collect();
         assert_eq!(left, ["auditing"], "its dispatch audit ends it");
         std::mem::forget(release);
@@ -719,8 +823,9 @@ mod tests {
         app.browser_create_host
             .pending
             .iter()
-            .find(|pending| pending.panel_local_id == local_id)
-            .and_then(|pending| pending.manifest.as_ref())
+            .find(|pending| pending.panel.as_ref().is_some_and(|panel| panel.local_id == local_id))
+            .and_then(|pending| pending.panel.as_ref())
+            .and_then(|panel| panel.manifest.as_ref())
             .map(|manifest| manifest.url.clone())
     }
 
@@ -753,18 +858,28 @@ mod tests {
             "the read waits on the coordination worker"
         );
         assert!(
-            app.browser_create_host.pending[0].manifest.is_none(),
+            app.browser_create_host.pending[0]
+                .panel
+                .as_ref()
+                .is_some_and(|panel| panel.manifest.is_none()),
             "the first frame judges the create on no snapshot yet"
         );
 
         app.settle_browser_host_io();
         let pending = app.browser_create_host.pending.first().expect("the create still waits");
         assert_eq!(
-            pending.manifest.as_ref().map(|manifest| manifest.url.as_str()),
+            pending
+                .panel
+                .as_ref()
+                .and_then(|panel| panel.manifest.as_ref())
+                .map(|manifest| manifest.url.as_str()),
             Some("https://example.test/"),
             "the read applies to the create that asked for it"
         );
-        assert!(!pending.manifest_reading, "no read of it is in flight");
+        assert!(
+            pending.panel.as_ref().is_some_and(|panel| !panel.manifest_reading),
+            "no read of it is in flight"
+        );
     }
 
     #[test]
@@ -792,5 +907,91 @@ mod tests {
             None,
             "a read asked for on a replaced board is dropped"
         );
+    }
+
+    #[test]
+    fn a_starting_create_asks_for_its_manifest_at_most_once_per_interval() {
+        let now = Instant::now();
+        assert!(manifest_refresh_due(None, false, now), "the first frame asks");
+        assert!(
+            !manifest_refresh_due(Some(now), false, now),
+            "a frame inside the interval judges the snapshot it holds"
+        );
+        assert!(
+            !manifest_refresh_due(Some(now), false, now + CREATE_MANIFEST_REFRESH / 2),
+            "halfway through the interval is still inside it"
+        );
+        assert!(
+            !manifest_refresh_due(Some(now), true, now + CREATE_MANIFEST_REFRESH * 10),
+            "a read that is still running is never asked for twice"
+        );
+        assert!(
+            manifest_refresh_due(Some(now), false, now + CREATE_MANIFEST_REFRESH),
+            "the frame at the interval asks again"
+        );
+    }
+
+    /// The URL of the manifest snapshot the create holds, as the frame judges it.
+    fn snapshot_url(app: &HorizonApp, local_id: &str) -> Option<String> {
+        app.browser_create_host
+            .pending
+            .iter()
+            .find(|pending| pending.panel.as_ref().is_some_and(|panel| panel.local_id == local_id))
+            .and_then(|pending| pending.panel.as_ref())
+            .and_then(|panel| panel.manifest.as_ref())
+            .map(|manifest| manifest.url.clone())
+    }
+
+    #[test]
+    fn a_starting_create_reads_its_manifest_again_only_after_the_interval() {
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.create_workspace("alpha");
+        let local_id = starting_browser(&mut app, 9_180, workspace);
+        app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
+            panel_local_id: local_id.clone(),
+        });
+        written_manifest(&app, &local_id, "https://example.test/");
+
+        app.finish_pending_browser_creates();
+        app.settle_browser_host_io();
+        assert_eq!(
+            snapshot_url(&app, &local_id).as_deref(),
+            Some("https://example.test/"),
+            "the first frame asks the worker for the manifest"
+        );
+
+        // Frames inside the interval judge the snapshot they hold, whatever the
+        // file says by then; the assertions stop when the interval is close.
+        written_manifest(&app, &local_id, "https://later.test/");
+        while last_manifest_read(&app).is_some_and(|read_at| read_at.elapsed() < CREATE_MANIFEST_REFRESH / 2) {
+            app.finish_pending_browser_creates();
+            assert_eq!(
+                snapshot_url(&app, &local_id).as_deref(),
+                Some("https://example.test/"),
+                "a frame inside the interval reads nothing, so a slow disk cannot mark the frame"
+            );
+        }
+
+        // The frame after the interval asks again, and holds the newer file.
+        if let Some(read_at) = last_manifest_read(&app) {
+            let wait = (read_at + CREATE_MANIFEST_REFRESH).saturating_duration_since(Instant::now());
+            std::thread::sleep(wait + Duration::from_millis(20));
+        }
+        app.finish_pending_browser_creates();
+        app.settle_browser_host_io();
+        assert_eq!(
+            snapshot_url(&app, &local_id).as_deref(),
+            Some("https://later.test/"),
+            "the frame after the interval asks again"
+        );
+    }
+
+    /// When the frame last asked the worker for this create's manifest.
+    fn last_manifest_read(app: &HorizonApp) -> Option<Instant> {
+        app.browser_create_host
+            .pending
+            .first()
+            .and_then(|pending| pending.panel.as_ref())
+            .and_then(|panel| panel.manifest_read_at)
     }
 }

@@ -15,6 +15,8 @@ mod browser_provider_catalog;
 mod browser_provider_usage;
 mod browser_recovery;
 mod browser_remote_create;
+mod browser_remote_credentials;
+mod browser_remote_slots;
 mod browser_request_claims;
 mod browser_requests;
 mod browser_visibility_requests;

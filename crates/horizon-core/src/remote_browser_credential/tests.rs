@@ -878,5 +878,91 @@ fn workbench_generation_tracks_session_and_keychain_mutations_without_secret_rea
     }
 }
 
+#[test]
+fn a_workbench_read_answers_one_value_to_the_caller_that_asked() {
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
+    wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
+    let user = CredentialReference::from("user");
+    workbench
+        .store_in_keychain("grid", &profile, &user, b"alice")
+        .expect("store request accepted");
+    wait_until(&mut workbench, |w| !w.is_busy());
+
+    let mut reply = workbench
+        .request_value(&profile, &user)
+        .expect("the store is available");
+    assert!(
+        !workbench.is_busy(),
+        "a read waits for no frame poll and adds no probe to the workbench"
+    );
+    assert_eq!(
+        read_answer(&mut reply),
+        Ok(b"alice".to_vec()),
+        "the read copies the value the store holds"
+    );
+    assert!(reply.poll().is_none(), "one read answers once");
+
+    assert_eq!(
+        workbench
+            .request_value(&profile, &CredentialReference::from("key"))
+            .err(),
+        Some(RemoteCredentialError::StoreUnavailable),
+        "a reference bound to another store is not an OS-store read"
+    );
+}
+
+#[test]
+fn a_workbench_read_names_a_missing_locked_or_ended_store() {
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let user = CredentialReference::from("user");
+
+    let mut empty = CredentialWorkbench::with_opener(fake_opener(false));
+    wait_until(&mut empty, |w| w.keychain_state() == &KeychainState::Available);
+    let mut missing = empty.request_value(&profile, &user).expect("the store is available");
+    assert_eq!(
+        read_answer(&mut missing),
+        Err(RemoteCredentialError::Missing),
+        "an item the store does not hold is missing, not a value"
+    );
+
+    let mut locked = CredentialWorkbench::with_opener(fake_opener(true));
+    wait_until(&mut locked, |w| w.keychain_state() == &KeychainState::Available);
+    let mut refused = locked.request_value(&profile, &user).expect("the store is available");
+    assert_eq!(read_answer(&mut refused), Err(RemoteCredentialError::Locked));
+
+    let mut unavailable = CredentialWorkbench::with_opener(Box::new(|| Err(RemoteCredentialError::Locked)));
+    wait_until(&mut unavailable, |w| {
+        matches!(w.keychain_state(), KeychainState::Unavailable(_))
+    });
+    assert!(!unavailable.keychain_available());
+    assert_eq!(
+        unavailable.request_value(&profile, &user).err(),
+        Some(RemoteCredentialError::Locked),
+        "a store that never opened answers with its own reason"
+    );
+
+    // A worker that ended takes no read, so the caller refuses its request
+    // instead of waiting for a value that will never arrive.
+    let mut dying = CredentialWorkbench::with_opener(fake_opener(false));
+    wait_until(&mut dying, |w| w.keychain_state() == &KeychainState::Available);
+    dying.simulate_worker_loss_for_tests();
+    assert_eq!(
+        dying.request_value(&profile, &user).err(),
+        Some(RemoteCredentialError::StoreUnavailable)
+    );
+}
+
+/// The answer the workbench gives the read, once it has read the value.
+fn read_answer(reply: &mut CredentialValueReply) -> Result<Vec<u8>, RemoteCredentialError> {
+    for _ in 0..200 {
+        if let Some(answer) = reply.poll() {
+            return answer.map(|value| value.to_vec());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the workbench did not answer the read");
+}
+
 #[cfg(target_os = "linux")]
 mod native_keyring;

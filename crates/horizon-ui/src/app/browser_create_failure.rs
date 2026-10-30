@@ -3,7 +3,7 @@
 use horizon_core::browser::manifest::{self, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult};
 use horizon_core::browser::{BackendKind, BrowserStatus};
 
-use super::browser_create_lifecycle::PendingBrowserCreate;
+use super::browser_create_lifecycle::CreatedPanel;
 use super::browser_host_io::HostIo;
 
 /// A create that did not become controllable before its deadline.
@@ -38,11 +38,23 @@ pub(super) fn terminal_create_failure(
     }
 }
 
-/// Audits and publishes a failed create on the coordination worker.
-pub(super) fn record_and_complete_failure(io: &mut HostIo, pending: &PendingBrowserCreate, code: &str, message: &str) {
-    let result = BrowserCreateResult::failed(&pending.request, code, message);
-    let (panel_local_id, request) = (pending.panel_local_id.clone(), pending.request.clone());
-    let (backend, orientation) = (pending.backend, pending.startup_orientation);
+/// Audits and publishes a failed create on the coordination worker. A create
+/// that never opened its panel has no dispatch to audit, so only its result is
+/// published: the agent still reads the typed refusal.
+pub(super) fn record_and_complete_failure(
+    io: &mut HostIo,
+    request: &BrowserCreateRequest,
+    panel: Option<&CreatedPanel>,
+    code: &str,
+    message: &str,
+) {
+    let result = BrowserCreateResult::failed(request, code, message);
+    let request = request.clone();
+    let Some(panel) = panel else {
+        io.write(move || complete_result(&result));
+        return;
+    };
+    let (panel_local_id, backend, orientation) = (panel.local_id.clone(), panel.backend, panel.startup_orientation);
     io.write(move || {
         record_create_failure(&panel_local_id, &request, backend, orientation);
         complete_result(&result);

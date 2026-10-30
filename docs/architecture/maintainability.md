@@ -336,7 +336,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   - `browser_create_dispatch`: the host side of a claimed create request, which
     creates the panel, audits its dispatch and publishes its result
   - `browser_create_lifecycle`: the pending creates that the host starts,
-    judges for readiness and retires when the board goes away
+    judges for readiness and retires when the board goes away; a starting
+    create is judged on the manifest snapshot the coordination worker last
+    read at a bounded interval, and a remote create waits there for its
+    credential values and its provider slot
   - `browser_create_failure`: the terminal failures that a create reports
   - `browser_manifest_stamp`: the host stamp of the browser manifests, and the
     workspace stamp that keeps MCP authorization current
@@ -356,9 +359,17 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   - `browser_cleanup`: closes ended browser panels on the host polling cadence,
     after pending creates report their failure; uses the core board's ended-session
     query and existing close path so remote holds and teardown remain tracked
-  - `browser_remote_create`: planning for a create that names a remote target:
-    provider, capabilities and credentials resolved before any panel exists,
-    typed refusals that carry no value, and the per-provider session limit
+  - `browser_remote_create`: planning for a create that names a remote target
+    from configuration and from the values the workbench read, so no frame
+    takes a credential-store lock: provider, capabilities and credentials
+    resolved before any panel exists, typed refusals that carry no value, the
+    per-provider session limit, and the bookkeeping of holds and leases
+  - `browser_remote_credentials`: the OS-store values a remote create needs,
+    read one at a time on the workbench thread and polled without waiting, so
+    a locked store never holds a frame
+  - `browser_remote_slots`: the provider slot of a remote create, leased on
+    the coordination worker, and the allocation each applied lease is recorded
+    in until its release is established
   - `canvas`: canvas rendering and HUD
   - `canvas_scroll`: viewport-local scroll gesture ownership and canvas event consumption
   - `canvas_drag`: viewport-local ownership for primary drags starting on empty canvas

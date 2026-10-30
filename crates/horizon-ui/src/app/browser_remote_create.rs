@@ -3,16 +3,31 @@
 //! provider, the capabilities and the authorization from configuration and
 //! the credential workbench, and refuses with a typed reason that never
 //! carries a credential value.
+//!
+//! The plan reads the in-memory stores only. The values that only the OS store
+//! holds are read on the workbench thread before it runs
+//! ([`browser_remote_credentials`](super::browser_remote_credentials)), and the
+//! provider slot is leased on the coordination worker
+//! ([`browser_remote_slots`](super::browser_remote_slots)), so a locked store or
+//! a slot another Horizon instance holds never stalls a window.
 
 use horizon_core::Config;
-use horizon_core::browser::{
-    BackendKind, RemoteRequestError, RemoteSessionRequest, build_remote_session_request, remote_slots,
-};
+use horizon_core::browser::provider_catalog::CatalogDevice;
+use horizon_core::browser::remote::RemoteBrowserConfig;
+use horizon_core::browser::remote_slots;
+use horizon_core::browser::{BackendKind, RemoteRequestError, RemoteSessionRequest, build_remote_session_request};
 use horizon_core::remote_browser_credential::{
-    CredentialStores, CredentialWorkbench, RemoteCredentialError, RemoteCredentialStore,
+    CredentialStores, CredentialWorkbench, ReadCredentialStore, RemoteCredentialError, RemoteCredentialStore,
+    ResolveError,
 };
 
 use super::HorizonApp;
+use super::browser_create_lifecycle::PendingBrowserCreate;
+use super::browser_request_claims::fail_create;
+
+/// The target name a catalog device is inserted under, so one plan path
+/// resolves a configured target and a discovered device alike.
+const CATALOG_SELECTION_TARGET: &str = "catalog_selection";
 
 /// Everything the host needs to open a panel at a remote target.
 #[derive(Debug)]
@@ -36,15 +51,46 @@ pub(super) struct CreateRefusal {
     pub(super) message: String,
 }
 
-/// Resolve `target` into a session request now, so allocation later never
-/// touches a credential store and a missing or locked credential is
-/// reported to the agent before any panel exists.
+impl CreateRefusal {
+    /// The refusal of a credential that could not be resolved. The same code
+    /// and text describe a value the request resolved directly and one the
+    /// workbench read, so where the value was read never changes the answer.
+    pub(super) fn for_credential(error: &ResolveError) -> Self {
+        if matches!(
+            error.error,
+            RemoteCredentialError::Missing
+                | RemoteCredentialError::Locked
+                | RemoteCredentialError::StoreUnavailable
+                | RemoteCredentialError::Checking
+        ) {
+            Self {
+                code: "credentials_not_ready",
+                message: format!(
+                    "{error}; check the selected credential source in Settings > Remote browsers; environment bindings require the named launch variable"
+                ),
+            }
+        } else {
+            Self {
+                code: "credentials_invalid",
+                message: format!(
+                    "{error}; correct the selected credential source; environment bindings require a valid named launch variable"
+                ),
+            }
+        }
+    }
+}
+
+/// Resolve `target` into a session request, so allocation later never touches a
+/// credential store and a missing or locked credential is reported to the agent
+/// before any panel exists. The session and environment stores are in memory; a
+/// value that only the OS store holds arrives in `os_values`, read on the
+/// workbench thread, so this never takes the store mutex or asks the keychain.
 pub(super) fn plan_remote_create(
-    config: &Config,
+    remote: &RemoteBrowserConfig,
     workbench: &CredentialWorkbench,
+    os_values: Option<&ReadCredentialStore>,
     target: &str,
 ) -> Result<RemoteCreatePlan, CreateRefusal> {
-    let remote = &config.browser.remote;
     let Some(profile) = remote.targets.get(target) else {
         return Err(CreateRefusal {
             code: "target_unknown",
@@ -57,15 +103,9 @@ pub(super) fn plan_remote_create(
         .get(&provider)
         .map(|profile| (remote_slots::quota_key(profile), profile.local_session_limit()))
         .unwrap_or_default();
-    let keychain = workbench.keychain_store();
-    let keychain_guard = keychain
-        .as_ref()
-        .map(|store| store.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     let stores = CredentialStores {
         session: workbench.session_store(),
-        os_keychain: keychain_guard
-            .as_deref()
-            .map(|store| -> &dyn RemoteCredentialStore { &**store }),
+        os_keychain: os_values.map(|values| -> &dyn RemoteCredentialStore { values }),
         environment: Some(workbench.environment_store()),
     };
     let request = build_remote_session_request(remote, target, &stores).map_err(|error| match error {
@@ -77,24 +117,7 @@ pub(super) fn plan_remote_create(
             code: "target_invalid",
             message: error.to_string(),
         },
-        RemoteRequestError::Credential { ref error, .. }
-            if matches!(
-                error.error,
-                RemoteCredentialError::Missing
-                    | RemoteCredentialError::Locked
-                    | RemoteCredentialError::StoreUnavailable
-                    | RemoteCredentialError::Checking
-            ) =>
-        {
-            CreateRefusal {
-                code: "credentials_not_ready",
-                message: format!("{error}; check the selected credential source in Settings > Remote browsers; environment bindings require the named launch variable"),
-            }
-        }
-        RemoteRequestError::Credential { .. } => CreateRefusal {
-            code: "credentials_invalid",
-            message: format!("{error}; correct the selected credential source; environment bindings require a valid named launch variable"),
-        },
+        RemoteRequestError::Credential { error, .. } => CreateRefusal::for_credential(&error),
         RemoteRequestError::Header { .. } => CreateRefusal {
             code: "credentials_invalid",
             message: error.to_string(),
@@ -127,185 +150,80 @@ pub(super) fn remote_session_limit_reached(config: &Config, provider: &str, hold
     limit.is_some_and(|limit| holds >= usize::try_from(limit).unwrap_or(usize::MAX))
 }
 
+/// The remote configuration a create is planned against, and the target name
+/// in it: a configured target, or the catalog device the agent named.
+pub(super) struct RemoteTarget {
+    /// The configuration, carrying a catalog device as the
+    /// [`CATALOG_SELECTION_TARGET`] target when the agent named one.
+    pub(super) remote: RemoteBrowserConfig,
+    /// The target name in `remote`.
+    pub(super) name: String,
+    /// The device a catalog target named, for the request's options.
+    pub(super) catalog: Option<CatalogDevice>,
+}
+
 impl HorizonApp {
-    pub(super) fn plan_and_admit_remote(
-        &mut self,
-        request: &horizon_core::browser::manifest::BrowserCreateRequest,
-        workspace_id: horizon_core::WorkspaceId,
-    ) -> Result<Option<RemoteCreatePlan>, CreateRefusal> {
-        let Some(target) = request.target.as_deref() else {
-            return Ok(None);
+    /// The configuration a create is planned against: the configured target,
+    /// or the catalog device the request named turned into one target.
+    pub(super) fn remote_target(&mut self, target: &str) -> Result<RemoteTarget, CreateRefusal> {
+        let Some(provider) = horizon_core::browser::remote_catalog::target_provider(target) else {
+            return Ok(RemoteTarget {
+                remote: self.template_config.browser.remote.clone(),
+                name: target.to_string(),
+                catalog: None,
+            });
         };
-        let mut plan = if let Some(provider) = horizon_core::browser::remote_catalog::target_provider(target) {
-            let profile = self
-                .template_config
-                .browser
-                .remote
-                .providers
-                .get(provider)
-                .ok_or_else(|| CreateRefusal {
-                    code: "provider_unknown",
-                    message: "Catalog provider is not configured".into(),
-                })?;
-            self.browser_create_host
-                .catalog
-                .cache
-                .invalidate_credentials(self.remote_browser_credentials.generation());
-            let device = self
-                .browser_create_host
-                .catalog
-                .cache
-                .target(profile, target)
-                .map_err(|error| CreateRefusal {
-                    code: "provider_catalog_refresh_required",
-                    message: error.to_string(),
-                })?;
-            let mut config = self.template_config.clone();
-            config.browser.remote.targets.insert(
-                "catalog_selection".into(),
-                horizon_core::browser::provider_catalog::target_profile(device),
-            );
-            let mut plan = plan_remote_create(&config, &self.remote_browser_credentials, "catalog_selection")?;
-            horizon_core::browser::provider_catalog::apply_catalog_options(&mut plan.request, device);
-            plan
-        } else {
-            plan_remote_create(&self.template_config, &self.remote_browser_credentials, target)?
-        };
-        horizon_core::browser::remote_config::override_orientation(&mut plan.request, request.orientation);
-        let workspace = self
-            .board
-            .workspace(workspace_id)
-            .map(|w| w.local_id.clone())
+        let profile = self
+            .template_config
+            .browser
+            .remote
+            .providers
+            .get(provider)
             .ok_or_else(|| CreateRefusal {
-                code: "workspace_unavailable",
-                message: "the requesting workspace no longer exists".into(),
+                code: "provider_unknown",
+                message: "Catalog provider is not configured".into(),
             })?;
-        self.admit_remote_create(&plan, &request.actor, &workspace)
-            .map_err(|(code, message)| CreateRefusal {
-                code,
-                message: message.to_string(),
-            })?;
-        Ok(Some(plan))
-    }
-
-    /// Admit a planned remote create against the provider's quota: first
-    /// this host's own holds, then the slots shared with other Horizon
-    /// instances on this computer.
-    ///
-    /// # Errors
-    /// The typed create refusal when the quota is reached either way.
-    pub(super) fn admit_remote_create(
-        &mut self,
-        plan: &RemoteCreatePlan,
-        owner: &str,
-        workspace: &str,
-    ) -> Result<(), (&'static str, &'static str)> {
-        self.browser_create_host.remote_allocations.poll();
-        let holds = remote_holds(self, &plan.provider);
-        if remote_session_limit_reached(&self.template_config, &plan.provider, holds) {
-            return Err((
-                "remote_session_limit_reached",
-                "the remote provider has reached its configured max_sessions; allocations count until their release is established",
-            ));
-        }
-        let lease = self.lease_remote_slot(plan)?;
-        self.browser_create_host.remote_allocations.insert(
-            horizon_core::browser::remote_recovery::HeldRemoteAllocation {
-                allocation: plan.request.recovery.clone(),
-                provider: plan.provider.clone(),
-                workspace: workspace.to_string(),
-                owner: owner.to_string(),
-                lease,
-            },
-        );
-        Ok(())
-    }
-
-    /// Lease one cross-instance provider slot for the planned create. Other
-    /// Horizon instances on this computer share the quota through slot files
-    /// under the Horizon home; the slot is leased before anything is
-    /// allocated and kept until the release is established. Slot files that
-    /// cannot be used are logged, and the host's own count stands alone.
-    ///
-    /// # Errors
-    /// The typed create refusal when every slot is held.
-    pub(super) fn lease_remote_slot(
-        &mut self,
-        plan: &RemoteCreatePlan,
-    ) -> Result<Option<remote_slots::SlotLease>, (&'static str, &'static str)> {
-        let Some(max_sessions) = plan.max_sessions else {
-            return Ok(None);
-        };
-        let root = self.session_store.home();
-        match remote_slots::acquire_slot(root.root(), &plan.quota_key, max_sessions) {
-            Ok(lease) => Ok(Some(lease)),
-            Err(remote_slots::SlotError::Busy { .. }) => Err((
-                "remote_session_limit_reached",
-                "the remote provider's configured max_sessions are held by Horizon instances on this computer; allocations count until their release is established",
-            )),
-            Err(remote_slots::SlotError::Contended) => Err((
-                "remote_quota_contended",
-                "another Horizon instance on this computer was checking the same provider quota; create again",
-            )),
-            Err(error) => {
-                tracing::warn!(%error, "remote provider slot files unavailable; proceeding on this host's count alone");
-                Ok(None)
-            }
-        }
-    }
-}
-
-/// Free only leases whose exact allocation is released, and prune old board holds.
-pub(super) fn trim_remote_slot_leases(app: &mut HorizonApp) {
-    app.browser_create_host.remote_allocations.poll();
-    app.browser_create_host.orphaned_remote_holds.retain(|hold| {
-        !hold
-            .recovery
-            .as_ref()
-            .is_some_and(horizon_core::browser::RemoteAllocation::is_released)
-    });
-}
-
-impl HorizonApp {
-    /// Take over the unreleased holds of a shutdown that is ending, so they
-    /// keep counting against their provider and their slots stay leased
-    /// after the board is gone.
-    pub(super) fn adopt_orphaned_remote_holds(&mut self, progress: &horizon_core::ShutdownProgress) {
         self.browser_create_host
-            .orphaned_remote_holds
-            .extend(progress.take_unreleased_remote_holds());
-    }
-}
-
-/// Allocations `provider` may still hold anywhere this host knows about:
-/// the board's live and retired remote sessions, plus closes the host is
-/// still waiting on. Each is counted until its release is established, and
-/// the provider identity travels with the session, not with the target
-/// configuration, so re-pointing a target never uncounts an allocation.
-pub(super) fn remote_holds(app: &HorizonApp, provider: &str) -> usize {
-    let pending = app
-        .browser_create_host
-        .pending_closes
-        .iter()
-        .filter(|pending| pending.holds_remote_allocation_at(provider))
-        .count();
-    let orphaned = app
-        .browser_create_host
-        .orphaned_remote_holds
-        .iter()
-        .filter(|held| {
-            held.provider == provider
-                && !held
-                    .recovery
-                    .as_ref()
-                    .is_some_and(horizon_core::browser::RemoteAllocation::is_released)
+            .catalog
+            .cache
+            .invalidate_credentials(self.remote_browser_credentials.generation());
+        let device = self
+            .browser_create_host
+            .catalog
+            .cache
+            .target(profile, target)
+            .cloned()
+            .map_err(|error| CreateRefusal {
+                code: "provider_catalog_refresh_required",
+                message: error.to_string(),
+            })?;
+        let mut remote = self.template_config.browser.remote.clone();
+        remote.targets.insert(
+            CATALOG_SELECTION_TARGET.into(),
+            horizon_core::browser::provider_catalog::target_profile(&device),
+        );
+        Ok(RemoteTarget {
+            remote,
+            name: CATALOG_SELECTION_TARGET.into(),
+            catalog: Some(device),
         })
-        .count();
-    app.board.remote_holds(provider) + pending + orphaned
+    }
+
+    /// Answers a remote create that never opened its panel with its typed
+    /// refusal. No panel exists, so no dispatch audit is written either, and the
+    /// credential values it held are wiped as it drops.
+    pub(super) fn refuse_remote_create(&mut self, pending: &PendingBrowserCreate, refusal: &CreateRefusal) {
+        fail_create(
+            &mut self.browser_create_host.io,
+            &pending.request,
+            refusal.code,
+            &refusal.message,
+        );
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::collections::BTreeMap;
 
     use horizon_core::browser::remote::{
@@ -316,7 +234,7 @@ mod tests {
 
     use super::*;
 
-    fn config() -> Config {
+    pub(in crate::app) fn config() -> Config {
         let mut config = Config::default();
         let mut bindings = BTreeMap::new();
         bindings.insert(
@@ -355,7 +273,7 @@ mod tests {
         config
     }
 
-    fn workbench() -> CredentialWorkbench {
+    pub(in crate::app) fn workbench() -> CredentialWorkbench {
         CredentialWorkbench::with_opener(Box::new(|| {
             Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
         }))
@@ -398,10 +316,7 @@ mod tests {
         app.remote_browser_credentials
             .set_session_value("grid", &profile, &reference, b"replacement")
             .unwrap();
-        let mut request = horizon_core::browser::manifest::BrowserCreateRequest::for_tests("fixture");
-        request.target = Some(target);
-        let workspace = app.board.create_workspace("Local");
-        let Err(error) = app.plan_and_admit_remote(&request, workspace) else {
+        let Err(error) = app.remote_target(&target) else {
             panic!("stale catalog admitted after credential replacement")
         };
         assert_eq!(error.code, "provider_catalog_refresh_required");
@@ -416,9 +331,10 @@ mod tests {
         workbench
             .set_session_value("grid", profile, &CredentialReference::from("key"), b"tok-en")
             .expect("session value");
-        let plan = plan_remote_create(&config, &workbench, "ios_phone").unwrap_or_else(|refused| {
-            panic!("{}: {}", refused.code, refused.message);
-        });
+        let plan =
+            plan_remote_create(&config.browser.remote, &workbench, None, "ios_phone").unwrap_or_else(|refused| {
+                panic!("{}: {}", refused.code, refused.message);
+            });
         assert_eq!(plan.provider, "grid");
         assert_eq!(plan.backend, BackendKind::SafariWebDriver);
         assert_eq!(plan.request.label, "ios_phone");
@@ -428,56 +344,15 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_admission_frees_its_lease_before_the_next_create_in_the_batch() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        app.template_config = config();
-        let mut credentials = workbench();
-        credentials
-            .set_session_value(
-                "grid",
-                &app.template_config.browser.remote.providers["grid"],
-                &CredentialReference::from("key"),
-                b"fixture-token",
-            )
-            .expect("credential");
-        let first = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("first plan");
-        app.admit_remote_create(&first, "owner", "workspace")
-            .expect("first admission");
-        first.request.recovery.cancel_before_launch();
-        assert!(matches!(
-            remote_slots::acquire_slot(app.session_store.home().root(), &first.quota_key, 1),
-            Err(remote_slots::SlotError::Busy { .. })
-        ));
-        let second = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("second plan");
-        // Concurrent process tests can inherit the freed lock until exec.
-        // Retry admission only; an omitted admission-time poll still fails.
-        (0..100)
-            .find_map(|_| match app.admit_remote_create(&second, "owner", "workspace") {
-                Ok(()) => Some(()),
-                Err(("remote_session_limit_reached", _)) => {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                    None
-                }
-                Err(error) => panic!("unexpected admission failure: {error:?}"),
-            })
-            .expect("same-batch admission without a host poll");
-        assert!(
-            matches!(
-                remote_slots::acquire_slot(app.session_store.home().root(), &second.quota_key, 1),
-                Err(remote_slots::SlotError::Busy { .. })
-            ),
-            "the new allocation keeps its lease"
-        );
-    }
-
-    #[test]
     fn refusals_name_the_target_or_reference_and_never_a_value() {
         let config = config();
         let workbench = workbench();
-        let unknown = plan_remote_create(&config, &workbench, "android").expect_err("unknown target");
+        let unknown =
+            plan_remote_create(&config.browser.remote, &workbench, None, "android").expect_err("unknown target");
         assert_eq!(unknown.code, "target_unknown");
         assert!(unknown.message.contains("android"));
-        let not_ready = plan_remote_create(&config, &workbench, "ios_phone").expect_err("missing credential");
+        let not_ready =
+            plan_remote_create(&config.browser.remote, &workbench, None, "ios_phone").expect_err("missing credential");
         assert_eq!(not_ready.code, "credentials_not_ready");
         assert!(not_ready.message.contains("`key`"));
         assert!(not_ready.message.contains(&RemoteCredentialError::Missing.to_string()));
@@ -575,64 +450,5 @@ mod tests {
             1,
             "an established release frees the slot"
         );
-    }
-
-    #[test]
-    fn provider_managed_capacity_bypasses_local_holds_and_locks_but_tracks_ownership() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        app.template_config = config();
-        app.template_config
-            .browser
-            .remote
-            .providers
-            .get_mut("grid")
-            .expect("provider")
-            .adapter = RemoteAdapterKind::Browserstack;
-        let mut credentials = workbench();
-        credentials
-            .set_session_value(
-                "grid",
-                &app.template_config.browser.remote.providers["grid"],
-                &CredentialReference::from("key"),
-                b"synthetic-key",
-            )
-            .expect("credential");
-        assert!(!remote_session_limit_reached(&app.template_config, "grid", usize::MAX));
-        let first = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("first");
-        let second = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("second");
-        let _existing_lock = remote_slots::acquire_slot(app.session_store.home().root(), &first.quota_key, 1)
-            .expect("existing instance");
-        app.admit_remote_create(&first, "owner-a", "workspace")
-            .expect("first admission");
-        app.admit_remote_create(&second, "owner-b", "workspace")
-            .expect("second admission");
-        let records = &mut app.browser_create_host.remote_allocations;
-        assert_eq!(records.summaries(None).len(), 2);
-        assert_eq!(records.summaries(Some(("owner-a", "workspace"))).len(), 1);
-        assert!(!records.reconcile(second.request.recovery.reference(), Some(("owner-a", "workspace"))));
-        first.request.recovery.cancel_before_launch();
-        let released = records.summaries(Some(("owner-a", "workspace")));
-        assert_eq!(
-            released[0].status,
-            horizon_core::browser::RemoteRecoveryStatus::Released
-        );
-        assert_ne!(
-            records.summaries(Some(("owner-b", "workspace")))[0].status,
-            horizon_core::browser::RemoteRecoveryStatus::Released
-        );
-    }
-
-    #[test]
-    fn malformed_credentials_are_invalid_not_merely_missing() {
-        let config = config();
-        let mut workbench = workbench();
-        let profile = &config.browser.remote.providers["grid"];
-        workbench
-            .set_session_value("grid", profile, &CredentialReference::from("key"), b"has space")
-            .expect("session value");
-        let refused = plan_remote_create(&config, &workbench, "ios_phone").expect_err("token grammar");
-        assert_eq!(refused.code, "credentials_invalid");
-        assert!(refused.message.contains("`key`"));
-        assert!(!refused.message.contains("has space"), "no value leaks");
     }
 }

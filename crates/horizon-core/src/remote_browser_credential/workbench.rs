@@ -13,7 +13,8 @@ use zeroize::Zeroizing;
 
 use super::{
     CredentialLocator, CredentialReadiness, CredentialState, CredentialStores, EnvironmentCredentialStore,
-    KeyringCredentialStore, RemoteCredentialError, RemoteCredentialStore, Sealed, SessionCredentialStore, readiness,
+    KeyringCredentialStore, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore,
+    readiness,
 };
 
 /// Boxed store the worker thread owns; the allocation path borrows it later.
@@ -115,6 +116,10 @@ impl Row {
 
 enum Command {
     Probe(Vec<CredentialLocator>),
+    Read(
+        CredentialLocator,
+        Sender<Result<Zeroizing<Vec<u8>>, RemoteCredentialError>>,
+    ),
     Put(CredentialLocator, Zeroizing<Vec<u8>>, Row),
     Delete(CredentialLocator, Row),
 }
@@ -130,6 +135,35 @@ struct KeychainLink {
     commands: Sender<Command>,
     events: Receiver<Event>,
     store: SharedStore,
+}
+
+/// The worker's answer to one read of a value that only the OS store holds.
+/// The value is a zeroizing buffer, and it reaches nothing but the caller that
+/// asked for it: polling never waits, so a locked store or an unlock prompt
+/// holds only the workbench thread.
+pub struct CredentialValueReply {
+    answer: Receiver<Result<Zeroizing<Vec<u8>>, RemoteCredentialError>>,
+    answered: bool,
+}
+
+impl CredentialValueReply {
+    /// The answer, or `None` while the workbench has not answered yet. A
+    /// worker that ended without answering reports an unavailable store, so a
+    /// caller waiting for the value refuses its request instead of waiting
+    /// for the create deadline. A read answers once.
+    #[must_use]
+    pub fn poll(&mut self) -> Option<Result<Zeroizing<Vec<u8>>, RemoteCredentialError>> {
+        if self.answered {
+            return None;
+        }
+        let answer = match self.answer.try_recv() {
+            Ok(answer) => answer,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err(RemoteCredentialError::StoreUnavailable),
+        };
+        self.answered = true;
+        Some(answer)
+    }
 }
 
 /// Session store plus a keychain worker, with a presence cache the UI reads.
@@ -483,12 +517,46 @@ impl CredentialWorkbench {
         &self.environment
     }
 
+    /// Ask the workbench thread to read one value from the OS store. The
+    /// answer arrives through the reply, so the caller never takes the store
+    /// mutex and never asks the keychain on its own thread. The value is read
+    /// as the store holds it, and every check of it belongs to the caller.
+    ///
+    /// # Errors
+    /// The reference must be bound to the OS store, which must be available.
+    pub fn request_value(
+        &mut self,
+        profile: &RemoteProviderProfile,
+        reference: &CredentialReference,
+    ) -> Result<CredentialValueReply, RemoteCredentialError> {
+        let locator = Self::locator(profile, reference, CredentialStoreKind::OsKeychain)?;
+        let commands = self.available_link()?.commands.clone();
+        let (answers, answer) = channel();
+        commands
+            .send(Command::Read(locator, answers))
+            .map_err(|_| RemoteCredentialError::StoreUnavailable)?;
+        Ok(CredentialValueReply {
+            answer,
+            answered: false,
+        })
+    }
+
+    /// Whether the OS store answered and a value can be read from it: the same
+    /// state [`Self::keychain_store`] offers the store in.
+    #[must_use]
+    pub fn keychain_available(&self) -> bool {
+        matches!(
+            (&self.keychain, &self.keychain_state),
+            (Some(_), KeychainState::Available)
+        )
+    }
+
     #[must_use]
     pub fn keychain_store(&self) -> Option<SharedStore> {
-        match (&self.keychain, &self.keychain_state) {
-            (Some(link), KeychainState::Available) => Some(Arc::clone(&link.store)),
-            _ => None,
+        if !self.keychain_available() {
+            return None;
         }
+        self.keychain.as_ref().map(|link| Arc::clone(&link.store))
     }
 
     fn request_probe(&mut self, profile: &RemoteProviderProfile) {
@@ -553,6 +621,23 @@ fn state_from(result: &Result<bool, RemoteCredentialError>) -> CredentialState {
         Ok(false) | Err(RemoteCredentialError::Missing) => CredentialState::Missing,
         Err(RemoteCredentialError::Locked) => CredentialState::Locked,
         Err(_) => CredentialState::StoreUnavailable,
+    }
+}
+
+/// Accepts one value from the OS store into a zeroizing buffer, for a caller
+/// on another thread. It checks nothing: the caller checks the value when it
+/// builds the request, with the same checks the store's own path applies.
+#[derive(Default)]
+struct StoreValueSink {
+    value: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl Sealed for StoreValueSink {}
+
+impl SecretSink for StoreValueSink {
+    fn accept(&mut self, bytes: &[u8]) -> Result<(), RemoteCredentialError> {
+        self.value = Some(Zeroizing::new(bytes.to_vec()));
+        Ok(())
     }
 }
 
@@ -622,6 +707,16 @@ fn worker(opener: StoreOpener, shared: &SharedStore, commands: &Receiver<Command
                 }
                 continue;
             }
+            // A read answers only the caller that asked for it, so an answer
+            // nobody waits for any more must not end the worker.
+            Command::Read(locator, answers) => {
+                let mut sink = StoreValueSink::default();
+                let result = store
+                    .with_secret(&locator, &mut sink)
+                    .and_then(|()| sink.value.take().ok_or(RemoteCredentialError::Missing));
+                let _ = answers.send(result);
+                continue;
+            }
             Command::Put(locator, value, row) => {
                 let result = store.put(&locator, &value);
                 Event::Stored(locator, result, row)
@@ -634,5 +729,26 @@ fn worker(opener: StoreOpener, shared: &SharedStore, commands: &Receiver<Command
         if events.send(outcome).is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_read_answers_once_and_a_worker_that_ended_answers_an_unavailable_store() {
+        let (answers, answer) = channel();
+        let mut reply = CredentialValueReply {
+            answer,
+            answered: false,
+        };
+        assert!(reply.poll().is_none(), "the worker has not answered yet");
+        drop(answers);
+        assert_eq!(
+            reply.poll().map(|answer| answer.map(|value| value.to_vec())),
+            Some(Err(RemoteCredentialError::StoreUnavailable))
+        );
+        assert!(reply.poll().is_none(), "a read answers once");
     }
 }
