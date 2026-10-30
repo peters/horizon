@@ -358,6 +358,8 @@ pub struct HorizonApp {
     root_viewport_stabilizer: Option<root_viewport::RootViewportStabilizer>,
     file_hover_positions: HashMap<ViewportId, Pos2>,
     file_drop_highlight: Option<file_drop::FileDropHighlight>,
+    /// Dropped editor files whose size read runs on the coordination worker.
+    pending_editor_drops: file_drop::PendingEditorDrops,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     git_watchers: HashMap<WorkspaceId, GitWatcher>,

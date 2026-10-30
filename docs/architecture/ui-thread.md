@@ -150,6 +150,14 @@ start one thread for each write.
   write for a replaced board, for example a claim, takes a board fence when
   the UI sends it. Before it writes, the job checks the fence. If the board
   was replaced, the job writes nothing.
+- Horizon reads the size of a dropped editor file on that worker too.
+  `queue_dropped_editor_file`
+  ([`file_drop/editor_panels.rs`](../../crates/horizon-ui/src/app/file_drop/editor_panels.rs))
+  records the drop that the frame resolved in `pending_editor_drops`, and it
+  queues the read of `editor_panel_size_for_file`. One panel for each file opens
+  on the frame that applies its size, in the order the person dropped the
+  files. A read that applies after a board replacement opens no panel. A file
+  that is not there opens its panel with the default size.
 
 ### One claim at a time, and one answer per request
 
@@ -341,6 +349,11 @@ after the call, so a new test must also start the release thread of step 2.
   holds the file lock of a coordination queue from a helper thread that releases
   it on a signal, as step 2 requires. It also checks that the claim runs on the
   worker and that the request is still answered.
+- `a_held_read_never_stalls_the_drop_frame` in
+  [`file_drop/editor_panels/tests.rs`](../../crates/horizon-ui/src/app/file_drop/editor_panels/tests.rs)
+  drops a file that is a named pipe and releases it from a helper thread. It
+  checks that the frame that takes the drop returns, that the panel opens after
+  the read, and that the panel has the size of the file.
 
 ## Known UI-thread work
 
@@ -348,10 +361,13 @@ This work still runs on the UI thread. Do not copy it into new code.
 
 - The Device request claim and the `manifest::read` of a browser capture in
   `capture_panel`
-  ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)),
-  and the read of a dropped file in `editor_panel_size_for_file`
-  ([`util.rs`](../../crates/horizon-ui/src/app/util.rs)).
+  ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)).
   [#1917](https://github.com/peters/horizon/issues/1917) tracks them.
+- The read of the content of an editor panel when the panel opens: `spawn_editor`
+  ([`panel/spawn.rs`](../../crates/horizon-core/src/panel/spawn.rs)) calls
+  `MarkdownEditor::open`, which reads the file. A dropped file is sized on the
+  coordination worker, but this read of its content still runs on the frame
+  that opens its panel.
 - The save of a recovered startup board (`save_recovered_startup_runtime_state`
   in [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
   and renames the session file on the UI thread, without a sync. While the

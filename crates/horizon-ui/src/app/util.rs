@@ -73,6 +73,11 @@ pub(super) fn format_relative_time(timestamp_millis: i64) -> String {
     format!("active {}d ago", age.as_secs() / (60 * 60 * 24))
 }
 
+/// The size of an editor panel whose file Horizon cannot read.
+pub(super) const EDITOR_PANEL_FALLBACK_SIZE: [f32; 2] = [520.0, 400.0];
+
+/// The size an editor panel needs for the text of `path`, which this call
+/// reads: it runs on the coordination worker, never on the UI thread.
 pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
     const CHAR_W: f32 = 8.0;
     const LINE_H: f32 = 20.0;
@@ -83,7 +88,7 @@ pub(super) fn editor_panel_size_for_file(path: &std::path::Path) -> [f32; 2] {
     const MAX_H: f32 = 800.0;
 
     let Ok(content) = std::fs::read_to_string(path) else {
-        return [520.0, 400.0];
+        return EDITOR_PANEL_FALLBACK_SIZE;
     };
 
     let line_count = content.lines().count().max(1);

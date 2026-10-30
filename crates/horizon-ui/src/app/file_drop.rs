@@ -2,14 +2,16 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use egui::{Context, Pos2, Rect};
-use horizon_core::{PanelId, PanelKind, PanelOptions, WorkspaceId};
+use horizon_core::{PanelId, PanelKind, WorkspaceId};
 
 use crate::input;
 
 mod browser;
+mod editor_panels;
+
+pub(in crate::app) use editor_panels::PendingEditorDrops;
 
 use super::HorizonApp;
-use super::util::editor_panel_size_for_file;
 
 #[derive(Clone, Copy)]
 enum FileDropScope {
@@ -416,8 +418,15 @@ impl HorizonApp {
             }
         }
 
-        let canvas_pos = screen_pos.map(|pos| self.screen_to_canvas(canvas_rect, pos));
+        let canvas_position = screen_pos.map(|pos| {
+            let pos = self.screen_to_canvas(canvas_rect, pos);
+            [pos.x, pos.y]
+        });
 
+        // The size of each panel comes from its file, which the coordination
+        // worker reads: the frame that takes the drop never waits for a large
+        // or missing file, and one panel per file opens on the frame that
+        // applies its size, in drop order.
         for file in dropped {
             let path = file.path().to_path_buf();
             if !is_editor_drop_path(&path) {
@@ -425,19 +434,8 @@ impl HorizonApp {
             }
 
             let workspace_id = *workspace_id.get_or_insert_with(|| self.ensure_workspace_visible(ctx));
-            let options = PanelOptions {
-                name: path.file_name().map(|name| name.to_string_lossy().to_string()),
-                command: Some(path.display().to_string()),
-                kind: PanelKind::Editor,
-                position: canvas_pos.map(|pos| [pos.x, pos.y]),
-                size: Some(editor_panel_size_for_file(&path)),
-                ..PanelOptions::default()
-            };
-            match self.create_panel_with_options(options, workspace_id) {
-                Ok(panel_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
-                Err(error) => tracing::error!("failed to create editor panel from dropped file: {error}"),
-            }
-            self.mark_runtime_dirty();
+            let name = path.file_name().map(|name| name.to_string_lossy().to_string());
+            self.queue_dropped_editor_file(path, workspace_id, canvas_position, name, ctx);
         }
     }
 }
@@ -654,6 +652,9 @@ mod tests {
         });
         let before = app.board.panels.len();
         app.handle_root_file_drop(&ctx);
+        // Each file is read on the coordination worker, so its panel opens on
+        // a later frame.
+        app.settle_browser_host_io();
         assert_eq!(app.board.panels.len(), before + 2);
     }
 
@@ -686,6 +687,9 @@ mod tests {
         ctx.input_mut(|input| input.raw.dropped_files = tokens);
         let before = app.board.panels.len();
         app.handle_root_file_drop(&ctx);
+        // Each file is read on the coordination worker, so its panel opens on
+        // a later frame.
+        app.settle_browser_host_io();
         assert_eq!(app.board.panels.len(), before + 5);
         assert!(
             observed

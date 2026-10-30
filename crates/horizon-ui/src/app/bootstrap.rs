@@ -12,7 +12,7 @@ use horizon_core::{
 
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
-    StartupChooserState, resolve_shortcuts, settings, speech, util,
+    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, settings, speech, util,
 };
 use crate::command_registry::{self, CommandEntry};
 use crate::input;
@@ -112,10 +112,8 @@ impl HorizonApp {
         Self {
             #[cfg(target_os = "linux")] casting: super::casting::CastState::new(session_store.home().root().join("cast-pairings")),
             board, #[cfg(feature = "cloud-workspaces")] cloud_prototype: super::cloud_panel::CloudPrototype::default(),
-            panels_to_close: Vec::new(),
-            panels_to_restart: Vec::new(),
-            workspace_assignments: Vec::new(),
-            workspace_creates: Vec::new(),
+            panels_to_close: Vec::new(), panels_to_restart: Vec::new(),
+            workspace_assignments: Vec::new(), workspace_creates: Vec::new(),
             appearance_theme: config.appearance.theme,
             resolved_theme,
             theme_applied: false,
@@ -185,6 +183,7 @@ impl HorizonApp {
             root_viewport_stabilizer: None,
             file_hover_positions: HashMap::new(),
             file_drop_highlight: None,
+            pending_editor_drops: PendingEditorDrops::default(),
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),
