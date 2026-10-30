@@ -77,8 +77,8 @@ ordered worker thread, and
 [#1489](https://github.com/peters/horizon/pull/1489) moved the stamps, audits
 and results to the same worker thread. This guide also covers the request and
 result half of the same work: the recovery claims and answers, the provider
-usage, catalog and cloud offer results, and the manifest owner read of each
-remote panel.
+usage, catalog, cloud offer and cloud request results, and the manifest owner
+read of each remote panel.
 
 ## Patterns
 
@@ -172,9 +172,17 @@ Answer a request on the worker, and only once. A request that was claimed is
 answered from the state in memory. A write that fails does not put the request
 back in the list of pending requests.
 
-- `publish_host_usage_result` writes the answer of a usage, catalog or cloud
-  offer request with one worker write. The write that follows finds no request
-  file and writes nothing.
+- `publish_host_usage_result` writes the answer of a usage, catalog, cloud
+  offer or cloud request with one worker write. The write that follows finds no
+  request file and writes nothing.
+- The agent request polls of the cloud cards (`poll_cloud_create_requests`,
+  `poll_cloud_delete_requests`, `poll_cloud_companion_requests` and
+  `answer_cloud_list_requests`) run on the UI thread and only build the answer
+  there. Each one hands the answer to `publish_host_usage_result`, with
+  `answer_result` in `create_agent.rs`, `delete_agent.rs` and
+  `companions/agent.rs`.
+- A cloud command (`exec.rs`) runs on its own thread, which answers the queue
+  there. No UI path of it reaches the queue.
 - The cloud offer poll answers each request once. Its deadline bounds the wait
   for the prices. The poll takes no lock of its own.
 

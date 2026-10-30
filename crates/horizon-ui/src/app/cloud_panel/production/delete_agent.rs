@@ -7,7 +7,7 @@ use crate::app::browser_requests::actor_panel;
 use egui::Context;
 use horizon_core::browser::manifest::{
     self,
-    provider_usage::{CloudDeleteOperation, CloudDeleteRequest, UsageRequest},
+    provider_usage::{CloudDeleteOperation, CloudDeleteRequest, UsageRequest, UsageResult},
 };
 use horizon_core::cloud_runtime::{
     Cancellation, Event,
@@ -163,7 +163,7 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel) fn poll_cloud_delete_requests(&mut self, ctx: &egui::Context) {
         for request in std::mem::take(&mut self.cloud_prototype.production.delete_agent.queued) {
             let answer = self.answer_cloud_delete(&request, ctx);
-            complete(&request, answer);
+            self.publish_host_usage_result(answer_result(&request, answer));
         }
         for message in self.cloud_prototype.production.delete_agent.messages() {
             self.apply_delete_message(message);
@@ -473,16 +473,16 @@ fn audit(request: &UsageRequest, answer: &Result<Value, String>) {
     );
 }
 
-fn complete(request: &UsageRequest, answer: Result<Value, String>) {
+/// The answer of one deletion, as the result the coordination worker writes for
+/// the request.
+fn answer_result(request: &UsageRequest, answer: Result<Value, String>) -> UsageResult {
     audit(request, &answer);
     let mut result = request.result(Vec::new(), None);
     match answer {
         Ok(value) => result.cloud_delete = Some(value),
         Err(error) => result.error = Some(error),
     }
-    if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-        tracing::warn!(kind = ?error.kind(), "could not answer a cloud delete request");
-    }
+    result
 }
 
 /// Whether the record this deletion saved is newer than what the card shows: it names the

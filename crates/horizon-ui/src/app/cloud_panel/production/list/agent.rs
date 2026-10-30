@@ -19,7 +19,8 @@ impl HorizonApp {
         self.cloud_prototype.production.list_requests.push(request);
     }
 
-    /// Answers the queued cloud list requests.
+    /// Answers the queued cloud list requests on the coordination worker, so a
+    /// slow disk never stalls the frame that answers them.
     pub(in crate::app::cloud_panel) fn answer_cloud_list_requests(&mut self, ctx: &egui::Context) {
         for request in std::mem::take(&mut self.cloud_prototype.production.list_requests) {
             let answer = self.answer_cloud_list(&request, ctx);
@@ -28,9 +29,7 @@ impl HorizonApp {
                 Ok(value) => result.cloud_list = Some(value),
                 Err(error) => result.error = Some(error),
             }
-            if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-                tracing::warn!(kind = ?error.kind(), "could not answer a cloud list request");
-            }
+            self.publish_host_usage_result(result);
         }
     }
 

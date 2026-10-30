@@ -8,7 +8,7 @@ use crate::app::browser_requests::actor_panel;
 use horizon_core::{
     browser::manifest::{
         self,
-        provider_usage::{CompanionAction, CompanionRequest, UsageRequest},
+        provider_usage::{CompanionAction, CompanionRequest, UsageRequest, UsageResult},
     },
     cloud_runtime::{
         self, Cancellation, Event, Stage,
@@ -120,7 +120,7 @@ impl HorizonApp {
         }
         for request in std::mem::take(&mut self.cloud_prototype.production.companions.agent.queued) {
             if let Err(error) = self.start_companion_request(&request, ctx) {
-                complete(&request, Err(error));
+                self.publish_host_usage_result(answer_result(&request, Err(error)));
             }
         }
         for message in self.cloud_prototype.production.companions.agent.messages() {
@@ -143,7 +143,7 @@ impl HorizonApp {
                     if !started {
                         self.release_companion_source(&source);
                     }
-                    complete(&request, answer);
+                    self.publish_host_usage_result(answer_result(&request, answer));
                 }
                 Message::Unchecked {
                     request,
@@ -164,7 +164,7 @@ impl HorizonApp {
                         entry.queue(Action::Clear { alias: alias.clone() });
                     }
                     self.release_companion_source(&source);
-                    complete(&request, uncheck::answer(&source, &alias, saved));
+                    self.publish_host_usage_result(answer_result(&request, uncheck::answer(&source, &alias, saved)));
                 }
                 Message::Executed { source, target } => {
                     self.cloud_prototype
@@ -239,7 +239,7 @@ impl HorizonApp {
             .map(|workspace| workspace.local_id.clone())
             .ok_or("cloud_companion_unavailable: requires a Horizon agent panel")?;
         if companion.action == CompanionAction::List {
-            complete(request, Ok(self.companion_listing(&workspace)));
+            self.publish_host_usage_result(answer_result(request, Ok(self.companion_listing(&workspace))));
             return Ok(());
         }
         let source = companion.cloud.clone().unwrap_or_default();
@@ -292,7 +292,7 @@ impl HorizonApp {
                         wake.request_repaint();
                     });
                 }
-                answer => complete(request, answer.map(Option::unwrap_or_default)),
+                answer => self.publish_host_usage_result(answer_result(request, answer.map(Option::unwrap_or_default))),
             }
             ctx.request_repaint();
             return Ok(());
@@ -681,15 +681,15 @@ fn hint(phase: Phase) -> &'static str {
     }
 }
 
-fn complete(request: &UsageRequest, answer: Result<Value, String>) {
+/// The answer of one companion request, as the result the coordination worker
+/// writes for the request.
+fn answer_result(request: &UsageRequest, answer: Result<Value, String>) -> UsageResult {
     let mut result = request.result(Vec::new(), None);
     match answer {
         Ok(value) => result.companion = Some(value),
         Err(error) => result.error = Some(error),
     }
-    if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-        tracing::warn!(kind = ?error.kind(), "could not answer a cloud companion request");
-    }
+    result
 }
 
 #[cfg(test)]
