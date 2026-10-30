@@ -8,7 +8,7 @@ use crate::app::browser_requests::actor_panel;
 use egui::Context;
 use horizon_core::browser::manifest::{
     self,
-    provider_usage::{CloudCreateOperation, CloudCreateRequest, UsageRequest},
+    provider_usage::{CloudCreateOperation, CloudCreateRequest, UsageRequest, UsageResult},
 };
 use horizon_core::cloud_panel::{CloudLaunch, Placement};
 use horizon_core::cloud_runtime::prices::Profile;
@@ -207,7 +207,7 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel) fn poll_cloud_create_requests(&mut self, ctx: &egui::Context) {
         for request in std::mem::take(&mut self.cloud_prototype.production.create_agent.queued) {
             let answer = self.answer_cloud_create(&request, ctx);
-            complete(&request, answer);
+            self.publish_host_usage_result(answer_result(&request, answer), request.deadline_at_millis);
         }
         for message in self.cloud_prototype.production.create_agent.messages() {
             self.apply_create_message(message, ctx);
@@ -646,15 +646,15 @@ fn status(running: &Operation, runtime: Option<&Runtime>) -> Value {
     })
 }
 
-fn complete(request: &UsageRequest, answer: Result<Value, String>) {
+/// The answer one operation gives, as the result the coordination worker
+/// writes for the request.
+fn answer_result(request: &UsageRequest, answer: Result<Value, String>) -> UsageResult {
     let mut result = request.result(Vec::new(), None);
     match answer {
         Ok(value) => result.cloud_create = Some(value),
         Err(error) => result.error = Some(error),
     }
-    if let Err(error) = manifest::provider_usage::complete_provider_usage(&result) {
-        tracing::warn!(kind = ?error.kind(), "could not answer a cloud create request");
-    }
+    result
 }
 
 /// The cloud's name on its card: the name the agent chose, or the repository's folder.

@@ -50,7 +50,7 @@ impl HorizonApp {
 
     pub(in crate::app) fn answer_image_destination(&mut self, request: &UsageRequest, ctx: &egui::Context) {
         let result = self.image_destination_result(request, ctx);
-        self.publish_host_usage_result(result);
+        self.publish_host_usage_result(result, request.deadline_at_millis);
     }
 
     fn image_destination_result(

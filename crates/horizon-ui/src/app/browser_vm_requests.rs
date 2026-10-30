@@ -162,7 +162,7 @@ impl HorizonApp {
             Ok(status) => answer.browser_vm = Some(describe(status)),
             Err(error) => answer.error = Some(error.clone()),
         }
-        self.publish_host_usage_result(answer);
+        self.publish_host_usage_result(answer, request.deadline_at_millis);
         let action = request
             .browser_vm
             .as_ref()

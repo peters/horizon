@@ -207,7 +207,9 @@ fn audit(actor: &str, exec: &CloudExecRequest, outcome: &Outcome, duration: Dura
     record
 }
 
-/// Answers the queue with the result of one request.
+/// Answers the queue with the result of one request. Every caller runs on the
+/// request's own thread, never on the UI thread, so the write takes its lock
+/// there.
 fn complete(request: &UsageRequest, outcome: &Outcome) {
     let mut result = request.result(Vec::new(), outcome.error());
     if let Outcome::Ran(answer) = outcome {

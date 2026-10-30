@@ -24,6 +24,9 @@ pub(super) struct BrowserCreateHostState {
     /// Claimed `cloud_offers` requests waiting for current prices.
     pub(super) cloud_offers: Vec<manifest::provider_usage::UsageRequest>,
     pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
+    /// Answers to recovery requests that the coordination worker could not
+    /// write yet, for a later frame and until each request's deadline.
+    pub(super) recovery_answers: super::answer_retries::RefusedAnswers<manifest::recovery::RecoveryResult>,
     pub(super) pending: Vec<PendingBrowserCreate>,
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.
@@ -50,6 +53,11 @@ pub(super) struct BrowserCreateHostState {
     stamp_failed: Option<u64>,
     /// A claim of the agents' requests runs on the coordination worker.
     pub(super) claiming: bool,
+    /// A claim of the agents' recovery requests runs on the coordination worker.
+    pub(super) recovery_claiming: bool,
+    /// The read of the remote panels' manifest owners runs on the coordination
+    /// worker, so one slow read is not queued again on every tick and close.
+    pub(super) scope_reading: bool,
     /// Panels whose visibility request runs on the coordination worker, with
     /// the visibility it sets; until it ends, a stamp keeps their manifest's.
     pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,
