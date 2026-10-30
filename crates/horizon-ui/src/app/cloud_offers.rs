@@ -22,7 +22,7 @@ impl HorizonApp {
             };
             // One answer per request: the request file is written once, and a
             // later answer for it would find no request file and write nothing.
-            self.publish_host_usage_result(result);
+            self.publish_host_usage_result(result, request.deadline_at_millis);
             changed = true;
         }
         changed

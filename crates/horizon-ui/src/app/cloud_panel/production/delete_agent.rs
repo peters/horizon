@@ -163,7 +163,7 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel) fn poll_cloud_delete_requests(&mut self, ctx: &egui::Context) {
         for request in std::mem::take(&mut self.cloud_prototype.production.delete_agent.queued) {
             let answer = self.answer_cloud_delete(&request, ctx);
-            self.publish_host_usage_result(answer_result(&request, answer));
+            self.publish_host_usage_result(answer_result(&request, answer), request.deadline_at_millis);
         }
         for message in self.cloud_prototype.production.delete_agent.messages() {
             self.apply_delete_message(message);

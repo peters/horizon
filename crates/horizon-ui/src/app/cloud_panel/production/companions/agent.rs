@@ -120,7 +120,7 @@ impl HorizonApp {
         }
         for request in std::mem::take(&mut self.cloud_prototype.production.companions.agent.queued) {
             if let Err(error) = self.start_companion_request(&request, ctx) {
-                self.publish_host_usage_result(answer_result(&request, Err(error)));
+                self.publish_host_usage_result(answer_result(&request, Err(error)), request.deadline_at_millis);
             }
         }
         for message in self.cloud_prototype.production.companions.agent.messages() {
@@ -143,7 +143,7 @@ impl HorizonApp {
                     if !started {
                         self.release_companion_source(&source);
                     }
-                    self.publish_host_usage_result(answer_result(&request, answer));
+                    self.publish_host_usage_result(answer_result(&request, answer), request.deadline_at_millis);
                 }
                 Message::Unchecked {
                     request,
@@ -164,7 +164,10 @@ impl HorizonApp {
                         entry.queue(Action::Clear { alias: alias.clone() });
                     }
                     self.release_companion_source(&source);
-                    self.publish_host_usage_result(answer_result(&request, uncheck::answer(&source, &alias, saved)));
+                    self.publish_host_usage_result(
+                        answer_result(&request, uncheck::answer(&source, &alias, saved)),
+                        request.deadline_at_millis,
+                    );
                 }
                 Message::Executed { source, target } => {
                     self.cloud_prototype
@@ -239,7 +242,10 @@ impl HorizonApp {
             .map(|workspace| workspace.local_id.clone())
             .ok_or("cloud_companion_unavailable: requires a Horizon agent panel")?;
         if companion.action == CompanionAction::List {
-            self.publish_host_usage_result(answer_result(request, Ok(self.companion_listing(&workspace))));
+            self.publish_host_usage_result(
+                answer_result(request, Ok(self.companion_listing(&workspace))),
+                request.deadline_at_millis,
+            );
             return Ok(());
         }
         let source = companion.cloud.clone().unwrap_or_default();
@@ -292,7 +298,10 @@ impl HorizonApp {
                         wake.request_repaint();
                     });
                 }
-                answer => self.publish_host_usage_result(answer_result(request, answer.map(Option::unwrap_or_default))),
+                answer => self.publish_host_usage_result(
+                    answer_result(request, answer.map(Option::unwrap_or_default)),
+                    request.deadline_at_millis,
+                ),
             }
             ctx.request_repaint();
             return Ok(());

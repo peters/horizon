@@ -24,6 +24,9 @@ pub(super) struct BrowserCreateHostState {
     /// Claimed `cloud_offers` requests waiting for current prices.
     pub(super) cloud_offers: Vec<manifest::provider_usage::UsageRequest>,
     pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
+    /// Answers to recovery requests that the coordination worker could not
+    /// write yet, for a later frame and until each request's deadline.
+    pub(super) recovery_answers: super::answer_retries::RefusedAnswers<manifest::recovery::RecoveryResult>,
     pub(super) pending: Vec<PendingBrowserCreate>,
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.

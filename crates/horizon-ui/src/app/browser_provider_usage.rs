@@ -10,6 +10,7 @@ use horizon_core::browser::manifest::{
 use horizon_core::browser::remote::RemoteProviderProfile;
 use horizon_core::browser::remote_usage::ProviderUsageMonitor;
 
+use super::answer_retries::{RefusedAnswer, RefusedAnswers};
 use super::{HorizonApp, browser_requests::actor_panel};
 
 #[derive(Default)]
@@ -17,6 +18,8 @@ pub(super) struct UsageHostState {
     pending: Vec<PendingUsage>,
     /// A claim of the agents' requests runs on the coordination worker.
     claiming: bool,
+    /// Answers the coordination worker could not write, for a later frame.
+    refused: RefusedAnswers<UsageResult>,
     /// The queue this host claims its requests from and answers them on. A
     /// test polls its own root, and the answers follow it.
     queue: UsageQueue,
@@ -35,15 +38,49 @@ struct PendingUsage {
 
 impl HorizonApp {
     /// Answers `result` on the coordination worker, on the queue the request
-    /// was claimed from. A request is answered once: a later answer for it
-    /// finds no request file and writes nothing.
-    pub(in crate::app) fn publish_host_usage_result(&mut self, result: UsageResult) {
+    /// was claimed from. A write that fails keeps the result, which a later
+    /// frame writes again until `deadline_at_millis`. A request is answered
+    /// once: a successful write removes the request file, so a later write of
+    /// the same answer finds no request file and writes nothing.
+    pub(in crate::app) fn publish_host_usage_result(&mut self, result: UsageResult, deadline_at_millis: i64) {
+        let request_id = result.request_id.clone();
+        self.write_host_usage_result(RefusedAnswer::new(result, request_id, deadline_at_millis));
+    }
+
+    /// Writes one answer on the coordination worker. A write that fails, or a
+    /// job that panics, keeps the answer: the request stays claimed, so the
+    /// host writes the same result again rather than claim the request again.
+    fn write_host_usage_result(&mut self, answer: RefusedAnswer<UsageResult>) {
         let queue = self.browser_create_host.provider_usage.queue.clone();
-        self.browser_create_host.io.write(move || {
-            if let Err(error) = queue.complete(&result) {
-                tracing::warn!(kind = ?error.kind(), "could not answer a host metadata request");
-            }
-        });
+        let writing = answer.result.clone();
+        self.browser_create_host.io.then(
+            move || queue.complete(&writing),
+            move |app, outcome| {
+                if matches!(outcome, Some(Ok(()))) {
+                    return;
+                }
+                tracing::debug!(
+                    request_id = %answer.request_id,
+                    "the coordination worker could not answer a host metadata request yet"
+                );
+                app.browser_create_host.provider_usage.refused.keep(answer);
+            },
+        );
+    }
+
+    /// Writes the answers that the coordination worker could not write again,
+    /// at most every `RETRY_INTERVAL` and until each request's deadline.
+    fn retry_host_usage_answers(&mut self) -> bool {
+        let due = self
+            .browser_create_host
+            .provider_usage
+            .refused
+            .due(manifest::now_millis());
+        let changed = !due.is_empty();
+        for answer in due {
+            self.write_host_usage_result(answer);
+        }
+        changed
     }
 
     #[cfg(feature = "cloud-workspaces")]
@@ -72,7 +109,9 @@ impl HorizonApp {
         #[cfg(feature = "cloud-workspaces")]
         self.poll_browser_vm(ctx);
         self.claim_provider_usage(queue, ctx);
-        self.finish_provider_usage()
+        let mut changed = self.finish_provider_usage();
+        changed |= self.retry_host_usage_answers();
+        changed
     }
 
     /// Claims the agents' usage, catalog and cloud offer requests on the
@@ -200,7 +239,10 @@ impl HorizonApp {
                 self.browser_create_host.provider_usage.pending.push(pending);
                 continue;
             }
-            self.publish_host_usage_result(pending.request.result(summaries, error.map(str::to_string)));
+            self.publish_host_usage_result(
+                pending.request.result(summaries, error.map(str::to_string)),
+                pending.request.deadline_at_millis,
+            );
             changed = true;
         }
         changed
@@ -210,10 +252,13 @@ impl HorizonApp {
 impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
     fn answer_image_destination(&mut self, request: &UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("image_destination_unavailable: cloud support is disabled".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("image_destination_unavailable: cloud support is disabled".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
@@ -222,7 +267,7 @@ impl HorizonApp {
             Vec::new(),
             Some("tailnet_credential_unavailable: cloud support is disabled".into()),
         );
-        self.publish_host_usage_result(result);
+        self.publish_host_usage_result(result, request.deadline_at_millis);
     }
 }
 
@@ -260,28 +305,37 @@ impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::needless_pass_by_value)]
     fn queue_cloud_exec(&mut self, request: UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("cloud_exec_unavailable: this Horizon build has no cloud support".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_exec_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::needless_pass_by_value)]
     fn queue_cloud_list(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("cloud_list_unavailable: this Horizon build has no cloud support".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_list_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::needless_pass_by_value)]
     fn queue_browser_vm(&mut self, request: UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("browser_vm_unavailable: this Horizon build has no cloud support".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("browser_vm_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(feature = "cloud-workspaces")]
@@ -292,10 +346,13 @@ impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::needless_pass_by_value)]
     fn queue_cloud_create(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("cloud_create_unavailable: this Horizon build has no cloud support".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_create_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(feature = "cloud-workspaces")]
@@ -306,19 +363,25 @@ impl HorizonApp {
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::needless_pass_by_value)]
     fn queue_cloud_delete(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("cloud_delete_unavailable: this Horizon build has no cloud support".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_delete_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
     #[allow(clippy::needless_pass_by_value)]
     fn queue_cloud_companion(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(request.result(
-            Vec::new(),
-            Some("cloud_companion_unavailable: this Horizon build has no cloud support".into()),
-        ));
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_companion_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 }
 
@@ -337,6 +400,7 @@ fn claim_usage(queue: &UsageQueue, host: &str) -> Vec<UsageRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::answer_retries::RETRY_INTERVAL;
     use horizon_core::browser::manifest::AgentIdentity;
     use horizon_core::browser::remote::{
         ControlEndpoint, CredentialReference, RemoteAdapterKind, RemoteAuthentication, RemoteSessionLimits,
@@ -571,7 +635,10 @@ mod tests {
         let id = queue.enqueue(identity, None).expect("usage request");
         let request = queue.claim(manifest::host_instance()).expect("claim").remove(0);
 
-        app.publish_host_usage_result(request.result(Vec::new(), Some("the first answer".into())));
+        app.publish_host_usage_result(
+            request.result(Vec::new(), Some("the first answer".into())),
+            request.deadline_at_millis,
+        );
         app.settle_browser_host_io();
         assert_eq!(
             queue
@@ -584,11 +651,92 @@ mod tests {
         );
 
         // The answered request file is gone, so a later answer writes nothing.
-        app.publish_host_usage_result(request.result(Vec::new(), Some("a later answer".into())));
+        app.publish_host_usage_result(
+            request.result(Vec::new(), Some("a later answer".into())),
+            request.deadline_at_millis,
+        );
         app.settle_browser_host_io();
         assert!(
             queue.take(identity, &id).expect("result").is_none(),
             "a request is answered once"
+        );
+    }
+
+    /// A queue whose root is a file: a write to it fails at once, as a disk
+    /// that refuses the coordination file does.
+    fn unavailable_queue(root: &std::path::Path) -> UsageQueue {
+        std::fs::create_dir_all(root.join("runtime")).expect("runtime");
+        std::fs::write(root.join("runtime/browser-provider-usage"), b"fixture").expect("fixture");
+        UsageQueue::new(root.to_path_buf())
+    }
+
+    /// A lock that outlives the wait of a write makes the write fail. The
+    /// request stays claimed, so the host writes the same answer again while
+    /// the request is still waiting.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_answer_is_written_after_the_lock_is_released() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let queue = UsageQueue::new(temp.path().join("usage"));
+        app.browser_create_host.provider_usage.queue = queue.clone();
+        let identity = AgentIdentity::new("horizon:missing-agent", Some(manifest::host_instance()));
+        let id = queue.enqueue(identity, None).expect("usage request");
+        let request = queue.claim(manifest::host_instance()).expect("claim").remove(0);
+        let (release, holder) = hold_lock(&temp.path().join("usage/runtime/browser-provider-usage/queue.json.lock"));
+
+        app.publish_host_usage_result(
+            request.result(Vec::new(), Some("the answer".into())),
+            request.deadline_at_millis,
+        );
+        // The write waits out the lock's bound and then fails.
+        app.settle_browser_host_io();
+        assert!(
+            queue.take(identity, &id).expect("result").is_none(),
+            "the answer waits for the lock"
+        );
+
+        release.send(()).expect("the lock holder waits");
+        holder.join().expect("the lock holder ends");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let answer = loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the refused answer was never written"
+            );
+            std::thread::sleep(RETRY_INTERVAL);
+            poll_usage(&mut app, &queue);
+            if let Some(answer) = queue.take(identity, &id).expect("result") {
+                break answer;
+            }
+        };
+        assert_eq!(answer.error.as_deref(), Some("the answer"));
+    }
+
+    /// A retry after the request deadline writes nothing: the agent has its own
+    /// timeout then, and the request is not answered a second time.
+    #[test]
+    fn a_refused_answer_is_not_written_after_its_deadline() {
+        let (temp, mut app) = crate::app::test_support::test_app();
+        let queue = UsageQueue::new(temp.path().join("usage"));
+        let identity = AgentIdentity::new("horizon:missing-agent", Some(manifest::host_instance()));
+        let id = queue.enqueue(identity, None).expect("usage request");
+        let mut request = queue.claim(manifest::host_instance()).expect("claim").remove(0);
+        request.deadline_at_millis = manifest::now_millis();
+        // The first write cannot reach the queue, so the answer is kept.
+        app.browser_create_host.provider_usage.queue = unavailable_queue(&temp.path().join("refused"));
+        app.publish_host_usage_result(
+            request.result(Vec::new(), Some("the answer".into())),
+            request.deadline_at_millis,
+        );
+        app.settle_browser_host_io();
+
+        // The retry finds the deadline past and drops the answer instead of
+        // writing it, although the queue can be written now.
+        app.browser_create_host.provider_usage.queue = queue.clone();
+        poll_usage(&mut app, &queue);
+        assert!(
+            queue.take(identity, &id).expect("result").is_none(),
+            "a retry after the request deadline writes nothing"
         );
     }
 

@@ -27,7 +27,7 @@ impl HorizonApp {
                 self.browser_create_host.catalog.pending.push(request);
                 continue;
             };
-            self.publish_host_usage_result(result);
+            self.publish_host_usage_result(result, request.deadline_at_millis);
             changed = true;
         }
         changed

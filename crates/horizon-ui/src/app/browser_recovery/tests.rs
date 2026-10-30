@@ -460,3 +460,44 @@ fn a_cleared_owner_clears_the_record_and_a_failed_read_keeps_its_scope() {
         "a failed read keeps the scope that the last good read recorded"
     );
 }
+
+/// A lock that outlives the wait of a write makes the write fail. The request
+/// stays claimed, so the host writes the same answer again while the request is
+/// still waiting.
+#[cfg(unix)]
+#[test]
+fn a_refused_recovery_answer_is_written_after_the_lock_is_released() {
+    let (temp, mut app) = test_app();
+    let queue = RecoveryQueue::new(temp.path().join("queue"));
+    let identity = manifest::AgentIdentity::new("horizon:missing-agent", Some(manifest::host_instance()));
+    let id = queue.enqueue(identity, None).expect("recovery request");
+    let request = queue.claim(manifest::host_instance()).expect("claim").remove(0);
+    // This frame answers the request it holds; its claim is not what the test
+    // measures, and a claim job would wait out the same lock.
+    app.browser_create_host.recovery_claiming = true;
+    app.browser_create_host.recovery_requests.push(request);
+    let (release, holder) = hold_lock(&temp.path().join("queue/runtime/browser-recovery/queue.json.lock"));
+
+    app.poll_remote_recovery_queue(&queue);
+    app.settle_browser_host_io();
+    assert!(
+        queue.take(identity, &id).expect("result").is_none(),
+        "the answer waits for the lock"
+    );
+
+    release.send(()).expect("the lock holder waits");
+    holder.join().expect("the lock holder ends");
+    let started = Instant::now();
+    let answer = loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the refused answer was never written"
+        );
+        std::thread::sleep(crate::app::answer_retries::RETRY_INTERVAL);
+        poll_recovery(&mut app, &queue);
+        if let Some(answer) = queue.take(identity, &id).expect("result") {
+            break answer;
+        }
+    };
+    assert_eq!(answer.error.as_deref(), Some("allocation_unavailable"));
+}

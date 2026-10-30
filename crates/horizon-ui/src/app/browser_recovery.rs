@@ -3,6 +3,7 @@
 //! read of each remote panel's manifest take coordination locks and write
 //! private files, so they run on the coordination worker; a later frame
 //! answers what the claim took.
+use super::answer_retries::RefusedAnswer;
 use super::{HorizonApp, browser_requests::actor_panel};
 use horizon_core::browser::RemoteRecoveryStatus;
 use horizon_core::browser::manifest::{
@@ -22,6 +23,7 @@ impl HorizonApp {
         // A request that waited for its allocation to establish release is
         // answered once the board can answer it.
         changed |= self.answer_recovery_requests(queue);
+        changed |= self.retry_recovery_answers(queue);
         changed
     }
 
@@ -104,26 +106,56 @@ impl HorizonApp {
             if error.is_some() {
                 allocations.clear();
             }
-            self.answer_recovery(queue, request.result(allocations, error.map(str::to_string)));
+            self.answer_recovery(
+                queue,
+                request.result(allocations, error.map(str::to_string)),
+                request.deadline_at_millis,
+            );
             changed = true;
         }
         changed
     }
 
     /// Publishes the board's answer to one request on the coordination worker.
-    /// An answer is written once: a later one for the same request finds no
-    /// request file and writes nothing.
-    fn answer_recovery(&mut self, queue: &RecoveryQueue, result: RecoveryResult) {
+    /// A write that fails keeps the result, which a later frame writes again
+    /// until `deadline_at_millis`. An answer is written once: a successful
+    /// write removes the request file, so a later write of the same answer
+    /// finds no request file and writes nothing.
+    fn answer_recovery(&mut self, queue: &RecoveryQueue, result: RecoveryResult, deadline_at_millis: i64) {
+        let request_id = result.request_id.clone();
+        self.write_recovery_answer(queue, RefusedAnswer::new(result, request_id, deadline_at_millis));
+    }
+
+    /// Writes one answer on the coordination worker. A write that fails, or a
+    /// job that panics, keeps the answer: the request stays claimed, so the
+    /// host writes the same result again rather than claim the request again.
+    fn write_recovery_answer(&mut self, queue: &RecoveryQueue, answer: RefusedAnswer<RecoveryResult>) {
         let queue = queue.clone();
-        self.browser_create_host.io.write(move || {
-            if let Err(error) = queue.complete(&result) {
-                tracing::warn!(
-                    request_id = %result.request_id,
-                    %error,
-                    "could not answer a remote recovery request"
+        let writing = answer.result.clone();
+        self.browser_create_host.io.then(
+            move || queue.complete(&writing),
+            move |app, outcome| {
+                if matches!(outcome, Some(Ok(()))) {
+                    return;
+                }
+                tracing::debug!(
+                    request_id = %answer.request_id,
+                    "the coordination worker could not answer a remote recovery request yet"
                 );
-            }
-        });
+                app.browser_create_host.recovery_answers.keep(answer);
+            },
+        );
+    }
+
+    /// Writes the answers that the coordination worker could not write again,
+    /// at most every `RETRY_INTERVAL` and until each request's deadline.
+    fn retry_recovery_answers(&mut self, queue: &RecoveryQueue) -> bool {
+        let due = self.browser_create_host.recovery_answers.due(manifest::now_millis());
+        let changed = !due.is_empty();
+        for answer in due {
+            self.write_recovery_answer(queue, answer);
+        }
+        changed
     }
 
     fn recovery_workspace(&self, request: &RecoveryRequest) -> Option<String> {

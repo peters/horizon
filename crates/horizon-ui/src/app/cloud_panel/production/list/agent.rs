@@ -29,7 +29,7 @@ impl HorizonApp {
                 Ok(value) => result.cloud_list = Some(value),
                 Err(error) => result.error = Some(error),
             }
-            self.publish_host_usage_result(result);
+            self.publish_host_usage_result(result, request.deadline_at_millis);
         }
     }
 

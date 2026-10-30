@@ -169,12 +169,24 @@ state, and clear it when the outcome of the job applies.
   finds no owner clears the record.
 
 Answer a request on the worker, and only once. A request that was claimed is
-answered from the state in memory. A write that fails does not put the request
-back in the list of pending requests.
+answered from the state in memory. A write that fails, because a lock waits
+longer than its bound, keeps the result: a later frame writes it again, at most
+every 250 ms, until the request's deadline. A retry cannot answer twice,
+because the write of a result removes the request file.
 
-- `publish_host_usage_result` writes the answer of a usage, catalog, cloud
-  offer or cloud request with one worker write. The write that follows finds no
-  request file and writes nothing.
+- `publish_host_usage_result` in
+  [`browser_provider_usage.rs`](../../crates/horizon-ui/src/app/browser_provider_usage.rs)
+  and `answer_recovery` in
+  [`browser_recovery.rs`](../../crates/horizon-ui/src/app/browser_recovery.rs)
+  write the answer of a usage, catalog, cloud offer, cloud or recovery request
+  with one worker write. The write that follows finds no request file and writes
+  nothing.
+- `RefusedAnswers` in
+  [`answer_retries.rs`](../../crates/horizon-ui/src/app/answer_retries.rs)
+  holds the results that the worker could not write. One write of a refused
+  answer runs at a time, so a disk that stays busy queues no retry per frame. An
+  answer whose deadline passed is dropped with a warning: the agent has its own
+  timeout for that request.
 - The agent request polls of the cloud cards (`poll_cloud_create_requests`,
   `poll_cloud_delete_requests`, `poll_cloud_companion_requests` and
   `answer_cloud_list_requests`) run on the UI thread and only build the answer

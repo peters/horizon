@@ -207,7 +207,7 @@ impl HorizonApp {
     pub(in crate::app::cloud_panel) fn poll_cloud_create_requests(&mut self, ctx: &egui::Context) {
         for request in std::mem::take(&mut self.cloud_prototype.production.create_agent.queued) {
             let answer = self.answer_cloud_create(&request, ctx);
-            self.publish_host_usage_result(answer_result(&request, answer));
+            self.publish_host_usage_result(answer_result(&request, answer), request.deadline_at_millis);
         }
         for message in self.cloud_prototype.production.create_agent.messages() {
             self.apply_create_message(message, ctx);
