@@ -177,6 +177,7 @@ mod tests {
     /// A restore waits for the coordination worker before it replaces the board.
     /// A delete that is still queued then must not remove the transcript of a
     /// panel that the restored board carries again.
+    #[cfg(feature = "cloud-workspaces")]
     #[test]
     fn a_cloud_restore_marks_the_panels_it_carries_before_the_wait_runs_the_queued_delete() {
         let (temp, mut app) = test_app();
