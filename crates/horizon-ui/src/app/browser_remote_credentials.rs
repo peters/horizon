@@ -446,6 +446,44 @@ mod tests {
         }
     }
 
+    /// A credentialed create for a provider that manages its own capacity
+    /// plans inside the frame that advances it, and that frame must keep the
+    /// pending entry of the audit the plan pushed: a frame restores the list
+    /// it kept, so it must join that list instead of replacing it.
+    #[test]
+    fn a_create_that_plans_inside_the_frame_keeps_the_pending_entry_of_its_audit() {
+        let (_temp, mut app) = test_app();
+        let mut config = os_config();
+        config
+            .browser
+            .remote
+            .providers
+            .get_mut("grid")
+            .expect("provider")
+            .adapter = horizon_core::browser::remote::RemoteAdapterKind::Browserstack;
+        app.template_config = config;
+        app.remote_browser_credentials = os_workbench(os_store(Some(b"tok-en")));
+        wait_for_os_store(&mut app);
+        let (request, actor) = remote_request(&mut app);
+        let id = request.request_id.clone();
+        let panels = app.board.panels.len();
+
+        app.begin_remote_create(request, actor, Instant::now());
+        pump_until(&mut app, |app| app.board.panels.len() > panels);
+        assert!(
+            app.browser_create_host
+                .pending
+                .iter()
+                .any(|pending| pending.request.request_id == id),
+            "the audit pending entry survives the frame that planned the create"
+        );
+        app.settle_browser_host_io();
+        assert!(
+            !app.browser_create_host.io.busy(),
+            "the audit and its result run on the worker"
+        );
+    }
+
     #[test]
     fn a_store_that_never_opens_stalls_no_frame() {
         let (_temp, mut app) = test_app();

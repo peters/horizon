@@ -259,7 +259,10 @@ impl HorizonApp {
                 }
             }
         }
-        self.browser_create_host.pending = waiting;
+        // A create that planned inside this loop already pushed the pending
+        // entry of its audit, so the surviving creates join it rather than
+        // replace the list.
+        self.browser_create_host.pending.extend(waiting);
         changed
     }
 
