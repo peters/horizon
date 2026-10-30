@@ -88,7 +88,7 @@ impl HorizonApp {
     /// pump wake applies what it took.
     pub(in crate::app) fn claim_device_requests(&mut self, root: Option<&Path>) {
         let now = Instant::now();
-        if self.panel_render_caches.device_claim.claiming
+        if self.device_claim.claiming
             || self
                 .panel_render_caches
                 .device_request_poll
@@ -97,7 +97,7 @@ impl HorizonApp {
             return;
         }
         self.panel_render_caches.device_request_poll = Some(now);
-        self.panel_render_caches.device_claim.claiming = true;
+        self.device_claim.claiming = true;
         let claiming = root.map(Path::to_path_buf);
         let board = self.browser_create_host.io.board_fence();
         self.browser_create_host.io.then(
@@ -110,14 +110,14 @@ impl HorizonApp {
     /// when no frame will apply it: the board it was sent to was replaced, or
     /// is retiring for an exit or a session switch.
     fn apply_device_claim(&mut self, claimed: Option<Vec<ClaimedRequest>>) {
-        self.panel_render_caches.device_claim.claiming = false;
+        self.device_claim.claiming = false;
         let Some(claimed) = claimed else { return };
         let retiring = self.browser_host_retiring();
         for request in claimed {
             if retiring {
                 self.write_device_answer(request.refused(Outcome::failed(HOST_RETIRING.0, HOST_RETIRING.1)));
             } else {
-                self.panel_render_caches.device_claim.claimed.push(request);
+                self.device_claim.claimed.push(request);
             }
         }
     }
@@ -132,20 +132,18 @@ impl HorizonApp {
         let deadline_at_millis = answer.request.deadline_at_millis;
         let writing = answer.request.clone();
         let (root, outcome) = (answer.root.clone(), answer.outcome.clone());
-        self.panel_render_caches.device_claim.writing += 1;
+        self.device_claim.writing += 1;
         self.browser_create_host.io.then(
             move || complete_device_request(root.as_deref(), &writing, outcome),
             move |app, written| {
-                app.panel_render_caches.device_claim.writing -= 1;
+                app.device_claim.writing -= 1;
                 if matches!(written, Some(Ok(()))) {
                     return;
                 }
                 tracing::debug!(%request_id, "the coordination worker could not answer a Device panel request yet");
-                app.panel_render_caches.device_claim.refused.keep(RefusedAnswer::new(
-                    answer,
-                    request_id,
-                    deadline_at_millis,
-                ));
+                app.device_claim
+                    .refused
+                    .keep(RefusedAnswer::new(answer, request_id, deadline_at_millis));
             },
         );
     }
@@ -154,11 +152,7 @@ impl HorizonApp {
     /// `RETRY_INTERVAL` and until each request's deadline. An answer whose
     /// deadline passed is dropped: the agent has its own timeout by then.
     pub(in crate::app) fn retry_device_answers(&mut self) -> bool {
-        let due = self
-            .panel_render_caches
-            .device_claim
-            .refused
-            .due(manifest::now_millis());
+        let due = self.device_claim.refused.due(manifest::now_millis());
         let retried = !due.is_empty();
         for answer in due {
             self.write_device_answer(answer.result);
@@ -171,7 +165,7 @@ impl HorizonApp {
     /// answered once, before the exit flushes the coordination worker: with
     /// `host_shutdown`, or with `request_expired` when its deadline passed.
     pub(in crate::app) fn refuse_claimed_device_requests(&mut self) {
-        for request in std::mem::take(&mut self.panel_render_caches.device_claim.claimed) {
+        for request in std::mem::take(&mut self.device_claim.claimed) {
             let refusal = if request.request.deadline_at_millis <= manifest::now_millis() {
                 request_expired()
             } else {
@@ -185,7 +179,7 @@ impl HorizonApp {
     /// The request watcher keeps waking while it does, so each answer lands
     /// also when the host runs no frame.
     pub(in crate::app) fn device_claims_outstanding(&self) -> bool {
-        self.panel_render_caches.device_claim.outstanding()
+        self.device_claim.outstanding()
     }
 }
 

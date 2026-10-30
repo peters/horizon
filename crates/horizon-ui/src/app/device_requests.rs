@@ -73,7 +73,7 @@ impl HorizonApp {
         // browser tick drains the same queue before this call; this one applies
         // what is left, so the device poll also works without that tick.
         self.apply_browser_host_io();
-        let claimed = std::mem::take(&mut self.panel_render_caches.device_claim.claimed);
+        let claimed = std::mem::take(&mut self.device_claim.claimed);
         let changed = !claimed.is_empty();
         for request in claimed {
             let root = request.root.as_deref();

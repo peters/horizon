@@ -87,6 +87,36 @@ fn a_held_coordination_lock_does_not_stall_the_frame_that_claims() {
     assert!(matches!(outcome, Outcome::Panels { .. }));
 }
 
+/// A session switch resets the render caches. The requests a claim took and
+/// the answers the host owes for them are not render caches: a reset that
+/// dropped them would lose the old board's answers and zero the count of a
+/// write that still runs.
+#[test]
+fn a_render_cache_reset_keeps_the_claim_and_the_answers_it_owes() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (_temp, ctx, mut app) = app();
+    enqueue(root.path(), &app, Operation::List, Duration::from_secs(5));
+    let (release, released) = mpsc::channel::<()>();
+    app.browser_create_host.io.write(move || {
+        let _ = released.recv();
+    });
+
+    app.claim_device_requests(Some(root.path()));
+    assert!(app.device_claims_outstanding(), "the claim runs on the worker");
+    app.panel_render_caches = crate::app::PanelRenderCaches::default();
+    assert!(
+        app.device_claims_outstanding(),
+        "the reset of the render caches keeps the claim and the answers it owes"
+    );
+
+    release.send(()).expect("release the coordination worker");
+    settle(&mut app, &ctx);
+    assert!(
+        !app.device_claims_outstanding(),
+        "the claim settled and its request was answered"
+    );
+}
+
 #[test]
 fn a_claimed_request_applies_only_after_the_worker_releases_it() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -136,7 +166,7 @@ fn two_claimed_requests_apply_in_claim_order() {
             enqueue(root.path(), &app, operation(first_visible), Duration::from_secs(5)),
             enqueue(root.path(), &app, operation(second_visible), Duration::from_secs(5)),
         ];
-        app.panel_render_caches.device_claim.claimed = claimed
+        app.device_claim.claimed = claimed
             .iter()
             .map(|request| ClaimedRequest {
                 root: Some(root.path().to_path_buf()),
@@ -198,7 +228,7 @@ fn an_exit_refuses_a_claimed_request_once_and_drops_an_expired_one() {
     app.claim_device_requests(Some(root.path()));
     app.settle_browser_host_io();
     assert_eq!(
-        app.panel_render_caches.device_claim.claimed.len(),
+        app.device_claim.claimed.len(),
         2,
         "the claim's requests wait for a frame that the exit ends"
     );
@@ -238,7 +268,7 @@ fn a_session_switch_refuses_a_claimed_request_once() {
     let queued = enqueue(root.path(), &app, Operation::List, Duration::from_secs(5));
     app.claim_device_requests(Some(root.path()));
     app.settle_browser_host_io();
-    assert_eq!(app.panel_render_caches.device_claim.claimed.len(), 1);
+    assert_eq!(app.device_claim.claimed.len(), 1);
 
     app.activate_runtime_session(&egui::Context::default(), &target);
 

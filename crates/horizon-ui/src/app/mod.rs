@@ -229,10 +229,6 @@ struct SpeechNotice {
 #[derive(Default)]
 pub struct PanelRenderCaches {
     device_request_poll: Option<Instant>,
-    /// Requests a claim took that no frame applied yet, and the answers owed
-    /// for them. A session switch resets it, so a claimed request of the old
-    /// board never applies to the replacement.
-    pub(in crate::app) device_claim: device_requests::claim::DeviceClaimState,
     pending_device_reveal: Option<device_requests::PendingDeviceReveal>,
     awaiting_device_reveals: Vec<device_reveal_wait::AwaitingDeviceReveal>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
@@ -298,6 +294,11 @@ pub struct HorizonApp {
     clipboard_images: crate::clipboard_image::ClipboardImages,
     terminal_selection_drag: TerminalSelectionDragState,
     panel_render_caches: PanelRenderCaches,
+    /// The Device requests a claim took, and the answers the host owes for
+    /// them. It lives here, not in the render caches: a session switch resets
+    /// those, but the answers to the old board's requests must still be
+    /// written, and an answer that is in flight must not lose its count.
+    pub(in crate::app) device_claim: device_requests::claim::DeviceClaimState,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
