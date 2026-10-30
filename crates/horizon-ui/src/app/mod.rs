@@ -294,6 +294,11 @@ pub struct HorizonApp {
     clipboard_images: crate::clipboard_image::ClipboardImages,
     terminal_selection_drag: TerminalSelectionDragState,
     panel_render_caches: PanelRenderCaches,
+    /// The Device requests a claim took, and the answers the host owes for
+    /// them. It lives here, not in the render caches: a session switch resets
+    /// those, but the answers to the old board's requests must still be
+    /// written, and an answer that is in flight must not lose its count.
+    pub(in crate::app) device_claim: device_requests::claim::DeviceClaimState,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,

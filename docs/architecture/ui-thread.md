@@ -171,6 +171,17 @@ state, and clear it when the outcome of the job applies.
   [`browser_recovery.rs`](../../crates/horizon-ui/src/app/browser_recovery.rs)
   claim only while their guard is clear. A slow disk cannot queue one claim per
   tick.
+- `claim_device_requests` in
+  [`device_requests/claim.rs`](../../crates/horizon-ui/src/app/device_requests/claim.rs)
+  claims the Device panel requests of this host, and `write_device_answer`
+  writes each answer. Both are jobs of the coordination worker. The frame or
+  the request pump applies each request a claim took, in claim order, and
+  answers it. A claim removes the request file, so the host keeps each request
+  it took: a request that no frame applies is answered with `host_shutdown`
+  before an exit or a session switch flushes the worker, or with
+  `request_expired` when its deadline passed. The watcher of an unpresented
+  host wakes while a claim, a request it took or an answer is outstanding, so
+  all three settle with no frame.
 - `refresh_remote_recovery_scope` reads the manifest owner of each remote panel
   in one job. `scope_reading` holds while that read runs. A read that fails
   keeps the scope that the last good read recorded, and a successful read that
@@ -359,8 +370,7 @@ after the call, so a new test must also start the release thread of step 2.
 
 This work still runs on the UI thread. Do not copy it into new code.
 
-- The Device request claim and the `manifest::read` of a browser capture in
-  `capture_panel`
+- The `manifest::read` of a browser capture in `capture_panel`
   ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)).
   [#1917](https://github.com/peters/horizon/issues/1917) tracks them.
 - The read of the content of an editor panel when the panel opens: `spawn_editor`

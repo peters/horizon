@@ -47,6 +47,11 @@ impl<T> Default for RefusedAnswers<T> {
 }
 
 impl<T> RefusedAnswers<T> {
+    /// Whether an answer waits for a later frame or pump wake.
+    pub(super) fn is_empty(&self) -> bool {
+        self.answers.is_empty()
+    }
+
     /// Keeps an answer whose write failed, for a later frame.
     pub(super) fn keep(&mut self, answer: RefusedAnswer<T>) {
         self.answers.push(answer);

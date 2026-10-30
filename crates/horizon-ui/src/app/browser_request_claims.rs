@@ -42,11 +42,13 @@ impl HorizonApp {
 
     /// Ends what the board was asked for before an exit or a session switch
     /// tears it down: no change asked for earlier is published any more, and
-    /// pending closes and starting creates are refused with `host_shutdown`.
+    /// pending closes, starting creates and Device requests a claim took are
+    /// refused with `host_shutdown`.
     pub(super) fn retire_browser_requests(&mut self) {
         self.browser_create_host.io.retire_board();
         self.retire_pending_browser_closes_for_shutdown();
         self.retire_starting_browser_creates();
+        self.refuse_claimed_device_requests();
     }
 
     /// Claims the create, visibility and close requests of the agents on this

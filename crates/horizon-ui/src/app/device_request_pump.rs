@@ -46,6 +46,11 @@ pub(crate) struct DeviceRequestBridge {
     /// Set while a reveal's answer is held. It settles on frames, or on these
     /// wakes when the host runs none, at the pending-request cadence.
     reveals_pending: Arc<AtomicBool>,
+    /// Set while this host owes a Device request a claim took: the claim runs,
+    /// a request it took is not applied, or an answer is not written. A hold
+    /// that never presents has no frame to apply them, so the watcher keeps
+    /// waking at the pending-request cadence until it is clear.
+    claim_pending: Arc<AtomicBool>,
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -70,6 +75,7 @@ impl DeviceRequestBridge {
             stop: Arc::new(AtomicBool::new(false)),
             persist_pending: Arc::new(AtomicBool::new(false)),
             reveals_pending: Arc::new(AtomicBool::new(false)),
+            claim_pending: Arc::new(AtomicBool::new(false)),
             watcher: Mutex::new(None),
         }
     }
@@ -78,7 +84,11 @@ impl DeviceRequestBridge {
         *lock(&self.installed) = Some(InstalledHost { app, ctx });
     }
 
-    /// Claim waiting requests on the UI thread. Also used when no frame is running.
+    /// Asks the coordination worker for waiting Device requests, applies the
+    /// requests a claim took and answers each, and writes the runtime state a
+    /// request changed. Also used when no frame is running, where the watcher
+    /// calls it until no claim or answer is outstanding. Returns whether a
+    /// request applied.
     pub(crate) fn poll_on_ui_thread(&self) -> bool {
         let mut installed = lock(&self.installed);
         let Some(installed) = installed.as_mut() else {
@@ -98,6 +108,7 @@ impl DeviceRequestBridge {
             .drain_cast_requests(&installed.ctx, self.root_override.as_deref());
         installed.app.settle_device_reveals_without_frame();
         self.sync_held_reveals(&installed.app);
+        self.sync_claim_pending(&installed.app);
         changed
     }
 
@@ -105,18 +116,38 @@ impl DeviceRequestBridge {
     /// the last to run before the host stops presenting.
     fn sync_held_reveals(&self, app: &HorizonApp) {
         let held = app.holds_device_reveals();
-        let was_held = self.reveals_pending.swap(held, Ordering::Relaxed);
-        if held && !was_held {
-            // The watcher may be parked on a persistence backoff of seconds.
-            if let Some(handle) = lock(&self.watcher).as_ref() {
-                handle.thread().unpark();
-            }
+        if self.reveals_pending.swap(held, Ordering::Relaxed) != held {
+            self.wake_watcher();
+        }
+    }
+
+    /// A claim and the answers owed for it settle on frames, or on these wakes
+    /// when the host runs none. The watcher keeps waking while a request a
+    /// claim took is not applied or an answer is not written, so neither waits
+    /// for input the unpresented host never gets.
+    fn sync_claim_pending(&self, app: &HorizonApp) {
+        let claimed = app.device_claims_outstanding();
+        if self.claim_pending.swap(claimed, Ordering::Relaxed) != claimed {
+            self.wake_watcher();
+        }
+    }
+
+    /// Wakes the watcher, which may be parked on a persistence backoff of
+    /// seconds, so it sees the flag that just changed.
+    fn wake_watcher(&self) {
+        if let Some(handle) = lock(&self.watcher).as_ref() {
+            handle.thread().unpark();
         }
     }
 
     #[cfg(test)]
     pub(crate) fn holds_reveals(&self) -> bool {
         self.reveals_pending.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds_claims(&self) -> bool {
+        self.claim_pending.load(Ordering::Relaxed)
     }
 
     pub(crate) fn start_watcher(&self, proxy: EventLoopProxy<UserEvent>) {
@@ -127,6 +158,7 @@ impl DeviceRequestBridge {
         let stop = Arc::clone(&self.stop);
         let persist_pending = Arc::clone(&self.persist_pending);
         let reveals_pending = Arc::clone(&self.reveals_pending);
+        let claim_pending = Arc::clone(&self.claim_pending);
         let root_override = self.root_override.clone();
         match thread::Builder::new()
             .name("horizon-device-requests".to_owned())
@@ -135,6 +167,7 @@ impl DeviceRequestBridge {
                     &stop,
                     &persist_pending,
                     &reveals_pending,
+                    &claim_pending,
                     root_override.as_deref(),
                     &proxy,
                 );
@@ -172,6 +205,7 @@ impl eframe::App for BridgeApp {
         if let Some(installed) = installed.as_mut() {
             eframe::App::ui(&mut installed.app, ui, frame);
             self.bridge.sync_held_reveals(&installed.app);
+            self.bridge.sync_claim_pending(&installed.app);
         }
     }
 
@@ -216,28 +250,31 @@ fn watch_device_requests(
     stop: &AtomicBool,
     persist_pending: &AtomicBool,
     reveals_pending: &AtomicBool,
+    claim_pending: &AtomicBool,
     root_override: Option<&Path>,
     proxy: &EventLoopProxy<UserEvent>,
 ) {
     let mut persist_wait = PERSIST_WAIT_MIN;
     while !stop.load(Ordering::Relaxed) {
         let reveals = reveals_pending.load(Ordering::Relaxed);
-        // A held reveal wakes at the pending-request cadence, so its bounded
-        // answer is not delayed by the persistence backoff.
+        let claims = claim_pending.load(Ordering::Relaxed);
+        // A held reveal or claimed work wakes at the pending-request cadence,
+        // so neither waits for the persistence backoff.
         let files_pending = reveals
             || match device_requests_pending(root_override) {
                 Ok(pending) => pending,
                 Err(error) => {
                     tracing::warn!(%error, "could not check Device panel requests");
-                    if !persist_pending.load(Ordering::Relaxed) {
+                    if !persist_pending.load(Ordering::Relaxed) && !claims {
                         thread::park_timeout(Duration::from_secs(1));
                         continue;
                     }
                     false
                 }
             };
+        let pending = files_pending || claims;
         let persist = persist_pending.load(Ordering::Relaxed);
-        if (files_pending || persist)
+        if (pending || persist)
             && proxy
                 .send_event(UserEvent::RequestRepaint {
                     viewport_id: ViewportId::ROOT,
@@ -248,15 +285,15 @@ fn watch_device_requests(
         {
             return;
         }
-        let (wait, next_persist_wait) = next_pump_wait(files_pending, persist, persist_wait);
+        let (wait, next_persist_wait) = next_pump_wait(pending, persist, persist_wait);
         persist_wait = next_persist_wait;
         thread::park_timeout(wait);
     }
 }
 
 /// How long to sleep, and the backoff to use after a persistence-only wake.
-fn next_pump_wait(files_pending: bool, persist_pending: bool, persist_wait: Duration) -> (Duration, Duration) {
-    if files_pending {
+fn next_pump_wait(pending: bool, persist_pending: bool, persist_wait: Duration) -> (Duration, Duration) {
+    if pending {
         (PENDING_WAIT, PERSIST_WAIT_MIN)
     } else if persist_pending {
         let wait = persist_wait.clamp(PERSIST_WAIT_MIN, PERSIST_WAIT_MAX);
@@ -349,9 +386,15 @@ mod tests {
         .expect("enqueue");
         let bridge = DeviceRequestBridge::with_root(root.path().to_path_buf());
         bridge.install(app, ctx);
-        assert!(bridge.poll_on_ui_thread());
+        // The claim and its answer run on the coordination worker, so the
+        // request applies on a later wake of the pump.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while device::take_result_at(root.path(), &request).expect("result").is_none() {
+            assert!(Instant::now() < deadline, "the request was never answered");
+            bridge.poll_on_ui_thread();
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(bridge.persist_pending.load(Ordering::Relaxed));
-        assert!(device::take_result_at(root.path(), &request).expect("result").is_some());
 
         {
             let mut installed = lock(&bridge.installed);
