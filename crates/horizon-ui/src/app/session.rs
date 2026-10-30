@@ -175,6 +175,9 @@ impl HorizonApp {
     }
 
     pub(super) fn apply_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+        // The board this state restores carries its panels again: mark them
+        // before any coordination job can remove their transcripts.
+        self.keep_transcripts_of_saved_board(runtime_state);
         // Coordination work asked for on the board this replaces no longer applies to a board.
         self.browser_create_host.io.replace_board();
         self.reset_native_file_input();

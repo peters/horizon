@@ -166,10 +166,11 @@ its id is still in that set.
 - `delete_closed_transcript` in
   [`transcript_deletes.rs`](../../crates/horizon-ui/src/app/transcript_deletes.rs)
   queues the delete of the transcript of the panel that just closed.
-- `keep_restored_transcripts` drops the deletes of the panels that a restored
-  board carries again. A restore marks the panels it carries before any wait of
-  an exit or of a replacement can run the queued deletes. Thus, a restored panel
-  never loses its transcript, also when the disk is slow.
+- `keep_restored_transcripts` and `keep_transcripts_of_saved_board` drop the
+  deletes of the panels that a restored board carries again. A restore marks the
+  panels of its saved board before any wait of an exit or of a replacement can
+  run the queued deletes. Thus, a restored panel never loses its transcript,
+  also when the disk is slow.
 
 ### Cancellation
 

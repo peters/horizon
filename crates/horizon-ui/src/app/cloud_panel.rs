@@ -101,14 +101,14 @@ impl HorizonApp {
         &mut self,
         runtime: &horizon_core::RuntimeState,
     ) -> horizon_core::Result<()> {
+        // The board this restores carries its panels again: mark them before the
+        // wait below runs the deletes that are still queued for it.
+        self.keep_transcripts_of_saved_board(runtime);
         self.browser_create_host.io.replace_board();
         self.finish_browser_host_io_before_replacement();
         let board = Board::from_runtime_state_with_transcripts(runtime, self.transcript_root.as_deref())?;
         self.reset_native_file_input();
         self.board = board;
-        // The restored board carries its panels again, also when the wait above
-        // ended before a queued transcript delete ran.
-        self.keep_restored_transcripts();
         Ok(())
     }
 

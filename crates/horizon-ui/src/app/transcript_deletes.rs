@@ -1,9 +1,9 @@
 //! Deletion of the transcript files of a closed panel. The files are removed
 //! on the coordination worker, in the order the panels closed, so a slow disk
 //! never stalls a close that an agent asked for. A panel that comes back with
-//! the same local id before its delete runs keeps its transcript: the UI
-//! thread drops that id from the deletes still wanted, and the job removes the
-//! files only while the id is still there.
+//! the same local id before its delete runs keeps its transcript: a restore
+//! marks the panels it carries before any wait can run the queued deletes, and
+//! the job removes the files only while the id is still there.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -47,9 +47,9 @@ impl PendingTranscriptDeletes {
 
     /// A board that comes back carries the panels it saved again: the deletes
     /// of their local ids remove nothing.
-    fn keep_restored(&self, board: &horizon_core::Board) {
+    fn keep(&self, carried: &BTreeSet<String>) {
         let mut wanted = self.wanted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        wanted.retain(|local_id| board.panel_id_by_local_id(local_id).is_none());
+        wanted.retain(|local_id| !carried.contains(local_id));
     }
 }
 
@@ -68,8 +68,23 @@ impl HorizonApp {
 
     /// A board that comes back carries the panels it saved again: a delete
     /// queued for one of them removes nothing.
-    pub(super) fn keep_restored_transcripts(&mut self) {
-        self.transcript_deletes.keep_restored(&self.board);
+    pub(super) fn keep_restored_transcripts(&self) {
+        let carried = self.board.panels.iter().map(|panel| panel.local_id.clone()).collect();
+        self.transcript_deletes.keep(&carried);
+    }
+
+    /// The same for a saved board that Horizon has not restored yet. A restore
+    /// marks the panels its saved board carries before any wait of an exit or
+    /// of a replacement runs the queued deletes, so a slow disk cannot remove
+    /// the transcript of a panel that comes back.
+    pub(super) fn keep_transcripts_of_saved_board(&self, runtime_state: &horizon_core::RuntimeState) {
+        let carried = runtime_state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panels.iter())
+            .map(|panel| panel.local_id.clone())
+            .collect();
+        self.transcript_deletes.keep(&carried);
     }
 }
 
@@ -143,5 +158,66 @@ mod tests {
         app.settle_browser_host_io();
         assert!(!history.exists(), "the transcript of a closed panel is removed");
         assert!(!transcript.session_path().exists());
+    }
+
+    /// Holds the coordination worker as a slow disk does, and releases it from
+    /// another thread while a restore waits for it. The restore runs on this
+    /// thread, so the release must not wait for it.
+    fn hold_the_worker_until(app: &mut HorizonApp) -> std::thread::JoinHandle<()> {
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = release.send(());
+        })
+    }
+
+    /// A restore waits for the coordination worker before it replaces the board.
+    /// A delete that is still queued then must not remove the transcript of a
+    /// panel that the restored board carries again.
+    #[test]
+    fn a_cloud_restore_marks_the_panels_it_carries_before_the_wait_runs_the_queued_delete() {
+        let (temp, mut app) = test_app();
+        let root = temp.path().join("transcripts");
+        let (transcript, history) = transcript_files(&root, "restored");
+        let releasing = hold_the_worker_until(&mut app);
+        app.delete_closed_transcript("restored", transcript.clone());
+
+        app.restore_cloud_prototype_board(&restored_board("restored"))
+            .expect("restored board");
+        releasing.join().expect("the release thread ends");
+
+        app.settle_browser_host_io();
+        assert!(
+            history.exists() && transcript.session_path().exists(),
+            "a panel that a restored board carries again keeps its transcript"
+        );
+    }
+
+    /// The same for a session switch, which waits for the worker before it
+    /// restores the next session.
+    #[test]
+    fn a_session_switch_marks_the_panels_it_restores_before_the_wait_runs_the_queued_delete() {
+        let (temp, mut app) = test_app();
+        let root = temp.path().join("transcripts");
+        let (transcript, history) = transcript_files(&root, "restored");
+        let target = app
+            .session_store
+            .create_session_from_runtime(restored_board("restored"))
+            .expect("target session");
+        let releasing = hold_the_worker_until(&mut app);
+        app.delete_closed_transcript("restored", transcript.clone());
+
+        app.activate_runtime_session(&egui::Context::default(), &target);
+        releasing.join().expect("the release thread ends");
+
+        assert!(app.pending_session_switch.is_none(), "the switch completed");
+        app.settle_browser_host_io();
+        assert!(
+            history.exists() && transcript.session_path().exists(),
+            "a panel that the next session carries keeps its transcript"
+        );
     }
 }
