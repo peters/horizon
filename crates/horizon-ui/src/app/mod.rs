@@ -62,6 +62,7 @@ mod startup_session;
 mod tailnets;
 #[cfg(test)]
 mod test_support;
+mod transcript_deletes;
 pub(crate) mod util;
 mod view;
 mod work_resume;
@@ -364,6 +365,9 @@ pub struct HorizonApp {
     exit_cleanup_complete: bool,
     /// When the exit stops waiting for the session writer.
     exit_save_deadline: Option<Instant>,
+    /// Transcripts whose delete runs on the coordination worker, so a panel
+    /// that comes back with the same local id keeps its own.
+    transcript_deletes: transcript_deletes::PendingTranscriptDeletes,
 }
 
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {

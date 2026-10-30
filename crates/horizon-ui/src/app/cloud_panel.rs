@@ -106,6 +106,9 @@ impl HorizonApp {
         let board = Board::from_runtime_state_with_transcripts(runtime, self.transcript_root.as_deref())?;
         self.reset_native_file_input();
         self.board = board;
+        // The restored board carries its panels again, also when the wait above
+        // ended before a queued transcript delete ran.
+        self.keep_restored_transcripts();
         Ok(())
     }
 

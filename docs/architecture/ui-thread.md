@@ -156,6 +156,21 @@ If the UI can send a job on each frame, put a limit on the queue.
 refuses a job when four jobs wait. It also refuses a job from an earlier
 generation. Its four threads do not keep the jobs in order.
 
+### A delete that stays wanted until its job runs
+
+A close must not wait for the disk. A transcript file is workspace data, so its
+removal takes file I/O. Put the delete on the coordination worker, and keep the
+local ids whose delete is queued in a set. The job removes the files only while
+its id is still in that set.
+
+- `delete_closed_transcript` in
+  [`transcript_deletes.rs`](../../crates/horizon-ui/src/app/transcript_deletes.rs)
+  queues the delete of the transcript of the panel that just closed.
+- `keep_restored_transcripts` drops the deletes of the panels that a restored
+  board carries again. A restore marks the panels it carries before any wait of
+  an exit or of a replacement can run the queued deletes. Thus, a restored panel
+  never loses its transcript, also when the disk is slow.
+
 ### Cancellation
 
 Give long work a cancellation token, and cancel it when its result has no
@@ -268,7 +283,7 @@ This work still runs on the UI thread. Do not copy it into new code.
   closes. #1489 moves them.
 - Browser request file work that #1469 and #1489 do not move: recovery claims,
   provider usage and catalog results, `poll_cloud_offers` on each frame,
-  remote slot leases, `manifest::read` calls, and transcript deletion.
+  remote slot leases, and `manifest::read` calls that retry on Windows.
   [#1470](https://github.com/peters/horizon/issues/1470) tracks them.
 - `capture_panel` in
   [`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)
