@@ -14,13 +14,15 @@
 mod environment;
 mod fake;
 mod keyring_store;
+mod resolved;
 mod session;
 mod workbench;
 
 use std::fmt;
 
 use horizon_browser::remote::{
-    ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteProviderProfile,
+    ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteBrowserConfig,
+    RemoteProviderProfile,
 };
 use horizon_browser_control::remote_authorization::{CredentialValueError, authorization_header, header_safe_value};
 use zeroize::Zeroizing;
@@ -28,9 +30,11 @@ use zeroize::Zeroizing;
 pub use environment::EnvironmentCredentialStore;
 pub use fake::FakeCredentialStore;
 pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
+pub use resolved::ReadCredentialStore;
 pub use session::SessionCredentialStore;
 pub use workbench::{
-    CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice, credential_destination,
+    CredentialValueReply, CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice,
+    credential_destination,
 };
 
 pub use horizon_browser_control::remote_authorization::MAX_SECRET_BYTES;
@@ -164,6 +168,39 @@ impl CredentialStores<'_> {
             CredentialStoreKind::Environment => self.environment.ok_or(RemoteCredentialError::StoreUnavailable),
         }
     }
+}
+
+/// The provider profile a configured target authenticates against, or `None`
+/// when the target or its provider is not configured. A caller that must read
+/// values from the OS store before the request is built resolves them for this
+/// profile; [`build_remote_session_request`](crate::browser::build_remote_session_request)
+/// refuses an unconfigured target or provider itself, with its own code and text.
+#[must_use]
+pub fn target_provider_profile<'a>(
+    remote: &'a RemoteBrowserConfig,
+    target_name: &str,
+) -> Option<&'a RemoteProviderProfile> {
+    let target = remote.targets.get(target_name)?;
+    remote.providers.get(&target.provider)
+}
+
+/// The references of `profile` whose value only the OS store can answer, in
+/// authentication order. Each must be read on the workbench thread before the
+/// request is built, and offered back to it as a [`ReadCredentialStore`].
+#[must_use]
+pub fn os_store_references(profile: &RemoteProviderProfile) -> Vec<CredentialReference> {
+    profile
+        .authentication
+        .references()
+        .into_iter()
+        .filter(|reference| {
+            profile
+                .credential_bindings
+                .get(*reference)
+                .is_some_and(|binding| binding.store == CredentialStoreKind::OsKeychain)
+        })
+        .cloned()
+        .collect()
 }
 
 /// Presence of every reference a provider needs, in authentication order.
