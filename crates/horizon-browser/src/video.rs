@@ -14,7 +14,7 @@ pub use encoder::VideoCaptureHandle;
 use crate::frames::FrameSlot;
 use crate::{
     BrowserControlFailure, BrowserCoordination, BrowserVideoCapture, BrowserVideoCaptureOptions,
-    BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
+    BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoQuality, BrowserVideoState,
 };
 
 const MAX_CAPTURE_ID_BYTES: usize = 96;
@@ -195,9 +195,11 @@ impl VideoCaptureState {
                     height: 0,
                     fps: 0,
                     effective_fps: 0.0,
+                    quality: BrowserVideoQuality::Unknown,
                     frames_encoded: 0,
                     frames_dropped: 0,
                     frames_repeated: 0,
+                    frames_offered: 0,
                     bytes_written: 0,
                     file_limit_reached: false,
                     encoder_failed: true,

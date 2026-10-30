@@ -160,6 +160,29 @@ impl BrowserVideoCaptureOverrides {
     }
 }
 
+/// Typed sample coverage of a recording, graded from the encoder's counters.
+///
+/// The host grades the frames it wrote against the distinct source frames it
+/// could have written: the source's own rate, capped by the requested `fps`. A
+/// source that changes rarely therefore grades as `Good` even though it has a
+/// low `effective_fps`, because no source frame was replaced before it was
+/// written. This grades sample coverage, not image quality and not whether the
+/// content in the file shows the event a caller wanted.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserVideoQuality {
+    /// The host has not written a frame yet, so it cannot grade the capture.
+    #[default]
+    Unknown,
+    /// The encoder wrote at least four of every five frames it could write.
+    Good,
+    /// The encoder wrote two to four of every five frames it could write, so a
+    /// short source state can be absent.
+    Degraded,
+    /// The encoder wrote fewer than two of every five frames it could write.
+    Poor,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct BrowserVideoCapture {
     pub capture_id: String,
@@ -169,12 +192,27 @@ pub struct BrowserVideoCapture {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
-    /// Observed encoded frames per active recording second, including repeated frames.
+    /// Frames written per active recording second. Unchanged source frames are
+    /// held by their timestamp instead of being written again, so a source that
+    /// changes rarely reports a low rate and still grades [`BrowserVideoQuality::Good`].
     #[serde(default)]
     pub effective_fps: f64,
+    /// Typed sample coverage, graded by [`Self::update_performance`].
+    #[serde(default)]
+    pub quality: BrowserVideoQuality,
+    /// Frames the encoder accepted for the file. A running capture counts them
+    /// before the encoder returns the packet, so a held source still counts.
     pub frames_encoded: u64,
+    /// Scheduled samples the host could not attempt because it was still
+    /// encoding a previous frame.
     pub frames_dropped: u64,
+    /// Scheduled samples whose source pixels had not changed since the last
+    /// written frame, so no frame was written for them.
     pub frames_repeated: u64,
+    /// Distinct source frames the encoder observed, including the frames it
+    /// replaced before it could write them.
+    #[serde(default)]
+    pub frames_offered: u64,
     pub bytes_written: u64,
     pub file_limit_reached: bool,
     pub encoder_failed: bool,
@@ -183,6 +221,7 @@ pub struct BrowserVideoCapture {
 }
 
 impl BrowserVideoCapture {
+    /// Fill the fields the host derives from the raw counters.
     pub fn update_performance(&mut self) {
         let milli_fps = self
             .frames_encoded
@@ -190,6 +229,28 @@ impl BrowserVideoCapture {
             .checked_div(self.elapsed_millis)
             .unwrap_or(0);
         self.effective_fps = f64::from(u32::try_from(milli_fps).unwrap_or(u32::MAX)) / 1_000.0;
+        self.quality = self.grade();
+    }
+
+    /// Grade written frames against the distinct source frames that were
+    /// available, bounded by the requested sample rate.
+    fn grade(&self) -> BrowserVideoQuality {
+        if self.elapsed_millis == 0 || self.frames_offered == 0 {
+            return BrowserVideoQuality::Unknown;
+        }
+        let scheduled = u64::from(self.fps.max(1))
+            .saturating_mul(self.elapsed_millis)
+            .saturating_div(1_000);
+        // The requested rate is a ceiling, never a requirement: a source that
+        // changes fewer times than the target has nothing more to write.
+        let expected = scheduled.min(self.frames_offered).max(1);
+        if self.frames_encoded.saturating_mul(10) >= expected.saturating_mul(8) {
+            BrowserVideoQuality::Good
+        } else if self.frames_encoded.saturating_mul(10) >= expected.saturating_mul(4) {
+            BrowserVideoQuality::Degraded
+        } else {
+            BrowserVideoQuality::Poor
+        }
     }
 }
 
@@ -326,5 +387,71 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    fn capture(fps: u32, elapsed_millis: u64, encoded: u64, offered: u64) -> BrowserVideoCapture {
+        BrowserVideoCapture {
+            capture_id: "capture".to_string(),
+            path: "/tmp/capture.webm".to_string(),
+            state: BrowserVideoState::Recording,
+            active: true,
+            width: 640,
+            height: 360,
+            fps,
+            effective_fps: 0.0,
+            quality: BrowserVideoQuality::Unknown,
+            frames_encoded: encoded,
+            frames_dropped: 0,
+            frames_repeated: 0,
+            frames_offered: offered,
+            bytes_written: 0,
+            file_limit_reached: false,
+            encoder_failed: false,
+            started_at_millis: 0,
+            elapsed_millis,
+        }
+    }
+
+    fn grade(mut capture: BrowserVideoCapture) -> BrowserVideoQuality {
+        capture.update_performance();
+        capture.quality
+    }
+
+    #[test]
+    fn a_capture_without_a_frame_is_unknown() {
+        assert_eq!(grade(capture(5, 0, 0, 0)), BrowserVideoQuality::Unknown);
+        assert_eq!(grade(capture(5, 5_000, 0, 0)), BrowserVideoQuality::Unknown);
+    }
+
+    #[test]
+    fn a_source_that_changes_rarely_grades_good_at_its_own_rate() {
+        // 60 s at 5 fps allows 300 samples, but the source changed 12 times and
+        // every change was written.
+        assert_eq!(grade(capture(5, 60_000, 12, 12)), BrowserVideoQuality::Good);
+    }
+
+    #[test]
+    fn written_frames_are_graded_against_the_frames_that_were_available() {
+        assert_eq!(grade(capture(10, 10_000, 90, 100)), BrowserVideoQuality::Good);
+        assert_eq!(grade(capture(10, 10_000, 80, 100)), BrowserVideoQuality::Good);
+        assert_eq!(grade(capture(10, 10_000, 79, 100)), BrowserVideoQuality::Degraded);
+        assert_eq!(grade(capture(10, 10_000, 40, 100)), BrowserVideoQuality::Degraded);
+        assert_eq!(grade(capture(10, 10_000, 39, 100)), BrowserVideoQuality::Poor);
+        assert_eq!(grade(capture(10, 10_000, 5, 100)), BrowserVideoQuality::Poor);
+    }
+
+    #[test]
+    fn the_requested_rate_caps_expected_frames_and_grades_a_fast_source_good() {
+        // A source that offers 3000 frames in 10 s at a requested 5 fps is
+        // deliberately sampled down; that is not a capture defect.
+        assert_eq!(grade(capture(5, 10_000, 50, 3_000)), BrowserVideoQuality::Good);
+    }
+
+    #[test]
+    fn update_performance_reports_rate_and_quality_together() {
+        let mut capture = capture(10, 10_000, 50, 100);
+        capture.update_performance();
+        assert!((capture.effective_fps - 5.0).abs() < f64::EPSILON);
+        assert_eq!(capture.quality, BrowserVideoQuality::Degraded);
     }
 }

@@ -13,7 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure tests video capture from a Device panel through the UI and MCP.
-It tests access control, background capture, file completion, and temporary storage.
+It tests access control, background capture, unchanged-desktop holding, the
+capture-quality grade, file completion, and temporary storage.
 
 ## 2. Applicability
 
@@ -23,6 +24,10 @@ It tests access control, background capture, file completion, and temporary stor
 - PANEL-ICON-01 checks the camera and record icons on a Device panel.
 - Browser recording is a separate procedure.
 - Linux uses the local device fixture. Other platforms need a separate isolated desktop.
+- The candidate targets 5 fps at the full desktop size. The file rate depends on
+  the source desktop and the build. A 1600 × 900 desktop with continuous motion
+  writes about 6 fps in a release build and about 3 fps in a debug build on a
+  48-thread reference host.
 
 ## 3. Safety
 
@@ -78,6 +83,12 @@ It tests access control, background capture, file completion, and temporary stor
 
    Result: The recording continues. The panel controls do not crop the recording.
 
+10. Make a recording of a desktop whose content does not change. Stop the
+    recording after ten seconds.
+
+    Result: The panel shows the frame count without a warning. The file holds one
+    frame and its duration covers the recording.
+
 ### PANEL-ICON-01 — Camera and record icons
 
 1. Open a Device panel that is not connected.
@@ -114,9 +125,19 @@ It tests access control, background capture, file completion, and temporary stor
 
 6. Send the video operation with `"action":"stop"`.
 7. Poll status until `recording.capture.active` and `recording.finalizing` are false.
-8. Examine `encoder_failed`, `frames_encoded`, and the file at `recording.capture.path`.
+8. Examine `encoder_failed`, `recording.capture.quality`, `frames_encoded`, and
+   `frames_offered`, then the file at `recording.capture.path`.
 
-   Result: `encoder_failed` is false. The file has decodable frames and includes the hidden interval.
+   Result: `encoder_failed` is false. The file has decodable frames and includes
+   the hidden interval. `quality` is `good` when the host wrote at least four of
+   every five desktop states it could write, and `unknown` when no frame was
+   written yet.
+
+9. Examine `recording.capture.fps`, `recording.capture.frames_repeated`, and
+   `recording.capture.effective_fps` after a recording of a desktop that did not change.
+
+   Result: `fps` is 5. `frames_repeated` advances. `effective_fps` is low
+   although `quality` is `good`, because the desktop had one state to write.
 
 ### VNC-VIDEO-03 — Access and lifecycle
 
@@ -152,7 +173,38 @@ It tests access control, background capture, file completion, and temporary stor
 
    Result: No recording starts automatically.
 
-### VNC-VIDEO-04 — Limits and retention
+### VNC-VIDEO-04 — Capture-quality warning
+
+Use a source desktop that changes faster than the candidate can write it. A
+2560 × 1440 desktop with continuous motion is one example. A debug build of the
+candidate is another.
+
+1. Start a recording in the UI and change the whole desktop for fifteen seconds.
+2. Stop the recording.
+
+   Result: The panel shows **Recording fell behind** or **Recording fell far
+   behind**. The yellow text means `quality` is `degraded`. The red text means
+   `quality` is `poor`.
+
+3. Put the pointer on the warning.
+
+   Result: The hover text gives the written rate, the target rate, the number of
+   held samples, and the number of missed samples.
+
+4. Send the video operation with `"action":"status"`.
+
+   Result: `recording.capture.quality` is `degraded` or `poor`. The written rate
+   in `recording.capture.effective_fps` is below `recording.capture.fps`.
+
+5. Decode frames at the two ends of a burst of motion.
+
+   Result: The frames show the motion that the file holds. Report that a short
+   state can be absent. Do not claim that the file shows all motion.
+
+6. Report the measured `quality`, `effective_fps`, `frames_offered`, and
+   `frames_dropped` with the evidence.
+
+### VNC-VIDEO-05 — Limits and retention
 
 1. Record for five minutes.
 
@@ -178,6 +230,10 @@ It tests access control, background capture, file completion, and temporary stor
 - Background capture works without panel rendering.
 - Unauthorized operations return no pixels or file paths.
 - Completed files decode. Disconnect and close do not block the UI.
+- An unchanged desktop writes one frame and reports no missed sample.
+- `quality` is `good` when the host keeps at least four of every five desktop
+  states it can write. A `degraded` or `poor` capture shows a warning in the
+  panel and a written rate below the target.
 - Temporary files follow the retention limit.
 
 ## 8. Cleanup

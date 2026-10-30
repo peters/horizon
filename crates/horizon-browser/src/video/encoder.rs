@@ -17,7 +17,7 @@ use rav1e::{Config, Context, EncoderConfig, Frame};
 use super::convert::{encode_size, rgb_to_yuv420};
 use super::muxer::{WebmMuxer, av1_codec_private, sequence_header_obu};
 use crate::frames::FrameSlot;
-use crate::{BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoState};
+use crate::{BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoQuality, BrowserVideoState};
 
 const STATE_IDLE: u8 = 0;
 const STATE_RECORDING: u8 = 1;
@@ -48,6 +48,7 @@ pub struct VideoCaptureHandle {
     frames_encoded: AtomicU64,
     frames_dropped: AtomicU64,
     frames_repeated: AtomicU64,
+    frames_offered: AtomicU64,
     bytes_written: AtomicU64,
     file_limit_reached: AtomicBool,
     encoder_failed: AtomicBool,
@@ -67,6 +68,7 @@ impl Default for VideoCaptureHandle {
             frames_encoded: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             frames_repeated: AtomicU64::new(0),
+            frames_offered: AtomicU64::new(0),
             bytes_written: AtomicU64::new(0),
             file_limit_reached: AtomicBool::new(false),
             encoder_failed: AtomicBool::new(false),
@@ -111,11 +113,13 @@ impl VideoCaptureHandle {
             frames_encoded: self.frames_encoded.load(Ordering::Relaxed),
             frames_dropped: self.frames_dropped.load(Ordering::Relaxed),
             frames_repeated: self.frames_repeated.load(Ordering::Relaxed),
+            frames_offered: self.frames_offered.load(Ordering::Relaxed),
             bytes_written: self.bytes_written.load(Ordering::Relaxed),
             file_limit_reached: self.file_limit_reached.load(Ordering::Relaxed),
             encoder_failed: self.encoder_failed.load(Ordering::Relaxed),
             started_at_millis: self.started_at_millis.load(Ordering::Relaxed),
             effective_fps: 0.0,
+            quality: BrowserVideoQuality::Unknown,
             elapsed_millis: self.elapsed_millis.load(Ordering::Relaxed),
         };
         capture.update_performance();
@@ -130,6 +134,7 @@ impl VideoCaptureHandle {
         self.frames_encoded.store(0, Ordering::Relaxed);
         self.frames_dropped.store(0, Ordering::Relaxed);
         self.frames_repeated.store(0, Ordering::Relaxed);
+        self.frames_offered.store(0, Ordering::Relaxed);
         self.bytes_written.store(0, Ordering::Relaxed);
         self.file_limit_reached.store(false, Ordering::Relaxed);
         self.encoder_failed.store(false, Ordering::Relaxed);
@@ -235,9 +240,11 @@ impl EncoderThread {
             height: 0,
             fps: 0,
             effective_fps: 0.0,
+            quality: BrowserVideoQuality::Unknown,
             frames_encoded: 0,
             frames_dropped: 0,
             frames_repeated: 0,
+            frames_offered: 0,
             bytes_written: 0,
             file_limit_reached: false,
             encoder_failed: false,
@@ -294,6 +301,9 @@ fn encode_loop(
     commands: Receiver<EncoderCommand>,
     handle: Arc<VideoCaptureHandle>,
 ) -> io::Result<()> {
+    // Frames the source published before this recording started are not part of
+    // its coverage, so counting starts at the frame the session inherits.
+    let observed_seq = frame_slot.latest().map_or(0, |frame| frame.seq);
     let mut session = EncodeSession {
         file: Some(file),
         encoder: None,
@@ -306,7 +316,9 @@ fn encode_loop(
         paused_total: Duration::ZERO,
         paused: false,
         next_tick: Instant::now(),
-        last_seq: 0,
+        observed_seq,
+        frames_offered: 0,
+        resume_pending: false,
     };
     session.run()
 }
@@ -323,7 +335,12 @@ struct EncodeSession {
     paused_total: Duration,
     paused: bool,
     next_tick: Instant,
-    last_seq: u64,
+    /// Highest source sequence the session has already counted.
+    observed_seq: u64,
+    /// Distinct source frames the session saw, including superseded frames.
+    frames_offered: u64,
+    /// A resume must write the desktop as it is now, even if it did not change.
+    resume_pending: bool,
 }
 
 impl EncodeSession {
@@ -401,6 +418,10 @@ impl EncodeSession {
                         let resume_at = clamp_command_instant(requested_at, at);
                         self.paused_total += resume_at.saturating_duration_since(at);
                     }
+                    // Paused time is not in the file, so states that appeared
+                    // during it are neither written nor counted as missed.
+                    self.observed_seq = self.frame_slot.latest().map_or(self.observed_seq, |frame| frame.seq);
+                    self.resume_pending = true;
                     self.next_tick = Instant::now();
                     self.handle.set_state(STATE_RECORDING);
                 }
@@ -443,10 +464,20 @@ impl EncodeSession {
             self.handle.frames_dropped.fetch_add(1, Ordering::Relaxed);
             return Ok(());
         };
-        if frame.seq == self.last_seq {
+        let source_frames = frame.seq.saturating_sub(self.observed_seq);
+        self.observed_seq = frame.seq;
+        let resumed = std::mem::take(&mut self.resume_pending);
+        if self.encoder.is_some() && source_frames == 0 && !resumed {
+            // The pixels are the ones the file already holds. A new block would
+            // repeat them, so hold the previous frame for the elapsed time
+            // instead of spending an encode on identical content.
             self.handle.frames_repeated.fetch_add(1, Ordering::Relaxed);
+            return Ok(());
         }
-        self.last_seq = frame.seq;
+        // The first frame is always written; afterwards every distinct source
+        // frame counts, including the ones this write replaces.
+        self.frames_offered = self.frames_offered.saturating_add(source_frames.max(1));
+        self.handle.frames_offered.store(self.frames_offered, Ordering::Relaxed);
         if self.encoder.is_none() {
             let (width, height) = encode_size(frame.width, frame.height, self.options.max_width);
             let file = self
@@ -467,7 +498,12 @@ impl EncodeSession {
                 self.handle.file_limit_reached.store(true, Ordering::Relaxed);
             }
         }
-        self.handle.frames_encoded.store(encoder.muxed, Ordering::Relaxed);
+        // rav1e returns a packet only after it has seen the frame that follows,
+        // so `muxed` trails the frames the encoder accepted. A source that is
+        // held must still count as written, or a running recording of an
+        // unchanged desktop grades as if its frames were lost.
+        let submitted = u64::try_from(encoder.timestamps.len()).unwrap_or(u64::MAX);
+        self.handle.frames_encoded.store(submitted, Ordering::Relaxed);
         if let Some(bytes) = encoder.bytes_written() {
             self.handle.bytes_written.store(bytes, Ordering::Relaxed);
         }
@@ -832,6 +868,189 @@ mod tests {
         assert!(path.is_file(), "the literal file name exists on disk");
     }
 
+    /// Frames handed to the encoder; `muxed` lags until the encoder flushes.
+    fn sent_frames(session: &EncodeSession) -> usize {
+        session.encoder.as_ref().map_or(0, |encoder| encoder.timestamps.len())
+    }
+
+    #[test]
+    fn an_unchanged_source_is_written_once_and_held_by_its_timestamp() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(20, 30, 40));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 10,
+            compression_level: 0,
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(root.path(), "static", Arc::clone(&slot), options, Arc::clone(&handle))
+            .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        std::thread::sleep(Duration::from_millis(700));
+        let capture = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish encoder: {error}"));
+        assert_eq!(
+            capture.frames_encoded, 1,
+            "an unchanged screen must not spend an encode per sample"
+        );
+        assert_eq!(capture.frames_offered, 1);
+        assert!(
+            capture.frames_repeated >= 2,
+            "held samples: {}",
+            capture.frames_repeated
+        );
+        assert_eq!(capture.quality, BrowserVideoQuality::Good);
+        assert!(capture.bytes_written > 0);
+    }
+
+    #[test]
+    fn a_running_recording_of_an_unchanged_source_grades_good() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(20, 30, 40));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 10,
+            compression_level: 0,
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(root.path(), "held", Arc::clone(&slot), options, Arc::clone(&handle))
+            .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        std::thread::sleep(Duration::from_millis(600));
+        // A caller reads this before `stop`, while rav1e still holds the packet
+        // it will return for the frame after the one it accepted.
+        let running = handle.snapshot().unwrap_or_else(|| panic!("no running capture"));
+        assert!(running.active);
+        assert_eq!(
+            running.frames_encoded, 1,
+            "the accepted frame counts before rav1e returns it"
+        );
+        assert_eq!(running.frames_offered, 1);
+        assert_eq!(running.quality, BrowserVideoQuality::Good);
+        let capture = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish encoder: {error}"));
+        assert_eq!(capture.frames_encoded, 1);
+        assert_eq!(capture.quality, BrowserVideoQuality::Good);
+    }
+
+    #[test]
+    fn a_tick_writes_the_newest_frame_and_counts_the_frames_it_replaced() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(1, 2, 3));
+        let (_, receiver) = mpsc::channel();
+        let observed_seq = slot.latest().map_or(0, |frame| frame.seq);
+        let mut session = EncodeSession {
+            file: Some(File::create(root.path().join("offered.webm")).unwrap()),
+            encoder: None,
+            frame_slot: Arc::clone(&slot),
+            options: BrowserVideoCaptureOptions {
+                compression_level: 0,
+                ..Default::default()
+            },
+            handle: Arc::new(VideoCaptureHandle::default()),
+            commands: receiver,
+            started: Instant::now(),
+            paused_at: None,
+            paused_total: Duration::ZERO,
+            paused: false,
+            next_tick: Instant::now(),
+            observed_seq,
+            frames_offered: 0,
+            resume_pending: false,
+        };
+        session.encode_tick().unwrap();
+        assert_eq!(sent_frames(&session), 1);
+        assert_eq!(session.frames_offered, 1);
+        for value in 1..=3 {
+            slot.store_test_rgb(64, 64, solid_rgb(value, 0, 0));
+        }
+        session.encode_tick().unwrap();
+        assert_eq!(sent_frames(&session), 2);
+        assert_eq!(
+            session.frames_offered, 4,
+            "the three frames written over by the newest one still count"
+        );
+        session.encode_tick().unwrap();
+        assert_eq!(
+            sent_frames(&session),
+            2,
+            "a tick without a new source frame writes nothing"
+        );
+        assert_eq!(session.handle.frames_repeated.load(Ordering::Relaxed), 1);
+        assert_eq!(session.handle.frames_offered.load(Ordering::Relaxed), 4);
+        let encoder = session.encoder.take().unwrap();
+        assert_eq!(encoder.finish(500).unwrap().muxed, 2);
+    }
+
+    #[test]
+    fn a_resumed_recording_writes_the_desktop_once_without_counting_paused_states() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(1, 2, 3));
+        let (sender, receiver) = mpsc::channel();
+        let observed_seq = slot.latest().map_or(0, |frame| frame.seq);
+        let mut session = EncodeSession {
+            file: Some(File::create(root.path().join("resume.webm")).unwrap()),
+            encoder: None,
+            frame_slot: Arc::clone(&slot),
+            options: BrowserVideoCaptureOptions {
+                compression_level: 0,
+                ..Default::default()
+            },
+            handle: Arc::new(VideoCaptureHandle::default()),
+            commands: receiver,
+            started: Instant::now(),
+            paused_at: None,
+            paused_total: Duration::ZERO,
+            paused: false,
+            next_tick: Instant::now(),
+            observed_seq,
+            frames_offered: 0,
+            resume_pending: false,
+        };
+        session.encode_tick().unwrap();
+        assert_eq!(sent_frames(&session), 1);
+        let (ack, ack_rx) = mpsc::channel();
+        sender
+            .send(EncoderCommand::Pause {
+                requested_at: Instant::now(),
+                ack,
+            })
+            .unwrap();
+        assert!(session.drain_commands());
+        assert_eq!(ack_rx.recv(), Ok(true));
+        for value in 4..=8 {
+            slot.store_test_rgb(64, 64, solid_rgb(value, 0, 0));
+        }
+        let (ack, ack_rx) = mpsc::channel();
+        sender
+            .send(EncoderCommand::Resume {
+                requested_at: Instant::now(),
+                ack,
+            })
+            .unwrap();
+        assert!(session.drain_commands());
+        assert_eq!(ack_rx.recv(), Ok(true));
+        session.encode_tick().unwrap();
+        assert_eq!(
+            sent_frames(&session),
+            2,
+            "a resume writes the desktop as it is, even when it did not change"
+        );
+        assert_eq!(
+            session.frames_offered, 2,
+            "states that appeared during the pause are not coverage"
+        );
+        session.encode_tick().unwrap();
+        assert_eq!(sent_frames(&session), 2);
+        assert_eq!(session.handle.frames_repeated.load(Ordering::Relaxed), 1);
+    }
+
     #[test]
     fn pause_elapsed_uses_the_request_timestamp() {
         let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
@@ -891,9 +1110,11 @@ mod tests {
         };
         let thread = EncoderThread::start(root.path(), "stop-ts", Arc::clone(&slot), options, Arc::clone(&handle))
             .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        // The request must be later than the capture start, or the elapsed time
+        // clamp holds it at zero and there is nothing to freeze.
         let ready = Instant::now() + Duration::from_secs(5);
         while Instant::now() < ready {
-            if handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1) {
+            if handle.snapshot().is_some_and(|capture| capture.elapsed_millis >= 500) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -977,7 +1198,9 @@ mod tests {
             paused_total: Duration::from_secs(2),
             paused: false,
             next_tick: now,
-            last_seq: 0,
+            observed_seq: 0,
+            frames_offered: 0,
+            resume_pending: false,
         };
         slot.store_test_rgb(64, 64, solid_rgb(255, 0, 0));
         session.encode_tick().unwrap();
