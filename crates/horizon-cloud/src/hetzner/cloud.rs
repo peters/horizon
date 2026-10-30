@@ -144,33 +144,34 @@ pub fn valid_placement_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-/// The location of an existing workspace volume. The policy can change while a
-/// cloud has a volume, so a location it no longer allows is refused rather than used.
-/// Provisioning uses [`volume_placement`] instead: a volume that holds what the
-/// cloud must not lose places the cloud where it is, within what Hetzner offers.
-/// # Errors
-/// Refuses a missing or no longer allowed location.
-pub fn location(recorded: Option<&str>, policy: &Policy) -> Result<String, CloudError> {
-    match recorded {
-        Some(location) if policy.locations.iter().any(|name| name == location) => Ok(location.to_owned()),
-        Some(_) => Err(CloudError::Invalid(
-            "This cloud's workspace volume is in a location the Hetzner settings no longer allow",
-        )),
-        None => Err(CloudError::Invalid(
-            "This cloud's workspace volume has no recorded location",
-        )),
+/// The policy widened to the location of this cloud's state volume, when `recorded`
+/// names one.
+///
+/// The volume is the durable half of a cloud: a worker's workspace, and a browser VM's
+/// sign-ins on `/state`. It cannot be replaced without losing that, so the location it is
+/// in keeps placing the cloud after the settings stop naming it. Nothing else about the
+/// policy changes: a server type the settings no longer allow is still refused, and
+/// [`admitted`] still requires the server to be in the location its volume fixed, so this
+/// admits no move.
+#[must_use]
+pub fn widened_to_volume(policy: &Policy, recorded: Option<&str>) -> Policy {
+    let mut widened = policy.clone();
+    if let Some(location) = recorded
+        && valid_placement_name(location)
+        && !widened.locations.iter().any(|name| name == location)
+    {
+        widened.locations.push(location.to_owned());
     }
+    widened
 }
 
 /// The location an existing state volume fixes, and the policy widened to it.
 ///
-/// The volume is the durable half of a cloud: a worker's workspace, and a browser
-/// VM's sign-ins on `/state`, so a deploy follows the volume's location instead of
-/// renting elsewhere and leaving it behind. The returned policy keeps its own
-/// locations and adds the volume's, so the server placed there is still admitted.
-/// `offers` is the catalog while the cloud can rent; it is `None` when the run only
-/// reconnects to a server that was placed already, which the catalog need not offer
-/// any more.
+/// A deploy follows the volume's location instead of renting elsewhere and leaving it
+/// behind, and the returned policy keeps its own locations and adds the volume's, so the
+/// server placed there is still admitted. `offers` is the catalog while the cloud can rent;
+/// it is `None` when the run only reconnects to a server that was placed already, which the
+/// catalog need not offer any more.
 /// # Errors
 /// Refuses a volume with no recorded or malformed location, and a volume whose
 /// location offers no requested server type, naming the volume's location.
@@ -191,8 +192,7 @@ pub fn volume_placement(
             "The state volume names the location {volume_location}, which is not a Hetzner location; delete the machine and its volume, and deploy again"
         )));
     }
-    let mut widened = policy.clone();
-    if !widened.locations.iter().any(|name| name == volume_location) {
+    if !policy.locations.iter().any(|name| name == volume_location) {
         // The volume cannot be replaced without losing what it holds, so a location that
         // cannot host the request leaves the person to choose what gives way.
         if let Some(offers) = offers
@@ -203,9 +203,11 @@ pub fn volume_placement(
                 policy.server_types.join(", ")
             )));
         }
-        widened.locations.push(volume_location.to_owned());
     }
-    Ok((volume_location.to_owned(), widened))
+    Ok((
+        volume_location.to_owned(),
+        widened_to_volume(policy, Some(volume_location)),
+    ))
 }
 
 /// For a cloud without a volume: the first allowed location, in order, where a
@@ -430,6 +432,9 @@ pub fn holds(server: &Server, volume: &Volume) -> bool {
 
 /// Whether the server's type and location are allowed now, and its location is
 /// the one its volume fixed.
+///
+/// Callers pass the policy widened with [`widened_to_volume`], so the location the volume
+/// is in admits the server that holds it even after the settings stop naming that location.
 #[must_use]
 pub fn admitted(server: &Server, policy: &Policy, location: Option<&str>) -> bool {
     policy.server_types.contains(&server.server_type.name)

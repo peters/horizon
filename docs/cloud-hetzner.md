@@ -20,7 +20,9 @@ choice, Horizon uses the configured fallback types and locations in this sequenc
 2. It picks the first allowed location, in order, where an allowed server type
    has the profile's CPU, memory and container disk, skipping locations where
    none does, and creates an ext4 workspace volume there. The volume fixes the
-   location for the cloud's whole life.
+   location for the cloud's whole life. A later deploy follows the volume to its
+   location, also after the settings stop naming that location, and refuses only
+   when that location cannot host the requested server type.
 3. It tries the allowed server types that have the profile's CPU, memory and
    container disk in that location, in order. A capacity refusal (HTTP 412 `resource_unavailable` or HTTP 422
    `placement_error`) moves on to the next type; any other refusal stops.

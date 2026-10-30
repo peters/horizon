@@ -237,13 +237,26 @@ fn allowing(locations: &[&str], server_types: &[&str]) -> Policy {
 }
 
 #[test]
-fn a_volume_fixes_its_location_only_while_the_settings_allow_it() {
+fn a_state_volume_widens_the_policy_to_the_location_it_is_in() {
     let allowed = allowing(&["hel1"], &["cx33"]);
-    assert_eq!(location(Some("hel1"), &allowed).unwrap(), "hel1");
-    // An existing volume always has a recorded location.
-    assert!(location(None, &allowed).is_err());
-    // The volume cannot follow a changed allow-list.
-    assert!(location(Some("hel1"), &allowing(&["nbg1"], &["cx33"])).is_err());
+    assert_eq!(
+        widened_to_volume(&allowed, Some("hel1")),
+        allowed,
+        "a named location adds nothing"
+    );
+    let widened = widened_to_volume(&allowed, Some("fsn1"));
+    assert_eq!(
+        widened.locations,
+        ["hel1", "fsn1"],
+        "the settings keep their own locations and gain the volume's"
+    );
+    assert_eq!(
+        widened.server_types, allowed.server_types,
+        "the types stay the settings' own"
+    );
+    // A volume with no location, or a malformed one, places nothing.
+    assert_eq!(widened_to_volume(&allowed, None), allowed);
+    assert_eq!(widened_to_volume(&allowed, Some("not a place!")), allowed);
 }
 
 #[test]
@@ -330,14 +343,20 @@ fn a_placed_server_is_reconciled_against_the_current_types_not_the_catalog() {
 }
 
 #[test]
-fn readiness_admits_only_a_server_the_current_policy_allows_where_its_volume_is() {
+fn admitted_requires_an_allowed_type_in_the_volumes_own_location() {
     let server = server("running", Some("192.0.2.10"));
     let allowed = allowing(&["hel1"], &["cx33"]);
     assert!(admitted(&server, &allowed, Some("hel1")));
     // A resized server type.
     assert!(!admitted(&server, &allowing(&["hel1"], &["cpx32"]), Some("hel1")));
-    // A location no longer allowed.
+    // A location the settings no longer name admits the server only once
+    // `widened_to_volume` adds the volume's location.
     assert!(!admitted(&server, &allowing(&["nbg1"], &["cx33"]), Some("hel1")));
+    assert!(admitted(
+        &server,
+        &widened_to_volume(&allowing(&["nbg1"], &["cx33"]), Some("hel1")),
+        Some("hel1")
+    ));
     assert!(!admitted(&server, &allowed, Some("nbg1")), "not where its volume is");
 }
 

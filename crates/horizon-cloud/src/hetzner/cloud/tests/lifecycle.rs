@@ -4,7 +4,7 @@ use super::{server, spec, volume};
 use crate::{
     Cancellation, CloudError, CreateState,
     hetzner::{
-        cloud::{Cloud, Journal, Policy, Records, Stop, StopRecords, check, delete, delete_observed},
+        cloud::{Check, Cloud, Journal, Policy, Records, Stop, StopRecords, check, delete, delete_observed},
         tests::provider,
     },
 };
@@ -201,6 +201,58 @@ fn a_powered_off_server_that_was_not_released_is_never_reported_stopped() {
     task.join().unwrap();
     assert!(refused.to_string().contains("still billed"));
     assert!(kept.stops.is_empty() && kept.operation.is_none(), "nothing is recorded");
+}
+
+#[test]
+fn a_bound_server_whose_location_the_settings_dropped_is_still_this_clouds_worker() {
+    // The state volume decides where the cloud runs, so a reconnect finds the worker in the
+    // volume's location instead of telling the person to delete the cloud it placed there.
+    let at = |mut value: Value, location: &str| {
+        value["location"]["name"] = json!(location);
+        value
+    };
+    let (client, _, task) = provider(vec![
+        (
+            200,
+            json!({"server": at(serde_json::to_value(server("running", Some("192.0.2.10"))).unwrap(), "fsn1")}),
+        ),
+        (
+            200,
+            json!({"volume": at(serde_json::to_value(volume()).unwrap(), "fsn1")}),
+        ),
+    ]);
+    let mut operation = CreateState::Bound { worker_id: "42".into() };
+    // The settings no longer name the location that the volume is in.
+    let policy = || {
+        Ok(Policy {
+            locations: vec!["hel1".into()],
+            server_types: vec!["cx33".into()],
+        })
+    };
+    let mut kept = Kept::default();
+    let (operation_id, cancel) = (spec().operation_id, Cancellation::default());
+    let held = Journal {
+        location: Some("fsn1".into()),
+        ..journal(CreateState::Bound { worker_id: "9".into() })
+    };
+    let found = check(
+        Cloud {
+            client: &client,
+            operation_id: &operation_id,
+            cancel: &cancel,
+        },
+        Some(&spec()),
+        &mut operation,
+        &held,
+        &policy,
+        &mut kept,
+    )
+    .unwrap();
+    task.join().unwrap();
+    assert!(
+        matches!(found, Check::Found { .. }),
+        "the server that holds the volume is this cloud's worker"
+    );
 }
 
 /// Records whose every journal save fails.
