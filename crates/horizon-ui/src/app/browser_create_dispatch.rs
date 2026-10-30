@@ -189,7 +189,6 @@ impl HorizonApp {
                 manifest_reading: false,
             }),
             remote_credentials: None,
-            leasing_provider: None,
         });
     }
 

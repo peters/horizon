@@ -74,9 +74,13 @@ impl HorizonApp {
             return None;
         };
         // The create counts against its provider from here: no allocation is
-        // recorded before the lease applies, and admission of a second create
-        // must not miss this one.
-        pending.leasing_provider = Some(plan.provider.clone());
+        // recorded before the lease applies, and the create that waits is not
+        // in `pending` while a tick advances it.
+        *self
+            .browser_create_host
+            .leasing_providers
+            .entry(plan.provider.clone())
+            .or_default() += 1;
         let root = self.session_store.home().root().to_path_buf();
         let quota_key = plan.quota_key.clone();
         let request_id = pending.request.request_id.clone();
@@ -101,6 +105,7 @@ impl HorizonApp {
         lease: Option<Result<SlotLease, SlotError>>,
     ) {
         let stale = self.browser_create_host.io.applying_stale();
+        release_leasing_provider(self, &leased.0.provider);
         let found = self
             .browser_create_host
             .pending
@@ -233,11 +238,10 @@ pub(super) fn remote_holds(app: &HorizonApp, provider: &str) -> usize {
         .count();
     let leasing = app
         .browser_create_host
-        .pending
-        .iter()
-        .filter(|pending| pending.stage == CreateStage::Leasing)
-        .filter(|pending| pending.leasing_provider.as_deref() == Some(provider))
-        .count();
+        .leasing_providers
+        .get(provider)
+        .copied()
+        .unwrap_or_default();
     let orphaned = app
         .browser_create_host
         .orphaned_remote_holds
@@ -251,6 +255,17 @@ pub(super) fn remote_holds(app: &HorizonApp, provider: &str) -> usize {
         })
         .count();
     app.board.remote_holds(provider) + pending + leasing + orphaned
+}
+
+/// Drops one queued lease of `provider`, whichever path the lease job takes.
+fn release_leasing_provider(app: &mut HorizonApp, provider: &str) {
+    let leasing = &mut app.browser_create_host.leasing_providers;
+    if let Some(count) = leasing.get_mut(provider) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            leasing.remove(provider);
+        }
+    }
 }
 
 /// Free only leases whose exact allocation is released, and prune old board holds.
@@ -337,10 +352,11 @@ mod tests {
     }
 
     /// A lease that the coordination worker has not applied yet counts against
-    /// its provider: no allocation exists before the lease applies, so
-    /// admission of a second create must not miss the first.
+    /// its provider, also while a tick advances the create that waits for it:
+    /// `finish_pending_browser_creates` takes `pending` out before it advances
+    /// each create, so the waiting create is not in that list during admission.
     #[test]
-    fn a_create_waiting_for_its_slot_counts_against_the_provider_limit() {
+    fn a_queued_lease_counts_against_its_provider_while_a_tick_advances_its_create() {
         let (_temp, mut app) = crate::app::test_support::test_app();
         app.template_config = config();
         let mut credentials = workbench();
@@ -355,23 +371,48 @@ mod tests {
         let plan =
             plan_remote_create(&app.template_config.browser.remote, &credentials, None, "ios_phone").expect("plan");
         assert_eq!(plan.max_sessions, Some(1), "the fixture allows one session");
-        let mut pending = PendingBrowserCreate::resolving(
-            horizon_core::browser::manifest::BrowserCreateRequest::for_tests("agent"),
-            std::time::Instant::now(),
-            app.browser_create_host.io.board_fence(),
+        app.remote_browser_credentials = credentials;
+        // The worker waits, as it does for a slot another Horizon instance holds.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        let workspace = app.board.create_workspace("alpha");
+        let actor = ActorPanel {
+            panel_id: horizon_core::PanelId(1),
+            workspace_id: workspace,
+        };
+        let mut request = horizon_core::browser::manifest::BrowserCreateRequest::for_tests("agent");
+        request.target = Some("ios_phone".into());
+        app.begin_remote_create(request, actor, std::time::Instant::now());
+        assert_eq!(
+            app.browser_create_host.pending[0].stage,
+            CreateStage::Leasing,
+            "the first create waits for its lease"
         );
-        pending.stage = CreateStage::Leasing;
-        pending.leasing_provider = Some(plan.provider.clone());
-        app.browser_create_host.pending.push(pending);
 
+        // A tick takes the pending list out before it advances each create.
+        let taken = std::mem::take(&mut app.browser_create_host.pending);
         let refused = app
             .remote_admission_refusal(&plan)
-            .expect_err("the waiting create holds the only session of this provider");
+            .expect_err("the create waiting for the only slot counts during the tick");
         assert_eq!(refused.0, "remote_session_limit_reached");
+
+        // The create ended while the tick advanced it: the lease applies to no
+        // create, is dropped, and stops counting.
+        drop(taken);
+        release.send(()).expect("release the coordination worker");
+        app.settle_browser_host_io();
+        assert!(
+            app.browser_create_host.leasing_providers.is_empty(),
+            "an applied lease no longer counts"
+        );
+        app.remote_admission_refusal(&plan)
+            .expect("no allocation holds the provider after the lease was dropped");
     }
 
     #[test]
-    fn a_create_waiting_for_another_provider_does_not_use_this_limit() {
+    fn a_queued_lease_for_another_provider_does_not_use_this_limit() {
         let (_temp, mut app) = crate::app::test_support::test_app();
         app.template_config = config();
         let mut credentials = workbench();
@@ -385,17 +426,11 @@ mod tests {
             .expect("credential");
         let plan =
             plan_remote_create(&app.template_config.browser.remote, &credentials, None, "ios_phone").expect("plan");
-        let mut pending = PendingBrowserCreate::resolving(
-            horizon_core::browser::manifest::BrowserCreateRequest::for_tests("agent"),
-            std::time::Instant::now(),
-            app.browser_create_host.io.board_fence(),
-        );
-        pending.stage = CreateStage::Leasing;
-        pending.leasing_provider = Some("another-provider".into());
-        app.browser_create_host.pending.push(pending);
-
+        app.browser_create_host
+            .leasing_providers
+            .insert("another-provider".into(), 1);
         app.remote_admission_refusal(&plan)
-            .expect("another provider's waiting create holds another budget");
+            .expect("another provider's queued lease holds another budget");
     }
 
     #[test]

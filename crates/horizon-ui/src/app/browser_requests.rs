@@ -32,6 +32,11 @@ pub(super) struct BrowserCreateHostState {
     /// write yet, for a later frame and until each request's deadline.
     pub(super) recovery_answers: super::answer_retries::RefusedAnswers<manifest::recovery::RecoveryResult>,
     pub(super) pending: Vec<PendingBrowserCreate>,
+    /// Slot leases queued on the coordination worker, by provider. A create
+    /// counts against its provider from the moment its lease is queued: no
+    /// allocation exists before the lease applies, and the create that waits
+    /// is not in `pending` while a tick advances it.
+    pub(super) leasing_providers: std::collections::BTreeMap<String, usize>,
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.
     pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,

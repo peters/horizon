@@ -45,10 +45,6 @@ pub(super) struct PendingBrowserCreate {
     /// The OS-store credential values a remote create still waits for; `None`
     /// once they are at hand, and for a create that reads none.
     pub(super) remote_credentials: Option<super::browser_remote_credentials::RemoteCredentialRead>,
-    /// The provider whose slot a remote create waits for while its lease runs.
-    /// It counts against that provider's limit from the moment the lease is
-    /// queued, because no allocation is recorded before the lease applies.
-    pub(super) leasing_provider: Option<String>,
 }
 
 /// The panel a create opened, and what the host judges it by.
@@ -85,7 +81,6 @@ impl PendingBrowserCreate {
             board,
             panel: None,
             remote_credentials: None,
-            leasing_provider: None,
         }
     }
 }
@@ -559,7 +554,6 @@ mod tests {
                     manifest_reading: false,
                 }),
                 remote_credentials: None,
-                leasing_provider: None,
             });
         }
     }
