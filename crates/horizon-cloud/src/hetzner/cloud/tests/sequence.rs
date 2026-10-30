@@ -93,6 +93,16 @@ fn and(mut responses: Vec<(u16, Value)>, more: impl IntoIterator<Item = (u16, Va
     responses.extend(more);
     responses
 }
+/// The fixture answers moved from `hel1` to `location`, for a cloud whose volume is there.
+fn in_location(responses: Vec<(u16, Value)>, location: &str) -> Vec<(u16, Value)> {
+    responses
+        .into_iter()
+        .map(|(status, value)| {
+            let moved = value.to_string().replace("hel1", location);
+            (status, serde_json::from_str(&moved).unwrap())
+        })
+        .collect()
+}
 /// A fresh request up to its volume request.
 fn until_volume() -> Vec<(u16, Value)> {
     let key = [(200, listing("ssh_keys", &json!([]))), (201, key())];
@@ -691,6 +701,39 @@ fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
     assert_eq!(outcome.served, 11, "reconciled and refused, with no delete");
     assert_eq!(outcome.journal.volume, CreateState::Bound { worker_id: "9".into() });
     assert!(!outcome.journal.unused);
+}
+
+#[test]
+fn a_cloud_whose_volume_is_outside_the_allowed_locations_is_placed_where_the_volume_is() {
+    // The settings no longer name the location of the volume that holds this cloud's
+    // workspace, so the server is rented where the volume is rather than leaving it behind.
+    let journal = Journal {
+        location: Some("fsn1".into()),
+        volume: CreateState::Bound { worker_id: "9".into() },
+        key: Some(super::super::throwaway_public_key().unwrap()),
+        ..Journal::default()
+    };
+    // A volume is recorded, so nothing is listed by label; the catalog follows.
+    let mut responses: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
+    responses.extend([(200, listing("ssh_keys", &json!([]))), (201, key())]);
+    responses.extend([(200, json!({"volume": free()}))]);
+    responses.extend(networked("hel1"));
+    responses.extend([(200, listing("servers", &json!([]))), (200, json!({"volume": free()}))]);
+    responses.push((201, created_server(4)));
+    responses.push((200, held_volume()));
+    let outcome = run(CreateState::Prepared, journal, false, in_location(responses, "fsn1"));
+    let worker = outcome.worker.expect("the server that holds the volume is the worker");
+    assert_eq!(
+        worker.data_center_id.as_deref(),
+        Some("fsn1"),
+        "rented in the volume's location, which the settings no longer name"
+    );
+    assert_eq!(outcome.journal.location.as_deref(), Some("fsn1"));
+    assert_eq!(
+        outcome.journal.volume,
+        CreateState::Bound { worker_id: "9".into() },
+        "the workspace volume stays"
+    );
 }
 
 #[test]

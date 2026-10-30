@@ -15,7 +15,7 @@ use crate::cloud_runtime::{
 };
 use horizon_cloud::{
     CreateState, WorkerSpec, WorkerStatus,
-    hetzner::cloud::{admitted, holds},
+    hetzner::cloud::{admitted, holds, widened_to_volume},
 };
 use std::time::{Duration, Instant};
 
@@ -30,7 +30,7 @@ pub(in crate::cloud_runtime::deployment) fn wait(
     state: &mut Deployment,
     spec: &WorkerSpec,
 ) -> Result<(Connection, WorkerContract)> {
-    let allowed = compute.allowed.for_spec(spec)?;
+    let policy = compute.allowed.for_spec(spec)?;
     let deadline = Instant::now() + Duration::from_secs(u64::from(state.profile.bootstrap.readiness_seconds));
     state.stage = Stage::Readiness;
     store.save(state)?;
@@ -44,6 +44,9 @@ pub(in crate::cloud_runtime::deployment) fn wait(
         return Err(Error::Invalid("Missing workspace volume identity"));
     };
     let volume_id: u64 = volume_id.parse().map_err(|_| Error::Invalid("Invalid volume ID"))?;
+    // The state volume decides where the cloud runs, so a location the settings no longer
+    // name still admits the server that holds it; its type must still be allowed.
+    let allowed = widened_to_volume(&policy, journal.location.as_deref());
     loop {
         // Both are inspected on every pass, so the attachment checked below is current.
         let server = compute
@@ -59,11 +62,11 @@ pub(in crate::cloud_runtime::deployment) fn wait(
         volume.verify(&state.cloud_id)?;
         // The server and the journaled volume must hold each other in one location,
         // or the worker's workspace is not the cloud's volume.
-        // The server's type and location must still be allowed, and its location
-        // must be the one its volume fixed; a resize or a changed policy is refused.
+        // The server's type must still be allowed, and its location must be the one its
+        // volume fixed; a resize is refused.
         if !admitted(&server, &allowed, journal.location.as_deref()) {
             return Err(Error::Invalid(
-                "The server's type or location is not one the Hetzner settings allow for this cloud",
+                "The server's type is not one the Hetzner settings allow for this cloud, or its location is not the one its volume fixed",
             ));
         }
         if !holds(&server, &volume) {

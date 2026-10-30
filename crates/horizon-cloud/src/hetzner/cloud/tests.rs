@@ -237,13 +237,82 @@ fn allowing(locations: &[&str], server_types: &[&str]) -> Policy {
 }
 
 #[test]
-fn a_volume_fixes_its_location_only_while_the_settings_allow_it() {
+fn a_state_volume_widens_the_policy_to_the_location_it_is_in() {
     let allowed = allowing(&["hel1"], &["cx33"]);
-    assert_eq!(location(Some("hel1"), &allowed).unwrap(), "hel1");
-    // An existing volume always has a recorded location.
-    assert!(location(None, &allowed).is_err());
-    // The volume cannot follow a changed allow-list.
-    assert!(location(Some("hel1"), &allowing(&["nbg1"], &["cx33"])).is_err());
+    assert_eq!(
+        widened_to_volume(&allowed, Some("hel1")),
+        allowed,
+        "a named location adds nothing"
+    );
+    let widened = widened_to_volume(&allowed, Some("fsn1"));
+    assert_eq!(
+        widened.locations,
+        ["hel1", "fsn1"],
+        "the settings keep their own locations and gain the volume's"
+    );
+    assert_eq!(
+        widened.server_types, allowed.server_types,
+        "the types stay the settings' own"
+    );
+    // A volume with no location, or a malformed one, places nothing.
+    assert_eq!(widened_to_volume(&allowed, None), allowed);
+    assert_eq!(widened_to_volume(&allowed, Some("not a place!")), allowed);
+}
+
+#[test]
+fn a_state_volume_in_another_allowed_location_places_the_cloud_there() {
+    // The volume is the durable half, so a request that resolved to another location must
+    // not leave it behind: a live deploy failed on exactly this, and blamed the settings.
+    let spec = spec();
+    let offers = [offer("cx33", "fsn1", 4, 8.0), offer("cx33", "hel1", 4, 8.0)];
+    // The browser VM names exactly the location that it resolved, so the volume's location is
+    // the one that has to be admitted.
+    let policy = allowing(&["hel1"], &["cx33"]);
+
+    let (location, widened) = volume_placement(Some("fsn1"), Some(&offers), &spec, &policy).unwrap();
+
+    assert_eq!(location, "fsn1", "the volume decides where the cloud runs");
+    assert!(
+        widened.locations.contains(&"fsn1".to_owned()),
+        "the placed location is admitted by the widened policy: {:?}",
+        widened.locations
+    );
+    assert_eq!(
+        widened.locations.len(),
+        policy.locations.len() + 1,
+        "the settings keep their own locations and gain the volume's"
+    );
+    assert_eq!(widened.server_types, policy.server_types);
+}
+
+#[test]
+fn a_state_volume_that_cannot_host_the_request_names_both_of_them() {
+    let spec = spec();
+    let offers = [offer("cx33", "hel1", 4, 8.0)];
+    let policy = allowing(&["hel1"], &["cx33"]);
+
+    let refused = volume_placement(Some("fsn1"), Some(&offers), &spec, &policy).unwrap_err();
+
+    let text = refused.to_string();
+    assert!(text.contains("fsn1"), "the volume's location is named: {text}");
+    assert!(text.contains("cx33"), "the requested type is named: {text}");
+    assert!(
+        !text.contains("Hetzner settings"),
+        "the settings are not the cause, so the message must not blame them: {text}"
+    );
+}
+
+#[test]
+fn a_state_volume_without_a_location_is_refused_rather_than_placed_elsewhere() {
+    let spec = spec();
+    let policy = allowing(&["hel1"], &["cx33"]);
+    let offers = [offer("cx33", "hel1", 4, 8.0)];
+
+    let refused = volume_placement(None, Some(&offers), &spec, &policy).unwrap_err();
+    assert!(refused.to_string().contains("location is unknown"), "{refused}");
+
+    let refused = volume_placement(Some("not a place!"), Some(&offers), &spec, &policy).unwrap_err();
+    assert!(refused.to_string().contains("not a Hetzner location"), "{refused}");
 }
 
 #[test]
@@ -274,14 +343,20 @@ fn a_placed_server_is_reconciled_against_the_current_types_not_the_catalog() {
 }
 
 #[test]
-fn readiness_admits_only_a_server_the_current_policy_allows_where_its_volume_is() {
+fn admitted_requires_an_allowed_type_in_the_volumes_own_location() {
     let server = server("running", Some("192.0.2.10"));
     let allowed = allowing(&["hel1"], &["cx33"]);
     assert!(admitted(&server, &allowed, Some("hel1")));
     // A resized server type.
     assert!(!admitted(&server, &allowing(&["hel1"], &["cpx32"]), Some("hel1")));
-    // A location no longer allowed.
+    // A location the settings no longer name admits the server only once
+    // `widened_to_volume` adds the volume's location.
     assert!(!admitted(&server, &allowing(&["nbg1"], &["cx33"]), Some("hel1")));
+    assert!(admitted(
+        &server,
+        &widened_to_volume(&allowing(&["nbg1"], &["cx33"]), Some("hel1")),
+        Some("hel1")
+    ));
     assert!(!admitted(&server, &allowed, Some("nbg1")), "not where its volume is");
 }
 

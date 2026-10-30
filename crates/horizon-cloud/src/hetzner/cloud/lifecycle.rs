@@ -3,7 +3,7 @@
 //! The cloud stays bound to the released server; resuming clears that fence so
 //! the next provisioning creates a new server in the volume's location that
 //! attaches the same volume.
-use super::{Journal, Policy, Records, admitted, holds, worker};
+use super::{Journal, Policy, Records, admitted, holds, widened_to_volume, worker};
 use crate::hetzner::servers::{Announcement, OriginalServerAbsence};
 use crate::{
     Cancellation, CloudError, CreateState, Worker, WorkerSpec, WorkerStatus,
@@ -140,10 +140,12 @@ pub fn check(
     server.verify(operation_id)?;
     let spec = spec.ok_or(CloudError::Invalid("No worker was requested"))?;
     let volume = bound_volume(client, journal, operation_id, cancel)?;
-    // A found server is a worker only as readiness would accept it.
-    if !holds(&server, &volume) || !admitted(&server, &policy()?.for_spec(spec)?, journal.location.as_deref()) {
+    // A found server is a worker only as readiness would accept it: a type the settings
+    // allow, holding this cloud's workspace volume in the location that volume fixes.
+    let allowed = widened_to_volume(&policy()?.for_spec(spec)?, journal.location.as_deref());
+    if !holds(&server, &volume) || !admitted(&server, &allowed, journal.location.as_deref()) {
         return Err(CloudError::Invalid(
-            "The server does not hold this cloud's workspace volume where the settings allow; delete the cloud",
+            "The server does not hold this cloud's workspace volume in the location that volume fixes; delete the cloud",
         ));
     }
     // A powered-off server is still billed, so it is never reported as stopped;

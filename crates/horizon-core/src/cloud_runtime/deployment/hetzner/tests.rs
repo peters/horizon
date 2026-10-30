@@ -728,6 +728,96 @@ fn reconnect_readiness_keeps_the_exact_type_when_fallback_preferences_change() {
     }
 }
 
+#[test]
+#[cfg(unix)]
+fn readiness_admits_the_server_provisioning_placed_in_the_volumes_location() {
+    use super::{Allowed, Compute, readiness};
+    use crate::cloud_runtime::{
+        Event, command::Runner, deployment::Request, settings::Settings, timeline::AWAITING_ENDPOINT,
+    };
+    use horizon_cloud::{Cancellation, CloudError, Credential, hetzner::Hetzner};
+    use serde_json::json;
+
+    // Provisioning follows the state volume when the settings no longer name its location,
+    // so readiness must accept the server it rented there; refusing it would leave a
+    // billed server that no deploy and no reconnect accepts.
+    let root = tempfile::tempdir().unwrap();
+    let bound = CreateState::Bound { worker_id: "42".into() };
+    let (store, mut state) = stored(root.path(), &bound);
+    let chosen = spec();
+    state.spec = Some(chosen.clone());
+    Journal {
+        location: Some("fsn1".into()),
+        volume: CreateState::Bound { worker_id: "9".into() },
+        ..Journal::default()
+    }
+    .save(root.path())
+    .unwrap();
+    let settings: Settings = serde_json::from_value(json!({
+        "runpod_key_file": "/unused", "ssh_identity_file": "/unused", "docker_config": "/unused",
+        "registry_pull_auth_id": null, "cpu_flavors": [], "gpu_types": [],
+        "hetzner": {"token_file": "/unused", "server_types": ["cx33"], "locations": ["hel1"]}
+    }))
+    .unwrap();
+    // The server and the volume that provisioning placed, in the location the settings drop.
+    let mut placed = server("off", Some("192.0.2.10"));
+    placed.location.name = "fsn1".into();
+    let mut held = volume();
+    held.location.name = "fsn1".into();
+    let (address, requests, provider) = provider::serve(vec![
+        (200, json!({"server": placed}).to_string()),
+        (200, json!({"volume": held}).to_string()),
+    ]);
+    let compute = Compute {
+        client: Hetzner::loopback(Credential::new("synthetic-key".into()).unwrap(), address).unwrap(),
+        settings: settings.hetzner.clone().unwrap(),
+        allowed: Allowed {
+            locations: vec!["hel1".into()],
+            server_types: vec!["cx33".into()],
+        },
+        registries: None,
+        verified_pull: std::cell::RefCell::default(),
+    };
+    let request = Request::new(
+        chosen.operation_id.clone(),
+        "/fixture".into(),
+        "a".repeat(40),
+        chosen.profile.clone(),
+        root.path().into(),
+        settings,
+    );
+    let cancel = Cancellation::default();
+    let endpoint_reached = std::cell::Cell::new(false);
+    let emit = |event| {
+        if let Event::Progress(progress) = event
+            && progress.detail == AWAITING_ENDPOINT
+        {
+            endpoint_reached.set(true);
+            cancel.cancel();
+        }
+    };
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &emit,
+        secrets: Vec::new(),
+    };
+    let result = readiness::wait(&request, &compute, &store, &runner, &mut state, &chosen);
+    provider.join().unwrap();
+    assert!(endpoint_reached.get(), "the server that holds the volume is admitted");
+    assert!(matches!(
+        result,
+        Err(crate::cloud_runtime::Error::Provider(CloudError::Cancelled))
+    ));
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET ")),
+        "readiness never allocates a fallback worker"
+    );
+}
+
 /// Deletion cleans up the record each provisioning failure point leaves.
 #[cfg(unix)]
 mod deletion_points;
