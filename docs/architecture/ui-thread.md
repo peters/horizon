@@ -198,6 +198,19 @@ because the write of a result removes the request file.
 - The cloud offer poll answers each request once. Its deadline bounds the wait
   for the prices. The poll takes no lock of its own.
 
+The browser request pumps send their file and slot work to these two threads.
+A create that names a remote target reads its OS-store values on the workbench
+thread (`request_value` in
+[`browser_remote_credentials.rs`](../../crates/horizon-ui/src/app/browser_remote_credentials.rs)).
+Each frame polls the answer and does not wait for it. The create leases its
+provider slot as a job of the coordination worker thread, and it opens its
+panel only after the lease applies
+([`browser_remote_slots.rs`](../../crates/horizon-ui/src/app/browser_remote_slots.rs)).
+A starting create also reads its manifest as a job of that thread, at most
+every 250 ms, and each frame judges the snapshot that it holds. A duplicate
+create reads the source manifest in the ordered job that starts it, so no
+frame reads it and no other job waits for it.
+
 ### A bounded queue
 
 If the UI can send a job on each frame, put a limit on the queue.
@@ -333,17 +346,12 @@ after the call, so a new test must also start the release thread of step 2.
 
 This work still runs on the UI thread. Do not copy it into new code.
 
-- Browser request file work that this guide does not move: the remote
-  provider slot lease that the create path takes
-  ([#1470](https://github.com/peters/horizon/issues/1470)), and the
-  `manifest::read` of a browser capture in `capture_panel`
-  ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)).
-  [#1917](https://github.com/peters/horizon/issues/1917) tracks the capture
-  read and the Device request claim.
-- `plan_remote_create` in
-  [`browser_remote_create.rs`](../../crates/horizon-ui/src/app/browser_remote_create.rs)
-  locks the keychain store mutex, which the credential worker thread can hold, and
-  reads OS credentials. #1470 tracks it.
+- The Device request claim and the `manifest::read` of a browser capture in
+  `capture_panel`
+  ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)),
+  and the read of a dropped file in `editor_panel_size_for_file`
+  ([`util.rs`](../../crates/horizon-ui/src/app/util.rs)).
+  [#1917](https://github.com/peters/horizon/issues/1917) tracks them.
 - The save of a recovered startup board (`save_recovered_startup_runtime_state`
   in [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
   and renames the session file on the UI thread, without a sync. While the

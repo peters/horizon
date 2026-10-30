@@ -12,7 +12,7 @@ use super::HorizonApp;
 use super::browser_create_failure::{
     CREATE_TIMEOUT, complete_result, record_and_complete_failure, record_create_failure,
 };
-use super::browser_create_lifecycle::{CreateStage, PendingBrowserCreate};
+use super::browser_create_lifecycle::{CreateStage, CreatedPanel, PendingBrowserCreate};
 use super::browser_host_io::BoardFence;
 use super::browser_manifest_stamp::{backend_session_limit_reached, host_identity};
 use super::browser_request_claims::{AGENT_GONE, HOST_RETIRING, fail_create, refuse_expired_create};
@@ -88,58 +88,65 @@ impl HorizonApp {
                 return;
             }
         };
-        // A remote target is resolved before any panel exists, so a missing
-        // or locked credential, an unknown target or a full provider is
-        // reported to the agent as a typed refusal.
-        let remote = match self.plan_and_admit_remote(&request, actor_panel.workspace_id) {
-            Ok(plan) => plan,
-            Err(refused) => {
-                fail_create(
-                    &mut self.browser_create_host.io,
-                    &request,
-                    refused.code,
-                    &refused.message,
-                );
-                return;
-            }
-        };
-        let backend = remote.as_ref().map_or_else(
-            || request.backend.unwrap_or(self.template_config.browser.backend),
-            |plan| plan.backend,
-        );
-        let startup_orientation = remote.as_ref().and_then(|plan| plan.request.orientation());
-        if remote.is_none() {
-            if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
-                fail_create(
-                    &mut self.browser_create_host.io,
-                    &request,
-                    "unsupported_platform",
-                    reason,
-                );
-                return;
-            }
-            if backend_session_limit_reached(&self.board, backend) {
-                fail_create(
-                    &mut self.browser_create_host.io,
-                    &request,
-                    "session_limit_reached",
-                    "the selected browser backend has reached its live-session limit",
-                );
-                return;
-            }
+        // A remote target takes the value and slot work of its plan off this
+        // thread; its panel opens on a later frame, once they are at hand.
+        if request.target.is_some() {
+            self.begin_remote_create(request, actor_panel, started_at);
+            return;
+        }
+        let backend = request.backend.unwrap_or(self.template_config.browser.backend);
+        if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
+            fail_create(
+                &mut self.browser_create_host.io,
+                &request,
+                "unsupported_platform",
+                reason,
+            );
+            return;
+        }
+        if backend_session_limit_reached(&self.board, backend) {
+            fail_create(
+                &mut self.browser_create_host.io,
+                &request,
+                "session_limit_reached",
+                "the selected browser backend has reached its live-session limit",
+            );
+            return;
         }
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
-        let recovery = remote.as_ref().map(|plan| plan.request.recovery.clone());
         let options = duplicate.unwrap_or_else(|| PanelOptions {
             command: request.url.clone(),
             kind: PanelKind::Browser,
             visible: request.visible,
             browser_config: Some(browser_config),
-            remote_session: remote.map(|plan| plan.request),
+            remote_session: None,
             ..PanelOptions::default()
         });
+        self.open_requested_browser_panel(request, actor_panel, options, started_at);
+    }
+
+    /// Opens the panel of a create whose request is resolved, and audits its
+    /// dispatch. The backend, the startup orientation and the remote allocation
+    /// cancelled by a failed creation come from `options`, so a local create and
+    /// a remote create that was planned off this thread take one path here.
+    pub(super) fn open_requested_browser_panel(
+        &mut self,
+        request: BrowserCreateRequest,
+        actor_panel: ActorPanel,
+        options: PanelOptions,
+        started_at: Instant,
+    ) {
+        let backend = options.browser_config.as_ref().map_or_else(
+            || request.backend.unwrap_or(self.template_config.browser.backend),
+            |config| config.backend,
+        );
+        let startup_orientation = options
+            .remote_session
+            .as_ref()
+            .and_then(horizon_core::browser::RemoteSessionRequest::orientation);
+        let recovery = options.remote_session.as_ref().map(|session| session.recovery.clone());
         let panel_id = match self.create_agent_child_panel(options, actor_panel.workspace_id, actor_panel.panel_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
@@ -168,17 +175,20 @@ impl HorizonApp {
         };
         self.audit_requested_browser(PendingBrowserCreate {
             request,
-            panel_local_id,
-            backend,
-            startup_orientation,
             started_at,
-            ready_since: None,
-            user_navigations_at_start: 0,
             stage: CreateStage::Auditing,
             board: self.browser_create_host.io.board_fence(),
-            manifest: None,
-            manifest_read_at: None,
-            manifest_reading: false,
+            panel: Some(CreatedPanel {
+                local_id: panel_local_id,
+                backend,
+                startup_orientation,
+                ready_since: None,
+                user_navigations_at_start: 0,
+                manifest: None,
+                manifest_read_at: None,
+                manifest_reading: false,
+            }),
+            remote_credentials: None,
         });
     }
 
@@ -187,11 +197,16 @@ impl HorizonApp {
     /// cannot be written closes the panel instead.
     fn audit_requested_browser(&mut self, pending: PendingBrowserCreate) {
         let request_id = pending.request.request_id.clone();
-        let audited = (pending.panel_local_id.clone(), pending.request.clone());
-        let (backend, startup_orientation) = (pending.backend, pending.startup_orientation);
+        let Some(panel) = pending.panel.as_ref() else { return };
+        let audited = (
+            panel.local_id.clone(),
+            pending.request.clone(),
+            panel.backend,
+            panel.startup_orientation,
+        );
         self.browser_create_host.io.then(
             move || {
-                let (panel_local_id, request) = audited;
+                let (panel_local_id, request, backend, startup_orientation) = audited;
                 [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched]
                     .into_iter()
                     .try_for_each(|status| {
@@ -232,11 +247,18 @@ impl HorizonApp {
         let pending = pending.remove(index);
         // A replaced board took the panel with it; a panel of the same id now is another one.
         if !self.browser_create_host.io.applying_stale()
-            && let Some(panel_id) = self.board.panel_id_by_local_id(&pending.panel_local_id)
+            && let Some(panel) = pending.panel.as_ref()
+            && let Some(panel_id) = self.board.panel_id_by_local_id(&panel.local_id)
         {
             self.close_panel(panel_id);
         }
-        record_and_complete_failure(&mut self.browser_create_host.io, &pending, code, message);
+        record_and_complete_failure(
+            &mut self.browser_create_host.io,
+            &pending.request,
+            pending.panel.as_ref(),
+            code,
+            message,
+        );
     }
 }
 
@@ -407,5 +429,69 @@ mod tests {
         // A second round of applies answers nothing more for the request.
         app.settle_browser_host_io();
         assert_eq!(app.board.panels.len(), panels_before);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "agent panels launch through a POSIX login shell (#688)")]
+    fn a_claim_is_answered_while_another_claim_waits_for_its_source_manifest() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let agent = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor = browser_actor(&app.board.panel(agent).expect("agent").local_id);
+        let source = inert_browser(&mut app, 9_320, alpha);
+        let path = manifest::manifest_path_for_root(app.host_manifest_root(), &source);
+        manifest::write_at(
+            &path,
+            &manifest::BrowserManifest {
+                url: "https://example.test/".into(),
+                host: Some(manifest::host_instance().to_string()),
+                ..manifest::BrowserManifest::default()
+            },
+        )
+        .expect("live manifest");
+        let mut duplicate = BrowserCreateRequest::for_tests("agent");
+        duplicate.actor = actor.clone();
+        duplicate.host_instance = Some(manifest::host_instance().to_string());
+        duplicate.duplicate_from = Some(source);
+        // A create of the same claimed batch that names a target this host does
+        // not configure is refused on the frame that applies the claim.
+        let mut unrelated = BrowserCreateRequest::for_tests("agent");
+        unrelated.actor = actor;
+        unrelated.host_instance = Some(manifest::host_instance().to_string());
+        unrelated.target = Some("android".into());
+
+        // The worker waits, as it does for the source manifest read.
+        let (release, released) = channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        let panels = app.board.panels.len();
+        app.start_claimed_browser_create(duplicate);
+        let started = Instant::now();
+        app.start_claimed_browser_create(unrelated);
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "the unrelated claim waited for the source manifest read"
+        );
+        assert!(
+            app.browser_create_host.io.busy(),
+            "both claims are answered on the coordination worker"
+        );
+        assert!(
+            app.browser_create_host.pending.is_empty(),
+            "neither create waits for a panel of its own"
+        );
+
+        release.send(()).expect("release the worker");
+        app.settle_browser_host_io();
+        assert!(
+            !app.browser_create_host.io.busy(),
+            "every claim of the batch is answered"
+        );
+        assert!(
+            app.browser_create_host.pending.is_empty(),
+            "a second round of applies answers nothing more"
+        );
+        assert_eq!(app.board.panels.len(), panels, "neither claim opens a panel");
     }
 }

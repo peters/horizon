@@ -16,6 +16,10 @@ use super::browser_recovery::retired_allocations;
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How soon a frame comes again while a remote create waits for a credential
+/// value that the workbench reads off-thread.
+const CREDENTIAL_READ_REPAINT: Duration = Duration::from_millis(50);
+
 #[derive(Default)]
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
@@ -85,6 +89,18 @@ impl HorizonApp {
     pub(super) fn poll_browser_create_requests(&mut self, ctx: &egui::Context) -> bool {
         let mut changed = self.apply_browser_host_io();
         changed |= self.finish_pending_browser_creates();
+        if self
+            .browser_create_host
+            .pending
+            .iter()
+            .any(|pending| pending.remote_credentials.is_some())
+        {
+            // The workbench answers a credential read on its own thread, which
+            // cannot wake this context: keep frames coming while a create
+            // waits for a value, so its panel opens on this frame instead of
+            // on the next idle refresh.
+            ctx.request_repaint_after(CREDENTIAL_READ_REPAINT);
+        }
         let now = Instant::now();
         let poll_due = self
             .browser_create_host

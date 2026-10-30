@@ -110,7 +110,7 @@ impl HorizonApp {
     /// claims new requests.
     pub(super) fn poll_browser_close_requests(&mut self) -> bool {
         let changed = self.finish_pending_browser_closes();
-        super::browser_remote_create::trim_remote_slot_leases(self);
+        super::browser_remote_slots::trim_remote_slot_leases(self);
         changed
     }
 
