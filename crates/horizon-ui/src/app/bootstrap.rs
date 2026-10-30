@@ -12,7 +12,7 @@ use horizon_core::{
 
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
-    StartupChooserState, resolve_shortcuts, settings, speech, util,
+    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, settings, speech, util,
 };
 use crate::command_registry::{self, CommandEntry};
 use crate::input;
@@ -183,8 +183,7 @@ impl HorizonApp {
             startup_selection_restored: false,
             initial_pan_done: false,
             root_viewport_stabilizer: None,
-            file_hover_positions: HashMap::new(),
-            file_drop_highlight: None,
+            file_hover_positions: HashMap::new(), file_drop_highlight: None, pending_editor_drops: PendingEditorDrops::default(),
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),
