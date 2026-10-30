@@ -10,4 +10,6 @@ Read `docs/architecture/azure-price-catalog.md` before review.
 - Send no credential. Keep the HTTPS-only, no-redirect and 30-second rules.
 - Follow a `NextPageLink` only on the price endpoint, once, and at most 10 pages.
 - A missing or disputed price drops the offer. Never estimate a missing meter.
-- Keep `offers::AZURE_DEPLOYABLE` false: every Azure offer has `rentable: false`.
+- Keep `offers::AZURE_DEPLOYABLE` true, so every caller can create an Azure cloud.
+  Keep every Azure offer at `rentable: false`, because the machine's `azure` settings
+  decide the VM size and the region.

@@ -194,7 +194,7 @@ impl State {
         })
     }
 
-    /// Azure's part of a `cloud_offers` answer, in US dollars and not deployable: the
+    /// Azure's part of a `cloud_offers` answer, in US dollars and deployable: the
     /// reason when the fetch failed, and offers from a current catalog. `None` while the
     /// catalog is being fetched and more than [`ANSWER_MARGIN_MILLIS`] remain until
     /// `deadline_in_millis`; closer to the deadline Azure is reported as still being
