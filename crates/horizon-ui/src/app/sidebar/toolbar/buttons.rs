@@ -1,8 +1,10 @@
-//! The toolbar's controls: the primary New cloud button and the Menu that holds
-//! Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
+//! The toolbar's controls: the primary New cloud button, the whole-window Cast button of a
+//! Linux build, and the Menu that holds Quick Nav, Remote Hosts, Cloud, Sessions and Settings.
 use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::app::HorizonApp;
+#[cfg(target_os = "linux")]
+use crate::app::root_chrome::ROOT_TOOLBAR_CAST_WIDTH;
 use crate::app::root_chrome::{
     ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ROOT_TOOLBAR_NEW_CLOUD_COMPACT_WIDTH,
     ROOT_TOOLBAR_NEW_CLOUD_WIDTH, ToolbarAction,
@@ -138,6 +140,30 @@ impl HorizonApp {
         });
         if button.clicked() {
             self.create_new_workspace(ui.ctx(), NewWorkspace::Cloud, None);
+        }
+    }
+
+    /// Casts the whole Horizon window, every workspace and panel as it appears on screen, to
+    /// an Apple TV.
+    #[cfg(target_os = "linux")]
+    pub(super) fn render_toolbar_cast(&mut self, ui: &mut Ui) {
+        let on = self.application_cast_highlighted();
+        let (rect, button) = ui.allocate_exact_size(
+            Vec2::new(ROOT_TOOLBAR_CAST_WIDTH, ROOT_TOOLBAR_BUTTON_HEIGHT),
+            Sense::click(),
+        );
+        let button = button.on_hover_cursor(CursorIcon::PointingHand);
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cast the whole window"));
+        paint_framed_button(ui.painter(), rect, &button, on, |painter, ink| {
+            let icon = Rect::from_center_size(rect.center(), Vec2::splat(16.0));
+            crate::app::casting::paint_cast_icon(painter, icon, ink);
+        });
+        let button = button.on_hover_text(
+            "Cast the whole Horizon window, with every workspace and panel on screen, to your Apple TV. Shift-click or right-click to choose another TV or quality.",
+        );
+        let chooser = ui.input(|input| input.modifiers.shift) || button.secondary_clicked();
+        if button.clicked() || button.secondary_clicked() {
+            self.toggle_application_cast(rect, ui.ctx(), chooser);
         }
     }
 
@@ -280,7 +306,7 @@ fn paint_new_cloud(painter: &egui::Painter, rect: Rect, button: &egui::Response,
 
 /// Paints the Menu button: a framed pill with three lines and the word Menu.
 fn paint_menu_button(painter: &egui::Painter, rect: Rect, button: &egui::Response) {
-    paint_framed_button(painter, rect, button, |painter, ink| {
+    paint_framed_button(painter, rect, button, false, |painter, ink| {
         paint_lines(painter, Pos2::new(rect.min.x + 18.0, rect.center().y), ink);
         painter.text(
             Pos2::new(rect.min.x + 32.0, rect.center().y),
@@ -292,14 +318,18 @@ fn paint_menu_button(painter: &egui::Painter, rect: Rect, button: &egui::Respons
     });
 }
 
-/// Paints a framed pill, its content in `ink`, and the focus ring.
+/// Paints a framed pill, its content in `ink`, and the focus ring. The frame and the content
+/// of an `on` control carry the accent color, as the cast button does while it casts.
 fn paint_framed_button(
     painter: &egui::Painter,
     rect: Rect,
     button: &egui::Response,
+    on: bool,
     content: impl FnOnce(&egui::Painter, egui::Color32),
 ) {
-    let fill = if button.hovered() || button.has_focus() {
+    let fill = if on {
+        theme::alpha(theme::ACCENT(), 40)
+    } else if button.hovered() || button.has_focus() {
         theme::blend(theme::PANEL_BG_ALT(), theme::FG(), 0.08)
     } else {
         theme::PANEL_BG_ALT()
@@ -308,10 +338,17 @@ fn paint_framed_button(
     painter.rect_stroke(
         rect,
         10,
-        Stroke::new(1.0, theme::alpha(theme::BORDER_SUBTLE(), 210)),
+        Stroke::new(
+            1.0,
+            if on {
+                theme::alpha(theme::ACCENT(), 210)
+            } else {
+                theme::alpha(theme::BORDER_SUBTLE(), 210)
+            },
+        ),
         StrokeKind::Inside,
     );
-    content(painter, theme::FG_SOFT());
+    content(painter, if on { theme::ACCENT() } else { theme::FG_SOFT() });
     if button.has_focus() {
         painter.rect_stroke(rect.expand(2.0), 12, Stroke::new(2.0, theme::FG()), StrokeKind::Outside);
     }

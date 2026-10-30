@@ -30,6 +30,7 @@ fn session(receiver: &str, workspace: u64, ip: &str) -> (Session, std::thread::J
 fn picker(session: &Session) -> Picker {
     Picker {
         anchor: crate::app::casting::Anchor::Panel(horizon_core::PanelId(1)),
+        anchor_rect: None,
         workspace: session.workspace,
         source: session.source.clone(),
         receiver: Some(session.receiver_id.clone()),
@@ -167,6 +168,7 @@ fn only_a_live_session_overrides_the_requested_source() {
         crate::app::casting::Anchor::Cloud(1),
         WorkspaceId(1),
         cloud.clone(),
+        None,
         &ctx,
     );
     let live = state.picker.take().expect("picker");
@@ -181,6 +183,7 @@ fn only_a_live_session_overrides_the_requested_source() {
         crate::app::casting::Anchor::Cloud(1),
         WorkspaceId(1),
         cloud.clone(),
+        None,
         &ctx,
     );
     let picker = state.picker.as_ref().expect("picker");
@@ -188,4 +191,18 @@ fn only_a_live_session_overrides_the_requested_source() {
     assert_eq!(picker.receiver.as_deref(), Some("first-tv"), "it still suggests its TV");
     assert!(state.stop_and_wait(Duration::from_secs(3)));
     peer.join().expect("receiver closed normally");
+}
+
+#[test]
+fn a_toolbar_button_puts_the_picker_under_it_inside_the_canvas() {
+    let canvas = Rect::from_min_max(egui::pos2(300.0, 46.0), egui::pos2(1600.0, 900.0));
+    // The root toolbar's cast button, just left of Menu in the action cluster.
+    let button = Rect::from_min_size(egui::pos2(1480.0, 8.0), Vec2::new(34.0, 30.0));
+    let size = Vec2::new(300.0, 380.0);
+    let position = initial_position(canvas, button, size, MarginF32::default());
+    let picker = Rect::from_min_size(position, size);
+
+    assert!(canvas.contains_rect(picker), "{picker:?}");
+    assert!(picker.min.y >= button.max.y, "the picker opens below the button");
+    assert!(picker.min.x <= button.center().x && button.center().x <= picker.max.x);
 }

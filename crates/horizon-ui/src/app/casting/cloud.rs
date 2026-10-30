@@ -174,7 +174,7 @@ impl HorizonApp {
         };
         let source = horizon_core::browser::manifest::cast::CastSource::Cloud { id: launch.id.clone() };
         self.casting
-            .toggle_picker(super::Anchor::Cloud(issue), workspace, source, ctx);
+            .toggle_picker(super::Anchor::Cloud(issue), workspace, source, None, ctx);
     }
 
     #[cfg(feature = "cloud-workspaces")]

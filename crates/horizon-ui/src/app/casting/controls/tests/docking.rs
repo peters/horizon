@@ -12,6 +12,7 @@ fn fixture() -> (tempfile::TempDir, Context, HorizonApp) {
     let panel = &app.board.panels[0];
     app.casting.picker = Some(Picker {
         anchor: super::super::super::Anchor::Panel(panel.id),
+        anchor_rect: None,
         workspace: panel.workspace_id,
         source: CastSource::Panel {
             id: panel.local_id.clone(),

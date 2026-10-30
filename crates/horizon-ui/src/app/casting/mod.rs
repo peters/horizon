@@ -1,3 +1,4 @@
+mod application;
 mod capture;
 mod cloud;
 mod controls;
@@ -31,6 +32,10 @@ pub(super) struct CastState {
     sessions: Vec<Session>,
     retiring: Vec<Session>,
     picker: Option<Picker>,
+    /// The TV of the last whole-window cast, which the root toolbar button starts again.
+    last_application_receiver: Option<String>,
+    /// A toolbar click that waits for discovery to find the TV it starts on.
+    pending_application_start: Option<PendingApplicationStart>,
     control_menus: Option<[egui::LayerId; 2]>,
     notice: Option<String>,
     notification: Option<String>,
@@ -50,6 +55,15 @@ struct Session {
     failure_notified: bool,
     agent_controlled: bool,
 }
+/// A click on the root toolbar that waits for discovery, then starts on `receiver_id`.
+#[derive(Clone, Debug)]
+pub(super) struct PendingApplicationStart {
+    workspace: WorkspaceId,
+    receiver_id: String,
+    orientation: CastOrientation,
+    resolution: CastResolution,
+    deadline: Instant,
+}
 /// What opened the picker. Choosing the same control again closes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Anchor {
@@ -57,6 +71,8 @@ enum Anchor {
     Panel(horizon_core::PanelId),
     /// The cast button in a workspace's toolbar.
     Workspace,
+    /// The cast button in the root toolbar, which casts the whole Horizon window.
+    Application,
     /// **Cast…** in the Manage tab of the cloud with this issue number.
     Cloud(u32),
 }
@@ -64,12 +80,15 @@ impl Anchor {
     fn panel(self) -> Option<horizon_core::PanelId> {
         match self {
             Self::Panel(id) => Some(id),
-            Self::Workspace | Self::Cloud(_) => None,
+            Self::Workspace | Self::Application | Self::Cloud(_) => None,
         }
     }
 }
 struct Picker {
     anchor: Anchor,
+    /// The toolbar button that opened an `Anchor::Application` picker. That anchor has no
+    /// panel, card or workspace on the canvas to sit next to.
+    anchor_rect: Option<egui::Rect>,
     workspace: WorkspaceId,
     source: CastSource,
     receiver: Option<String>,

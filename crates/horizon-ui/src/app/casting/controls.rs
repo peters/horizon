@@ -43,14 +43,7 @@ impl HorizonApp {
             .panel()
             .and_then(|anchor| self.panel_screen_rects.get(&anchor))
             .map_or(source, |anchor| source.union(*anchor));
-        let position = *picker.position.get_or_insert_with(|| {
-            super::popup::initial_position(
-                canvas,
-                source,
-                egui::vec2(300.0, 380.0),
-                super::popup::control_shadow_margin(ctx),
-            )
-        });
+        let position = picker_position(&mut picker, canvas, source, ctx);
         let snapshot = self.cast_snapshot(picker.workspace, ctx);
         let mut open = true;
         let mut action = None;
@@ -206,7 +199,8 @@ impl HorizonApp {
                     let source = CastSource::Panel {
                         id: panel.local_id.clone(),
                     };
-                    self.casting.toggle_picker(Anchor::Panel(id), workspace, source, ctx);
+                    self.casting
+                        .toggle_picker(Anchor::Panel(id), workspace, source, None, ctx);
                 }
             }
         }
@@ -222,6 +216,20 @@ fn render_application_hint(ui: &mut egui::Ui) {
         )
         .wrap(),
     );
+}
+
+/// The picker's first position: next to the control that opened it, which for a picker of
+/// the root toolbar is its cast button instead of a rectangle on the canvas.
+fn picker_position(picker: &mut Picker, canvas: Rect, source: Rect, ctx: &Context) -> Pos2 {
+    let anchor = picker.anchor_rect.unwrap_or(source);
+    *picker.position.get_or_insert_with(|| {
+        super::popup::initial_position(
+            canvas,
+            anchor,
+            egui::vec2(300.0, 380.0),
+            super::popup::control_shadow_margin(ctx),
+        )
+    })
 }
 
 fn picker_window<'a>(ctx: &Context, canvas: Rect, position: Pos2, open: &'a mut bool) -> egui::Window<'a> {
@@ -614,6 +622,7 @@ mod tests {
         let ctx = Context::default();
         let mut picker = Picker {
             anchor: Anchor::Panel(horizon_core::PanelId(1)),
+            anchor_rect: None,
             workspace: WorkspaceId(1),
             source: CastSource::Panel { id: "synthetic".into() },
             receiver: None,

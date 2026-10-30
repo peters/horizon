@@ -5,7 +5,14 @@ window to a modern Apple TV. Casting
 is Linux-only. Each panel has a Cast icon beside its recording/microphone
 controls on supported builds, the workspace toolbar has a cast button after
 **Detach**, and a cloud card has **Cast…** beside **Full screen** in its Manage
-tab. Choosing the same control again closes the picker. Panel icons are hidden
+tab. The root toolbar has a Cast button before **Menu**. One click starts the
+whole window, with every workspace and panel on screen, on your Apple TV, and a
+click during that cast stops it. It starts on the TV of your last whole-window
+cast, or on your only paired TV. Shift-click or right-click opens the picker
+instead, for another TV, another quality or a first pairing. Before discovery
+finds that TV, the click waits for it and then starts; if the TV does not
+answer, the picker stays open and reports it. Choosing the same control again
+closes the picker. Panel icons are hidden
 while a panel fills the window. Each control opens source, receiver, orientation and resolution
 selection, plus status and stop controls. Each TV allows one session, including
 pairing and teardown; different TVs can have independent sessions.
@@ -45,7 +52,10 @@ operations requires Settings to be open.
 
 The **Entire Horizon** source is `{ "kind": "application" }`. It includes the
 toolbar, sidebar, canvas and in-window dialogs. A person can start it directly
-in the Cast picker. Agent starts require that person to select **Allow this
+in the Cast picker, or with one click on the root toolbar's Cast button, which
+opens that picker on this source. The button uses the active workspace for the
+picker's session records and for the agent approval below. It opens no picker
+when no workspace is active. Agent starts require that person to select **Allow this
 workspace's agents**; `sources` reports `requires_user_approval` until then.
 Approval belongs to one workspace, lasts only for the current application
 session, and cannot be granted through MCP or CLI. Revoking it or approving

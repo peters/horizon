@@ -30,12 +30,14 @@ impl CastState {
     /// Opens the picker for `workspace`, or closes it when the same anchor opened it.
     /// A live session of the workspace keeps its source and settings. Otherwise the
     /// picker starts on `source`, with the receiver and quality of the last finished
-    /// session.
+    /// session. `anchor_rect` is the control that opened the picker for an anchor that
+    /// holds no rectangle of its own, such as the root toolbar's cast button.
     pub(super) fn toggle_picker(
         &mut self,
         anchor: super::Anchor,
         workspace: WorkspaceId,
         source: CastSource,
+        anchor_rect: Option<Rect>,
         ctx: &Context,
     ) {
         let reopened = self
@@ -59,6 +61,7 @@ impl CastState {
             });
         self.picker = Some(Picker {
             anchor,
+            anchor_rect,
             workspace,
             source: session
                 .filter(|session| !session.worker.finished())
