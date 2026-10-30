@@ -330,8 +330,15 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
-  - `browser_requests`: transient host polling and panel creation for
-    authenticated requests routed from a live agent panel, and the host-owned
+  - `browser_requests`: transient host polling and the host state of a
+    requested browser panel, and the actor panel lookup that routes a request
+    from a live agent panel
+  - `browser_create_dispatch`: the host side of a claimed create request, which
+    creates the panel, audits its dispatch and publishes its result
+  - `browser_create_lifecycle`: the pending creates that the host starts,
+    judges for readiness and retires when the board goes away
+  - `browser_create_failure`: the terminal failures that a create reports
+  - `browser_manifest_stamp`: the host stamp of the browser manifests, and the
     workspace stamp that keeps MCP authorization current
   - `browser_host_io`: the one coordination worker that runs the claims,
     audits, manifest stamps and results of the browser request pumps in the

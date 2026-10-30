@@ -12,8 +12,9 @@ use horizon_core::browser::manifest::{
 
 use super::HorizonApp;
 use super::browser_host_io::BoardFence;
+use super::browser_manifest_stamp::browser_workspace;
 use super::browser_request_claims::HOST_RETIRING;
-use super::browser_requests::{ActorPanel, actor_panel, browser_workspace};
+use super::browser_requests::{ActorPanel, actor_panel};
 
 type Refusal = (&'static str, &'static str);
 
