@@ -12,7 +12,7 @@ use horizon_core::{
     },
 };
 
-use super::{HorizonApp, device_requests::complete_device_request};
+use super::{HorizonApp, device_requests::claim::DeviceAnswer};
 
 /// A held reveal's answer and the queue it goes to.
 pub(super) struct RevealAnswer {
@@ -103,7 +103,8 @@ impl HorizonApp {
         if !self.holds_device_reveals() {
             return;
         }
-        publish(self.take_settled_device_reveals(Instant::now()));
+        let settled = self.take_settled_device_reveals(Instant::now());
+        self.answer_device_reveals(settled);
         if self.holds_device_reveals() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
@@ -113,14 +114,28 @@ impl HorizonApp {
     /// closed viewers still answer, from the last completed pass.
     pub(super) fn settle_device_reveals_without_frame(&mut self) {
         if self.holds_device_reveals() {
-            publish(self.take_settled_device_reveals(Instant::now()));
+            let settled = self.take_settled_device_reveals(Instant::now());
+            self.answer_device_reveals(settled);
         }
     }
 
     /// Answers every held reveal before a session switch renumbers panels or
     /// the host exits, instead of letting its caller time out.
     pub(super) fn abandon_device_reveals(&mut self, message: &str) {
-        publish(self.take_abandoned_device_reveals(message));
+        let abandoned = self.take_abandoned_device_reveals(message);
+        self.answer_device_reveals(abandoned);
+    }
+
+    /// Answers settled reveals on the coordination worker, which writes each
+    /// result and retries a write that fails.
+    fn answer_device_reveals(&mut self, answers: Vec<RevealAnswer>) {
+        for answer in answers {
+            self.write_device_answer(DeviceAnswer::new(
+                answer.root.as_deref(),
+                answer.request,
+                answer.outcome,
+            ));
+        }
     }
 
     pub(super) fn take_abandoned_device_reveals(&mut self, message: &str) -> Vec<RevealAnswer> {
@@ -192,12 +207,4 @@ impl HorizonApp {
 
 fn awaits_frames(connection: &Connection) -> bool {
     !matches!(connection, Connection::Stopped | Connection::Disconnected)
-}
-
-fn publish(answers: Vec<RevealAnswer>) {
-    for answer in answers {
-        if let Err(error) = complete_device_request(answer.root.as_deref(), &answer.request, answer.outcome) {
-            tracing::warn!(%error, "could not publish Device panel result");
-        }
-    }
 }

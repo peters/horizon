@@ -229,6 +229,10 @@ struct SpeechNotice {
 #[derive(Default)]
 pub struct PanelRenderCaches {
     device_request_poll: Option<Instant>,
+    /// Requests a claim took that no frame applied yet, and the answers owed
+    /// for them. A session switch resets it, so a claimed request of the old
+    /// board never applies to the replacement.
+    pub(in crate::app) device_claim: device_requests::claim::DeviceClaimState,
     pending_device_reveal: Option<device_requests::PendingDeviceReveal>,
     awaiting_device_reveals: Vec<device_reveal_wait::AwaitingDeviceReveal>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,

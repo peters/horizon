@@ -307,20 +307,19 @@ fn a_reveal_claimed_while_no_frame_runs_still_answers_in_its_queue() {
     app.root_viewport_stabilizer = None;
     let bridge = crate::app::DeviceRequestBridge::with_root(root.path().to_path_buf());
     bridge.install(app, ctx);
-    assert!(bridge.poll_on_ui_thread());
+    pump_until_applied(&bridge);
     assert!(
         device::take_result_at(root.path(), &held).expect("result").is_none(),
         "the reveal waits for the viewer to be drawn"
     );
     let close = enqueue(Operation::Close { panel_id: local });
-    assert!(bridge.poll_on_ui_thread());
     assert!(matches!(
-        device::take_result_at(root.path(), &close).expect("result"),
-        Some(Outcome::Closed { .. })
+        pump_until_answered(&bridge, root.path(), &close),
+        Outcome::Closed { .. }
     ));
     assert!(matches!(
-        device::take_result_at(root.path(), &held).expect("result"),
-        Some(Outcome::Failed { code, .. }) if code == "panel_unavailable"
+        pump_until_answered(&bridge, root.path(), &held),
+        Outcome::Failed { code, .. } if code == "panel_unavailable"
     ));
 }
 

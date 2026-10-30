@@ -16,6 +16,8 @@ use super::{
     browser_requests::{ActorPanel, actor_panel},
 };
 
+pub(in crate::app) mod claim;
+
 /// Options every MCP-created SSH route carries: the host must already be
 /// trusted, whatever the machine's SSH configuration says.
 fn mcp_route_ssh_args() -> Vec<String> {
@@ -39,65 +41,56 @@ pub(super) struct WindowRestore {
     pub size: egui::Vec2,
 }
 
-fn claim_device_requests(root: Option<&Path>) -> std::io::Result<Vec<Request>> {
-    let host = manifest::host_instance();
-    match root {
-        Some(root) => device::claim_at(root, host),
-        None => device::claim(host),
-    }
-}
-
-pub(super) fn complete_device_request(root: Option<&Path>, request: &Request, outcome: Outcome) -> std::io::Result<()> {
-    match root {
-        Some(root) => device::complete_at(root, request, outcome),
-        None => device::complete(request, outcome),
-    }
-}
+/// How often Horizon asks the coordination worker for this host's waiting
+/// requests. A claim on a queue that stays empty costs one reader of that
+/// queue per tick, so both the frame and the request pump keep this cadence.
+const DEVICE_REQUEST_POLL: Duration = Duration::from_millis(250);
 
 impl HorizonApp {
+    /// The frame poll. See [`Self::drain_device_panel_requests`].
     pub(super) fn poll_device_panel_requests(&mut self, ctx: &Context) -> bool {
-        let now = Instant::now();
-        if self
-            .panel_render_caches
-            .device_request_poll
-            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(250))
-        {
-            return false;
-        }
         self.drain_device_panel_requests(ctx, None)
     }
 
-    /// Claim and apply every queued request. `root` selects an explicit queue
-    /// directory; `None` uses the process runtime root.
+    /// Applies each request a claim took and answers it, retries the answers
+    /// the coordination worker could not write, and asks that worker for this
+    /// host's waiting requests. `root` selects an explicit queue directory;
+    /// `None` uses the process runtime root.
     ///
-    /// The frame poll skips calls closer than 250ms apart. This entry point
-    /// does not: the unpresented-host pump uses it when a request is already
-    /// waiting, and no later frame is guaranteed to notice the cadence.
+    /// The unpresented host's request pump calls it on each wake, where it is
+    /// the only path that claims a request and no later frame is guaranteed.
+    /// Returns whether a request applied.
     pub(super) fn drain_device_panel_requests(&mut self, ctx: &Context, root: Option<&Path>) -> bool {
-        self.panel_render_caches.device_request_poll = Some(Instant::now());
-        let requests = match claim_device_requests(root) {
-            Ok(requests) => requests,
-            Err(error) => {
-                tracing::warn!(%error, "could not poll Device panel requests");
-                return false;
-            }
-        };
-        let changed = !requests.is_empty();
-        for request in requests {
-            let outcome = match root {
-                Some(_) => self.apply_device_request_at(&request, ctx, root),
-                None => self.apply_device_request(&request, ctx),
-            };
-            let Some(outcome) = self.defer_device_reveal(&request, outcome, root) else {
-                continue;
-            };
-            if let Err(error) = complete_device_request(root, &request, outcome) {
-                tracing::warn!(%error, "could not publish Device panel result");
-            }
-        }
+        let changed = self.drain_claimed_device_requests(ctx);
+        self.claim_device_requests(root);
         changed
     }
 
+    /// Applies each request a claim took, in claim order, and answers it: now
+    /// on the coordination worker, or later once a held reveal settles.
+    fn drain_claimed_device_requests(&mut self, ctx: &Context) -> bool {
+        // The outcome of the claim arrives on the coordination worker. The
+        // browser tick drains the same queue before this call; this one applies
+        // what is left, so the device poll also works without that tick.
+        self.apply_browser_host_io();
+        let claimed = std::mem::take(&mut self.panel_render_caches.device_claim.claimed);
+        let changed = !claimed.is_empty();
+        for request in claimed {
+            let root = request.root.as_deref();
+            let outcome = self.apply_device_request_at(&request.request, ctx, root);
+            // A reveal waits for the pass that draws the viewer, and the
+            // request pump answers it, also when the host runs no frame.
+            let Some(outcome) = self.defer_device_reveal(&request.request, outcome, root) else {
+                continue;
+            };
+            self.write_device_answer(claim::DeviceAnswer::new(root, request.request, outcome));
+        }
+        changed | self.retry_device_answers()
+    }
+
+    /// Applies a request against the process runtime root, as a claim's apply
+    /// does. Tests use it to judge one operation without a queue.
+    #[cfg(test)]
     fn apply_device_request(&mut self, request: &Request, ctx: &Context) -> Outcome {
         self.apply_device_request_at(request, ctx, None)
     }
@@ -107,7 +100,7 @@ impl HorizonApp {
             return Outcome::failed("wrong_host", "Request belongs to another Horizon host");
         }
         if request.deadline_at_millis <= manifest::now_millis() {
-            return Outcome::failed("request_expired", "Device panel request expired before dispatch");
+            return claim::request_expired();
         }
         let Some(actor) = actor_panel(&self.board, &request.actor) else {
             return Outcome::failed(
@@ -529,6 +522,7 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
+    mod claim;
     mod reveal;
     mod reveal_wait;
 
@@ -856,6 +850,28 @@ mod tests {
         );
     }
 
+    /// Polls the request pump until it reports a claimed request applied.
+    fn pump_until_applied(bridge: &crate::app::DeviceRequestBridge) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !bridge.poll_on_ui_thread() {
+            assert!(Instant::now() < deadline, "the pump never applied the claimed request");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Polls the request pump until `request` has an answer, within a bound.
+    fn pump_until_answered(bridge: &crate::app::DeviceRequestBridge, root: &Path, request: &Request) -> Outcome {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            bridge.poll_on_ui_thread();
+            if let Some(outcome) = device::take_result_at(root, request).expect("result") {
+                return outcome;
+            }
+            assert!(Instant::now() < deadline, "the pump never answered the request");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn one(outcome: Outcome) -> PanelState {
         let Outcome::Panels { mut panels } = outcome else {
             panic!("expected panels: {outcome:?}")
@@ -879,10 +895,9 @@ mod tests {
         .expect("enqueue");
         let bridge = crate::app::DeviceRequestBridge::with_root(root.path().to_path_buf());
         bridge.install(app, ctx);
-        assert!(bridge.poll_on_ui_thread());
-        let outcome = device::take_result_at(root.path(), &request).expect("result");
-        assert!(matches!(outcome, Some(Outcome::Panels { .. })));
-        assert!(!bridge.poll_on_ui_thread());
+        let outcome = pump_until_answered(&bridge, root.path(), &request);
+        assert!(matches!(outcome, Outcome::Panels { .. }));
+        assert!(!bridge.poll_on_ui_thread(), "an answered queue applies nothing more");
     }
 
     #[test]
