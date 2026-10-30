@@ -276,7 +276,16 @@ fn claim_at(
 /// # Errors
 /// Returns an error when the private result cannot be written atomically.
 pub fn complete_close_request(result: &BrowserCloseResult) -> std::io::Result<()> {
-    complete_at(BrowserRuntimePaths::resolve().root(), result)
+    complete_close_request_in(BrowserRuntimePaths::resolve().root(), result)
+}
+
+/// Publish a close result in `root`, the Horizon home a host keeps its
+/// coordination files in, and remove the request.
+///
+/// # Errors
+/// Returns an error when the private result cannot be written atomically.
+pub fn complete_close_request_in(root: &Path, result: &BrowserCloseResult) -> std::io::Result<()> {
+    complete_at(root, result)
 }
 
 fn complete_at(root: &Path, result: &BrowserCloseResult) -> std::io::Result<()> {
@@ -330,7 +339,20 @@ fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option
 /// # Errors
 /// Returns an error for invalid identity or audit storage failure.
 pub fn record_close_status(request: &BrowserCloseRequest, status: BrowserCloseAuditStatus) -> std::io::Result<()> {
-    record_status_at(BrowserRuntimePaths::resolve().root(), request, status)
+    record_close_status_in(BrowserRuntimePaths::resolve().root(), request, status)
+}
+
+/// Append a close lifecycle state to the panel audit journal in `root`, the
+/// Horizon home a host keeps its coordination files in.
+///
+/// # Errors
+/// Returns an error for invalid identity or audit storage failure.
+pub fn record_close_status_in(
+    root: &Path,
+    request: &BrowserCloseRequest,
+    status: BrowserCloseAuditStatus,
+) -> std::io::Result<()> {
+    record_status_at(root, request, status)
 }
 
 fn record_status_at(

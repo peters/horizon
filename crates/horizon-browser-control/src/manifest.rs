@@ -67,7 +67,8 @@ pub use audit::{
 };
 pub use close::{
     BrowserCloseAuditStatus, BrowserCloseOutcome, BrowserCloseRequest, BrowserCloseResult, claim_close_request,
-    complete_close_request, enqueue_close, list_close_requests, record_close_status, take_close_result,
+    complete_close_request, complete_close_request_in, enqueue_close, list_close_requests, record_close_status,
+    record_close_status_in, take_close_result,
 };
 pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateAdmission,
