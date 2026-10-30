@@ -113,14 +113,19 @@ shell commands, files, or other MCP servers.
   ```
 
 - `browser_video` records sampled page pixels as a private AV1/WebM export.
-  `fps` is the requested sample rate; `effective_fps` is encoded frames divided
-  by active recording seconds (including repeated frames). `frames_dropped`
-  counts skipped scheduled samples; the tool explains when the host cannot keep up.
-  Encoding is CPU-bound; high quality, stronger compression and larger frames
-  may reduce the observed rate. A missed sample can omit a brief page state.
-  Frame timestamps preserve elapsed sample time, and pause excludes idle time.
-  Check the finalized stop result and decode the exact returned export path
-  before relying on a recording as evidence of short interactions.
+  `fps` is the requested sample rate; `effective_fps` is written frames divided
+  by active recording seconds. The host writes a frame only when the page pixels
+  changed, so a static page keeps one frame and reports a low `effective_fps`.
+  `quality` grades the capture as `unknown`, `good`, `degraded` or `poor`:
+  `degraded` and `poor` mean the host fell behind and wrote fewer of the states
+  the page offered, so a brief page state can be absent, and `next_step` says so.
+  `frames_offered` counts the distinct page frames the encoder saw, including the
+  ones it replaced before writing, and `frames_dropped` counts scheduled samples
+  it could not attempt. Encoding is CPU-bound; high quality, stronger compression
+  and larger frames may reduce the observed rate. Frame timestamps preserve
+  elapsed sample time, and pause excludes idle time. Check the finalized stop
+  result and decode the exact returned export path before relying on a recording
+  as evidence of short interactions.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
 - `browser_duplicate` opens the current URL in another panel sharing the source
@@ -663,18 +668,40 @@ with `status` and `stop` as the other actions. Every action requires the exact
 owning agent in the same workspace. Reconnect explicitly to acquire an unowned
 viewer before capture. There is no new CLI command.
 
-The host records the full decoded desktop as AV1 WebM with a target of 10 fps, including while
-hidden or off canvas. View crop and scale do not affect recording; audio is not
-captured. Status reports the measured effective frame rate and dropped frames;
-encoding may run slower than the target. Recording stops on disconnect, reconnect, panel close, after five
-minutes, or at the encoder's 256 MiB limit. Restoring a session never resumes a
-recording. The Horizon app always includes the encoder. The standalone browser
-library separately supports builds without its video-capture feature.
+The host records the full decoded desktop as AV1 WebM with a target of 5 fps,
+including while hidden or off canvas. View crop and scale do not affect
+recording; audio is not captured. Recording stops on disconnect, reconnect,
+panel close, after five minutes, or at the encoder's 256 MiB limit. Restoring a
+session never resumes a recording. The Horizon app always includes the encoder.
+The standalone browser library separately supports builds without its
+video-capture feature.
+
+The target is the rate the host attempts, not a guarantee. A desktop is
+re-encoded as a whole frame, so the achievable rate depends on the build and the
+desktop pixels. With the default compression on a 48-thread reference host, a
+1600 × 900 desktop recorded about 6 fps for continuous screen-like motion in a
+release build and about 3 fps in a debug build; noisy full-frame motion and
+larger desktops record less. Ask for motion evidence at a smaller desktop, or
+report the measured rate.
+
+The host writes a frame only when the desktop changed. An unchanged desktop is
+held by the timestamp of the frame before it, so a screen that changes three
+times a second writes three frames a second instead of ten identical ones.
+`effective_fps` counts written frames, `frames_repeated` counts scheduled
+samples whose pixels had not changed, and `frames_offered` counts the distinct
+desktop states the encoder saw, including the states it replaced before it
+could write them.
 
 Stop requests background finalization. Poll until `recording.capture.active`
-and `recording.finalizing` are both false. Check `encoder_failed` and
-`frames_encoded` before using `recording.capture.path`, a private file on the
-Horizon host. It is not a remotely downloadable URL. Save a copy before closing
-the panel or making four subsequent recordings. The Device panel uses a record
-icon, a stop icon, and a clipboard icon for the same recorder. Hover text names
-those actions.
+and `recording.finalizing` are both false. Then read `recording.capture.quality`
+before using `recording.capture.path`, a private file on the Horizon host.
+`quality` is `unknown`, `good`, `degraded` or `poor`. The host grades written
+frames against the frames it could write, capped by the requested rate:
+`good` keeps at least four of every five, `degraded` keeps two to four, and
+`poor` keeps fewer than two. `degraded` and `poor` mean a short desktop state
+can be absent, so report that instead of claiming the recording shows motion.
+`unknown` means no frame was written yet, or an older host without the coverage
+counter. Also check `encoder_failed` and `frames_encoded`. The path is not a
+remotely downloadable URL. Save a copy before closing the panel or making four
+subsequent recordings. The Device panel uses a record icon, a stop icon, and a
+clipboard icon for the same recorder. Hover text names those actions.

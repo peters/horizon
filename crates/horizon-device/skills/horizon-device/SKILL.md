@@ -218,11 +218,22 @@ panel close or normal host exit. A screenshot does not replace live-motion evide
 `device_panel video` operations are `start`, `status`, and `stop`.
 For feature evidence, use `device_panel` with `operation: video`, the owned
 `panel_id`, and `action: start|status|stop`. Start before the flow. It records the
-full VNC desktop as private WebM without audio and continues offscreen. Every
-action requires the exact owning agent. It stops on disconnect, after five
-minutes, or at 256 MiB. Stop is asynchronous: read status at a bounded interval
-until `recording.capture.active` and `recording.finalizing` are both false.
-Examine `encoder_failed` and `frames_encoded`, then decode representative frames.
+full VNC desktop as private WebM without audio, targets 5 fps at the full desktop
+size, and continues offscreen. Every action requires the exact owning agent. It
+stops on disconnect, after five minutes, or at 256 MiB. The host writes a frame
+only when the desktop changed, so a screen that changes less often keeps every
+state and reports a low `effective_fps`.
+The target is not a guarantee: a whole desktop is re-encoded per frame, so a
+1600 × 900 desktop with continuous motion recorded about 6 fps in a release
+build and about 3 fps in a debug build on a 48-thread reference host, and noisy
+or larger desktops record less.
+Stop is asynchronous: read status at a bounded interval until
+`recording.capture.active` and `recording.finalizing` are both false. Then read
+`recording.capture.quality` and `encoder_failed`, and decode representative
+frames. `quality` is `unknown`, `good`, `degraded` or `poor`; `degraded` and
+`poor` mean the host wrote fewer of the states the desktop offered, so a brief
+state can be absent. Report that instead of claiming the recording shows motion,
+and do not present a `poor` recording as motion evidence.
 The file path is on the Horizon host. Copy it before panel close or four subsequent
 recordings. Browser pages use `browser_video`; native provider sessions use
 `app_video` through `horizon-app-testing`.

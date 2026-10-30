@@ -1,5 +1,6 @@
 use horizon_browser::{
-    BrowserControlAction, BrowserVideoCapture, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
+    BrowserControlAction, BrowserVideoCapture, BrowserVideoCaptureOverrides, BrowserVideoOperation,
+    BrowserVideoQuality, BrowserVideoState,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -88,10 +89,17 @@ pub(crate) struct VideoOutput {
     width: u32,
     height: u32,
     fps: u32,
+    /// Frames written per active recording second. Unchanged source frames are
+    /// held by their timestamp instead of being written again.
     effective_fps: f64,
+    /// Typed sample coverage. `good` writes at least four of every five frames
+    /// the source offered up to the requested rate; `degraded` and `poor` mean
+    /// the host fell behind and brief states can be absent.
+    quality: String,
     frames_encoded: u64,
     frames_dropped: u64,
     frames_repeated: u64,
+    frames_offered: u64,
     bytes_written: u64,
     file_limit_reached: bool,
     encoder_failed: bool,
@@ -103,6 +111,7 @@ pub(crate) struct VideoOutput {
 impl VideoOutput {
     pub(crate) fn new(panel_id: String, action_id: String, mut capture: BrowserVideoCapture) -> Self {
         capture.update_performance();
+        let next_step = next_step(&capture);
         Self {
             panel_id,
             action_id,
@@ -119,36 +128,53 @@ impl VideoOutput {
             height: capture.height,
             fps: capture.fps,
             effective_fps: capture.effective_fps,
+            quality: match capture.quality {
+                BrowserVideoQuality::Unknown => "unknown",
+                BrowserVideoQuality::Good => "good",
+                BrowserVideoQuality::Degraded => "degraded",
+                BrowserVideoQuality::Poor => "poor",
+            }
+            .to_string(),
             frames_encoded: capture.frames_encoded,
             frames_dropped: capture.frames_dropped,
             frames_repeated: capture.frames_repeated,
+            frames_offered: capture.frames_offered,
             bytes_written: capture.bytes_written,
             file_limit_reached: capture.file_limit_reached,
             encoder_failed: capture.encoder_failed,
             started_at_millis: capture.started_at_millis,
             elapsed_millis: capture.elapsed_millis,
-            next_step: if capture.encoder_failed {
-                "The encoder failed; this WebM may be incomplete and should not be treated as a successful export."
-                    .to_string()
-            } else if capture.frames_dropped > 0 {
-                format!(
-                    "The host missed scheduled frames: {:.2} fps encoded versus {} fps requested. Inspect the exact export path before relying on brief page states.",
-                    capture.effective_fps, capture.fps
-                )
-            } else {
-                match capture.state {
-                    BrowserVideoState::Recording => {
-                        "Call browser_video pause or stop; inspect status for elapsed time and file size.".to_string()
-                    }
-                    BrowserVideoState::Paused => {
-                        "Call browser_video resume to continue or stop to finalize this WebM.".to_string()
-                    }
-                    BrowserVideoState::Stopped => {
-                        "The WebM is finalized; inspect this exact path with a player or read-only tool.".to_string()
-                    }
-                }
-            },
+            next_step,
         }
+    }
+}
+
+/// Tell the caller what a typed capture quality means for this export.
+fn next_step(capture: &BrowserVideoCapture) -> String {
+    if capture.encoder_failed {
+        return "The encoder failed; this WebM may be incomplete and should not be treated as a successful export."
+            .to_string();
+    }
+    match capture.quality {
+        BrowserVideoQuality::Poor => format!(
+            "The host kept fewer than two of every five source frames: it wrote {:.2} fps against the {} fps you requested, so brief page states can be absent. Lower `fps`, `max_width` or `quality` for the next recording, and inspect this export before relying on it.",
+            capture.effective_fps, capture.fps
+        ),
+        BrowserVideoQuality::Degraded => format!(
+            "The host fell behind and wrote {:.2} fps against the {} fps you requested, so a short page state can be absent. Inspect this export before relying on it.",
+            capture.effective_fps, capture.fps
+        ),
+        BrowserVideoQuality::Unknown | BrowserVideoQuality::Good => match capture.state {
+            BrowserVideoState::Recording => {
+                "Call browser_video pause or stop; inspect status for elapsed time and file size.".to_string()
+            }
+            BrowserVideoState::Paused => {
+                "Call browser_video resume to continue or stop to finalize this WebM.".to_string()
+            }
+            BrowserVideoState::Stopped => {
+                "The WebM is finalized; inspect this exact path with a player or read-only tool.".to_string()
+            }
+        },
     }
 }
 
@@ -189,57 +215,65 @@ mod tests {
         assert!(input.build_action().is_err());
     }
 
-    #[test]
-    fn failed_stop_does_not_present_the_webm_as_finalized() {
-        let capture = BrowserVideoCapture {
+    fn capture(fps: u32, elapsed_millis: u64, encoded: u64, dropped: u64, offered: u64) -> BrowserVideoCapture {
+        BrowserVideoCapture {
             capture_id: "capture".to_string(),
             path: "/tmp/failed.webm".to_string(),
             state: BrowserVideoState::Stopped,
             active: false,
             width: 16,
             height: 16,
-            fps: 5,
+            fps,
             effective_fps: 0.0,
-            frames_encoded: 0,
-            frames_dropped: 0,
+            quality: BrowserVideoQuality::Unknown,
+            frames_encoded: encoded,
+            frames_dropped: dropped,
             frames_repeated: 0,
+            frames_offered: offered,
             bytes_written: 12,
             file_limit_reached: false,
-            encoder_failed: true,
+            encoder_failed: false,
             started_at_millis: 0,
-            elapsed_millis: 0,
-        };
+            elapsed_millis,
+        }
+    }
+
+    #[test]
+    fn failed_stop_does_not_present_the_webm_as_finalized() {
+        let mut capture = capture(5, 0, 0, 0, 0);
+        capture.encoder_failed = true;
         let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
         assert!(output.encoder_failed);
         assert!(output.next_step.contains("incomplete"));
     }
+
     #[test]
-    fn older_host_counters_report_actual_rate_and_missed_frames() {
-        let mut capture = BrowserVideoCapture {
-            capture_id: "capture".to_string(),
-            path: "/tmp/failed.webm".to_string(),
-            state: BrowserVideoState::Stopped,
-            active: false,
-            width: 16,
-            height: 16,
-            fps: 5,
-            effective_fps: 0.0,
-            frames_encoded: 0,
-            frames_dropped: 0,
-            frames_repeated: 0,
-            bytes_written: 12,
-            file_limit_reached: false,
-            encoder_failed: true,
-            started_at_millis: 0,
-            elapsed_millis: 0,
-        };
-        capture.encoder_failed = false;
-        capture.elapsed_millis = 10_000;
-        capture.frames_encoded = 20;
-        capture.frames_dropped = 30;
+    fn older_host_counters_report_the_written_rate_without_a_grade() {
+        // An older host sends no `frames_offered`, so it cannot grade coverage.
+        // Its written rate and dropped samples stay available.
+        let capture = capture(5, 10_000, 20, 30, 0);
         let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
         assert!((output.effective_fps - 2.0).abs() < f64::EPSILON);
-        assert!(output.next_step.contains("2.00 fps encoded versus 5 fps requested"));
-        assert!(!output.next_step.contains("preserves sample times"));
+        assert_eq!(output.quality, "unknown");
+        assert_eq!(output.frames_dropped, 30);
+        assert!(output.next_step.contains("finalized"));
+    }
+
+    #[test]
+    fn a_source_that_changes_rarely_is_not_graded_poor() {
+        // 600 s at 5 fps offers 3000 samples, but the source only changed 120
+        // times and every change was written.
+        let capture = capture(5, 600_000, 120, 0, 120);
+        let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
+        assert_eq!(output.quality, "good");
+        assert!(output.next_step.contains("finalized"));
+    }
+
+    #[test]
+    fn a_degraded_capture_warns_that_a_state_can_be_absent() {
+        let capture = capture(10, 10_000, 45, 55, 100);
+        let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
+        assert_eq!(output.quality, "degraded");
+        assert!(output.next_step.contains("a short page state can be absent"));
     }
 }

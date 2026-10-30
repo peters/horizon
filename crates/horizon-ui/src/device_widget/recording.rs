@@ -6,12 +6,18 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use horizon_browser::{BrowserVideoCaptureOptions, FrameSlot, PixelVideoRecorder, VideoCaptureHandle};
+use horizon_browser::{
+    BrowserVideoCaptureOptions, BrowserVideoQuality, FrameSlot, PixelVideoRecorder, VideoCaptureHandle,
+};
 use horizon_core::browser::manifest::device::{Outcome, VideoAction, VideoRecording};
 use horizon_vnc::Frame;
 
 use super::DeviceUiState;
 
+/// A VNC desktop is re-encoded as a whole frame, so the target is the rate a
+/// release build sustains at a 1600 × 900 desktop with the default compression
+/// (about 6 fps on the reference host). Asking for more only skips samples.
+const VNC_FPS: u32 = 5;
 const MAX_DURATION: Duration = Duration::from_secs(300);
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILES: usize = 4;
@@ -89,6 +95,7 @@ impl Recording {
             return Err("The desktop dimensions exceed the recording limit".into());
         }
         let options = BrowserVideoCaptureOptions {
+            fps: VNC_FPS,
             max_file_bytes: MAX_BYTES,
             ..Default::default()
         };
@@ -165,6 +172,23 @@ fn publish(frames: &FrameSlot, image: &Frame) -> bool {
     frames.store_rgb(width, height, rgb).is_some()
 }
 
+/// A short warning when the encoder could not write most of what the desktop
+/// offered. `None` means the counters do not show a gap worth a line.
+fn capture_quality_label(status: &VideoRecording) -> Option<(&'static str, egui::Color32)> {
+    match status.capture.quality {
+        BrowserVideoQuality::Poor => Some(("Recording fell far behind", crate::theme::PALETTE_RED())),
+        BrowserVideoQuality::Degraded => Some(("Recording fell behind", crate::theme::PALETTE_YELLOW())),
+        BrowserVideoQuality::Unknown | BrowserVideoQuality::Good => None,
+    }
+}
+
+fn recording_detail(status: &VideoRecording) -> String {
+    format!(
+        "{:.1} of {} fps written, {} frames held, {} samples missed. A short state can be missing. Save a copy before closing this panel.",
+        status.capture.effective_fps, status.capture.fps, status.capture.frames_repeated, status.capture.frames_dropped
+    )
+}
+
 impl DeviceUiState {
     pub(crate) fn video(&mut self, action: VideoAction) -> Outcome {
         let result = match action {
@@ -223,6 +247,8 @@ impl DeviceUiState {
             if let Some(status) = &status {
                 if status.capture.encoder_failed {
                     ui.colored_label(egui::Color32::RED, "Recording failed");
+                } else if let Some((text, color)) = capture_quality_label(status) {
+                    ui.colored_label(color, text).on_hover_text(recording_detail(status));
                 } else {
                     ui.label(format!("{} frames recorded", status.capture.frames_encoded));
                 }
@@ -245,9 +271,52 @@ impl DeviceUiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_browser::BrowserVideoState;
 
     fn frame() -> Frame {
         Frame::from_rgba([64, 64], &[255, 0, 0, 255].repeat(64 * 64)).expect("64 × 64 pixels")
+    }
+
+    fn recording(quality: BrowserVideoQuality) -> VideoRecording {
+        VideoRecording {
+            finalizing: false,
+            capture: horizon_browser::BrowserVideoCapture {
+                capture_id: "vnc".to_string(),
+                path: "/tmp/horizon-vnc-video-1/vnc.webm".to_string(),
+                state: BrowserVideoState::Stopped,
+                active: false,
+                width: 1600,
+                height: 900,
+                fps: VNC_FPS,
+                effective_fps: 2.0,
+                quality,
+                frames_encoded: 10,
+                frames_dropped: 40,
+                frames_repeated: 0,
+                frames_offered: 50,
+                bytes_written: 1024,
+                file_limit_reached: false,
+                encoder_failed: false,
+                started_at_millis: 0,
+                elapsed_millis: 10_000,
+            },
+        }
+    }
+
+    #[test]
+    fn a_capture_that_kept_under_two_of_five_states_is_a_red_warning() {
+        let warning = capture_quality_label(&recording(BrowserVideoQuality::Poor)).expect("warning");
+        assert_eq!(warning.0, "Recording fell far behind");
+        assert_eq!(warning.1, crate::theme::PALETTE_RED());
+        assert!(recording_detail(&recording(BrowserVideoQuality::Poor)).contains("2.0 of 5 fps written"));
+    }
+
+    #[test]
+    fn a_degraded_capture_is_a_yellow_warning_and_a_good_one_has_none() {
+        let warning = capture_quality_label(&recording(BrowserVideoQuality::Degraded)).expect("warning");
+        assert_eq!(warning.1, crate::theme::PALETTE_YELLOW());
+        assert!(capture_quality_label(&recording(BrowserVideoQuality::Good)).is_none());
+        assert!(capture_quality_label(&recording(BrowserVideoQuality::Unknown)).is_none());
     }
 
     #[test]
@@ -278,6 +347,10 @@ mod tests {
             let state = recording.status().expect("status");
             if !state.capture.active && !state.finalizing {
                 assert!(!state.capture.encoder_failed);
+                assert_eq!(
+                    state.capture.fps, VNC_FPS,
+                    "the desktop recorder targets the documented rate"
+                );
                 assert!(state.capture.frames_encoded > 0);
                 let path = state.capture.path;
                 let bytes = std::fs::read(&path).expect("webm");

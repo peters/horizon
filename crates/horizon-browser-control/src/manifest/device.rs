@@ -82,7 +82,8 @@ pub enum VideoAction {
 pub struct VideoRecording {
     /// True while the worker is finishing the file. Do not use the file until false.
     pub finalizing: bool,
-    /// Encoder counters and private host-local file path. Files last until panel close or four subsequent recordings.
+    /// Encoder counters, the typed `quality` grade, and the private host-local
+    /// file path. Files last until panel close or four subsequent recordings.
     #[schemars(with = "serde_json::Value")]
     pub capture: horizon_browser::BrowserVideoCapture,
 }
