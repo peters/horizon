@@ -498,7 +498,12 @@ impl EncodeSession {
                 self.handle.file_limit_reached.store(true, Ordering::Relaxed);
             }
         }
-        self.handle.frames_encoded.store(encoder.muxed, Ordering::Relaxed);
+        // rav1e returns a packet only after it has seen the frame that follows,
+        // so `muxed` trails the frames the encoder accepted. A source that is
+        // held must still count as written, or a running recording of an
+        // unchanged desktop grades as if its frames were lost.
+        let submitted = u64::try_from(encoder.timestamps.len()).unwrap_or(u64::MAX);
+        self.handle.frames_encoded.store(submitted, Ordering::Relaxed);
         if let Some(bytes) = encoder.bytes_written() {
             self.handle.bytes_written.store(bytes, Ordering::Relaxed);
         }
@@ -901,6 +906,38 @@ mod tests {
     }
 
     #[test]
+    fn a_running_recording_of_an_unchanged_source_grades_good() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(20, 30, 40));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 10,
+            compression_level: 0,
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(root.path(), "held", Arc::clone(&slot), options, Arc::clone(&handle))
+            .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        std::thread::sleep(Duration::from_millis(600));
+        // A caller reads this before `stop`, while rav1e still holds the packet
+        // it will return for the frame after the one it accepted.
+        let running = handle.snapshot().unwrap_or_else(|| panic!("no running capture"));
+        assert!(running.active);
+        assert_eq!(
+            running.frames_encoded, 1,
+            "the accepted frame counts before rav1e returns it"
+        );
+        assert_eq!(running.frames_offered, 1);
+        assert_eq!(running.quality, BrowserVideoQuality::Good);
+        let capture = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish encoder: {error}"));
+        assert_eq!(capture.frames_encoded, 1);
+        assert_eq!(capture.quality, BrowserVideoQuality::Good);
+    }
+
+    #[test]
     fn a_tick_writes_the_newest_frame_and_counts_the_frames_it_replaced() {
         let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
         let slot = Arc::new(FrameSlot::new());
@@ -1073,9 +1110,11 @@ mod tests {
         };
         let thread = EncoderThread::start(root.path(), "stop-ts", Arc::clone(&slot), options, Arc::clone(&handle))
             .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        // The request must be later than the capture start, or the elapsed time
+        // clamp holds it at zero and there is nothing to freeze.
         let ready = Instant::now() + Duration::from_secs(5);
         while Instant::now() < ready {
-            if handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1) {
+            if handle.snapshot().is_some_and(|capture| capture.elapsed_millis >= 500) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));

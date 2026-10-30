@@ -200,7 +200,8 @@ pub struct BrowserVideoCapture {
     /// Typed sample coverage, graded by [`Self::update_performance`].
     #[serde(default)]
     pub quality: BrowserVideoQuality,
-    /// Frames written to the file.
+    /// Frames the encoder accepted for the file. A running capture counts them
+    /// before the encoder returns the packet, so a held source still counts.
     pub frames_encoded: u64,
     /// Scheduled samples the host could not attempt because it was still
     /// encoding a previous frame.
