@@ -4,6 +4,8 @@
 //! result is published only once that teardown has completed, so a caller
 //! that sees `closed` knows the session and any device allocation are gone.
 
+use std::path::{Path, PathBuf};
+
 use horizon_core::browser::BrowserShutdownSignal;
 use horizon_core::browser::manifest::{self, BrowserCloseAuditStatus, BrowserCloseRequest, BrowserCloseResult};
 use horizon_core::{PanelId, PanelKind};
@@ -23,6 +25,9 @@ pub(super) struct CloseRefusal {
 const fn refusal(code: &'static str, message: &'static str) -> CloseRefusal {
     CloseRefusal { code, message }
 }
+
+/// The refusal of a close whose manifest names another agent as the live owner.
+const OWNERSHIP_CHANGED: CloseRefusal = refusal("ownership_changed", "browser panel ownership changed");
 
 /// A panel the host already closed whose session teardown is still running.
 pub(super) struct PendingBrowserClose {
@@ -110,13 +115,28 @@ impl HorizonApp {
     }
 
     /// Decide whether `request` may close a panel, from board state and the
-    /// live ownership the caller read from the manifest. Pure: nothing is
-    /// written, so the refusal paths are testable without a driver.
+    /// live ownership a manifest read found. Pure: nothing is written, so the
+    /// refusal paths are testable without a driver.
     pub(super) fn close_target(
         &self,
         request: &BrowserCloseRequest,
         actor_panel: ActorPanel,
         owned_by_actor: bool,
+        now_millis: i64,
+    ) -> Result<PanelId, CloseRefusal> {
+        let panel_id = self.board_close_target(request, actor_panel, now_millis)?;
+        if !owned_by_actor {
+            return Err(OWNERSHIP_CHANGED);
+        }
+        Ok(panel_id)
+    }
+
+    /// The refusals that board state alone decides, for a close whose manifest
+    /// no thread has read yet: the coordination worker reads its ownership.
+    fn board_close_target(
+        &self,
+        request: &BrowserCloseRequest,
+        actor_panel: ActorPanel,
         now_millis: i64,
     ) -> Result<PanelId, CloseRefusal> {
         if request.deadline_at_millis < now_millis {
@@ -145,43 +165,46 @@ impl HorizonApp {
                 "browser panel is still being created; wait for browser_create to return",
             ));
         }
-        if !owned_by_actor {
-            return Err(refusal("ownership_changed", "browser panel ownership changed"));
-        }
         Ok(panel_id)
     }
 
-    /// Closes the panel once the coordination worker audited the dispatch: a
-    /// journal that cannot be written refuses the close instead of leaving a
-    /// closed panel with no dispatch record.
+    /// Audits the dispatch of a claimed close on the coordination worker: the
+    /// worker reads the ownership its manifest names and writes the dispatch
+    /// record, so neither runs on the UI thread. The board then closes the
+    /// panel, or refuses it with the ownership the worker read; a journal that
+    /// cannot be written refuses the close instead of leaving a closed panel
+    /// with no dispatch record.
     pub(super) fn apply_browser_close_request(&mut self, request: &BrowserCloseRequest, actor_panel: ActorPanel) {
-        if let Err(refused) = self.close_target(request, actor_panel, owned_by_actor(request), manifest::now_millis()) {
+        // Nothing the manifest carries is needed to refuse a close the board
+        // cannot apply, so it is refused without waiting for the worker.
+        if let Err(refused) = self.board_close_target(request, actor_panel, manifest::now_millis()) {
             self.fail_close(request, refused.code, refused.message);
             return;
         }
+        let root = self.close_files_root();
         let audited = request.clone();
         let request = request.clone();
         self.browser_create_host.io.then(
-            move || {
-                let dispatched = manifest::record_close_status(&audited, BrowserCloseAuditStatus::Dispatched);
-                if let Err(error) = &dispatched {
-                    tracing::warn!(request_id = %audited.request_id, %error, "could not audit browser close dispatch");
-                    complete_close_failure(&audited, "audit_failed", "Horizon refused an unaudited close");
-                }
-                dispatched.is_ok()
-            },
+            move || dispatch_close(&root, &audited),
             move |app, dispatched| match dispatched {
-                Some(true) => app.close_dispatched_browser_panel(request),
-                Some(false) => {}
+                Some(CloseDispatch { owned, audited: true }) => app.close_dispatched_browser_panel(request, owned),
+                Some(_) => {}
                 // The audit's outcome is unknown; nothing closes without it.
                 None => app.fail_close(&request, "audit_failed", "Horizon refused an unaudited close"),
             },
         );
     }
 
+    /// The Horizon home that keeps this host's close requests, audits and
+    /// results. Production builds the session store from `HorizonHome::resolve()`,
+    /// the same root the requesting agent's driver uses for its default paths.
+    fn close_files_root(&self) -> PathBuf {
+        self.session_store.home().root().to_path_buf()
+    }
+
     /// Closes the panel of an audited close, decided again on the board as it
-    /// is now.
-    fn close_dispatched_browser_panel(&mut self, request: BrowserCloseRequest) {
+    /// is now and on the ownership the worker read.
+    fn close_dispatched_browser_panel(&mut self, request: BrowserCloseRequest, owned: bool) {
         if self.browser_host_retiring() {
             self.fail_close(&request, HOST_RETIRING.0, HOST_RETIRING.1);
             return;
@@ -189,8 +212,7 @@ impl HorizonApp {
         let target = actor_panel(&self.board, &request.actor)
             .ok_or(refusal("workspace_unavailable", AGENT_GONE))
             .and_then(|actor_panel| {
-                let panel_id =
-                    self.close_target(&request, actor_panel, owned_by_actor(&request), manifest::now_millis())?;
+                let panel_id = self.close_target(&request, actor_panel, owned, manifest::now_millis())?;
                 Ok((panel_id, actor_panel))
             });
         let (panel_id, actor_panel) = match target {
@@ -209,11 +231,12 @@ impl HorizonApp {
 
     /// Publishes a refused or failed close on the coordination worker.
     pub(super) fn fail_close(&mut self, request: &BrowserCloseRequest, code: &str, message: &str) {
+        let root = self.close_files_root();
         let request = request.clone();
         let (code, message) = (code.to_string(), message.to_string());
         self.browser_create_host
             .io
-            .write(move || complete_close_failure(&request, &code, &message));
+            .write(move || complete_close_failure(&root, &request, &code, &message));
     }
 
     /// The close itself, shared with the tests: the app's own close path
@@ -287,13 +310,15 @@ impl HorizonApp {
                         }
                         continue;
                     }
+                    let root = self.close_files_root();
                     let request = pending.request;
                     self.browser_create_host.io.write(move || {
-                        match manifest::record_close_status(&request, BrowserCloseAuditStatus::Completed) {
-                            Ok(()) => complete_close_result(&BrowserCloseResult::closed(&request)),
+                        match manifest::record_close_status_in(&root, &request, BrowserCloseAuditStatus::Completed) {
+                            Ok(()) => complete_close_result(&root, &BrowserCloseResult::closed(&request)),
                             Err(error) => {
                                 tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close completion");
                                 complete_close_failure(
+                                    &root,
                                     &request,
                                     "audit_failed",
                                     "browser panel closed but its completion could not be audited",
@@ -320,10 +345,33 @@ impl HorizonApp {
     }
 }
 
+/// What the coordination worker found and wrote for one close request.
+struct CloseDispatch {
+    /// Whether the agent the request names holds the panel's live lease.
+    owned: bool,
+    /// Whether the dispatch state reached the panel's audit journal.
+    audited: bool,
+}
+
+/// Reads the ownership the request's manifest names and audits the dispatch, in
+/// the Horizon home that hosts the panel, on the coordination worker.
+fn dispatch_close(root: &Path, request: &BrowserCloseRequest) -> CloseDispatch {
+    let owned = owned_by_actor(root, request);
+    let audited = manifest::record_close_status_in(root, request, BrowserCloseAuditStatus::Dispatched);
+    if let Err(error) = &audited {
+        tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close dispatch");
+        complete_close_failure(root, request, "audit_failed", "Horizon refused an unaudited close");
+    }
+    CloseDispatch {
+        owned,
+        audited: audited.is_ok(),
+    }
+}
+
 /// Whether the request's actor owns the panel now, by the live owner its
-/// manifest names.
-fn owned_by_actor(request: &BrowserCloseRequest) -> bool {
-    manifest::read(&request.panel_local_id)
+/// manifest in `root` names.
+fn owned_by_actor(root: &Path, request: &BrowserCloseRequest) -> bool {
+    manifest::read_at(&manifest::manifest_path_for_root(root, &request.panel_local_id))
         .and_then(|manifest| {
             manifest
                 .live_owner(manifest::now_millis())
@@ -333,21 +381,24 @@ fn owned_by_actor(request: &BrowserCloseRequest) -> bool {
         == Some(request.actor.as_str())
 }
 
-fn complete_close_failure(request: &BrowserCloseRequest, code: &str, message: &str) {
-    if let Err(error) = manifest::record_close_status(request, BrowserCloseAuditStatus::Failed) {
+fn complete_close_failure(root: &Path, request: &BrowserCloseRequest, code: &str, message: &str) {
+    if let Err(error) = manifest::record_close_status_in(root, request, BrowserCloseAuditStatus::Failed) {
         tracing::warn!(request_id = %request.request_id, %error, "could not append failed browser close audit");
     }
-    complete_close_result(&BrowserCloseResult::failed(request, code, message));
+    complete_close_result(root, &BrowserCloseResult::failed(request, code, message));
 }
 
-fn complete_close_result(result: &BrowserCloseResult) {
-    if let Err(error) = manifest::complete_close_request(result) {
+fn complete_close_result(root: &Path, result: &BrowserCloseResult) {
+    if let Err(error) = manifest::complete_close_request_in(root, result) {
         tracing::error!(request_id = %result.request_id, %error, "could not publish browser close result");
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::channel;
+    use std::time::{Duration, Instant};
+
     use horizon_core::browser::BrowserPanelState;
     use horizon_core::{Panel, PanelContent, PanelOptions, WorkspaceId};
 
@@ -381,6 +432,207 @@ mod tests {
 
     fn request(actor: &str, panel_local_id: &str, deadline_at_millis: i64) -> BrowserCloseRequest {
         BrowserCloseRequest::for_tests(actor, panel_local_id, deadline_at_millis)
+    }
+
+    /// A manifest that names `actor` as the panel's live owner.
+    fn live_manifest(actor: &str) -> manifest::BrowserManifest {
+        manifest::BrowserManifest {
+            host: Some(manifest::host_instance().to_string()),
+            owner: Some(manifest::ManifestOwner {
+                name: actor.to_string(),
+                tty: None,
+                updated_at: manifest::now_millis(),
+            }),
+            ..manifest::BrowserManifest::default()
+        }
+    }
+
+    #[test]
+    fn a_blocked_coordination_worker_never_stalls_the_close_request_frame() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor = horizon_core::browser_actor(&app.board.panel(agent_id).expect("agent").local_id);
+        let actor_panel = ActorPanel {
+            panel_id: agent_id,
+            workspace_id: alpha,
+        };
+        let (browser_id, browser_local_id) = inert_browser(&mut app, 9101, alpha);
+        // The panel's manifest names the requesting agent as its live owner, so
+        // the close applies once the worker read it.
+        let path = manifest::manifest_path_for_root(app.session_store.home().root(), &browser_local_id);
+        manifest::write_at(&path, &live_manifest(&actor)).expect("live manifest");
+        let close = request(&actor, &browser_local_id, i64::MAX);
+
+        // The coordination worker waits, as it does for a manifest whose read
+        // waits on a blocked file.
+        let (release, released) = channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+
+        let started = Instant::now();
+        app.apply_browser_close_request(&close, actor_panel);
+        let elapsed = started.elapsed();
+        release.send(()).expect("release the worker");
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "the frame waited {elapsed:?} for the close's manifest read"
+        );
+        assert!(app.browser_create_host.io.busy(), "the close waits on the worker");
+        assert!(
+            app.board.panel(browser_id).is_some(),
+            "nothing closes before the dispatch audit lands"
+        );
+
+        app.settle_browser_host_io();
+        assert!(
+            app.board.panel(browser_id).is_none(),
+            "the close applies once the worker read the ownership and audited it"
+        );
+        assert_eq!(
+            app.browser_create_host.pending_closes.len(),
+            1,
+            "the close waits for its session teardown"
+        );
+
+        // The close audits and publishes its result in this Horizon home.
+        let published_by = Instant::now() + Duration::from_secs(10);
+        while !app.browser_create_host.pending_closes.is_empty() {
+            assert!(Instant::now() < published_by, "the close did not publish its result");
+            app.poll_browser_close_requests();
+            app.settle_browser_host_io();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let root = app.session_store.home().root();
+        let journal = std::fs::read_to_string(manifest::audit_path_for_root(root, &browser_local_id))
+            .expect("close audit journal");
+        assert!(
+            journal.contains("\"status\":\"dispatched\""),
+            "the worker audited the dispatch it read the ownership for: {journal}"
+        );
+        assert!(
+            journal.contains("\"status\":\"completed\""),
+            "the close reports completed: {journal}"
+        );
+    }
+
+    #[test]
+    fn the_close_reads_the_panel_manifest_on_the_coordination_worker() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor = horizon_core::browser_actor(&app.board.panel(agent_id).expect("agent").local_id);
+        let actor_panel = ActorPanel {
+            panel_id: agent_id,
+            workspace_id: alpha,
+        };
+        let (browser_id, browser_local_id) = inert_browser(&mut app, 9103, alpha);
+        // The manifest is a FIFO, so the read of it blocks until the writer
+        // publishes the ownership. Only a reader on another thread leaves the
+        // frame free to return.
+        let path = manifest::manifest_path_for_root(app.session_store.home().root(), &browser_local_id);
+        std::fs::create_dir_all(path.parent().expect("manifest directory")).expect("manifest directory");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .expect("mkfifo runs")
+                .success(),
+            "a FIFO stands in for the manifest"
+        );
+        let bytes = serde_json::to_vec(&live_manifest(&actor)).expect("manifest bytes");
+        let (permit, permitted) = channel::<()>();
+        let (opened, reader) = channel::<()>();
+        let (reported, released) = channel::<bool>();
+        let written = path.clone();
+        let writer = std::thread::spawn(move || {
+            use std::io::Write as _;
+            let mut manifest = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&written)
+                .expect("a reader opens the manifest");
+            opened.send(()).expect("the reader is known");
+            // A read that ran on the frame would wait for this permit, so the
+            // writer gives up on its own instead of hanging the test.
+            let prompt = permitted.recv_timeout(Duration::from_secs(5)).is_ok();
+            reported.send(prompt).expect("the outcome is reported");
+            manifest.write_all(&bytes).expect("the ownership is published");
+            drop(manifest);
+            std::fs::remove_file(&written).expect("the FIFO is replaced");
+            std::fs::write(&written, &bytes).expect("the manifest stays readable");
+        });
+
+        let started = Instant::now();
+        app.apply_browser_close_request(&request(&actor, &browser_local_id, i64::MAX), actor_panel);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "the frame waited {elapsed:?} for the manifest read"
+        );
+        assert!(app.browser_create_host.io.busy(), "the close waits on the worker");
+        reader
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the worker is the reader of the manifest");
+        assert!(
+            app.board.panel(browser_id).is_some(),
+            "nothing closes before the ownership is read"
+        );
+
+        permit.send(()).expect("the ownership is published");
+        assert!(
+            released
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the writer reports"),
+            "the frame did not wait for the manifest read"
+        );
+        writer.join().expect("the writer ends");
+        app.settle_browser_host_io();
+        assert!(
+            app.board.panel(browser_id).is_none(),
+            "the close applies from the ownership the worker read"
+        );
+    }
+
+    #[test]
+    fn a_close_the_worker_reads_as_another_agents_keeps_the_panel() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor = horizon_core::browser_actor(&app.board.panel(agent_id).expect("agent").local_id);
+        let actor_panel = ActorPanel {
+            panel_id: agent_id,
+            workspace_id: alpha,
+        };
+        let (browser_id, browser_local_id) = inert_browser(&mut app, 9102, alpha);
+        // Board state alone permits this close; only the manifest names a live
+        // owner that is not the requesting agent, and the coordination worker
+        // is what reads it.
+        let path = manifest::manifest_path_for_root(app.session_store.home().root(), &browser_local_id);
+        manifest::write_at(&path, &live_manifest("horizon:other-agent")).expect("live manifest of another agent");
+
+        app.apply_browser_close_request(&request(&actor, &browser_local_id, i64::MAX), actor_panel);
+        app.settle_browser_host_io();
+
+        assert!(
+            app.board.panel(browser_id).is_some(),
+            "a close the worker read as another agent's leaves the panel"
+        );
+        assert!(
+            app.browser_create_host.pending_closes.is_empty(),
+            "a refused close has no teardown to wait for"
+        );
+        let root = app.session_store.home().root();
+        let journal = std::fs::read_to_string(manifest::audit_path_for_root(root, &browser_local_id))
+            .expect("close audit journal");
+        assert!(
+            journal.contains("\"status\":\"dispatched\""),
+            "the dispatch is audited with the ownership read: {journal}"
+        );
+        assert!(
+            journal.contains("\"status\":\"failed\""),
+            "the refused close publishes a failure: {journal}"
+        );
     }
 
     #[test]
