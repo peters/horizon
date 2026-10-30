@@ -129,6 +129,7 @@ impl UsageRequest {
 }
 
 /// A usage queue bound to one private coordination root.
+#[derive(Clone)]
 pub struct UsageQueue {
     root: PathBuf,
 }

@@ -50,6 +50,11 @@ pub(super) struct BrowserCreateHostState {
     stamp_failed: Option<u64>,
     /// A claim of the agents' requests runs on the coordination worker.
     pub(super) claiming: bool,
+    /// A claim of the agents' recovery requests runs on the coordination worker.
+    pub(super) recovery_claiming: bool,
+    /// The read of the remote panels' manifest owners runs on the coordination
+    /// worker, so one slow read is not queued again on every tick and close.
+    pub(super) scope_reading: bool,
     /// Panels whose visibility request runs on the coordination worker, with
     /// the visibility it sets; until it ends, a stamp keeps their manifest's.
     pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,

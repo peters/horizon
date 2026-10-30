@@ -73,9 +73,12 @@ The coordination files of browser MCP requests are the same type of work. The
 claims, manifest stamps, audits and results take file locks, write manifests
 and call `fsync`.
 [#1469](https://github.com/peters/horizon/pull/1469) moved the claims to one
-ordered worker thread. The open PR
-[#1489](https://github.com/peters/horizon/pull/1489) moves the stamps, audits
-and results to the same worker thread.
+ordered worker thread, and
+[#1489](https://github.com/peters/horizon/pull/1489) moved the stamps, audits
+and results to the same worker thread. This guide also covers the request and
+result half of the same work: the recovery claims and answers, the provider
+usage, catalog and cloud offer results, and the manifest owner read of each
+remote panel.
 
 ## Patterns
 
@@ -141,12 +144,39 @@ start one thread for each write.
   `poll` reads the events.
 - `HostIo` in
   [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)
-  does the work on the browser coordination files. #1489 adds jobs to it.
+  does the work on the browser coordination files. #1489 added its first jobs.
   Its worker thread runs the jobs in the order that the UI sends them, and
   the UI applies the outcomes in the same order. A job that must not
   write for a replaced board, for example a claim, takes a board fence when
   the UI sends it. Before it writes, the job checks the fence. If the board
   was replaced, the job writes nothing.
+
+### One claim at a time, and one answer per request
+
+A job that the UI sends on each tick can queue one job per tick. Do not send
+one while a job of the same kind still runs. Record the start on the app
+state, and clear it when the outcome of the job applies.
+
+- `claim_provider_usage` in
+  [`browser_provider_usage.rs`](../../crates/horizon-ui/src/app/browser_provider_usage.rs)
+  and `claim_recovery_requests` in
+  [`browser_recovery.rs`](../../crates/horizon-ui/src/app/browser_recovery.rs)
+  claim only while their guard is clear. A slow disk cannot queue one claim per
+  tick.
+- `refresh_remote_recovery_scope` reads the manifest owner of each remote panel
+  in one job. `scope_reading` holds while that read runs. A read that fails
+  keeps the scope that the last good read recorded, and a successful read that
+  finds no owner clears the record.
+
+Answer a request on the worker, and only once. A request that was claimed is
+answered from the state in memory. A write that fails does not put the request
+back in the list of pending requests.
+
+- `publish_host_usage_result` writes the answer of a usage, catalog or cloud
+  offer request with one worker write. The write that follows finds no request
+  file and writes nothing.
+- The cloud offer poll answers each request once. Its deadline bounds the wait
+  for the prices. The poll takes no lock of its own.
 
 ### A bounded queue
 
@@ -273,18 +303,19 @@ after the call, so a new test must also start the release thread of step 2.
   [`native_app/transfer.rs`](../../crates/horizon-ui/src/native_app/transfer.rs)
   holds the worker thread on a channel. It also makes sure that the UI drops results
   of an earlier generation.
+- `a_held_recovery_lock_never_stalls_the_frame_that_claims` in
+  [`browser_recovery/tests.rs`](../../crates/horizon-ui/src/app/browser_recovery/tests.rs)
+  holds the file lock of a coordination queue from a helper thread that releases
+  it on a signal, as step 2 requires. It also checks that the claim runs on the
+  worker and that the request is still answered.
 
 ## Known UI-thread work
 
 This work still runs on the UI thread. Do not copy it into new code.
 
-- The manifest stamps after a panel moves
-  (`restamp_browser_manifests_for_placement`, which each frame calls), and
-  the audits, manifest writes and results of creates, visibility changes and
-  closes. #1489 moves them.
-- Browser request file work that #1469 and #1489 do not move: recovery claims,
-  provider usage and catalog results, `poll_cloud_offers` on each frame,
-  remote slot leases, and `manifest::read` calls that retry on Windows.
+- Browser request file work that this guide does not move: the remote
+  provider slot lease that the create path takes, and the `manifest::read`
+  of a browser capture in `capture_panel`.
   [#1470](https://github.com/peters/horizon/issues/1470) tracks them.
 - `capture_panel` in
   [`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)

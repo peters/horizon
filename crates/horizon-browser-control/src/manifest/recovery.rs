@@ -49,6 +49,7 @@ impl RecoveryRequest {
 }
 
 /// A recovery queue bound to one private coordination root.
+#[derive(Clone)]
 pub struct RecoveryQueue {
     root: PathBuf,
 }

@@ -1,4 +1,6 @@
 //! UI and public MCP/CLI discovery share one account-bound cache.
+//! The claim of a request runs on the coordination worker, and so does its
+//! result, so a slow disk never stalls a frame.
 use super::{HorizonApp, browser_requests::actor_panel};
 use horizon_core::browser::{
     manifest::{
@@ -25,11 +27,8 @@ impl HorizonApp {
                 self.browser_create_host.catalog.pending.push(request);
                 continue;
             };
-            if manifest::provider_usage::complete_provider_usage(&result).is_ok() {
-                changed = true;
-            } else {
-                self.browser_create_host.catalog.pending.push(request);
-            }
+            self.publish_host_usage_result(result);
+            changed = true;
         }
         changed
     }

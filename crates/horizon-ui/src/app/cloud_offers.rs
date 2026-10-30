@@ -1,6 +1,8 @@
 //! Host bridge for read-only `cloud_offers` requests from agents. Offers are ranked from
 //! the prices New cloud keeps, fetched when missing or older than 15 minutes. Nothing is
 //! rented, and without current prices a request fails rather than returning old ones.
+//! The frame only decides what the prices allow; the answer is written by the
+//! coordination worker, so this path takes no lock of its own.
 use super::{HorizonApp, browser_requests::actor_panel};
 use horizon_core::browser::manifest::{
     self,
@@ -14,19 +16,14 @@ impl HorizonApp {
         let mut changed = false;
         for request in pending {
             let Some(result) = self.cloud_offers_result(&request, ctx) else {
+                // The prices are still being fetched; the wait costs no file work.
                 self.browser_create_host.cloud_offers.push(request);
                 continue;
             };
-            match manifest::provider_usage::complete_provider_usage(&result) {
-                Ok(()) => changed = true,
-                Err(error) => {
-                    tracing::warn!(kind = ?error.kind(), "could not publish cloud offers");
-                    // Retried on the next poll until the agent stops waiting.
-                    if manifest::now_millis() < request.deadline_at_millis {
-                        self.browser_create_host.cloud_offers.push(request);
-                    }
-                }
-            }
+            // One answer per request: the request file is written once, and a
+            // later answer for it would find no request file and write nothing.
+            self.publish_host_usage_result(result);
+            changed = true;
         }
         changed
     }
