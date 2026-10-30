@@ -385,3 +385,35 @@ Three findings from the run:
    `docker: command not found` on every provider. The container identity, the
    release in `/etc/os-release`, the mount in `findmnt` and the two contract
    files in `/etc/horizon-worker` are the proof that the image ran.
+
+### 9.2 Results of the run on 2026-10-30
+
+Candidate `884e818b4`, frozen debug binary
+`sha256 c0a0f78747dbec0dd4b38d016621d279192469018eb80b78dce8def35bd7f6ab`.
+The run made three clouds in one fixture home, one provider at a time, and
+deleted each cloud before the next provider started. The report is
+[the Azure completion rule report](../reports/2026-10-30-azure-completion-rule.md).
+
+| Provider | Machine | Region | Ready | Delete | Proof of absence |
+|---|---|---|---|---|---|
+| Azure | `Standard_D4s_v3`, group `horizon-ws-5485aecf-eee5-4bdd-8cf9-f9a94bb00de1` | northeurope | 3m 31s | 3m 03s | `az group exists` `false`, empty group list, empty tag sweep, no resource of the run in 389 |
+| RunPod | 4 vCPU · 16 GB, pod `4de78455zae0d3` | any, network volume on AP-JP-1 | 1m 54s | 0m 07s | Pod `404`, no `horizon-cloud-*` pod, no volume of the cloud |
+| Hetzner | cx33, server `173542857` | fsn1 | 1m 53s | 0m 10s | No server, no volume of the run |
+
+Findings 1 and 3 of Section 9.1 held again. One request at 8 shared-core vCPU
+failed in 3.8 s with the same message; it was the misrouted request of finding 4,
+not the Hetzner lane. The Hetzner lane started on `cx33` and passed.
+
+One new finding:
+
+4. **A later profile choice replaces the provider of the heading.** The run
+   selected **RunPod** in the heading and then the `runpod-cpu` profile chip. The
+   placement moved to the cheapest offer across all providers, which was a
+   Hetzner `cx43`, and the card read `Hetzner · runpod-cpu`. The provision
+   request then went to Hetzner and failed there. A person who chooses a provider
+   and then a profile gets a cloud on the other provider.
+   [Issue #1922](https://github.com/peters/horizon/issues/1922) tracks it.
+
+Two conditions of the host, and not defects, are in the report: a `TMPDIR` of
+`/var/tmp` makes the validate step fail with a read-only file system, and the
+fixture needs its own Docker daemon because it has no Docker socket.
