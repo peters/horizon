@@ -27,7 +27,9 @@ It also makes sure that each Azure offer includes the disks and the static addre
   - The creation, stop, resume and delete of an Azure worker.
   - The Azure credential and the ARM client. [The ARM client procedure](azure-arm-client.md) tests the client.
   - The stock of a VM size. The retail price list has no stock data.
-  - Azure in the New cloud dialog. Azure has no cloud settings yet, so the dialog shows no Azure offer.
+  - Azure in the New cloud dialog. [The Azure New cloud procedure](azure-new-cloud.md) tests the dialog.
+    The machine's `azure` section decides the VM size and the region, so each Azure row is
+    informational (`rentable: false`). The provider is creatable (`AZURE_DEPLOYABLE` is `true`).
   - Azure offers on a cloud worker. A cloud worker lists no Azure offers yet.
 
 ## 3. Safety

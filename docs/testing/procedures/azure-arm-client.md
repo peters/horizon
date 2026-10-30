@@ -17,21 +17,24 @@ It also makes sure that the client classifies each ARM answer correctly and that
 
 ## 2. Applicability
 
-- Candidate: a pull request of #1774 that adds to the module `horizon_cloud::azure`.
-  The first of these pull requests adds the ARM transport, its error classification and the resource group read.
-  The second adds the VM read and the reconcile by name (ARM-04 to ARM-06).
-  The third adds the deployment and the operation poll (ARM-07).
+- Candidate: a pull request of #1774 that changes the module `horizon_cloud::azure`.
+  The module has the ARM transport, its error classification and the resource group read (ARM-01 to ARM-03).
+  It also has the VM read and the reconcile by name (ARM-04 to ARM-06), the deployment and the operation poll (ARM-07).
 - Platform: Linux with the repository Rust toolchain.
 - The tests use a scripted agent and synthetic data only.
   They need no network, no socket, no Azure account and no Azure credential.
 - No task makes, changes or deletes an Azure resource.
 - The tests record each wait of the operation poll. No test sleeps.
 - The trust boundary of the client is in [the ARM client architecture](../../architecture/azure-arm-client.md).
-- This procedure does not test these items. Later pull requests of #1774 add them:
-  - The provisioning, stop, resume and delete of an Azure worker.
-  - The Azure credential source and its token refresh.
-  - The deployment template, the VM size catalog and Azure prices.
-  - Azure in the UI, the CLI and the MCP tools.
+- This procedure does not test these items:
+  - The provisioning, stop, resume and delete of an Azure worker. [The Azure provisioning procedure](azure-provisioning.md) tests them.
+  - The Azure credential source. Horizon reads the token file for each deployment and has no token refresh.
+    [The Azure provisioning procedure](azure-provisioning.md) tests the checks of that file.
+  - The deployment template and the VM size catalog. [The Azure provisioning procedure](azure-provisioning.md)
+    and [the Azure price catalog procedure](azure-price-catalog.md) test them.
+  - Azure in **New cloud**, the CLI plan runner and the `cloud_offers` answer of an agent.
+    The [Azure New cloud](azure-new-cloud.md), [Azure provisioning](azure-provisioning.md) and
+    [Azure price catalog](azure-price-catalog.md) procedures test them.
 - This procedure does not examine a live ARM endpoint.
 
 ## 3. Safety

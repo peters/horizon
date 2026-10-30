@@ -21,8 +21,9 @@ person chooses.
 
 ## 2. Applicability
 
-- Candidate: a build that includes the chosen Azure placement and Azure in New
-  cloud (PR 6 of [epic #1774](https://github.com/peters/horizon/issues/1774)).
+- Candidate: a build that has the Azure provider. The machine's `azure` section
+  decides the VM size and the region, and **New cloud** lists the Azure rows of
+  that section.
 - Platforms: Linux with Xvfb. Provider: Azure, beside RunPod.
 - This procedure does not test:
   - A form for the `azure` section in **Cloud settings**. There is no such
@@ -105,7 +106,7 @@ In this procedure, `$CLOUD` is the cloud settings folder of the fixture:
 
    Result: `$CLOUD/settings.json` exists. It has no `azure` section.
 
-   A test key is sufficient for this procedure. The RunPod check then says
+   A test key is enough for this procedure. The RunPod check then says
    "Provider authentication failed". That line belongs to the test key. It is
    not an Azure finding.
 
