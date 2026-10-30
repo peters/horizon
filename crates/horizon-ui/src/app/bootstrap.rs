@@ -207,6 +207,7 @@ impl HorizonApp {
             shutdown_progress: None,
             pending_session_switch: None, exit_cleanup_complete: false,
             exit_save_deadline: None,
+            transcript_deletes: super::transcript_deletes::PendingTranscriptDeletes::default(),
         }
     }
 }

@@ -340,6 +340,15 @@ impl HorizonApp {
             }
         }
 
+        // The board this switch restores carries its panels again: mark them
+        // before the wait below runs the deletes that are still queued for it.
+        if let Some(target) = self
+            .pending_session_switch
+            .as_ref()
+            .and_then(|pending| pending.target.as_ref())
+        {
+            self.keep_transcripts_of_saved_board(&target.runtime_state);
+        }
         self.finish_browser_host_io_before_replacement();
         let Some(pending) = self.pending_session_switch.take() else {
             return false;

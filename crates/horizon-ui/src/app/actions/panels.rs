@@ -145,19 +145,17 @@ impl HorizonApp {
             return None;
         }
         self.refresh_remote_recovery_scope();
-        let transcript = self
-            .board
-            .panel(panel_id)
-            .and_then(|panel| PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id));
+        let transcript = self.board.panel(panel_id).and_then(|panel| {
+            let transcript = PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id)?;
+            Some((panel.local_id.clone(), transcript))
+        });
         let teardown = self.board.close_panel_returning_teardown(panel_id);
         self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
         self.panel_render_caches.editor_preview_cache.remove(&panel_id);
         self.panel_render_caches.browser_ui_state.remove(&panel_id);
         self.panel_render_caches.device_ui_state.remove(&panel_id);
-        if let Some(transcript) = transcript
-            && let Err(error) = transcript.delete_all()
-        {
-            tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
+        if let Some((local_id, transcript)) = transcript {
+            self.delete_closed_transcript(&local_id, transcript);
         }
         teardown
     }
@@ -194,7 +192,7 @@ impl HorizonApp {
                     .filter_map(|panel_id| {
                         self.board.panel(*panel_id).map(|panel| {
                             (
-                                *panel_id,
+                                panel.local_id.clone(),
                                 PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id),
                             )
                         })
@@ -225,11 +223,9 @@ impl HorizonApp {
             self.clear_panel_rename();
         }
 
-        for (panel_id, transcript) in panels_to_close {
-            if let Some(transcript) = transcript
-                && let Err(error) = transcript.delete_all()
-            {
-                tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
+        for (local_id, transcript) in panels_to_close {
+            if let Some(transcript) = transcript {
+                self.delete_closed_transcript(&local_id, transcript);
             }
         }
     }
