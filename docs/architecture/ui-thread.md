@@ -334,13 +334,12 @@ after the call, so a new test must also start the release thread of step 2.
 This work still runs on the UI thread. Do not copy it into new code.
 
 - Browser request file work that this guide does not move: the remote
-  provider slot lease that the create path takes, and the `manifest::read`
-  of a browser capture in `capture_panel`.
-  [#1470](https://github.com/peters/horizon/issues/1470) tracks them.
-- `capture_panel` in
-  [`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)
-  calls `manifest::read` for the capture of a browser panel. The read can retry
-  for up to 2 s. #1470 does not list this call.
+  provider slot lease that the create path takes
+  ([#1470](https://github.com/peters/horizon/issues/1470)), and the
+  `manifest::read` of a browser capture in `capture_panel`
+  ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)).
+  [#1917](https://github.com/peters/horizon/issues/1917) tracks the capture
+  read and the Device request claim.
 - `plan_remote_create` in
   [`browser_remote_create.rs`](../../crates/horizon-ui/src/app/browser_remote_create.rs)
   locks the keychain store mutex, which the credential worker thread can hold, and
