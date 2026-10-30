@@ -186,7 +186,7 @@ impl HorizonApp {
     /// Root of the Horizon home whose manifests this host stamps. Production
     /// constructs the session store from `HorizonHome::resolve()`, the same
     /// root the drivers and the MCP server use for their default paths.
-    fn host_manifest_root(&self) -> &Path {
+    pub(super) fn host_manifest_root(&self) -> &Path {
         self.session_store.home().root()
     }
 
