@@ -400,8 +400,9 @@ deleted each cloud before the next provider started. The report is
 | RunPod | 4 vCPU · 16 GB, pod `4de78455zae0d3` | any, network volume on AP-JP-1 | 1m 54s | 0m 07s | Pod `404`, no `horizon-cloud-*` pod, no volume of the cloud |
 | Hetzner | cx33, server `173542857` | fsn1 | 1m 53s | 0m 10s | No server, no volume of the run |
 
-Findings 1 and 3 of Section 9.1 held again. The Hetzner attempt at 8 shared-core
-vCPU failed in 3.8 s with the same message, and the run then used `cx33`.
+Findings 1 and 3 of Section 9.1 held again. One request at 8 shared-core vCPU
+failed in 3.8 s with the same message; it was the misrouted request of finding 4,
+not the Hetzner lane. The Hetzner lane started on `cx33` and passed.
 
 One new finding:
 
@@ -409,8 +410,9 @@ One new finding:
    selected **RunPod** in the heading and then the `runpod-cpu` profile chip. The
    placement moved to the cheapest offer across all providers, which was a
    Hetzner `cx43`, and the card read `Hetzner · runpod-cpu`. The provision
-   request then went to Hetzner. A person who chooses a provider and then a
-   profile gets a cloud on the other provider.
+   request then went to Hetzner and failed there. A person who chooses a provider
+   and then a profile gets a cloud on the other provider.
+   [Issue #1922](https://github.com/peters/horizon/issues/1922) tracks it.
 
 Two conditions of the host, and not defects, are in the report: a `TMPDIR` of
 `/var/tmp` makes the validate step fail with a read-only file system, and the

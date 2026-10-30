@@ -50,8 +50,9 @@ and a loopback VNC server. The person watched the run in a native Device panel.
   **RunPod** in the heading, then selected the `runpod-cpu` profile chip. The
   placement changed to the cheapest offer across all providers, which was a
   Hetzner `cx43`, and the card then read `Hetzner · runpod-cpu`. The provision
-  request went to Hetzner. This is the reason the Hetzner attempt in Section 4
-  happened before the RunPod pass.
+  request went to Hetzner, and Hetzner refused it after 3.8 s. This is the only
+  Hetzner request of the run that failed. [Issue #1922](https://github.com/peters/horizon/issues/1922)
+  tracks the cause.
 - The account limit of the Hetzner project is unchanged. A request for 8
   shared-core vCPU failed in 3.8 s with `Provider rejected the request or
   capacity is unavailable`. The 4 vCPU shape `cx33` succeeded. The
@@ -72,10 +73,13 @@ and a loopback VNC server. The person watched the run in a native Device panel.
 - The run used one fixture home for the three lanes. The procedure asks for one
   private home for each provider. The run deleted each cloud and proved its
   absence before the next lane, so no lane changed the settings of another.
-- The first Hetzner attempt used the `azure-build` profile at 4 vCPU. That
-  profile requires 4 vCPU and 16 GB, and Hetzner offered `cx43` for it, which the
-  account refused. The run then set the 2 vCPU profile `hetzner-cpu` as the
-  default profile of the test repository. The dialog then placed `cx33`.
+- The deliberate Hetzner lane did not start at the profile that the dialog
+  first showed. The default profile of the test repository was `azure-build` at
+  4 vCPU, so the dialog placed the Hetzner shape `cx43` and marked it
+  `Unlisted · advisory`. The run did not send that request. It set the 2 vCPU
+  profile `hetzner-cpu` as the default profile of the test repository, and the
+  dialog then placed `cx33`, which reached ready. The account refusal in
+  Section 3 belongs to the misrouted attempt, not to this lane.
 - The recording of the Azure lane has a gap of about 3.5 minutes between the two
   segments, across the ready state. The report GIF holds the recorded flow and
   puts the ready state and the deleted state in it as still frames.
