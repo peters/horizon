@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 
 use super::super::claim::ClaimedRequest;
 use super::*;
+use horizon_core::{
+    Panel, PanelContent,
+    browser::{BrowserPanelState, BrowserStatus},
+};
 
 /// Queues one request for the first agent panel of the fixture board.
 fn enqueue(root: &Path, app: &HorizonApp, operation: Operation, timeout: Duration) -> Request {
@@ -171,6 +175,7 @@ fn two_claimed_requests_apply_in_claim_order() {
             .map(|request| ClaimedRequest {
                 root: Some(root.path().to_path_buf()),
                 request: request.clone(),
+                browser_manifest: None,
             })
             .collect();
 
@@ -327,4 +332,82 @@ fn the_pump_wake_flag_is_set_while_a_claim_is_outstanding_and_cleared_after() {
         std::thread::sleep(Duration::from_millis(5));
         bridge.poll_on_ui_thread();
     }
+}
+
+/// A ready browser panel of the first agent's workspace, as a capture needs.
+fn browser_panel(app: &mut HorizonApp) -> String {
+    let mut browser = BrowserPanelState::inert();
+    browser.status = BrowserStatus::Ready;
+    let mut panel = Panel::from_content(
+        PanelId(999),
+        app.board.panels[0].workspace_id,
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(browser)),
+    );
+    panel.visible = false;
+    let local = panel.local_id.clone();
+    app.board.panels.push(panel);
+    local
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_backed_manifest_read_does_not_stall_the_frame_that_claims() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (_temp, ctx, mut app) = app();
+    let local = browser_panel(&mut app);
+    let manifest_path = manifest::manifest_path_for_root(root.path(), &local);
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest directory")).expect("manifest directory");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&manifest_path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success());
+    let queued = enqueue(
+        root.path(),
+        &app,
+        Operation::BrowserScreenshot {
+            input: device::ScreenshotInput {
+                panel_id: local,
+                copy_to_clipboard: false,
+            },
+        },
+        Duration::from_secs(5),
+    );
+    // The read waits until the test releases it, so a frame that reads the
+    // manifest itself waits for the release and fails the bound below.
+    let (release, released) = mpsc::channel::<()>();
+    let writer = std::thread::spawn(move || {
+        let _ = released.recv_timeout(Duration::from_secs(10));
+        std::fs::write(manifest_path, b"{}").expect("the read waits");
+    });
+
+    let started = Instant::now();
+    app.claim_device_requests(Some(root.path()));
+    // The frame that follows applies nothing: the claim job still reads the
+    // manifest, and the frame does not wait for that read.
+    assert!(
+        !app.drain_claimed_device_requests(&ctx),
+        "the capture waits for its claim"
+    );
+    let elapsed = started.elapsed();
+    // A job that the claim job holds back proves which thread reads the file.
+    let (finished, ran) = mpsc::channel::<()>();
+    app.browser_create_host.io.write(move || {
+        let _ = finished.send(());
+    });
+    let held = ran.recv_timeout(Duration::from_millis(300)).is_err();
+    release.send(()).expect("the writer waits");
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "the frame waited for the manifest read: {elapsed:?}"
+    );
+    assert!(held, "the claim job reads the manifest on the coordination worker");
+
+    let outcome = answer(root.path(), &queued, || settle(&mut app, &ctx));
+    writer.join().expect("the writer ends");
+    assert!(
+        matches!(&outcome, Outcome::Failed { code, .. } if code == "browser_unavailable"),
+        "a claim job that reads no manifest still refuses the capture: {outcome:?}"
+    );
 }
