@@ -53,10 +53,11 @@ and a loopback VNC server. The person watched the run in a native Device panel.
   request went to Hetzner, and Hetzner refused it after 3.8 s. This is the only
   Hetzner request of the run that failed. [Issue #1922](https://github.com/peters/horizon/issues/1922)
   tracks the cause.
-- The account limit of the Hetzner project is unchanged. A request for 8
-  shared-core vCPU failed in 3.8 s with `Provider rejected the request or
-  capacity is unavailable`. The 4 vCPU shape `cx33` succeeded. The
-  2026-10-25 finding 1 stays open as an account condition, not a defect.
+- The account limit of the Hetzner project is unchanged. The shape `cx33` at
+  4 vCPU succeeded. The shape `cx43` at 8 shared-core vCPU is refused with
+  `Provider rejected the request or capacity is unavailable`, and that refusal
+  is the one above. The 2026-10-25 finding 1 therefore stays open as an account
+  condition, not a defect.
 
 ## 4. Deviations from the procedure
 
