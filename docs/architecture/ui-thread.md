@@ -181,7 +181,8 @@ state, and clear it when the outcome of the job applies.
   before an exit or a session switch flushes the worker, or with
   `request_expired` when its deadline passed. The watcher of an unpresented
   host wakes while a claim, a request it took or an answer is outstanding, so
-  all three settle with no frame.
+  all three settle with no frame. The claim job also reads the manifest that a
+  browser capture judges, so the frame that takes the capture reads no file.
 - `refresh_remote_recovery_scope` reads the manifest owner of each remote panel
   in one job. `scope_reading` holds while that read runs. A read that fails
   keeps the scope that the last good read recorded, and a successful read that
@@ -370,9 +371,6 @@ after the call, so a new test must also start the release thread of step 2.
 
 This work still runs on the UI thread. Do not copy it into new code.
 
-- The `manifest::read` of a browser capture in `capture_panel`
-  ([`device_requests.rs`](../../crates/horizon-ui/src/app/device_requests.rs)).
-  [#1917](https://github.com/peters/horizon/issues/1917) tracks them.
 - The read of the content of an editor panel when the panel opens: `spawn_editor`
   ([`panel/spawn.rs`](../../crates/horizon-core/src/panel/spawn.rs)) calls
   `MarkdownEditor::open`, which reads the file. A dropped file is sized on the

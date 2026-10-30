@@ -77,7 +77,7 @@ impl HorizonApp {
         let changed = !claimed.is_empty();
         for request in claimed {
             let root = request.root.as_deref();
-            let outcome = self.apply_device_request_at(&request.request, ctx, root);
+            let outcome = self.apply_device_request_at(&request.request, ctx, request.browser_manifest.as_ref());
             // A reveal waits for the pass that draws the viewer, and the
             // request pump answers it, also when the host runs no frame.
             let Some(outcome) = self.defer_device_reveal(&request.request, outcome, root) else {
@@ -95,7 +95,14 @@ impl HorizonApp {
         self.apply_device_request_at(request, ctx, None)
     }
 
-    fn apply_device_request_at(&mut self, request: &Request, ctx: &Context, root: Option<&Path>) -> Outcome {
+    /// Applies one request. A browser capture judges the manifest that the
+    /// claim read on the coordination worker.
+    fn apply_device_request_at(
+        &mut self,
+        request: &Request,
+        ctx: &Context,
+        browser_manifest: Option<&manifest::BrowserManifest>,
+    ) -> Outcome {
         if request.host_instance != manifest::host_instance() {
             return Outcome::failed("wrong_host", "Request belongs to another Horizon host");
         }
@@ -129,8 +136,10 @@ impl HorizonApp {
                         .collect(),
                 }
             }
-            Operation::Screenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, false, root),
-            Operation::BrowserScreenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, true, root),
+            Operation::Screenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, false, None),
+            Operation::BrowserScreenshot { input } => {
+                self.capture_panel(input, actor, &request.actor, ctx, true, browser_manifest)
+            }
             operation => self.change_device_viewer(operation, actor, &request.actor, ctx),
         }
     }
@@ -142,7 +151,7 @@ impl HorizonApp {
         owner: &str,
         ctx: &Context,
         browser: bool,
-        root: Option<&Path>,
+        live: Option<&manifest::BrowserManifest>,
     ) -> Outcome {
         let Some(panel) = self
             .board
@@ -157,10 +166,6 @@ impl HorizonApp {
             let Some(browser) = panel.browser() else {
                 return Outcome::failed("not_browser_panel", "Target is not a browser panel");
             };
-            let live = root.map_or_else(
-                || manifest::read(&input.panel_id),
-                |root| manifest::read_at(&manifest::manifest_path_for_root(root, &input.panel_id)),
-            );
             let Some(live) = live else {
                 return Outcome::failed("browser_unavailable", "Browser manifest is unavailable");
             };
@@ -522,7 +527,7 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
-    mod claim;
+    mod claimed_requests;
     mod reveal;
     mod reveal_wait;
 
@@ -662,7 +667,12 @@ mod tests {
         let mut outcome = None;
         let output = ctx
             .run_ui(egui::RawInput::default(), |ui| {
-                outcome = Some(app.apply_device_request_at(&capture_request, ui.ctx(), Some(temp.path())));
+                outcome = Some(capture_after_claim_read(
+                    &mut app,
+                    ui.ctx(),
+                    temp.path(),
+                    &capture_request,
+                ));
             })
             .discard_textures();
         let Outcome::Screenshot { capture } = outcome.unwrap() else {
@@ -691,7 +701,7 @@ mod tests {
         let mut foreign = capture_request.clone();
         foreign.actor = format!("horizon:{}", app.board.panels[1].local_id);
         assert!(
-            matches!(app.apply_device_request_at(&foreign, ctx, Some(root)), Outcome::Failed { code, .. } if code == "panel_unavailable")
+            matches!(capture_after_claim_read(app, ctx, root, &foreign), Outcome::Failed { code, .. } if code == "panel_unavailable")
         );
         live.owner = Some(manifest::ManifestOwner {
             name: "another-agent".into(),
@@ -700,14 +710,14 @@ mod tests {
         });
         manifest::write_at(path, &live).unwrap();
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "not_owner")
         );
         live.owner.as_mut().unwrap().name.clone_from(&capture_request.actor);
         assert_browser_manifest_authorization(app, ctx, root, capture_request, path, &live);
         live.owner = None;
         manifest::write_at(path, &live).unwrap();
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "not_owner")
         );
         live.owner = Some(manifest::ManifestOwner {
             name: capture_request.actor.clone(),
@@ -716,19 +726,19 @@ mod tests {
         });
         manifest::write_at(path, &live).unwrap();
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "not_owner")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "not_owner")
         );
         live.owner.as_mut().unwrap().updated_at = manifest::now_millis();
         live.user_active = true;
         live.user_active_at = manifest::now_millis();
         manifest::write_at(path, &live).unwrap();
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "handoff_pending")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "handoff_pending")
         );
         live.user_active_at = manifest::now_millis() - 6_000;
         manifest::write_at(path, &live).unwrap();
         assert!(matches!(
-            app.apply_device_request_at(capture_request, ctx, Some(root)),
+            capture_after_claim_read(app, ctx, root, capture_request),
             Outcome::Screenshot { .. }
         ));
         live.user_active = false;
@@ -740,13 +750,13 @@ mod tests {
         });
         manifest::write_at(path, &live).unwrap();
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "handoff_pending")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "handoff_pending")
         );
         live.handoff = None;
         manifest::write_at(path, &live).unwrap();
         app.board.panel_mut(id).unwrap().browser_mut().unwrap().handoff_reason = Some("local handoff".into());
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "handoff_pending")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "handoff_pending")
         );
         app.board.panel_mut(id).unwrap().browser_mut().unwrap().handoff_reason = None;
         app.board
@@ -757,7 +767,7 @@ mod tests {
             .frame_slot
             .clear();
         assert!(
-            matches!(app.apply_device_request_at(capture_request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "screenshot_unavailable")
+            matches!(capture_after_claim_read(app, ctx, root, capture_request), Outcome::Failed { code, .. } if code == "screenshot_unavailable")
         );
     }
 
@@ -782,7 +792,7 @@ mod tests {
             }
             manifest::write_at(path, &live).unwrap();
             assert!(
-                matches!(app.apply_device_request_at(request, ctx, Some(root)), Outcome::Failed { code, .. } if code == "panel_unavailable"),
+                matches!(capture_after_claim_read(app, ctx, root, request), Outcome::Failed { code, .. } if code == "panel_unavailable"),
                 "{variant}",
             );
         }
@@ -870,6 +880,13 @@ mod tests {
             assert!(Instant::now() < deadline, "the pump never answered the request");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Applies a browser capture as a frame does after its claim: the claim job
+    /// read the manifest on the coordination worker.
+    fn capture_after_claim_read(app: &mut HorizonApp, ctx: &Context, root: &Path, request: &Request) -> Outcome {
+        let live = claim::claimed_browser_manifest(Some(root), request);
+        app.apply_device_request_at(request, ctx, live.as_ref())
     }
 
     fn one(outcome: Outcome) -> PanelState {

@@ -28,6 +28,9 @@ pub(in crate::app) struct ClaimedRequest {
     /// The queue the request came from; its answer is published there.
     pub(in crate::app) root: Option<PathBuf>,
     pub(in crate::app) request: Request,
+    /// The manifest a browser capture judges, read by the claim job so no frame
+    /// reads it. A request that captures no browser panel carries none.
+    pub(in crate::app) browser_manifest: Option<manifest::BrowserManifest>,
 }
 
 /// One answer to a claimed request, and the queue it goes to.
@@ -194,15 +197,36 @@ fn claim_requests(root: Option<&Path>) -> Vec<ClaimedRequest> {
     match claimed {
         Ok(requests) => requests
             .into_iter()
-            .map(|request| ClaimedRequest {
-                root: root.map(Path::to_path_buf),
-                request,
+            .map(|request| {
+                let browser_manifest = claimed_browser_manifest(root, &request);
+                ClaimedRequest {
+                    root: root.map(Path::to_path_buf),
+                    request,
+                    browser_manifest,
+                }
             })
             .collect(),
         Err(error) => {
             tracing::warn!(%error, "could not poll Device panel requests");
             Vec::new()
         }
+    }
+}
+
+/// The manifest that judges a browser capture, read in the claim job so no
+/// frame reads it. A read that fails is no manifest, which the apply refuses as
+/// `browser_unavailable`; a manifest of another panel is refused as
+/// `panel_unavailable`.
+pub(in crate::app) fn claimed_browser_manifest(
+    root: Option<&Path>,
+    request: &Request,
+) -> Option<manifest::BrowserManifest> {
+    let device::Operation::BrowserScreenshot { input } = &request.operation else {
+        return None;
+    };
+    match root {
+        Some(root) => manifest::read_at(&manifest::manifest_path_for_root(root, &input.panel_id)),
+        None => manifest::read(&input.panel_id),
     }
 }
 
