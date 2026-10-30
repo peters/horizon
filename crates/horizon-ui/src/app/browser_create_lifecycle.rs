@@ -26,10 +26,10 @@ const STARTUP_NAVIGATION_BUDGET: Duration = Duration::from_secs(10);
 const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 
 /// How old the manifest snapshot of a starting create may be before the host
-/// asks the coordination worker for a fresh one. The read retries for up to
-/// two seconds on Windows, so no frame reads it; the snapshot lags by at most
-/// this interval, and the startup budget above and the deadline headroom leave
-/// room for that lag before the create deadline.
+/// asks the coordination worker for a fresh one. No frame reads the manifest
+/// itself; the snapshot lags by at most this interval, and the startup budget
+/// above and the deadline headroom leave room for that lag before the create
+/// deadline.
 const CREATE_MANIFEST_REFRESH: Duration = Duration::from_millis(250);
 
 pub(super) struct PendingBrowserCreate {
@@ -45,6 +45,10 @@ pub(super) struct PendingBrowserCreate {
     /// The OS-store credential values a remote create still waits for; `None`
     /// once they are at hand, and for a create that reads none.
     pub(super) remote_credentials: Option<super::browser_remote_credentials::RemoteCredentialRead>,
+    /// The provider whose slot a remote create waits for while its lease runs.
+    /// It counts against that provider's limit from the moment the lease is
+    /// queued, because no allocation is recorded before the lease applies.
+    pub(super) leasing_provider: Option<String>,
 }
 
 /// The panel a create opened, and what the host judges it by.
@@ -81,6 +85,7 @@ impl PendingBrowserCreate {
             board,
             panel: None,
             remote_credentials: None,
+            leasing_provider: None,
         }
     }
 }
@@ -554,6 +559,7 @@ mod tests {
                     manifest_reading: false,
                 }),
                 remote_credentials: None,
+                leasing_provider: None,
             });
         }
     }
