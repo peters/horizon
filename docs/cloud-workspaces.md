@@ -1158,11 +1158,79 @@ Quick start has these limits:
 
 To go back to the settings of the repository, click **Use .horizon/cloud.yml**
 below the quick start note. A different repository also ends quick start. The
-`cloud_deploy` harness has the same choice, `--quick-start`. Cloud creation has no
-MCP operation, thus quick start has no MCP operation either.
+`cloud_deploy` harness has the same choice, `--quick-start`. An agent starts a
+quick start cloud with the `cloud_create` MCP tool. See
+[An agent rents a quick-start cloud](#an-agent-rents-a-quick-start-cloud).
 
 For the default launch path, commit `.horizon/cloud.yml` using the
 [example](../crates/horizon-cloud/examples/cloud.yml).
+
+#### An agent rents a quick-start cloud
+
+An agent panel can rent, use and delete a quick start cloud without a person.
+It uses the `cloud_create`, `cloud_exec` and `cloud_delete` MCP tools. Each tool
+uses the provider credentials of this computer.
+
+The machine owner sets the agent lifecycle policy in the `agent_lifecycle`
+section of `~/.horizon/cloud/settings.json`. A machine without this section
+refuses each cloud that an agent asks for. The section has these fields:
+
+| Field | Value |
+|---|---|
+| `providers` | The provider IDs that an agent can rent on, for example `runpod`. Write each ID one time. |
+| `max_hourly` | The highest hourly rate of a cloud, in the provider's own currency. Storage charges are not part of the rate. |
+| `repositories` | The repository directories that an agent can deploy. Each is an absolute machine-local path. |
+| `allow_github_sign_in_skip` | If `true`, the cloud continues without GitHub access when the GitHub sign-in needs a person. The default is `false`. |
+
+```json
+"agent_lifecycle": {
+  "providers": ["runpod"],
+  "max_hourly": 0.5,
+  "repositories": ["/home/person/repositories/shop"],
+  "allow_github_sign_in_skip": false
+}
+```
+
+Horizon refuses a repository or a provider that is not in the list. It also
+refuses a rate above `max_hourly`, and a rate that this computer cannot quote.
+
+`cloud_create` starts a quick start cloud:
+
+1. Send `operation submit` with an `operation_id`, `repository` and
+   `quick_start true`. `repository` is a directory on this computer.
+2. Send `operation status` with the same `operation_id` until `done` is `true`.
+   The card of the cloud in your workspace shows the same progress.
+
+If the commit has its own `.horizon/cloud.yml`, quick start does not apply.
+Horizon then refuses the operation with `cloud_create_needs_profile`. A cloud
+belongs to a saved session. If Horizon cannot save the workspace, it refuses the
+operation with `cloud_create_needs_persistent_session`.
+
+`cloud_exec` runs one command in the worker of a ready cloud:
+
+- The command is one text of at most 8192 bytes. The worker runs it with
+  `/bin/sh -c` in `/workspace`.
+- The command runs as the agent user of the worker, uid 10001, with
+  `HOME=/workspace/home`. You cannot set a different user or environment.
+- `timeout_millis` is from 1000 to 120000 ms. The default is 30000 ms.
+- The answer has at most 256 KiB for each stream. A command that writes more
+  fails.
+- Horizon refuses a command that switches user, for example with `sudo` or `su`.
+
+A non-zero exit status is a result, not a tool error. Do not put a secret in the
+command.
+
+`cloud_delete` deletes the provider resources of one cloud permanently. Horizon
+deletes only a cloud that an agent created for the same agent actor. For a cloud
+of a person or of a different agent, and for a cloud that never requested a
+worker, Horizon answers `cloud_delete_refused`. A person then deletes the cloud
+or removes its card. `cloud_delete` removes no card.
+
+The GitHub chain of the worker is the GitHub sign-in of this computer. The worker
+renews the chain itself, so the cloud keeps its GitHub access while this
+computer is off. Thus the commits and pull requests of the worker are the
+person's. To get one more repository, the agent calls `github_access` in the
+worker. The person decides in Horizon.
 
 ### Settings from the working copy
 
