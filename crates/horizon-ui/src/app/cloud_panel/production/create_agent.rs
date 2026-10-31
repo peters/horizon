@@ -443,16 +443,23 @@ impl HorizonApp {
         }
     }
 
-    /// Whether the cloud's deployment has requested no provider resource, so a failure left
-    /// nothing at a provider that a card must keep reachable.
+    /// Whether the cloud's own record proves that no provider resource was requested, so a
+    /// failure left nothing a card must keep reachable. Only a saved record can prove it: a
+    /// cloud whose record names a worker, a publication, an exposure or a service admission
+    /// keeps its card, because one of those may hold a provider journal that only the card's
+    /// own deletion settles. A failure that wrote no record keeps its card too.
     fn card_requested_no_worker(&self, card: u32) -> bool {
         let Some(runtime) = self.cloud_prototype.production.runtimes.get(&card) else {
             return false;
         };
-        runtime.state.as_ref().map_or_else(
-            || matches!(runtime.stage, None | Some(Stage::Validate | Stage::Build)),
-            |state| state.spec.is_none(),
-        )
+        runtime.state.as_ref().is_some_and(|state| {
+            state.spec.is_none()
+                && state.worker.is_none()
+                && state.publication.is_none()
+                && state.exposure.is_none()
+                && state.service_admission.is_none()
+                && state.image_replacement.is_none()
+        })
     }
 
     /// Registers the cloud on the card a person's deployment shows on, in the caller's

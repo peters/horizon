@@ -106,6 +106,8 @@ impl Phase {
 enum Message {
     /// The record admits this caller and a worker was requested, so the provider steps run.
     Started { operation: String },
+    /// Nothing of the cloud remains at a provider, so its card goes and no provider step runs.
+    Removed { operation: String },
     /// The deletion moved to another step.
     Stage { operation: String, stage: Stage },
     /// The deletion ended. `state` is the record it left and `absent` what the provider
@@ -122,7 +124,10 @@ impl Message {
     /// The operation this message belongs to.
     fn operation(&self) -> &str {
         match self {
-            Self::Started { operation } | Self::Stage { operation, .. } | Self::Finished { operation, .. } => operation,
+            Self::Started { operation }
+            | Self::Removed { operation }
+            | Self::Stage { operation, .. }
+            | Self::Finished { operation, .. } => operation,
         }
     }
 }
@@ -336,6 +341,15 @@ impl HorizonApp {
                 }
                 None
             }
+            Message::Removed { .. } => {
+                running.finished = true;
+                running.absent = Some(Absence::Proven);
+                if !ended {
+                    running.phase = Phase::Done;
+                    running.error = None;
+                }
+                Some((running.card, None, None, true))
+            }
             Message::Finished {
                 state, absent, error, ..
             } => {
@@ -361,6 +375,18 @@ impl HorizonApp {
         let Some((card, state, error, no_worker)) = finished else {
             return;
         };
+        self.apply_finished_delete(card, state, error, no_worker);
+    }
+
+    /// Takes one finished deletion into the cloud's card, and removes the card of a cloud
+    /// that never requested a worker.
+    fn apply_finished_delete(
+        &mut self,
+        card: u32,
+        state: Option<Box<Deployment>>,
+        error: Option<String>,
+        no_worker: bool,
+    ) {
         // A card that another operation holds keeps its own view until that operation ends.
         let busy = self
             .cloud_prototype
@@ -551,6 +577,34 @@ fn refusal(cloud: &Deployment, actor: &str) -> Option<String> {
 /// Deletes one cloud for its agent and reports every step. The cloud's record is read
 /// under its own lock, which is dropped before the deletion takes that lock again as the
 /// card's own delete does.
+/// The cloud's record, once it admits this caller; `None` when the directory holds no
+/// record and every provider journal agrees that nothing remains.
+///
+/// # Errors
+/// The refusal this caller gets, in the vocabulary of this tool.
+fn admitted_record(state_root: &Path, actor: &str) -> Result<Option<Deployment>, String> {
+    match Store::lock_existing(state_root) {
+        Ok(store) => match store.load() {
+            Ok(Some(state)) => match refusal(&state, actor) {
+                None => Ok(Some(state)),
+                Some(reason) => Err(reason),
+            },
+            Ok(None) => Err(NO_RECORD.to_owned()),
+            Err(error) => Err(failed(error)),
+        },
+        // A cloud whose directory holds no record has no provider resource to delete, unless a
+        // provider journal written without a record still names one.
+        Err(cloud_runtime::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            let store = Store::lock(state_root).ok();
+            match store.map(|store| cloud_runtime::lifecycle::can_remove_without_deployment(&store)) {
+                Some(Ok(true)) => Ok(None),
+                _ => Err(NO_RECORD.to_owned()),
+            }
+        }
+        Err(error) => Err(failed(error)),
+    }
+}
+
 fn delete_cloud(
     root: &Path,
     (cloud, actor): (&str, &str),
@@ -573,23 +627,14 @@ fn delete_cloud(
             return;
         }
     };
-    let recorded = match Store::lock_existing(&state_root) {
-        Ok(store) => match store.load() {
-            Ok(Some(state)) => match refusal(&state, actor) {
-                None => Ok(state),
-                Some(reason) => Err(reason),
-            },
-            Ok(None) => Err(NO_RECORD.to_owned()),
-            Err(error) => Err(failed(error)),
-        },
-        // A cloud whose directory holds no record has no provider resource to delete.
-        Err(cloud_runtime::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(NO_RECORD.to_owned())
+    let recorded = match admitted_record(&state_root, actor) {
+        Ok(Some(recorded)) => recorded,
+        Ok(None) => {
+            send(Message::Removed {
+                operation: operation.to_owned(),
+            });
+            return;
         }
-        Err(error) => Err(failed(error)),
-    };
-    let recorded = match recorded {
-        Ok(state) => state,
         Err(error) => {
             send(Message::Finished {
                 operation: operation.to_owned(),
@@ -600,9 +645,10 @@ fn delete_cloud(
             return;
         }
     };
-    // Nothing was ever requested at a provider, so the record is all that remains: the card
-    // goes, and no provider call is made.
-    if recorded.spec.is_none() {
+    // A cloud whose record names no worker still holds nothing only when its provider
+    // journals agree: a volume or a tailnet enrollment written before the spec keeps the
+    // card, and the ordinary deletion below settles it.
+    if recorded.spec.is_none() && absence(&state_root).is_some_and(|absence| absence == Absence::Proven) {
         send(Message::Started {
             operation: operation.to_owned(),
         });

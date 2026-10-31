@@ -317,8 +317,9 @@ fn a_cloud_without_a_worker_is_deleted_and_its_card_goes() {
 }
 
 #[test]
-fn a_missing_record_is_a_refusal_that_names_the_card() {
+fn a_missing_record_without_a_journal_is_removed_and_one_with_a_journal_is_refused() {
     let (_temp, mut app, _workspace, actor) = agent_app();
+    let card = app.cloud_prototype.groups.0[0].issue;
     answer(
         &mut app,
         &build_request(
@@ -329,8 +330,38 @@ fn a_missing_record_is_a_refusal_that_names_the_card() {
         ),
     )
     .unwrap();
-    let answer = finish(&mut app);
-    assert_eq!(answer["error"], json!(NO_RECORD));
+    let done = finish(&mut app);
+    assert_eq!(done["error"], json!(null), "no record and no journal: nothing remains");
+    assert!(
+        !app.cloud_prototype.groups.0.iter().any(|group| group.issue == card),
+        "a card with nothing behind it is removed"
+    );
+
+    // A provider journal written without a deployment may still name a resource.
+    let (temp, mut app, _workspace, actor) = agent_app();
+    let directory = cloud_runtime::state::cloud_directory(&temp.path().join("cloud"), CLOUD).unwrap();
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("workspace-volume.json"), b"{}").unwrap();
+    answer(
+        &mut app,
+        &build_request(
+            &actor,
+            manifest::host_instance(),
+            submit(CLOUD),
+            manifest::now_millis() + 10_000,
+        ),
+    )
+    .unwrap();
+    let refused = finish(&mut app);
+    assert_eq!(
+        refused["error"],
+        json!(NO_RECORD),
+        "a journal without a record is not nothing"
+    );
+    assert!(
+        app.cloud_prototype.groups.0.iter().any(|group| group.issue == card),
+        "the card that can settle the journal stays"
+    );
 }
 
 #[test]

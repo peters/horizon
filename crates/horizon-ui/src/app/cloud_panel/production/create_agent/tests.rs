@@ -579,14 +579,10 @@ fn the_worker_is_rented_only_after_the_session_is_durable() {
     assert!(!error.is_empty(), "the failure says why");
     assert!(operation.ready.is_none());
     assert!(
-        !app.cloud_prototype.production.runtimes.contains_key(&card),
-        "a failure that requested no worker takes its card with it"
+        app.cloud_prototype.groups.0.iter().any(|group| group.issue == card),
+        "a failure that saved no record keeps its card: nothing proves what it left"
     );
-    assert!(
-        !app.cloud_prototype.groups.0.iter().any(|group| group.issue == card),
-        "the same repository may be submitted again"
-    );
-    assert_eq!(operation.card, None, "the operation no longer names a card");
+    assert_eq!(operation.card, Some(card));
 }
 
 #[test]
