@@ -281,12 +281,13 @@ fn a_cloud_a_person_created_is_refused_by_the_lease() {
 }
 
 #[test]
-fn a_cloud_without_a_worker_is_refused_and_a_missing_record_names_the_card() {
+fn a_cloud_without_a_worker_is_deleted_and_its_card_goes() {
     let (temp, mut app, _workspace, actor) = agent_app();
     let root = temp.path().join("cloud");
     let mut record = deleted_record(Some(creator(&actor)));
     record.spec = None;
     save_cloud(&root, &record);
+    let card = app.cloud_prototype.groups.0[0].issue;
     answer(
         &mut app,
         &build_request(
@@ -298,15 +299,19 @@ fn a_cloud_without_a_worker_is_refused_and_a_missing_record_names_the_card() {
     )
     .unwrap();
     let answer = finish(&mut app);
-    assert_eq!(answer["error"], json!(NO_WORKER));
+    assert_eq!(answer["error"], json!(null), "nothing failed: nothing was rented");
+    assert!(
+        !app.cloud_prototype.groups.0.iter().any(|group| group.issue == card),
+        "a cloud that never requested a worker leaves no card the person must remove"
+    );
     assert_eq!(
         refusal(&deleted_record(None), &actor).as_deref(),
         Some(NOT_AN_AGENTS_CLOUD)
     );
     assert_eq!(
-        refusal(&record, &actor).as_deref(),
-        Some(NO_WORKER),
-        "a record without a worker has nothing to delete"
+        refusal(&record, &actor),
+        None,
+        "a record without a worker is removable, not refused"
     );
     assert_eq!(refusal(&deleted_record(Some(creator(&actor))), &actor), None);
 }

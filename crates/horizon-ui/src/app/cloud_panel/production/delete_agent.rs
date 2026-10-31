@@ -37,9 +37,8 @@ const AGENT_BUSY: &str = "cloud_delete_busy: an agent's create operation owns th
 const DELETE_BUSY: &str = "cloud_delete_busy: this cloud already has a delete operation; poll its status instead";
 const NO_RECORD: &str = "cloud_delete_refused: Horizon has no deployment record for this cloud, so it has nothing to delete; a person removes its card";
 const NOT_AN_AGENTS_CLOUD: &str = "cloud_delete_refused: not an agent's cloud; a person deletes this cloud on its card";
-const NO_WORKER: &str = "cloud_delete_refused: no worker was requested; a person removes this cloud's card";
 const CANCELLED: &str = "cloud_delete_cancelled: the delete may already have started";
-const DONE: &str = "cloud_delete_done: the delete finished; cloud_list shows the cloud without a worker, and a person removes its card";
+const DONE: &str = "cloud_delete_done: the delete finished; a card that still shows the cloud is one a person removes";
 const IN_PROGRESS: &str = "a delete may already be in progress; a provider request that was sent cannot be recalled";
 const ABSENT: &str = "the cloud's record and every provider journal confirm that nothing it created remains";
 const UNCONFIRMED: &str = "the provider's records do not confirm absence; read the cloud's record, or check the provider with your own credential";
@@ -351,26 +350,54 @@ impl HorizonApp {
                     running.phase = if error.is_some() { Phase::Failed } else { Phase::Done };
                     running.error = error;
                 }
+                // A cloud that never requested a worker keeps no provider resource, so its
+                // card goes as soon as the deletion confirms that.
+                let no_worker = state.as_ref().is_some_and(|state| state.spec.is_none());
                 // The record this deletion wrote is the truth on disk, also for an operation
                 // that a cancel ended first, so the card takes it rather than its own copy.
-                Some((running.card, state, running.error.clone()))
+                Some((running.card, state, running.error.clone(), no_worker))
             }
         };
-        let Some((card, state, error)) = finished else {
+        let Some((card, state, error, no_worker)) = finished else {
             return;
         };
         // A card that another operation holds keeps its own view until that operation ends.
-        let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&card) else {
-            return;
-        };
-        if runtime.busy() {
+        let busy = self
+            .cloud_prototype
+            .production
+            .runtimes
+            .get(&card)
+            .is_some_and(super::Runtime::busy);
+        if busy {
             return;
         }
-        match state {
-            Some(state) if saved_is_newer(&state, runtime.state.as_ref()) => runtime.adopt_snapshot(*state),
-            Some(_) => {}
-            None => runtime.error = error,
+        let failed = error.is_some();
+        if let Some(runtime) = self.cloud_prototype.production.runtimes.get_mut(&card) {
+            match state {
+                Some(state) if saved_is_newer(&state, runtime.state.as_ref()) => runtime.adopt_snapshot(*state),
+                Some(_) => {}
+                None => runtime.error = error,
+            }
         }
+        // A cloud that never requested a worker has nothing on the card that a person must
+        // remove later, and its card would hold the repository against the next attempt.
+        if no_worker && !failed {
+            self.remove_cloud_card(card);
+        }
+    }
+
+    /// Removes one cloud's card with the cloud it shows, as the card's own removal does,
+    /// once nothing of the cloud remains to show.
+    pub(super) fn remove_cloud_card(&mut self, card: u32) {
+        let groups = &mut self.cloud_prototype.groups.0;
+        let before = groups.len();
+        groups.retain(|group| group.issue != card);
+        if groups.len() == before {
+            return;
+        }
+        self.cloud_prototype.groups.reconcile(&mut self.board);
+        self.cloud_prototype.production.runtimes.remove(&card);
+        self.save_cloud_prototype();
     }
 
     fn delete_status(&self, actor: &str, delete: &CloudDeleteRequest) -> Result<Value, String> {
@@ -512,14 +539,13 @@ fn read_absence(mut read: impl FnMut() -> cloud_runtime::Result<Absence>) -> Opt
 }
 
 /// Why this caller may not delete `cloud`, read from the cloud's own record: only the
-/// agent panel that created a cloud deletes it, and only a cloud whose worker was
-/// requested has provider resources to delete.
+/// agent panel that created a cloud deletes it. A cloud whose worker was never requested
+/// has nothing at a provider to delete; its card is removed instead.
 fn refusal(cloud: &Deployment, actor: &str) -> Option<String> {
     match &cloud.created_by {
-        Some(Creator { actor: creator, .. }) if creator == actor => {}
-        Some(_) | None => return Some(NOT_AN_AGENTS_CLOUD.into()),
+        Some(Creator { actor: creator, .. }) if creator == actor => None,
+        Some(_) | None => Some(NOT_AN_AGENTS_CLOUD.into()),
     }
-    cloud.spec.is_none().then(|| NO_WORKER.into())
 }
 
 /// Deletes one cloud for its agent and reports every step. The cloud's record is read
@@ -547,9 +573,12 @@ fn delete_cloud(
             return;
         }
     };
-    let admitted = match Store::lock_existing(&state_root) {
+    let recorded = match Store::lock_existing(&state_root) {
         Ok(store) => match store.load() {
-            Ok(Some(state)) => refusal(&state, actor).map_or(Ok(()), Err),
+            Ok(Some(state)) => match refusal(&state, actor) {
+                None => Ok(state),
+                Some(reason) => Err(reason),
+            },
             Ok(None) => Err(NO_RECORD.to_owned()),
             Err(error) => Err(failed(error)),
         },
@@ -559,12 +588,29 @@ fn delete_cloud(
         }
         Err(error) => Err(failed(error)),
     };
-    if let Err(error) = admitted {
+    let recorded = match recorded {
+        Ok(state) => state,
+        Err(error) => {
+            send(Message::Finished {
+                operation: operation.to_owned(),
+                state: None,
+                absent: None,
+                error: Some(error),
+            });
+            return;
+        }
+    };
+    // Nothing was ever requested at a provider, so the record is all that remains: the card
+    // goes, and no provider call is made.
+    if recorded.spec.is_none() {
+        send(Message::Started {
+            operation: operation.to_owned(),
+        });
         send(Message::Finished {
             operation: operation.to_owned(),
-            state: None,
-            absent: None,
-            error: Some(error),
+            state: Some(Box::new(recorded)),
+            absent: Some(Absence::Proven),
+            error: None,
         });
         return;
     }

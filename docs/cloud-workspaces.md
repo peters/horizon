@@ -1222,9 +1222,10 @@ command.
 
 `cloud_delete` deletes the provider resources of one cloud permanently. Horizon
 deletes only a cloud that an agent created for the same agent actor. For a cloud
-of a person or of a different agent, and for a cloud that never requested a
-worker, Horizon answers `cloud_delete_refused`. A person then deletes the cloud
-or removes its card. `cloud_delete` removes no card.
+of a person or of a different agent, Horizon answers `cloud_delete_refused`, and
+the person deletes the cloud on its card. A cloud that never requested a worker
+keeps no provider resource: Horizon removes its card and answers done.
+`cloud_delete` removes no other card.
 
 The GitHub chain of the worker is the GitHub sign-in of this computer. The worker
 renews the chain itself, so the cloud keeps its GitHub access while this
