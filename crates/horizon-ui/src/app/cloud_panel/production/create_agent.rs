@@ -135,6 +135,19 @@ enum Message {
     },
 }
 
+impl Message {
+    /// The operation this message belongs to.
+    fn operation(&self) -> &str {
+        match self {
+            Self::Prepared { operation, .. }
+            | Self::Durable { operation, .. }
+            | Self::Refused { operation, .. }
+            | Self::SignIn { operation, .. }
+            | Self::Finished { operation, .. } => operation,
+        }
+    }
+}
+
 impl State {
     fn sender(&mut self) -> Sender<Message> {
         self.channel.get_or_insert_with(channel).0.clone()
@@ -337,6 +350,7 @@ impl HorizonApp {
     }
 
     fn apply_create_message(&mut self, message: Message, ctx: &Context) {
+        let ended_operation = message.operation().to_owned();
         match message {
             Message::Prepared {
                 operation,
@@ -412,6 +426,40 @@ impl HorizonApp {
                 running.cancel = None;
             }
         }
+        // A failed create that reached no provider request leaves nothing to keep: the card
+        // would hold the repository against the agent's next attempt, and no agent tool
+        // removes a card whose cloud never rented a worker.
+        if let Some(card) = self
+            .cloud_prototype
+            .production
+            .create_agent
+            .operations
+            .get(&ended_operation)
+            .filter(|running| running.phase == Phase::Failed)
+            .and_then(|running| running.card)
+            && self.card_requested_no_worker(card)
+        {
+            self.discard_create_card(&ended_operation, card);
+        }
+    }
+
+    /// Whether the cloud's own record proves that no provider resource was requested, so a
+    /// failure left nothing a card must keep reachable. Only a saved record can prove it: a
+    /// cloud whose record names a worker, a publication, an exposure or a service admission
+    /// keeps its card, because one of those may hold a provider journal that only the card's
+    /// own deletion settles. A failure that wrote no record keeps its card too.
+    fn card_requested_no_worker(&self, card: u32) -> bool {
+        let Some(runtime) = self.cloud_prototype.production.runtimes.get(&card) else {
+            return false;
+        };
+        runtime.state.as_ref().is_some_and(|state| {
+            state.spec.is_none()
+                && state.worker.is_none()
+                && state.publication.is_none()
+                && state.exposure.is_none()
+                && state.service_admission.is_none()
+                && state.image_replacement.is_none()
+        })
     }
 
     /// Registers the cloud on the card a person's deployment shows on, in the caller's

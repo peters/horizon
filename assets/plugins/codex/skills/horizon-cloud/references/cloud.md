@@ -637,10 +637,11 @@ records the agent and the session at create, and it refuses every other cloud:
 
 - A cloud that a person created with **New cloud** has no creator.
 - A cloud that another agent panel created names that panel.
-- A cloud with no requested worker has no provider resource to delete.
+- A cloud with no requested worker has no provider resource: Horizon removes its
+  card and answers `cloud_delete_done`.
 
-Each of these answers `cloud_delete_refused`, and the message says that the person
-deletes the cloud on its card. The tool removes no card and deletes no credential:
+The first two answer `cloud_delete_refused`, and the message says that the person
+deletes the cloud on its card. The tool removes no other card and deletes no credential:
 after the delete the card offers **Remove cloud**.
 
 `status` returns `phase` (`submitted`, `deleting`, `done`, `failed` or

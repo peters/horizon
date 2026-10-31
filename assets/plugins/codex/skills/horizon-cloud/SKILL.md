@@ -37,8 +37,8 @@ that an agent panel of your own actor created. A cloud a person created, or one
 another agent created, is refused with `cloud_delete_refused`, and the person
 deletes it on its card. Poll `status` with the same `operation_id`: it reports the
 stage, the provider, and `absent`, which is true only when the record and the
-provider journal confirm that nothing the cloud created remains. The tool removes
-no card and deletes no credential. Read `references/cloud.md` before you submit.
+provider journal confirm that nothing the cloud created remains. A cloud that never requested a worker keeps no provider resource, so the tool
+removes its card. It removes no other card and deletes no credential. Read `references/cloud.md` before you submit.
 
 Cloud cards show the last-read tailnet device name under Connections > Tailnet.
 Copy includes the MagicDNS domain when the worker reports it. A stable-name

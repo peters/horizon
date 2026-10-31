@@ -579,12 +579,10 @@ fn the_worker_is_rented_only_after_the_session_is_durable() {
     assert!(!error.is_empty(), "the failure says why");
     assert!(operation.ready.is_none());
     assert!(
-        app.cloud_prototype.production.runtimes[&card]
-            .state
-            .as_ref()
-            .is_none_or(|state| state.worker.is_none()),
-        "no worker was requested"
+        app.cloud_prototype.groups.0.iter().any(|group| group.issue == card),
+        "a failure that saved no record keeps its card: nothing proves what it left"
     );
+    assert_eq!(operation.card, Some(card));
 }
 
 #[test]
