@@ -820,3 +820,62 @@ pub(super) fn provider_filter(output: &egui::FullOutput, label: &str) -> Rect {
         })
         .unwrap_or_else(|| panic!("Missing provider filter: {label}"))
 }
+
+#[test]
+fn a_provider_chosen_in_the_heading_stays_after_a_profile_choice() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    // Hetzner's offer is the cheaper one, so a cloud that followed the cheapest offer across
+    // providers would leave RunPod. This is the case the issue reports.
+    hetzner_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "RunPod").center());
+    tall_frame(&ctx, &mut app);
+    assert_eq!(
+        app.cloud_prototype.production.provider.map(|provider| provider.id),
+        Some("runpod"),
+        "the heading choice is recorded"
+    );
+
+    // `prebuilt` is written for RunPod too; the heading choice must still decide the launch.
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "prebuilt").center());
+    tall_frame(&ctx, &mut app);
+    assert_eq!(app.cloud_prototype.production.selected_profile, "prebuilt");
+    assert_eq!(
+        app.cloud_prototype.production.provider.map(|provider| provider.id),
+        Some("runpod"),
+        "a provider chosen in the heading survives a profile choice"
+    );
+    assert_eq!(
+        selected(&app).provider,
+        "RunPod",
+        "the dialog does not place the cloud on the cheapest offer of another provider"
+    );
+}
+
+#[test]
+fn a_profile_written_for_a_saved_docker_host_ends_another_providers_choice() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    prepare(&mut app, &ctx, temp.path());
+    hetzner_binding(&mut app);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "Hetzner · cx33 · hel1").center());
+    let mut config = app.cloud_prototype.production.profiles.clone().unwrap();
+    let mut host = config.profiles["development"].clone();
+    host.provider = "docker-host".into();
+    config.profiles.insert("on-my-host".into(), host);
+    app.cloud_prototype.production.profiles = Some(config);
+    let output = tall_frame(&ctx, &mut app);
+    click(&ctx, &mut app, label_rect(&output, "on-my-host").center());
+    tall_frame(&ctx, &mut app);
+    assert_eq!(
+        app.cloud_prototype.production.provider.map(|provider| provider.id),
+        None,
+        "a host profile runs on the saved host, not on the provider chosen before it"
+    );
+}

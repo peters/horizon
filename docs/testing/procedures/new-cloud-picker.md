@@ -26,7 +26,7 @@ the UI and the agents must agree.
   [issue #1304](https://github.com/peters/horizon/issues/1304) and
   [issue #1305](https://github.com/peters/horizon/issues/1305).
 - Platforms: Linux with Xvfb. Providers: RunPod and Hetzner.
-- Test list: C12 to C30 of the cloud panel smoke test,
+- Test list: C12 to C31 of the cloud panel smoke test,
   [issue #1264](https://github.com/peters/horizon/issues/1264).
 - This procedure does not test:
   - The start of a cloud.
@@ -565,7 +565,33 @@ this order. Each task starts with the result of the task before it.
    Result: The summary shows **In stock**, **Low stock** or **Out of stock**.
    It does not show **stock unknown**.
 
-### 6.19 C30 — GPU workers
+### 6.19 C30 — A heading provider survives a profile choice
+
+1. Click **RunPod** in the heading.
+
+   Result: The summary shows a RunPod worker, and its provider is RunPod.
+
+2. Click the profile chip `runpod-cpu` of a repository whose profiles name more
+   than one provider.
+
+   Result: The summary still shows a RunPod worker. Its provider is RunPod, and
+   the placement is a RunPod data center.
+
+3. Click the profile chip of a profile whose `provider` is `hetzner`.
+
+   Result: The summary still shows a RunPod worker, because the heading choice
+   decides the provider. It does not show a Hetzner worker.
+
+4. Click the profile chip of a profile whose `provider` is `docker-host`.
+
+   Result: The heading choice ends. The dialog shows the saved Docker host,
+   because a host profile runs on that host only.
+
+5. Repeat steps 1 to 3 with **Hetzner** in the heading, then with **Azure**.
+
+   Result: The chosen provider stays after each profile choice.
+
+### 6.20 C31 — GPU workers
 
 1. Select the profile `gpu`.
 
@@ -606,7 +632,9 @@ this order. Each task starts with the result of the task before it.
   unavailable**, not **none in stock**.
 - C28 hides the cards for high-performance storage.
 - C29 never shows **stock unknown**.
-- C30 shows no Hetzner row for a GPU profile.
+- C30 keeps the provider chosen in the heading after each profile choice, except
+  for a profile written for a saved Docker host.
+- C31 shows no Hetzner row for a GPU profile.
 
 ## 8. Cleanup
 
