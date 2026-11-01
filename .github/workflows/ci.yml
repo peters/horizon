@@ -448,16 +448,21 @@ jobs:
             cargo build --locked -p horizon-chromecast --no-default-features --target "$target"
           done
       # The worker image scripts need util-linux flock and bash 4, so the
-      # suite runs on the Linux libs shard only. That shard already built the
-      # helper. A skipped test fails the step: the helper-gated contract tests
-      # and the git-lfs hydration tests skip silently when a prerequisite is gone.
+      # suite runs on the Linux libs-extra shard only. A skipped test fails the
+      # step: the helper-gated contract tests and the git-lfs hydration tests skip
+      # silently when a prerequisite is gone.
+      # The suite drives the worker and the browser MCP as real processes, and it
+      # looks for `horizon-browser` beside the worker binary. Only a package with
+      # integration tests gets its binary built beside the test binaries, so build
+      # both binaries here instead of relying on the workspace selection that the
+      # libs shard makes.
       # A local localci run only warns, because some tests need root, which a
       # runner has through passwordless sudo and a developer computer should not.
       - name: Cloud worker scripts
         if: matrix.os == 'ubuntu-latest' && matrix.shard == 'libs-extra'
         shell: bash
         run: |
-          cargo build --locked -p horizon-cloud-worker
+          cargo build --locked -p horizon-cloud-worker -p horizon-browser-cli
           HORIZON_TEST_CLOUD_WORKER="$PWD/target/debug/horizon-cloud-worker" \
             python3 -B -m unittest discover -s examples/cloud-worker -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/cloud-worker-tests.log"
           if grep -q 'skipped=' "$RUNNER_TEMP/cloud-worker-tests.log"; then
