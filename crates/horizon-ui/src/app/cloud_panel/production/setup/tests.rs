@@ -819,6 +819,7 @@ fn settings_open_at_their_final_size_and_position() {
     }
 }
 
+mod dismissal;
 mod host_pull;
 mod registry_edit;
 
