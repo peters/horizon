@@ -96,6 +96,9 @@ impl HorizonApp {
         } else {
             None
         };
+        // A build without clouds has nothing to fill, and the same workspace code runs.
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let reused: Option<WorkspaceId> = None;
         let workspace = if let Some(empty) = reused {
             self.board.active_workspace = Some(empty);
             self.focus_workspace_visible(ctx, empty, false);
