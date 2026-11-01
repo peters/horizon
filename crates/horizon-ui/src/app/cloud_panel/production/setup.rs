@@ -503,8 +503,11 @@ impl HorizonApp {
                 footer = state.render_footer(ui);
             });
         ctx.move_to_top(response.response.layer_id);
+        // Consumed before the decision: `should_close` also takes Escape for this frame.
+        let ui_close = response.should_close() || response.response.should_close();
+        let closed = dismissed(footer.cancel, ui_close, response.backdrop_response.clicked());
         // Once Save starts, retain its completion and do not imply cancellation of writes.
-        if (footer.cancel || response.should_close()) && state.receiver.is_none() {
+        if closed && state.receiver.is_none() {
             self.cancel_cloud_accounts();
             if escape {
                 self.consume_navigation_key(
@@ -738,4 +741,11 @@ fn cached_pull_validation(
 
 fn cloud_runtime_ssh_valid(path: &std::path::Path) -> bool {
     horizon_core::cloud_runtime::repository::launch::ssh_ready(path)
+}
+
+/// Whether Cloud settings closes. A click on the backdrop keeps it open, because the form
+/// holds the keys, tokens and repository choices a person entered; Cancel, Save and Escape
+/// still close it.
+fn dismissed(cancel: bool, ui_close: bool, backdrop: bool) -> bool {
+    cancel || (ui_close && !backdrop)
 }
