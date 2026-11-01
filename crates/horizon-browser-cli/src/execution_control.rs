@@ -333,7 +333,9 @@ mod tests {
         let mut control = ExecutionControl::with_timeout(Duration::ZERO);
         let error = control
             .wait_owned_blocking("horizon-browser-test-deadline", BlockingIoMode::Bound, || {
-                std::thread::sleep(Duration::from_secs(5));
+                // The deadline is already spent, so the work only has to outlast
+                // the moment the control checks it.
+                std::thread::sleep(Duration::from_millis(200));
                 1
             })
             .await
