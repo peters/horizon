@@ -30,6 +30,29 @@ run_cargo() {
     cargo "$@"
 }
 
+# Runs cargo and keeps its standard output in a file. nextest writes its
+# libtest-json stream there and its human report to standard error, so the log
+# keeps the report while the duration gate reads the stream.
+run_cargo_kept() {
+    local stream=$1
+    shift
+    if [[ "${HORIZON_CI_SHARD_DRY_RUN:-}" == "1" ]]; then
+        printf '%s\n' "cargo $* > $stream"
+        return 0
+    fi
+    cargo "$@" > "$stream"
+}
+
+# The gate reads the stream that the run just wrote, so it adds no run time.
+run_duration_gate() {
+    local stream=$1
+    if [[ "${HORIZON_CI_SHARD_DRY_RUN:-}" == "1" ]]; then
+        printf '%s\n' "python3 -B scripts/check-test-durations.py --stream $stream"
+        return 0
+    fi
+    python3 -B scripts/check-test-durations.py --stream "$stream"
+}
+
 run_ui() {
     run_cargo test --locked -p horizon-ui
 }
@@ -47,8 +70,9 @@ libs_features() {
 # Each step returns its own status instead of aborting, so one failing command
 # still reports the checks after it.
 run_libs() {
-    local status=0 features
+    local status=0 features stream
     features="$(libs_features)"
+    stream="${RUNNER_TEMP:-/tmp}/nextest-libs.json"
     # One build for the gateway and encoder lanes, plus the exposure-firewall
     # lane of horizon-cloud. Their own builds used to rebuild horizon-core and
     # its dependents for each lane, which cost more than the tests themselves.
@@ -58,9 +82,13 @@ run_libs() {
     # `cargo test` runs one test binary at a time, so 66 binaries ran in series
     # and the shard's 236 s of test time was a sum. nextest schedules the tests
     # of every binary in one pool, so the same tests overlap instead.
-    run_cargo nextest run --locked --workspace --exclude horizon-ui --features "$features" || status=$?
+    NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1 \
+        run_cargo_kept "$stream" nextest run --locked --workspace --exclude horizon-ui \
+        --features "$features" --message-format libtest-json-plus || status=$?
     # nextest runs no doctests, so they keep their own pass over the same units.
     run_cargo test --locked --workspace --exclude horizon-ui --features "$features" --doc || status=$?
+    # A test over its allowance fails the shard that ran it, not a later sweep.
+    run_duration_gate "$stream" || status=$?
     return "$status"
 }
 

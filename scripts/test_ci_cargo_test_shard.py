@@ -19,10 +19,14 @@ FEATURES = (
 )
 # The shipped horizon-cloud build, without an opt-in feature.
 DEFAULT_CLOUD = "cargo test --locked -p horizon-cloud"
-# nextest runs the workspace selection; libtest keeps the doctests, which
-# nextest cannot run.
-NEXTEST = f"cargo nextest run --locked --workspace --exclude horizon-ui --features {FEATURES}"
+# nextest runs the workspace selection and keeps its libtest-json stream for the
+# duration gate; libtest keeps the doctests, which nextest cannot run.
+STREAM = "/tmp/nextest-libs.json"
+NEXTEST = (f"cargo nextest run --locked --workspace --exclude horizon-ui "
+           f"--features {FEATURES} --message-format libtest-json-plus > {STREAM}")
 DOCTESTS = f"cargo test --locked --workspace --exclude horizon-ui --features {FEATURES} --doc"
+NEXTEST_ARGS = NEXTEST.split(" > ")[0]
+DURATION_GATE = f"python3 -B scripts/check-test-durations.py --stream {STREAM}"
 EXAMPLE = (
     "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
     "tests::malformed_selection_arguments_never_create_cloud_paths"
@@ -44,6 +48,8 @@ def shard_commands(shard, runner_os, *, ref="", cache_hit=""):
     env["RUNNER_OS"] = runner_os
     env.pop("GITHUB_REF", None)
     env.pop("HORIZON_CI_CACHE_HIT", None)
+    # The dry run names the stream path, so it must not follow the caller.
+    env.pop("RUNNER_TEMP", None)
     if ref:
         env["GITHUB_REF"] = ref
     if cache_hit:
@@ -68,7 +74,7 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(libs.returncode, 0, libs.stderr)
         self.assertEqual(extra.returncode, 0, extra.stderr)
         self.assertEqual(ui.stdout.splitlines(), ["cargo test --locked -p horizon-ui"])
-        self.assertEqual(libs.stdout.splitlines(), [NEXTEST, DOCTESTS])
+        self.assertEqual(libs.stdout.splitlines(), [NEXTEST, DOCTESTS, DURATION_GATE])
         self.assertEqual(extra.stdout.splitlines(), [DEFAULT_CLOUD, EXAMPLE])
 
     def test_cloud_gateway_and_encoder_features_build_once_on_each_platform(self):
@@ -79,6 +85,7 @@ class ShardCommandTests(unittest.TestCase):
                 lines = result.stdout.splitlines()
                 self.assertEqual(lines.count(NEXTEST), 1)
                 self.assertEqual(lines.count(DOCTESTS), 1)
+                self.assertEqual(lines.count(DURATION_GATE), 1)
                 # A per-lane build of one package would rebuild every crate, so
                 # no lane may name these features outside the workspace run.
                 self.assertNotIn("-p horizon-core --lib --features", result.stdout)
@@ -217,7 +224,7 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_libs_failure_keeps_the_remaining_checks(self):
         cases = [
-            ("libs", "macOS", f"--exclude horizon-ui --features {FEATURES}", [NEXTEST, DOCTESTS]),
+            ("libs", "macOS", f"--exclude horizon-ui --features {FEATURES}", [NEXTEST_ARGS, DOCTESTS]),
             ("libs-extra", "macOS", "-p horizon-cloud", [DEFAULT_CLOUD, EXAMPLE]),
             ("libs-extra", "macOS", "--example cloud_deploy", [DEFAULT_CLOUD, EXAMPLE]),
         ]

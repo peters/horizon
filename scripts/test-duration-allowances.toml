@@ -1,0 +1,15 @@
+# Per-test ceilings for `scripts/check-test-durations.py`.
+#
+# The check reads the libtest-json stream of the shard run and fails when a test
+# takes longer than `--ceiling` seconds (60) and is not listed here, or when a
+# listed test grows by more than a quarter of its own ceiling. The libs shard
+# runs it at the end of the step, so it adds no run time.
+#
+# Add an entry only for a test that legitimately needs longer, and put a measured
+# number in it: the list exists to shrink, not to grow.
+[tests]
+
+# #1796 measured this test at 64 s one test at a time, which is the only published
+# number for it. The ceiling above is that value with room for a busy runner.
+# Re-measure it from a shard run and lower the number.
+"horizon-core::horizon_core$cloud_runtime::bootstrap_initialization::tests::project_reservations::namespaces::source::setup::recovery::project_setup_capacity_reserves_unstarted_plans_and_counts_progress_once" = { seconds = 70 }
