@@ -96,7 +96,8 @@ class ReportTests(unittest.TestCase):
         times = {"a$b::fast": 1.0, "a$b::slow": 75.0}
         findings = durations.check(times, {}, 60.0)
         report = durations.render(times, findings, 60.0, 10)
-        self.assertIn("2 tests, ceiling 60 s, slowest 75.0 s", report)
+        self.assertIn("2 tests, 1.3 min of test time one test at a time, "
+                      "ceiling 60 s, slowest 75.0 s", report)
         self.assertLess(report.index("a$b::slow"), report.index("a$b::fast"))
         self.assertIn("::error::a$b::slow took 75.0 s", report)
 
