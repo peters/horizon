@@ -206,12 +206,7 @@ pub(super) fn prepare_image(
             false,
         )?
     };
-    let public_key = std::fs::read_to_string(PathBuf::from(format!(
-        "{}.pub",
-        request.settings.ssh_identity_file.display()
-    )))?
-    .trim()
-    .to_owned();
+    let public_key = super::current_public_key(&request.settings.ssh_identity_file)?;
     let cpu_flavors = super::sizing::bound_types(&state.profile, &request.settings, state.spec.as_ref())?;
     let data_centers = super::sizing::bound_centers(&state.profile, &request.settings, state.spec.as_ref())?;
     let exact_placement = exact_placement(&state.profile, request.settings.placement.as_ref(), state.spec.as_ref());

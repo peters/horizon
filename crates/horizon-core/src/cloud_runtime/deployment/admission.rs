@@ -52,15 +52,7 @@ pub fn problems(profile: &horizon_cloud::Profile, settings: &Settings) -> Vec<Pr
 /// deployment sends to the provider, which must be a supported Ed25519 key.
 fn ssh_key(settings: &Settings) -> crate::cloud_runtime::Result<()> {
     validate_ssh_identity(&settings.ssh_identity_file)?;
-    // Appended to the path itself: a name that is not valid UTF-8 keeps its own bytes.
-    let mut public = settings.ssh_identity_file.clone().into_os_string();
-    public.push(".pub");
-    let key = std::fs::read_to_string(&public)?;
-    if !horizon_cloud::valid_public_key(key.trim()) {
-        return Err(Error::Invalid(
-            "The SSH public key beside the identity is not a supported Ed25519 key; Cloud settings can make a new pair",
-        ));
-    }
+    super::current_public_key(&settings.ssh_identity_file)?;
     // The same test that decides whether a profile is ready to launch: the private key must be
     // readable without a passphrase and be the pair of the public key deployment sends.
     if crate::cloud_runtime::repository::launch::ssh_ready(&settings.ssh_identity_file) {
@@ -162,6 +154,10 @@ mod tests {
         assert_eq!(
             found.iter().map(|problem| problem.what).collect::<Vec<_>>(),
             ["SSH key"]
+        );
+        assert_eq!(
+            found[0].reason, "The SSH identity has no public key beside it; Cloud settings can make a new pair",
+            "a missing public key names the file and the fix"
         );
         std::fs::write(root.path().join("ssh.pub"), "ssh-rsa AAAA not-ed25519").unwrap();
         let found = problems(&profile(), &settings(root.path()));

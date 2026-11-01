@@ -575,8 +575,12 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     Ok(state)
 }
 
-fn current_public_key(identity: &std::path::Path) -> Result<String> {
-    let path = PathBuf::from(format!("{}.pub", identity.display()));
+/// The public key deployment sends to the provider: the one beside the identity.
+pub(super) fn current_public_key(identity: &std::path::Path) -> Result<String> {
+    // Appended to the path itself: a name that is not valid UTF-8 keeps its own bytes.
+    let mut public = identity.as_os_str().to_owned();
+    public.push(".pub");
+    let path = PathBuf::from(public);
     let key = match std::fs::read_to_string(&path) {
         Ok(key) => key.trim().to_owned(),
         // A person reads this through the card, so it names the file and the fix rather
