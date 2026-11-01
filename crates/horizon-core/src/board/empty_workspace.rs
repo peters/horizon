@@ -8,12 +8,19 @@ impl Board {
     /// this before it offers the removal, so a person never gets a button that does nothing.
     #[must_use]
     pub fn can_remove_empty_workspace(&self, id: WorkspaceId) -> bool {
+        // The board keeps one workspace, so the only one stays even when it holds nothing.
+        self.workspaces.len() > 1 && self.workspace_holds_nothing(id)
+    }
+
+    /// Whether `id` holds nothing at all: no panel, no cloud and no remote workspace. A new
+    /// cloud fills such a workspace before it makes another one.
+    #[must_use]
+    pub fn workspace_holds_nothing(&self, id: WorkspaceId) -> bool {
         let Some(workspace) = self.workspace(id) else {
             return false;
         };
         // A remote workspace's reference is state of its own, as the other cleanups keep it.
-        self.workspaces.len() > 1
-            && workspace.remote_workspace.is_none()
+        workspace.remote_workspace.is_none()
             && workspace.panels.is_empty()
             && !self.panels.iter().any(|panel| panel.workspace_id == id)
             && !cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id)
@@ -101,5 +108,24 @@ mod tests {
         );
         assert!(board.remove_empty_workspace(empty));
         assert!(!board.remove_empty_workspace(cloud), "a cloud's workspace stays");
+    }
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+
+    #[test]
+    fn a_workspace_that_holds_nothing_can_be_filled_but_the_remove_rule_keeps_the_last_one() {
+        let mut board = Board::new();
+        let only = board.create_workspace("only");
+        assert!(
+            board.workspace_holds_nothing(only),
+            "a new cloud may fill the only workspace"
+        );
+        assert!(!board.can_remove_empty_workspace(only), "the board keeps one workspace");
+        let second = board.create_workspace("second");
+        assert!(board.workspace_holds_nothing(second));
+        assert!(board.can_remove_empty_workspace(second));
     }
 }

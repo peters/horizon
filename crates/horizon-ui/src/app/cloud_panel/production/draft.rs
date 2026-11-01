@@ -66,7 +66,7 @@ impl Production {
                 .map(|definition| definition.id.to_owned()),
             setup_preset: self.setup_preset.clone(),
             configuration: horizon_core::cloud_runtime::draft::Configuration::of(self.launch.configuration),
-            new_workspace: self.new_workspace.is_some(),
+            new_workspace: self.new_workspace.as_ref().is_some_and(|intent| intent.made),
         }
     }
 
