@@ -19,8 +19,10 @@ FEATURES = (
 )
 # The shipped horizon-cloud build, without an opt-in feature.
 DEFAULT_CLOUD = "cargo test --locked -p horizon-cloud"
-BUILD = f"cargo test --locked --workspace --exclude horizon-ui --no-run --features {FEATURES}"
-WORKSPACE = f"cargo test --locked --workspace --exclude horizon-ui --features {FEATURES}"
+# nextest runs the workspace selection; libtest keeps the doctests, which
+# nextest cannot run.
+NEXTEST = f"cargo nextest run --locked --workspace --exclude horizon-ui --features {FEATURES}"
+DOCTESTS = f"cargo test --locked --workspace --exclude horizon-ui --features {FEATURES} --doc"
 EXAMPLE = (
     "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
     "tests::malformed_selection_arguments_never_create_cloud_paths"
@@ -66,7 +68,7 @@ class ShardCommandTests(unittest.TestCase):
         self.assertEqual(libs.returncode, 0, libs.stderr)
         self.assertEqual(extra.returncode, 0, extra.stderr)
         self.assertEqual(ui.stdout.splitlines(), ["cargo test --locked -p horizon-ui"])
-        self.assertEqual(libs.stdout.splitlines(), [BUILD, WORKSPACE])
+        self.assertEqual(libs.stdout.splitlines(), [NEXTEST, DOCTESTS])
         self.assertEqual(extra.stdout.splitlines(), [DEFAULT_CLOUD, EXAMPLE])
 
     def test_cloud_gateway_and_encoder_features_build_once_on_each_platform(self):
@@ -75,8 +77,8 @@ class ShardCommandTests(unittest.TestCase):
                 result = shard_commands("libs", runner_os)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 lines = result.stdout.splitlines()
-                self.assertEqual(lines.count(BUILD), 1)
-                self.assertEqual(lines.count(WORKSPACE), 1)
+                self.assertEqual(lines.count(NEXTEST), 1)
+                self.assertEqual(lines.count(DOCTESTS), 1)
                 # A per-lane build of one package would rebuild every crate, so
                 # no lane may name these features outside the workspace run.
                 self.assertNotIn("-p horizon-core --lib --features", result.stdout)
@@ -215,7 +217,7 @@ class ShardCommandTests(unittest.TestCase):
 
     def test_libs_failure_keeps_the_remaining_checks(self):
         cases = [
-            ("libs", "macOS", f"--exclude horizon-ui --features {FEATURES}", [BUILD, WORKSPACE]),
+            ("libs", "macOS", f"--exclude horizon-ui --features {FEATURES}", [NEXTEST, DOCTESTS]),
             ("libs-extra", "macOS", "-p horizon-cloud", [DEFAULT_CLOUD, EXAMPLE]),
             ("libs-extra", "macOS", "--example cloud_deploy", [DEFAULT_CLOUD, EXAMPLE]),
         ]
@@ -290,6 +292,18 @@ class WorkflowShardTests(unittest.TestCase):
         self.assertIn("if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'speech' }}", rust)
         self.assertEqual(rust.count("bash scripts/ci-cargo-test-shard.sh"), 1)
         self.assertNotIn("cargo test --locked --workspace\n", rust)
+
+    def test_only_the_libs_shards_install_and_run_nextest(self):
+        workflow = WORKFLOW.read_text()
+        self.assertIn(
+            "        if: ${{ matrix.shard == 'libs' }}\n"
+            "        uses: taiki-e/install-action@nextest\n",
+            workflow,
+        )
+        self.assertEqual(workflow.count("taiki-e/install-action@nextest"), 1)
+        # Only the libs shard's script path may name nextest, so a leg that does
+        # not install it cannot run it.
+        self.assertIn("nextest run", SCRIPT.read_text())
 
     def test_apple_mobile_targets_install_retries_three_times(self):
         workflow = WORKFLOW.read_text()
