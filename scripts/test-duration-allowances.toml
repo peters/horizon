@@ -7,9 +7,11 @@
 #
 # Add an entry only for a test that legitimately needs longer, and put a measured
 # number in it: the list exists to shrink, not to grow.
+#
+# The file is empty because no test needs one. Run 41308216605 reports the
+# slowest test of the libs shard at 21.9 s on Linux and 34.9 s on macOS, against
+# the 60 s ceiling. The report in
+# `docs/testing/reports/2026-10-24-test-suite-durations.md` measures one test at a
+# time on a busy machine, so its 64 s and 175 s rows describe that machine and not
+# a runner; seed an entry from a shard run if one is ever needed.
 [tests]
-
-# #1796 measured this test at 64 s one test at a time, which is the only published
-# number for it. The ceiling above is that value with room for a busy runner.
-# Re-measure it from a shard run and lower the number.
-"horizon-core::horizon_core$cloud_runtime::bootstrap_initialization::tests::project_reservations::namespaces::source::setup::recovery::project_setup_capacity_reserves_unstarted_plans_and_counts_progress_once" = { seconds = 70 }
