@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# One platform test shard. On Linux, ui, libs, and speech run as separate
-# jobs and share the OS cache entry. Only the speech job saves that entry, and
-# only on main. A cold main entry is filled by building the whole workspace in
-# that job before the speech feature, so the saved target is not speech-only.
+# One platform test shard. On Linux, ui, libs, libs-extra, and speech run as
+# separate jobs and share the OS cache entry. Only the speech job saves that
+# entry, and only on main. A cold main entry is filled by building the whole
+# workspace in that job before the speech feature, so the saved target is not
+# speech-only.
 #
-# macOS runs libs and speech as two jobs, each with its own cache key and its
-# own saved entry. The two jobs build different graphs, so one shared entry
-# would leave one of them to rebuild what the other saved. This shard set skips
-# the ui shard: speech runs the same horizon-ui tests with the feature on, and
-# the Linux ui job still tests the build without it.
+# `libs` runs the one workspace selection that carries the opt-in features, and
+# `libs-extra` runs the single-package lanes and the example whose own feature
+# resolution cannot join it. They are two jobs because cargo resolves features
+# per selection: one job that ran both paid for both graphs in series, and the
+# workspace selection alone was 656 s of its 999 s.
+#
+# macOS runs libs, libs-extra, and speech as three jobs over two cache keys:
+# libs-extra restores the entry that libs saves and never writes it. libs and
+# speech keep one key each because the jobs build different graphs, so one
+# shared entry would leave one of them to rebuild what the other saved. This
+# shard set skips the ui shard: speech runs the same horizon-ui tests with the
+# feature on, and the Linux ui job still tests the build without it.
 set -euo pipefail
 
 shard="${HORIZON_CI_SHARD:?HORIZON_CI_SHARD is required}"
@@ -40,18 +48,27 @@ libs_features() {
 run_libs() {
     local status=0 features
     features="$(libs_features)"
-    # The shipped configuration first, with no opt-in feature. One horizon-cloud
-    # test asserts that the default build accepts an unknown firewall attachment
-    # field, and that assertion cannot run in the feature build below.
-    run_cargo test --locked -p horizon-cloud || status=$?
     # One build for the gateway and encoder lanes, plus the exposure-firewall
     # lane of horizon-cloud. Their own builds used to rebuild horizon-core and
     # its dependents for each lane, which cost more than the tests themselves.
-    # Every later invocation repeats this package selection and this feature
-    # list: cargo resolves features per selection, so a `-p` selection after a
-    # `--workspace` build rebuilds every crate.
+    # Repeat this package selection and this feature list in every invocation of
+    # this shard: cargo resolves features per selection, so a `-p` selection
+    # after a `--workspace` build rebuilds every crate.
     run_cargo test --locked --workspace --exclude horizon-ui --no-run --features "$features" || status=$?
     run_cargo test --locked --workspace --exclude horizon-ui --features "$features" || status=$?
+    return "$status"
+}
+
+# The lanes that cannot join the workspace selection above, because each one
+# asserts behaviour that another feature changes. They are seconds of tests over
+# their own builds, so they run beside `libs` on a second runner instead of
+# after it.
+run_libs_extra() {
+    local status=0
+    # The shipped configuration first, with no opt-in feature. One horizon-cloud
+    # test asserts that the default build accepts an unknown firewall attachment
+    # field, and that assertion cannot run in the feature build.
+    run_cargo test --locked -p horizon-cloud || status=$?
     # The original Unix/FD producer is a default-off Linux Worker component. Its
     # two lanes keep their own builds, because exposure-gate changes the
     # behaviour that the trusted_tcp_producer tests assert.
@@ -74,6 +91,9 @@ case "$shard" in
         ;;
     libs)
         run_libs
+        ;;
+    libs-extra)
+        run_libs_extra
         ;;
     speech)
         # The Linux speech job saves `linux-test`, so only it must fill a cold

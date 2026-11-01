@@ -85,8 +85,9 @@ original external mapping/daemon cleanup custody and hard runtime bounds.
 
 2. Run Producer tests, required tiers, CI command contracts and paired guidance checks.
 
-   Result: Linux libs runs the adapter once after Producer; non-Linux and UI/speech
-   shards omit it. Its failure still runs later checks and fails the shard.
+   Result: Linux `libs-extra` runs the adapter once after Producer; non-Linux and
+   the UI, libs, and speech shards omit it. Its failure still runs later checks
+   and fails the shard.
    Existing SDK/gateway/Owner/encoder commands are preserved.
 
 ### 6.2 T02 — Actual named allow and deny, each daemon mode
