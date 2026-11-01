@@ -96,8 +96,10 @@ def check(times: dict[str, float], allowances: dict[str, float], ceiling: float)
 
 def render(times: dict[str, float], findings: list[Finding], ceiling: float, top: int) -> str:
     """Write the report a reader sees in the job log."""
+    total = sum(times.values())
     lines = [
-        f"Test durations: {len(times)} tests, ceiling {ceiling:.0f} s, "
+        f"Test durations: {len(times)} tests, {total / 60:.1f} min of test time "
+        f"one test at a time, ceiling {ceiling:.0f} s, "
         f"slowest {max(times.values(), default=0.0):.1f} s",
     ]
     slowest = sorted(times.items(), key=lambda item: item[1], reverse=True)[:top]
