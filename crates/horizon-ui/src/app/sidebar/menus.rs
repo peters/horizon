@@ -13,7 +13,13 @@ impl HorizonApp {
         workspace: &WorkspaceSidebarEntry,
         actions: &mut SidebarActions,
     ) {
-        response.context_menu(|ui| {
+        // A tooltip layer, as the panel menu uses: the row lives in the sidebar's clipped
+        // rectangle, so a menu drawn in the row's own layer is cut to a slice of its width.
+        let popup = egui::Popup::context_menu(response)
+            .kind(egui::PopupKind::Tooltip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
+        let shown = popup.show(|ui| {
             ui.set_min_width(160.0);
             ui.label(egui::RichText::new("Arrange Panels").size(11.0).color(theme::FG_DIM()));
             if ui
@@ -61,6 +67,24 @@ impl HorizonApp {
 
             ui.separator();
             if ui
+                .add_enabled(
+                    workspace.capabilities.can_remove_empty,
+                    Button::new(
+                        egui::RichText::new("Remove Empty Workspace")
+                            .size(12.0)
+                            .color(theme::FG_SOFT()),
+                    )
+                    .frame(false),
+                )
+                .on_disabled_hover_text(
+                    "This workspace holds a panel, a cloud or a remote workspace, or it is the last one.",
+                )
+                .clicked()
+            {
+                actions.remove_empty_workspace = Some(workspace.id);
+                ui.close();
+            }
+            if ui
                 .add(
                     Button::new(
                         egui::RichText::new("Close All Panels")
@@ -75,6 +99,11 @@ impl HorizonApp {
                 ui.close();
             }
         });
+        if shown.is_some() {
+            response
+                .ctx
+                .memory_mut(|memory| memory.areas_mut().set_sublayer(response.layer_id, popup_layer));
+        }
     }
 
     pub(super) fn show_sidebar_panel_context_menu(
