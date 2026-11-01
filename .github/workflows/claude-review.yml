@@ -1,9 +1,9 @@
 name: Claude Review
 
-# Claude reviews a pull request at most 2 times, in the policy of
+# Claude reviews a pull request at most 5 times, in the policy of
 # fintermobilityas/company (docs/pull-requests.md). Round 1 starts when a pull
-# request opens or leaves draft. Round 2, and every review of a fork's pull
-# request, starts only when a maintainer adds the `claude-review` label.
+# request opens or leaves draft. Every later round, and every review of a fork's
+# pull request, starts only when a maintainer adds the `claude-review` label.
 #
 # Keep this file identical in every repository and change the review itself in
 # fintermobilityas/review/.github/workflows/claude-review.yml, which this file
@@ -25,7 +25,7 @@ jobs:
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}
       cancel-in-progress: false
-    uses: fintermobilityas/review/.github/workflows/claude-review.yml@3df2a13620889c358e9839088f14e19ccac95f1b
+    uses: fintermobilityas/review/.github/workflows/claude-review.yml@7a5ba7a3549f568252581dc9007d6fc5b8d6c361
     permissions:
       contents: read
       pull-requests: write
