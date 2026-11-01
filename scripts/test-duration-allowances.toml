@@ -1,0 +1,17 @@
+# Per-test ceilings for `scripts/check-test-durations.py`.
+#
+# The check reads the libtest-json stream of the shard run and fails when a test
+# takes longer than `--ceiling` seconds (60) and is not listed here, or when a
+# listed test grows by more than a quarter of its own ceiling. The libs shard
+# runs it at the end of the step, so it adds no run time.
+#
+# Add an entry only for a test that legitimately needs longer, and put a measured
+# number in it: the list exists to shrink, not to grow.
+#
+# The file is empty because no test needs one. Run 41308216605 reports the
+# slowest test of the libs shard at 21.9 s on Linux and 34.9 s on macOS, against
+# the 60 s ceiling. The report in
+# `docs/testing/reports/2026-10-24-test-suite-durations.md` measures one test at a
+# time on a busy machine, so its 64 s and 175 s rows describe that machine and not
+# a runner; seed an entry from a shard run if one is ever needed.
+[tests]
