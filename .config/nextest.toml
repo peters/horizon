@@ -1,6 +1,6 @@
-# Test-runner settings for `cargo nextest`, which `scripts/test-focus.py` uses
-# when it is installed. No CI job runs nextest, so this file only changes a run
-# that someone starts by hand.
+# Test-runner settings for `cargo nextest`. The Linux and macOS libs test jobs
+# run it through `scripts/ci-cargo-test-shard.sh`, and `scripts/test-focus.py`
+# uses it for a local run when it is installed.
 #
 # libtest prints one total for the whole target. nextest names every test that
 # exceeds the period below, so a slow test is visible and can be fixed instead

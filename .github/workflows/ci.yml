@@ -402,6 +402,11 @@ jobs:
           else
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
+      # nextest schedules the tests of every binary in one pool; libtest runs one
+      # binary at a time. Only the libs shards use it.
+      - name: Install nextest
+        if: ${{ matrix.shard == 'libs' }}
+        uses: taiki-e/install-action@nextest
       - name: Link the Swift runtime in macOS test binaries
         if: startsWith(matrix.os, 'macos-')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"

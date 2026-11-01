@@ -5,11 +5,12 @@
 # workspace in that job before the speech feature, so the saved target is not
 # speech-only.
 #
-# `libs` runs the one workspace selection that carries the opt-in features, and
-# `libs-extra` runs the single-package lanes and the example whose own feature
-# resolution cannot join it. They are two jobs because cargo resolves features
-# per selection: one job that ran both paid for both graphs in series, and the
-# workspace selection alone was 656 s of its 999 s.
+# `libs` runs the one workspace selection that carries the opt-in features with
+# `cargo nextest`, which schedules the tests of every binary in one pool, and
+# adds the doctests that nextest cannot run. `libs-extra` runs the single-package
+# lanes and the example, which keep libtest. They are two jobs because cargo
+# resolves features per selection: one job that ran both paid for both graphs in
+# series, and the workspace selection alone was 656 s of its 999 s.
 #
 # macOS runs libs, libs-extra, and speech as three jobs over two cache keys:
 # libs-extra restores the entry that libs saves and never writes it. libs and
@@ -54,8 +55,12 @@ run_libs() {
     # Repeat this package selection and this feature list in every invocation of
     # this shard: cargo resolves features per selection, so a `-p` selection
     # after a `--workspace` build rebuilds every crate.
-    run_cargo test --locked --workspace --exclude horizon-ui --no-run --features "$features" || status=$?
-    run_cargo test --locked --workspace --exclude horizon-ui --features "$features" || status=$?
+    # `cargo test` runs one test binary at a time, so 66 binaries ran in series
+    # and the shard's 236 s of test time was a sum. nextest schedules the tests
+    # of every binary in one pool, so the same tests overlap instead.
+    run_cargo nextest run --locked --workspace --exclude horizon-ui --features "$features" || status=$?
+    # nextest runs no doctests, so they keep their own pass over the same units.
+    run_cargo test --locked --workspace --exclude horizon-ui --features "$features" --doc || status=$?
     return "$status"
 }
 
