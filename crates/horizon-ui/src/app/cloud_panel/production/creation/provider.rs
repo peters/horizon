@@ -205,6 +205,23 @@ pub(in crate::app::cloud_panel) fn choose(form: &mut Production, provider: &'sta
     place_cheapest(form, provider);
 }
 
+/// Whether `provider`, chosen in the heading, runs the profile the dialog now holds. A
+/// profile written for a saved Docker host runs on that host only, so another provider's
+/// choice ends with it, as [`choices`] offers no move away from a host.
+pub(in crate::app::cloud_panel) fn runs(provider: &Description, form: &Production) -> bool {
+    selector::profile(form)
+        .is_some_and(|profile| profile.provider != provider::DOCKER_HOST.id && provider.supports(profile))
+}
+
+/// Places the cloud on `provider` again, as a heading click does, without ending a choice
+/// the person already made.
+pub(in crate::app::cloud_panel) fn place(form: &mut Production, provider: &'static Description) {
+    form.provider = Some(provider);
+    form.size = None;
+    form.placement = horizon_core::cloud_panel::Placement::default();
+    place_cheapest(form, provider);
+}
+
 /// Fills the size and placement without changing whether the provider was chosen explicitly.
 fn place_cheapest(form: &mut Production, provider: &Description) {
     let Some(profile) = selector::profile(form) else {

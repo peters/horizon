@@ -27,10 +27,16 @@ pub(super) fn field(ui: &mut Ui, form: &mut Production) {
     if let Some(name) = chosen {
         form.size = None;
         form.placement = Placement::default();
-        form.provider = None;
         form.selected_profile = name;
+        // A provider the person chose in the heading is this cloud's provider, which
+        // ADR-1774 promises; only a profile it cannot run drops that choice.
+        let heading = form.provider;
+        form.provider = heading.filter(|provider| super::provider::runs(provider, form));
         form.launch.accounts_checked = false;
         form.launch.selector.profile_changed();
+        if let Some(provider) = form.provider {
+            super::provider::place(form, provider);
+        }
     }
 }
 
