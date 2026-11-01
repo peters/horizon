@@ -61,6 +61,24 @@ impl HorizonApp {
 
             ui.separator();
             if ui
+                .add_enabled(
+                    workspace.capabilities.can_remove_empty,
+                    Button::new(
+                        egui::RichText::new("Remove Empty Workspace")
+                            .size(12.0)
+                            .color(theme::FG_SOFT()),
+                    )
+                    .frame(false),
+                )
+                .on_disabled_hover_text(
+                    "This workspace holds a panel, a cloud or a remote workspace, or it is the last one.",
+                )
+                .clicked()
+            {
+                actions.remove_empty_workspace = Some(workspace.id);
+                ui.close();
+            }
+            if ui
                 .add(
                     Button::new(
                         egui::RichText::new("Close All Panels")

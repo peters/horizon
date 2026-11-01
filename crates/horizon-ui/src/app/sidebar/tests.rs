@@ -302,6 +302,7 @@ fn workspace_entry(row: horizon_core::cloud_list::Row, detached: bool) -> super:
         capabilities: crate::app::workspace::WorkspaceLayoutCapabilities {
             can_arrange: true,
             can_detach: false,
+            can_remove_empty: false,
         },
         panels: Vec::new(),
         row,
@@ -477,4 +478,47 @@ fn the_snapshot_labels_only_the_panel_rows_that_show() {
 
     app.template_config.features.sidebar_accordion = false;
     assert_eq!(labels(&app, hidden), ["second"], "flat rows all show");
+}
+
+#[test]
+fn an_empty_workspace_is_removed_from_its_row_and_the_last_one_stays() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let lone = app.board.create_workspace("lone");
+    let rows = app.sidebar_workspace_data();
+    assert!(
+        !rows
+            .iter()
+            .find(|row| row.id == lone)
+            .unwrap()
+            .capabilities
+            .can_remove_empty,
+        "the board keeps one workspace"
+    );
+
+    let empty = app.board.create_workspace("empty");
+    let with_panel = app.board.create_workspace("with a panel");
+    app.board
+        .create_panel(editor_panel_options("a panel"), with_panel)
+        .unwrap();
+    let rows = app.sidebar_workspace_data();
+    let capability = |id| {
+        rows.iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .capabilities
+            .can_remove_empty
+    };
+    assert!(capability(empty), "an empty workspace can go");
+    assert!(!capability(with_panel), "a workspace with a panel stays");
+
+    app.apply_sidebar_actions(
+        &egui::Context::default(),
+        &super::SidebarActions {
+            remove_empty_workspace: Some(empty),
+            ..Default::default()
+        },
+    );
+    assert!(app.board.workspace(empty).is_none(), "the row's action removed it");
+    assert!(app.board.workspace(with_panel).is_some());
+    assert!(app.board.workspace(lone).is_some());
 }

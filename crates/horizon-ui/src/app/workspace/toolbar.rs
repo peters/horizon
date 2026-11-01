@@ -299,6 +299,7 @@ mod tests {
             capabilities: super::super::WorkspaceLayoutCapabilities {
                 can_arrange: true,
                 can_detach: true,
+                can_remove_empty: false,
             },
             #[cfg(target_os = "linux")]
             casting: false,

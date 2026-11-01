@@ -20,6 +20,8 @@ use self::toolbar::workspace_layout_toolbar_rect;
 pub(super) struct WorkspaceLayoutCapabilities {
     pub can_arrange: bool,
     pub can_detach: bool,
+    /// The workspace holds nothing, and the board keeps another one, so a person may remove it.
+    pub can_remove_empty: bool,
 }
 
 struct WorkspaceVisual {
@@ -82,6 +84,7 @@ impl HorizonApp {
         WorkspaceLayoutCapabilities {
             can_arrange: self.workspace_can_arrange_panels(id),
             can_detach: self.workspace_can_detach(id),
+            can_remove_empty: self.board.can_remove_empty_workspace(id),
         }
     }
 
@@ -465,6 +468,7 @@ mod tests {
             capabilities: super::WorkspaceLayoutCapabilities {
                 can_arrange: true,
                 can_detach: true,
+                can_remove_empty: false,
             },
             #[cfg(target_os = "linux")]
             casting: false,

@@ -60,6 +60,7 @@ struct SidebarActions {
     reattach_workspace: Option<WorkspaceId>,
     close_panel: Option<PanelId>,
     close_all_in_workspace: Option<WorkspaceId>,
+    remove_empty_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
 }
@@ -567,6 +568,11 @@ impl HorizonApp {
         }
         if let Some(workspace_id) = actions.close_all_in_workspace {
             self.close_workspace_panels(workspace_id);
+        }
+        if let Some(workspace_id) = actions.remove_empty_workspace
+            && self.board.remove_empty_workspace(workspace_id)
+        {
+            self.mark_runtime_dirty();
         }
         if let Some(workspace_id) = actions.clear_layout
             && self.workspace_can_arrange_panels(workspace_id)
