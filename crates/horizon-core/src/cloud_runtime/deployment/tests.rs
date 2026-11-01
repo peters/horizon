@@ -935,3 +935,19 @@ fn absence_reports_only_what_the_record_and_its_provider_journal_confirm() {
     ));
     assert_eq!(absence(&state_root).unwrap(), Absence::Unconfirmed);
 }
+
+#[test]
+fn a_key_without_its_public_half_says_what_to_do() {
+    let temp = tempfile::tempdir().unwrap();
+    let identity = temp.path().join("identity");
+    std::fs::write(&identity, "private").unwrap();
+    let error = current_public_key(&identity).unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "The SSH identity has no public key beside it; Cloud settings can make a new pair"
+    );
+
+    std::fs::write(temp.path().join("identity.pub"), "not a key").unwrap();
+    let error = current_public_key(&identity).unwrap_err().to_string();
+    assert!(error.contains("not a supported Ed25519 key"), "{error}");
+}
