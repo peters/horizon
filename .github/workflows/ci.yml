@@ -434,7 +434,9 @@ jobs:
       # already keeps nextest's stream, so publishing it is one pass over a file:
       # no second run, no second runner, and no stored artifact.
       - name: Publish the test durations
-        if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        # `!cancelled()` publishes the record of a shard that failed, which is the
+        # run whose durations a reader needs most.
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
         shell: bash
         run: |
           python3 -B scripts/publish-test-durations.py \

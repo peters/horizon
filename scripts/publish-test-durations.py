@@ -21,9 +21,14 @@ from pathlib import Path
 
 
 def crate_of(name: str) -> str:
-    """The package that owns a test name from the stream."""
-    head = name.split("::", 1)[0]
-    return head or "unknown"
+    """The package that owns a test name from the stream.
+
+    The stream names a test as `<package>::<binary>$<path>`, and a package whose
+    library is the only test binary can appear as `<package>$<path>`. The package
+    is the first segment either way.
+    """
+    head = name.split("$", 1)[0]
+    return head.split("::", 1)[0] or "unknown"
 
 
 def read_times(path: Path) -> dict[str, float]:

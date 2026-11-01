@@ -60,8 +60,11 @@ class ReadTests(unittest.TestCase):
     def test_a_missing_stream_has_no_times(self):
         self.assertEqual(durations.read_times(Path(self.directory.name) / "absent"), {})
 
-    def test_the_crate_is_the_package_prefix_of_the_name(self):
+    def test_the_crate_is_the_package_of_either_name_shape(self):
+        # nextest writes `<package>::<binary>$<path>`, and a package with one test
+        # binary can appear as `<package>$<path>`.
         self.assertEqual(durations.crate_of("horizon-core::horizon_core$board::moves"), "horizon-core")
+        self.assertEqual(durations.crate_of("horizon-core$board::moves"), "horizon-core")
 
 
 class ReportTests(unittest.TestCase):
