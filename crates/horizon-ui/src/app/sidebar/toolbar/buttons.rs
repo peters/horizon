@@ -159,7 +159,7 @@ impl HorizonApp {
             crate::app::casting::paint_cast_icon(painter, icon, ink);
         });
         let button = button.on_hover_text(
-            "Cast the whole Horizon window, with every workspace and panel on screen, to your Apple TV. Shift-click or right-click to choose another TV or quality.",
+            "Cast the whole Horizon window, with every workspace and panel on screen, to your Apple TV. A click opens the Cast picker, and a click during the cast stops it. Shift-click or right-click opens the picker also during the cast.",
         );
         let chooser = ui.input(|input| input.modifiers.shift) || button.secondary_clicked();
         if button.clicked() || button.secondary_clicked() {

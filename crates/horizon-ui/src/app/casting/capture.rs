@@ -69,7 +69,6 @@ impl HorizonApp {
         if self.casting.poll() {
             ctx.request_repaint();
         }
-        self.resume_pending_application_cast(ctx);
         let mut source_lost = false;
         for session in &self.casting.sessions {
             if session.worker.finished() {

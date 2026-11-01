@@ -212,9 +212,6 @@ impl HorizonApp {
             agent_controlled: caller == CastCaller::WorkspaceAgent,
         });
         self.casting.notice = None;
-        if matches!(source, CastSource::Application {}) {
-            self.casting.last_application_receiver = Some(receiver_id.to_owned());
-        }
         if caller == CastCaller::WorkspaceAgent && matches!(source, CastSource::Application {}) {
             self.close_application_cast_controls(ctx);
         }
