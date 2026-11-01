@@ -198,7 +198,7 @@ class WorkflowTests(unittest.TestCase):
                         jobs[name],
                     )
                     self.assertIn(
-                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}\n"
+                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs-extra' }}\n"
                         "        run: " + prefix + "tmux",
                         jobs[name],
                     )

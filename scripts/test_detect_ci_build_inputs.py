@@ -316,7 +316,8 @@ class WorkflowGateTests(unittest.TestCase):
                 condition = re.search(r"(?m)^(?:        )?if: (.*)$", step)
                 condition = condition.group(1) if condition else ""
                 if ("startsWith(matrix.os, 'macos-')" in condition
-                        or "matrix.shard == 'libs'" in condition):
+                        or "matrix.shard == 'libs'" in condition
+                        or "matrix.shard == 'libs-extra'" in condition):
                     continue
                 if "Skip the speech tests" in step:
                     self.assertEqual(condition, "env.HORIZON_CI_SKIP_SPEECH == 'true'")

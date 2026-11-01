@@ -42,4 +42,4 @@ Unix credentials and the pinned Unix Serve PROXY-v1 runtime are prerequisites.
 Keep provisional Unix accounting separate from real peer IPs and StableIDs.
 Preserve the Producer dependency custody checks. Preserve SDK, gateway,
 Owner, Producer and encoder CI commands; add the Gate suite only once in Linux
-libs with independent failure propagation. Keep paired guidance identical.
+`libs-extra` with independent failure propagation. Keep paired guidance identical.
