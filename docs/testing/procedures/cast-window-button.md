@@ -66,9 +66,7 @@ panel, a workspace or a cloud card.
    Result: The button background gets lighter. The icon keeps its normal color.
    A hint says that the cast shares the whole window.
 
-### 6.2 OPEN — A first click without a known TV
-
-Do this task when the candidate has no remembered whole-window TV.
+### 6.2 OPEN — A click opens the picker
 
 1. Click the cast icon.
 
@@ -87,15 +85,20 @@ Do this task when the candidate has no remembered whole-window TV.
 
    Result: The picker closes. The icon loses the accent color.
 
-### 6.3 START — One click on the remembered TV
+5. Do steps 1 and 4 three more times.
 
-1. Select the Apple TV in the picker and start one whole-window cast. Stop it.
+   Result: Each click opens or closes the picker. No cast starts.
 
-   Result: The candidate now remembers this TV for the whole window.
+### 6.3 START — A cast from the picker
 
-2. Click the cast icon.
+1. Click the cast icon.
 
-   Result: The cast starts on the same TV. The picker does not open.
+   Result: The picker opens. The Apple TV of the last cast in this workspace is
+   selected when the candidate knows it.
+
+2. Select the Apple TV and click **Start casting**.
+
+   Result: The picker closes and the cast starts.
 
 3. Look at the TV.
 
@@ -110,6 +113,11 @@ Do this task when the candidate has no remembered whole-window TV.
 5. Click the cast icon.
 
    Result: The cast stops. The cast icon loses the accent color.
+
+6. Click the cast icon again.
+
+   Result: The picker opens again, with the same Apple TV selected. A stopped
+   cast does not take the picker away.
 
 ### 6.4 CHOOSER — Shift-click opens the picker
 
@@ -137,17 +145,25 @@ Do this task when the candidate has no remembered whole-window TV.
 
 ### 6.5 RUNNING — The chooser shows a running cast
 
-1. Start a whole-window cast from the root toolbar. Switch to another workspace
+1. Open the picker and start a whole-window cast. Switch to another workspace
    with at least one panel.
 
    Result: The TV keeps the picture of the window. The cast icon stays in the
    accent color.
 
-2. Hold **Shift** and click the cast icon.
+2. Click the cast icon.
 
-   Result: The picker opens on the running session. It shows **Stop**.
+   Result: The cast stops, and no picker opens.
 
-3. Click **Stop**.
+3. Start the whole-window cast again.
+
+   Result: The picker opens, and **Start casting** starts the cast.
+
+4. Hold **Shift** and click the cast icon.
+
+   Result: The picker opens on the running session. It shows **Stop casting**.
+
+5. Click **Stop casting**.
 
    Result: The cast stops. The icon loses the accent color.
 
@@ -169,10 +185,11 @@ Do this task when the candidate has no remembered whole-window TV.
 ## 7. Pass criteria
 
 - The cast icon is in the root toolbar on Linux, and no other platform shows it.
-- A first click without a known TV opens the picker under the icon with the
-  whole-window source, and the same click closes it.
-- A click with a remembered TV starts the cast without a picker, and a click
-  during that cast stops it.
+- A click opens the picker under the icon with the whole-window source, and the
+  same click closes it. This holds for every click, also when the candidate
+  knows an Apple TV and after a cast stopped.
+- A click never starts a cast. **Start casting** in the picker starts it, and a
+  click during that cast stops it.
 - Shift-click and right-click open the picker. While a cast runs, that picker
   shows the running session and can stop it.
 - A whole-window session shows the window as it appears, and the icon shows the
