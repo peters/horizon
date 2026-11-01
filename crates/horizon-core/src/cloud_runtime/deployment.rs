@@ -575,12 +575,26 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     Ok(state)
 }
 
-fn current_public_key(identity: &std::path::Path) -> Result<String> {
-    let path = PathBuf::from(format!("{}.pub", identity.display()));
-    let key = std::fs::read_to_string(&path)?.trim().to_owned();
+/// The public key deployment sends to the provider: the one beside the identity.
+pub(super) fn current_public_key(identity: &std::path::Path) -> Result<String> {
+    // Appended to the path itself: a name that is not valid UTF-8 keeps its own bytes.
+    let mut public = identity.as_os_str().to_owned();
+    public.push(".pub");
+    let path = PathBuf::from(public);
+    let key = match std::fs::read_to_string(&path) {
+        Ok(key) => key.trim().to_owned(),
+        // A person reads this through the card, so it names the file and the fix rather
+        // than the operating system's wording for a missing path.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::Invalid(
+                "The SSH identity has no public key beside it; Cloud settings can make a new pair",
+            ));
+        }
+        Err(error) => return Err(Error::Io(error)),
+    };
     if !horizon_cloud::valid_public_key(&key) {
         return Err(Error::Invalid(
-            "Replacement worker requires the current Ed25519 public key",
+            "The SSH identity's public key is not a supported Ed25519 key; Cloud settings can make a new pair",
         ));
     }
     Ok(key)
