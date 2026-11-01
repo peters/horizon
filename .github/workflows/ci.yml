@@ -105,6 +105,8 @@ jobs:
         run: python3 -B scripts/test_test_duration_baseline.py -v
       - name: Verify the test duration gate
         run: python3 -B scripts/test_check_test_durations.py -v
+      - name: Verify the test duration report
+        run: python3 -B scripts/test_publish_test_durations.py -v
       - name: Verify the setup gate runner
         run: python3 -B scripts/test_setup_gate.py -v
 
@@ -428,6 +430,16 @@ jobs:
           HORIZON_CI_SHARD: ${{ matrix.shard }}
           HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: bash scripts/ci-cargo-test-shard.sh
+      # #1796 asks for the duration baseline of every change to main. The shard
+      # already keeps nextest's stream, so publishing it is one pass over a file:
+      # no second run, no second runner, and no stored artifact.
+      - name: Publish the test durations
+        if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        shell: bash
+        run: |
+          python3 -B scripts/publish-test-durations.py \
+            --stream "$RUNNER_TEMP/nextest-libs.json" \
+            --label "${{ matrix.name }} libs" >> "$GITHUB_STEP_SUMMARY"
       # horizon-chromecast and horizon-media are standalone libraries that also
       # target Apple mobile platforms; keep device and simulator builds compiling.
       - name: Cross-build portable casting crates for Apple mobile targets
