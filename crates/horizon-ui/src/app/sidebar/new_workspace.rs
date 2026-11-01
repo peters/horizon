@@ -1,6 +1,7 @@
 //! Where a new workspace runs: **+ New cloud** makes one with a cloud, and **New** in the
 //! sidebar header makes an empty one on this computer.
 use egui::Context;
+use horizon_core::WorkspaceId;
 
 use super::super::HorizonApp;
 
@@ -58,6 +59,22 @@ impl HorizonApp {
         }
     }
 
+    /// The workspace a new cloud may fill instead of a new one: the active workspace when it
+    /// holds nothing, or else the first empty workspace on the board.
+    #[cfg(feature = "cloud-workspaces")]
+    fn empty_workspace_for_a_cloud(&self) -> Option<WorkspaceId> {
+        if let Some(active) = self.board.active_workspace
+            && self.board.workspace_holds_nothing(active)
+        {
+            return Some(active);
+        }
+        self.board
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id)
+            .find(|workspace| self.board.workspace_holds_nothing(*workspace))
+    }
+
     /// Makes a workspace where `choice` says, at `canvas_pos` or where new workspaces go. A
     /// cloud workspace opens New cloud for it; a draft a dismissal parked comes back first.
     pub(in crate::app) fn create_new_workspace(
@@ -70,14 +87,37 @@ impl HorizonApp {
         if choice.is_cloud() && self.cloud_launch_ready() && self.reopen_cloud_draft(ctx) {
             return;
         }
-        let name = format!("Workspace {}", self.board.workspaces.len() + 1);
-        let workspace = match canvas_pos {
-            Some(position) => self.create_workspace_at_visible(ctx, &name, position),
-            None => self.create_workspace_visible(ctx, &name),
+        // A cloud takes an empty workspace that is already on the board before it makes
+        // another one, so a cancelled draft never leaves a row behind. A workspace the person
+        // made is theirs: the draft points at it without the intent that would remove it.
+        #[cfg(feature = "cloud-workspaces")]
+        let reused = if choice.is_cloud() && self.cloud_launch_ready() && canvas_pos.is_none() {
+            self.empty_workspace_for_a_cloud()
+        } else {
+            None
+        };
+        // A build without clouds has nothing to fill, and the same workspace code runs.
+        #[cfg(not(feature = "cloud-workspaces"))]
+        let reused: Option<WorkspaceId> = None;
+        let workspace = if let Some(empty) = reused {
+            self.board.active_workspace = Some(empty);
+            self.focus_workspace_visible(ctx, empty, false);
+            empty
+        } else {
+            let name = format!("Workspace {}", self.board.workspaces.len() + 1);
+            match canvas_pos {
+                Some(position) => self.create_workspace_at_visible(ctx, &name, position),
+                None => self.create_workspace_visible(ctx, &name),
+            }
         };
         #[cfg(feature = "cloud-workspaces")]
         if choice.is_cloud() && self.cloud_launch_ready() {
-            self.open_cloud_for_new_workspace(ctx, workspace, choice == NewWorkspace::CloudGpu);
+            let gpu = choice == NewWorkspace::CloudGpu;
+            if reused.is_some() {
+                self.open_cloud_in_existing_workspace(ctx, workspace, gpu);
+            } else {
+                self.open_cloud_for_new_workspace(ctx, workspace, gpu);
+            }
         }
         #[cfg(not(feature = "cloud-workspaces"))]
         let _ = (choice, workspace);

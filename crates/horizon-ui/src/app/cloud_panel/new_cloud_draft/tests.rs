@@ -77,8 +77,8 @@ fn parked_draft(ctx: &egui::Context, app: &mut HorizonApp, temp: &std::path::Pat
     assert!(app.cloud_creation_open());
     assert_eq!(
         app.board.workspaces.len(),
-        workspaces + 1,
-        "a workspace holds the draft"
+        workspaces,
+        "the draft sits in the empty workspace the person already had"
     );
     app.cloud_prototype.production.set_draft_title("Atlas cloud");
     park_off_the_canvas(ctx, app);
@@ -116,7 +116,7 @@ fn a_parked_draft_stays_in_its_workspace_with_its_choices() {
         "Atlas cloud",
         "what was typed stays with the draft"
     );
-    assert_eq!(app.board.workspaces.len(), workspaces + 1, "its workspace stays");
+    assert_eq!(app.board.workspaces.len(), workspaces, "its workspace stays");
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     for label in ["Atlas cloud", "Continue", "Cancel"] {
         assert!(
@@ -141,11 +141,11 @@ fn continue_on_the_card_opens_the_dialog_again_with_what_it_kept() {
         "the dialog shows the draft it kept"
     );
     assert!(app.cloud_prototype.production.draft.is_none(), "no card is left behind");
-    assert_eq!(app.board.workspaces.len(), workspaces + 1, "one workspace, not two");
+    assert_eq!(app.board.workspaces.len(), workspaces, "one workspace, not two");
 }
 
 #[test]
-fn cancel_on_the_card_ends_the_draft_and_takes_its_empty_workspace() {
+fn cancel_on_the_card_ends_the_draft_and_leaves_the_workspace_the_person_had() {
     let (temp, ctx, mut app, workspaces) = ready_app();
     parked_draft(&ctx, &mut app, temp.path(), workspaces);
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
@@ -156,7 +156,7 @@ fn cancel_on_the_card_ends_the_draft_and_takes_its_empty_workspace() {
     assert_eq!(
         app.board.workspaces.len(),
         workspaces,
-        "the workspace New cloud made goes with the draft"
+        "a workspace the person already had stays after Cancel"
     );
 }
 
@@ -263,7 +263,10 @@ fn a_parked_draft_keeps_its_choices_in_the_cloud_settings_folder() {
         ],
         "only choices, their owner, and where the draft sits are saved"
     );
-    assert_eq!(saved["new_workspace"], true, "New workspace made that workspace");
+    assert_eq!(
+        saved["new_workspace"], false,
+        "the draft filled a workspace the person already had, so Cancel keeps it"
+    );
     assert!(
         app.cloud_prototype.production.creating,
         "the draft still belongs to this session"
@@ -338,6 +341,8 @@ fn a_record_of_a_workspace_that_went_is_dropped() {
         .board
         .workspace_id_by_local_id(&workspace)
         .expect("the draft's workspace");
+    // A second workspace, so the board may remove the one that holds the draft.
+    let _other = app.board.create_workspace("another workspace");
     assert!(
         app.board.remove_empty_workspace(card),
         "the person removed the workspace"

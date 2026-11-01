@@ -89,12 +89,16 @@ fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
         "the machine line in the tooltip"
     );
 
-    // + New cloud makes a workspace and opens New cloud for it. The draft parks when that
-    // workspace leaves the canvas, and + New cloud brings it back; only Cancel takes the
-    // workspace away.
+    // + New cloud fills the empty workspace the person already has and opens New cloud on
+    // it. The draft parks when that workspace leaves the canvas, and + New cloud brings it
+    // back; the workspace the person made stays through Cancel.
     click(&ctx, &mut app, cloud);
     assert!(app.cloud_prototype.production.creating, "+ New cloud opens New cloud");
-    assert_eq!(app.board.workspaces.len(), workspaces + 1);
+    assert_eq!(
+        app.board.workspaces.len(),
+        workspaces,
+        "an empty workspace is filled instead of a second one being made"
+    );
     // The form opens on its workspace, which the view has to reach first.
     let layer = egui::LayerId::new(egui::Order::Middle, Id::unique("cloud-creation"));
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -111,7 +115,7 @@ fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
     );
     assert_eq!(
         app.board.workspaces.len(),
-        workspaces + 1,
+        workspaces,
         "its workspace stays with the draft"
     );
     // Parking brings the view back to that workspace, where the card waits.
@@ -126,7 +130,11 @@ fn the_toolbar_has_one_button_for_a_cloud_and_the_menu() {
     click(&ctx, &mut app, label_position(&output, "Cancel"));
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     assert!(!app.cloud_prototype.production.creating, "Cancel ends the draft");
-    assert_eq!(app.board.workspaces.len(), workspaces, "the cancelled workspace goes");
+    assert_eq!(
+        app.board.workspaces.len(),
+        workspaces,
+        "Cancel leaves the workspace the person already had"
+    );
 }
 
 #[test]
@@ -246,5 +254,52 @@ fn a_dimmed_new_cloud_takes_no_focus_and_says_why_on_hover() {
     assert!(
         text_center(&output, crate::app::sidebar::NEW_CLOUD_NOT_READY).is_some(),
         "the hover explains the dimmed button"
+    );
+}
+
+#[test]
+fn new_cloud_fills_an_empty_workspace_instead_of_leaving_another_behind() {
+    let (_temp, ctx, mut app, workspaces) = ready_app();
+    assert_eq!(workspaces, 1, "the board holds one empty workspace");
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    click(&ctx, &mut app, label_position(&output, "+  New cloud"));
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    assert!(app.cloud_prototype.production.creating, "New cloud opens the dialog");
+    assert_eq!(
+        app.board.workspaces.len(),
+        1,
+        "the cloud takes the empty workspace instead of making a second one"
+    );
+    assert_eq!(
+        app.cloud_prototype.production.creation_workspace().as_deref(),
+        Some(app.board.workspaces[0].local_id.as_str()),
+        "the dialog points at the workspace the person already has"
+    );
+}
+
+#[test]
+fn new_cloud_still_makes_a_workspace_when_the_board_holds_panels_only() {
+    let (_temp, ctx, mut app, workspaces) = ready_app();
+    let workspace = app.board.workspaces[0].id;
+    app.board
+        .create_panel(
+            horizon_core::PanelOptions {
+                name: Some("a panel".to_owned()),
+                kind: horizon_core::PanelKind::Editor,
+                command: Some("seed".to_owned()),
+                ..horizon_core::PanelOptions::default()
+            },
+            workspace,
+        )
+        .unwrap();
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    click(&ctx, &mut app, label_position(&output, "+  New cloud"));
+    assert!(app.cloud_prototype.production.creating);
+    assert_eq!(
+        app.board.workspaces.len(),
+        workspaces + 1,
+        "a workspace that holds a panel is not taken for a new cloud"
     );
 }

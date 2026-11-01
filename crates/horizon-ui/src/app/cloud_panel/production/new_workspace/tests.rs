@@ -55,6 +55,7 @@ fn texts(form: &mut Production) -> (bool, Vec<String>) {
 fn plain_intent(workspace: WorkspaceId, gpu: bool) -> Intent {
     Intent {
         workspace,
+        made: true,
         gpu,
         chosen_for: None,
         no_gpu: false,
@@ -143,21 +144,41 @@ fn a_cancelled_cloud_takes_away_only_the_empty_workspace_new_workspace_made() {
     let (_temp, mut app) = test_app();
     let ctx = egui::Context::default();
     app.cloud_prototype.ready = true;
-    // This PC makes a plain workspace and no dialog.
     let before = app.board.workspaces.len();
+    // This PC makes a plain workspace and no dialog.
     app.create_new_workspace(&ctx, NewWorkspace::ThisPc, None);
     assert_eq!(app.board.workspaces.len(), before + 1);
     assert!(!app.cloud_prototype.production.creating);
-    // Cloud makes one and opens New cloud for it; Cancel takes it away again.
+    // Cloud fills that empty workspace, so Cancel leaves the workspace the person has.
     app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
     assert!(app.cloud_prototype.production.creating);
-    assert_eq!(app.board.workspaces.len(), before + 2);
+    assert_eq!(app.board.workspaces.len(), before + 1, "the empty workspace is filled");
     app.close_cloud_creation();
-    assert_eq!(app.board.workspaces.len(), before + 1, "the empty cloud workspace goes");
-    // A workspace with something in it stays.
+    assert_eq!(
+        app.board.workspaces.len(),
+        before + 1,
+        "a workspace the person already had stays after Cancel"
+    );
+    // With nothing empty on the board, Cloud makes one and Cancel takes it away again.
+    let filled = app.board.workspaces.last().unwrap().id;
+    let note = PanelOptions {
+        kind: horizon_core::PanelKind::Editor,
+        ..PanelOptions::default()
+    };
+    app.create_panel_with_options(note, filled).unwrap();
     app.create_new_workspace(&ctx, NewWorkspace::CloudGpu, None);
     let intent = app.cloud_prototype.production.new_workspace.clone().unwrap();
-    assert!(intent.gpu);
+    assert!(intent.gpu && intent.made, "New workspace made this one for the cloud");
+    assert_eq!(app.board.workspaces.len(), before + 2);
+    app.close_cloud_creation();
+    assert_eq!(
+        app.board.workspaces.len(),
+        before + 1,
+        "the workspace New workspace made goes with the cancelled draft"
+    );
+    // A workspace with something in it stays.
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    let intent = app.cloud_prototype.production.new_workspace.clone().unwrap();
     let note = PanelOptions {
         kind: horizon_core::PanelKind::Editor,
         ..PanelOptions::default()
@@ -179,7 +200,11 @@ fn a_session_switch_keeps_a_parked_draft_and_ends_an_open_dialog() {
     // A parked draft is what the next start of this session saves: its workspace and its
     // saved choices stay.
     app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
-    assert_eq!(app.board.workspaces.len(), before + 1);
+    assert_eq!(
+        app.board.workspaces.len(),
+        before,
+        "the parked draft fills the empty workspace the board already had"
+    );
     app.hide_cloud_creation(&ctx);
     let parked = app
         .cloud_prototype
@@ -190,7 +215,7 @@ fn a_session_switch_keeps_a_parked_draft_and_ends_an_open_dialog() {
     assert!(!app.cloud_prototype.production.creating);
     assert_eq!(
         app.board.workspaces.len(),
-        before + 1,
+        before,
         "the workspace of a parked draft is saved with its card"
     );
     app.settle_cloud_drafts();
@@ -200,9 +225,16 @@ fn a_session_switch_keeps_a_parked_draft_and_ends_an_open_dialog() {
             .is_some(),
         "the record waits for the session that comes back"
     );
-    // A dialog that a switch ends takes its empty workspace and its record with it.
+    // A dialog that a switch ends takes its own workspace and its record with it. The board
+    // holds no empty workspace here, so Cloud makes one for the dialog.
+    let filled = app.board.workspaces.last().unwrap().id;
+    let note = PanelOptions {
+        kind: horizon_core::PanelKind::Editor,
+        ..PanelOptions::default()
+    };
+    app.create_panel_with_options(note, filled).unwrap();
     app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
-    assert_eq!(app.board.workspaces.len(), before + 2);
+    assert_eq!(app.board.workspaces.len(), before + 1);
     let open = app
         .cloud_prototype
         .production
@@ -210,11 +242,7 @@ fn a_session_switch_keeps_a_parked_draft_and_ends_an_open_dialog() {
         .expect("the open dialog's workspace");
     app.close_cloud_creation_for_session_switch();
     assert!(!app.cloud_prototype.production.creating);
-    assert_eq!(
-        app.board.workspaces.len(),
-        before + 1,
-        "nothing empty is saved with the board"
-    );
+    assert_eq!(app.board.workspaces.len(), before, "the workspace the person had stays");
     assert!(
         horizon_core::cloud_runtime::draft::Drafts::load(&root)
             .get(&open)

@@ -28,6 +28,9 @@ impl Production {
 #[derive(Clone, Debug)]
 pub(super) struct Intent {
     workspace: WorkspaceId,
+    /// Whether New workspace made this workspace for the cloud. A workspace the person
+    /// already had stays when the draft is cancelled or a session switch ends it.
+    pub(super) made: bool,
     /// Cloud GPU: the first GPU profile of each repository the dialog reads.
     gpu: bool,
     /// The repository Cloud GPU last chose a profile for. A reread of it keeps the person's
@@ -54,11 +57,28 @@ impl HorizonApp {
     /// Opens New cloud for `workspace`, which New workspace just made; `gpu` for Cloud GPU.
     pub(in crate::app) fn open_cloud_for_new_workspace(&mut self, ctx: &Context, workspace: WorkspaceId, gpu: bool) {
         self.open_cloud_for_workspace(ctx, workspace);
+        self.keep_cloud_workspace_intent(ctx, workspace, gpu, true);
+    }
+
+    /// Opens New cloud in `workspace`, which the person already had, so nothing takes that
+    /// workspace away when the draft ends. `gpu` asks for a GPU profile as Cloud GPU does.
+    pub(in crate::app) fn open_cloud_in_existing_workspace(
+        &mut self,
+        ctx: &Context,
+        workspace: WorkspaceId,
+        gpu: bool,
+    ) {
+        self.open_cloud_for_workspace(ctx, workspace);
+        self.keep_cloud_workspace_intent(ctx, workspace, gpu, false);
+    }
+
+    fn keep_cloud_workspace_intent(&mut self, ctx: &Context, workspace: WorkspaceId, gpu: bool, made: bool) {
         let root = self.cloud_prototype.root.clone();
         let form = &mut self.cloud_prototype.production;
         if form.creating {
             form.new_workspace = Some(Intent {
                 workspace,
+                made,
                 gpu,
                 chosen_for: None,
                 no_gpu: false,
@@ -79,6 +99,9 @@ impl HorizonApp {
         let Some(intent) = self.cloud_prototype.production.new_workspace.take() else {
             return;
         };
+        if !intent.made {
+            return;
+        }
         let Some(workspace) = self.board.workspace(intent.workspace) else {
             return;
         };
@@ -276,6 +299,7 @@ impl Intent {
         let loading = root.as_ref().map(|root| loading_choices(root.clone(), ctx));
         Self {
             workspace,
+            made: true,
             gpu: false,
             chosen_for: None,
             no_gpu: false,
