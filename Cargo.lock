@@ -561,9 +561,9 @@ dependencies = [
 
 [[package]]
 name = "axuielement"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a53a0989d246c81db85d16ed7a2476d6641bc43cf6c73d3f79625a8e32b26294"
+checksum = "b496850e61c4be1af778108910b087777075c23968e2151dcfd0a4b758686cd6"
 dependencies = [
  "apple-cf",
  "doom-fish-utils",
