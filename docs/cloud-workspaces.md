@@ -1222,7 +1222,11 @@ A machine without that section rents nothing for an agent:
 Horizon writes one line for each rent the envelope paid for in
 `envelope-rents.jsonl`, beside these settings. The line holds the cloud, the
 provider, the hours, the rate, the estimate, the currency, the person who
-approved the envelope and the agent that rented. A rent outside what is left is
+approved the envelope, the approval time and the agent that rented. A new
+approval counts only the rents that it recorded, so it starts with its whole
+budget. A record that Horizon cannot read admits nothing: one that is too long,
+one with too many rents, or one with a whole line it cannot parse. Remove the file
+only when you approve a fresh envelope. A rent outside what is left is
 refused before a worker is requested, and it writes no line. Because a worker can
 be rented after the line is written, a cloud whose deployment then fails stays
 counted.

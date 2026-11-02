@@ -23,7 +23,7 @@ pub(super) const LEDGER: &str =
 /// read from cannot be read: a bound that Horizon cannot see is not a bound.
 pub(super) fn approval(machine: &Settings, root: &Path) -> Result<record::Envelope, String> {
     let envelope = machine.spending_envelope.clone().ok_or(NO_ENVELOPE)?;
-    record::Ledger::at(root).spent().map_err(|_| LEDGER.to_owned())?;
+    record::Ledger::at(root).rents().map_err(|_| LEDGER.to_owned())?;
     Ok(envelope)
 }
 
@@ -40,7 +40,7 @@ pub(super) fn admit(
     actor: &str,
 ) -> Result<record::Admitted, String> {
     let ledger = record::Ledger::at(root);
-    let spent = ledger.spent().map_err(|_| LEDGER.to_owned())?;
+    let spent = ledger.spent(envelope).map_err(|_| LEDGER.to_owned())?;
     let admitted = envelope
         .admit(spent, ask)
         .map_err(|refusal| format!("{}: {}", refusal.code(), refusal.describe(envelope, spent, ask)))?;
@@ -55,6 +55,7 @@ pub(super) fn admit(
             estimate: admitted.estimate,
             currency: admitted.currency.clone(),
             approved_by: admitted.approved_by.clone(),
+            approved_at: envelope.approved_at.clone(),
             actor: actor.to_owned(),
         })
         .map_err(|error| format!("cloud_create_refused: the spending envelope record could not be written: {error}"))?;

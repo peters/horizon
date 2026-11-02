@@ -31,7 +31,18 @@ fn rent(cloud: &str, hours: f64, estimate: f64) -> Rent {
         estimate,
         currency: "EUR".into(),
         approved_by: "peters".into(),
+        approved_at: "2026-11-02T09:00:00Z".into(),
         actor: "horizon:agent".into(),
+    }
+}
+
+/// A rent of an approval that a later envelope replaced.
+fn earlier_rent(cloud: &str, hours: f64, estimate: f64) -> Rent {
+    Rent {
+        approved_at: "2026-11-01T09:00:00Z".into(),
+        currency: "USD".into(),
+        provider: "runpod".into(),
+        ..rent(cloud, hours, estimate)
     }
 }
 
@@ -184,7 +195,7 @@ fn the_ledger_keeps_one_line_per_rent_and_answers_what_was_spent() {
     let temp = tempfile::tempdir().unwrap();
     let ledger = Ledger::at(temp.path());
     assert_eq!(
-        ledger.spent().unwrap(),
+        ledger.spent(&envelope()).unwrap(),
         Spent::default(),
         "no rent until one is admitted"
     );
@@ -195,7 +206,7 @@ fn the_ledger_keeps_one_line_per_rent_and_answers_what_was_spent() {
     assert_eq!(rents.len(), 2);
     assert_eq!(rents[1].cloud, "cloud-2");
     assert_eq!(rents[1].approved_by, "peters");
-    let spent = ledger.spent().unwrap();
+    let spent = ledger.spent(&envelope()).unwrap();
     assert!((spent.hours - 3.5).abs() < 1e-9);
     assert!((spent.amount - 0.75).abs() < 1e-9);
     // The record is one line per rent, and it holds no credential.
@@ -205,7 +216,7 @@ fn the_ledger_keeps_one_line_per_rent_and_answers_what_was_spent() {
 }
 
 #[test]
-fn a_line_that_a_crash_left_half_written_changes_no_bound() {
+fn a_line_that_a_crash_left_half_written_changes_no_bound_and_never_swallows_the_next() {
     let temp = tempfile::tempdir().unwrap();
     let ledger = Ledger::at(temp.path());
     ledger.record(&rent("cloud-1", 1.0, 0.1)).unwrap();
@@ -213,8 +224,67 @@ fn a_line_that_a_crash_left_half_written_changes_no_bound() {
     text.push_str("{\"schema_version\":1,\"cloud\":\"cloud-2\"");
     std::fs::write(ledger.path(), text).unwrap();
     let rents = ledger.rents().unwrap();
-    assert_eq!(rents.len(), 1, "the half-written line is not a rent");
-    assert!((ledger.spent().unwrap().hours - 1.0).abs() < 1e-9);
+    assert_eq!(rents.len(), 1, "the half-written tail is not a rent");
+    assert!((ledger.spent(&envelope()).unwrap().hours - 1.0).abs() < 1e-9);
+
+    // The next admitted rent is a line of its own: the torn tail is dropped first, so the
+    // record never holds two records joined into one line that no reader can count.
+    ledger.record(&rent("cloud-2", 2.0, 0.2)).unwrap();
+    let rents = ledger.rents().unwrap();
+    assert_eq!(rents.len(), 2, "{rents:?}");
+    assert_eq!(rents[1].cloud, "cloud-2");
+    assert!((ledger.spent(&envelope()).unwrap().hours - 3.0).abs() < 1e-9);
+    let text = std::fs::read_to_string(ledger.path()).unwrap();
+    assert_eq!(text.lines().count(), 2, "{text}");
+    assert!(text.ends_with('\n'));
+}
+
+#[test]
+fn a_line_horizon_cannot_read_admits_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let ledger = Ledger::at(temp.path());
+    ledger.record(&rent("cloud-1", 1.0, 0.1)).unwrap();
+    let mut text = std::fs::read_to_string(ledger.path()).unwrap();
+    text.push_str("not a rent\n");
+    std::fs::write(ledger.path(), text).unwrap();
+    assert!(matches!(ledger.rents(), Err(Error::Invalid(_))));
+    assert!(matches!(ledger.spent(&envelope()), Err(Error::Invalid(_))));
+}
+
+#[test]
+fn a_record_with_more_rents_than_horizon_counts_admits_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let ledger = Ledger::at(temp.path());
+    let mut text = String::new();
+    for index in 0..=MAX_LEDGER_RENTS {
+        text.push_str(&serde_json::to_string(&rent(&format!("cloud-{index}"), 0.01, 0.001)).unwrap());
+        text.push('\n');
+    }
+    assert!(
+        u64::try_from(text.len()).unwrap() < MAX_LEDGER_BYTES,
+        "the count bound is what stops it"
+    );
+    std::fs::write(ledger.path(), text).unwrap();
+    assert!(matches!(ledger.rents(), Err(Error::Invalid(_))));
+}
+
+#[test]
+fn a_later_approval_counts_only_its_own_rents() {
+    let temp = tempfile::tempdir().unwrap();
+    let ledger = Ledger::at(temp.path());
+    // One cloud paid for by an earlier approval, in another currency and on another provider.
+    ledger.record(&earlier_rent("cloud-0", 5.0, 1.9)).unwrap();
+    assert_eq!(
+        ledger.spent(&envelope()).unwrap(),
+        Spent::default(),
+        "a new approval starts with its whole budget"
+    );
+    ledger.record(&rent("cloud-1", 2.0, 0.5)).unwrap();
+    let spent = ledger.spent(&envelope()).unwrap();
+    assert!((spent.hours - 2.0).abs() < 1e-9);
+    assert!((spent.amount - 0.5).abs() < 1e-9);
+    // The earlier approval is still readable in the record, so a later audit keeps it.
+    assert_eq!(ledger.rents().unwrap().len(), 2);
 }
 
 #[test]
@@ -224,7 +294,7 @@ fn a_ledger_longer_than_horizon_reads_admits_nothing() {
     let over = usize::try_from(MAX_LEDGER_BYTES).unwrap() + 1;
     std::fs::write(ledger.path(), "x".repeat(over)).unwrap();
     assert!(matches!(ledger.rents(), Err(Error::Invalid(_))));
-    assert!(matches!(ledger.spent(), Err(Error::Invalid(_))));
+    assert!(matches!(ledger.spent(&envelope()), Err(Error::Invalid(_))));
     assert!(
         matches!(ledger.record(&rent("", 1.0, 0.1)), Err(Error::Invalid(_))),
         "a rent without a cloud is refused"

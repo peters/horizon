@@ -35,8 +35,13 @@ and the machine settings section in
   `envelope-rents.jsonl` beside the settings, and admits a rent only when the hours
   asked for and the offer's estimate for those hours fit what is left. A refusal
   names the limit and what is left, records nothing and requests no worker. A
-  record that Horizon cannot read, because it is longer than
-  `MAX_LEDGER_BYTES`, admits nothing.
+  record that Horizon cannot read admits nothing: one longer than
+  `MAX_LEDGER_BYTES`, one with more rents than `MAX_LEDGER_RENTS`, or one that
+  holds a whole line Horizon cannot parse. A rent belongs to the approval that
+  recorded it, by its approving person, approval time, provider and currency, so a
+  later approval counts only its own rents. An append drops a torn tail before it
+  writes, so a record is never two rents joined into one unreadable line, and a torn
+  tail held no admitted rent because the create that wrote it was refused.
 - `hours` is bounded to at most 336 in the request itself, and one hour when the
   caller omits it. The offer that is ranked and the estimate that is checked are
   priced for exactly that duration, so a longer rent cannot pass the amount bound

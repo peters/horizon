@@ -248,6 +248,9 @@ pub struct Rent {
     pub currency: String,
     /// The person who approved the envelope.
     pub approved_by: String,
+    /// When that person approved it, which names the approval this rent belongs to: a later
+    /// approval counts only its own rents, so a new envelope starts with its whole budget.
+    pub approved_at: String,
     /// The calling agent's actor, so a later audit shows who spent it.
     pub actor: String,
 }
@@ -285,10 +288,15 @@ impl Ledger {
             return Err(Error::Invalid("An envelope rent must name a cloud and its hours"));
         }
         std::fs::create_dir_all(&self.root)?;
+        // A torn tail is dropped before the append, so this rent is a line of its own and a
+        // reader never sees two records joined into one. A torn tail held no admitted rent:
+        // the create that wrote it was refused, because this write did not finish.
+        truncate_torn_tail(&self.path())?;
         let mut line = serde_json::to_string(rent).map_err(|_| Error::Json)?;
         line.push('\n');
         let mut file = OpenOptions::new().create(true).append(true).open(self.path())?;
         file.write_all(line.as_bytes())?;
+        file.sync_data()?;
         Ok(())
     }
 
@@ -309,28 +317,72 @@ impl Ledger {
             ));
         }
         let mut rents = Vec::new();
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if rents.len() >= MAX_LEDGER_RENTS {
-                break;
+        for line in text.split_inclusive('\n') {
+            if line.trim().is_empty() {
+                continue;
             }
-            // A line that a crash left half-written changes no bound: the next one counts.
-            if let Ok(rent) = serde_json::from_str::<Rent>(line) {
-                rents.push(rent);
+            // A tail without its newline is an append that never finished, so it holds no
+            // admitted rent: the create that tried to write it was refused.
+            if !line.ends_with('\n') {
+                continue;
+            }
+            // A line that arrived whole and cannot be read is a record Horizon does not
+            // understand, and a bound it cannot read is not a bound.
+            let Ok(rent) = serde_json::from_str::<Rent>(line) else {
+                return Err(Error::Invalid(
+                    "The envelope rent record holds a line Horizon cannot read, so no rent is admitted",
+                ));
+            };
+            rents.push(rent);
+            if rents.len() > MAX_LEDGER_RENTS {
+                return Err(Error::Invalid(
+                    "The envelope rent record holds more rents than Horizon reads, so no rent is admitted",
+                ));
             }
         }
         Ok(rents)
     }
 
-    /// What this machine's envelopes already paid for.
+    /// What `envelope` already paid for. A rent of an earlier approval is not counted, so a
+    /// new approval starts with its whole budget, and a rent that another approval recorded
+    /// cannot make its amount wrong.
     ///
     /// # Errors
     /// As [`Self::rents`].
-    pub fn spent(&self) -> super::Result<Spent> {
-        Ok(self.rents()?.into_iter().fold(Spent::default(), |spent, rent| Spent {
-            hours: spent.hours + rent.hours,
-            amount: spent.amount + rent.estimate,
-        }))
+    pub fn spent(&self, envelope: &Envelope) -> super::Result<Spent> {
+        Ok(self
+            .rents()?
+            .into_iter()
+            .filter(|rent| {
+                rent.approved_at == envelope.approved_at
+                    && rent.provider == envelope.provider
+                    && rent.currency == envelope.currency
+            })
+            .fold(Spent::default(), |spent, rent| Spent {
+                hours: spent.hours + rent.hours,
+                amount: spent.amount + rent.estimate,
+            }))
     }
+}
+
+/// Drops a trailing line that has no newline, so the next record is a line of its own. The
+/// file is truncated at its last newline, which is the only byte this ever removes.
+fn truncate_torn_tail(path: &Path) -> super::Result<()> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    if bytes.last().is_none_or(|byte| *byte == b'\n') {
+        return Ok(());
+    }
+    let kept = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(u64::try_from(kept).unwrap_or(0))?;
+    Ok(())
 }
 
 /// Whole hours read as an integer when they are one, such as `6 h` or `1.5 h`.
