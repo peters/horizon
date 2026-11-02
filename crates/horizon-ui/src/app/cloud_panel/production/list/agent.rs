@@ -141,7 +141,23 @@ impl HorizonApp {
             .get(&group.issue)
             .and_then(|runtime| runtime.state.as_ref())
             .filter(|state| state.cloud_id == id);
-        entry(id, &self.cloud_facts(group, now), state)
+        // A session is recorded when its terminal attaches, which the runtime state of the
+        // deployment thread does not adopt: a live worker whose session was saved after the
+        // last snapshot lists none. The cloud's own record is what a caller must be able to
+        // address, so it is read when the runtime holds no session.
+        let recorded = state
+            .filter(|state| state.sessions.is_empty())
+            .and_then(|_| self.cloud_record(id));
+        entry(id, &self.cloud_facts(group, now), state, recorded.as_ref())
+    }
+
+    /// The cloud's own saved record, when this Horizon holds a state directory for it. A
+    /// record of another cloud, or one Horizon cannot read, is nothing: the list stays honest.
+    fn cloud_record(&self, id: &str) -> Option<horizon_core::cloud_runtime::state::Deployment> {
+        let root = self.cloud_prototype.root.as_ref()?;
+        let directory = horizon_core::cloud_runtime::state::cloud_directory(root, id).ok()?;
+        let record = horizon_core::cloud_runtime::state::Store::snapshot(&directory).ok()??;
+        (record.cloud_id == id).then_some(record)
     }
 
     /// Moves the view to cloud `index` as a click on its row does: to its first
@@ -179,8 +195,17 @@ impl HorizonApp {
     }
 }
 
-/// One cloud of a `list` answer.
-fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtime::state::Deployment>) -> Value {
+/// One cloud of a `list` answer. `recorded` is the cloud's saved record, read only when the
+/// runtime state of this window holds no session of it.
+fn entry(
+    id: &str,
+    facts: &CloudFacts,
+    state: Option<&horizon_core::cloud_runtime::state::Deployment>,
+    recorded: Option<&horizon_core::cloud_runtime::state::Deployment>,
+) -> Value {
+    // A record read because the runtime holds no session is the only source of one, so it
+    // replaces the runtime state rather than sitting beside it.
+    let sessions = recorded.or(state);
     json!({
         "cloud": id,
         "name": facts.name,
@@ -193,7 +218,7 @@ fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtim
         "image_publication": state.and_then(|state| state.publication.as_ref()),
         // The sessions the worker runs, so a caller can name one to the agent tools. A
         // session's panel ID is its name on the worker, and nothing here is a secret.
-        "sessions": state.map(|state| state.sessions.iter().map(|session| json!({
+        "sessions": sessions.map(|state| state.sessions.iter().map(|session| json!({
             "panel_id": session.panel_id,
             "agent": session.agent,
             "branch": session.branch,

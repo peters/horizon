@@ -314,3 +314,39 @@ fn the_list_names_the_sessions_a_caller_can_address() {
     let encoded = serde_json::to_string(&listed).unwrap();
     assert!(!encoded.contains("secret") && !encoded.contains("token"), "{encoded}");
 }
+
+#[test]
+fn a_session_saved_after_the_last_snapshot_is_still_listed() {
+    // A live worker saved its session to the record after the deployment thread's last
+    // snapshot, so the runtime state holds none. `cloud_list` must still name the session a
+    // caller addresses, or the agent tools cannot be reached at all.
+    let (temp, mut app, actor) = cloud_with_agent();
+    let ctx = egui::Context::default();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(listed["clouds"][0]["sessions"], json!([]), "nothing is recorded yet");
+
+    let root = temp.path().to_path_buf();
+    app.cloud_prototype.use_root(Some(root.clone()));
+    let directory = horizon_core::cloud_runtime::state::cloud_directory(&root, "fixture").unwrap();
+    let store = horizon_core::cloud_runtime::state::Store::lock(&directory).unwrap();
+    let mut record = store.load().unwrap().unwrap();
+    record.sessions = vec![horizon_core::cloud_runtime::state::Session::new(
+        "panel-live",
+        "claude",
+        "/workspace/checkout".into(),
+    )];
+    store.save(&record).unwrap();
+    drop(store);
+
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(
+        listed["clouds"][0]["sessions"],
+        json!([{
+            "panel_id": "panel-live",
+            "agent": "claude",
+            "branch": "",
+            "worktree": "/workspace/checkout",
+        }]),
+        "the record answers while the runtime state holds no session: {listed}"
+    );
+}
