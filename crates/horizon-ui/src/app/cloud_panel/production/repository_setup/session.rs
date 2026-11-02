@@ -1054,8 +1054,11 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let entered = folder.display().to_string();
         // Prepared before an earlier run of the folder began to end, such as a run that a
-        // link to the folder started and that is stopped while this one prepares.
-        let prepared = prepare(&entered, super::super::Mode::New, &[]).unwrap();
+        // link to the folder started and that is stopped while this one prepares. The panel
+        // runs no process, so its scope adds nothing and this test needs no systemd user
+        // manager: the ending it examines is what decides here.
+        let mut prepared = prepare(&entered, super::super::Mode::New, &[]).unwrap();
+        prepared.launcher = Some(Vec::new());
         let first_status = prepared.status.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(Ok(prepared)).unwrap();
