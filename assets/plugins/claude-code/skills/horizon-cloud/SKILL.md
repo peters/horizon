@@ -21,7 +21,11 @@ server types are fallback preferences; they do not restrict explicit worker choi
 
 `cloud_create` is the only cloud tool that spends money without a person. It rents a
 quick-start cloud in your workspace on the machine's own provider credentials, and
-only when cloud settings allow that in its `agent_lifecycle` section. Horizon chooses
+only when cloud settings allow that in its `agent_lifecycle` section and a person has
+approved a `spending_envelope` section: the envelope bounds the hours and the total of
+every rent it pays for, and a create outside it is refused with
+`cloud_create_envelope_hours` or `cloud_create_envelope_amount` before a worker is
+requested. Pass `hours` for the time the task needs; one hour is the default. Horizon chooses
 the provider from the offers of the providers that section lists, and the cheapest
 offer of the quick-start requirements wins. It answers at once: poll `status` with the
 same `operation_id` until `done` is true. The cloud appears on a card in your workspace

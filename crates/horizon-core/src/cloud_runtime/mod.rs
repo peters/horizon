@@ -18,6 +18,7 @@ pub mod diagnosis;
 pub mod docker_daemon;
 pub mod docker_host;
 pub mod draft;
+pub mod envelope;
 pub mod file_drop;
 pub mod git_auth;
 pub mod github;

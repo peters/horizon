@@ -4,6 +4,7 @@ use horizon_core::{
 };
 use std::path::{Path, PathBuf};
 
+mod envelope_gate;
 mod person_chain;
 mod pinned_worker;
 
@@ -42,6 +43,14 @@ fn status_request(operation_id: &str) -> Value {
 /// An app whose cloud root holds `settings`, with an agent panel in a workspace, and the
 /// agent's actor. The workspace local ID is returned too.
 fn agent_app(settings: Option<Value>) -> (tempfile::TempDir, HorizonApp, String, String) {
+    agent_app_with_envelope(settings, None)
+}
+
+/// As [`agent_app`], with a spending envelope beside the policy when `approved` is set.
+fn agent_app_with_envelope(
+    settings: Option<Value>,
+    approved: Option<Value>,
+) -> (tempfile::TempDir, HorizonApp, String, String) {
     let (temp, mut app) = crate::app::test_support::test_app();
     let root = temp.path().join("cloud");
     std::fs::create_dir_all(&root).unwrap();
@@ -55,6 +64,9 @@ fn agent_app(settings: Option<Value>) -> (tempfile::TempDir, HorizonApp, String,
     });
     if let Some(settings) = settings {
         file["agent_lifecycle"] = settings;
+    }
+    if let Some(approved) = approved {
+        file["spending_envelope"] = approved;
     }
     std::fs::write(root.join("settings.json"), file.to_string()).unwrap();
     app.cloud_prototype.root = Some(root.clone());

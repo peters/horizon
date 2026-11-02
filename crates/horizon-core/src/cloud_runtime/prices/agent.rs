@@ -14,9 +14,9 @@ use crate::cloud_runtime::{
     settings::Settings,
 };
 
-/// How long an agent's cloud is priced to run when its offers are ranked: one hour, as a
-/// `cloud_offers` request that names no duration.
-const HOURS: f64 = 1.0;
+/// How long an agent's cloud is priced to run when the caller names no duration: one hour,
+/// as a `cloud_offers` request that names none.
+pub const HOURS: f64 = 1.0;
 
 /// The worker an agent's cloud rents, and what it bills per hour.
 pub struct Chosen {
@@ -30,13 +30,24 @@ pub struct Chosen {
     /// The placement that offer names: the server type and location of the worker, so the
     /// deployment asks for this offer and not for a fallback one.
     pub placement: Placement,
+    /// What that offer costs for the hours it was ranked for, which is what a spending
+    /// envelope bounds.
+    pub estimate: f64,
+    /// The currency of [`Self::estimate`], as the provider bills it.
+    pub currency: &'static str,
 }
 
 /// The worker an agent's cloud rents for `profile` among the providers `allowed` names:
-/// the cheapest of their offers that meets the profile. `None` when none of them offers
-/// such a worker, or when this machine cannot read their prices.
+/// the cheapest of their offers that meets the profile for `hours` of rent. `None` when none of
+/// them offers such a worker, or when this machine cannot read their prices.
 #[must_use]
-pub fn choose(profile: &Profile, allowed: &[String], settings: &Settings, cancel: &Cancellation) -> Option<Chosen> {
+pub fn choose(
+    profile: &Profile,
+    allowed: &[String],
+    settings: &Settings,
+    hours: f64,
+    cancel: &Cancellation,
+) -> Option<Chosen> {
     // A provider whose prices this machine cannot read contributes no offer, so a binding
     // that is missing for one allowed provider never refuses a create on another.
     let permits = |description: &Description| allowed.iter().any(|id| id == description.id);
@@ -49,7 +60,7 @@ pub fn choose(profile: &Profile, allowed: &[String], settings: &Settings, cancel
     if runpod.is_none() && hetzner.is_none() {
         return None;
     }
-    let ranked = workers(profile, HOURS, runpod.as_ref(), hetzner.as_ref());
+    let ranked = workers(profile, hours, runpod.as_ref(), hetzner.as_ref());
     let rates = needs_rates(&ranked)
         .then(Rates::fetch)
         .and_then(std::result::Result::ok);
@@ -84,6 +95,8 @@ fn cheapest(profile: &Profile, allowed: &[String], ranked: &Workers, rates: Opti
         hourly: offer.hourly,
         size: chosen.size,
         placement: chosen.placement,
+        estimate: offer.estimated_total,
+        currency: offer.currency,
     })
 }
 
@@ -328,6 +341,6 @@ mod tests {
         // This machine binds no Hetzner token and its RunPod key file is missing, so an
         // agent may rent on neither provider.
         let allowed = ["runpod".to_owned(), "hetzner".to_owned()];
-        assert!(choose(&profile(), &allowed, &settings, &cancel).is_none());
+        assert!(choose(&profile(), &allowed, &settings, HOURS, &cancel).is_none());
     }
 }

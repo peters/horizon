@@ -27,6 +27,8 @@ time.
   profile names RunPod, but the create does not use that name. Horizon ranks the
   offers of RunPod and Hetzner for a create, so a policy that allows only
   another provider has no offer to choose.
+- This procedure also needs a `spending_envelope` section in the cloud settings.
+  Without it, Horizon refuses every agent create.
 - This procedure does not test:
   - a `.horizon/cloud.yml` profile, a worker choice, a plan token, siblings or a
     publishing selection. This version does not offer them.
@@ -42,9 +44,11 @@ time.
 > the cloud card after each submit, and stop the cloud that the run created
 > before you end the run.
 
-> **CAUTION:** THE TEST WRITES AN `agent_lifecycle` SECTION INTO THE CLOUD
-> SETTINGS OF THIS COMPUTER. Copy the settings file first, and put the copy back
-> in section 8. A wrong section refuses every agent create on this computer.
+> **CAUTION:** THE TEST WRITES `agent_lifecycle` AND `spending_envelope`
+> SECTIONS INTO THE CLOUD SETTINGS OF THIS COMPUTER. Copy the settings file
+> first, and put the copy back in section 8. A wrong section refuses every agent
+> create on this computer, and a wide envelope allows more spending than the
+> person approved.
 
 ## 4. Equipment and preconditions
 
@@ -66,9 +70,10 @@ time.
    Result: The copy exists and holds the same bytes.
 
 2. Read the cloud state root and the settings file, and note whether the file
-   has an `agent_lifecycle` section.
+   has an `agent_lifecycle` section and a `spending_envelope` section.
 
-   Result: You know which section you replace and later restore.
+   Result: You know which sections you replace and later restore. Note whether
+   `HORIZON_HOME/cloud/envelope-rents.jsonl` exists, and copy it too.
 
 3. Start Horizon from the candidate build and open the workspace with the agent
    panel.
@@ -103,10 +108,15 @@ time.
 1. Add an `agent_lifecycle` section with `providers: ["runpod"]`,
    `max_hourly` above the current RunPod CPU price, `repositories` with the
    absolute path of the test repository, and `allow_github_sign_in_skip: false`.
+   Add a `spending_envelope` section with `provider: "runpod"`,
+   `currency: "USD"`, `max_hours: 6`, `max_total` above one hour of that price,
+   `approved_by` with your name, and `approved_at` with the current time in
+   RFC 3339.
 
-   Result: The file loads. An invalid value, such as a relative repository path
-   or a provider that Horizon cannot create clouds on, makes `Settings::load`
-   fail.
+   Result: The file loads. An invalid value, such as a relative repository path,
+   a provider that Horizon cannot create clouds on, a currency that is not three
+   uppercase letters or an approval time that is not RFC 3339, makes
+   `Settings::load` fail.
 
 2. Call `cloud_create` again with the `operation_id` of A1 step 2.
 
@@ -313,6 +323,83 @@ time.
    Result: Cloud settings shows the sign-in again, so another run needs no
    person.
 
+### 6.12 A12 — A rent outside the envelope is refused and records nothing
+
+> **CAUTION:** EVERY SUBMITTED CLOUD RENTS A PAID WORKER WHEN IT IS ADMITTED.
+> Read `cloud_list` after each submit, and stop any cloud that this task rents.
+
+1. Read `HORIZON_HOME/cloud/envelope-rents.jsonl` and note the number of lines.
+
+   Result: The file holds one line for each rent that the envelope paid for in
+   this run.
+
+2. Call `cloud_create` with `operation submit`, a new `operation_id`, the
+   `repository` of A2, and `hours` above the `max_hours` of the envelope.
+
+   Result: The answer holds `phase: submitted`.
+
+3. Call `cloud_create` with `operation status` and that `operation_id`.
+
+   Result: `phase` is `failed`, and `error` starts with
+   `cloud_create_envelope_hours: this envelope allows USD in total on runpod up to
+   6 h and ... ; ... h and ... are left`. No cloud card appears, and
+   `cloud_list` stays the same.
+
+4. Read `HORIZON_HOME/cloud/envelope-rents.jsonl` again.
+
+   Result: The file holds the same number of lines as step 1, because a refused
+   rent writes nothing.
+
+5. Set `max_total` to a value below the estimate of one hour, and call
+   `cloud_create` with `operation submit`, a new `operation_id`, the `repository`
+   of A2 and no `hours`.
+
+   Result: `phase` becomes `failed`, and `error` starts with
+   `cloud_create_envelope_amount`. No cloud card appears.
+
+6. Set `provider: "hetzner"` in the `spending_envelope` section, and call
+   `cloud_create` with `operation submit` and a new `operation_id`.
+
+   Result: `phase` becomes `failed`, and `error` starts with
+   `cloud_create_outside_envelope`.
+
+7. Put the `spending_envelope` section of A2 back.
+
+   Result: The file loads, and the values are those of A2.
+
+### 6.13 A13 — A machine without an envelope rents nothing
+
+1. Remove the `spending_envelope` section from the cloud settings file, and call
+   `cloud_create` with `operation submit`, a new `operation_id` and the
+   `repository` of A2.
+
+   Result: The answer holds `phase: submitted`.
+
+2. Call `cloud_create` with `operation status` and that `operation_id`.
+
+   Result: `phase` is `failed`, and `error` is
+   `cloud_create_refused: this machine has no spending envelope, so no agent may
+   rent; the person approves one in the spending_envelope section of the cloud
+   settings`. No cloud card appears.
+
+3. Put the `spending_envelope` section of A2 back.
+
+   Result: The file loads, and an agent create may rent again.
+
+### 6.14 A14 — The rent is recorded with its envelope and its actor
+
+1. Read `HORIZON_HOME/cloud/envelope-rents.jsonl` after A2 rented its cloud.
+
+   Result: One line names the cloud of A2, `provider: "runpod"`, the hours that
+   A2 asked for, its rate, its estimate, `currency: "USD"`, the `approved_by` of
+   the envelope and the actor of the agent panel. The line holds no credential and
+   no GitHub token.
+
+2. Add the estimates and the hours of every line in the file.
+
+   Result: The sums are not more than `max_total` and `max_hours`. A later create
+   is refused when they are used up, as A12 shows.
+
 ## 7. Pass criteria
 
 - A1, A5, A6, A8 and A11 rent nothing that the run does not delete.
@@ -334,6 +421,10 @@ time.
   policy with no offer to choose, with its allowed providers in the sentence.
   A9 step 3 rents the server type of the admitted offer: `ready` reports an
   `hourly` that is not above `max_hourly`.
+- A12 rents nothing, writes no rent line, and names the hours limit, the amount
+  limit and the provider limit with their own codes.
+- A13 refuses every create on a machine without an approved envelope.
+- A14 finds one line per admitted rent, and the sums are inside the envelope.
 - `cloud_list` shows every cloud that the run created.
 
 ## 8. Cleanup
@@ -348,9 +439,15 @@ time.
 
 3. Put the copied cloud settings file back, and remove the copy.
 
-   Result: `agent_lifecycle` holds its earlier values, or no section at all.
+   Result: `agent_lifecycle` and `spending_envelope` hold their earlier values, or
+   no section at all.
 
-4. Close Horizon and the MCP client.
+4. Put the copied `envelope-rents.jsonl` back, or remove it when the machine had
+   none.
+
+   Result: The rent record holds what it held before the run.
+
+5. Close Horizon and the MCP client.
 
    Result: No Horizon process of this run stays alive.
 

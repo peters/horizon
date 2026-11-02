@@ -541,11 +541,18 @@ same operation and rents no second cloud.
 `quick_start: true`. Quick start is the only choice in this version: it runs the
 built-in profile on the public base image. Horizon refuses a commit with its own
 `.horizon/cloud.yml`, because quick start does not apply there. The optional `name`
-sets the card title; the repository folder name is the default.
+sets the card title; the repository folder name is the default. The optional `hours`
+is the rent that the create prices and bounds, and one hour when omitted: ask for the
+time the task needs, because the envelope's hours and total are what pay for it.
 
-The machine must allow the create. Cloud settings has an optional `agent_lifecycle`
-section with `providers`, `max_hourly`, `repositories` and
-`allow_github_sign_in_skip`. Without that section no create rents anything. Horizon
+The machine must allow the create, and a person must approve what it may cost. Cloud
+settings has an optional `agent_lifecycle` section with `providers`, `max_hourly`,
+`repositories` and `allow_github_sign_in_skip`, and an optional `spending_envelope`
+section with `provider`, `currency`, `max_hours`, `max_total`, `approved_by` and
+`approved_at`. Without the policy, or without the envelope, no create rents anything:
+the policy names who may rent and at which hourly rate, and the envelope names what the
+bill may reach in total. The hours and the total of the envelope count every rent it
+paid for, so a second cloud of the same envelope has only what the first left. Horizon
 refuses a repository that the section does not allow, a rate above `max_hourly`, and
 a machine that cannot quote a rate. Horizon chooses the provider itself, from the
 offers of the providers that the section lists: the cheapest offer that meets the
@@ -588,7 +595,7 @@ no work beyond the request itself:
 - `cloud_create_unavailable`: this Horizon has no agent panel for the caller, no cloud
   state directory, or no cloud support in its build. Call it from an agent panel.
 - `cloud_create_invalid_request`: the shape is wrong. Fix `operation_id`,
-  `repository` or `quick_start` and send a new request.
+  `repository`, `quick_start` or `hours` and send a new request.
 - `cloud_create_expired`: the request expired before Horizon answered it. Nothing was
   rented; send a new request.
 - `cloud_create_unknown_operation`: this ID is not an operation of your agent panel.
@@ -600,6 +607,12 @@ no work beyond the request itself:
   approved again. The machine owner sets `agent_lifecycle`, the repository and
   `max_hourly` in Cloud settings, adds the binding of a provider whose offers Horizon
   reads, and signs in to GitHub there.
+- `cloud_create_envelope_hours`: the rent asks for more hours than the envelope has
+  left. Ask for fewer hours, or the person approves a larger envelope.
+- `cloud_create_envelope_amount`: the offer's estimate is above what the envelope has
+  left. Ask for fewer hours, or the person approves a larger envelope.
+- `cloud_create_outside_envelope`: the offer is on another provider than the envelope
+  names, or it bills in another currency, so the amounts cannot be compared.
 - `cloud_create_needs_persistent_session`: save the workspace in a Horizon session
   first. A quick-start cloud belongs to a saved session.
 - `cloud_create_busy`: your workspace already has a cloud for this repository. Use

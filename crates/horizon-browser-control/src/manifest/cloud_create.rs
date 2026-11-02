@@ -3,6 +3,10 @@
 //! workspace, and owns the deployment; nothing here holds an authority of its own.
 use serde::{Deserialize, Serialize};
 
+/// The longest rent an agent may ask for, in hours. The machine's spending envelope bounds it
+/// again; this is the bound of a shape that a person could approve.
+pub const MAX_HOURS: f64 = 24.0 * 14.0;
+
 /// What an agent asks of a cloud it rents. `submit` rents one cloud; `status` and
 /// `cancel` act on the operation that `operation_id` names.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -13,7 +17,7 @@ pub enum CloudCreateOperation {
     Cancel,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CloudCreateRequest {
     /// Chosen by the caller before queueing, so a lost answer is polled with `status`
@@ -32,6 +36,10 @@ pub struct CloudCreateRequest {
     /// choice until committed `.horizon/cloud.yml` profiles are offered. It must be true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_start: Option<bool>,
+    /// `submit` only: the hours of rent this cloud may run, which the machine's spending
+    /// envelope bounds. One hour when omitted, and never more than the envelope has left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hours: Option<f64>,
 }
 
 impl CloudCreateRequest {
@@ -55,6 +63,7 @@ impl CloudCreateRequest {
                 && value.trim() == value
         };
         let path = |value: &str| !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control);
+        let hours = |value: f64| value.is_finite() && value > 0.0 && value <= MAX_HOURS;
         if !lower_uuid(&self.operation_id) {
             return false;
         }
@@ -63,10 +72,11 @@ impl CloudCreateRequest {
                 self.quick_start == Some(true)
                     && self.repository.as_deref().is_some_and(path)
                     && self.name.as_deref().is_none_or(name)
+                    && self.hours.is_none_or(hours)
                     && serde_json::to_vec(self).is_ok_and(|bytes| bytes.len() <= 8192)
             }
             CloudCreateOperation::Status | CloudCreateOperation::Cancel => {
-                self.repository.is_none() && self.name.is_none() && self.quick_start.is_none()
+                self.repository.is_none() && self.name.is_none() && self.quick_start.is_none() && self.hours.is_none()
             }
         }
     }
@@ -94,6 +104,23 @@ mod tests {
             "repository": "/home/person/shop", "name": "shop", "quick_start": true,
         });
         assert!(request(named).unwrap().valid());
+        let timed = serde_json::json!({
+            "operation": "submit", "operation_id": ID,
+            "repository": "/home/person/shop", "quick_start": true, "hours": 4.5,
+        });
+        assert_eq!(request(timed.clone()).unwrap().hours, Some(4.5));
+        assert!(request(timed).unwrap().valid());
+        for hours in [
+            serde_json::json!(0),
+            serde_json::json!(-1.0),
+            serde_json::json!(MAX_HOURS + 1.0),
+        ] {
+            let invalid = serde_json::json!({
+                "operation": "submit", "operation_id": ID,
+                "repository": "/home/person/shop", "quick_start": true, "hours": hours,
+            });
+            assert!(!request(invalid).unwrap().valid(), "{hours}");
+        }
         for (field, value) in [
             ("quick_start", serde_json::json!(null)),
             ("quick_start", serde_json::json!(false)),

@@ -420,7 +420,14 @@ fn assert_companion_tools_contract(tools: &Value) {
 fn assert_create_tool_contract(tools: &Value) {
     let create = listed_tool(tools, "cloud_create");
     let properties = &create["inputSchema"]["properties"];
-    for field in ["operation", "operation_id", "repository", "name", "quick_start"] {
+    for field in [
+        "operation",
+        "operation_id",
+        "repository",
+        "name",
+        "quick_start",
+        "hours",
+    ] {
         assert!(properties.get(field).is_some(), "cloud_create schema lacks {field}");
     }
     for forbidden in [
@@ -444,6 +451,8 @@ fn assert_create_tool_contract(tools: &Value) {
         "does not apply",
         "poll operation status",
         "cloud_create_needs_person",
+        "spending envelope",
+        "cloud_create_envelope_hours",
     ] {
         assert!(description.contains(phrase), "cloud_create description lacks {phrase}");
     }

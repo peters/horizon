@@ -875,6 +875,7 @@ mod tests {
             repository: Some("/home/person/shop".into()),
             name: None,
             quick_start: Some(true),
+            hours: None,
         };
         let id = enqueue_cloud_create_at(root.path(), identity, request.clone()).unwrap();
         assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
@@ -895,6 +896,7 @@ mod tests {
             repository: Some(repository),
             name: None,
             quick_start: Some(quick_start),
+            hours: None,
         };
         for invalid in [
             submit("/home/person/shop".into(), false),
@@ -905,6 +907,7 @@ mod tests {
                 repository: None,
                 name: None,
                 quick_start: None,
+                hours: None,
             },
         ] {
             assert!(enqueue_cloud_create_at(root.path(), identity, invalid).is_err());
