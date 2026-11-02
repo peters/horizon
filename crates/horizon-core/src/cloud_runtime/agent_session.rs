@@ -173,7 +173,7 @@ pub fn message_text(tmux: &str, text: &str, buffer: &str) -> String {
          && tmux -L {socket} send-keys -t {target} Enter \
          || exit {WRITE_FAILED}\n\
          sleep {settle}\n\
-         tmux -L {socket} capture-pane -p -J -t {target} -S -{CONFIRM_LINES}\n",
+         tmux -L {socket} capture-pane -p -J -t {target} -S -{CONFIRM_LINES} || true\n",
         guard = guard(tmux),
         lock = LOCK,
         tmux = tmux,

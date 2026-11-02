@@ -316,27 +316,20 @@ fn the_list_names_the_sessions_a_caller_can_address() {
 }
 
 #[test]
-fn a_session_saved_after_the_last_snapshot_is_still_listed() {
-    // A live worker saved its session to the record after the deployment thread's last
-    // snapshot, so the runtime state holds none. `cloud_list` must still name the session a
-    // caller addresses, or the agent tools cannot be reached at all.
-    let (temp, mut app, actor) = cloud_with_agent();
+fn a_session_this_window_recorded_is_listed_without_reading_the_record() {
+    // A live worker saves its session to the record, which a worker thread writes; the
+    // deployment thread's snapshot holds none, so a list answer taken from it named no
+    // session and a caller had no panel ID to address. The window keeps the session it
+    // added, and the answer reads that instead of the record: a list request must not read
+    // a file on the UI thread.
+    let (_temp, mut app, actor) = cloud_with_agent();
     let ctx = egui::Context::default();
     let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
     assert_eq!(listed["clouds"][0]["sessions"], json!([]), "nothing is recorded yet");
 
-    let root = temp.path().to_path_buf();
-    app.cloud_prototype.use_root(Some(root.clone()));
-    let directory = horizon_core::cloud_runtime::state::cloud_directory(&root, "fixture").unwrap();
-    let store = horizon_core::cloud_runtime::state::Store::lock(&directory).unwrap();
-    let mut record = store.load().unwrap().unwrap();
-    record.sessions = vec![horizon_core::cloud_runtime::state::Session::new(
-        "panel-live",
-        "claude",
-        "/workspace/checkout".into(),
-    )];
-    store.save(&record).unwrap();
-    drop(store);
+    let session =
+        horizon_core::cloud_runtime::state::Session::new("panel-live", "claude", "/workspace/checkout".into());
+    runtime(&mut app).sessions.remember(&session);
 
     let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
     assert_eq!(
@@ -347,6 +340,6 @@ fn a_session_saved_after_the_last_snapshot_is_still_listed() {
             "branch": "",
             "worktree": "/workspace/checkout",
         }]),
-        "the record answers while the runtime state holds no session: {listed}"
+        "the session this window recorded is named: {listed}"
     );
 }

@@ -331,6 +331,23 @@ fn a_write_pastes_its_own_text_and_never_the_top_of_the_shared_buffer_stack() {
 }
 
 #[test]
+fn a_message_that_was_delivered_is_not_a_failure_when_its_confirmation_was_not() {
+    // The instruction is typed before the confirmation is read back, so a confirmation that
+    // tmux refuses must not fail the call: a caller that retried would type it twice. Only a
+    // refused paste or Enter is the write's own failure.
+    let text = message_text("panel-1", "go", "horizon-agent-f");
+    assert!(
+        text.contains("capture-pane -p -J -t '=panel-1:' -S -40 || true"),
+        "the confirming read cannot fail the call: {text}"
+    );
+    assert!(
+        text.contains("|| exit 5"),
+        "a refused paste or Enter is still the write's failure: {text}"
+    );
+    assert!(!text.contains("|| exit 6"), "a message names no read code: {text}");
+}
+
+#[test]
 fn a_tmux_call_that_never_answered_is_a_failure_and_never_an_empty_answer() {
     // The live worker answered a capture on `=<id>` with "can't find pane" and status 1, and
     // the read arrived as a successful empty terminal. Every status that is not a success is

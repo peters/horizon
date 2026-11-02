@@ -141,23 +141,22 @@ impl HorizonApp {
             .get(&group.issue)
             .and_then(|runtime| runtime.state.as_ref())
             .filter(|state| state.cloud_id == id);
-        // A session is recorded when its terminal attaches, which the runtime state of the
-        // deployment thread does not adopt: a live worker whose session was saved after the
-        // last snapshot lists none. The cloud's own record is what a caller must be able to
-        // address, so it is read when the runtime holds no session.
-        let recorded = state
-            .filter(|state| state.sessions.is_empty())
-            .and_then(|_| self.cloud_record(id));
-        entry(id, &self.cloud_facts(group, now), state, recorded.as_ref())
-    }
-
-    /// The cloud's own saved record, when this Horizon holds a state directory for it. A
-    /// record of another cloud, or one Horizon cannot read, is nothing: the list stays honest.
-    fn cloud_record(&self, id: &str) -> Option<horizon_core::cloud_runtime::state::Deployment> {
-        let root = self.cloud_prototype.root.as_ref()?;
-        let directory = horizon_core::cloud_runtime::state::cloud_directory(root, id).ok()?;
-        let record = horizon_core::cloud_runtime::state::Store::snapshot(&directory).ok()??;
-        (record.cloud_id == id).then_some(record)
+        // A session is recorded when its terminal attaches. That record goes to a worker
+        // thread, and the deployment thread's snapshots need not carry it, so a live worker
+        // whose session was saved after the last snapshot holds none here. The sessions this
+        // window added itself answer for it, from memory: a list answer never reads the
+        // record on the UI thread.
+        let added = match state {
+            Some(state) if !state.sessions.is_empty() => Vec::new(),
+            _ => self
+                .cloud_prototype
+                .production
+                .runtimes
+                .get(&group.issue)
+                .map(|runtime| runtime.sessions.added())
+                .unwrap_or_default(),
+        };
+        entry(id, &self.cloud_facts(group, now), state, &added)
     }
 
     /// Moves the view to cloud `index` as a click on its row does: to its first
@@ -195,17 +194,20 @@ impl HorizonApp {
     }
 }
 
-/// One cloud of a `list` answer. `recorded` is the cloud's saved record, read only when the
-/// runtime state of this window holds no session of it.
+/// One cloud of a `list` answer. `added` names the sessions this window added to the cloud's
+/// record, used only when the runtime state of this window holds no session of it.
 fn entry(
     id: &str,
     facts: &CloudFacts,
     state: Option<&horizon_core::cloud_runtime::state::Deployment>,
-    recorded: Option<&horizon_core::cloud_runtime::state::Deployment>,
+    added: &[horizon_core::cloud_runtime::state::Session],
 ) -> Value {
-    // A record read because the runtime holds no session is the only source of one, so it
-    // replaces the runtime state rather than sitting beside it.
-    let sessions = recorded.or(state);
+    // Sessions this window added replace a runtime state that names none: they are the only
+    // source of one then.
+    let sessions: Vec<&horizon_core::cloud_runtime::state::Session> = match state {
+        Some(state) if !state.sessions.is_empty() => state.sessions.iter().collect(),
+        _ => added.iter().collect(),
+    };
     json!({
         "cloud": id,
         "name": facts.name,
@@ -218,12 +220,12 @@ fn entry(
         "image_publication": state.and_then(|state| state.publication.as_ref()),
         // The sessions the worker runs, so a caller can name one to the agent tools. A
         // session's panel ID is its name on the worker, and nothing here is a secret.
-        "sessions": sessions.map(|state| state.sessions.iter().map(|session| json!({
+        "sessions": sessions.iter().map(|session| json!({
             "panel_id": session.panel_id,
             "agent": session.agent,
             "branch": session.branch,
             "worktree": session.worktree,
-        })).collect::<Vec<Value>>()).unwrap_or_default(),
+        })).collect::<Vec<Value>>(),
     })
 }
 
