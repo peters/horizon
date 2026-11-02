@@ -106,14 +106,11 @@ through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:616`).
 |---|---|---|
 | Release binary (note 1) | x64 | arm64 and x64 |
 | Homebrew | x64 | Yes |
-| Snap Store | Partial (note 2) | No |
-| Code signing and notarization in the release | n/a | No (note 3) |
+| Code signing and notarization in the release | n/a | No (note 2) |
 
 1. The release assets and the Homebrew tap come from the release workflow. See
    [the release flow](release-flow.md).
-2. The Snap publish job has `if: false` in `.github/workflows/release.yml`.
-   The store can still hold an older release. New releases do not go to the store.
-3. The release workflow and the packaging scripts have no signing or
+2. The release workflow and the packaging scripts have no signing or
    notarization step.
 
 ## Agent skills

@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Classify the paths changed between two commits for the CI lanes that are
-# gated on them: the Snap package, the release Artifacts builds and, on pull
-# requests, the Rust build and test jobs and the Linux speech tests.
+# gated on them: the release Artifacts builds and, on pull requests, the Rust
+# build and test jobs and the Linux speech tests.
 #
 # Usage: detect-ci-build-inputs.sh <event-name> <base-sha> <head-sha>
 #
-# Prints `run_snap_build=<bool>`, `release_inputs=<bool>`,
-# `macos_release_inputs=<bool>`, `rust_inputs=<bool>` and
-# `speech_inputs=<bool>`, in the `key=value` form a workflow step appends to
-# $GITHUB_OUTPUT. Runs in the current working directory, which must be the
-# repository checkout.
+# Prints `release_inputs=<bool>`, `macos_release_inputs=<bool>`,
+# `rust_inputs=<bool>` and `speech_inputs=<bool>`, in the `key=value` form a
+# workflow step appends to $GITHUB_OUTPUT. Runs in the current working
+# directory, which must be the repository checkout.
 #
-# `release_inputs` gates the Linux release build on main.
+# `release_inputs` gates the Linux release build on main. The workflow files
+# that run a release are inputs too, so a change to a lane builds an artifact
+# before the next tag uses it.
 # `macos_release_inputs` is the narrower set that also builds the two macOS
 # release assets at once instead of waiting for the nightly macOS release
 # builds: the files that define how a release asset is built and packaged.
@@ -49,8 +50,8 @@ base_sha=$2
 head_sha=$3
 
 emit() {
-  printf 'run_snap_build=%s\nrelease_inputs=%s\nmacos_release_inputs=%s\nrust_inputs=%s\nspeech_inputs=%s\n' \
-    "$1" "$2" "$3" "$4" "$5"
+  printf 'release_inputs=%s\nmacos_release_inputs=%s\nrust_inputs=%s\nspeech_inputs=%s\n' \
+    "$1" "$2" "$3" "$4"
 }
 
 # Prints the files under crates/ that name the speech feature in the base or
@@ -90,11 +91,10 @@ outside_rust() {
 if [ "$event_name" = "workflow_dispatch" ] \
   || ! git rev-parse --verify --quiet "${base_sha}^{commit}" > /dev/null 2>&1 \
   || ! changed_paths=$(git diff -z --name-only --no-renames "$base_sha" "$head_sha" 2>/dev/null | tr '\0' '\n'); then
-  emit true true true true true
+  emit true true true true
   exit 0
 fi
 
-run_snap_build=false
 release_inputs=false
 macos_release_inputs=false
 rust_inputs=false
@@ -109,16 +109,11 @@ fi
 
 while IFS= read -r path; do
   case "$path" in
-    .github/workflows/ci.yml|.github/workflows/release.yml|scripts/package-release-asset.sh|snap/*|packaging/linux/*|assets/icons/*)
-      run_snap_build=true
-      ;;
-  esac
-  case "$path" in
     .github/workflows/release-artifacts.yml|scripts/select-release-artifact-platforms.py|scripts/package-release-asset.sh|scripts/install-ci-video-build-tools.sh)
       macos_release_inputs=true
       release_inputs=true
       ;;
-    .github/workflows/ci.yml|rust-toolchain.toml|Cargo.toml|Cargo.lock|assets/*|crates/*)
+    .github/workflows/ci.yml|.github/workflows/release.yml|rust-toolchain.toml|Cargo.toml|Cargo.lock|assets/*|crates/*)
       release_inputs=true
       ;;
   esac
@@ -139,4 +134,4 @@ while IFS= read -r path; do
   esac
 done <<< "$changed_paths"
 
-emit "$run_snap_build" "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs"
+emit "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs"
