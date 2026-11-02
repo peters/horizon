@@ -1084,11 +1084,26 @@ mod tests {
             1,
             "it prepares again"
         );
-        // The next frame starts the run that preparation read. A runner has no systemd user
-        // manager to hold it, and this test's panel runs no process, so the run starts in the
-        // empty wrapper the test places it with.
-        app.cloud_prototype.production.setup_starting.clear();
-        super::super::support::start(&mut app, &ctx, &folder);
+        // The next frame starts the run that preparation read, so its status folder belongs to
+        // the run and goes with it. This test's panel runs no process, so the run starts in the
+        // empty wrapper the test decides: a runner has no systemd user manager to hold it.
+        let again = app.cloud_prototype.production.setup_starting.remove(0);
+        let prepared = again
+            .receiver
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the preparation reported")
+            .expect("the repository was read");
+        app.place_setup_run(
+            &ctx,
+            Submitted {
+                entered: again.entered,
+                preset: again.preset,
+                mode: again.chosen_mode,
+            },
+            again.build_on,
+            prepared,
+            Vec::new(),
+        );
         assert_eq!(app.cloud_prototype.production.setup_runs.len(), 1);
         let gone = Instant::now();
         while first_status.parent().is_some_and(Path::exists) {
