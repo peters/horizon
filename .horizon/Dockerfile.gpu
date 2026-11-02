@@ -1,9 +1,9 @@
-FROM rust:1.99.1-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS helpers
+FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS helpers
 COPY build-worker-tools.sh /build-worker-tools.sh
 RUN bash /build-worker-tools.sh
 COPY collect-helper-notices.py /collect-helper-notices.py
 RUN python3 /collect-helper-notices.py
-FROM rust:1.99.1-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS browser-packages
+FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS browser-packages
 RUN sed -i \
         -e 's|http://deb.debian.org/debian-security|https://snapshot.debian.org/archive/debian-security/20260922T000000Z|' \
         -e 's|http://deb.debian.org/debian|https://snapshot.debian.org/archive/debian/20260922T000000Z|' \
