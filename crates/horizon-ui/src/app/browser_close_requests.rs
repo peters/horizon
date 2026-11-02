@@ -343,7 +343,12 @@ impl HorizonApp {
 /// close open because the exact session's check has not answered yet; the
 /// check runs at the provider, so the frame never waits for it.
 fn settled_close(pending: &PendingBrowserClose, past_deadline: bool) -> Option<Result<(), CloseReleaseFailure>> {
-    let teardown = pending.teardown.as_ref()?;
+    // A panel without a teardown signal (a cloud browser panel, or a browser
+    // panel with no session signal) has no driver left to wait for and no
+    // provider session of its own.
+    let Some(teardown) = pending.teardown.as_ref() else {
+        return Some(Ok(()));
+    };
     let allocation = teardown.remote_recovery();
     let answer = close_release(
         teardown.holds_remote_allocation(),
@@ -862,6 +867,40 @@ mod tests {
             .collect();
         results.sort_by_key(|result| result.request_id.clone());
         results
+    }
+
+    #[test]
+    fn a_close_without_a_teardown_signal_is_answered_at_once() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let (_, browser_local_id) = inert_browser(&mut app, 9203, alpha);
+        app.browser_create_host.pending_closes.push(PendingBrowserClose {
+            request: request("horizon:agent", &browser_local_id, i64::MAX),
+            teardown: None,
+        });
+
+        assert!(app.poll_browser_close_requests());
+        let published = published_close_results(&mut app);
+        assert_eq!(published.len(), 1, "the close is answered once: {published:?}");
+        assert_eq!(published[0].outcome, BrowserCloseOutcome::Closed, "{published:?}");
+        assert!(
+            app.browser_create_host.pending_closes.is_empty(),
+            "nothing is left to wait for"
+        );
+
+        // A driver-less close that is first observed after its deadline is
+        // still answered, not left waiting for a teardown that never existed.
+        app.browser_create_host.pending_closes.push(PendingBrowserClose {
+            request: request("horizon:agent", &browser_local_id, 0),
+            teardown: None,
+        });
+        app.poll_browser_close_requests();
+        assert_eq!(
+            published_close_results(&mut app).len(),
+            2,
+            "the late close is answered too"
+        );
+        assert!(app.browser_create_host.pending_closes.is_empty());
     }
 
     #[test]
