@@ -20,6 +20,7 @@ pub(crate) mod agent_session;
 pub(crate) mod browser_vm;
 pub(crate) mod cloud_create;
 pub(crate) mod cloud_delete;
+mod cloud_lifecycle;
 pub(crate) mod cloud_list;
 pub(crate) mod companion;
 mod device;

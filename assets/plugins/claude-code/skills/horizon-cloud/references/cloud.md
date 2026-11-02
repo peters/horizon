@@ -66,7 +66,7 @@ See docs/testing/procedures/publication-records.md.
 ## Servers and offer inspection
 
 The host Horizon browser MCP (`horizon --browser-mcp`) provides `cloud_offers`,
-`cloud_list`, `cloud_create`, `cloud_delete`, `cloud_exec`, `cloud_agent_message`,
+`cloud_list`, `cloud_create`, `cloud_delete`, `cloud_lifecycle`, `cloud_exec`, `cloud_agent_message`,
 `cloud_agent_read`, `cloud_companions`,
 `cloud_companion_ensure_ready`, `cloud_companion_stop`, `cloud_companion_uncheck`,
 `cloud_companion_operation`, and `tailnet_api_credential`. Host operations require
@@ -637,6 +637,25 @@ no work beyond the request itself:
 
 You cannot choose a worker, a plan token, siblings or a publishing destination in
 this version, and it has no CLI plan entry.
+
+## Stop or resume a cloud without a person
+
+`cloud_lifecycle` stops or resumes one cloud's worker in the workspace of your agent
+panel. Its operations are `submit` and `status`: choose one lowercase UUID
+`operation_id` and keep it. `submit` needs `cloud`, the ID that `cloud_list`
+reports, and `action`, which is `stop` or `resume`. It answers at once with the
+`phase`, the `action` and an `in_progress` sentence. Poll `status` with the same
+`operation_id` until `done` is true, then read `phase`, `stage`, `kept` and
+`error`.
+
+A stop or a resume cannot be recalled once Horizon sent its provider request, so
+there is no `cancel`: a lost answer is read with `status`, never submitted again.
+`stop` keeps what the provider keeps of the worker, which `kept` names, so a
+`resume` finds the same workspace volume and the same files. You act only on a
+cloud that an agent panel of your own actor created; every other cloud is
+`cloud_lifecycle_refused`, and a cloud another operation owns is
+`cloud_lifecycle_busy`. Use `cloud_delete` to remove the cloud and prove its
+resources absent.
 
 ## Delete a cloud without a person
 

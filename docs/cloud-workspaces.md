@@ -1279,6 +1279,16 @@ the person deletes the cloud on its card. A cloud that never requested a worker
 keeps no provider resource: Horizon removes its card and answers done.
 `cloud_delete` removes no other card.
 
+`cloud_lifecycle` stops or resumes the worker of one cloud. Horizon acts only on a
+cloud that an agent created for the same agent actor, and it answers
+`cloud_lifecycle_refused` for every other cloud. `stop` ends the compute of the
+worker and keeps what the provider keeps of it, so a `resume` finds the same
+workspace volume and the same files. A stop or a resume cannot be recalled once
+Horizon sent its provider request, so the tool has `submit` and `status` and no
+`cancel`. An operation against a cloud that another operation owns is
+`cloud_lifecycle_busy`. To remove the cloud and prove its resources absent, use
+`cloud_delete`.
+
 The GitHub chain of the worker is the GitHub sign-in of this computer. The worker
 renews the chain itself, so the cloud keeps its GitHub access while this
 computer is off. Thus the commits and pull requests of the worker are the

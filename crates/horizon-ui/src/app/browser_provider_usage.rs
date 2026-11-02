@@ -164,6 +164,10 @@ impl HorizonApp {
                 self.queue_cloud_delete(request);
                 continue;
             }
+            if request.cloud_lifecycle.is_some() {
+                self.queue_cloud_lifecycle(request);
+                continue;
+            }
             if request.browser_vm.is_some() {
                 self.queue_browser_vm(request, ctx);
                 continue;
@@ -388,6 +392,23 @@ impl HorizonApp {
             request.result(
                 Vec::new(),
                 Some("cloud_delete_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    fn queue_cloud_lifecycle(&mut self, request: UsageRequest) {
+        self.queue_cloud_lifecycle_request(request);
+    }
+
+    #[cfg(not(feature = "cloud-workspaces"))]
+    #[allow(clippy::needless_pass_by_value)]
+    fn queue_cloud_lifecycle(&mut self, request: UsageRequest) {
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_lifecycle_unavailable: this Horizon build has no cloud support".into()),
             ),
             request.deadline_at_millis,
         );

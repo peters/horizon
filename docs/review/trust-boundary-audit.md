@@ -625,6 +625,28 @@ guarantee that the code gives, and what the code does not guarantee.
     hold the Store lock; the tool removes no card and holds no discard authority;
     the operation table is in memory.
 
+- [`cloud-lifecycle-request`](trust-boundaries/cloud-lifecycle-request.md)
+  (added after this audit, with this change)
+  - Untrusted: the `cloud_lifecycle` request of an agent panel, its action and
+    cloud ID, the saved cloud record that carries the creator and the stage, and
+    the provider's answers during a stop or a resume.
+  - Guarantees: only a live agent panel of this Horizon answers, in its own
+    workspace; the cloud ID names exactly one cloud there; a card operation, a
+    provider check, a preparation, a running create or a running lifecycle
+    operation of that cloud is a refusal; only the actor that created the cloud
+    stops or resumes it, and a cloud without a creator or without a worker is
+    refused; an action that does not match the record sends nothing, so a stop
+    of a stopped cloud answers `stopped` and a resume of a running cloud is
+    refused with the stage it found; the action then takes the Store lock as the
+    card's own action does; a repeated `submit` with one operation ID answers the
+    operation it has and sends no second provider request.
+  - Does not guarantee: a sent stop or resume cannot be recalled, so there is no
+    cancel; what a stop keeps is the provider's decision, and a provider that
+    bills a stopped worker still bills it; a stop ends compute only and proves no
+    absence; a deployment that starts between the record check and the action is
+    acted on with the cloud; another process may hold the Store lock; the
+    operation table is in memory.
+
 ### Worker command authority
 
 - [`cloud-exec-request`](trust-boundaries/cloud-exec-request.md)

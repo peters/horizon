@@ -47,6 +47,7 @@ pub mod cloud_agent;
 mod cloud_companion;
 mod cloud_create;
 mod cloud_delete;
+mod cloud_lifecycle;
 mod cloud_list;
 mod create;
 pub mod device;
