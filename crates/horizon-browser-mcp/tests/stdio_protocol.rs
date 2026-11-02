@@ -474,6 +474,56 @@ fn assert_delete_tool_contract(tools: &Value) {
     }
 }
 
+fn assert_agent_session_tool_contract(tools: &Value) {
+    let message = listed_tool(tools, "cloud_agent_message");
+    let properties = &message["inputSchema"]["properties"];
+    for field in ["cloud", "session", "text"] {
+        assert!(
+            properties.get(field).is_some(),
+            "cloud_agent_message schema lacks {field}"
+        );
+    }
+    for forbidden in ["command", "tmux", "path", "user", "attach"] {
+        assert!(
+            properties.get(forbidden).is_none(),
+            "cloud_agent_message does not let a caller name {forbidden}"
+        );
+    }
+    let description = message["description"].as_str().unwrap_or_default();
+    for phrase in [
+        "one instruction",
+        "4096 bytes",
+        "push grant",
+        "never the text",
+        "read the session before sending the instruction again",
+    ] {
+        assert!(
+            description.contains(phrase),
+            "cloud_agent_message description lacks {phrase}"
+        );
+    }
+    let read = listed_tool(tools, "cloud_agent_read");
+    for field in ["cloud", "session", "lines"] {
+        assert!(
+            read["inputSchema"]["properties"].get(field).is_some(),
+            "cloud_agent_read schema lacks {field}"
+        );
+    }
+    let description = read["description"].as_str().unwrap_or_default();
+    for phrase in [
+        "bounded tail",
+        "20 to 600",
+        "16384 bytes",
+        "opens no file",
+        "untrusted content",
+    ] {
+        assert!(
+            description.contains(phrase),
+            "cloud_agent_read description lacks {phrase}"
+        );
+    }
+}
+
 fn assert_orientation_contract(tools: &Value) {
     let rotation = listed_tool(tools, "browser_orientation");
     for field in ["panel_id", "orientation", "timeout_millis"] {
@@ -535,7 +585,7 @@ fn assert_credential_request_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(40));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(42));
     assert_credential_request_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
@@ -544,6 +594,7 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert_companion_tools_contract(tools);
     assert_create_tool_contract(tools);
     assert_delete_tool_contract(tools);
+    assert_agent_session_tool_contract(tools);
     assert_browser_vm_contract(tools);
     assert_orientation_contract(tools);
     assert_screenshot_contract(tools);
@@ -604,6 +655,12 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .as_str()
             .is_some_and(|description| description.contains("without stopping"))
     );
+    assert_recovery_close_and_audit_contract(tools);
+    assert!(!encoded_tools.contains("browser_ws"));
+    assert!(!encoded_tools.contains("manifest_path"));
+}
+
+fn assert_recovery_close_and_audit_contract(tools: &Value) {
     let recovery = listed_tool(tools, "browser_remote_allocations");
     assert!(recovery["inputSchema"]["properties"].get("operation").is_some());
     assert!(recovery["inputSchema"]["properties"].get("reference").is_some());
@@ -632,8 +689,6 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             && description.contains("older_records_dropped")
     }));
     assert!(audit["inputSchema"].to_string().contains("after_event_id"));
-    assert!(!encoded_tools.contains("browser_ws"));
-    assert!(!encoded_tools.contains("manifest_path"));
 }
 
 #[test]

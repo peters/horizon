@@ -2,6 +2,11 @@
 //! cloud offers only read; companion requests and the `attach` and `park` of a cloud
 //! list request change clouds, and the host authorizes each one.
 pub use super::browser_vm::{BrowserVmAction, BrowserVmRequest};
+pub use super::cloud_agent::{
+    CloudAgentAction, CloudAgentAudit, CloudAgentMessageRequest, CloudAgentOutcome, CloudAgentReadRequest,
+    MAX_MESSAGE_BYTES, MAX_READ_BYTES, MAX_READ_LINES, MIN_READ_LINES, append_cloud_agent_audit,
+    cloud_agent_audit_path,
+};
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 pub use super::cloud_create::{CloudCreateOperation, CloudCreateRequest};
 pub use super::cloud_delete::{CloudDeleteOperation, CloudDeleteRequest};
@@ -59,6 +64,12 @@ pub struct UsageRequest {
     /// One bounded command for a cloud's worker, run by the host's recorded route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_exec: Option<CloudExecRequest>,
+    /// One instruction for one session of a cloud's worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_agent_message: Option<CloudAgentMessageRequest>,
+    /// One read of one session's terminal on a cloud's worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_agent_read: Option<CloudAgentReadRequest>,
     /// A browser VM request, authorized and run by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_vm: Option<BrowserVmRequest>,
@@ -95,6 +106,12 @@ pub struct UsageResult {
     /// The host's answer to a cloud command: its exit status, both streams and its account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_exec: Option<serde_json::Value>,
+    /// The host's answer to one instruction in a cloud session's terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_agent_message: Option<serde_json::Value>,
+    /// The host's answer to one read of a cloud session's terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_agent_read: Option<serde_json::Value>,
     /// The host's answer to a browser VM request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_vm: Option<serde_json::Value>,
@@ -120,6 +137,8 @@ impl UsageRequest {
             cloud_create: None,
             cloud_delete: None,
             cloud_exec: None,
+            cloud_agent_message: None,
+            cloud_agent_read: None,
             browser_vm: None,
             tailnet_credential: None,
             image_destination: None,
@@ -391,6 +410,72 @@ fn enqueue_cloud_exec_at(
     )
 }
 
+/// Queues one instruction for one session of a cloud's worker, which the host types into
+/// that session's terminal through its recorded route. The host answers the exit status,
+/// the account and the tail of the terminal.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_agent_message(
+    identity: AgentIdentity<'_>,
+    request: CloudAgentMessageRequest,
+) -> std::io::Result<String> {
+    enqueue_cloud_agent_message_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+/// Queues one read of one session's terminal on a cloud's worker.
+/// # Errors
+/// As [`enqueue_cloud_agent_message`].
+pub fn enqueue_cloud_agent_read(
+    identity: AgentIdentity<'_>,
+    request: CloudAgentReadRequest,
+) -> std::io::Result<String> {
+    enqueue_cloud_agent_read_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_cloud_agent_message_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudAgentMessageRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud agent message request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            deadline_millis: Some(request.answer_millis()),
+            cloud_agent_message: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
+fn enqueue_cloud_agent_read_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudAgentReadRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud agent read request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            deadline_millis: Some(request.answer_millis()),
+            cloud_agent_read: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 /// Queue only a request for an owner decision; never accepts credential bytes.
 /// # Errors
 /// Invalid metadata, missing live host identity or unavailable bounded queue.
@@ -466,6 +551,8 @@ struct Ask {
     cloud_create: Option<CloudCreateRequest>,
     cloud_delete: Option<CloudDeleteRequest>,
     cloud_exec: Option<CloudExecRequest>,
+    cloud_agent_message: Option<CloudAgentMessageRequest>,
+    cloud_agent_read: Option<CloudAgentReadRequest>,
     browser_vm: Option<BrowserVmRequest>,
     tailnet_credential: Option<CredentialRequest>,
     image_destination: Option<ImageDestinationRequest>,
@@ -483,6 +570,8 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_create,
         cloud_delete,
         cloud_exec,
+        cloud_agent_message,
+        cloud_agent_read,
         browser_vm,
         tailnet_credential,
         image_destination,
@@ -535,6 +624,8 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_create,
         cloud_delete,
         cloud_exec,
+        cloud_agent_message,
+        cloud_agent_read,
         browser_vm,
         tailnet_credential,
         image_destination,

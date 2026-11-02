@@ -1,8 +1,13 @@
 use super::*;
 use horizon_core::{
-    Board, PanelKind, PanelOptions, PanelState, RuntimeState, WorkspaceState, browser_actor,
-    cloud_panel::{CloudConfig, CloudGroup, CloudLaunch},
-    cloud_runtime::state::Deployment,
+    Board, PanelKind, PanelOptions, PanelState, RuntimeState, WorkspaceState,
+    browser::manifest,
+    browser_actor,
+    cloud_panel::{CloudConfig, CloudGroup, CloudLaunch, Placement},
+    cloud_runtime::{
+        Stage,
+        state::{Deployment, Store},
+    },
 };
 
 /// A ready cloud in its own workspace, its record on disk, and an agent panel beside it.

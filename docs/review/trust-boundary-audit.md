@@ -629,6 +629,29 @@ guarantee that the code gives, and what the code does not guarantee.
     that a repeated call runs the command only once; that a crashed append keeps
     its last journal line.
 
+- [`cloud-agent-session`](trust-boundaries/cloud-agent-session.md) (added after
+  this audit, with this change)
+  - Untrusted: the instruction text, which the receiving agent decides what to do
+    with, everything the terminal shows, and the calling agent that chooses the
+    cloud, the session and the text.
+  - Guarantees: the write and the read reach the worker as a `cloud_exec` text, so
+    they run as the agent user `10001` and never as `root`; the cloud comes from
+    the board groups of the caller's workspace, must be `Ready`, and its record must
+    name the session; the tmux target is exact and its name is one identifier; the
+    text reaches tmux through a buffer on stdin and never through argv, and a
+    control character is refused before the request is queued; the instruction is
+    at most 4096 bytes, a read answers at most 16384 bytes cut at its start, and
+    one call has a 20 second bound that kills the process group; a read runs
+    `capture-pane` and nothing else; the journal keeps byte counts and never the
+    text.
+  - Does not guarantee: what the receiving agent does with the authority of its
+    account, the person's GitHub push grant included; that the terminal shows the
+    truth, because a program on the worker prints it; that a read holds no secret
+    that a person or the agent printed there; that one call is one instruction,
+    because an agent may act on a part of a line; that a repeated call happens once;
+    that a record's session still exists after a restart; that a crashed append
+    keeps its last journal line.
+
 > The `cloud-exec-request` page was added after the audit above, in its own
 > change. Its row records the boundary as that change wrote it and does not
 > claim a new full audit.

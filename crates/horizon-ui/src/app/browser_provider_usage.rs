@@ -172,6 +172,10 @@ impl HorizonApp {
                 self.queue_cloud_exec(request, ctx);
                 continue;
             }
+            if request.cloud_agent_message.is_some() || request.cloud_agent_read.is_some() {
+                self.queue_cloud_agent(request, ctx);
+                continue;
+            }
             if request.cloud_offers.is_some() {
                 self.browser_create_host.cloud_offers.push(request);
                 continue;
@@ -300,6 +304,23 @@ impl HorizonApp {
     #[cfg(feature = "cloud-workspaces")]
     fn queue_cloud_exec(&mut self, request: UsageRequest, ctx: &egui::Context) {
         self.start_cloud_exec(request, ctx);
+    }
+
+    #[cfg(feature = "cloud-workspaces")]
+    fn queue_cloud_agent(&mut self, request: UsageRequest, ctx: &egui::Context) {
+        self.start_cloud_agent(request, ctx);
+    }
+
+    #[cfg(not(feature = "cloud-workspaces"))]
+    #[allow(clippy::needless_pass_by_value)]
+    fn queue_cloud_agent(&mut self, request: UsageRequest, _ctx: &egui::Context) {
+        self.publish_host_usage_result(
+            request.result(
+                Vec::new(),
+                Some("cloud_agent_unavailable: this Horizon build has no cloud support".into()),
+            ),
+            request.deadline_at_millis,
+        );
     }
 
     #[cfg(not(feature = "cloud-workspaces"))]
