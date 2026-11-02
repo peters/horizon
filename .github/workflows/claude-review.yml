@@ -1,15 +1,5 @@
 name: Claude Review
 
-# Claude reviews a pull request at most 5 times, in the policy of
-# fintermobilityas/company (docs/pull-requests.md). Round 1 starts when a pull
-# request opens or leaves draft. Every later round, and every review of a fork's
-# pull request, starts only when a maintainer adds the `claude-review` label.
-#
-# Keep this file identical in every repository and change the review itself in
-# fintermobilityas/review/.github/workflows/claude-review.yml, which this file
-# calls at a commit of that repository: a change there reaches this repository
-# only when this line moves.
-
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, labeled]
@@ -17,15 +7,15 @@ on:
 permissions:
   contents: read
 
+# A new run waits for the current one and never cancels it, so the label stays
+# until its own run removes it and two runs cannot count the same free round.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   review:
-    if: github.event.action != 'labeled' || github.event.label.name == 'claude-review'
-    # A new run waits for the current one and never cancels it, so the label stays
-    # until its own run removes it and two runs cannot count the same free round.
-    concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    uses: fintermobilityas/review/.github/workflows/claude-review.yml@7a5ba7a3549f568252581dc9007d6fc5b8d6c361
+    uses: fintermobilityas/review/.github/workflows/claude-review.yml@f4dc32e3550a23b2e866f1b9aade2f83d80d5c28
     permissions:
       contents: read
       pull-requests: write
