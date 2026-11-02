@@ -752,7 +752,6 @@ mod tests {
             crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
                 runtime_state: Box::default(),
             });
-        app.cloud_prototype.production.repository = temp.path().display().to_string();
         support::start(&mut app, &ctx, temp.path());
         let fix = access::Fix::GrantOrganization {
             organization: "fintermobilityas".into(),
