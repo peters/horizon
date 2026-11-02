@@ -94,8 +94,10 @@ fn script(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// A tmux that answers the four calls the tool makes, on files in `$HORIZON_TEST_STATE`. It
-/// reads its arguments as a real tmux server would: the socket, the command and the target.
+/// A tmux that answers the calls the tool makes, on files in `$HORIZON_TEST_STATE`. It reads
+/// its arguments as a real tmux server would: the socket, the command, the target and the
+/// named buffer. Its buffers are kept by name, as the real server keeps them, so a write that
+/// pastes the top of the stack would paste the wrong text.
 const FAKE_TMUX: &str = r#"#!/bin/sh
 set -e
 state="$HORIZON_TEST_STATE"
@@ -104,19 +106,26 @@ state="$HORIZON_TEST_STATE"
 shift 2
 command="$1"; shift
 target=
+buffer=
+delete=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -t) target="$2"; shift 2;;
-        -S|-N|-b|-s) shift 2;;
-        -p|-J|-d) shift;;
+        -b) buffer="$2"; shift 2;;
+        -d) delete=1; shift;;
+        -S|-N|-s) shift 2;;
+        -p|-J) shift;;
         *) shift;;
     esac
 done
 target="${target#=}"
+[ "$buffer" = "" ] || [ -f "$state/buffer-$buffer" ] || [ "$command" = load-buffer ] || exit 7
 case "$command" in
     has-session) [ -f "$state/sessions/$target" ];;
-    load-buffer) cat > "$state/buffer";;
-    paste-buffer) cat "$state/buffer" >> "$state/panes/$target"; rm -f "$state/buffer";;
+    load-buffer) cat > "$state/buffer-$buffer";;
+    paste-buffer)
+        cat "$state/buffer-$buffer" >> "$state/panes/$target"
+        [ "$delete" = 1 ] && rm -f "$state/buffer-$buffer";;
     send-keys)
         [ "$target" = "" ] && exit 2
         # The agent's user interface prints its prompt again after the key.
@@ -124,6 +133,7 @@ case "$command" in
     capture-pane) cat "$state/panes/$target" | tail -n 40;;
     *) exit 2;;
 esac
+exit 0
 "#;
 
 fn cloud(panel: &str, tmux: &str) -> Deployment {
@@ -167,7 +177,11 @@ fn an_instruction_reaches_the_terminal_as_text_and_the_answer_shows_it() {
     let session = session(&record, "panel-1").unwrap();
 
     let outcome = sandbox
-        .run(&message_text(&session.tmux, "read #1774 and execute PR 1"))
+        .run(&message_text(
+            &session.tmux,
+            "read #1774 and execute PR 1",
+            "horizon-agent-a",
+        ))
         .unwrap();
     assert_eq!(outcome.uid, 10001, "the write runs as the worker's agent user");
     assert_eq!(outcome.exit_status, 0);
@@ -188,7 +202,7 @@ fn text_that_tmux_would_read_as_a_flag_arrives_unchanged() {
     let record = cloud("panel-1", "panel-1");
     let instruction = "-S -t 'other' $(id) `id` ; rm -rf / --no-preserve-root";
     let outcome = sandbox
-        .run(&message_text(&record.sessions[0].tmux, instruction))
+        .run(&message_text(&record.sessions[0].tmux, instruction, "horizon-agent-b"))
         .unwrap();
     assert_eq!(outcome.exit_status, 0);
     assert_eq!(sandbox.pane("panel-1"), format!("❯ {instruction}\n❯ "));
@@ -200,7 +214,9 @@ fn a_session_the_worker_does_not_run_is_named_as_such() {
     sandbox.install();
     // No session is started on the worker, though the cloud's own record has one.
     let record = cloud("panel-1", "panel-1");
-    let failure = sandbox.run(&message_text(&record.sessions[0].tmux, "go")).unwrap_err();
+    let failure = sandbox
+        .run(&message_text(&record.sessions[0].tmux, "go", "horizon-agent-c"))
+        .unwrap_err();
     assert_eq!(failure, Failure::NotRunning);
     assert!(failure.to_string().starts_with("cloud_agent_not_running"));
     assert_eq!(sandbox.pane("panel-1"), "", "nothing is typed into an absent session");
@@ -217,8 +233,8 @@ fn a_read_answers_the_lines_the_terminal_shows() {
     sandbox.start("panel-1");
     let record = cloud("panel-1", "panel-1");
     let tmux = &record.sessions[0].tmux;
-    sandbox.run(&message_text(tmux, "first")).unwrap();
-    sandbox.run(&message_text(tmux, "second")).unwrap();
+    sandbox.run(&message_text(tmux, "first", "horizon-agent-d")).unwrap();
+    sandbox.run(&message_text(tmux, "second", "horizon-agent-e")).unwrap();
 
     let outcome = sandbox.run(&read_text(tmux, 40)).unwrap();
     assert_eq!(outcome.text, "❯ first\n❯ second\n❯ ");
@@ -259,7 +275,7 @@ fn the_answer_keeps_the_newest_text_and_cuts_its_start_on_a_line() {
 
 #[test]
 fn the_text_names_the_socket_the_session_and_no_other_program() {
-    let text = message_text("panel-1", "go");
+    let text = message_text("panel-1", "go", "horizon-agent-f");
     assert!(text.contains("tmux -L 'horizon-cloud'"), "{text}");
     assert!(text.contains("-t '=panel-1'"), "the target is exact and quoted: {text}");
     assert!(
@@ -272,6 +288,36 @@ fn the_text_names_the_socket_the_session_and_no_other_program() {
     let read = read_text("panel-2", 120);
     assert!(read.contains("-S -120"), "{read}");
     assert!(!read.contains("load-buffer") && !read.contains("send-keys"), "{read}");
+    assert_ne!(buffer(), buffer(), "each call uses its own buffer name");
+    assert!(buffer().starts_with("horizon-agent-"));
+}
+
+#[test]
+fn a_write_pastes_its_own_text_and_never_the_top_of_the_shared_buffer_stack() {
+    let sandbox = Sandbox::new();
+    sandbox.install();
+    sandbox.start("panel-1");
+    sandbox.start("panel-2");
+    let record = cloud("panel-1", "panel-1");
+    // Another session's write loaded its text first, as it does on the worker's one server.
+    fs::write(sandbox.state().join("buffer-other"), "delete the worktree").unwrap();
+
+    let outcome = sandbox
+        .run(&message_text(
+            &record.sessions[0].tmux,
+            "push the branch",
+            "horizon-agent-mine",
+        ))
+        .unwrap();
+    assert_eq!(outcome.exit_status, 0);
+    assert_eq!(
+        sandbox.pane("panel-1"),
+        "❯ push the branch\n❯ ",
+        "the session receives this call's text"
+    );
+    assert_eq!(sandbox.pane("panel-2"), "❯ ", "the other session receives nothing");
+    // The named buffer is deleted after the paste, so the worker keeps no instruction.
+    assert!(!sandbox.state().join("buffer-horizon-agent-mine").exists());
 }
 
 #[test]

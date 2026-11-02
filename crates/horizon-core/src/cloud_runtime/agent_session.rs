@@ -21,6 +21,10 @@ const SETTLE: Duration = Duration::from_secs(1);
 /// The exit code of a session the worker does not run, and of a write that tmux refused.
 const NO_SESSION: i32 = 4;
 pub(super) const WRITE_FAILED: i32 = 5;
+/// Where the write of one session serializes with another write of the same session, under
+/// the agent user's home. The lock is held until the call's own shell exits, so a paste and
+/// its Enter are never split by another instruction of that session.
+const LOCK: &str = "$HOME/.horizon-agent-session";
 /// The frame the remote text prints when the session is absent. It is written before tmux is
 /// asked to type anything, so a caller can tell an absent session from a refused write.
 pub(super) const NO_SESSION_MARKER: &str = "HORIZON-AGENT no-session";
@@ -84,7 +88,7 @@ pub struct Outcome {
 /// worker runs no such session, and [`Failure::Write`] when tmux refused the write.
 pub fn message(target: &Target<'_>, session: &Session, text: &str, cancel: &Cancellation) -> Result<Outcome, Failure> {
     let command = Command {
-        text: message_text(&session.tmux, text),
+        text: message_text(&session.tmux, text, &buffer()),
         timeout: Duration::from_millis(horizon_browser_control::manifest::cloud_agent::TIMEOUT_MILLIS),
     };
     outcome(target, &command, cancel)
@@ -135,22 +139,36 @@ fn interpret(answer: Answer) -> Result<Outcome, Failure> {
     })
 }
 
-/// The remote text that types `text` into the session named `tmux` and presses Enter, then
-/// prints what the terminal shows. The instruction reaches tmux through a buffer, never
-/// through argv: tmux would read a word that starts with `-` as one of its own flags.
+/// The name of the tmux buffer one write uses. Every call has its own, so a write of one
+/// session never pastes the text that another write loaded: the sessions of a worker share
+/// one tmux server, and therefore one stack of buffers.
 #[must_use]
-pub fn message_text(tmux: &str, text: &str) -> String {
+pub fn buffer() -> String {
+    format!("horizon-agent-{}", horizon_browser::new_action_id())
+}
+
+/// The remote text that types `text` into the session named `tmux` and presses Enter, then
+/// prints what the terminal shows. The instruction reaches tmux through this call's own named
+/// buffer, never through argv: tmux would read a word that starts with `-` as one of its own
+/// flags, and an unnamed buffer is the top of a stack that every session of the worker shares.
+#[must_use]
+pub fn message_text(tmux: &str, text: &str, buffer: &str) -> String {
     let target = target(tmux);
     let socket = cloud_exec::quote(TMUX_SOCKET);
+    let buffer = cloud_exec::quote(buffer);
     format!(
         "{guard}\
-         printf '%s' {text} | tmux -L {socket} load-buffer - \
-         && tmux -L {socket} paste-buffer -d -t {target} \
+         exec 9>{lock}-{tmux}.lock || exit {WRITE_FAILED}\n\
+         flock 9\n\
+         printf '%s' {text} | tmux -L {socket} load-buffer -b {buffer} - \
+         && tmux -L {socket} paste-buffer -d -b {buffer} -t {target} \
          && tmux -L {socket} send-keys -t {target} Enter \
          || exit {WRITE_FAILED}\n\
          sleep {settle}\n\
          tmux -L {socket} capture-pane -p -J -t {target} -S -{CONFIRM_LINES}\n",
         guard = guard(tmux),
+        lock = LOCK,
+        tmux = tmux,
         text = cloud_exec::quote(text),
         settle = SETTLE.as_secs(),
     )

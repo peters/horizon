@@ -52,21 +52,28 @@ tmux call runs as the worker's unprivileged agent user. The agent tool contract 
    `cloud_agent_not_running` for that code, so a session that the worker stopped is
    never reported as a write that failed.
 5. **The instruction arrives as text and never as a key.** The text reaches tmux
-   through `load-buffer -` on stdin and `paste-buffer`, never through argv, so tmux
-   never reads a word of it as one of its own flags and never reads a word of it as
-   a key name. A control character is refused before the request is queued: a
+   through `load-buffer -b <name> -` on stdin and `paste-buffer -d -b <name>`, never
+   through argv, so tmux never reads a word of it as one of its own flags and never
+   reads a word of it as a key name. Each call loads and pastes its own named buffer,
+   because every session of a worker shares one tmux server and therefore one stack
+   of unnamed buffers: a write of one session can then never paste the text that
+   another write loaded, and the named buffer is deleted after the paste. A control character is refused before the request is queued: a
    newline or a carriage return would submit a part of the instruction, an escape
    would leave the agent's input mode, and a tab would ask for a completion. One
    control byte therefore never arrives as an effect of its own.
-6. **The call is bounded.** One instruction is at most 4096 bytes. One read asks for
+6. **One session's writes do not interleave.** A write holds a lock file of its own
+   session under the agent user's home from before the paste until its shell exits, so
+   two writes to the same session arrive one after the other and a paste and its Enter
+   are never split. Writes to different sessions need no shared state.
+7. **The call is bounded.** One instruction is at most 4096 bytes. One read asks for
    20 to 600 lines and answers at most 16384 bytes, cut at its start on a line
    boundary, so the newest output arrives whole. One call has a wall-clock bound of
    20 seconds; on expiry Horizon kills the process group of the SSH client.
-7. **A read reads the terminal.** A read runs `capture-pane -p` on the session and
+8. **A read reads the terminal.** A read runs `capture-pane -p` on the session and
    returns what that prints. It opens no file, no credential store and no provider
    API on the worker, and it does not read the workspace. The bound in guarantee 6
    is the only cut.
-8. **The journal keeps no text.** Horizon writes one private line per call with the
+9. **The journal keeps no text.** Horizon writes one private line per call with the
    actor, the cloud, the session, the action, the byte length of the instruction,
    the bytes of the answer, the outcome, the exit status and the duration. It never
    records the instruction text, which can name what the person may not want
@@ -104,6 +111,8 @@ tmux call runs as the worker's unprivileged agent user. The agent tool contract 
   when the isolation marker, the launcher or the cloud's `Ready` stage is absent.
 - An instruction that reaches tmux through argv, or one whose control character
   arrives as a key.
+- A write that loads or pastes an unnamed buffer, or one that pastes a buffer another
+  call loaded, and a paste that is not held by its session's lock.
 - A tmux target that matches a session by prefix, or a session name that carries a
   quote, a space or a shell metacharacter.
 - A read that opens a file, a credential store or a provider API on the worker, or

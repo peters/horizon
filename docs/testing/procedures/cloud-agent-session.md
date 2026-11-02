@@ -101,7 +101,24 @@ allow is refused and types nothing.
    Result: Both answers arrive. The second answer holds at least as much text as
    the first.
 
-### 6.2 B — A refused body types nothing
+### 6.2 B — Two sessions keep their own instruction
+
+1. Open a second agent session on the cloud's card, and read `cloud_list` for its
+   `panel_id`.
+
+   Result: The cloud's `sessions` holds two entries.
+
+2. Send `Reply with ZEPHYR only.` to the first session and `Reply with BASALT only.`
+   to the second session in the same minute.
+
+   Result: Each session shows its own word, and neither shows the other's.
+
+3. Read both sessions.
+
+   Result: The first answer holds `ZEPHYR` and not `BASALT`, and the second holds
+   `BASALT` and not `ZEPHYR`.
+
+### 6.3 C — A refused body types nothing
 
 1. Call `cloud_agent_message` with the same cloud and session and the text
    `line one` followed by a newline and `line two`.
@@ -113,7 +130,7 @@ allow is refused and types nothing.
 
    Result: The instruction arrives and the agent replies.
 
-### 6.3 C — A session that the cloud does not name
+### 6.4 D — A session that the cloud does not name
 
 1. Call `cloud_agent_message` with the same cloud and a `panel_id` that no session
    of that cloud uses.
@@ -125,7 +142,7 @@ allow is refused and types nothing.
 
    Result: The tool refuses with `cloud_agent_unknown_session`.
 
-### 6.4 D — Another cloud and a cloud that is not ready
+### 6.5 E — Another cloud and a cloud that is not ready
 
 1. Read `cloud_list` and choose a second cloud in the same workspace that this
    workspace does not own, or one in another workspace.
@@ -146,7 +163,7 @@ allow is refused and types nothing.
 
    Result: The card shows **Ready**, and `cloud_list` lists the cloud again.
 
-### 6.5 E — The journal holds no text
+### 6.6 F — The journal holds no text
 
 1. Read the private journal of the cloud, at
    `HORIZON_HOME/browser/audit/cloud-agent/`, and open the file of that cloud.
@@ -155,7 +172,7 @@ allow is refused and types nothing.
    `answer_bytes`, `outcome` and the duration. No line holds the instruction text
    of step 6.1.1.
 
-### 6.6 F — The cloud shows the work
+### 6.7 G — The cloud shows the work
 
 1. Call `cloud_agent_message` with the text
    `Create a branch named agent/proof and commit one empty commit on it.`
@@ -173,8 +190,9 @@ allow is refused and types nothing.
 
 ## 7. Pass criteria
 
-- Task A, B, C, E and F pass.
-- Task D passes when the run has a second workspace with its own cloud.
+- Task A, B, C, D, F and G pass.
+- Task E passes when the run has a second workspace with its own cloud.
+- Task B proves that one session's instruction never reaches the other session.
 
 ## 8. Cleanup
 

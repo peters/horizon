@@ -813,6 +813,11 @@ worker; it reads the terminal only. A secret that a person or the agent printed 
 that terminal is part of the answer, so keep the answer private and never copy such
 a value into a commit, a pull request or a message.
 
+Each write arrives as plain text and never as a key, and two writes to the same
+session arrive one after the other: Horizon types the instruction into a buffer of
+that call and holds the session's lock until the key is sent. A write to one session
+never reaches another session's terminal.
+
 Think of the terminal as a slow, shared channel. An agent's user interface redraws
 its whole screen, so compare two reads to see what is new rather than treating one
 read as a delta. Wait between a write and a read that judges its effect: a long task
