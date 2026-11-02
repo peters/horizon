@@ -772,8 +772,13 @@ fn prepare(
     policy
         .admits(&prepared.repository, chosen.provider.id, Some(chosen.hourly))
         .map_err(|refusal| refused(refusal, chosen.hourly, policy.max_hourly))?;
-    // The envelope admits the rent before this computer reads the repository's GitHub access,
-    // because that step spends money too. A refusal here rents nothing and records nothing.
+    // The offer whose rate the policy admits is the worker that is rented.
+    let (profile, settings) = pinned_offer(&settings_path, &profile, &chosen)?;
+    github_access(&settings, &runner, mint)?;
+    // Every refusal that a read of this computer can decide is behind us, so the envelope is
+    // asked last: a create that never reaches a provider spends none of what it allows. What
+    // remains after this line can rent a worker, which is why its rent stays recorded even
+    // when the deployment that follows fails.
     let ask = envelope_runtime::Ask {
         provider: chosen.provider.id.to_owned(),
         currency: chosen.currency.to_owned(),
@@ -781,9 +786,6 @@ fn prepare(
         estimate: chosen.estimate,
     };
     envelope_gate::admit(root, &envelope, &ask, &cloud, chosen.hourly, &actor)?;
-    // The offer whose rate the policy admits is the worker that is rented.
-    let (profile, settings) = pinned_offer(&settings_path, &profile, &chosen)?;
-    github_access(&settings, &runner, mint)?;
     let state_root = cloud_runtime::state::cloud_directory(root, &cloud).map_err(|error| error.to_string())?;
     let skip_sign_in = policy.allow_github_sign_in_skip;
     let mut request = Request::new(

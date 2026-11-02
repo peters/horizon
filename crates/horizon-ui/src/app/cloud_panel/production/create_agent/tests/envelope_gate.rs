@@ -118,3 +118,33 @@ fn a_machine_whose_envelope_record_cannot_be_read_rents_nothing() {
     assert_eq!(operation.error.as_deref(), Some(LEDGER));
     assert!(app.cloud_prototype.groups.0.is_empty());
 }
+
+#[test]
+fn a_create_that_a_local_check_refuses_spends_no_envelope() {
+    // The order of `prepare`: the repository, the price, the policy and the GitHub access of
+    // this computer are read before the envelope is asked, so a refusal among them leaves the
+    // record as it was. The smoke run of the create lane found the opposite order spending a
+    // 5.5 h rent on a repository that has no GitHub remote.
+    let (temp, mut app, _workspace, actor) = agent_app_with_envelope(Some(policy()), Some(approved()));
+    let root = temp.path().join("cloud");
+    let request = build_request(
+        &actor,
+        manifest::host_instance(),
+        submit("/home/person/shop"),
+        manifest::now_millis() + 10_000,
+    );
+    assert_eq!(answer(&mut app, &request).unwrap()["phase"], json!("submitted"));
+    let ctx = Context::default();
+    finish(&mut app, &ctx);
+    let operation = &app.cloud_prototype.production.create_agent.operations[ID];
+    assert_eq!(operation.phase, Phase::Failed);
+    let error = operation.error.as_deref().unwrap_or_default();
+    assert!(
+        !error.starts_with("cloud_create_envelope"),
+        "a local refusal is not an envelope refusal: {error}"
+    );
+    assert!(
+        !root.join("envelope-rents.jsonl").exists(),
+        "a create that never reached a provider records no rent"
+    );
+}
