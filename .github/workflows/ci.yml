@@ -9,7 +9,7 @@ on:
 # Each push to main gets its own group. With a shared group, GitHub keeps only one
 # pending run, so when merges land close together the run of a middle merge is
 # dropped, and the next run diffs only its own push and can skip that merge's
-# Snap and release builds.
+# release builds.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -110,18 +110,17 @@ jobs:
       - name: Verify the setup gate runner
         run: python3 -B scripts/test_setup_gate.py -v
 
-  # One diff answers every gated lane: Snap packaging, the release Artifacts
-  # builds and, on pull requests, the Rust build and test jobs and the Linux
-  # speech tests. It runs on its own small runner so the Rust jobs wait
-  # seconds for it, not for every repo check. The classification lives in a
-  # script with its own test suite (run in Repo checks) because a silent
-  # misclassification skips a build.
+  # One diff answers every gated lane: the release Artifacts builds and, on
+  # pull requests, the Rust build and test jobs and the Linux speech tests.
+  # It runs on its own small runner so the Rust jobs wait seconds for it, not
+  # for every repo check. The classification lives in a script with its own
+  # test suite (run in Repo checks) because a silent misclassification skips a
+  # build.
   changes:
     name: Detect changed inputs
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run_snap_build: ${{ steps.changes.outputs.run_snap_build }}
       release_inputs: ${{ steps.changes.outputs.release_inputs }}
       macos_release_inputs: ${{ steps.changes.outputs.macos_release_inputs }}
       rust_inputs: ${{ steps.changes.outputs.rust_inputs }}
@@ -494,28 +493,6 @@ jobs:
               exit 1
             fi
           fi
-
-  snap-build:
-    name: Snap Build
-    needs: changes
-    # Disabled: Snap packaging paused. Re-enable by restoring the previous
-    # condition: needs.changes.outputs.run_snap_build == 'true'
-    if: false
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - uses: snapcore/action-build@v1
-        id: snapcraft
-        with:
-          path: .
-      - name: Upload snap artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: horizon-linux-x64.snap
-          path: ${{ steps.snapcraft.outputs.snap }}
 
   # Docs/CI-only pushes to main must not pay for release builds, so this job
   # is gated on the paths that can change the binary, as detected by Detect

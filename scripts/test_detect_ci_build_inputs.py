@@ -15,6 +15,7 @@ SCRIPT = ROOT / "scripts" / "detect-ci-build-inputs.sh"
 SELECT = ROOT / "scripts" / "select-release-artifact-platforms.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 ARTIFACTS_WORKFLOW = ROOT / ".github" / "workflows" / "release-artifacts.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 NIGHTLY_WORKFLOW = ROOT / ".github" / "workflows" / "macos-release-builds.yml"
 MACOS_PLATFORMS = ["macos-arm64", "macos-x64"]
 RUST_JOBS = ["browser-engine", "device", "clippy", "rust-test"]
@@ -65,14 +66,14 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return dict(line.split("=", 1) for line in result.stdout.split())
 
-    def assert_gates(self, outputs, *, snap, release, macos="false", rust="true", speech="true"):
-        self.assertEqual(outputs, {"run_snap_build": snap, "release_inputs": release,
+    def assert_gates(self, outputs, *, release, macos="false", rust="true", speech="true"):
+        self.assertEqual(outputs, {"release_inputs": release,
                                    "macos_release_inputs": macos, "rust_inputs": rust,
                                    "speech_inputs": speech})
 
-    def test_documentation_only_change_gates_both_lanes_off(self):
+    def test_documentation_only_change_gates_the_release_builds_off(self):
         self.commit("docs/architecture/maintainability.md", "README.md")
-        self.assert_gates(self.detect(), snap="false", release="false")
+        self.assert_gates(self.detect(), release="false")
 
     def test_source_and_manifest_changes_gate_the_release_matrix(self):
         for path in ["crates/horizon-ui/src/app/mod.rs", "Cargo.toml", "Cargo.lock",
@@ -80,32 +81,32 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), snap="false", release="true")
+                self.assert_gates(self.detect(), release="true")
 
-    def test_packaging_changes_gate_the_snap_build(self):
-        for path in ["snap/snapcraft.yaml", "packaging/linux/horizon.desktop",
-                     ".github/workflows/release.yml"]:
+    def test_packaging_changes_stay_out_of_the_release_matrix(self):
+        for path in ["packaging/linux/horizon.desktop", "packaging/linux/install.sh"]:
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), snap="true", release="false")
+                self.assert_gates(self.detect(), release="false")
 
-    def test_shared_inputs_gate_both_lanes(self):
-        for path in [".github/workflows/ci.yml", "assets/icons/icon-512.png"]:
+    def test_workflow_and_asset_changes_gate_the_release_matrix(self):
+        for path in [".github/workflows/ci.yml", ".github/workflows/release.yml",
+                     "assets/icons/icon-512.png"]:
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), snap="true", release="true")
+                self.assert_gates(self.detect(), release="true")
 
     def test_artifact_build_definition_builds_macos_at_once(self):
-        for path, snap in [(".github/workflows/release-artifacts.yml", "false"),
-                           ("scripts/select-release-artifact-platforms.py", "false"),
-                           ("scripts/install-ci-video-build-tools.sh", "false"),
-                           ("scripts/package-release-asset.sh", "true")]:
+        for path in [".github/workflows/release-artifacts.yml",
+                     "scripts/select-release-artifact-platforms.py",
+                     "scripts/install-ci-video-build-tools.sh",
+                     "scripts/package-release-asset.sh"]:
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), snap=snap, release="true", macos="true")
+                self.assert_gates(self.detect(), release="true", macos="true")
 
     def test_source_changes_leave_macos_to_the_nightly_build(self):
         for paths in [["crates/horizon-ui/src/app/mod.rs"], ["Cargo.lock", "Cargo.toml"],
@@ -119,21 +120,20 @@ class DetectionTests(unittest.TestCase):
     def test_macos_build_inputs_with_other_changes_still_build_macos(self):
         self.commit("docs/plan.md", "crates/horizon-ui/src/lib.rs",
                     "scripts/package-release-asset.sh")
-        self.assert_gates(self.detect(), snap="true", release="true", macos="true")
+        self.assert_gates(self.detect(), release="true", macos="true")
 
-    def test_a_range_without_changes_gates_both_lanes_off(self):
-        self.assert_gates(self.detect(head=self.base), snap="false", release="false")
+    def test_a_range_without_changes_gates_the_release_builds_off(self):
+        self.assert_gates(self.detect(head=self.base), release="false")
 
     def test_unknown_diff_bases_build_everything(self):
         self.commit("docs/plan.md")
         for base in ["", ZERO_SHA, "0" * 38, "deadbeef" * 5, "refs/heads/missing"]:
             with self.subTest(base=base):
-                self.assert_gates(self.detect(base=base), snap="true", release="true",
-                                  macos="true")
+                self.assert_gates(self.detect(base=base), release="true", macos="true")
 
     def test_workflow_dispatch_builds_everything_from_a_resolvable_base(self):
         self.commit("docs/plan.md")
-        self.assert_gates(self.detect(event="workflow_dispatch"), snap="true", release="true",
+        self.assert_gates(self.detect(event="workflow_dispatch"), release="true",
                           macos="true")
 
     def test_pull_request_outside_rust_skips_the_rust_jobs(self):
@@ -181,13 +181,13 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), snap="false", release="true")
+                self.assert_gates(self.detect(), release="true")
 
     def test_pushes_and_unknown_bases_always_run_the_rust_jobs(self):
         self.commit("docs/plan.md")
-        self.assert_gates(self.detect(event="push"), snap="false", release="false", rust="true")
+        self.assert_gates(self.detect(event="push"), release="false", rust="true")
         self.assert_gates(self.detect(event="pull_request", base=ZERO_SHA),
-                          snap="true", release="true", macos="true", rust="true")
+                          release="true", macos="true", rust="true")
 
     def write(self, path, text):
         target = self.repo / path
@@ -278,6 +278,19 @@ class DetectionTests(unittest.TestCase):
 
 
 class WorkflowGateTests(unittest.TestCase):
+    def test_no_snap_lane_remains(self):
+        ci = WORKFLOW.read_text()
+        release = RELEASE_WORKFLOW.read_text()
+        self.assertNotIn("snap-build", jobs_of(ci))
+        self.assertNotIn("publish-snap", jobs_of(release))
+        for workflow in (ci, release):
+            with self.subTest(workflow=workflow.splitlines()[0]):
+                self.assertNotIn("run_snap_build", workflow)
+                self.assertNotIn("snapcore/", workflow)
+                self.assertNotIn("SNAPCRAFT_STORE_CREDENTIALS", workflow)
+        self.assertNotIn("publish_snap", release)
+        self.assertFalse((ROOT / "snap").exists())
+
     def test_rust_jobs_wait_for_the_change_detection_and_run_unless_told_not_to(self):
         workflow = WORKFLOW.read_text()
         jobs = jobs_of(workflow)

@@ -285,18 +285,6 @@ brew uninstall horizon
 brew untap peters/horizon
 ```
 
-### Snap
-
-Snap Store publishing is paused for now, so the store may hold an older release. Use another install method for the latest version. The snap is a classic snap for Linux x64:
-
-```bash
-sudo snap install horizon-ui --classic
-snap refresh horizon-ui
-snap remove horizon-ui
-```
-
-Classic confinement is intentional. Horizon launches host shells and host tools such as `ssh`, `git`, `xdg-open`, `pgrep`, `lsof`, and optional `tailscale` helpers, so a strict sandbox would compromise core workflows.
-
 ### Build from source
 
 ```bash
@@ -562,7 +550,7 @@ A Browser panel is a real browser drawn on the canvas. Type an address and the p
 3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. On Linux, Horizon searches `PATH` for Chrome, Chromium, Edge, and Brave. macOS searches `PATH` and the usual browser `.app` bundles under `/Applications`, including Brave. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
 4. Back, forward, and reload sit on the same bar. **Record** writes a private WebM of the live page.
 
-Chromium and Firefox start headless and paint into the panel. A panel you create keeps its own profile under `~/.horizon/browser-profiles`. Duplicating a Chromium or Firefox panel shares that profile, including cookies. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so the Snap can read the profile. A workspace can open straight onto a URL:
+Chromium and Firefox start headless and paint into the panel. A panel you create keeps its own profile under `~/.horizon/browser-profiles`. Duplicating a Chromium or Firefox panel shares that profile, including cookies. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so a Snap-confined browser can read the profile. A workspace can open straight onto a URL:
 
 ```yaml
 workspaces:
