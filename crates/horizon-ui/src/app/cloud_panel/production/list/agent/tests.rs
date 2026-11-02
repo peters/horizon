@@ -290,3 +290,27 @@ fn an_unresolved_automatic_image_is_null_and_a_retained_registry_grant_stays_opa
     assert!(!encoded.contains("secret_file"));
     assert!(!encoded.contains("access_token"));
 }
+
+#[test]
+fn the_list_names_the_sessions_a_caller_can_address() {
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let ctx = egui::Context::default();
+    let state = runtime(&mut app).state.as_mut().unwrap();
+    state.sessions = vec![horizon_core::cloud_runtime::state::Session::new(
+        "panel-1",
+        "claude",
+        "/workspace/agents/panel-1".into(),
+    )];
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(
+        listed["clouds"][0]["sessions"],
+        json!([{
+            "panel_id": "panel-1",
+            "agent": "claude",
+            "branch": "",
+            "worktree": "/workspace/agents/panel-1",
+        }])
+    );
+    let encoded = serde_json::to_string(&listed).unwrap();
+    assert!(!encoded.contains("secret") && !encoded.contains("token"), "{encoded}");
+}

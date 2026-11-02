@@ -30,6 +30,20 @@ cancel cannot recall a rented worker, so then read `cloud_list` and stop that cl
 it exists. You cannot choose a worker, plan token, siblings or publishing choice in
 this version. Read `references/cloud.md` before you submit.
 
+`cloud_agent_message` types one instruction into the agent terminal of one cloud
+session, and `cloud_agent_read` returns the bounded tail of what that terminal shows.
+The session is a `panel_id` from the `sessions` of a `cloud_list` row: one cloud holds
+several, its agents and its shells. Use them to drive an agent that already runs on a
+rented cloud from the session that plans the work. The text goes to the terminal, never
+to a file or a secret store, and it is plain printable text on one line of at most 4096
+bytes. The terminal carries the person's GitHub push grant, so treat a write as an act
+with that grant: send only what the person asked for, read the answer before you send
+the next instruction, and read the session before you send an instruction again after a
+lost answer. Horizon records the cloud, the session and the byte count of each call and
+never the text. Read `references/cloud.md` before your first call.
+
+Cloud cards show the last-read tailnet device name under Connections > Tailnet.
+
 `cloud_delete` deletes one cloud's provider resources without a person. It is
 irreversible: a provider request that Horizon sent cannot be recalled, so a delete
 may already be in progress as soon as `submit` answers. You can delete only a cloud

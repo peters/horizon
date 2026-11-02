@@ -191,6 +191,14 @@ fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtim
         "working": facts.working,
         "worker_image": state.map(|state| &state.profile.image).filter(|image| !image.is_empty()),
         "image_publication": state.and_then(|state| state.publication.as_ref()),
+        // The sessions the worker runs, so a caller can name one to the agent tools. A
+        // session's panel ID is its name on the worker, and nothing here is a secret.
+        "sessions": state.map(|state| state.sessions.iter().map(|session| json!({
+            "panel_id": session.panel_id,
+            "agent": session.agent,
+            "branch": session.branch,
+            "worktree": session.worktree,
+        })).collect::<Vec<Value>>()).unwrap_or_default(),
     })
 }
 

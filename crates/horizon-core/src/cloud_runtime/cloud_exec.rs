@@ -25,10 +25,10 @@ const REFUSED_NOT_ROOT: i32 = 21;
 const REFUSED_NO_LAUNCHER: i32 = 22;
 /// OpenSSH reports its own failures, such as an unreachable worker, with this code.
 const SSH_FAILURE: i32 = 255;
-const UID_MARKER: &str = "HORIZON-EXEC uid=";
-const LAUNCHER: &str = "/usr/local/bin/horizon-worker-tailnet";
+pub(super) const UID_MARKER: &str = "HORIZON-EXEC uid=";
+pub(super) const LAUNCHER: &str = "/usr/local/bin/horizon-worker-tailnet";
 /// The worker's record that agents are isolated, which its GitHub service requires too.
-const ISOLATION_MARKER: &str = "/run/horizon-tailnet/agent-isolation";
+pub(super) const ISOLATION_MARKER: &str = "/run/horizon-tailnet/agent-isolation";
 /// Programs that would change the account the command runs as.
 const USER_SWITCH: [&str; 8] = [
     "su", "sudo", "doas", "setpriv", "runuser", "pkexec", "nsenter", "chroot",
@@ -36,7 +36,7 @@ const USER_SWITCH: [&str; 8] = [
 
 /// Wraps `value` in single quotes for a POSIX shell, so the shell reads it as one literal
 /// word. Each embedded quote is closed, escaped and reopened, which no shell interprets.
-fn quote(value: &str) -> String {
+pub(super) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
@@ -219,7 +219,7 @@ fn record<'a>(word: &'a str, heads: &mut Vec<&'a str>) -> bool {
 
 /// The remote text one `ssh` argument carries. Root's login shell parses only Horizon's own
 /// words here, and the caller's text arrives as a single quoted word.
-fn remote(command: &str) -> String {
+pub(super) fn remote(command: &str) -> String {
     format!(
         "if [ \"$(id -u)\" != 0 ]; then printf '%s\\n' 'HORIZON-EXEC refused=not-root' >&2; exit {REFUSED_NOT_ROOT}; fi\n\
          if [ ! -f {isolation} ]; then printf '%s\\n' 'HORIZON-EXEC refused=no-isolation' >&2; exit {REFUSED_NO_ISOLATION}; fi\n\

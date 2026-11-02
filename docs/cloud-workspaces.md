@@ -1168,8 +1168,9 @@ For the default launch path, commit `.horizon/cloud.yml` using the
 #### An agent rents a quick-start cloud
 
 An agent panel can rent, use and delete a quick start cloud without a person.
-It uses the `cloud_create`, `cloud_exec` and `cloud_delete` MCP tools. Each tool
-uses the provider credentials of this computer.
+It uses the `cloud_create`, `cloud_exec`, `cloud_agent_message`,
+`cloud_agent_read` and `cloud_delete` MCP tools. Each tool uses the provider
+credentials of this computer.
 
 The machine owner sets the agent lifecycle policy in the `agent_lifecycle`
 section of `~/.horizon/cloud/settings.json`. A machine without this section
@@ -1219,6 +1220,18 @@ operation with `cloud_create_needs_persistent_session`.
 
 A non-zero exit status is a result, not a tool error. Do not put a secret in the
 command.
+
+`cloud_agent_message` types one instruction into the agent terminal of one
+cloud session, and `cloud_agent_read` returns the tail of that terminal. The
+session is a `panel_id` from the `sessions` of a `cloud_list` row:
+
+- An instruction is one line of printable text of at most 4096 bytes. A control
+  character is refused.
+- A read asks for 20 to 600 lines and answers at most 16384 bytes, cut at the
+  start.
+- The terminal holds the GitHub push grant of the person. An instruction acts
+  with that grant.
+- Horizon records the byte counts of each call and never the instruction text.
 
 `cloud_delete` deletes the provider resources of one cloud permanently. Horizon
 deletes only a cloud that an agent created for the same agent actor. For a cloud

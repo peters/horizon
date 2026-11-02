@@ -3,36 +3,26 @@
 //! that the caller may not use, and answers from a background thread: the route, the
 //! settings and the command never run on the UI thread.
 use super::HorizonApp;
-use crate::app::browser_requests::actor_panel;
+use super::route::{Codes, Route};
 use horizon_core::{
-    browser::manifest::{
-        self,
-        provider_usage::{
-            CloudExecAudit, CloudExecOutcome, CloudExecRequest, UsageRequest, append_cloud_exec_audit,
-            complete_provider_usage,
-        },
+    browser::manifest::provider_usage::{
+        CloudExecAudit, CloudExecOutcome, CloudExecRequest, UsageRequest, append_cloud_exec_audit,
+        complete_provider_usage,
     },
-    cloud_panel::Placement,
     cloud_runtime::{
-        self, Cancellation, Stage,
+        Cancellation,
         cloud_exec::{self, Command, Failure, Target},
-        state::Store,
     },
 };
 use serde_json::{Value, json};
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-/// The route one request takes: a cloud's own record, which holds the host key Horizon
-/// pinned for its worker.
-#[derive(Debug)]
-struct Route {
-    directory: PathBuf,
-    settings: PathBuf,
-    placement: Placement,
-}
+/// The codes and sentences this tool uses for its own refusals.
+const CODES: Codes = Codes {
+    prefix: "cloud_exec",
+    request: "one command for one cloud ID from cloud_list",
+    started: "the command",
+};
 
 /// What one request produced. A non-zero exit status is an answer, not a failure.
 #[derive(Debug)]
@@ -90,53 +80,8 @@ impl HorizonApp {
             .cloud_exec
             .as_ref()
             .filter(|exec| exec.valid())
-            .ok_or("cloud_exec_invalid_request: one command for one cloud ID from cloud_list")?;
-        let workspace = (request.host_instance == manifest::host_instance())
-            .then(|| actor_panel(&self.board, &request.actor))
-            .flatten()
-            .and_then(|panel| self.board.workspace(panel.workspace_id))
-            .map(|workspace| workspace.local_id.clone())
-            .ok_or("cloud_exec_unavailable: requires a Horizon agent panel")?;
-        // Two saved clouds with one ID, in any workspace, make the ID ambiguous.
-        let same_id = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .filter(|group| group.remote.as_ref().is_some_and(|remote| remote.id == exec.cloud))
-            .count();
-        let group = self
-            .cloud_prototype
-            .groups
-            .0
-            .iter()
-            .find(|group| group.workspace == workspace && group.remote.as_ref().is_some_and(|r| r.id == exec.cloud))
-            .ok_or("cloud_exec_unknown_cloud: no cloud with this ID in your workspace; read cloud_list first")?;
-        if same_id != 1 {
-            return Err("cloud_exec_ambiguous_cloud: more than one cloud has this ID; use the sidebar".into());
-        }
-        let root = self
-            .cloud_prototype
-            .root
-            .clone()
-            .ok_or("cloud_exec_not_ready: Horizon has no cloud state directory")?;
-        // A caller that stopped waiting gets nothing that runs.
-        if manifest::now_millis() >= request.deadline_at_millis {
-            return Err(
-                "cloud_exec_expired: the request expired before Horizon started the command; nothing ran".into(),
-            );
-        }
-        let directory = cloud_runtime::state::cloud_directory(&root, &exec.cloud).map_err(|error| error.to_string())?;
-        let placement = group
-            .remote
-            .as_ref()
-            .map(|launch| launch.placement.clone())
-            .unwrap_or_default();
-        Ok(Route {
-            directory,
-            settings: root.join("settings.json"),
-            placement,
-        })
+            .ok_or_else(invalid)?;
+        Route::of(self, request, &exec.cloud, &CODES)
     }
 
     /// The command to run, refused here when it names another account.
@@ -145,7 +90,7 @@ impl HorizonApp {
             .cloud_exec
             .as_ref()
             .filter(|exec| exec.valid())
-            .ok_or("cloud_exec_invalid_request: one command for one cloud ID from cloud_list")?;
+            .ok_or_else(invalid)?;
         let command = Command {
             text: exec.command.clone(),
             timeout: Duration::from_millis(exec.timeout_millis),
@@ -172,22 +117,14 @@ fn execute(route: &Route, command: &Command) -> Outcome {
     }
 }
 
-/// Whether the cloud's own record says that its worker is ready. A command changes a
-/// running worker's checkout, so a cloud that is deploying, stopped or deleted takes none.
+/// Whether the cloud's own record says that its worker is ready.
 fn ready(route: &Route) -> Result<(), String> {
-    // A removed folder is not made again: an exec creates nothing on the cloud's disk.
-    let Ok(store) = Store::lock_existing(&route.directory) else {
-        return Err("cloud_exec_not_ready: no deployment recorded".into());
-    };
-    let stage = store
-        .load()
-        .map_err(|error| format!("cloud_exec_not_ready: {error}"))?
-        .map(|state| state.stage);
-    match stage {
-        Some(Stage::Ready) => Ok(()),
-        Some(stage) => Err(format!("cloud_exec_not_ready: {}", stage.label())),
-        None => Err("cloud_exec_not_ready: no deployment recorded".into()),
-    }
+    route.ready(&CODES)
+}
+
+/// The refusal of a request that does not carry one command for one cloud.
+fn invalid() -> String {
+    format!("cloud_exec_invalid_request: {}", CODES.request)
 }
 
 /// Records what Horizon asked for and how it ended, never the command text.

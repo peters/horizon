@@ -43,6 +43,7 @@ mod browser_vm;
 mod capture;
 pub mod cast;
 mod close;
+pub mod cloud_agent;
 mod cloud_companion;
 mod cloud_create;
 mod cloud_delete;

@@ -1,3 +1,4 @@
+mod agent_session;
 mod codex_login_sync;
 mod exec;
 mod fullscreen;
@@ -9,6 +10,7 @@ mod ownership;
 mod production;
 mod render;
 mod resize;
+mod route;
 mod runtime;
 #[cfg(test)]
 mod scroll_bar_tests;
