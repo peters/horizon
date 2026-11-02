@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use horizon_browser::{
     BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal, FrameSlot,
-    RemoteReleaseOutcome, RemoteSessionEvent, VideoCaptureHandle, start_session,
+    RemoteAllocation, RemoteReleaseOutcome, RemoteSessionEvent, VideoCaptureHandle, start_session,
 };
 use horizon_browser_control::manifest::{
     self, AgentIdentity, BrowserCloseRequest, BrowserCloseResult, BrowserCreateRequest, BrowserCreateResult,
     BrowserVisibilityResult, CreateNavigation, ManifestCoordination, ManifestWorkspace,
 };
+use horizon_browser_control::remote_release::{self, CloseRelease, CloseReleaseFailure, close_release};
 use horizon_browser_control::remote_slots::{self, SlotError, SlotLease};
 
 use super::config::HostConfig;
@@ -27,6 +28,8 @@ const EXIT_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 const FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long an exit waits for the provider checks of unconfirmed releases.
 const EXIT_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+/// Cause of a close whose check the host's own exit stopped.
+const STOPPING_BEFORE_CHECK: &str = "the standalone host is stopping before the provider answered";
 /// Codes that a request failure keeps from its message.
 const CODES: &[&str] = &[
     "target_unknown",
@@ -54,6 +57,24 @@ struct Stopping {
     lease: Option<SlotLease>,
 }
 
+/// A close whose teardown finished while the exact session's release is still
+/// unproven: the close waits for the check at the provider.
+struct Verifying {
+    close: BrowserCloseRequest,
+    evidence: CloseEvidence,
+}
+
+/// The provider evidence a close's answer is decided from. It is taken from
+/// the teardown once, because the driver's report cannot change after it ended.
+struct CloseEvidence {
+    /// Whether the teardown still holds an allocation at its provider.
+    holds: bool,
+    /// What the driver's own release request established.
+    driver: Option<RemoteReleaseOutcome>,
+    /// The exact session's record, when this host holds one.
+    allocation: Option<RemoteAllocation>,
+}
+
 pub struct RemoteHost {
     config: Arc<HostConfig>,
     actor: String,
@@ -62,6 +83,8 @@ pub struct RemoteHost {
     sessions: BTreeMap<String, Hosted>,
     pending: Vec<BrowserCreateRequest>,
     stopping: BTreeMap<String, Stopping>,
+    /// Closes that wait for the exact session's check at the provider.
+    verifying: BTreeMap<String, Verifying>,
     /// Provider slots of stopped sessions whose release is not confirmed yet.
     retained: Vec<(horizon_browser::RemoteAllocation, SlotLease)>,
     holds: Holds,
@@ -93,6 +116,7 @@ impl RemoteHost {
             sessions: BTreeMap::new(),
             pending: Vec::new(),
             stopping: BTreeMap::new(),
+            verifying: BTreeMap::new(),
             retained,
             holds,
             usage: Usage::default(),
@@ -161,6 +185,18 @@ impl RemoteHost {
         let checks = std::time::Instant::now() + EXIT_CHECK_TIMEOUT;
         while self.holds.checking() && std::time::Instant::now() < checks {
             std::thread::sleep(Duration::from_millis(100));
+        }
+        // A close that waited for a check is answered from what the check
+        // established; no tick follows this one, so a close still waiting is
+        // answered now instead of at its own deadline.
+        self.stopped();
+        for (_, pending) in std::mem::take(&mut self.verifying) {
+            let failure = CloseReleaseFailure::unconfirmed(STOPPING_BEFORE_CHECK);
+            let _ = manifest::complete_close_request(&BrowserCloseResult::failed(
+                &pending.close,
+                failure.code,
+                &failure.message,
+            ));
         }
         self.holds.prune();
         stopped && !self.holds.own_unreleased()
@@ -447,19 +483,18 @@ impl RemoteHost {
         }
     }
 
-    /// Finish the stops whose driver ended. A close answers `closed` only for a confirmed
-    /// release; the provider slot of an unconfirmed one stays held until its check confirms it.
+    /// Finish the stops whose driver ended. A close answers `closed` only for a
+    /// release established by provider evidence; a teardown whose release is
+    /// still unproven keeps its close open while the exact session is checked,
+    /// and the provider slot stays held until that check proves the release.
     fn stopped(&mut self) {
         let now = manifest::now_millis();
         let mut done = Vec::new();
+        let mut settled = Vec::new();
         for (id, stopping) in &mut self.stopping {
             if stopping.signal.is_complete() {
                 if let Some(close) = stopping.close.take() {
-                    let result = match close_outcome(&stopping.signal) {
-                        Ok(()) => BrowserCloseResult::closed(&close),
-                        Err((code, message)) => BrowserCloseResult::failed(&close, code, message),
-                    };
-                    let _ = manifest::complete_close_request(&result);
+                    settled.push((close, CloseEvidence::of(&stopping.signal)));
                 }
                 done.push(id.clone());
             } else if stopping
@@ -486,26 +521,80 @@ impl RemoteHost {
         // A provider can answer a release in a way the driver does not take as
         // proof; its exact session record can still prove the release.
         self.holds.check(&done);
+        for (close, evidence) in settled {
+            self.answer_close(close, &evidence, now);
+        }
+        for (_, pending) in std::mem::take(&mut self.verifying) {
+            self.answer_close(pending.close, &pending.evidence, now);
+        }
         self.holds.prune();
         self.retained.retain(|(allocation, _)| !allocation.is_released());
     }
+
+    /// Answer one finished teardown's close, or keep it open while the exact
+    /// session's check at the provider has not answered. A kept close is held
+    /// in `verifying` and answered by a later tick.
+    fn answer_close(&mut self, close: BrowserCloseRequest, evidence: &CloseEvidence, now: i64) {
+        let answer = if evidence.holds {
+            close_release(
+                evidence.driver.as_ref(),
+                evidence.allocation.as_ref().map(RemoteAllocation::status),
+            )
+        } else {
+            CloseRelease::Established
+        };
+        if answer.needs_check() {
+            let Some(allocation) = &evidence.allocation else {
+                let failure = CloseReleaseFailure::unconfirmed(remote_release::NO_IDENTITY);
+                let _ = manifest::complete_close_request(&BrowserCloseResult::failed(
+                    &close,
+                    failure.code,
+                    &failure.message,
+                ));
+                return;
+            };
+            if now < close.deadline_at_millis {
+                allocation.reconcile();
+                self.verifying.insert(
+                    close.request_id.clone(),
+                    Verifying {
+                        close,
+                        evidence: evidence.awaiting_check(),
+                    },
+                );
+                return;
+            }
+            let failure = CloseReleaseFailure::unconfirmed(remote_release::CHECK_PENDING);
+            let _ =
+                manifest::complete_close_request(&BrowserCloseResult::failed(&close, failure.code, &failure.message));
+            return;
+        }
+        let result = match answer.refusal() {
+            Some(failure) => BrowserCloseResult::failed(&close, failure.code, &failure.message),
+            None => BrowserCloseResult::closed(&close),
+        };
+        let _ = manifest::complete_close_request(&result);
+    }
 }
 
-/// The answer to a close, as the desktop host gives it.
-fn close_outcome(signal: &BrowserShutdownSignal) -> Result<(), (&'static str, &'static str)> {
-    if !signal.holds_remote_allocation() {
-        return Ok(());
+impl CloseEvidence {
+    fn of(signal: &BrowserShutdownSignal) -> Self {
+        Self {
+            holds: signal.holds_remote_allocation(),
+            driver: signal.remote_release(),
+            allocation: signal.remote_recovery(),
+        }
     }
-    Err(match signal.remote_release() {
-        Some(RemoteReleaseOutcome::Failed { .. }) => (
-            "release_failed",
-            "the session stopped but the provider refused its release; use browser_remote_allocations to reconcile its exact session",
-        ),
-        _ => (
-            "release_unknown",
-            "the session stopped but its release is unconfirmed; use browser_remote_allocations to reconcile its exact session",
-        ),
-    })
+
+    /// The evidence of a close that already started its check: the driver's
+    /// report is no proof, so only the exact session's record decides now.
+    fn awaiting_check(&self) -> Self {
+        Self {
+            holds: self.holds,
+            driver: None,
+            allocation: self.allocation.clone(),
+        }
+    }
 }
 
 fn panel_id(request: &BrowserCreateRequest) -> String {

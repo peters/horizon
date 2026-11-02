@@ -507,6 +507,13 @@ fn release_session(transport: &RemoteHttpClient, session_id: &str) -> RemoteRele
                     message: "the original provider rejected the credential".into(),
                 };
             }
+            // This DELETE addresses the exact session path, so a 404 is the
+            // provider saying it does not have that session. Providers do not
+            // agree on the error code or the body of that answer, so the
+            // status decides here, not its text.
+            if status == 404 {
+                return RemoteReleaseOutcome::AlreadyGone;
+            }
             let response = super::http::interpret_body(status, &bytes);
             match response {
                 Ok(value)
@@ -514,9 +521,6 @@ fn release_session(transport: &RemoteHttpClient, session_id: &str) -> RemoteRele
                         || (status == 204 && bytes.is_empty()) =>
                 {
                     return RemoteReleaseOutcome::Released;
-                }
-                Err(HttpError::WebDriver { error, .. }) if status == 404 && error == "invalid session id" => {
-                    return RemoteReleaseOutcome::AlreadyGone;
                 }
                 Err(HttpError::WebDriver { .. }) => {
                     return RemoteReleaseOutcome::Failed {

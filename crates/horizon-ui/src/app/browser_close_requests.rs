@@ -6,8 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use horizon_core::browser::BrowserShutdownSignal;
 use horizon_core::browser::manifest::{self, BrowserCloseAuditStatus, BrowserCloseRequest, BrowserCloseResult};
+use horizon_core::browser::remote_release::{self, CloseRelease, CloseReleaseFailure};
+use horizon_core::browser::{BrowserShutdownSignal, RemoteAllocation};
 use horizon_core::{PanelId, PanelKind};
 
 use super::HorizonApp;
@@ -71,38 +72,21 @@ pub(super) const fn pending_close_state(
     }
 }
 
-/// What a completed teardown means for the caller, from the remote release
-/// the driver recorded. A local browser records nothing and is simply gone.
-/// Whether a finished teardown counts as closed. A local browser, or a
-/// remote session whose release the driver established, is closed; a remote
-/// teardown that still holds an allocation is a typed failure, whatever the
-/// driver managed to report (nothing at all after an unknown allocation or a
-/// driver that died before releasing counts as unknown).
-pub(super) fn close_outcome(
+/// What a completed teardown means for the caller, from the provider evidence
+/// the host holds for its exact session. A local browser records nothing and
+/// is simply gone. Whether a finished teardown counts as closed is decided by
+/// [`remote_release::close_release`]: a driver release the provider did not
+/// confirm is settled by the exact session's own record, so a close reports
+/// `release_failed` only when that record still shows the session as held.
+pub(super) fn close_release(
     holds_remote_allocation: bool,
     release: Option<&horizon_core::browser::RemoteReleaseOutcome>,
-) -> Result<(), (&'static str, String)> {
-    use horizon_core::browser::RemoteReleaseOutcome;
+    recovery: Option<horizon_core::browser::RemoteRecoveryStatus>,
+) -> CloseRelease {
     if !holds_remote_allocation {
-        return Ok(());
+        return CloseRelease::Established;
     }
-    match release {
-        Some(RemoteReleaseOutcome::Failed { .. }) => Err((
-            "release_failed",
-            "browser panel closed but the provider refused release; use browser_remote_allocations to reconcile its exact session".to_string(),
-        )),
-        Some(RemoteReleaseOutcome::ReleaseUnknown { .. }) => Err((
-            "release_unknown",
-            "browser panel closed but release is unconfirmed; use browser_remote_allocations to reconcile its exact session".to_string(),
-        )),
-        None => Err((
-            "release_unknown",
-            "browser panel closed but its remote session's release was never established; check the provider before allocating again".to_string(),
-        )),
-        Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone | RemoteReleaseOutcome::NeverAllocated) => {
-            Ok(())
-        }
-    }
+    remote_release::close_release(release, recovery)
 }
 
 impl HorizonApp {
@@ -279,7 +263,9 @@ impl HorizonApp {
 
     /// Publish every close whose teardown has completed or whose request
     /// deadline passed first. A timed-out teardown keeps being joined by the
-    /// board so application exit still waits for it.
+    /// board so application exit still waits for it. A teardown whose release
+    /// the provider did not confirm keeps the close open while its exact
+    /// session is checked, so the answer comes from provider evidence.
     fn finish_pending_browser_closes(&mut self) -> bool {
         if self.browser_create_host.pending_closes.is_empty() {
             return false;
@@ -289,53 +275,34 @@ impl HorizonApp {
         let mut waiting = Vec::new();
         for pending in std::mem::take(&mut self.browser_create_host.pending_closes) {
             let complete = pending.teardown.as_ref().is_none_or(BrowserShutdownSignal::is_complete);
-            match pending_close_state(complete, pending.request.deadline_at_millis, now) {
+            let state = pending_close_state(complete, pending.request.deadline_at_millis, now);
+            match state {
                 PendingCloseState::Waiting => waiting.push(pending),
-                PendingCloseState::Complete => {
-                    changed = true;
-                    let release = pending
-                        .teardown
-                        .as_ref()
-                        .and_then(BrowserShutdownSignal::remote_release);
-                    let holds = pending
-                        .teardown
-                        .as_ref()
-                        .is_some_and(BrowserShutdownSignal::holds_remote_allocation);
-                    if let Err((code, message)) = close_outcome(holds, release.as_ref()) {
-                        self.fail_close(&pending.request, code, &message);
-                        // The provider may still hold the session: the board
-                        // keeps counting it against the provider's limit.
-                        if let Some(signal) = pending.teardown {
-                            self.board.retire_browser_shutdown_signal(signal);
-                        }
-                        continue;
-                    }
-                    let root = self.close_files_root();
-                    let request = pending.request;
-                    self.browser_create_host.io.write(move || {
-                        match manifest::record_close_status_in(&root, &request, BrowserCloseAuditStatus::Completed) {
-                            Ok(()) => complete_close_result(&root, &BrowserCloseResult::closed(&request)),
-                            Err(error) => {
-                                tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close completion");
-                                complete_close_failure(
-                                    &root,
-                                    &request,
-                                    "audit_failed",
-                                    "browser panel closed but its completion could not be audited",
-                                );
-                            }
-                        }
-                    });
-                }
-                PendingCloseState::TimedOut => {
+                PendingCloseState::TimedOut if !complete => {
                     changed = true;
                     self.fail_close(
                         &pending.request,
                         "teardown_timeout",
                         "browser panel closed but its session teardown has not completed; call browser_list to confirm it is gone and check the provider before allocating again",
                     );
-                    if let Some(signal) = pending.teardown {
-                        self.board.retire_browser_shutdown_signal(signal);
+                    self.retire_close_teardown(pending.teardown);
+                }
+                PendingCloseState::Complete | PendingCloseState::TimedOut => {
+                    let past_deadline = state == PendingCloseState::TimedOut;
+                    match settled_close(&pending, past_deadline) {
+                        Some(Ok(())) => {
+                            changed = true;
+                            self.publish_closed_close(pending.request);
+                        }
+                        Some(Err(failure)) => {
+                            changed = true;
+                            self.fail_close(&pending.request, failure.code, &failure.message);
+                            // The provider may still hold the session: the board
+                            // keeps counting it against the provider's limit.
+                            self.retire_close_teardown(pending.teardown);
+                        }
+                        // The exact session's check has not answered yet.
+                        None => waiting.push(pending),
                     }
                 }
             }
@@ -343,6 +310,56 @@ impl HorizonApp {
         self.browser_create_host.pending_closes = waiting;
         changed
     }
+
+    /// Publish a close whose release the provider established.
+    fn publish_closed_close(&mut self, request: BrowserCloseRequest) {
+        let root = self.close_files_root();
+        self.browser_create_host.io.write(move || {
+            match manifest::record_close_status_in(&root, &request, BrowserCloseAuditStatus::Completed) {
+                Ok(()) => complete_close_result(&root, &BrowserCloseResult::closed(&request)),
+                Err(error) => {
+                    tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close completion");
+                    complete_close_failure(
+                        &root,
+                        &request,
+                        "audit_failed",
+                        "browser panel closed but its completion could not be audited",
+                    );
+                }
+            }
+        });
+    }
+
+    /// Hand a teardown the host stopped observing to the board, so exit still
+    /// joins it and an unreleased allocation keeps counting.
+    fn retire_close_teardown(&mut self, teardown: Option<BrowserShutdownSignal>) {
+        if let Some(signal) = teardown {
+            self.board.retire_browser_shutdown_signal(signal);
+        }
+    }
+}
+
+/// Decide one closed panel's answer from provider evidence. `None` keeps the
+/// close open because the exact session's check has not answered yet; the
+/// check runs at the provider, so the frame never waits for it.
+fn settled_close(pending: &PendingBrowserClose, past_deadline: bool) -> Option<Result<(), CloseReleaseFailure>> {
+    let teardown = pending.teardown.as_ref()?;
+    let allocation = teardown.remote_recovery();
+    let answer = close_release(
+        teardown.holds_remote_allocation(),
+        teardown.remote_release().as_ref(),
+        allocation.as_ref().map(RemoteAllocation::status),
+    );
+    if !answer.needs_check() {
+        return Some(answer.refusal().map_or(Ok(()), Err));
+    }
+    if past_deadline {
+        return Some(Err(CloseReleaseFailure::unconfirmed(remote_release::CHECK_PENDING)));
+    }
+    // The exact session is retired once the driver ended, so the check reads
+    // the provider and records its own status there.
+    allocation.as_ref()?.reconcile();
+    None
 }
 
 /// What the coordination worker found and wrote for one close request.
@@ -399,7 +416,8 @@ mod tests {
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
 
-    use horizon_core::browser::BrowserPanelState;
+    use horizon_core::browser::manifest::BrowserCloseOutcome;
+    use horizon_core::browser::{BrowserPanelState, RemoteRecoveryStatus, RemoteReleaseOutcome};
     use horizon_core::{Panel, PanelContent, PanelOptions, WorkspaceId};
 
     use super::*;
@@ -752,36 +770,176 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_teardown_is_a_close_only_when_the_release_was_established() {
-        use horizon_core::browser::RemoteReleaseOutcome;
-        assert!(close_outcome(false, None).is_ok(), "a local browser is simply gone");
-        assert!(close_outcome(false, Some(&RemoteReleaseOutcome::Released)).is_ok());
-        assert!(close_outcome(false, Some(&RemoteReleaseOutcome::AlreadyGone)).is_ok());
-        assert!(close_outcome(false, Some(&RemoteReleaseOutcome::NeverAllocated)).is_ok());
-        let never = close_outcome(true, None).expect_err("a held allocation with no report is unknown");
-        assert_eq!(never.0, "release_unknown");
-        assert!(never.1.contains("never established"), "{}", never.1);
-        let failed = close_outcome(
-            true,
-            Some(&RemoteReleaseOutcome::Failed {
-                error: "unknown error".into(),
-                message: "busy".into(),
-            }),
-        )
-        .expect_err("a refused release is not a close");
-        assert_eq!(failed.0, "release_failed");
-        assert!(!failed.1.contains("busy"), "provider messages stay private");
-        assert!(failed.1.contains("browser_remote_allocations"));
-        let unknown = close_outcome(
+    fn a_completed_teardown_is_a_close_only_when_provider_evidence_established_the_release() {
+        let refused = RemoteReleaseOutcome::Failed {
+            error: "unknown error".into(),
+            message: "busy".into(),
+        };
+        assert_eq!(
+            close_release(false, None, None),
+            CloseRelease::Established,
+            "a local browser is simply gone"
+        );
+        for release in [
+            RemoteReleaseOutcome::Released,
+            RemoteReleaseOutcome::AlreadyGone,
+            RemoteReleaseOutcome::NeverAllocated,
+        ] {
+            assert_eq!(close_release(false, Some(&release), None), CloseRelease::Established);
+            assert_eq!(close_release(true, Some(&release), None), CloseRelease::Established);
+        }
+
+        // The reported bug: the provider did not confirm the release request,
+        // and its exact session record proved the session was gone.
+        for established in [
+            RemoteRecoveryStatus::Released,
+            RemoteRecoveryStatus::PersistenceUnavailable,
+        ] {
+            assert_eq!(
+                close_release(true, Some(&refused), Some(established)),
+                CloseRelease::Established,
+                "{established:?} proves the release"
+            );
+        }
+
+        let retained = close_release(true, Some(&refused), Some(RemoteRecoveryStatus::Active))
+            .refusal()
+            .expect("a session the provider still holds fails the close");
+        assert_eq!(retained.code, "release_failed");
+        assert!(retained.message.contains("still reports its exact session as active"));
+        assert!(!retained.message.contains("busy"), "provider messages stay private");
+        assert!(retained.message.contains("reconcile"));
+
+        let rejected = close_release(true, None, Some(RemoteRecoveryStatus::AuthenticationRequired))
+            .refusal()
+            .expect("a release that could not run is not a close");
+        assert_eq!(rejected.code, "release_unknown");
+        assert!(
+            rejected.message.contains("the original credential was rejected"),
+            "{}",
+            rejected.message
+        );
+
+        let never = close_release(true, None, None)
+            .refusal()
+            .expect("a held allocation with no report is unknown");
+        assert_eq!(never.code, "release_unknown");
+        assert!(never.message.contains("no exact session identity"), "{}", never.message);
+        let unknown = close_release(
             true,
             Some(&RemoteReleaseOutcome::ReleaseUnknown {
                 attempts: 3,
                 reason: "timed out".into(),
             }),
+            Some(RemoteRecoveryStatus::ProviderUnavailable),
         )
-        .expect_err("an unanswered release is not a close");
-        assert_eq!(unknown.0, "release_unknown");
-        assert!(!unknown.1.contains("timed out"));
-        assert!(unknown.1.contains("browser_remote_allocations"));
+        .refusal()
+        .expect("an unanswered release is not a close");
+        assert_eq!(unknown.code, "release_unknown");
+        assert!(!unknown.message.contains("timed out"));
+        assert!(
+            unknown.message.contains("no trustworthy session result"),
+            "{}",
+            unknown.message
+        );
+
+        // A retired session whose release nothing established is checked at
+        // the provider before the close answers.
+        assert!(close_release(true, Some(&refused), Some(RemoteRecoveryStatus::Unresolved)).needs_check());
+    }
+
+    /// Every close result the host published in its Horizon home, oldest id first.
+    fn published_close_results(app: &mut HorizonApp) -> Vec<BrowserCloseResult> {
+        app.settle_browser_host_io();
+        let directory = app.session_store.home().root().join("runtime").join("browser-close");
+        let mut results: Vec<BrowserCloseResult> = std::fs::read_dir(directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".result.json"))
+            .filter_map(|entry| std::fs::read(entry.path()).ok())
+            .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+            .collect();
+        results.sort_by_key(|result| result.request_id.clone());
+        results
+    }
+
+    #[test]
+    fn a_refused_release_the_provider_proved_released_is_a_closed_panel() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let (_, browser_local_id) = inert_browser(&mut app, 9201, alpha);
+        let allocation = RemoteAllocation::default();
+        allocation.cancel_before_launch();
+        assert!(allocation.is_released());
+
+        app.browser_create_host.pending_closes.push(PendingBrowserClose {
+            request: request("horizon:agent", &browser_local_id, i64::MAX),
+            teardown: Some(BrowserShutdownSignal::completed_remote_recovery_for_test(
+                "grid",
+                Some(RemoteReleaseOutcome::Failed {
+                    error: "release refused".into(),
+                    message: "the provider did not confirm the exact session release".into(),
+                }),
+                Some(allocation),
+            )),
+        });
+
+        assert!(app.poll_browser_close_requests());
+        let published = published_close_results(&mut app);
+        assert_eq!(published.len(), 1, "the close is answered once: {published:?}");
+        assert_eq!(published[0].outcome, BrowserCloseOutcome::Closed, "{published:?}");
+    }
+
+    #[test]
+    fn a_close_whose_exact_session_was_not_checked_yet_waits_for_the_provider() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let (_, browser_local_id) = inert_browser(&mut app, 9202, alpha);
+        // No provider answers on this endpoint, so the check itself fails and
+        // the close reports the cause instead of a refusal.
+        let allocation = RemoteAllocation::unresolved_for_test("http://127.0.0.1:1/wd/hub", "fixture-session")
+            .expect("unresolved allocation");
+
+        app.browser_create_host.pending_closes.push(PendingBrowserClose {
+            request: request("horizon:agent", &browser_local_id, manifest::now_millis() + 60_000),
+            teardown: Some(BrowserShutdownSignal::completed_remote_recovery_for_test(
+                "grid",
+                Some(RemoteReleaseOutcome::Failed {
+                    error: "release refused".into(),
+                    message: "private provider text".into(),
+                }),
+                Some(allocation),
+            )),
+        });
+
+        // The first poll starts the check and keeps the close open.
+        app.poll_browser_close_requests();
+        assert_eq!(
+            app.browser_create_host.pending_closes.len(),
+            1,
+            "the close waits for the check at the provider"
+        );
+        assert!(
+            published_close_results(&mut app).is_empty(),
+            "nothing is published before the provider answers"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let published = loop {
+            app.poll_browser_close_requests();
+            let published = published_close_results(&mut app);
+            if let Some(result) = published.first() {
+                break result.clone();
+            }
+            assert!(Instant::now() < deadline, "the close is never answered");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let BrowserCloseOutcome::Failed { code, message } = published.outcome else {
+            panic!("an unchecked release is not a close: {published:?}");
+        };
+        assert_eq!(code, "release_unknown");
+        assert!(message.contains("no trustworthy session result"), "{message}");
+        assert!(!message.contains("private provider text"), "{message}");
     }
 }

@@ -38,6 +38,8 @@ The host file decides which endpoint gets which credential.
 - A hold is saved before its driver starts, and its files go only after the
   release is confirmed, by the driver or by the exact-session check at the
   provider.
-- A close answers `closed` only for a confirmed release; otherwise it answers
-  `release_failed` or `release_unknown` and keeps the provider slot.
+- A close answers `closed` only for a release that provider evidence
+  established, from the release request or from the exact session's record.
+  Otherwise it answers `release_failed` for a session the provider still
+  holds, or `release_unknown` with its cause, and keeps the provider slot.
 - A host takes over only the hold folders whose lock no live host holds.

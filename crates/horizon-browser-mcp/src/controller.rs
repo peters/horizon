@@ -496,9 +496,11 @@ impl BrowserController {
     /// Close an owned panel in the calling agent's workspace. The host drops
     /// the panel and answers once its session teardown has completed: a
     /// successful result means the panel is gone and, for a remote session,
-    /// that the provider established the release; a refused or unanswered
-    /// release comes back as a typed `release_failed` / `release_unknown`
-    /// failure, and a teardown still running at the deadline as
+    /// that provider evidence established the release, including the exact
+    /// session's own record when the provider refused the release request.
+    /// `release_failed` is reserved for a session the provider still reports
+    /// as held, any other unestablished release is `release_unknown` with its
+    /// cause, and a teardown still running at the deadline is
     /// `teardown_timeout`.
     pub(crate) async fn close(
         &self,
