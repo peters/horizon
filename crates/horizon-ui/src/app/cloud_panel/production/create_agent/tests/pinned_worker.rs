@@ -65,6 +65,8 @@ fn the_deployment_requests_the_offer_its_policy_admits_and_not_a_dearer_fallback
         hourly: offer.hourly,
         size: choice.size,
         placement: choice.placement,
+        estimate: offer.estimated_total,
+        currency: offer.currency,
     };
     // The limit admits the cheap offer alone: the fallback type bills above it.
     let policy = AgentLifecycle {

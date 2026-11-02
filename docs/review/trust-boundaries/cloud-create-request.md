@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-ui/src/app/cloud_panel/production/create_agent.rs,crates/horizon-ui/src/app/cloud_panel/production/create_agent/**,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-browser-control/src/manifest/cloud_create.rs,crates/horizon-browser-mcp/src/controller/cloud_create.rs,crates/horizon-core/src/cloud_runtime/settings/agent_lifecycle.rs,crates/horizon-core/src/cloud_runtime/prices/agent.rs"
+applyTo: "crates/horizon-ui/src/app/cloud_panel/production/create_agent.rs,crates/horizon-ui/src/app/cloud_panel/production/create_agent/**,crates/horizon-ui/src/app/browser_provider_usage.rs,crates/horizon-browser-control/src/manifest/cloud_create.rs,crates/horizon-browser-mcp/src/controller/cloud_create.rs,crates/horizon-core/src/cloud_runtime/settings/agent_lifecycle.rs,crates/horizon-core/src/cloud_runtime/envelope.rs,crates/horizon-core/src/cloud_runtime/envelope/**,crates/horizon-core/src/cloud_runtime/prices/agent.rs"
 ---
 
 # Cloud create request boundary
@@ -11,7 +11,8 @@ and the machine settings section in
 ## Untrusted input
 
 - An agent panel of a workspace. Its `cloud_create` request is untrusted: the
-  operation, the repository path, the name and the caller-chosen operation ID.
+  operation, the repository path, the name, the hours of rent and the
+  caller-chosen operation ID.
 - The repository directory and its Git content on this computer. The commit
   decides the profile that quick start uses.
 - Every answer of a provider: its price list, its worker and its GitHub sign-in
@@ -27,6 +28,23 @@ and the machine settings section in
   section, no agent rents a cloud. The listed repositories, the listed providers
   and the hourly limit are refusals, never warnings. A rate that Horizon cannot
   quote is a refusal, so an unknown price never passes the limit.
+- The machine's `spending_envelope` section bounds the total bill, and a machine
+  without it rents nothing. The envelope names one provider and one currency, the
+  hours and the total that every rent it pays for must fit, and the person who
+  approved it. Horizon reads the rents it already paid for from
+  `envelope-rents.jsonl` beside the settings, and admits a rent only when the hours
+  asked for and the offer's estimate for those hours fit what is left. A refusal
+  names the limit and what is left, records nothing and requests no worker. A
+  record that Horizon cannot read, because it is longer than
+  `MAX_LEDGER_BYTES`, admits nothing.
+- `hours` is bounded to at most 336 in the request itself, and one hour when the
+  caller omits it. The offer that is ranked and the estimate that is checked are
+  priced for exactly that duration, so a longer rent cannot pass the amount bound
+  by being measured in hours.
+- The rent is recorded before this computer reads the repository's GitHub access,
+  because that step can spend money too. The line names the cloud, the provider,
+  the hours, the rate, the estimate, the currency, the approving person and the
+  calling actor, and it holds no credential.
 - The provider of an agent's cloud is chosen from the offers of the providers the
   section allows: the cheapest offer that meets the quick-start requirements
   wins, by the one order `cloud_offers` uses, and a tie keeps the first offer of
@@ -80,7 +98,17 @@ and the machine settings section in
   while a deployment runs does not stop that deployment. A `status` poll after
   such an edit reads no new policy.
 - The price is the provider's own quote at that moment. Storage and other
-  provider charges are outside `max_hourly`.
+  provider charges are outside `max_hourly`. The envelope's `max_total` covers the
+  offer's estimate for the requested hours, which includes the workspace storage
+  and container disk that the estimate names, and it does not cover a charge that
+  the provider adds after that quote.
+- An admitted rent stays counted after a deployment that fails, because a worker
+  may have been rented before the failure. Horizon stops no worker when the
+  envelope's hours are used up: the hours and the total are checked when a cloud
+  is rented, and the person stops the cloud, whose card shows its cost.
+- The envelope is one section for the whole machine. Two agent panels that rent at
+  the same moment read the record before either line is written, so both can be
+  admitted inside a budget that fits only one of them.
 - The placement of the admitted offer is a request, not a reservation. A provider
   that has no stock of that server type or location at that moment fails the
   deployment; Horizon does not rent another worker instead. The rate that the

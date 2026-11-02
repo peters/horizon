@@ -1194,10 +1194,45 @@ refuses each cloud that an agent asks for. The section has these fields:
 Horizon refuses a repository or a provider that is not in the list. It also
 refuses a rate above `max_hourly`, and a rate that this computer cannot quote.
 
+The policy does not bound the total bill. A `max_hourly` rate says nothing about
+how long a worker runs, and a worker bills while it exists. The person therefore
+approves a spending envelope in the `spending_envelope` section of the same file.
+A machine without that section rents nothing for an agent:
+
+| Field | Value |
+|---|---|
+| `provider` | The provider this envelope pays for, such as `runpod`. Another provider never fits. |
+| `currency` | The currency of `max_total`, as that provider bills, such as `USD` for `RunPod`. |
+| `max_hours` | The hours this envelope allows in total, across every cloud it pays for. The most is 336. |
+| `max_total` | The most this envelope may cost in total, in `currency`. |
+| `approved_by` | The person who approved it. |
+| `approved_at` | The time of that approval, in RFC 3339. |
+
+```json
+"spending_envelope": {
+  "provider": "runpod",
+  "currency": "USD",
+  "max_hours": 6,
+  "max_total": 2.5,
+  "approved_by": "person",
+  "approved_at": "2026-11-02T09:00:00Z"
+}
+```
+
+Horizon writes one line for each rent the envelope paid for in
+`envelope-rents.jsonl`, beside these settings. The line holds the cloud, the
+provider, the hours, the rate, the estimate, the currency, the person who
+approved the envelope and the agent that rented. A rent outside what is left is
+refused before a worker is requested, and it writes no line. Because a worker can
+be rented after the line is written, a cloud whose deployment then fails stays
+counted.
+
 `cloud_create` starts a quick start cloud:
 
-1. Send `operation submit` with an `operation_id`, `repository` and
-   `quick_start true`. `repository` is a directory on this computer.
+1. Send `operation submit` with an `operation_id`, `repository`,
+   `quick_start true` and, when the task needs more than one hour, `hours`.
+   `repository` is a directory on this computer. `hours` is the rent that the
+   spending envelope bounds.
 2. Send `operation status` with the same `operation_id` until `done` is `true`.
    The card of the cloud in your workspace shows the same progress.
 

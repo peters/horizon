@@ -586,6 +586,25 @@ guarantee that the code gives, and what the code does not guarantee.
     in memory, so a restart answers `cloud_create_unknown_operation`; no worker
     choice, plan token, sibling, publishing selection or CLI plan entry is
     offered.
+- [`cloud-create-request`](trust-boundaries/cloud-create-request.md) (the spending
+  envelope was added after this audit, with this change)
+  - Untrusted: the `cloud_create` request of an agent panel with its hours, and the
+    answered prices it is priced with.
+  - Guarantees: a machine without a `spending_envelope` section rents nothing; the
+    envelope names one provider, one currency, the hours and the total that every
+    rent it paid for must fit, and the person who approved it; Horizon reads the
+    rents it already paid for from `envelope-rents.jsonl` and admits a rent only
+    when the asked hours and the offer's estimate for them fit what is left; a
+    refusal names the limit and what is left, records nothing and requests no
+    worker; a record longer than `MAX_LEDGER_BYTES` admits nothing; the rent is
+    recorded before the GitHub access step.
+  - Does not guarantee: a charge that the provider adds after its quote; that a
+    deployment which fails after admission stops being counted; that Horizon stops
+    a worker when the envelope's hours are used up, because the bounds are checked
+    when a cloud is rented and the person stops the cloud; that two simultaneous
+    creates are admitted inside one budget, because both read the record before
+    either line is written.
+
 - [`cloud-delete-request`](trust-boundaries/cloud-delete-request.md) (added after
   this audit, with this change)
   - Untrusted: the `cloud_delete` request of an agent panel and its cloud ID, the

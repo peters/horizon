@@ -416,6 +416,7 @@ fn defaults(root: &Path) -> Settings {
         azure: None,
         github: None,
         agent_lifecycle: None,
+        spending_envelope: None,
         placement: None,
         root: None,
         codex_home: None,

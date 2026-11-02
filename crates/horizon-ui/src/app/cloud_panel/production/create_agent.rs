@@ -15,6 +15,7 @@ use horizon_core::cloud_runtime::prices::Profile;
 use horizon_core::cloud_runtime::{
     Cancellation, Event,
     deployment::Request,
+    envelope as envelope_runtime,
     github::{self, Prompt},
     prices::{self, agent::Chosen},
     repository::launch::{self, Configuration},
@@ -27,6 +28,8 @@ use std::{
     sync::mpsc::{Receiver, Sender, channel},
     time::Duration,
 };
+
+mod envelope_gate;
 
 /// How many lines of its output an operation's status carries.
 const RING_LINES: usize = 200;
@@ -282,6 +285,7 @@ impl HorizonApp {
             return Err(NEEDS_SESSION.into());
         }
         let repository = create.repository.clone().unwrap_or_default();
+        let hours = create.hours.unwrap_or(prices::agent::HOURS);
         let cloud = cloud_runtime::new_id();
         let name = create.name.clone().unwrap_or_else(|| folder_name(&repository));
         let cancel = Cancellation::default();
@@ -328,6 +332,7 @@ impl HorizonApp {
                 &root,
                 (&repository, thread_cloud),
                 creator,
+                hours,
                 &cancel,
                 github::for_agent_cloud,
                 &report,
@@ -720,6 +725,7 @@ fn prepare(
     root: &Path,
     (repository, cloud): (&str, String),
     (actor, session): (String, Option<String>),
+    hours: f64,
     cancel: &Cancellation,
     mint: Mint,
     show: &dyn Fn(String),
@@ -729,6 +735,7 @@ fn prepare(
     let machine = Settings::for_cloud(&settings_path, &Placement::default())
         .map_err(|error| format!("cloud_create_refused: the cloud settings could not be read: {error}"))?;
     let policy = machine.agent_lifecycle.clone().ok_or(REFUSED)?;
+    let envelope = envelope_gate::approval(&machine, root)?;
     // Only a GitHub sign-in reports anything here: the reads of this thread stay quiet, and the
     // one sign-in an agent's cloud needs reaches the agent as its status.
     let emit = |event: Event| {
@@ -760,11 +767,20 @@ fn prepare(
         .ok_or("cloud_create_needs_profile: the built-in quick-start profile is invalid")?;
     // An agent's cloud runs on the provider its policy allows that offers the cheapest
     // worker, not on the provider the profile names.
-    let chosen = prices::agent::choose(&profile, &policy.providers, &machine, cancel)
+    let chosen = prices::agent::choose(&profile, &policy.providers, &machine, hours, cancel)
         .ok_or_else(|| no_offer(&policy.providers))?;
     policy
         .admits(&prepared.repository, chosen.provider.id, Some(chosen.hourly))
         .map_err(|refusal| refused(refusal, chosen.hourly, policy.max_hourly))?;
+    // The envelope admits the rent before this computer reads the repository's GitHub access,
+    // because that step spends money too. A refusal here rents nothing and records nothing.
+    let ask = envelope_runtime::Ask {
+        provider: chosen.provider.id.to_owned(),
+        currency: chosen.currency.to_owned(),
+        hours,
+        estimate: chosen.estimate,
+    };
+    envelope_gate::admit(root, &envelope, &ask, &cloud, chosen.hourly, &actor)?;
     // The offer whose rate the policy admits is the worker that is rented.
     let (profile, settings) = pinned_offer(&settings_path, &profile, &chosen)?;
     github_access(&settings, &runner, mint)?;

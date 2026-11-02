@@ -90,6 +90,10 @@ pub struct Settings {
     /// machine without it refuses every cloud an agent asks for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_lifecycle: Option<AgentLifecycle>,
+    /// What an agent's clouds may cost in total. Omitted until the person approves one, and a
+    /// machine without it rents nothing for an agent, because nothing bounds the bill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spending_envelope: Option<super::envelope::Envelope>,
     /// The cloud's own placement, kept by [`Settings::for_cloud`] for providers
     /// that read it themselves. Never stored.
     #[serde(skip)]
@@ -294,6 +298,11 @@ impl Settings {
         }
         if let Some(lifecycle) = &self.agent_lifecycle {
             lifecycle.validate()?;
+        }
+        if let Some(envelope) = &self.spending_envelope
+            && let Err(invalid) = envelope.validate()
+        {
+            return Err(Error::Invalid(invalid.describe()));
         }
         Ok(())
     }
