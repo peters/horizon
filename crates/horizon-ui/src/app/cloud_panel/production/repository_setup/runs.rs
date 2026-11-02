@@ -140,58 +140,24 @@ fn wait_for(repository: Option<&std::path::Path>, limit: Option<Duration>) -> bo
     }
 }
 
-// The setup agent is offered on Linux only.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::super::run::{self, Action};
-    use crate::app::HorizonApp;
-    use horizon_core::{PanelId, PanelKind};
+    use super::super::support;
     use std::time::{Duration, Instant};
 
-    fn app() -> (tempfile::TempDir, egui::Context, HorizonApp) {
+    #[test]
+    fn two_repositories_are_set_up_at_once_and_each_stops_alone() {
         let (temp, ctx, mut app) =
             crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
                 runtime_state: Box::default(),
             });
-        // A non-process panel stands in for the agent, so no real login starts in a test.
-        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
-        app.cloud_prototype.production.setup_presets = vec![horizon_core::PresetConfig {
-            name: "Test panel".into(),
-            kind: PanelKind::Usage,
-            alias: None,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::default(),
-            ssh_connection: None,
-        }];
-        (temp, ctx, app)
-    }
-
-    /// Starts a setup of `folder` from the dialog and waits until its agent started.
-    fn start(app: &mut HorizonApp, ctx: &egui::Context, folder: &std::path::Path) -> PanelId {
-        app.cloud_prototype.production.repository = folder.display().to_string();
-        app.start_cloud_repository_setup(ctx);
-        let started = Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(started.elapsed() < Duration::from_secs(20), "the baseline was read");
-            std::thread::sleep(Duration::from_millis(20));
-            app.sync_cloud_repository_setup(ctx);
-        }
-        app.cloud_prototype
-            .production
-            .run_here_key()
-            .expect("the setup of the repository the dialog shows runs")
-    }
-
-    #[test]
-    fn two_repositories_are_set_up_at_once_and_each_stops_alone() {
-        let (temp, ctx, mut app) = app();
         let first = temp.path().join("first");
         let second = temp.path().join("second");
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
-        let a = start(&mut app, &ctx, &first);
-        let b = start(&mut app, &ctx, &second);
+        let a = support::start(&mut app, &ctx, &first);
+        let b = support::start(&mut app, &ctx, &second);
         assert_ne!(a, b);
         assert!(app.cloud_prototype.error.is_none(), "{:?}", app.cloud_prototype.error);
         assert_eq!(app.cloud_prototype.production.setup_runs.len(), 2, "the first goes on");
@@ -214,22 +180,18 @@ mod tests {
 
     #[test]
     fn one_folder_entered_twice_still_gets_one_run() {
-        let (temp, ctx, mut app) = app();
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
         let folder = temp.path().join("repository");
         std::fs::create_dir_all(&folder).unwrap();
         let link = temp.path().join("link");
         std::os::unix::fs::symlink(&folder, &link).unwrap();
-        let first = start(&mut app, &ctx, &folder);
+        let first = support::start(&mut app, &ctx, &folder);
         // The link names another text, so the dialog offers a setup; the run it would start
         // works in the same folder.
-        app.cloud_prototype.production.repository = link.display().to_string();
-        app.start_cloud_repository_setup(&ctx);
-        let started = Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(started.elapsed() < Duration::from_secs(20), "the baseline was read");
-            std::thread::sleep(Duration::from_millis(20));
-            app.sync_cloud_repository_setup(&ctx);
-        }
+        assert_eq!(support::place(&mut app, &ctx, &link), None);
         assert_eq!(app.cloud_prototype.production.setup_runs.len(), 1);
         assert_eq!(app.cloud_prototype.production.setup_runs[0].panel, first);
         let error = app.cloud_prototype.error.clone().unwrap_or_default();

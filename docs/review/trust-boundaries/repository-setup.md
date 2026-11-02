@@ -44,7 +44,8 @@ Horizon's exit past its time limit.
   report that the image, its shell, its git or its localci can make a proof
   pass.
 - The agent runs on the person's own login, in a systemd user scope. With the
-  scope, Horizon can stop all processes of the agent before it commits.
+  scope, Horizon can stop all processes of the agent before it commits. Horizon
+  places no setup panel without that scope, and the dialog then reports why.
 - The scope is not a sandbox. Do not report that the agent, or a program that
   it starts, can leave the scope through another service of the person, such
   as `systemd-run --user` or Docker. Do not report what the agent can do with

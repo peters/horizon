@@ -990,8 +990,6 @@ mod tests {
         }
     }
 
-    // The proof's test doubles are built where the setup agent is offered: on Linux.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_proof_that_waits_for_a_build_slot_says_who_builds() {
         let mut run = Run::new(
