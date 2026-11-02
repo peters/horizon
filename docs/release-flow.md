@@ -13,7 +13,6 @@ Horizon releases are tag-driven.
 - Releases publish three executable assets and `SHA256SUMS.txt`: Linux x64, macOS arm64 and macOS x64.
 - Stable releases update the `peters/homebrew-horizon` tap.
 - Horizon supports Linux and macOS. Releases do not publish a Windows asset and the workflow opens no WinGet PR. The WinGet catalog keeps the older versions that were published before this change and receives no new ones.
-- Snap Store publication is currently paused.
 
 ## Source Of Truth
 
@@ -96,7 +95,7 @@ The release workflow validates:
 - the tag's base version matches `Cargo.toml`
 - the Git tag commit recorded on the draft
 
-If the workflow itself needs a fix after a release was started, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path accepts a draft, an incomplete published release, or a tag with no GitHub Release yet, and it does not require a bumped version tag. The manual form's `publish_snap` input is currently disabled and has no effect while Snap Store publication is paused.
+If the workflow itself needs a fix after a release was started, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path accepts a draft, an incomplete published release, or a tag with no GitHub Release yet, and it does not require a bumped version tag.
 
 Then it:
 
@@ -104,7 +103,6 @@ Then it:
 - builds the release binaries for Linux and macOS
 - uploads the release assets and `SHA256SUMS.txt` to the draft GitHub Release; it skips files with matching hashes
 - publishes the GitHub Release only after the required asset set is present on that draft
-- Snap Store publication is currently paused; the `publish-snap` job and its `publish_snap` manual input remain disabled
 - in the canonical `peters/horizon` repo only, updates `peters/homebrew-horizon` so `brew install peters/horizon/horizon` tracks the latest stable release
 
 ## Update The Quick-Start Image
@@ -193,10 +191,8 @@ Stable-release packaging assumes:
   - `horizon-osx-arm64.tar.gz`
   - `horizon-osx-x64.tar.gz`
 - The workflow uploads the three executable assets before the tap update starts.
-- `snap/snapcraft.yaml` remains available for the classic `horizon-ui` snap, but the release job is currently paused
 - The Homebrew job uses the private `Horizon Release Automation` GitHub App with Contents write permission.
 - The job limits its token to `peters/homebrew-horizon`.
-- `SNAPCRAFT_STORE_CREDENTIALS` is not currently required while Snap Store publication is paused
 - the protected `release-automation` environment contains `RELEASE_AUTOMATION_APP_ID` (variable) and `RELEASE_AUTOMATION_PRIVATE_KEY` (secret); permit the trusted `main` branch and release tags only
 
 After the credential migration, recover an older release by dispatching **Release from `main`** with the existing tag. Do not rerun a pre-migration workflow run: reruns retain the old workflow definition and its retired secret references.
