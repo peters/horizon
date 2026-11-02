@@ -22,10 +22,13 @@ jobs:
     if: github.event.action != 'labeled' || github.event.label.name == 'claude-review'
     # A new run waits for the current one and never cancels it, so the label stays
     # until its own run removes it and two runs cannot count the same free round.
+    # The label filter stays on the job, above this group: a `labeled` event for any
+    # other label would otherwise join the group, and GitHub replaces a pending run
+    # of the same group, so a queued review round would be lost without a run.
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}
       cancel-in-progress: false
-    uses: fintermobilityas/review/.github/workflows/claude-review.yml@7a5ba7a3549f568252581dc9007d6fc5b8d6c361
+    uses: fintermobilityas/review/.github/workflows/claude-review.yml@f4dc32e3550a23b2e866f1b9aade2f83d80d5c28
     permissions:
       contents: read
       pull-requests: write
