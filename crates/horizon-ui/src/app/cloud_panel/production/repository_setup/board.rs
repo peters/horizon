@@ -123,12 +123,10 @@ impl HorizonApp {
     }
 }
 
-// The setup agent is offered on Linux only.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
+    use super::super::support;
     use horizon_core::setup_board::Request;
-    use horizon_core::{PanelKind, PresetConfig};
-    use std::time::{Duration, Instant};
 
     #[test]
     fn a_setup_opens_the_board_and_its_stop_ends_the_run() {
@@ -136,31 +134,12 @@ mod tests {
             crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
                 runtime_state: Box::default(),
             });
-        // A non-process panel stands in for the agent, so no real login starts in a test.
-        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
-        app.cloud_prototype.production.setup_presets = vec![PresetConfig {
-            name: "Test panel".into(),
-            kind: PanelKind::Usage,
-            alias: None,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::default(),
-            ssh_connection: None,
-        }];
         let folder = temp.path().join("web-api");
         std::fs::create_dir_all(&folder).unwrap();
-        app.cloud_prototype.production.repository = folder.display().to_string();
-        app.start_cloud_repository_setup(&ctx);
-        let started = Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(started.elapsed() < Duration::from_secs(20), "the baseline was read");
-            std::thread::sleep(Duration::from_millis(20));
-            app.sync_cloud_repository_setup(&ctx);
-        }
+        let run = support::start(&mut app, &ctx, &folder);
         let boards = app.setup_boards();
         assert_eq!(boards.len(), 1, "the first setup opens the board");
         let board = boards[0];
-        let run = app.cloud_prototype.production.setup_runs[0].panel;
         let panel = app.board.panel(board).unwrap();
         assert_eq!(
             Some(panel.workspace_id),
@@ -195,25 +174,7 @@ mod tests {
             crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
                 runtime_state: Box::default(),
             });
-        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
-        app.cloud_prototype.production.setup_presets = vec![PresetConfig {
-            name: "Test panel".into(),
-            kind: PanelKind::Usage,
-            alias: None,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::default(),
-            ssh_connection: None,
-        }];
-        app.cloud_prototype.production.repository = temp.path().display().to_string();
-        app.start_cloud_repository_setup(&ctx);
-        let started = Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(started.elapsed() < Duration::from_secs(20), "the baseline was read");
-            std::thread::sleep(Duration::from_millis(20));
-            app.sync_cloud_repository_setup(&ctx);
-        }
-        let run = app.cloud_prototype.production.setup_runs[0].panel;
+        let run = support::start(&mut app, &ctx, temp.path());
         let board = app.setup_boards()[0];
         // The person closes the agent's panel before the setup is ready.
         app.close_panel(run);

@@ -30,7 +30,7 @@ pub(in crate::app::cloud_panel::production) struct Starting {
 /// identity and the files outside `.horizon` before the agent starts, the run's status
 /// file, the agent's instructions, the scope it starts in and the Rust git repositories
 /// the clone box may name.
-struct Prepared {
+pub(super) struct Prepared {
     repository: PathBuf,
     identity: super::untrusted::Identity,
     status: PathBuf,
@@ -167,8 +167,8 @@ impl HorizonApp {
         }
     }
 
-    /// Creates the agent's hidden panel and the run that follows it.
-    fn launch_cloud_repository_setup(&mut self, ctx: &egui::Context, starting: Starting, prepared: Prepared) {
+    /// Starts the setup the preparation read, in the scope that the preparation found.
+    fn launch_cloud_repository_setup(&mut self, ctx: &egui::Context, starting: Starting, mut prepared: Prepared) {
         let Starting {
             preset,
             chosen_mode,
@@ -176,6 +176,45 @@ impl HorizonApp {
             build_on,
             receiver: _,
         } = starting;
+        // Every preset the dialog offers is an agent, and an agent starts only inside a
+        // scope that holds all its descendants: without one, a process it started could
+        // leave its process group and keep writing while Use reads and commits.
+        let Some(launcher) = prepared.launcher.take() else {
+            self.refuse_setup(chosen_mode, &prepared.status, NO_SCOPE);
+            return;
+        };
+        self.place_setup_run(
+            ctx,
+            Submitted {
+                entered,
+                preset,
+                mode: chosen_mode,
+            },
+            build_on,
+            prepared,
+            launcher,
+        );
+    }
+
+    /// Creates the agent's hidden panel and the run that follows it, inside `launcher`: the
+    /// systemd user scope that holds every process the agent starts.
+    ///
+    /// The scope is decided before this point, so a panel that runs no process is placed
+    /// with an empty wrapper. The dialog places no other setup: every preset it offers is an
+    /// agent, and an agent without a scope does not start.
+    pub(super) fn place_setup_run(
+        &mut self,
+        ctx: &egui::Context,
+        submitted: Submitted,
+        build_on: Option<super::build_on::Target>,
+        prepared: Prepared,
+        launcher: Vec<String>,
+    ) {
+        let Submitted {
+            entered,
+            preset,
+            mode: chosen_mode,
+        } = submitted;
         let Prepared {
             repository,
             identity,
@@ -185,9 +224,9 @@ impl HorizonApp {
             unit,
             outside,
             dotnet,
-            launcher,
             git_crates: crates,
             endings,
+            ..
         } = prepared;
         // Two entries of one folder, such as a link and its target, still get one run.
         if let Some(other) = self
@@ -197,13 +236,15 @@ impl HorizonApp {
             .iter()
             .find(|run| run.repository == repository)
         {
-            self.cloud_prototype.error = Some(format!(
-                "A setup of {} already runs. Open New cloud for {} to see it or to stop it.",
-                repository.display(),
-                other.entered
-            ));
-            self.cloud_prototype.production.setup_mode = chosen_mode;
-            run::remove_run_folder(&status);
+            self.refuse_setup(
+                chosen_mode,
+                &status,
+                &format!(
+                    "A setup of {} already runs. Open New cloud for {} to see it or to stop it.",
+                    repository.display(),
+                    other.entered
+                ),
+            );
             return;
         }
         // An earlier run of this folder began to end after the preparation looked, as when
@@ -217,12 +258,6 @@ impl HorizonApp {
         }
         let kind = preset.kind;
         let (args, pending_prompt) = launch_task(&preset, instructions);
-        let Some(launcher) = setup_launch_wrapper(kind, launcher) else {
-            self.cloud_prototype.production.setup_mode = chosen_mode;
-            run::remove_run_folder(&status);
-            self.cloud_prototype.error = Some(NO_SCOPE.into());
-            return;
-        };
         let workspace = self.board.ensure_local_workspace(WORKSPACE);
         // Deliberately local: config preparation must not inherit a focused cloud.
         let result = self.board.create_panel(
@@ -265,13 +300,16 @@ impl HorizonApp {
                 self.open_setup_board(ctx, false);
                 ctx.request_repaint();
             }
-            Err(error) => {
-                // A retry after fixing the agent keeps the Update or Fix it was asked for.
-                self.cloud_prototype.production.setup_mode = chosen_mode;
-                run::remove_run_folder(&status);
-                self.cloud_prototype.error = Some(error.to_string());
-            }
+            Err(error) => self.refuse_setup(chosen_mode, &status, &error.to_string()),
         }
+    }
+
+    /// Reports a setup that did not start. A retry after fixing the agent keeps the Update or
+    /// Fix the person asked for.
+    fn refuse_setup(&mut self, chosen_mode: super::Mode, status: &Path, reason: &str) {
+        self.cloud_prototype.production.setup_mode = chosen_mode;
+        run::remove_run_folder(status);
+        self.cloud_prototype.error = Some(reason.to_owned());
     }
 
     /// Offers the agent presets of the New Workspace menu for the setup agent, read again
@@ -837,17 +875,6 @@ impl HorizonApp {
     }
 }
 
-/// The wrapper the setup panel starts under, or none when an agent has no scope to start
-/// in. An agent starts only inside a scope that holds all its descendants: without one, a
-/// process it started could leave its group and keep writing while Use reads and commits.
-/// Every preset the dialog offers is an agent, so a setup that starts from the dialog
-/// always starts in its scope. A panel that runs no agent process starts no process that
-/// could outlive it, so it needs no scope: the start tests follow a setup with such a
-/// panel, which needs no agent login and no systemd user session.
-fn setup_launch_wrapper(kind: horizon_core::PanelKind, scope: Option<Vec<String>>) -> Option<Vec<String>> {
-    scope.or_else(|| (!kind.is_agent()).then(Vec::new))
-}
-
 /// The preset's arguments and the instructions still to paste: an agent whose command
 /// line takes the message starts on its task, and the others get it pasted into their
 /// prompt once their session has settled.
@@ -866,7 +893,7 @@ fn launch_task(preset: &horizon_core::PresetConfig, instructions: String) -> (Ve
 /// Prepares a run on a thread, for the repository the person entered as `folder`: its
 /// folder must exist, the run gets its status folder, and the files outside `.horizon` are
 /// read once any earlier run has ended.
-fn prepare(
+pub(super) fn prepare(
     folder: &str,
     chosen_mode: super::Mode,
     agents: &[horizon_core::cloud_runtime::setup::Agent],
@@ -972,28 +999,51 @@ fn list_changed_files(run: &mut Run, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_panel_that_runs_no_agent_process_needs_no_scope() {
-        let scope = Some(vec!["systemd-run".to_owned(), "--scope".to_owned()]);
-        assert_eq!(
-            setup_launch_wrapper(PanelKind::Claude, scope.clone()),
-            scope,
-            "an agent starts inside its scope"
-        );
-        assert_eq!(
-            setup_launch_wrapper(PanelKind::Claude, None),
-            None,
-            "an agent with no scope to start in does not start"
-        );
-        assert_eq!(
-            setup_launch_wrapper(PanelKind::Usage, None),
-            Some(Vec::new()),
-            "a panel that runs no process needs no scope"
-        );
+    /// The preparation of `folder` as a runner reads it: no systemd user manager answers, so
+    /// the agent has no scope to start in.
+    fn prepared_without_scope(folder: &Path) -> Prepared {
+        let mut prepared = prepare(&folder.display().to_string(), super::super::Mode::New, &[]).unwrap();
+        prepared.launcher = None;
+        prepared
     }
 
-    // The setup agent is offered on Linux only.
-    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_setup_with_no_scope_to_start_in_starts_nothing() {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
+        let folder = temp.path().join("repository");
+        std::fs::create_dir_all(&folder).unwrap();
+        let prepared = prepared_without_scope(&folder);
+        let status = prepared.status.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok(prepared)).unwrap();
+        app.cloud_prototype.production.setup_starting.push(Starting {
+            preset: super::super::support::test_preset(),
+            chosen_mode: super::super::Mode::New,
+            entered: folder.display().to_string(),
+            build_on: None,
+            receiver,
+        });
+        app.sync_cloud_repository_setup(&ctx);
+        assert_eq!(app.cloud_prototype.error.as_deref(), Some(NO_SCOPE));
+        assert!(
+            app.cloud_prototype.production.setup_runs.is_empty(),
+            "no setup starts without a scope"
+        );
+        assert!(
+            app.board.panels.iter().all(|panel| panel.title != PANEL_NAME),
+            "and no panel starts either"
+        );
+        // The folder the run would have written to goes, so the next try starts fresh.
+        let gone = Instant::now() + Duration::from_secs(10);
+        while status.parent().is_some_and(Path::exists) {
+            assert!(Instant::now() < gone, "the run's folder goes");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn a_setup_prepared_before_its_folder_began_to_end_prepares_again() {
         let (temp, ctx, mut app) =
@@ -1010,17 +1060,9 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(Ok(prepared)).unwrap();
         app.cloud_prototype.production.setup_starting.push(Starting {
-            preset: horizon_core::PresetConfig {
-                name: "Test panel".into(),
-                kind: PanelKind::Usage,
-                alias: None,
-                command: None,
-                args: Vec::new(),
-                resume: horizon_core::PanelResume::default(),
-                ssh_connection: None,
-            },
+            preset: super::super::support::test_preset(),
             chosen_mode: super::super::Mode::New,
-            entered,
+            entered: entered.clone(),
             build_on: None,
             receiver,
         });
@@ -1039,15 +1081,11 @@ mod tests {
             1,
             "it prepares again"
         );
-        let started = Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "it started after preparing again"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-            app.sync_cloud_repository_setup(&ctx);
-        }
+        // The next frame starts the run that preparation read. A runner has no systemd user
+        // manager to hold it, and this test's panel runs no process, so the run starts in the
+        // empty wrapper the test places it with.
+        app.cloud_prototype.production.setup_starting.clear();
+        super::super::support::start(&mut app, &ctx, &folder);
         assert_eq!(app.cloud_prototype.production.setup_runs.len(), 1);
         let gone = Instant::now();
         while first_status.parent().is_some_and(Path::exists) {
@@ -1058,6 +1096,26 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         app.end_cloud_repository_setup();
+    }
+
+    // The setup agent is offered on Linux only.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn the_setup_agent_is_refused_off_linux() {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::default(),
+            });
+        let folder = temp.path().join("repository");
+        std::fs::create_dir_all(&folder).unwrap();
+        app.cloud_prototype.production.repository = folder.display().to_string();
+        app.cloud_prototype.production.setup_presets = vec![super::super::support::test_preset()];
+        app.start_cloud_repository_setup(&ctx);
+        assert_eq!(app.cloud_prototype.error.as_deref(), Some(super::super::PLATFORM_NOTE));
+        assert!(
+            app.cloud_prototype.production.setup_starting.is_empty(),
+            "no preparation starts where its agent cannot start"
+        );
     }
 
     #[test]

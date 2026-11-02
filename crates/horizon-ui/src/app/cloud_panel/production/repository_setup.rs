@@ -28,6 +28,8 @@ mod run;
 mod runs;
 mod session;
 mod snapshot;
+#[cfg(test)]
+mod support;
 mod untrusted;
 pub(super) use build_on::{Deferred, State as BuildOn};
 pub(super) use builder::Builder;
@@ -726,36 +728,7 @@ mod tests {
         app.board.cloud_groups.0.push(group.clone());
         app.cloud_prototype.groups.0.push(group);
         app.board.active_workspace = Some(cloud);
-        app.cloud_prototype.production.repository = temp.path().display().to_string();
-        // A non-process panel exercises placement without invoking a real login in unit tests.
-        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
-        app.cloud_prototype.production.setup_presets = vec![horizon_core::PresetConfig {
-            name: "Test panel".into(),
-            kind: PanelKind::Usage,
-            alias: None,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::default(),
-            ssh_connection: None,
-        }];
-        app.start_cloud_repository_setup(&ctx);
-        // Only Linux offers the setup agent: elsewhere it says why and starts nothing.
-        if !cfg!(target_os = "linux") {
-            assert_eq!(app.cloud_prototype.error.as_deref(), Some(PLATFORM_NOTE));
-            assert!(app.cloud_prototype.production.setup_starting.is_empty());
-            return;
-        }
-        assert!(app.cloud_prototype.error.is_none());
-        // The agent starts once its run's baseline was read on a thread.
-        let started = std::time::Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(20),
-                "the baseline was read"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            app.sync_cloud_repository_setup(&ctx);
-        }
+        support::start(&mut app, &ctx, temp.path());
         let panel = app
             .board
             .panels
@@ -773,8 +746,6 @@ mod tests {
         assert_eq!(app.board.ensure_local_workspace("Cloud setup"), workspace);
     }
 
-    // The setup agent is offered on Linux only.
-    #[cfg(target_os = "linux")]
     #[test]
     fn the_agent_fixes_an_account_problem_in_a_browser_panel_beside_it() {
         let (temp, ctx, mut app) =
@@ -782,27 +753,7 @@ mod tests {
                 runtime_state: Box::default(),
             });
         app.cloud_prototype.production.repository = temp.path().display().to_string();
-        app.cloud_prototype.production.setup_agent = Some(PanelKind::Usage);
-        app.cloud_prototype.production.setup_presets = vec![horizon_core::PresetConfig {
-            name: "Test panel".into(),
-            kind: PanelKind::Usage,
-            alias: None,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::default(),
-            ssh_connection: None,
-        }];
-        app.start_cloud_repository_setup(&ctx);
-        // The agent starts once its run's baseline was read on a thread.
-        let started = std::time::Instant::now();
-        while !app.cloud_prototype.production.setup_starting.is_empty() {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(20),
-                "the baseline was read"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            app.sync_cloud_repository_setup(&ctx);
-        }
+        support::start(&mut app, &ctx, temp.path());
         let fix = access::Fix::GrantOrganization {
             organization: "fintermobilityas".into(),
         };
