@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 mod bundle;
 mod checkout;
 mod launch;
-// Its only user, a UI test, runs where the setup agent is offered: on Linux.
-#[cfg(all(test, target_os = "linux"))]
+// The tests of the fix and of a proof that waits for a build slot build these proofs.
+#[cfg(test)]
 mod failed;
 // The setup gate, an ignored test that scripts/setup-gate.py runs, on Linux likewise.
 #[cfg(all(test, target_os = "linux"))]
