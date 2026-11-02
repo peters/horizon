@@ -775,6 +775,10 @@ fn prepare(
     // The offer whose rate the policy admits is the worker that is rented.
     let (profile, settings) = pinned_offer(&settings_path, &profile, &chosen)?;
     github_access(&settings, &runner, mint)?;
+    // The worker's public key is read here too: a missing pair is a settings fault that
+    // Horizon can decide now, not a reason to spend the envelope.
+    deployment::current_public_key(&settings.ssh_identity_file)
+        .map_err(|error| format!("cloud_create_refused: {error}"))?;
     // Every refusal that a read of this computer can decide is behind us, so the envelope is
     // asked last: a create that never reaches a provider spends none of what it allows. What
     // remains after this line can rent a worker, which is why its rent stays recorded even
