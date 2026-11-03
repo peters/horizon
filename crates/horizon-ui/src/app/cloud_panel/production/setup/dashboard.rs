@@ -377,6 +377,7 @@ pub(super) fn page(
         ssh_ready,
         required_agents,
         github,
+        envelope,
         chatgpt,
         docker_hosts,
         needed,
@@ -392,6 +393,7 @@ pub(super) fn page(
         super::docker_hosts::card(ui, draft, docker_hosts, hosts);
         fields::agents(ui, draft, edits, chatgpt, fixed_agents);
         super::github::card(ui, draft, github);
+        super::envelope::card(ui, draft, envelope);
         action = registry::card(ui, draft, verified, needed);
         fields::workspace(ui, draft, *ssh_ready, &readiness);
     } else {
@@ -402,6 +404,7 @@ pub(super) fn page(
             super::docker_hosts::card(&mut columns[0], draft, docker_hosts, hosts);
             fields::agents(&mut columns[0], draft, edits, chatgpt, fixed_agents);
             super::github::card(&mut columns[1], draft, github);
+            super::envelope::card(&mut columns[1], draft, envelope);
             action = registry::card(&mut columns[1], draft, verified, needed);
             fields::workspace(&mut columns[1], draft, *ssh_ready, &readiness);
         });

@@ -44,6 +44,14 @@ pub struct Envelope {
     pub approved_at: String,
 }
 
+/// The approval time of an envelope approved now, in the RFC 3339 form the settings keep.
+#[must_use]
+pub fn approved_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
 /// Why an envelope cannot be approved or used as written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Invalid {

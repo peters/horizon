@@ -615,3 +615,60 @@ fn a_save_on_a_machine_with_only_an_azure_section_makes_the_identity_start_asks_
     assert!(saved.azure_configured());
     assert!(!saved.runpod_configured());
 }
+
+#[test]
+fn an_envelope_is_approved_and_revoked_while_every_other_setting_stays() {
+    use crate::cloud_runtime::envelope::Envelope;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let cancel = crate::cloud_runtime::Cancellation::default();
+    let approval = Envelope {
+        provider: "hetzner".into(),
+        currency: "EUR".into(),
+        max_hours: 6.0,
+        max_total: 2.0,
+        approved_by: "peters".into(),
+        approved_at: "2026-11-03T10:00:00Z".into(),
+    };
+    let saved = save_spending_envelope(root, None, Some(approval.clone()), &cancel).unwrap();
+    let after = crate::cloud_runtime::settings::Settings::load(&root.join("settings.json")).unwrap();
+    assert_eq!(after.spending_envelope.as_ref(), Some(&approval));
+
+    // Another window that showed no envelope must not overwrite this approval.
+    assert!(save_spending_envelope(root, None, None, &cancel).is_err());
+
+    // The card that showed it revokes it, and every other setting stays.
+    save_spending_envelope(root, Some(&approval), None, &cancel).unwrap();
+    let revoked = crate::cloud_runtime::settings::Settings::load(&root.join("settings.json")).unwrap();
+    assert!(revoked.spending_envelope.is_none());
+    assert_eq!(
+        revoked.agent_lifecycle, after.agent_lifecycle,
+        "no other setting changed"
+    );
+    assert!(saved.after.len() > 2, "the settings were written");
+}
+
+#[test]
+fn an_envelope_that_does_not_validate_is_never_saved() {
+    use crate::cloud_runtime::envelope::Envelope;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let cancel = crate::cloud_runtime::Cancellation::default();
+    let broken = Envelope {
+        provider: "hetzner".into(),
+        currency: "EUR".into(),
+        max_hours: -1.0,
+        max_total: 2.0,
+        approved_by: "peters".into(),
+        approved_at: "2026-11-03T10:00:00Z".into(),
+    };
+    assert!(save_spending_envelope(root, None, Some(broken), &cancel).is_err());
+    let settings = crate::cloud_runtime::settings::Settings::load(&root.join("settings.json"));
+    assert!(
+        settings
+            .map(|settings| settings.spending_envelope)
+            .unwrap_or_default()
+            .is_none(),
+        "nothing was written"
+    );
+}
