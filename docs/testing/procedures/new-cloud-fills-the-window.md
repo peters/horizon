@@ -67,17 +67,19 @@ scroll a form the window could show.
 
    Result: The form grows back and stays inside the window.
 
-### 6.3 WINDOW-3 — A small window keeps the floor
+### 6.3 WINDOW-3 — The narrowest window keeps the form usable
 
-1. Make the window about 700 pixels wide.
+1. Make the window as narrow as Horizon allows.
 
-   Result: The form stops at its floor of 640 pixels, and it stays usable.
+   Result: The form is as wide as that window, and its two columns become one
+   above the fields if the window is narrower than 800 pixels. Nothing is clipped
+   and the footer stays visible.
 
 ## 7. Pass criteria
 
 - The form is as wide as the window, not as wide as the workspace that holds it.
 - The two-column layout survives a resize, and the footer stays visible.
-- The form never leaves the canvas, and it never goes below its floor.
+- The form never leaves the canvas, and it stays usable in the narrowest window.
 
 ## 8. Cleanup
 
