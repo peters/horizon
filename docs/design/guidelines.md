@@ -468,7 +468,7 @@ Fixed metrics:
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
 | Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
 | Directory picker | 520 wide, 34 row, at most 460 tall |
-| Dialog width | viewport width minus 64, clamped to 240-1180; two columns from 800 (summary column 330, gutter 24) |
+| Dialog width | viewport width minus 64, so the dialog takes the window; two columns from 800 (summary column 330, gutter 24) |
 
 ### Strokes
 
@@ -538,10 +538,11 @@ New cloud surface:
   brings that workspace into view instead of parking.
 - The workspace that **+ New cloud** makes is large enough to hold the form
   (`WS_CLOUD_FORM_SIZE`); a workspace the person made keeps its own size.
-- Size from that rect, between a usable floor and the form's old ceiling: width
-  `(rect.width - 64).clamp(640, 1180)` and body height
-  `(rect.height - 270).clamp(320, window body)`. The form moves back inside the
-  canvas at an edge, so it never leaves the screen.
+- Size from that rect and the canvas together, so a small workspace never crops a
+  form the window has room for: width `(room.width - 64).clamp(640, window width
+  - 64)` and body height `(room.height - 270).clamp(320, window body)`, where
+  `room` is the union of the two rects. The form moves back inside the canvas at
+  an edge, so it never leaves the screen.
 - A click outside it does nothing. Escape closes nothing and loses no choice: it
   only ends the search of an open folder picker. **Cancel** ends the draft, and the
   setup view's **Close** parks it.

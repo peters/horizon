@@ -36,21 +36,24 @@ pub(super) const FORM_MIN_WIDTH: f32 = 640.0;
 /// The lowest body, so that the fields never collapse to a sliver.
 const BODY_MIN_HEIGHT: f32 = 320.0;
 /// Room for the form's own margins beside its content, both sides together.
-const SIDE_MARGIN: f32 = 64.0;
+pub(super) const SIDE_MARGIN: f32 = 64.0;
 
 /// The height the body takes in a window of `window`, which is also the tallest body.
-fn body_ceiling(window: egui::Rect) -> f32 {
+pub(super) fn body_ceiling(window: egui::Rect) -> f32 {
     (window.height() - CHROME_HEIGHT).max(BODY_MIN_HEIGHT)
 }
 
 /// The form on `surface`: the width and body height it takes there, and where its frame starts. It
-/// fills the workspace that holds it between its own floor and the size the dialog had as a modal,
-/// and it stays on `canvas`, where an edge moves it back inside.
+/// takes the whole window it is open in, so a person never scrolls a form that would fit beside
+/// the workspace that holds it, and it stays on `canvas`, where an edge moves it back inside.
 fn form_layout(surface: Rect, canvas: Rect, ceiling: f32, widest: f32) -> (f32, f32, Pos2) {
-    let width = (surface.width() - SIDE_MARGIN)
+    // The room is the window, not the workspace the form is drawn on: a small workspace must not
+    // crop a form the window beside it has room for.
+    let room = surface.union(canvas);
+    let width = (room.width() - SIDE_MARGIN)
         .clamp(FORM_MIN_WIDTH, widest)
         .min(canvas.width() - SIDE_MARGIN);
-    let body = (surface.height() - CHROME_HEIGHT).clamp(BODY_MIN_HEIGHT, ceiling);
+    let body = (room.height() - CHROME_HEIGHT).clamp(BODY_MIN_HEIGHT, ceiling);
     // The form draws its own chrome, so the room kept below the workspace's top is the body plus
     // that reserve, which also covers a heading and an action bar taller than this dialog's.
     let origin = Pos2::new(
@@ -121,12 +124,9 @@ impl HorizonApp {
         let Some(surface) = self.cloud_creation_surface_now(ctx) else {
             return;
         };
-        // A setup agent of this repository shows its output; large surfaces give it room.
-        let widest = if super::repository_setup::running_here(&self.cloud_prototype.production) {
-            1480.0
-        } else {
-            1180.0
-        };
+        // A setup agent of this repository shows its output; both sizes leave the window's
+        // margins, and the form takes whatever the window has.
+        let widest = ctx.content_rect().width() - SIDE_MARGIN;
         let (width, body_height, origin) =
             form_layout(surface, self.canvas_rect(ctx), body_ceiling(ctx.content_rect()), widest);
         let mut actions = Actions::default();
