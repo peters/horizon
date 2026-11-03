@@ -26,6 +26,57 @@ pub(in crate::app::cloud_panel) struct Card {
     /// A mode change or Disconnect being saved; the card saves them itself, so they need
     /// no provider set up and no Save settings.
     saving: Option<Receiver<Result<Saved, String>>>,
+    /// This computer's own sign-in for the shown app. The app binding alone does not mean
+    /// this machine can sign a cloud in.
+    stored: Stored,
+    /// The account this computer is signed in as, or why that read failed.
+    stored_job: Option<Receiver<Result<Option<String>, String>>>,
+    /// A sign-in under way, which answers the account it stored.
+    signing_in: Option<Receiver<Signed>>,
+    /// Ends the sign-in under way when the card goes or Disconnect ends it. Its own field,
+    /// so one flow never cancels another.
+    sign_in_abort: Option<Abort>,
+    /// What a sign-in under way asks the person to do.
+    asking: Option<github::Prompt>,
+}
+
+/// This computer's own sign-in for the app the card shows.
+#[derive(Default)]
+enum Stored {
+    /// Not read yet.
+    #[default]
+    Unknown,
+    /// Read: the account, or nothing when this computer holds no sign-in.
+    Read(Option<String>),
+}
+
+impl Stored {
+    fn login(&self) -> Option<&str> {
+        match self {
+            Self::Read(login) => login.as_deref(),
+            Self::Unknown => None,
+        }
+    }
+
+    fn known(&self) -> bool {
+        matches!(self, Self::Read(_))
+    }
+}
+
+/// What a sign-in under way puts in its channel: what GitHub asks the person to do, or the
+/// account it stored when it ended.
+enum Signed {
+    Ask(github::Prompt),
+    Done(Result<Option<String>, String>),
+}
+
+/// The prompt a sign-in asks a card to show. A prompt about a cloud's worker belongs to the
+/// cloud's card, not here.
+fn prompt_for_card(prompt: &github::Prompt) -> Option<Signed> {
+    match prompt {
+        github::Prompt::Device { .. } | github::Prompt::Web { .. } => Some(Signed::Ask(prompt.clone())),
+        _ => None,
+    }
 }
 
 /// A GitHub setting the card saved: the file's bytes and what it now holds.
@@ -134,6 +185,49 @@ impl Card {
         });
     }
 
+    /// Reads this computer's own sign-in for `settings`, off the UI thread: the read takes
+    /// the sign-in lock, and a lock must never hold a frame.
+    fn read_own_sign_in(&mut self, ctx: &egui::Context, root: std::path::PathBuf, settings: github::Settings) {
+        let (tx, rx) = channel();
+        self.stored_job = Some(rx);
+        self.stored = Stored::Unknown;
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let found = Ok(horizon_core::cloud_runtime::github::host::stored_login(
+                &root, &settings,
+            ));
+            let _ = tx.send(found);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Signs this computer in for `settings`, off the UI thread, and shows what GitHub asks
+    /// for: a code to enter, or the page Automatic opens.
+    fn sign_in_own(&mut self, ctx: &egui::Context, root: std::path::PathBuf, settings: github::Settings) {
+        let (tx, rx) = channel();
+        self.signing_in = Some(rx);
+        self.asking = None;
+        self.message = None;
+        let cancel = horizon_core::cloud_runtime::Cancellation::default();
+        self.abort = Some(Abort(cancel.clone()));
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let ask = ctx.clone();
+            let prompts = tx.clone();
+            let show = move |prompt| {
+                if let Some(ask) = prompt_for_card(&prompt) {
+                    let _ = prompts.send(ask);
+                }
+                ask.request_repaint();
+            };
+            let answer = horizon_core::cloud_runtime::github::host::sign_in(&root, &settings, &cancel, &show)
+                .map_err(|error| error.to_string())
+                .and_then(|signed| signed.map(|(login, _)| Some(login)));
+            let _ = tx.send(Signed::Done(answer));
+            ctx.request_repaint();
+        });
+    }
+
     fn check(&mut self, ctx: &egui::Context, settings: github::Settings) {
         let (tx, rx) = channel();
         self.checking = Some(rx);
@@ -152,6 +246,7 @@ impl Card {
                     draft.adopt_github(&connected.committed, Some(connected.settings));
                     self.device_flow = Some(connected.device_flow);
                     self.connecting = None;
+                    self.stored = Stored::Unknown;
                 }
                 Ok(Err(message)) => {
                     self.message = Some(message);
@@ -168,7 +263,12 @@ impl Card {
         if let Some(rx) = &self.saving {
             match rx.try_recv() {
                 Ok(Ok((committed, github))) => {
+                    self.stored = Stored::Unknown;
                     if github.is_none() {
+                        // Disconnect ends this computer's sign-in, also one started here.
+                        self.sign_in_abort = None;
+                        self.signing_in = None;
+                        self.asking = None;
                         self.device_flow = None;
                         self.message = Some(
                             "Disconnected. New clouds get no GitHub access. To end the access of running clouds, \
@@ -185,6 +285,42 @@ impl Card {
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
                 Err(TryRecvError::Disconnected) => self.saving = None,
+            }
+        }
+        if let Some(rx) = &self.stored_job {
+            match rx.try_recv() {
+                Ok(Ok(login)) => {
+                    self.stored = Stored::Read(login);
+                    self.stored_job = None;
+                }
+                Ok(Err(message)) => {
+                    self.message = Some(format!("Horizon could not read this computer's sign-in: {message}"));
+                    self.stored_job = None;
+                }
+                Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+                Err(TryRecvError::Disconnected) => self.stored_job = None,
+            }
+        }
+        if let Some(rx) = &self.signing_in {
+            match rx.try_recv() {
+                Ok(Signed::Ask(prompt)) => self.asking = Some(prompt),
+                Ok(Signed::Done(Ok(login))) => {
+                    self.stored = Stored::Read(login);
+                    self.asking = None;
+                    self.signing_in = None;
+                    self.sign_in_abort = None;
+                }
+                Ok(Signed::Done(Err(message))) => {
+                    self.message = Some(message);
+                    self.asking = None;
+                    self.signing_in = None;
+                    self.sign_in_abort = None;
+                }
+                Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+                Err(TryRecvError::Disconnected) => {
+                    self.signing_in = None;
+                    self.sign_in_abort = None;
+                }
             }
         }
         if let Some(rx) = &self.checking {
@@ -241,6 +377,58 @@ pub(super) fn card(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card) {
     });
 }
 
+/// What this computer is signed in as for the app, and the way to sign in when it holds no
+/// sign-in: the app binding alone cannot sign a cloud in.
+fn own_sign_in(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &github::Settings) {
+    match card.stored.login() {
+        Some(login) => caption(ui, &format!("Signed in as {login} on this computer.")),
+        None if card.stored.known() => {
+            ui.label(
+                RichText::new(
+                    "No sign-in on this computer yet. A new cloud cannot get GitHub access until it has one.",
+                )
+                .size(12.0)
+                .color(theme::PALETTE_YELLOW()),
+            );
+            if card.signing_in.is_none() && ui.add(primary_button("Sign in on this computer")).clicked() {
+                let root = draft.root().to_owned();
+                let settings = settings.clone();
+                card.sign_in_own(ui.ctx(), root, settings);
+            }
+        }
+        None => caption(ui, "Checking this computer's sign-in…"),
+    }
+    if let Some(prompt) = card.asking.clone() {
+        match prompt {
+            github::Prompt::Device {
+                user_code,
+                verification_uri,
+                ..
+            } => {
+                ui.label(
+                    RichText::new(format!("Enter {user_code} at {verification_uri} to sign in."))
+                        .size(12.0)
+                        .color(theme::PALETTE_YELLOW()),
+                );
+                if ui.add(chrome_button("Open the page")).clicked() {
+                    open(&verification_uri);
+                }
+            }
+            github::Prompt::Web { url } => {
+                ui.label(
+                    RichText::new("Approve the sign-in in the browser Horizon opened.")
+                        .size(12.0)
+                        .color(theme::PALETTE_YELLOW()),
+                );
+                if ui.add(chrome_button("Open the page")).clicked() {
+                    open(&url);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &github::Settings) {
     ui.horizontal(|ui| {
         label(ui, &format!("App: {}", settings.slug));
@@ -248,6 +436,11 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
             open(&settings.installation_url());
         }
     });
+    if card.device_flow.is_some() && !card.stored.known() && card.stored_job.is_none() {
+        let root = draft.root().to_owned();
+        let settings = settings.clone();
+        card.read_own_sign_in(ui.ctx(), root, settings);
+    }
     match card.device_flow.clone() {
         Some(Ok(false)) => {
             ui.label(
@@ -264,7 +457,10 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
                 }
             });
         }
-        Some(Ok(true)) => caption(ui, "Device sign-in is on."),
+        Some(Ok(true)) => {
+            caption(ui, "Device sign-in is on.");
+            own_sign_in(ui, draft, card, settings);
+        }
         Some(Err(error)) => {
             ui.label(
                 RichText::new(format!("Horizon could not check the app's settings: {error}"))

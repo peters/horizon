@@ -283,3 +283,32 @@ fn a_commit_is_authored_as_the_person_and_not_as_a_bot() {
         "a public address never goes into a commit; the noreply address attributes it either way"
     );
 }
+
+#[test]
+fn this_computers_sign_in_is_read_without_github_and_the_app_binding_alone_is_not_one() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path();
+    let app = super::settings(Mode::Automatic, &directory.join("app-secret"));
+    std::fs::create_dir_all(directory.join("credentials")).unwrap();
+    // The cloud settings name the app, so its sign-in belongs to this card.
+    let bound = serde_json::json!({"github": {"app_id": app.app_id}});
+    std::fs::write(directory.join("settings.json"), bound.to_string()).unwrap();
+    assert_eq!(
+        host::stored_login(directory, &app),
+        None,
+        "an app that is bound but not signed in reads as no sign-in"
+    );
+
+    store_chain(directory, "octo-cat");
+    assert_eq!(
+        host::stored_login(directory, &app),
+        Some("octo-cat".to_owned()),
+        "the stored account is what the card shows"
+    );
+
+    // A sign-in of another app is never shown for this one.
+    let other = Settings { app_id: 43, ..app };
+    let bound = serde_json::json!({"github": {"app_id": other.app_id}});
+    std::fs::write(directory.join("settings.json"), bound.to_string()).unwrap();
+    assert_eq!(host::stored_login(directory, &other), None);
+}
