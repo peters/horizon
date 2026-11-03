@@ -84,35 +84,33 @@ fn workspace_with_panel(app: &mut HorizonApp, name: &str, size: [f32; 2]) -> hor
 }
 
 #[test]
-fn the_surface_sits_on_the_draft_workspace_and_moves_with_a_pan() {
+fn the_form_takes_the_window_and_stays_on_the_canvas() {
     let (_temp, ctx, mut app) = ready_app();
     let workspace = workspace_with_panel(&mut app, "sample project", [900.0, 700.0]);
-    // The form sits on its workspace, so the workspace is in view first.
+    // The form starts on its workspace, so the workspace is in view first.
     app.focus_workspace_in_rect(workspace, app.canvas_rect(&ctx));
     app.open_workspace_cloud(&ctx, workspace);
     for _ in 0..3 {
         frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     }
     let surface = draft_workspace_frame(&app, &ctx);
-    let form = form_rect(&ctx).expect("the form is drawn on its workspace");
-    // The form starts inside the workspace frame, below the name badge it must not cover.
-    let inset = crate::app::WS_TITLE_HEIGHT + crate::app::WS_BG_PAD;
+    let canvas = app.canvas_rect(&ctx);
+    let form = form_rect(&ctx).expect("the form is drawn");
+    // A window with room beside a small workspace gives the form that room, so nothing scrolls
+    // that the window could show.
     assert!(
-        (form.min.x - surface.min.x).abs() < 0.5 && (form.min.y - surface.min.y - inset).abs() < 0.5,
-        "the form starts below the workspace's badge: {form:?} beside {surface:?}"
+        form.width() > surface.width(),
+        "the form {form:?} is no wider than its workspace {surface:?}"
     );
     assert!(
-        surface.contains_rect(form),
-        "the form stays inside its workspace: {form:?} beside {surface:?}"
+        form.width() >= canvas.width() - 100.0,
+        "the form {form:?} does not take the canvas {canvas:?}"
     );
-    // The form fills the workspace that holds it, up to the margins its width rule keeps.
     assert!(
-        form.width() <= surface.width() && form.width() >= surface.width() - 20.0,
-        "the form {form:?} does not fill its workspace {surface:?}"
+        canvas.contains_rect(form),
+        "the form stays on the canvas: {form:?} beside {canvas:?}"
     );
-    // The body takes its height from that workspace, below the workspace's name badge, not from
-    // the window.
-    let usable = surface.height() - crate::app::WS_TITLE_HEIGHT - crate::app::WS_BG_PAD;
+    // The body takes its height from the window, not from the workspace it is drawn on.
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     let body = output
         .shapes
@@ -122,21 +120,31 @@ fn the_surface_sits_on_the_draft_workspace_and_moves_with_a_pan() {
             _ => None,
         })
         .expect("the body shows its first field");
+    let ceiling = super::super::creation::body_ceiling(ctx.content_rect());
+    // The body follows the window, not the 700 px workspace it is drawn on.
     assert!(
-        (body - (usable - super::super::creation::CHROME_HEIGHT)).abs() < 0.5,
+        body > surface.height() - super::super::creation::CHROME_HEIGHT,
         "the body is {body} px tall in a workspace of {} px",
         surface.height()
     );
-    // A pan moves the workspace on the screen, and the form with it.
+    assert!(
+        body <= ceiling + 1.0,
+        "the body is {body} px tall, above the ceiling {ceiling}"
+    );
+    // A pan moves the form while it can move, and the canvas keeps it inside.
     let pan = Vec2::new(120.0, 0.0);
     app.canvas_view.pan_offset[0] += pan.x;
     app.canvas_view.pan_offset[1] += pan.y;
     frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
     let moved = form_rect(&ctx).expect("the form follows its workspace");
     assert!(
-        (moved.min - (form.min + pan)).length() < 0.5,
-        "the form moved to {moved:?}, not to {:?}",
-        form.min + pan
+        moved.min.x >= form.min.x,
+        "the form moved to {moved:?}, not from {:?}",
+        form.min
+    );
+    assert!(
+        app.canvas_rect(&ctx).contains_rect(moved),
+        "the form stays on the canvas after a pan: {moved:?}"
     );
 }
 
