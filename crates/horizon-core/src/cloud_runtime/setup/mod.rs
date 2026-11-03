@@ -353,6 +353,51 @@ pub fn save_github(
     Ok(Committed { before, after })
 }
 
+/// Approves, changes or revokes the spending envelope of these settings, and keeps every
+/// other setting as it is. A machine without an envelope rents nothing for an agent, so
+/// granting one and taking it away are the person's two decisions.
+///
+/// `shown` is the envelope the caller displayed: settings that hold another envelope, or
+/// none, were saved by another Horizon window since, and are left as they are. `cancel` is
+/// checked under the settings lock, right before the commit.
+/// # Errors
+/// Malformed saved settings, settings that changed while this save ran, an envelope that
+/// does not validate, or a cancellation.
+pub fn save_spending_envelope(
+    root: &Path,
+    shown: Option<&super::envelope::Envelope>,
+    next: Option<super::envelope::Envelope>,
+    cancel: &super::Cancellation,
+) -> Result<Committed> {
+    let mut write = storage::Transaction::new(root)?;
+    let before = match std::fs::read(root.join("settings.json")) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut settings = before.as_ref().map_or_else(
+        || Ok(defaults(root)),
+        |bytes| serde_json::from_slice::<Settings>(bytes).map_err(|_| Error::Json),
+    )?;
+    if settings.spending_envelope.as_ref() != shown {
+        return Err(Error::Invalid(
+            "The spending envelope was changed in another Horizon window. Close and reopen the settings to see it.",
+        ));
+    }
+    if let Some(envelope) = &next
+        && let Err(invalid) = envelope.validate()
+    {
+        return Err(Error::Invalid(invalid.describe()));
+    }
+    settings.spending_envelope = next;
+    cancel.check()?;
+    // Committed only over the bytes read above, so a concurrent writer is never overwritten.
+    write.commit(&settings, before.as_deref())?;
+    // The bytes this save committed, never a later read of a file another writer may change.
+    let after = storage::encode(&settings)?;
+    Ok(Committed { before, after })
+}
+
 impl Draft {
     /// Takes the GitHub App that [`save_github`] saved. When the form was opened from the
     /// file that the save replaced, the form now counts the saved file as its starting

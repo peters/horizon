@@ -2,6 +2,7 @@
 mod chatgpt;
 mod dashboard;
 mod docker_hosts;
+mod envelope;
 mod fields;
 mod github;
 mod needed;
@@ -106,6 +107,7 @@ pub(in crate::app::cloud_panel) struct State {
     /// Whether the dialog has been measured since it opened, in case the window changed size.
     measured: bool,
     github: github::Card,
+    envelope: envelope::Card,
     chatgpt: chatgpt::Card,
     docker_hosts: docker_hosts::Card,
     needed: needed::Needed,
@@ -217,6 +219,7 @@ impl State {
                         self.draft.is_some()
                             && self.receiver.is_none()
                             && !self.github.connecting()
+                            && !self.envelope.busy()
                             && !self.chatgpt.busy()
                             && !self.docker_hosts.editing(),
                         egui::Button::new(match self.continuation {
