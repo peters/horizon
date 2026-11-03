@@ -33,6 +33,9 @@ pub(in crate::app::cloud_panel) struct Card {
     stored_job: Option<Receiver<Result<Option<String>, String>>>,
     /// A sign-in under way, which answers the account it stored.
     signing_in: Option<Receiver<Signed>>,
+    /// Ends the sign-in under way when the card goes or Disconnect ends it. Its own field,
+    /// so one flow never cancels another.
+    sign_in_abort: Option<Abort>,
     /// What a sign-in under way asks the person to do.
     asking: Option<github::Prompt>,
 }
@@ -262,6 +265,10 @@ impl Card {
                 Ok(Ok((committed, github))) => {
                     self.stored = Stored::Unknown;
                     if github.is_none() {
+                        // Disconnect ends this computer's sign-in, also one started here.
+                        self.sign_in_abort = None;
+                        self.signing_in = None;
+                        self.asking = None;
                         self.device_flow = None;
                         self.message = Some(
                             "Disconnected. New clouds get no GitHub access. To end the access of running clouds, \
@@ -301,18 +308,18 @@ impl Card {
                     self.stored = Stored::Read(login);
                     self.asking = None;
                     self.signing_in = None;
-                    self.abort = None;
+                    self.sign_in_abort = None;
                 }
                 Ok(Signed::Done(Err(message))) => {
                     self.message = Some(message);
                     self.asking = None;
                     self.signing_in = None;
-                    self.abort = None;
+                    self.sign_in_abort = None;
                 }
                 Err(TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
                 Err(TryRecvError::Disconnected) => {
                     self.signing_in = None;
-                    self.abort = None;
+                    self.sign_in_abort = None;
                 }
             }
         }
