@@ -422,6 +422,16 @@ jobs:
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs-extra' }}
         run: bash scripts/install-ci-ubuntu-dependencies.sh tmux
+      # The remote browser bridge lane needs an SSH target that answers without a
+      # prompt. A runner has no sshd, so this step starts a user-level one on a
+      # loopback port and aliases it. HORIZON_BROWSER_REMOTE_REQUIRED makes the
+      # parity test fail, not skip, when that transport breaks.
+      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        run: bash scripts/install-ci-ubuntu-dependencies.sh openssh-server
+      - name: Start the loopback SSH transport
+        if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        shell: bash
+        run: bash scripts/ci-ssh-transport.sh
       - name: Test shard
         if: env.HORIZON_CI_SKIP_SPEECH != 'true'
         shell: bash

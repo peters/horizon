@@ -146,7 +146,23 @@ local connect client.
    ```
 
    Result: `a_profile_host_over_ssh_advertises_the_same_capabilities_as_a_local_connect_client`
-   passes. A machine without an SSH target prints the reason and skips the test.
+   passes, and so does `every_advertised_tool_has_a_parity_row`. A machine without
+   an SSH target prints the reason and skips the first test.
+
+2. Read the parity table in the test file.
+
+   Result: every tool of `tools/list` has one row. A row says `Yes`, `Partial`
+   or `No`, and a `Partial` or `No` row names its limit and its issue.
+
+3. Run the test on a machine where the transport must answer.
+
+   ```bash
+   HORIZON_BROWSER_REMOTE_REQUIRED=1 cargo test -p horizon-browser-cli --test remote_parity
+   ```
+
+   Result: an unreachable target fails the test with the reason. The CI transport
+   lane sets this variable on the Linux libs shard, where
+   `scripts/ci-ssh-transport.sh` starts a loopback `sshd`.
 
 ### 6.5 R5 — a refusal names its reason
 

@@ -13,7 +13,10 @@
 //! names another target, and `HORIZON_BROWSER_REMOTE_EXECUTABLE` names the binary
 //! when the login shell of the target does not find it on its `PATH`. Without a
 //! reachable target the test states the reason and does nothing, because a
-//! machine without an SSH server can not show this property.
+//! machine without an SSH server can not show this property. `HORIZON_BROWSER_REMOTE_REQUIRED=1`
+//! turns that skip into a failure: the CI transport lane starts a loopback
+//! `sshd` and sets this flag, so a broken transport fails the shard instead of
+//! printing a line that no log reader tests.
 //!
 //! The live test at the end also needs a local Chromium; run it with
 //! `cargo test -p horizon-browser-cli --test remote_parity -- --ignored`.
@@ -49,6 +52,26 @@ fn ssh_reachable(target: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// Whether this run must reach an SSH target. The CI transport lane sets it, so
+/// a broken transport fails instead of skipping.
+fn remote_transport_required() -> bool {
+    std::env::var_os("HORIZON_BROWSER_REMOTE_REQUIRED").is_some_and(|value| value != "0")
+}
+
+/// States the reason that the transport lane cannot run, or fails when the run
+/// requires that lane.
+fn skip_or_fail(target: &str) {
+    let reason = format!(
+        "`ssh -Tq {target}` needs an SSH server that answers without a prompt, \
+         with the horizon-browser binary of this build on that machine"
+    );
+    assert!(
+        !remote_transport_required(),
+        "HORIZON_BROWSER_REMOTE_REQUIRED is set, so the transport must answer: {reason}"
+    );
+    eprintln!("skipped: {reason}");
 }
 
 fn host_file(root: &Path) -> PathBuf {
@@ -239,6 +262,124 @@ impl Drop for Client {
     }
 }
 
+/// What a browser host on another machine answers for one tool of the contract.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Parity {
+    /// The tool answers for the page that the host serves.
+    Yes,
+    /// The tool answers, with a stated limit.
+    Partial,
+    /// The tool refuses, or cannot work, and the interface states why.
+    No,
+}
+
+/// The tools of the public contract that drive a page, and the answer that a
+/// browser host on another machine gives for each one. A tool that is absent
+/// here fails `every_advertised_tool_has_a_parity_row`, so a new page tool
+/// cannot reach an agent without a decision about the bridge. The epic that
+/// closes each `Partial` and `No` row is issue 1962.
+const PARITY_ROWS: &[(&str, Parity, &str)] = &[
+    (
+        "browser_act",
+        Parity::Partial,
+        "set_files stages one file up to 512 MiB; drop_files needs a local drag",
+    ),
+    ("browser_audit", Parity::Yes, ""),
+    ("browser_close", Parity::Yes, ""),
+    (
+        "browser_create",
+        Parity::Yes,
+        "the bridge gives the named browser profile",
+    ),
+    (
+        "browser_duplicate",
+        Parity::No,
+        "a host page cannot duplicate yet (issue 1970)",
+    ),
+    ("browser_evaluate", Parity::Yes, ""),
+    (
+        "browser_handoff",
+        Parity::No,
+        "no person can steer a host page in the panel (issue 1966)",
+    ),
+    ("browser_http_auth", Parity::Yes, ""),
+    ("browser_list", Parity::Yes, ""),
+    ("browser_navigate", Parity::Yes, ""),
+    (
+        "browser_network",
+        Parity::Partial,
+        "a result above 8 MiB stays a path on the host (issue 1967)",
+    ),
+    ("browser_network_watch", Parity::Yes, ""),
+    (
+        "browser_orientation",
+        Parity::Yes,
+        "a provider gate, unchanged by the bridge",
+    ),
+    ("browser_panel", Parity::Yes, ""),
+    (
+        "browser_provider_devices",
+        Parity::Yes,
+        "the devices of the serving machine's account",
+    ),
+    (
+        "browser_provider_usage",
+        Parity::Yes,
+        "the usage of the serving machine's account",
+    ),
+    ("browser_query", Parity::Yes, ""),
+    (
+        "browser_remote_allocations",
+        Parity::Partial,
+        "the reconciliation needs a Horizon host identity",
+    ),
+    ("browser_resize", Parity::Yes, ""),
+    ("browser_screenshot", Parity::Yes, ""),
+    ("browser_snapshot", Parity::Yes, ""),
+    (
+        "browser_video",
+        Parity::Partial,
+        "a WebM above 8 MiB stays a path on the host (issue 1967)",
+    ),
+    ("browser_visibility", Parity::Yes, ""),
+    (
+        "browser_vm",
+        Parity::Partial,
+        "it acts on the serving machine's settings, not the caller's",
+    ),
+    ("browser_wait", Parity::Yes, ""),
+    (
+        "browser_zoom",
+        Parity::No,
+        "the bridge carries no zoom command (issue 1966)",
+    ),
+];
+
+/// The tools of the same manifest that need the Horizon application, not a
+/// browser host: casting to a television, the cloud cards, the native Device
+/// panel, and the tailnet credential. A profile host advertises them today,
+/// because the bridge relays `tools/list` unchanged, and a call refuses. They
+/// are outside this lane, so the parity table names them here and the epic keeps
+/// the question of a narrower `tools/list` for a later change.
+const APP_ONLY_TOOLS: &[&str] = &[
+    "cast",
+    "cloud_agent_message",
+    "cloud_agent_read",
+    "cloud_companion_ensure_ready",
+    "cloud_companion_operation",
+    "cloud_companion_stop",
+    "cloud_companion_uncheck",
+    "cloud_companions",
+    "cloud_create",
+    "cloud_delete",
+    "cloud_exec",
+    "cloud_image_destination",
+    "cloud_list",
+    "cloud_offers",
+    "device_panel",
+    "tailnet_api_credential",
+];
+
 fn tool_names(tools: &Value) -> Vec<String> {
     tools
         .as_array()
@@ -255,10 +396,7 @@ fn tool_names(tools: &Value) -> Vec<String> {
 fn a_profile_host_over_ssh_advertises_the_same_capabilities_as_a_local_connect_client() {
     let target = ssh_target();
     if !ssh_reachable(&target) {
-        eprintln!(
-            "skipped: `ssh -Tq {target}` needs an SSH server that answers without a prompt, \
-             with the horizon-browser binary of this build on that machine"
-        );
+        skip_or_fail(&target);
         return;
     }
     let root = tempfile::tempdir().expect("root");
@@ -325,6 +463,38 @@ fn a_profile_host_over_ssh_advertises_the_same_capabilities_as_a_local_connect_c
         pages,
         local.tool("browser_list", &json!({})).expect("browser_list"),
         "one identity sees one page set"
+    );
+
+    drop(running);
+}
+
+/// One row for every tool of the contract, in both directions: an advertised
+/// tool without a row fails, and a row without an advertised tool fails.
+#[test]
+fn every_advertised_tool_has_a_parity_row() {
+    let root = tempfile::tempdir().expect("root");
+    let config = host_file(root.path());
+    let running = host(root.path(), &config);
+    let instance = instance(root.path(), running.id());
+    let mut client = Client::start(Transport::Local, root.path(), &instance);
+    let names = tool_names(&client.tools());
+    assert!(!names.is_empty(), "the contract advertises tools");
+
+    for name in &names {
+        assert!(
+            PARITY_ROWS.iter().any(|(row, _, _)| row == name) || APP_ONLY_TOOLS.contains(&name.as_str()),
+            "{name} is advertised, and no parity row states what a remote host answers for it"
+        );
+    }
+    for (row, _, _) in PARITY_ROWS {
+        assert!(
+            names.iter().any(|name| name == row),
+            "{row} has a parity row, and the contract does not advertise it"
+        );
+    }
+    assert!(
+        PARITY_ROWS.iter().any(|(_, parity, _)| *parity == Parity::No),
+        "the table keeps the rows that still refuse"
     );
 
     drop(running);
