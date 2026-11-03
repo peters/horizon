@@ -164,7 +164,7 @@ uuid = { version = "1.24.1", features = ["serde", "v4"] }
 if-addrs = "0.15.0"
 # DNS wire format for Local Network Bridge's one-shot mDNS/DNS-SD queries; a
 # parser and builder only, with no daemon or responder.
-simple-dns = "0.12.0"
+simple-dns = "0.13.0"
 # Selects the bridged interface for Local Network Bridge's multicast queries.
 socket2 = "0.6.5"
 git2 = { version = "0.21", default-features = false }
