@@ -267,7 +267,86 @@ A profile that uses a proxy on the Docker host itself needs the name
 because Docker Engine on Linux adds that name only with the option.
 Do not depend on this image to stop a profile that has no proxy.
 
-## 9. Limits
+## 9. The local container
+
+The image of sections 1 to 8 runs on this computer too.
+The script `scripts/browser-vm-local.sh` builds the target `browser-vm-local`,
+which adds an SSH server, and runs the container with two loopback ports.
+
+```sh
+scripts/browser-vm-local.sh up
+```
+
+The task `up` does these steps:
+
+1. It writes an Ed25519 key in the state directory.
+2. It builds the image when the image is absent, with the target
+   `browser-vm-local`.
+3. It runs the container with this start:
+
+   ```sh
+   docker run --detach --name horizon-browser-vm-local \
+     --volume horizon-browser-vm-local-state:/state \
+     --publish 127.0.0.1:5900:5900 \
+     --publish 127.0.0.1:2222:2222 \
+     --shm-size 1g \
+     --env HORIZON_BROWSER_VM_SSH=1 \
+     --env HORIZON_BROWSER_VM_SSH_PUBKEY=<the public key> \
+     horizon-browser-vm-local:latest
+   ```
+
+4. It waits until the two loopback ports answer.
+5. It prints the block of `~/.ssh/config` that names the container.
+
+The SSH server accepts one key: the public key in
+`HORIZON_BROWSER_VM_SSH_PUBKEY`.
+It refuses a password and it needs no interactivity.
+It listens on the container port 2222, and the script publishes that port on
+the loopback of this computer only.
+
+The target `browser-vm` of the publish workflow holds no SSH server.
+Its only port is 5900.
+A start of that target with `HORIZON_BROWSER_VM_SSH=1` stops with an error.
+
+| Task | Result |
+|---|---|
+| `up` | The container runs, the two ports answer on the loopback, and the script prints the alias block. `--write-alias` also writes the block to `~/.ssh/config`, once for that name. |
+| `down` | The container stops and is removed. The state volume and the key stay. |
+| `status` | It prints the container, the two ports, the state volume, the key and the SSH target. |
+| `alias` | It prints the block of `~/.ssh/config`. |
+| `key` | It prints the public key that the container accepts. |
+
+The block of a name starts with the line
+`# >>> horizon-browser-vm-local:<name> >>>` and ends with
+`# <<< horizon-browser-vm-local:<name> <<<`.
+A second name adds a second block, and a rewrite removes only the block of its
+own name.
+
+The state directory is `${XDG_STATE_HOME:-~/.local/state}/horizon/browser-vm-local`.
+It holds the key, one known-host file for each name
+(`known_hosts-<name>`), and the alias block.
+A name has its own host file, because a new state volume brings a new host key
+and `ssh` refuses a changed key for a known host.
+The script reads the host key of the container through Docker, and not through
+the network, and it writes the entry `[127.0.0.1]:<port>` in that file before
+the first login.
+It replaces an earlier entry of the same address, so a start after a removed
+volume works, and the alias block sets `StrictHostKeyChecking yes`.
+The options `--name`, `--image`, `--vnc-port`, `--ssh-port`, `--state` and
+`--docker` change the names, the ports and the Docker command.
+
+A Horizon that reaches this container over SSH names it as the entry
+`browser_host.ssh_target` of its settings:
+
+```yaml
+browser_host:
+  ssh_target: horizon-browser-vm-local
+  profile: probe
+```
+
+The entry applies at the next start of Horizon.
+
+## 10. Limits
 
 > **CAUTION:** PUBLISH THE VNC PORT ON THE LOOPBACK OF THE DOCKER HOST ONLY.
 > The VNC server has no password. A published port on another interface gives
@@ -280,6 +359,10 @@ Do not depend on this image to stop a profile that has no proxy.
 - The container runs as root, so each Chromium profile needs `--no-sandbox`.
   The sandbox of Chromium does not protect the pages of the profiles.
 - The image serves one display. Every browser profile uses that display.
-- The image does not run an SSH server. Use the SSH server of the Docker host.
+- The published image does not run an SSH server. Only the target
+  `browser-vm-local` runs one, and only with `HORIZON_BROWSER_VM_SSH=1`.
+- The local container publishes two ports on the loopback of this computer.
+  The VNC server has no password, so a published port on another interface
+  gives every host of the network access to the desktop and to the sign-ins.
 - The image has no credential of its own. The host file holds no credential
   value.

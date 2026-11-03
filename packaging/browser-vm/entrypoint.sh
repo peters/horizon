@@ -9,6 +9,9 @@ readonly STATE_DIR="${HORIZON_BROWSER_VM_STATE:-/state}"
 readonly DISPLAY_NUMBER="${HORIZON_BROWSER_VM_DISPLAY:-99}"
 readonly VNC_PORT="${HORIZON_BROWSER_VM_VNC_PORT:-5900}"
 readonly SCREEN="${HORIZON_BROWSER_VM_SCREEN:-1920x1080x24}"
+readonly SSH_ENABLED="${HORIZON_BROWSER_VM_SSH:-0}"
+readonly SSH_PORT="${HORIZON_BROWSER_VM_SSH_PORT:-2222}"
+readonly SSH_PUBKEY="${HORIZON_BROWSER_VM_SSH_PUBKEY:-}"
 readonly HOST_FILE="${STATE_DIR}/host.yaml"
 readonly EXAMPLE_HOST_FILE="/usr/local/share/horizon-browser-vm/host.example.yaml"
 
@@ -19,6 +22,7 @@ xvfb_pid=""
 dbus_pid=""
 wm_pid=""
 vnc_pid=""
+sshd_pid=""
 host_pid=""
 
 log() {
@@ -53,6 +57,7 @@ cleanup() {
         terminate "$host_pid"
         wait "$host_pid" 2>/dev/null
     fi
+    terminate "$sshd_pid"
     terminate "$vnc_pid"
     terminate "$wm_pid"
     terminate "$dbus_pid"
@@ -142,6 +147,82 @@ wm_pid=$!
 x11vnc -display "$DISPLAY" -rfbport "$VNC_PORT" -nopw -forever -shared -quiet >/dev/null 2>&1 &
 vnc_pid=$!
 log "the VNC server listens on the container port $VNC_PORT"
+
+# The SSH server of the local container. A published machine has none: its image
+# target `browser-vm` holds no server, and this block needs the variable that the
+# local start sets. The key of the person is the only key that opens it.
+start_ssh() {
+    if [[ "$SSH_ENABLED" == 0 ]]; then
+        return 0
+    fi
+    if [[ "$SSH_ENABLED" != 1 ]]; then
+        log "HORIZON_BROWSER_VM_SSH must be 1 or 0, not $SSH_ENABLED"
+        exit 1
+    fi
+    # sshd refuses a bare command name: it must be started by its absolute path.
+    local sshd_bin
+    if ! sshd_bin="$(command -v sshd)"; then
+        log "this image has no SSH server; build the target browser-vm-local for a local container"
+        exit 1
+    fi
+    if [[ -z "$SSH_PUBKEY" ]]; then
+        log "HORIZON_BROWSER_VM_SSH=1 needs HORIZON_BROWSER_VM_SSH_PUBKEY with one public key"
+        exit 1
+    fi
+    local ssh_dir="${STATE_DIR}/ssh"
+    local host_key="${ssh_dir}/ssh_host_ed25519_key"
+    local home_dir="${HOME:-/root}"
+    mkdir -p "$ssh_dir" "$home_dir/.ssh" /run/sshd
+    chmod 0700 "$ssh_dir" "$home_dir/.ssh"
+    if [[ ! -f "$host_key" ]]; then
+        ssh-keygen -q -t ed25519 -N '' -C horizon-browser-vm-local -f "$host_key"
+        log "wrote the SSH host key to $host_key"
+    fi
+    printf '%s\n' "$SSH_PUBKEY" >"$home_dir/.ssh/authorized_keys"
+    chmod 0600 "$home_dir/.ssh/authorized_keys"
+    # A session of `ssh -T` gets no login shell, so the root of the browser
+    # runtime and the display reach it through the permitted user environment.
+    printf 'HORIZON_BROWSER_ROOT=%s\nDISPLAY=%s\n' "$HORIZON_BROWSER_ROOT" "$DISPLAY" \
+        >"$home_dir/.ssh/environment"
+    chmod 0600 "$home_dir/.ssh/environment"
+    local config="${ssh_dir}/sshd_config"
+    cat >"$config" <<EOF
+Port ${SSH_PORT}
+ListenAddress 0.0.0.0
+HostKey ${host_key}
+PidFile /run/sshd.pid
+AuthorizedKeysFile .ssh/authorized_keys
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+UsePAM no
+PermitUserEnvironment yes
+LogLevel INFO
+EOF
+    chmod 0600 "$config"
+    "$sshd_bin" -f "$config" -D -e &
+    sshd_pid=$!
+    local ready=0
+    for _ in {1..100}; do
+        if ! kill -0 "$sshd_pid" 2>/dev/null; then
+            break
+        fi
+        if (exec 3<>"/dev/tcp/127.0.0.1/${SSH_PORT}") 2>/dev/null; then
+            exec 3>&- 3<&-
+            ready=1
+            break
+        fi
+        sleep 0.1
+    done
+    if [[ "$ready" -ne 1 ]]; then
+        log "the SSH server did not answer on the container port $SSH_PORT"
+        exit 1
+    fi
+    log "the SSH server listens on the container port $SSH_PORT"
+}
+
+start_ssh
 
 log "start the profile host with $HOST_FILE"
 horizon-browser host --config "$HOST_FILE" --visible &
