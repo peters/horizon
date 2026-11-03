@@ -399,6 +399,16 @@ pub fn save_spending_envelope(
 }
 
 impl Draft {
+    /// Takes the spending envelope that [`save_spending_envelope`] saved. As
+    /// [`Draft::adopt_github`] does, the form counts the saved file as its starting point, so
+    /// its own Save does not see the card's save as a change made elsewhere.
+    pub fn adopt_spending_envelope(&mut self, committed: &Committed, envelope: Option<super::envelope::Envelope>) {
+        if self.original == committed.before {
+            self.original = Some(committed.after.clone());
+        }
+        self.settings.spending_envelope = envelope;
+    }
+
     /// Takes the GitHub App that [`save_github`] saved. When the form was opened from the
     /// file that the save replaced, the form now counts the saved file as its starting
     /// point, so its own Save does not see the save as a change made elsewhere.

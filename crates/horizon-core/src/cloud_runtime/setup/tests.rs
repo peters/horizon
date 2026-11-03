@@ -665,7 +665,10 @@ fn an_envelope_that_does_not_validate_is_never_saved() {
     assert!(save_spending_envelope(root, None, Some(broken), &cancel).is_err());
     let settings = crate::cloud_runtime::settings::Settings::load(&root.join("settings.json"));
     assert!(
-        settings.map(|settings| settings.spending_envelope).unwrap_or_default().is_none(),
+        settings
+            .map(|settings| settings.spending_envelope)
+            .unwrap_or_default()
+            .is_none(),
         "nothing was written"
     );
 }

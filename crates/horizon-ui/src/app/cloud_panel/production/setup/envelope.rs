@@ -20,7 +20,7 @@ pub(in crate::app::cloud_panel) struct Card {
     hours: String,
     total: String,
     /// A save under way, and the message it left.
-    saving: Option<Receiver<Result<Option<Envelope>, String>>>,
+    saving: Option<Receiver<Result<Saved, String>>>,
     message: Option<String>,
 }
 
@@ -42,7 +42,10 @@ impl Card {
                 next.clone(),
                 &horizon_core::cloud_runtime::Cancellation::default(),
             )
-            .map(|_| next)
+            .map(|committed| Saved {
+                committed,
+                envelope: next,
+            })
             .map_err(|error| error.to_string());
             let _ = tx.send(result);
             ctx.request_repaint();
@@ -54,9 +57,10 @@ impl Card {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(next)) => {
-                // The card shows what the file now holds, not what it held when it opened.
-                draft.settings.spending_envelope = next;
+            Ok(Ok(saved)) => {
+                // The card shows what the file now holds, and the form counts that file as its
+                // starting point, so its own Save is not refused as a change made elsewhere.
+                draft.adopt_spending_envelope(&saved.committed, saved.envelope);
                 self.hours.clear();
                 self.total.clear();
                 self.saving = None;
@@ -69,6 +73,12 @@ impl Card {
             Err(TryRecvError::Disconnected) => self.saving = None,
         }
     }
+}
+
+/// What a save committed, and the envelope the settings now hold.
+struct Saved {
+    committed: setup::Committed,
+    envelope: Option<Envelope>,
 }
 
 /// The providers an envelope may name: the ones that rent compute, never a saved host.
