@@ -6,8 +6,8 @@
 # Usage: detect-ci-build-inputs.sh <event-name> <base-sha> <head-sha>
 #
 # Prints `release_inputs=<bool>`, `macos_release_inputs=<bool>`,
-# `rust_inputs=<bool>` and `speech_inputs=<bool>`, in the `key=value` form a
-# workflow step appends to $GITHUB_OUTPUT. Runs in the current working
+# `rust_inputs=<bool>`, `speech_inputs=<bool>` and `packaging_inputs=<bool>`, in
+# the `key=value` form a workflow step appends to $GITHUB_OUTPUT. Runs in the current working
 # directory, which must be the repository checkout.
 #
 # `release_inputs` gates the Linux release build on main. The workflow files
@@ -38,6 +38,15 @@
 # A change in another crate can still break a speech-only horizon-ui test;
 # the speech job on the push to main finds it. Every push and dispatch keep
 # it true, because the speech job on main saves the Linux test cache.
+#
+# `packaging_inputs` is true for a changed path that the image publish workflow
+# rebuilds from (`packaging/browser-vm`, the two browser crates), for that
+# workflow, the CI workflow and this script. The publish runs on main only, so an
+# image that these paths break would otherwise reach main before any build. The
+# Rust jobs do not cover it: they build with the repository toolchain, and the
+# image pins its own image tag and its own package list. A push that changes
+# nothing there keeps it false, because that push publishes the image anyway. An
+# unknown diff and a manual dispatch build it.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -50,8 +59,8 @@ base_sha=$2
 head_sha=$3
 
 emit() {
-  printf 'release_inputs=%s\nmacos_release_inputs=%s\nrust_inputs=%s\nspeech_inputs=%s\n' \
-    "$1" "$2" "$3" "$4"
+  printf 'release_inputs=%s\nmacos_release_inputs=%s\nrust_inputs=%s\nspeech_inputs=%s\npackaging_inputs=%s\n' \
+    "$1" "$2" "$3" "$4" "$5"
 }
 
 # Prints the files under crates/ that name the speech feature in the base or
@@ -91,7 +100,7 @@ outside_rust() {
 if [ "$event_name" = "workflow_dispatch" ] \
   || ! git rev-parse --verify --quiet "${base_sha}^{commit}" > /dev/null 2>&1 \
   || ! changed_paths=$(git diff -z --name-only --no-renames "$base_sha" "$head_sha" 2>/dev/null | tr '\0' '\n'); then
-  emit true true true true
+  emit true true true true true
   exit 0
 fi
 
@@ -99,6 +108,7 @@ release_inputs=false
 macos_release_inputs=false
 rust_inputs=false
 speech_inputs=false
+packaging_inputs=false
 speech_gated=
 if [ "$event_name" != "pull_request" ]; then
   rust_inputs=true
@@ -121,6 +131,13 @@ while IFS= read -r path; do
     rust_inputs=true
   fi
   case "$path" in
+    packaging/browser-vm/*|crates/horizon-browser-cli/*|crates/horizon-browser/* \
+      |.github/workflows/browser-vm-image.yml \
+      |.github/workflows/ci.yml|scripts/detect-ci-build-inputs.sh)
+      packaging_inputs=true
+      ;;
+  esac
+  case "$path" in
     crates/horizon-ui/*|crates/*speech*|crates/*dictat*|crates/*transcrib* \
       |Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|rust-toolchain.toml|.cargo/* \
       |.github/workflows/ci.yml|scripts/ci-cargo-test-shard.sh|scripts/install-ci-ubuntu-dependencies.sh)
@@ -134,4 +151,4 @@ while IFS= read -r path; do
   esac
 done <<< "$changed_paths"
 
-emit "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs"
+emit "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs" "$packaging_inputs"

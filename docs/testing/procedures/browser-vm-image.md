@@ -21,6 +21,11 @@ sign-in of that profile after a restart of the container.
 
 - Candidate: the image from the commit under test of `packaging/browser-vm`.
 - Platforms: Linux with a working Docker daemon.
+- The continuous integration builds this image on a pull request that changes
+  a path of the publish trigger, `packaging/browser-vm`, the two browser crates
+  or the publish workflow, and on a change of the CI workflow or the change
+  detection script. That build proves the recipe. This procedure proves the run
+  time.
 - This procedure does not test: a rented machine, the Horizon panel backend,
   and the MCP entry of an agent. Later pull requests of issue 1780 test those.
 
@@ -77,7 +82,24 @@ sign-in of that profile after a restart of the container.
 
 ## 6. Tasks
 
-### 6.1 BVM-START: The container starts the display and the profile host
+### 6.1 BVM-CI: The pull request builds the image
+
+This task needs no local build. Do it on a pull request that changes
+`packaging/browser-vm`.
+
+1. Open the checks of the pull request.
+
+2. Find the job `Browser VM image build`.
+
+   Result: The job runs and ends with success. `Detect changed inputs` reports
+   `packaging_inputs=true`.
+
+3. Open a pull request that changes only `docs/`.
+
+   Result: `Detect changed inputs` reports `packaging_inputs=false`, and the job
+   `Browser VM image build` does not run.
+
+### 6.2 BVM-START: The container starts the display and the profile host
 
 1. Examine the log of the container.
 
@@ -91,7 +113,7 @@ sign-in of that profile after a restart of the container.
    - `the VNC server listens on the container port 5900`;
    - `the profile host runs as <PID>, the browser runtime root is /state/browser-root`.
 
-### 6.2 BVM-RECORD: The profile host writes its record
+### 6.3 BVM-RECORD: The profile host writes its record
 
 1. Examine the files of the state volume.
 
@@ -113,7 +135,7 @@ sign-in of that profile after a restart of the container.
    Result: The file holds `host_instance`, `pid` and `started_at`.
    Keep the value of `host_instance` for task BVM-STAY.
 
-### 6.3 BVM-VNC: The VNC port answers on the loopback
+### 6.4 BVM-VNC: The VNC port answers on the loopback
 
 1. Ask the published port for the version of the protocol.
 
@@ -131,7 +153,7 @@ sign-in of that profile after a restart of the container.
 
    Result: The output holds the one line `5900/tcp -> 127.0.0.1:5995`.
 
-### 6.4 BVM-VIEW: A Device panel shows the desktop
+### 6.5 BVM-VIEW: A Device panel shows the desktop
 
 1. In Horizon, create a Device panel with the SSH route to the Docker host and
    the VNC target `127.0.0.1:5995`.
@@ -143,7 +165,7 @@ sign-in of that profile after a restart of the container.
    Result: The panel reports a connection, a received image, a displayed image
    and a frame sequence that increases.
 
-### 6.5 BVM-PAGE: A browser profile opens a page
+### 6.6 BVM-PAGE: A browser profile opens a page
 
 1. Read the host instance.
 
@@ -176,7 +198,7 @@ sign-in of that profile after a restart of the container.
 
    Result: A Chromium window shows the page `Example Domain`.
 
-### 6.6 BVM-STAY: The sign-in stays after a restart
+### 6.7 BVM-STAY: The sign-in stays after a restart
 
 1. Call `browser_evaluate` on the panel with the expression
    `document.cookie = "run=1780; max-age=86400; path=/"; document.cookie`.
@@ -207,7 +229,7 @@ sign-in of that profile after a restart of the container.
 
    Result: The answer holds `run=1780`. The sign-in of the profile stays.
 
-### 6.7 BVM-STOP: The container stops cleanly and reports a dead host
+### 6.8 BVM-STOP: The container stops cleanly and reports a dead host
 
 1. Stop the container.
 
@@ -239,7 +261,7 @@ sign-in of that profile after a restart of the container.
    Result: The exit code is not `0`, and the log holds
    `the profile host stopped with the status <N>`.
 
-### 6.8 BVM-STALE: The start recovers from a stop without the stop path
+### 6.9 BVM-STALE: The start recovers from a stop without the stop path
 
 1. Start the container, then kill it, so that the stop path does not run.
 

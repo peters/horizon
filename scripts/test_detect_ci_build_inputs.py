@@ -31,6 +31,25 @@ GIT_ENV = {
 }
 
 
+def paths_in_push_trigger(text):
+    """The `on.push.paths` entries of a workflow, read without a YAML parser."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "paths:":
+            continue
+        indent = len(line) - len(line.lstrip())
+        found = []
+        for entry in lines[index + 1:]:
+            if not entry.strip() or entry.strip().startswith("#"):
+                continue
+            if len(entry) - len(entry.lstrip()) <= indent:
+                break
+            if entry.strip().startswith("- "):
+                found.append(entry.strip()[2:].strip().strip("'\""))
+        return found
+    return []
+
+
 class DetectionTests(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp(prefix="detect-ci-inputs-"))
@@ -66,10 +85,11 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return dict(line.split("=", 1) for line in result.stdout.split())
 
-    def assert_gates(self, outputs, *, release, macos="false", rust="true", speech="true"):
+    def assert_gates(self, outputs, *, release, macos="false", rust="true", speech="true",
+                     packaging="false"):
         self.assertEqual(outputs, {"release_inputs": release,
                                    "macos_release_inputs": macos, "rust_inputs": rust,
-                                   "speech_inputs": speech})
+                                   "speech_inputs": speech, "packaging_inputs": packaging})
 
     def test_documentation_only_change_gates_the_release_builds_off(self):
         self.commit("docs/architecture/maintainability.md", "README.md")
@@ -90,13 +110,54 @@ class DetectionTests(unittest.TestCase):
                 self.commit(path)
                 self.assert_gates(self.detect(), release="false")
 
+    def test_packaging_changes_build_the_browser_vm_image(self):
+        for paths in [["packaging/browser-vm/Dockerfile"],
+                      ["packaging/browser-vm/entrypoint.sh", "docs/casting.md"],
+                      ["crates/horizon-browser-cli/src/main.rs"],
+                      ["crates/horizon-browser/src/host.rs", "Cargo.lock"],
+                      [".github/workflows/browser-vm-image.yml"],
+                      [".github/workflows/ci.yml"],
+                      ["scripts/detect-ci-build-inputs.sh"]]:
+            with self.subTest(paths=paths):
+                self.setUp()
+                self.commit(*paths)
+                self.assertEqual(self.detect(event="pull_request")["packaging_inputs"], "true")
+
+    def test_other_paths_leave_the_browser_vm_image_alone(self):
+        for paths in [["crates/horizon-ui/src/app/mod.rs"],
+                      ["packaging/linux/horizon.desktop"],
+                      ["docs/testing/procedures/browser-vm-image.md"],
+                      [".github/workflows/release.yml"]]:
+            with self.subTest(paths=paths):
+                self.setUp()
+                self.commit(*paths)
+                self.assertEqual(self.detect(event="pull_request")["packaging_inputs"], "false")
+
+    def test_the_image_gate_covers_every_publish_workflow_path(self):
+        text = (ROOT / ".github" / "workflows" / "browser-vm-image.yml").read_text()
+        patterns = paths_in_push_trigger(text)
+        self.assertTrue(patterns, "the publish workflow names no path")
+        for pattern in patterns:
+            with self.subTest(pattern=pattern):
+                self.setUp()
+                self.commit(pattern.replace("/**", "/sample"))
+                self.assertEqual(self.detect(event="pull_request")["packaging_inputs"], "true")
+
+    def test_a_push_builds_the_image_only_for_a_packaging_input(self):
+        self.commit("docs/casting.md")
+        self.assertEqual(self.detect(event="push")["packaging_inputs"], "false")
+        self.commit("packaging/browser-vm/Dockerfile")
+        self.assertEqual(self.detect(event="push")["packaging_inputs"], "true")
+        self.assertEqual(self.detect(event="workflow_dispatch")["packaging_inputs"], "true")
+
     def test_workflow_and_asset_changes_gate_the_release_matrix(self):
-        for path in [".github/workflows/ci.yml", ".github/workflows/release.yml",
-                     "assets/icons/icon-512.png"]:
+        for path, packaging in [(".github/workflows/ci.yml", "true"),
+                                (".github/workflows/release.yml", "false"),
+                                ("assets/icons/icon-512.png", "false")]:
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), release="true")
+                self.assert_gates(self.detect(), release="true", packaging=packaging)
 
     def test_artifact_build_definition_builds_macos_at_once(self):
         for path in [".github/workflows/release-artifacts.yml",
@@ -129,12 +190,13 @@ class DetectionTests(unittest.TestCase):
         self.commit("docs/plan.md")
         for base in ["", ZERO_SHA, "0" * 38, "deadbeef" * 5, "refs/heads/missing"]:
             with self.subTest(base=base):
-                self.assert_gates(self.detect(base=base), release="true", macos="true")
+                self.assert_gates(self.detect(base=base), release="true", macos="true",
+                              packaging="true")
 
     def test_workflow_dispatch_builds_everything_from_a_resolvable_base(self):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="workflow_dispatch"), release="true",
-                          macos="true")
+                          macos="true", packaging="true")
 
     def test_pull_request_outside_rust_skips_the_rust_jobs(self):
         for paths in [["docs/plan.md"], ["README.md", "AGENTS.md"],
@@ -187,7 +249,7 @@ class DetectionTests(unittest.TestCase):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="push"), release="false", rust="true")
         self.assert_gates(self.detect(event="pull_request", base=ZERO_SHA),
-                          release="true", macos="true", rust="true")
+                          release="true", macos="true", rust="true", packaging="true")
 
     def write(self, path, text):
         target = self.repo / path
@@ -295,6 +357,8 @@ class WorkflowGateTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         jobs = jobs_of(workflow)
         self.assertIn("rust_inputs: ${{ steps.changes.outputs.rust_inputs }}", jobs["changes"])
+        self.assertIn("packaging_inputs: ${{ steps.changes.outputs.packaging_inputs }}",
+                      jobs["changes"])
         self.assertIn("detect-ci-build-inputs.sh", jobs["changes"])
         for name in RUST_JOBS:
             with self.subTest(job=name):
@@ -305,6 +369,18 @@ class WorkflowGateTests(unittest.TestCase):
                     jobs[name],
                 )
         self.assertNotIn("needs.repo-checks.outputs", workflow)
+
+    def test_the_image_lane_builds_only_when_packaging_changes(self):
+        jobs = jobs_of(WORKFLOW.read_text())
+        self.assertIn("    needs: changes\n", jobs["browser-vm-image"])
+        self.assertIn(
+            "    if: ${{ !cancelled() && needs.changes.outputs.packaging_inputs == 'true' }}\n",
+            jobs["browser-vm-image"],
+        )
+        self.assertIn("docker build", jobs["browser-vm-image"])
+        self.assertIn("packaging/browser-vm/Dockerfile", jobs["browser-vm-image"])
+        # Build only: the publish workflow owns the digest on main.
+        self.assertNotIn("docker push", jobs["browser-vm-image"])
 
     def test_only_the_linux_speech_leg_skips_and_only_on_a_pull_request(self):
         jobs = jobs_of(WORKFLOW.read_text())
