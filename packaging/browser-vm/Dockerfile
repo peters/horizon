@@ -8,6 +8,9 @@
 # profile host from the sources:
 #
 #   docker build -f packaging/browser-vm/Dockerfile -t horizon-browser-vm .
+#
+# The local container of one computer builds the target `browser-vm-local`, which
+# adds an SSH server. `scripts/browser-vm-local.sh` runs it.
 
 FROM rust:1.99.1-bookworm AS profile-host
 
@@ -21,7 +24,7 @@ COPY . /src
 RUN cargo build --release --locked -p horizon-browser-cli \
     && install -m 0755 target/release/horizon-browser /usr/local/bin/horizon-browser
 
-FROM debian:13-slim AS browser-vm
+FROM debian:13-slim AS browser-vm-base
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
@@ -51,3 +54,20 @@ LABEL org.opencontainers.image.source="https://github.com/peters/horizon" \
 VOLUME ["/state"]
 EXPOSE 5900
 ENTRYPOINT ["/usr/local/bin/horizon-browser-vm-start"]
+
+# The local container of one computer adds an SSH server, so that Horizon reaches
+# the running profile host over SSH the same way it reaches a rented machine. A
+# published machine keeps no SSH server: its only port is VNC.
+FROM browser-vm-base AS browser-vm-local
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+        openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/sshd
+
+EXPOSE 2222
+
+# The published image stays the default target, so a build that names no target
+# keeps the recipe that the publish workflow builds.
+FROM browser-vm-base AS browser-vm
