@@ -125,6 +125,7 @@ jobs:
       macos_release_inputs: ${{ steps.changes.outputs.macos_release_inputs }}
       rust_inputs: ${{ steps.changes.outputs.rust_inputs }}
       speech_inputs: ${{ steps.changes.outputs.speech_inputs }}
+      packaging_inputs: ${{ steps.changes.outputs.packaging_inputs }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -141,6 +142,24 @@ jobs:
   # Both feature sets share one runner: each finished in well under a minute,
   # the boundary and geometry checks above them are identical, and a second
   # matrix leg bought a duplicate cache entry for a near-identical graph.
+  # A change under packaging/ builds the image before it merges. The publish
+  # workflow runs on a push to main only, so a broken Dockerfile would otherwise
+  # reach main before any build ran it. The image compiles the browser crates
+  # too, but a change there is covered by the Rust jobs on every run; only the
+  # recipe is a separate input.
+  browser-vm-image:
+    name: Browser VM image build
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.packaging_inputs == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+      - name: Build the browser VM image
+        run: docker build --file packaging/browser-vm/Dockerfile --tag horizon-browser-vm:ci .
+
   browser-engine:
     name: Browser engine
     needs: changes
