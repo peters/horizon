@@ -104,7 +104,7 @@ fn instance(name: &Name<'_>) -> Option<(String, String)> {
     let labels = name.get_labels();
     let (first, rest) = labels.split_first()?;
     let kind = service_type(&Name::new_with_labels(rest))?;
-    Some((first.to_string(), kind))
+    Some((String::from_utf8_lossy(first.as_ref()).into_owned(), kind))
 }
 
 /// The address a reverse lookup name such as `5.1.168.192.in-addr.arpa` stands for.
