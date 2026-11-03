@@ -336,6 +336,7 @@ impl Card {
         if self.device_flow.is_none()
             && self.checking.is_none()
             && let Some(settings) = &draft.settings.github
+            && settings.mode == Mode::Ask
         {
             self.check(ui.ctx(), settings.clone());
         }
@@ -436,13 +437,16 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
             open(&settings.installation_url());
         }
     });
-    if card.device_flow.is_some() && !card.stored.known() && card.stored_job.is_none() {
+    if !card.stored.known() && card.stored_job.is_none() {
         let root = draft.root().to_owned();
         let settings = settings.clone();
         card.read_own_sign_in(ui.ctx(), root, settings);
     }
-    match card.device_flow.clone() {
-        Some(Ok(false)) => {
+    match (settings.mode, card.device_flow.clone()) {
+        // Automatic signs in through the browser it opens, so GitHub's device-flow setting
+        // does not apply and the card must not ask for it.
+        (Mode::Automatic, _) => caption(ui, "Sign-in runs in the browser Horizon opens."),
+        (Mode::Ask, Some(Ok(false))) => {
             ui.label(
                 RichText::new("Turn on Enable Device Flow in the app's settings, once.")
                     .size(12.0)
@@ -457,11 +461,11 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
                 }
             });
         }
-        Some(Ok(true)) => {
+        (Mode::Ask, Some(Ok(true))) => {
             caption(ui, "Device sign-in is on.");
             own_sign_in(ui, draft, card, settings);
         }
-        Some(Err(error)) => {
+        (Mode::Ask, Some(Err(error))) => {
             ui.label(
                 RichText::new(format!("Horizon could not check the app's settings: {error}"))
                     .size(12.0)
@@ -471,7 +475,10 @@ fn connected(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card, settings: &g
                 card.device_flow = None;
             }
         }
-        None => caption(ui, "Checking the app's settings…"),
+        (Mode::Ask, None) => caption(ui, "Checking the app's settings…"),
+    }
+    if settings.mode == Mode::Automatic {
+        own_sign_in(ui, draft, card, settings);
     }
     ui.add_space(4.0);
     label(ui, "New clouds get GitHub access");
