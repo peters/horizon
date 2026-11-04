@@ -14,6 +14,36 @@ use std::time::Duration;
 const LIST: &str = "if command -v horizon-worker-github >/dev/null 2>&1; then horizon-worker-github requests; \
      else printf '{\"requests\":[]}'; fi";
 
+/// Whether a ready cloud's worker takes agents' access requests, which a card asks once
+/// before it polls: a worker without the service answers the list command with an empty
+/// list, so its own status is what tells the two apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Service {
+    /// The worker did not answer, so this is unknown and the card asks again later. A
+    /// worker that was asleep or unreachable takes requests again when it answers.
+    #[default]
+    Unknown,
+    Takes,
+    DoesNot,
+}
+
+/// Asks a cloud's worker whether it takes access requests.
+#[must_use]
+pub fn service(connection: &Connection, runner: &Runner<'_>) -> Service {
+    use super::worker::{self, Status};
+    match worker::status(connection, runner) {
+        Ok(Status::Current { requests, .. }) => {
+            if requests {
+                Service::Takes
+            } else {
+                Service::DoesNot
+            }
+        }
+        Ok(Status::Absent | Status::Unsupported) => Service::DoesNot,
+        Ok(Status::Unavailable) | Err(_) => Service::Unknown,
+    }
+}
+
 /// One pending request.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Request {

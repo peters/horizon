@@ -3,7 +3,7 @@
 use super::{HorizonApp, Settings, Stage, cloud_runtime};
 use horizon_core::cloud_runtime::github::{
     Prompt,
-    requests::{self, Decision, Request},
+    requests::{self, Decision, Request, Service},
 };
 use std::{
     sync::mpsc::{Receiver, TryRecvError, channel},
@@ -13,11 +13,15 @@ use std::{
 /// How often a ready cloud's worker is asked for new requests.
 const POLL: Duration = Duration::from_secs(15);
 
+// A worker without the GitHub service answers the list command with an empty list, so a
+// list alone never says whether asking is useful: the card asks the worker for its status
+// once per ready stage, and only that answer decides.
+
 /// The pending requests (`None` when they could not be listed, which keeps the shown
 /// list), and for a decision whether the worker refused it or it did not arrive
 /// (`Some(None)` when the worker applied it); a later list-only poll that succeeds
 /// clears the last refusal, so it shows until then and never stays for good.
-type Answer = (Option<Vec<Request>>, Option<Option<String>>);
+type Answer = (Option<Vec<Request>>, Option<Option<String>>, Service);
 
 /// A cloud's pending requests and the last decision the worker refused.
 #[derive(Default)]
@@ -26,6 +30,10 @@ pub(super) struct State {
     pub(super) refused: Option<String>,
     inflight: Option<Receiver<Answer>>,
     next: Option<Instant>,
+    /// What the worker last said about taking requests. A cloud that an agent rented has
+    /// no sign-in prompt of its own, so the worker's own answer is what tells the card
+    /// whether to ask at all.
+    service: Service,
     /// The repository of an Allow for this cloud under way, which joins the cloud's
     /// connected repositories once the worker applies it.
     allowing: Option<String>,
@@ -38,13 +46,26 @@ impl State {
         self.inflight.is_some()
     }
 
+    /// Whether the worker is asked for requests: a service that does not take them is
+    /// asked once per ready stage and not again, and an unknown one is asked again, so a
+    /// worker that was asleep starts answering when it returns.
+    fn asks(&self) -> bool {
+        self.service != Service::DoesNot
+    }
+
+    /// Forgets what the worker said, so a cloud whose stage changed is asked again.
+    fn rearm(&mut self) {
+        self.service = Service::Unknown;
+    }
+
     /// Takes the answer of the exchange under way. Returns the repository that an applied
     /// Allow for this cloud added.
     fn receive(&mut self) -> Option<String> {
         let rx = self.inflight.as_ref()?;
         match rx.try_recv() {
-            Ok((list, decided)) => {
+            Ok((list, decided, service)) => {
                 let listed = list.is_some();
+                self.service = service;
                 if let Some(list) = list {
                     self.list = list;
                 }
@@ -96,12 +117,19 @@ impl HorizonApp {
             {
                 repositories.push(repository);
             }
-            // Only a service that takes requests is asked for them.
-            let connected = matches!(runtime.github, Some(Prompt::Connected { requests: true, .. }));
+            // A ready cloud whose worker was signed in earlier is asked for its agents'
+            // requests, whether or not this window saw that sign-in: an agent that rents a
+            // cloud installs the chain without a prompt of its own. The worker's answers
+            // decide whether to keep asking, so a worker without the service costs one ask
+            // per minute and then stays quiet until its stage changes.
             let ready = runtime.stage == Some(Stage::Ready);
-            if !connected || !ready {
+            if !ready {
                 runtime.github_requests.list.clear();
                 runtime.github_requests.refused = None;
+                runtime.github_requests.rearm();
+                continue;
+            }
+            if !runtime.github_requests.asks() {
                 continue;
             }
             let requests = &mut runtime.github_requests;
@@ -188,9 +216,14 @@ fn spawn(
                 let decided = decision.map(|(id, decision)| {
                     requests::decide(&connection, &runner, &id, decision).unwrap_or_else(|error| Some(unsent(&error)))
                 });
-                (requests::list(&connection, &runner).ok(), decided)
+                let service = requests::service(&connection, &runner);
+                let list = match service {
+                    Service::DoesNot => None,
+                    Service::Takes | Service::Unknown => requests::list(&connection, &runner).ok(),
+                };
+                (list, decided, service)
             }
-            Err(error) => (None, decision.map(|_| Some(unsent(&error)))),
+            Err(error) => (None, decision.map(|_| Some(unsent(&error))), Service::Unknown),
         };
         let _ = tx.send(answer);
         drop(tx);
@@ -208,6 +241,38 @@ fn unsent(error: &cloud_runtime::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::State;
+    use horizon_core::cloud_runtime::github::requests::Service;
+
+    fn answered(state: &mut State, service: Service) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.inflight = Some(rx);
+        tx.send((None, None, service)).unwrap();
+        state.receive();
+    }
+
+    #[test]
+    fn a_worker_that_does_not_take_requests_is_not_asked_until_its_stage_changes() {
+        let mut state = State::default();
+        assert!(state.asks(), "a cloud is asked before anything is known");
+        answered(&mut state, Service::DoesNot);
+        assert!(
+            !state.asks(),
+            "a service that does not take requests is not asked again"
+        );
+        state.rearm();
+        assert!(state.asks(), "a cloud whose stage changed is asked again");
+    }
+
+    #[test]
+    fn an_unreachable_worker_keeps_the_asks_going() {
+        let mut state = State::default();
+        for _ in 0..10 {
+            answered(&mut state, Service::Unknown);
+            assert!(state.asks(), "a worker that did not answer is asked again");
+        }
+        answered(&mut state, Service::Takes);
+        assert!(state.asks(), "a worker that takes requests is asked for them");
+    }
 
     #[test]
     fn an_exchange_holds_decisions_until_its_answer_arrives() {
@@ -218,19 +283,20 @@ mod tests {
         };
         state.receive();
         assert!(state.busy(), "no answer yet");
-        tx.send((None, Some(Some("This request expired.".into())))).unwrap();
+        tx.send((None, Some(Some("This request expired.".into())), Service::Takes))
+            .unwrap();
         state.receive();
         assert!(!state.busy());
         assert_eq!(state.refused.as_deref(), Some("This request expired."));
         let (tx, rx) = std::sync::mpsc::channel();
         state.inflight = Some(rx);
-        tx.send((Some(Vec::new()), None)).unwrap();
+        tx.send((Some(Vec::new()), None, Service::Takes)).unwrap();
         state.receive();
         assert_eq!(state.refused, None, "the next poll clears the refusal");
         let (tx, rx) = std::sync::mpsc::channel();
         state.inflight = Some(rx);
         state.allowing = Some("acme/design-system".into());
-        tx.send((Some(Vec::new()), Some(None))).unwrap();
+        tx.send((Some(Vec::new()), Some(None), Service::Takes)).unwrap();
         assert_eq!(
             state.receive().as_deref(),
             Some("acme/design-system"),
