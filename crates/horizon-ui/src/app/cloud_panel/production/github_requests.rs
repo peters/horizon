@@ -113,9 +113,6 @@ impl HorizonApp {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
-        // The dialog's draft holds the settings this window last read; a card asks about
-        // requests only while this computer can sign a cloud in at all.
-        let this_computer_signs_in = self.cloud_prototype.production.setup.signs_clouds_in();
         let now = Instant::now();
         for group in &self.cloud_prototype.groups.0 {
             let Some(launch) = &group.remote else { continue };
@@ -140,7 +137,7 @@ impl HorizonApp {
                 runtime.github_requests.rearm();
                 continue;
             }
-            if !runtime.github_requests.asks() || !this_computer_signs_in {
+            if !runtime.github_requests.asks() {
                 continue;
             }
             let requests = &mut runtime.github_requests;

@@ -114,12 +114,6 @@ pub(in crate::app::cloud_panel) struct State {
 }
 
 impl State {
-    /// Whether this computer can sign a cloud in to GitHub, which is what makes a ready
-    /// cloud's worker worth asking for its agents' access requests.
-    pub(in crate::app::cloud_panel) fn signs_clouds_in(&self) -> bool {
-        self.draft.as_ref().is_some_and(|draft| draft.settings.github.is_some())
-    }
-
     pub(super) fn reset_form(&mut self) {
         *self = Self {
             refused_pulls: std::mem::take(&mut self.refused_pulls),
