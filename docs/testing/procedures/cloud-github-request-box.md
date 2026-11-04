@@ -80,13 +80,19 @@ service costs no repeated asks.
 
    Result: The request leaves the card, and the worker reports it as denied.
 
-### 6.2 R2 — A worker without the GitHub service is asked five times
+### 6.2 R2 — A worker without the GitHub service is asked once per ready stage
 
-1. Stop the cloud of R1, and read its journal.
+1. Stop the GitHub service of the cloud of R1's worker, so that the worker no
+   longer takes access requests, and keep the cloud ready.
 
-   Result: The card shows no request. The log holds at most five asks for
-   requests, spread over a minute, and then none until the stage of the cloud
-   changes.
+   Result: The card keeps showing no request.
+
+2. Read the journal for the asks of this cloud.
+
+   Result: The card asked the worker for its status once after the service
+   stopped, then stopped asking, so the asks do not repeat every 15 seconds.
+   When the stage of the cloud changes, for example after a redeploy, the card
+   asks once more.
 
 ## 7. Cleanup
 

@@ -3,7 +3,7 @@
 use super::{HorizonApp, Settings, Stage, cloud_runtime};
 use horizon_core::cloud_runtime::github::{
     Prompt,
-    requests::{self, Decision, Request},
+    requests::{self, Decision, Request, Service},
 };
 use std::{
     sync::mpsc::{Receiver, TryRecvError, channel},
@@ -13,16 +13,15 @@ use std::{
 /// How often a ready cloud's worker is asked for new requests.
 const POLL: Duration = Duration::from_secs(15);
 
-/// How many failed asks in a row mean that the worker does not take requests, which a
-/// worker without a GitHub service answers every time; a blip fails fewer times, so the
-/// card keeps asking through it.
-const FAILURES_BEFORE_QUIET: u8 = 5;
+// A worker without the GitHub service answers the list command with an empty list, so a
+// list alone never says whether asking is useful: the card asks the worker for its status
+// once per ready stage, and only that answer decides.
 
 /// The pending requests (`None` when they could not be listed, which keeps the shown
 /// list), and for a decision whether the worker refused it or it did not arrive
 /// (`Some(None)` when the worker applied it); a later list-only poll that succeeds
 /// clears the last refusal, so it shows until then and never stays for good.
-type Answer = (Option<Vec<Request>>, Option<Option<String>>);
+type Answer = (Option<Vec<Request>>, Option<Option<String>>, Service);
 
 /// A cloud's pending requests and the last decision the worker refused.
 #[derive(Default)]
@@ -31,11 +30,10 @@ pub(super) struct State {
     pub(super) refused: Option<String>,
     inflight: Option<Receiver<Answer>>,
     next: Option<Instant>,
-    /// Failed asks in a row, and whether they have stopped the asks until the cloud's
-    /// stage changes. A cloud that an agent rented has no sign-in prompt of its own, so
-    /// the worker's own answers are what tell the card whether to keep asking.
-    failures: u8,
-    quiet: bool,
+    /// What the worker last said about taking requests. A cloud that an agent rented has
+    /// no sign-in prompt of its own, so the worker's own answer is what tells the card
+    /// whether to ask at all.
+    service: Service,
     /// The repository of an Allow for this cloud under way, which joins the cloud's
     /// connected repositories once the worker applies it.
     allowing: Option<String>,
@@ -48,15 +46,16 @@ impl State {
         self.inflight.is_some()
     }
 
-    /// Whether the worker is asked again, which a run of failed asks ends.
+    /// Whether the worker is asked for requests: a service that does not take them is
+    /// asked once per ready stage and not again, and an unknown one is asked again, so a
+    /// worker that was asleep starts answering when it returns.
     fn asks(&self) -> bool {
-        !self.quiet
+        self.service != Service::DoesNot
     }
 
-    /// Forgets the failed asks, so a cloud whose worker became ready again is asked again.
+    /// Forgets what the worker said, so a cloud whose stage changed is asked again.
     fn rearm(&mut self) {
-        self.failures = 0;
-        self.quiet = false;
+        self.service = Service::Unknown;
     }
 
     /// Takes the answer of the exchange under way. Returns the repository that an applied
@@ -64,18 +63,11 @@ impl State {
     fn receive(&mut self) -> Option<String> {
         let rx = self.inflight.as_ref()?;
         match rx.try_recv() {
-            Ok((list, decided)) => {
+            Ok((list, decided, service)) => {
                 let listed = list.is_some();
-                match &list {
-                    Some(list) => {
-                        self.failures = 0;
-                        self.list.clone_from(list);
-                    }
-                    None if decided.is_none() => {
-                        self.failures = self.failures.saturating_add(1);
-                        self.quiet = self.failures >= FAILURES_BEFORE_QUIET;
-                    }
-                    None => {}
+                self.service = service;
+                if let Some(list) = list {
+                    self.list = list;
                 }
                 self.inflight = None;
                 let allowed = self.allowing.take();
@@ -224,9 +216,14 @@ fn spawn(
                 let decided = decision.map(|(id, decision)| {
                     requests::decide(&connection, &runner, &id, decision).unwrap_or_else(|error| Some(unsent(&error)))
                 });
-                (requests::list(&connection, &runner).ok(), decided)
+                let service = requests::service(&connection, &runner);
+                let list = match service {
+                    Service::DoesNot => None,
+                    Service::Takes | Service::Unknown => requests::list(&connection, &runner).ok(),
+                };
+                (list, decided, service)
             }
-            Err(error) => (None, decision.map(|_| Some(unsent(&error)))),
+            Err(error) => (None, decision.map(|_| Some(unsent(&error))), Service::Unknown),
         };
         let _ = tx.send(answer);
         drop(tx);
@@ -243,36 +240,38 @@ fn unsent(error: &cloud_runtime::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FAILURES_BEFORE_QUIET, State};
+    use super::State;
+    use horizon_core::cloud_runtime::github::requests::Service;
 
-    #[test]
-    fn a_worker_that_does_not_take_requests_stops_the_asks_until_its_stage_changes() {
-        let mut state = State::default();
-        for _ in 0..FAILURES_BEFORE_QUIET {
-            let (tx, rx) = std::sync::mpsc::channel();
-            state.inflight = Some(rx);
-            tx.send((None, None)).unwrap();
-            state.receive();
-        }
-        assert!(!state.asks(), "a run of failed asks ends the asks");
-        state.rearm();
-        assert!(state.asks(), "a cloud whose stage changed is asked again");
-        assert_eq!(state.failures, 0);
+    fn answered(state: &mut State, service: Service) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.inflight = Some(rx);
+        tx.send((None, None, service)).unwrap();
+        state.receive();
     }
 
     #[test]
-    fn a_listed_answer_keeps_the_asks_going_through_an_earlier_failure() {
+    fn a_worker_that_does_not_take_requests_is_not_asked_until_its_stage_changes() {
         let mut state = State::default();
-        let (tx, rx) = std::sync::mpsc::channel();
-        state.inflight = Some(rx);
-        tx.send((None, None)).unwrap();
-        state.receive();
-        assert!(state.asks(), "one failure is a blip, not a missing service");
-        let (tx, rx) = std::sync::mpsc::channel();
-        state.inflight = Some(rx);
-        tx.send((Some(Vec::new()), None)).unwrap();
-        state.receive();
-        assert_eq!(state.failures, 0, "a listed answer clears the failures");
+        assert!(state.asks(), "a cloud is asked before anything is known");
+        answered(&mut state, Service::DoesNot);
+        assert!(
+            !state.asks(),
+            "a service that does not take requests is not asked again"
+        );
+        state.rearm();
+        assert!(state.asks(), "a cloud whose stage changed is asked again");
+    }
+
+    #[test]
+    fn an_unreachable_worker_keeps_the_asks_going() {
+        let mut state = State::default();
+        for _ in 0..10 {
+            answered(&mut state, Service::Unknown);
+            assert!(state.asks(), "a worker that did not answer is asked again");
+        }
+        answered(&mut state, Service::Takes);
+        assert!(state.asks(), "a worker that takes requests is asked for them");
     }
 
     #[test]
@@ -284,19 +283,20 @@ mod tests {
         };
         state.receive();
         assert!(state.busy(), "no answer yet");
-        tx.send((None, Some(Some("This request expired.".into())))).unwrap();
+        tx.send((None, Some(Some("This request expired.".into())), Service::Takes))
+            .unwrap();
         state.receive();
         assert!(!state.busy());
         assert_eq!(state.refused.as_deref(), Some("This request expired."));
         let (tx, rx) = std::sync::mpsc::channel();
         state.inflight = Some(rx);
-        tx.send((Some(Vec::new()), None)).unwrap();
+        tx.send((Some(Vec::new()), None, Service::Takes)).unwrap();
         state.receive();
         assert_eq!(state.refused, None, "the next poll clears the refusal");
         let (tx, rx) = std::sync::mpsc::channel();
         state.inflight = Some(rx);
         state.allowing = Some("acme/design-system".into());
-        tx.send((Some(Vec::new()), Some(None))).unwrap();
+        tx.send((Some(Vec::new()), Some(None), Service::Takes)).unwrap();
         assert_eq!(
             state.receive().as_deref(),
             Some("acme/design-system"),
