@@ -130,12 +130,14 @@ It records what the tools and the person see when the proxy is not available.
          args:
            - --no-sandbox
            - --disable-dev-shm-usage
-           - --proxy-server=socks5://100.64.0.10:1080
+         egress:
+           proxy: socks5://100.64.0.10:1080
    ```
 
    Result: The file holds the two profiles. The profile `probe` matches
    `packaging/browser-vm/host.example.yaml` lines 13 to 17. The profile `egress`
-   matches the commented block at lines 31 to 36 of that file.
+   is the same profile with an `egress` block, which names the proxy of the home
+   machine, and which `host.example.yaml` shows commented out inside `probe`.
 
 6. Put the host file in the state volume and give it the mode 0600.
 

@@ -575,6 +575,15 @@ pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool
     result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
 }
 
+/// The Chromium switch of the egress record, when the profile host named one.
+///
+/// # Errors
+/// The session states an egress and also carries an argument that selects or
+/// bypasses a proxy, so one of the two would win in silence.
+fn egress_argument(config: &BrowserConfig) -> Option<String> {
+    config.egress.as_ref().map(crate::Egress::chromium_argument)
+}
+
 fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeLaunch, String> {
     let command = crate::process::resolve_binary_or_default(&config.browser.command)
         .map(|p| p.to_string_lossy().to_string())
@@ -586,7 +595,10 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeL
         width: config.width,
         height: config.height,
         headless: config.browser.headless,
-        extra_args: config.browser.extra_args.clone(),
+        extra_args: egress_argument(&config.browser)
+            .into_iter()
+            .chain(config.browser.extra_args.iter().cloned())
+            .collect(),
         automation_disclosure: config.browser.automation_disclosure,
         background_windows: config.browser.background_windows,
     })
@@ -594,6 +606,29 @@ fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeL
 
 pub(crate) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> std::path::PathBuf {
     config.profile_dir(panel_local_id)
+}
+
+#[cfg(test)]
+mod egress_tests {
+    use super::egress_argument;
+
+    #[test]
+    fn a_session_without_an_egress_adds_no_switch() {
+        let config = crate::BrowserConfig::default();
+        assert_eq!(egress_argument(&config), None);
+    }
+
+    #[test]
+    fn a_session_with_an_egress_starts_behind_its_proxy() {
+        let config = crate::BrowserConfig {
+            egress: Some(crate::Egress::parse("socks5://100.64.0.10:1080").unwrap()),
+            ..crate::BrowserConfig::default()
+        };
+        assert_eq!(
+            egress_argument(&config).as_deref(),
+            Some("--proxy-server=socks5://100.64.0.10:1080")
+        );
+    }
 }
 
 #[cfg(test)]

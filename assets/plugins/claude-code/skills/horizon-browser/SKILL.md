@@ -350,6 +350,14 @@ private PNG on the host's computer; a client started with
 `mcp --connect --inline-screenshots` also gets the PNG as an image block. A
 screenshot counts as an action of the page.
 
+A host file names the egress of a Chromium profile in the `egress` block of that
+profile, `egress: {proxy: socks5://host:port}`, and the engine starts that
+profile's Chromium behind the proxy. A profile with `egress` holds no argument
+that selects or bypasses a proxy (`--proxy-server`, `--no-proxy-server`,
+`--proxy-pac-url`, `--proxy-auto-detect`, `--proxy-bypass-list`), and an egress
+address holds no credential. A Firefox
+profile states its proxy in `firefox_prefs`.
+
 A profile host on another computer is reachable over SSH. Horizon writes the
 `browser_host` entry with the SSH target, or you start the bridge yourself:
 

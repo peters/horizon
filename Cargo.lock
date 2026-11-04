@@ -2454,6 +2454,7 @@ dependencies = [
  "tracing",
  "tungstenite",
  "ureq",
+ "url",
  "uuid",
  "zip",
  "zune-jpeg",

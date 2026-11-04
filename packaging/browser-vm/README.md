@@ -207,25 +207,41 @@ The image does not block the network and does not route it through a proxy.
 A Chromium in the image reaches the internet as the network of the Docker host
 allows, so a profile without a proxy argument uses the network of that host.
 
-A browser profile gets its own egress only from the `args` of that profile in
-the host file.
-`host.example.yaml` shows a commented profile whose Chromium argument is
-`--proxy-server=socks5://100.64.0.10:1080`.
+A browser profile gets its own egress from the `egress` block of that profile
+in the host file.
 The egress of issue 1780 is the SOCKS5 proxy of the home machine, so the
 profile names the tailnet address of the home machine.
+`host.example.yaml` shows the block, commented out.
 
-To use the profile, remove the comment markers of the block, put it at the
-indentation of the profile `probe`, and replace the example address
-`100.64.0.10` with the tailnet address of your proxy machine:
+The commented block sits inside the profile `probe` of `host.example.yaml`, so
+the profile reads this way after you remove its comment markers:
 
 ```yaml
-    egress:
+    probe:
       backend: chromium
       args:
         - --no-sandbox
         - --disable-dev-shm-usage
-        - --proxy-server=socks5://100.64.0.10:1080
+      egress:
+        proxy: socks5://100.64.0.10:1080
 ```
+
+Do not put the block beside the profiles: a block at that indentation is a
+profile of its own, and the host file refuses it because it has no `backend`.
+Replace the example address `100.64.0.10` with the tailnet address of your proxy
+machine.
+
+The engine starts the Chromium of the profile with
+`--proxy-server=socks5://100.64.0.10:1080`, so the profile states the proxy
+once.
+A profile that names `egress` must hold no argument that selects or bypasses a
+proxy: `--proxy-server`, `--no-proxy-server`, `--proxy-pac-url`,
+`--proxy-auto-detect` and `--proxy-bypass-list` are all refused together with the
+block, with a message that names the argument. A bypass list of `*` would send
+every page around the proxy that the profile states.
+The proxy holds no credential: the host file holds none either.
+A Firefox profile states its proxy in `firefox_prefs`, because the egress block
+applies to a Chromium profile.
 
 A tailnet address needs no option in the container start of section 6, because
 the container reaches it through the network of the Docker host.
