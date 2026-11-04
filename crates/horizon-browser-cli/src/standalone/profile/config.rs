@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::io;
 use std::path::Path;
 
-use horizon_browser::BackendKind;
+use horizon_browser::{BackendKind, Egress};
 use serde::Deserialize;
 
 const MAX_HOST_FILE_BYTES: u64 = 256 * 1024;
@@ -39,6 +39,16 @@ struct ProfileEntry {
     args: Vec<String>,
     #[serde(default)]
     firefox_prefs: BTreeMap<String, Pref>,
+    #[serde(default)]
+    egress: Option<EgressEntry>,
+}
+
+/// The egress block of one profile. The profile names the proxy once, and the
+/// engine reads it from there instead of a string inside `args`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EgressEntry {
+    proxy: String,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -64,6 +74,8 @@ pub struct Profile {
     pub backend: BackendKind,
     pub args: Vec<String>,
     pub firefox_prefs: BTreeMap<String, Pref>,
+    /// The proxy of this profile, when the host file names one.
+    pub egress: Option<Egress>,
 }
 
 /// A validated host file of a profile host.
@@ -143,6 +155,24 @@ pub fn valid_name(name: &str) -> bool {
         && edge(name.as_bytes().last())
 }
 
+/// The egress record of a profile, checked against the arguments of the same
+/// profile. Chromium reads the switch from the record, so an argument that names
+/// a proxy too would fight it; a Firefox profile states its proxy in
+/// `firefox_prefs`, which this record does not replace yet.
+fn check_egress(backend: BackendKind, args: &[String], entry: Option<EgressEntry>) -> Result<Option<Egress>, String> {
+    let Some(entry) = entry else { return Ok(None) };
+    if backend != BackendKind::ChromiumCdp {
+        return Err("egress applies to a chromium profile; a firefox profile states its proxy in firefox_prefs".into());
+    }
+    let egress = Egress::parse(&entry.proxy).map_err(|error| format!("egress.proxy: {error}"))?;
+    if let Some(argument) = args.iter().find(|arg| Egress::names_proxy_switch(arg)) {
+        return Err(format!(
+            "an egress block and the argument {argument} can not both select the proxy; remove the argument"
+        ));
+    }
+    Ok(Some(egress))
+}
+
 fn check(name: &str, entry: ProfileEntry) -> Result<Profile, String> {
     if !valid_name(name) {
         return Err(format!(
@@ -191,10 +221,12 @@ fn check(name: &str, entry: ProfileEntry) -> Result<Profile, String> {
             ));
         }
     }
+    let egress = check_egress(backend, &entry.args, entry.egress)?;
     Ok(Profile {
         backend,
         args: entry.args,
         firefox_prefs: entry.firefox_prefs,
+        egress,
     })
 }
 

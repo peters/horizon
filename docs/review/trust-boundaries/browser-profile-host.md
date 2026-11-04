@@ -11,14 +11,18 @@ clients on the same computer. The design is in the section "Profile host" of
 
 ## Trusted: the host file
 
-The host file sets the engine, the browser arguments and the Firefox
-preferences of each browser profile.
+The host file sets the engine, the browser arguments, the Firefox preferences
+and the egress of each browser profile.
 
 - The host refuses a host file that the group or other users can write, and a
   host file of more than 256 KiB.
 - The host refuses an argument that the engine manages: the profile folder,
   the automation endpoint and the headless mode.
-- The host file holds no credential.
+- The host file holds no credential. An egress proxy address is refused when it
+  holds one, and it is an address only, without a path, a query or a fragment.
+- An egress block names the proxy of one Chromium profile, and the engine starts
+  that profile behind it. The host refuses a profile that names the proxy in an
+  argument as well, and it refuses an egress block for a Firefox profile.
 
 ## Untrusted: each connect client
 

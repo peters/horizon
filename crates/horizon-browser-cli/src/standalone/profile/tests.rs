@@ -52,6 +52,80 @@ fn a_host_file_names_each_profile_with_its_engine_args_and_prefs() {
 }
 
 #[test]
+fn a_host_file_carries_the_egress_of_a_profile() {
+    let parsed = ProfileConfig::parse(
+        b"browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"--no-sandbox\"]\n      egress:\n        proxy: socks5://100.64.0.10:1080\n",
+    )
+    .unwrap_or_else(|error| panic!("valid host file: {error}"));
+    let probe = parsed.profile("probe").unwrap_or_else(|| panic!("probe"));
+    assert_eq!(probe.args, ["--no-sandbox"]);
+    let egress = probe.egress.clone().unwrap_or_else(|| panic!("egress"));
+    assert_eq!(egress.proxy, "socks5://100.64.0.10:1080");
+    assert_eq!(egress.chromium_argument(), "--proxy-server=socks5://100.64.0.10:1080");
+    // A profile without the block carries no egress, as before the block existed.
+    assert!(
+        config()
+            .profile("mail")
+            .unwrap_or_else(|| panic!("mail"))
+            .egress
+            .is_none()
+    );
+}
+
+#[test]
+fn a_host_file_refuses_an_egress_that_disagrees_with_the_profile() {
+    for (text, expected) in [
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"--proxy-server=socks5://127.0.0.1:1080\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"--no-proxy-server\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"--proxy-pac-url=http://pac.example/p.pac\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"--proxy-auto-detect\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"-proxy-server=socks5://127.0.0.1:1080\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"-no-proxy-server\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      args: [\"--proxy-bypass-list=*\"]\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "can not both select the proxy",
+        ),
+        (
+            "browser:\n  profiles:\n    chat:\n      backend: firefox\n      egress:\n        proxy: socks5://127.0.0.1:1080\n",
+            "egress applies to a chromium profile",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      egress:\n        proxy: socks5://person:secret@127.0.0.1:1080\n",
+            "holds no credential",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      egress:\n        proxy: 127.0.0.1:1080\n",
+            "starts with `socks5://`",
+        ),
+        (
+            "browser:\n  profiles:\n    probe:\n      backend: chromium\n      egress:\n        proxy: socks5://127.0.0.1:1080\n        backend: chromium\n",
+            "unknown field",
+        ),
+    ] {
+        let error = ProfileConfig::parse(text.as_bytes()).expect_err("refused");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn a_host_file_refuses_bad_names_engines_args_and_prefs() {
     let refused = [
         "browser:\n  profiles: {}\n",

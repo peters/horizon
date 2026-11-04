@@ -549,6 +549,7 @@ fn browser_config(root: &Path, name: &str, profile: &Profile, headed: bool) -> B
         backend: profile.backend,
         headless: !headed,
         extra_args: profile.args.clone(),
+        egress: profile.egress.clone(),
         profile_root: Some(profile_root(root, name)),
         // On a shared display, a new page never takes the keyboard of the person.
         background_windows: headed,
