@@ -48,6 +48,12 @@ The frame reports its own positions.
 
 ## Does not guarantee
 
+- A navigation of a session that states an egress opens one connection to the
+  listening port of the proxy at dispatch, within 2 s or the bound of the action,
+  and answers `egress_unreachable` when no address of it answers. A message of
+  the browser that names a proxy failure carries the same code. The text names
+  the proxy that the session's own record states, and it names no credential: the
+  record refuses one.
 - The page can refuse a click that reached it, for example with its own state
   machine, and the action still reports completion. The agent examines the
   visible result.

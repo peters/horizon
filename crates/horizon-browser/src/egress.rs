@@ -4,16 +4,36 @@
 //! record instead of a string inside the browser arguments, so a later change can
 //! answer for a proxy that does not answer and can report which egress a page uses.
 
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs as _};
+use std::time::Duration;
+
 use serde::{Deserialize, Deserializer, Serialize, de};
 use url::Url;
 
 /// Longest proxy address, in bytes.
 pub const MAX_PROXY_BYTES: usize = 512;
 
+/// Longest time that a dispatch waits for the listening port of the proxy before
+/// it reports that the egress does not answer.
+pub const MAX_PROBE: Duration = Duration::from_secs(2);
+
 /// The proxy schemes that a profile host accepts. Chromium reads these three.
 /// `socks5h` is not one of them: Chromium drops a proxy it does not know, and
 /// the profile would then reach its pages without the proxy.
 const SCHEMES: [&str; 3] = ["socks5", "http", "https"];
+
+/// Why the proxy of an egress did not answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum EgressProbeError {
+    #[error("has no readable address")]
+    Address,
+    #[error("does not resolve its name")]
+    Unresolved,
+    #[error("refuses the connection")]
+    Refused,
+    #[error("did not answer within {millis} ms")]
+    TimedOut { millis: u64 },
+}
 
 /// Why an egress record is invalid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -117,6 +137,56 @@ impl Egress {
         })
     }
 
+    /// The host and port of the proxy, when the record could be read.
+    #[must_use]
+    pub fn address(&self) -> Option<(String, u16)> {
+        let (_, rest) = self.proxy.split_once("://")?;
+        let url = Url::parse(&format!("http://{rest}/")).ok()?;
+        Some((url.host_str()?.to_string(), url.port()?))
+    }
+
+    /// Open one connection to the listening port of the proxy, within `bound`.
+    ///
+    /// A proxy that holds no route to its target still opens its port, so this
+    /// probe answers for the machine and the listener, and a page that the proxy
+    /// then cannot reach is what the navigation itself reports.
+    ///
+    /// # Errors
+    /// The address cannot be read, its name does not resolve, or no address of it
+    /// answers within the bound.
+    pub fn probe(&self, bound: Duration) -> Result<(), EgressProbeError> {
+        let Some((host, port)) = self.address() else {
+            return Err(EgressProbeError::Address);
+        };
+        let started = std::time::Instant::now();
+        let deadline = started + bound;
+        let addresses = resolve(&host, port, bound)?;
+        if addresses.is_empty() {
+            return Err(EgressProbeError::Unresolved);
+        }
+        let mut failure = EgressProbeError::Refused;
+        for address in addresses {
+            // One deadline for the whole probe, so a name with several addresses
+            // can not take several bounds.
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(EgressProbeError::TimedOut {
+                    millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+                });
+            }
+            match TcpStream::connect_timeout(&address, remaining) {
+                Ok(_) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    failure = EgressProbeError::TimedOut {
+                        millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+                    };
+                }
+                Err(_) => failure = EgressProbeError::Refused,
+            }
+        }
+        Err(failure)
+    }
+
     /// The switches that select or bypass a proxy. A session that states an
     /// egress and also carries one of these would send its pages around the proxy,
     /// so the engine refuses the pair.
@@ -135,6 +205,32 @@ impl Egress {
     #[must_use]
     pub fn chromium_argument(&self) -> String {
         format!("--proxy-server={}", self.proxy)
+    }
+}
+
+/// The socket addresses of one proxy host and port, within `bound`.
+///
+/// A literal address needs no lookup. A name is looked up on its own thread,
+/// because the resolver has no bound of its own, and the probe reads the answer
+/// with the remaining time; a lookup that outlives it is left to finish alone.
+fn resolve(host: &str, port: u16, bound: Duration) -> Result<Vec<SocketAddr>, EgressProbeError> {
+    if let Ok(address) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
+        return Ok(vec![SocketAddr::new(address, port)]);
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let name = host.to_string();
+    std::thread::Builder::new()
+        .name("egress-probe-resolve".into())
+        .spawn(move || {
+            let _ = sender.send((name.as_str(), port).to_socket_addrs().map(Iterator::collect::<Vec<_>>));
+        })
+        .map_err(|_| EgressProbeError::Unresolved)?;
+    match receiver.recv_timeout(bound) {
+        Ok(Ok(addresses)) => Ok(addresses),
+        Ok(Err(_)) => Err(EgressProbeError::Unresolved),
+        Err(_) => Err(EgressProbeError::TimedOut {
+            millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+        }),
     }
 }
 
@@ -296,6 +392,42 @@ mod tests {
             }
             .check_egress()
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_proxy_that_answers_passes_the_probe() {
+        // The test opens a listener of its own, so no network is used.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let egress = Egress::parse(&format!("socks5://127.0.0.1:{port}")).unwrap();
+        assert_eq!(egress.address(), Some(("127.0.0.1".to_string(), port)));
+        assert_eq!(egress.probe(Duration::from_millis(500)), Ok(()));
+        drop(listener);
+        // With the listener gone the same address refuses, which is the same code
+        // as an address that nothing routes to.
+        let failure = egress.probe(Duration::from_millis(500)).unwrap_err();
+        assert!(matches!(failure, EgressProbeError::Refused), "{failure:?}");
+        let unroutable = Egress::parse("socks5://192.0.2.1:1080").unwrap();
+        let failure = unroutable.probe(Duration::from_millis(300)).unwrap_err();
+        assert!(
+            matches!(failure, EgressProbeError::Refused | EgressProbeError::TimedOut { .. }),
+            "{failure:?}"
+        );
+        // The whole probe stays inside its bound, also when the address does not
+        // answer at all, because every attempt reads one deadline.
+        let started = std::time::Instant::now();
+        let unroutable = Egress::parse("socks5://192.0.2.1:1080").unwrap();
+        let _ = unroutable.probe(Duration::from_millis(200));
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "the probe took {:?}",
+            started.elapsed()
+        );
+        let unresolved = Egress::parse("socks5://no-such-host.invalid:1080").unwrap();
+        assert_eq!(
+            unresolved.probe(Duration::from_millis(300)),
+            Err(EgressProbeError::Unresolved)
         );
     }
 

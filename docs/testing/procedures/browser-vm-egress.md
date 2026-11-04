@@ -302,7 +302,7 @@ The tunnel of task EG-LISTEN runs in this task.
 The image blocks no traffic. A profile gets an egress only from the `args` of
 that profile.
 
-### 6.6 EG-OFF: With the home machine off, the page does not load and the tool gives no reason
+### 6.6 EG-OFF: With the home machine off, the refusal names the egress
 
 > **CAUTION:** THE NEXT STEP STOPS THE MACHINE THAT GIVES THE EGRESS. Start it
 > again before you use it for other work.
@@ -316,10 +316,10 @@ that profile.
 2. Call `browser_navigate` on the panel of task EG-EGRESS with the URL
    `https://ifconfig.me/ip` and the bound `timeout_millis` 20000.
 
-   Result: The answer holds `state: timed_out` and `completed: false`. It holds
-   `loading: true` and `committed_url: null`, and `isError` is false. The answer
-   arrives after 20.1 s in the run that wrote this procedure. The answer holds
-   no reason for the failure.
+   Result: The answer fails within 2 s, before the bound, with the code
+   `egress_unreachable`. Its text names the proxy of the profile, for example
+   `the egress proxy socks5://100.64.0.10:1080 did not answer within 2000 ms`,
+   and the answer holds no page state, because no page opened.
 
 3. Look at the Device panel of task EG-VIEW.
 
@@ -351,12 +351,14 @@ egress nor the proxy. This is the gap of issue #1841.
 3. Call `browser_navigate` on the panel of task EG-EGRESS with the URL
    `https://ifconfig.me/ip`.
 
-   Result: The answer fails after 0.3 s with this text:
-   `browser action <ID> failed (navigation_failed): could not navigate:
-   net::ERR_PROXY_CONNECTION_FAILED`.
+   Result: The answer fails within 2 s with the code `egress_unreachable`. Its
+   text names the proxy of the profile, as in `the egress proxy
+   socks5://100.64.0.10:1080 refuses the connection`, and the answer holds no
+   page state.
 
-The text names the proxy and the failed connection. The text holds no address of
-the egress. The person sees a blank page in the Device panel.
+The profile's own record names the egress, so the answer can name it too. A page
+that the proxy accepts and then cannot reach keeps its own answer: the code
+`navigation_failed` with the text of the browser.
 
 ## 7. Pass criteria
 
@@ -366,13 +368,12 @@ the egress. The person sees a blank page in the Device panel.
   address differs from the address of the browser machine.
 - The container keeps the address of the browser machine when a command uses no
   proxy.
-- With the home machine off, the page does not load and no address of the egress
-  appears in the answer.
-- With the tunnel stopped on a machine that is up, the answer names the proxy
-  with `net::ERR_PROXY_CONNECTION_FAILED`.
-- Not met by the image that this procedure tested: a page that cannot reach the
-  egress gives a refusal that names the egress. The tool gives `state: timed_out`
-  with no reason. Issue #1841 tracks it.
+- With the home machine off, the answer fails with `egress_unreachable` within
+  2 s, and its text names the proxy of the profile.
+- With the tunnel stopped on a machine that is up, the answer fails with
+  `egress_unreachable` within 2 s, and its text names the proxy.
+- A page that the proxy accepts and then cannot reach answers within its own
+  bound, not with `egress_unreachable`.
 
 ## 8. Cleanup
 

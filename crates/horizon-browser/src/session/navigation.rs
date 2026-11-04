@@ -49,6 +49,9 @@ impl DriverState {
             return AgentActionExecution::Done(expired);
         }
         self.supersede_pending_navigation(now);
+        if let Some(failure) = crate::navigation::egress_failure(&self.config, pending.remaining(Instant::now())) {
+            return AgentActionExecution::Done(Err(failure));
+        }
         self.interaction_started_at.get_or_insert(now);
         self.vertical_scrollbar_drag = None;
         self.invalidate_scrollbar_layout(event_tx);
