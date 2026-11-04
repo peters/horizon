@@ -13,6 +13,11 @@ use std::{
 /// How often a ready cloud's worker is asked for new requests.
 const POLL: Duration = Duration::from_secs(15);
 
+/// How many failed asks in a row mean that the worker does not take requests, which a
+/// worker without a GitHub service answers every time; a blip fails fewer times, so the
+/// card keeps asking through it.
+const FAILURES_BEFORE_QUIET: u8 = 5;
+
 /// The pending requests (`None` when they could not be listed, which keeps the shown
 /// list), and for a decision whether the worker refused it or it did not arrive
 /// (`Some(None)` when the worker applied it); a later list-only poll that succeeds
@@ -26,6 +31,11 @@ pub(super) struct State {
     pub(super) refused: Option<String>,
     inflight: Option<Receiver<Answer>>,
     next: Option<Instant>,
+    /// Failed asks in a row, and whether they have stopped the asks until the cloud's
+    /// stage changes. A cloud that an agent rented has no sign-in prompt of its own, so
+    /// the worker's own answers are what tell the card whether to keep asking.
+    failures: u8,
+    quiet: bool,
     /// The repository of an Allow for this cloud under way, which joins the cloud's
     /// connected repositories once the worker applies it.
     allowing: Option<String>,
@@ -38,6 +48,17 @@ impl State {
         self.inflight.is_some()
     }
 
+    /// Whether the worker is asked again, which a run of failed asks ends.
+    fn asks(&self) -> bool {
+        !self.quiet
+    }
+
+    /// Forgets the failed asks, so a cloud whose worker became ready again is asked again.
+    fn rearm(&mut self) {
+        self.failures = 0;
+        self.quiet = false;
+    }
+
     /// Takes the answer of the exchange under way. Returns the repository that an applied
     /// Allow for this cloud added.
     fn receive(&mut self) -> Option<String> {
@@ -45,8 +66,16 @@ impl State {
         match rx.try_recv() {
             Ok((list, decided)) => {
                 let listed = list.is_some();
-                if let Some(list) = list {
-                    self.list = list;
+                match &list {
+                    Some(list) => {
+                        self.failures = 0;
+                        self.list.clone_from(list);
+                    }
+                    None if decided.is_none() => {
+                        self.failures = self.failures.saturating_add(1);
+                        self.quiet = self.failures >= FAILURES_BEFORE_QUIET;
+                    }
+                    None => {}
                 }
                 self.inflight = None;
                 let allowed = self.allowing.take();
@@ -84,6 +113,9 @@ impl HorizonApp {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
+        // The dialog's draft holds the settings this window last read; a card asks about
+        // requests only while this computer can sign a cloud in at all.
+        let this_computer_signs_in = self.cloud_prototype.production.setup.signs_clouds_in();
         let now = Instant::now();
         for group in &self.cloud_prototype.groups.0 {
             let Some(launch) = &group.remote else { continue };
@@ -96,12 +128,19 @@ impl HorizonApp {
             {
                 repositories.push(repository);
             }
-            // Only a service that takes requests is asked for them.
-            let connected = matches!(runtime.github, Some(Prompt::Connected { requests: true, .. }));
+            // A ready cloud whose worker was signed in earlier is asked for its agents'
+            // requests, whether or not this window saw that sign-in: an agent that rents a
+            // cloud installs the chain without a prompt of its own. The worker's answers
+            // decide whether to keep asking, so a worker without the service costs one ask
+            // per minute and then stays quiet until its stage changes.
             let ready = runtime.stage == Some(Stage::Ready);
-            if !connected || !ready {
+            if !ready {
                 runtime.github_requests.list.clear();
                 runtime.github_requests.refused = None;
+                runtime.github_requests.rearm();
+                continue;
+            }
+            if !runtime.github_requests.asks() || !this_computer_signs_in {
                 continue;
             }
             let requests = &mut runtime.github_requests;
@@ -207,7 +246,37 @@ fn unsent(error: &cloud_runtime::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::State;
+    use super::{FAILURES_BEFORE_QUIET, State};
+
+    #[test]
+    fn a_worker_that_does_not_take_requests_stops_the_asks_until_its_stage_changes() {
+        let mut state = State::default();
+        for _ in 0..FAILURES_BEFORE_QUIET {
+            let (tx, rx) = std::sync::mpsc::channel();
+            state.inflight = Some(rx);
+            tx.send((None, None)).unwrap();
+            state.receive();
+        }
+        assert!(!state.asks(), "a run of failed asks ends the asks");
+        state.rearm();
+        assert!(state.asks(), "a cloud whose stage changed is asked again");
+        assert_eq!(state.failures, 0);
+    }
+
+    #[test]
+    fn a_listed_answer_keeps_the_asks_going_through_an_earlier_failure() {
+        let mut state = State::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.inflight = Some(rx);
+        tx.send((None, None)).unwrap();
+        state.receive();
+        assert!(state.asks(), "one failure is a blip, not a missing service");
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.inflight = Some(rx);
+        tx.send((Some(Vec::new()), None)).unwrap();
+        state.receive();
+        assert_eq!(state.failures, 0, "a listed answer clears the failures");
+    }
 
     #[test]
     fn an_exchange_holds_decisions_until_its_answer_arrives() {
