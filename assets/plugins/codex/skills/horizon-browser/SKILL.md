@@ -352,7 +352,9 @@ screenshot counts as an action of the page.
 
 A host file names the egress of a Chromium profile in the `egress` block of that
 profile, `egress: {proxy: socks5://host:port}`, and the engine starts that
-profile's Chromium behind the proxy. A profile with `egress` holds no argument
+profile's Chromium behind the proxy. A navigation of such a profile answers
+`egress_unreachable` when the proxy does not answer, with the proxy in the text,
+so a page that never loads is not reported as a slow page. A profile with `egress` holds no argument
 that selects or bypasses a proxy (`--proxy-server`, `--no-proxy-server`,
 `--proxy-pac-url`, `--proxy-auto-detect`, `--proxy-bypass-list`), and an egress
 address holds no credential. A Firefox

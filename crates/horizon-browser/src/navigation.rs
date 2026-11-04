@@ -343,7 +343,7 @@ impl PendingNavigation {
                 return None;
             }
             NavigationSignal::Failed { message, .. } => {
-                return Some(Err(BrowserControlFailure::new("navigation_failed", message)));
+                return Some(Err(navigation_failure(message)));
             }
         }
         self.settled_state().map(|state| Ok(self.outcome(state, now)))
@@ -432,6 +432,188 @@ fn bare_origin_variant(short: &str, long: &str) -> bool {
         .split_once("://")
         .is_some_and(|(_, rest)| !rest.is_empty() && !rest.contains('/'));
     bare_origin && long.len() == short.len() + 1 && long.starts_with(short) && long.ends_with('/')
+}
+
+/// The failure of a session whose egress does not answer, checked at dispatch.
+///
+/// The probe opens one connection to the listening port of the proxy, within the
+/// shorter of [`crate::egress::MAX_PROBE`] and `remaining`, the time that the
+/// action has left, so a proxy that is absent or refuses reports at once and the
+/// caller still gets its answer inside its own bound.
+///
+/// A probe that the caller's own bound cut short answers nothing: a proxy that is
+/// slow but alive and a proxy that is gone look the same in 50 ms, so that
+/// navigation keeps the answer of its page.
+#[must_use]
+pub(crate) fn egress_failure(
+    config: &crate::session::BrowserSessionConfig,
+    remaining: Duration,
+) -> Option<BrowserControlFailure> {
+    let egress = config.browser.egress.as_ref()?;
+    let bound = crate::egress::MAX_PROBE.min(remaining);
+    match egress.probe(bound) {
+        Ok(()) => None,
+        Err(reason) => egress_refusal(&egress.proxy, bound, reason),
+    }
+}
+
+/// The refusal of a probe that failed, or nothing when the action's own bound cut
+/// the probe short: a proxy that is slow but alive and one that is gone look the
+/// same in the time that is left, so that navigation keeps the answer of its page.
+#[must_use]
+pub(crate) fn egress_refusal(
+    proxy: &str,
+    bound: Duration,
+    failure: crate::egress::EgressProbeError,
+) -> Option<BrowserControlFailure> {
+    if bound < crate::egress::MAX_PROBE && matches!(failure, crate::egress::EgressProbeError::TimedOut { .. }) {
+        return None;
+    }
+    Some(BrowserControlFailure::new(
+        "egress_unreachable",
+        format!("the egress proxy {proxy} {failure}"),
+    ))
+}
+
+/// The code of a navigation that the browser refused.
+///
+/// A message that names the proxy of the session becomes `egress_unreachable`, so
+/// a person and an agent can tell an egress that does not answer from a page that
+/// does not answer. The text stays as the browser wrote it.
+#[must_use]
+pub(crate) fn navigation_failure(message: &str) -> BrowserControlFailure {
+    const PROXY: [&str; 8] = [
+        "net::ERR_PROXY_",
+        "net::ERR_TUNNEL_",
+        "net::ERR_SOCKS_",
+        "NS_ERROR_PROXY_",
+        "NS_ERROR_UNKNOWN_PROXY_HOST",
+        "proxyConnectFailure",
+        "proxyResolveFailure",
+        "Proxy Connect Error",
+    ];
+    let code = if PROXY.iter().any(|needle| message.contains(needle)) {
+        "egress_unreachable"
+    } else {
+        "navigation_failed"
+    };
+    BrowserControlFailure::new(code, message)
+}
+
+#[cfg(test)]
+mod egress_tests {
+    use super::*;
+
+    #[test]
+    fn a_navigation_that_names_the_proxy_reports_the_egress() {
+        for message in [
+            "could not navigate: net::ERR_PROXY_CONNECTION_FAILED",
+            "net::ERR_TUNNEL_CONNECTION_FAILED",
+            "net::ERR_SOCKS_CONNECTION_REFUSED",
+            "NS_ERROR_PROXY_CONNECTION_REFUSED",
+            "Reached error page: about:neterror?e=proxyConnectFailure",
+            "proxyResolveFailure",
+        ] {
+            let failure = navigation_failure(message);
+            assert_eq!(failure.code, "egress_unreachable", "{message}");
+            assert_eq!(failure.message, message, "the browser text stays as written");
+        }
+    }
+
+    #[test]
+    fn a_page_that_does_not_answer_keeps_its_own_code() {
+        for message in [
+            "net::ERR_CONNECTION_REFUSED",
+            "net::ERR_NAME_NOT_RESOLVED",
+            "net::ERR_ABORTED",
+            "could not navigate: timeout",
+        ] {
+            assert_eq!(navigation_failure(message).code, "navigation_failed", "{message}");
+        }
+    }
+
+    fn session() -> crate::session::BrowserSessionConfig {
+        crate::session::BrowserSessionConfig {
+            browser: crate::BrowserConfig::default(),
+            panel_local_id: "panel".into(),
+            initial_url: None,
+            width: 800,
+            height: 600,
+            frame_slot: std::sync::Arc::new(crate::frames::FrameSlot::default()),
+            coordination: None,
+            capture_directory: None,
+            video: std::sync::Arc::new(crate::VideoCaptureHandle::default()),
+            remote: None,
+        }
+    }
+
+    #[test]
+    fn the_probe_uses_the_time_that_the_action_has_left() {
+        // A listener that refuses: the probe fails, and it must fail inside the
+        // time that the caller passed, not inside a bound of its own.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut config = session();
+        config.browser.egress = Some(crate::Egress::parse(&format!("socks5://127.0.0.1:{port}")).unwrap());
+        let started = std::time::Instant::now();
+        assert!(egress_failure(&config, Duration::from_millis(50)).is_some());
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "the probe took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_probe_cut_short_by_the_action_bound_keeps_the_page_answer() {
+        use crate::egress::EgressProbeError;
+        let timed_out = EgressProbeError::TimedOut { millis: 50 };
+        // A slow but alive proxy and a dead one look the same inside the bound the
+        // action has left, so that navigation answers from its page.
+        assert!(egress_refusal("socks5://127.0.0.1:1080", Duration::from_millis(50), timed_out).is_none());
+        // With the whole probe bound a timeout is a dead egress.
+        let refusal = egress_refusal("socks5://127.0.0.1:1080", crate::egress::MAX_PROBE, timed_out).expect("refused");
+        assert_eq!(refusal.code, "egress_unreachable");
+        assert!(refusal.message.contains("socks5://127.0.0.1:1080"));
+        // A refusal is certain whatever the bound was.
+        let refused = egress_refusal(
+            "socks5://127.0.0.1:1080",
+            Duration::from_millis(50),
+            EgressProbeError::Refused,
+        )
+        .expect("refused");
+        assert_eq!(refused.code, "egress_unreachable");
+    }
+
+    #[test]
+    fn a_session_without_an_egress_never_probes() {
+        assert!(egress_failure(&session(), Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn a_session_whose_egress_refuses_is_refused_at_dispatch() {
+        // A listener that is closed answers the same code as an address that
+        // nothing routes to, in milliseconds rather than at the page bound.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut config = session();
+        config.browser.egress = Some(crate::Egress::parse(&format!("socks5://127.0.0.1:{port}")).unwrap());
+        let failure = egress_failure(&config, Duration::from_secs(30)).expect("refused");
+        assert_eq!(failure.code, "egress_unreachable");
+        assert_eq!(failure.code, "egress_unreachable");
+        assert!(
+            failure.message.contains(&format!("socks5://127.0.0.1:{port}")),
+            "{}",
+            failure.message
+        );
+        // A reachable listener leaves the navigation to the page itself.
+        let live = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let live_port = live.local_addr().unwrap().port();
+        config.browser.egress = Some(crate::Egress::parse(&format!("socks5://127.0.0.1:{live_port}")).unwrap());
+        assert!(egress_failure(&config, Duration::from_secs(30)).is_none());
+    }
 }
 
 #[cfg(test)]

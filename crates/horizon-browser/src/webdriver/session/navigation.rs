@@ -79,6 +79,9 @@ impl Driver {
             return AgentActionExecution::Done(expired);
         }
         self.supersede_pending_navigation(now);
+        if let Some(failure) = crate::navigation::egress_failure(&self.config, pending.remaining(Instant::now())) {
+            return AgentActionExecution::Done(Err(failure));
+        }
         if !self.firefox_bidi() {
             return AgentActionExecution::Done(self.navigate_classic_bounded(url, &mut pending, event_tx));
         }
@@ -92,7 +95,7 @@ impl Driver {
             "agent navigation dispatched"
         );
         if let Err(error) = dispatch {
-            return AgentActionExecution::Done(Err(BrowserControlFailure::new("navigation_failed", error)));
+            return AgentActionExecution::Done(Err(crate::navigation::navigation_failure(&error)));
         }
         if wait == NavigationWait::Dispatched {
             return AgentActionExecution::Done(Ok(pending.dispatched(Instant::now())));
@@ -193,7 +196,7 @@ impl Driver {
             self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
         }
         self.finish_page(result, &format!("navigation to {url}"), event_tx)
-            .map_err(|error| BrowserControlFailure::new("navigation_failed", error))?;
+            .map_err(|error| crate::navigation::navigation_failure(&error))?;
         let (committed, title) = (self.url.clone(), self.title.clone());
         Ok(pending.settle_loaded(&committed, &title, Instant::now()))
     }
