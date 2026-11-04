@@ -13,6 +13,7 @@ pub mod cdp;
 mod challenge;
 mod coordination;
 mod disclosure;
+mod egress;
 mod error;
 mod evaluation;
 mod file_chooser;
@@ -53,6 +54,7 @@ pub use coordination::{
     BrowserCoordination, CoordinationOwnership, CoordinationSignals, CoordinationState, HandoffRequest,
 };
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
+pub use egress::{Egress, EgressError};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
 pub use horizon_browser_protocol::remote::{self, RemoteBrowserConfig};
@@ -135,6 +137,11 @@ pub struct BrowserConfig {
     pub safaridriver_command: Option<String>,
     /// Backend-specific extra process arguments.
     pub extra_args: Vec<String>,
+    /// The proxy that this session sends its traffic through, when a profile
+    /// host named one. A Chromium session starts with the matching switch, and a
+    /// Firefox profile states its proxy in `firefox_prefs` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<Egress>,
     /// Chromium CDP screencast JPEG quality (1-100).
     pub quality: u32,
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
@@ -176,6 +183,7 @@ impl Default for BrowserConfig {
             geckodriver_command: None,
             safaridriver_command: None,
             extra_args: Vec::new(),
+            egress: None,
             quality: 60,
             every_nth_frame: 1,
             profile_root: None,

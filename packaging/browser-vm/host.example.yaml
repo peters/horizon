@@ -15,22 +15,17 @@ browser:
       args:
         - --no-sandbox
         - --disable-dev-shm-usage
-
-    # The same profile with the egress of issue 1780: the pages of the profile
-    # leave through a SOCKS5 proxy on another machine, for example the home
-    # machine. The profile names the tailnet address of that machine, so the
-    # container start needs no option. Replace the example address
-    # 100.64.0.10 with the tailnet address of your proxy machine, and start
-    # `ssh -N -D 100.64.0.10:1080` on that machine. README.md section 8 gives
-    # that command, the CAUTION and the check of the result.
-    #
-    # To use it, remove the comment markers, put the block at the indentation
-    # of the profile `probe`, and replace the address. README.md section 8
-    # shows the result.
-    #
-    # egress:
-    #   backend: chromium
-    #   args:
-    #     - --no-sandbox
-    #     - --disable-dev-shm-usage
-    #     - --proxy-server=socks5://100.64.0.10:1080
+      # The egress of issue 1780: the pages of this profile leave through a
+      # SOCKS5 proxy on another machine, for example the home machine. The
+      # profile names the proxy once here, and the engine starts its Chromium
+      # behind it. Replace the example address 100.64.0.10 with the tailnet
+      # address of your proxy machine, and start `ssh -N -D 100.64.0.10:1080` on
+      # that machine. README.md section 8 gives that command, the CAUTION and the
+      # check of the result.
+      #
+      # To use it, remove the comment markers of these two lines. A profile with
+      # `egress` holds no argument that selects a proxy: the host file refuses
+      # both together.
+      #
+      # egress:
+      #   proxy: socks5://100.64.0.10:1080
