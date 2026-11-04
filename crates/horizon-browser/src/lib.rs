@@ -13,6 +13,7 @@ pub mod cdp;
 mod challenge;
 mod coordination;
 mod disclosure;
+mod egress;
 mod error;
 mod evaluation;
 mod file_chooser;
@@ -53,6 +54,7 @@ pub use coordination::{
     BrowserCoordination, CoordinationOwnership, CoordinationSignals, CoordinationState, HandoffRequest,
 };
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
+pub use egress::{Egress, EgressError};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
 pub use horizon_browser_protocol::remote::{self, RemoteBrowserConfig};
@@ -135,6 +137,11 @@ pub struct BrowserConfig {
     pub safaridriver_command: Option<String>,
     /// Backend-specific extra process arguments.
     pub extra_args: Vec<String>,
+    /// The proxy that this session sends its traffic through, when a profile
+    /// host named one. A Chromium session starts with the matching switch, and a
+    /// Firefox profile states its proxy in `firefox_prefs` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<Egress>,
     /// Chromium CDP screencast JPEG quality (1-100).
     pub quality: u32,
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
@@ -176,6 +183,7 @@ impl Default for BrowserConfig {
             geckodriver_command: None,
             safaridriver_command: None,
             extra_args: Vec::new(),
+            egress: None,
             quality: 60,
             every_nth_frame: 1,
             profile_root: None,
@@ -188,13 +196,51 @@ impl Default for BrowserConfig {
 }
 
 impl BrowserConfig {
-    /// Resolve relative profile roots once on the calling thread and clamp
-    /// protocol-bound values before the driver starts.
+    /// Check that this session applies the egress that it states.
     ///
     /// # Errors
-    /// Returns an error if the process launch directory cannot be resolved.
+    /// The session names a proxy that its backend, its remote target or one of its
+    /// own arguments would send the pages around.
+    pub fn check_egress(&self) -> std::io::Result<()> {
+        if self.egress.is_none() {
+            return Ok(());
+        }
+        let refuse = |message: String| Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, message));
+        if !self.remote.is_empty() {
+            return refuse(
+                "an egress record applies to a local chromium session; a remote target states its egress at its provider"
+                    .into(),
+            );
+        }
+        if self.backend != BackendKind::ChromiumCdp {
+            return refuse(format!(
+                "an egress record applies to a chromium session, and this session uses {backend:?}",
+                backend = self.backend
+            ));
+        }
+        match self
+            .extra_args
+            .iter()
+            .find(|argument| Egress::names_proxy_switch(argument))
+        {
+            Some(argument) => refuse(format!(
+                "the egress record and the argument {argument} can not both select the proxy"
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// Resolve relative profile roots once on the calling thread, clamp
+    /// protocol-bound values, and check the egress of the session before the
+    /// driver starts.
+    ///
+    /// # Errors
+    /// Returns an error if the process launch directory cannot be resolved, or if
+    /// this session would not apply the egress that it states.
     pub fn resolved_for_launch(&self) -> std::io::Result<Self> {
-        profile::resolved_for_launch(self)
+        let resolved = profile::resolved_for_launch(self)?;
+        resolved.check_egress()?;
+        Ok(resolved)
     }
 
     #[must_use]
