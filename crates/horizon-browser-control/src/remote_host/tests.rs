@@ -233,7 +233,7 @@ fn the_remote_server_names_the_forwarded_identity_and_the_capture_flags() {
     assert_eq!(
         command,
         "env HORIZON_BROWSER_ACTOR='horizon:panel-1' HORIZON_BROWSER_HOST_INSTANCE='host-instance' \
-         'horizon-browser' mcp --connect --inline-screenshots"
+         HORIZON_BROWSER_BRIDGED='1' 'horizon-browser' mcp --connect --inline-screenshots"
     );
     assert!(
         !command.contains("HORIZON_BROWSER_ROOT"),
@@ -248,7 +248,7 @@ fn the_remote_server_names_the_forwarded_identity_and_the_capture_flags() {
     assert!(
         named.starts_with(
             "env HORIZON_BROWSER_ACTOR='horizon:panel-1' HORIZON_BROWSER_HOST_INSTANCE='host-instance' \
-            HORIZON_BROWSER_ROOT='/srv/browser state'"
+            HORIZON_BROWSER_BRIDGED='1' HORIZON_BROWSER_ROOT='/srv/browser state'"
         ),
         "a root with a space stays one word: {named}"
     );

@@ -40,7 +40,7 @@ impl BrowserController {
     ) -> Result<HandoffReceipt, ControlError> {
         let started = Instant::now();
         let panel = self.authorized_manifest(panel_id)?;
-        require_supported_handoff(&panel)?;
+        require_supported_handoff(&panel, self.bridged)?;
         if let Some(request_id) = resume_request_id {
             if !wait {
                 return Err(ControlError::internal_io(
@@ -144,9 +144,12 @@ impl BrowserController {
     }
 }
 
-fn require_supported_handoff(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
+fn require_supported_handoff(panel: &manifest::BrowserManifest, bridged: bool) -> Result<(), ControlError> {
     if panel.remote_target.is_some() {
         return Err(ControlError::RemoteHandoffUnsupported);
+    }
+    if bridged {
+        return Err(ControlError::BridgedHandoffUnsupported);
     }
     Ok(())
 }
@@ -166,6 +169,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_page_behind_the_bridge_has_no_handoff() {
+        let panel = manifest::BrowserManifest::default();
+        let error = require_supported_handoff(&panel, true).expect_err("the bridge has no person");
+        assert!(matches!(error, ControlError::BridgedHandoffUnsupported));
+        assert!(error.to_string().contains("unsupported_backend"));
+        assert!(error.to_string().contains("another machine"), "{error}");
+        // The same panel served by a local server belongs to a person who sits here.
+        require_supported_handoff(&panel, false).expect("local handoff supported");
+    }
+
+    #[test]
     fn remote_handoff_is_refused_for_visible_and_hidden_panels() {
         for hidden in [false, true] {
             let panel = manifest::BrowserManifest {
@@ -173,11 +187,11 @@ mod tests {
                 hidden,
                 ..manifest::BrowserManifest::default()
             };
-            let error = require_supported_handoff(&panel).expect_err("remote steering unavailable");
+            let error = require_supported_handoff(&panel, false).expect_err("remote steering unavailable");
             assert!(matches!(error, ControlError::RemoteHandoffUnsupported));
             assert!(error.to_string().contains("unsupported_backend"));
         }
-        require_supported_handoff(&manifest::BrowserManifest::default()).expect("local handoff supported");
+        require_supported_handoff(&manifest::BrowserManifest::default(), false).expect("local handoff supported");
     }
 
     #[test]

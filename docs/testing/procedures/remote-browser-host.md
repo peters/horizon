@@ -184,7 +184,28 @@ local connect client.
    Result: the result holds `browser set_files failed (attachment path is outside
    the allowed roots ...)` and the remote machine holds no copy.
 
-### 6.6 R6 — an entry of an earlier start is updated
+### 6.6 R8 — a page behind the bridge offers no handoff
+
+1. Ask the agent of the remote host to call `browser_list`.
+
+   Result: the entry of a page holds `capabilities` with `navigate`, `snapshot`
+   and the other actions, and it holds no `handoff`.
+
+2. Ask the agent to call `browser_handoff` on that page with a `reason` and
+   `timeout_millis` 5000.
+
+   Result: the answer is an error within one second, with
+   `browser handoff failed (unsupported_backend): this page runs on another
+   machine, so no person here can steer it`. It reports no `handoff_pending`, and
+   no wait starts.
+
+3. Ask an agent of a panel of this computer, not of the remote host, to call
+   `browser_list` and `browser_handoff`.
+
+   Result: the page of this computer holds `handoff`, and the tool starts the
+   human wait, as before.
+
+### 6.7 R6 — an entry of an earlier start is updated
 
 1. Remove the `browser_host` entry, close Horizon, and start it one time. Then
    set the entry of step 5.2 again and start Horizon.
@@ -200,7 +221,7 @@ local connect client.
    Result: the `args` change back to `["--browser-mcp"]`, and the local browser
    is used again.
 
-### 6.7 R7 — a sign-in stays over a restart
+### 6.8 R7 — a sign-in stays over a restart
 
 1. In the remote page, sign in to a test site, or run the existing profile-host
    test:
@@ -214,7 +235,8 @@ local connect client.
 
 ## 7. Pass criteria
 
-- R1 to R7 pass.
+- R1 to R8 pass, and R8 shows that a page behind the bridge offers no handoff
+  while a page of this computer keeps it.
 - With a `browser_host` entry that names `browser-vm` and `mail`, the `.mcp.json`
   of the Claude plugin holds
   `"args": ["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]`, and

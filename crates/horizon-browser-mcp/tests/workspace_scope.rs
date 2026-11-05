@@ -35,7 +35,17 @@ struct McpProcess {
 }
 
 impl McpProcess {
+    /// Start the server as the bridge starts it on the other machine.
+    fn start_bridged(home: &Path, actor: &str, host_instance: Option<&str>) -> Self {
+        // The name is the one that `server_command` of the transport writes.
+        Self::start_with(home, actor, host_instance, &[("HORIZON_BROWSER_BRIDGED", "1")])
+    }
+
     fn start(home: &Path, actor: &str, host_instance: Option<&str>) -> Self {
+        Self::start_with(home, actor, host_instance, &[])
+    }
+
+    fn start_with(home: &Path, actor: &str, host_instance: Option<&str>, extra: &[(&str, &str)]) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_horizon-browser-mcp"));
         command
             .env("HOME", home)
@@ -45,6 +55,9 @@ impl McpProcess {
             .env("RUST_LOG", "off");
         if let Some(host_instance) = host_instance {
             command.env("HORIZON_BROWSER_HOST_INSTANCE", host_instance);
+        }
+        for (name, value) in extra {
+            command.env(name, value);
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -574,6 +587,37 @@ fn mark_handoff_done(home: &Path, panel_id: &str) {
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+#[test]
+fn a_bridged_server_offers_no_handoff_and_refuses_it_at_once() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start_bridged(home.path(), AGENT_A, Some(HOST_A));
+    let listed = agent.call("browser_list", &json!({}));
+    let panel = &listed["structuredContent"]["panels"][0];
+    let capabilities = panel["capabilities"].as_array().expect("capabilities");
+    assert!(
+        !capabilities.iter().any(|capability| capability == "handoff"),
+        "{panel}"
+    );
+    assert!(
+        capabilities.iter().any(|capability| capability == "navigate"),
+        "{panel}"
+    );
+    let handoff = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL,
+            "reason": "please sign in",
+            "timeout_millis": 5000
+        }),
+    );
+    assert_eq!(handoff["isError"], true, "{handoff}");
+    let text = handoff.to_string();
+    assert!(text.contains("unsupported_backend"), "{handoff}");
+    assert!(text.contains("another machine"), "{handoff}");
+    agent.close();
 }
 
 #[test]

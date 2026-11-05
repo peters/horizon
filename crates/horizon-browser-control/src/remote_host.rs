@@ -490,6 +490,10 @@ pub fn remove_directory(target: &str, directory: &str) {
     }
 }
 
+/// Whether the server on the other machine serves a client on this one. A page
+/// there then has no handoff: the person who steers must sit at that machine.
+pub const BRIDGED_ENV: &str = "HORIZON_BROWSER_BRIDGED";
+
 /// The remote server of a profile host, with the identity that the caller
 /// forwards.
 ///
@@ -500,10 +504,15 @@ pub fn remove_directory(target: &str, directory: &str) {
 pub fn server_command(program: &str, actor: &str, host_instance: &str, root: Option<&Path>) -> String {
     use std::fmt::Write as _;
 
+    // The server on the other machine serves a client on this one, so it states
+    // that in its environment: a page there has no handoff, because the person
+    // who steers must sit at that machine.
     let mut command = format!(
-        "env HORIZON_BROWSER_ACTOR={} HORIZON_BROWSER_HOST_INSTANCE={}",
+        "env HORIZON_BROWSER_ACTOR={} HORIZON_BROWSER_HOST_INSTANCE={} {}={}",
         quote(actor),
-        quote(host_instance)
+        quote(host_instance),
+        BRIDGED_ENV,
+        quote("1")
     );
     if let Some(root) = root {
         let _ = write!(command, " HORIZON_BROWSER_ROOT={}", quote(&path_text(root)));

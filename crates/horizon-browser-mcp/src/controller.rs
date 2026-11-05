@@ -52,6 +52,9 @@ pub(crate) struct BrowserController {
     /// The Horizon host process that injected `actor`, when its launcher
     /// forwarded it. Workspace stamps only match identities from that host.
     host_instance: Option<String>,
+    /// This server was started by the bridge for a client on another computer, so
+    /// its pages run on this machine while the person who would steer is not here.
+    bridged: bool,
     process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
 }
 
@@ -187,6 +190,10 @@ pub(crate) enum ControlError {
     )]
     RemoteHandoffUnsupported,
     #[error(
+        "browser handoff failed (unsupported_backend): this page runs on another machine, so no person here can steer it; open the page on that machine, or use browser_act for supported actions and verify their outcomes"
+    )]
+    BridgedHandoffUnsupported,
+    #[error(
         "browser set_files failed (unsupported_backend): this remote session does not support transferring host files; iOS native file pickers are not supported"
     )]
     RemoteAttachmentUnsupported,
@@ -210,15 +217,18 @@ impl BrowserController {
         let host_instance = std::env::var(HOST_INSTANCE_ENV)
             .ok()
             .filter(|value| manifest::valid_host_instance(value));
+        let bridged = std::env::var(crate::remote::BRIDGED_ENV).is_ok_and(|value| value == "1");
         actor.map_or_else(
             || Self {
                 actor: fallback.clone(),
                 host_instance: None,
+                bridged,
                 process_local_ownership: Some(Arc::new(ProcessLocalOwnership::new(fallback))),
             },
             |actor| Self {
                 actor,
                 host_instance,
+                bridged,
                 process_local_ownership: None,
             },
         )
@@ -229,6 +239,7 @@ impl BrowserController {
         Self {
             actor: actor.to_owned(),
             host_instance: Some(host_instance.to_owned()),
+            bridged: false,
             process_local_ownership: None,
         }
     }
@@ -238,6 +249,7 @@ impl BrowserController {
         Self {
             actor: actor.into(),
             host_instance: None,
+            bridged: false,
             process_local_ownership: None,
         }
     }
@@ -263,7 +275,7 @@ impl BrowserController {
         self.require_host_instance()?;
         let mut panels = self
             .workspace_manifests()
-            .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
+            .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor, self.bridged))
             .collect::<Vec<_>>();
         panels.sort_by(|left, right| left.panel_id.cmp(&right.panel_id));
         Ok(panels)
@@ -271,7 +283,7 @@ impl BrowserController {
 
     pub(crate) fn panel(&self, panel_id: &str) -> Result<BrowserPanel, ControlError> {
         self.authorized_manifest(panel_id)
-            .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor))
+            .map(|manifest| BrowserPanel::from_manifest(manifest, &self.actor, self.bridged))
     }
 
     fn workspace_manifests(&self) -> impl Iterator<Item = BrowserManifest> {
@@ -401,7 +413,7 @@ impl BrowserController {
                         })?;
                         Ok(CreateReceipt {
                             action_id,
-                            panel: BrowserPanel::from_manifest(manifest, &self.actor),
+                            panel: BrowserPanel::from_manifest(manifest, &self.actor, self.bridged),
                             navigation,
                             navigation_error,
                             startup_millis,
@@ -469,7 +481,7 @@ impl BrowserController {
                         }
                         Ok(VisibilityReceipt {
                             action_id,
-                            panel: BrowserPanel::from_manifest(manifest, &self.actor),
+                            panel: BrowserPanel::from_manifest(manifest, &self.actor, self.bridged),
                         })
                     }
                     BrowserVisibilityOutcome::Failed { code, message } => Err(ControlError::Browser {

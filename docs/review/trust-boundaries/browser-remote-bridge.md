@@ -14,6 +14,24 @@ because a browser panel of Horizon reaches a profile host through the same
 record, the same remote command and the same bounded `ssh` calls. The bridge is
 one client of that channel and the panel is the other.
 
+## What the bridge does not offer
+
+A page that the bridge reaches runs its browser on the other machine, and manual
+steering needs a person at that machine. A client on this one cannot promise that
+someone is there.
+
+- The remote command that `server_command` builds carries
+  `HORIZON_BROWSER_BRIDGED=1` next to the actor and the host instance, so the
+  server on the other machine knows that its client is on this one.
+- A server that reads that variable offers no `handoff` in the capability list
+  of a page, and `browser_handoff` refuses with `unsupported_backend`, the
+  text that the page runs on another machine, and no wait.
+- The marker is a fact about the server process, not about the panel's manifest,
+  because a `--connect` server is always a different process from the Horizon that
+  stamps its panels.
+- A server that does not read it, such as one started by hand for a client on its
+  own machine, keeps the capability.
+
 ## Trusted: the settings entry and the SSH target
 
 Horizon writes the entry `browser_host` with an SSH target and an optional
