@@ -300,7 +300,9 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
     (
         "browser_handoff",
         Parity::No,
-        "no person can steer a host page in the panel (issue 1966)",
+        "a page behind the bridge advertises no handoff and the tool refuses with \
+         unsupported_backend, because the person who steers must sit at the machine \
+         that runs its browser",
     ),
     ("browser_http_auth", Parity::Yes, ""),
     ("browser_list", Parity::Yes, ""),

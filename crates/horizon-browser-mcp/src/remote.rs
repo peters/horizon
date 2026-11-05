@@ -34,7 +34,7 @@ use relay::Relay;
 /// The identity of the calling agent panel. The bridge forwards it, because the
 /// remote host stamps each page for the actor that opened it.
 pub const ACTOR_ENV: &str = "HORIZON_BROWSER_ACTOR";
-pub use horizon_browser_control::remote_host::{REMOTE_EXECUTABLE_ENV, REMOTE_ROOT_ENV};
+pub use horizon_browser_control::remote_host::{BRIDGED_ENV, REMOTE_EXECUTABLE_ENV, REMOTE_ROOT_ENV};
 /// The folder under the remote runtime root that holds the staged copies of one
 /// call. The bridge removes a call's folder when its answer arrives.
 pub const STAGING_DIR: &str = "browser-staging";
