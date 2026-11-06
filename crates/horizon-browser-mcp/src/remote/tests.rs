@@ -40,6 +40,93 @@ fn a_profile_that_the_host_does_not_serve_reaches_it_and_is_refused_there() {
 }
 
 #[test]
+fn a_capture_above_the_inline_bound_says_that_its_bytes_are_withheld() {
+    let mut message = json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+            "content": [{"type": "text", "text": "{\"path\":\"/srv/state/captures/record.webm\"}"}],
+            "structuredContent": {
+                "panel_id": "profile-mail-1",
+                "path": "/srv/state/captures/record.webm",
+                "bytes_written": 9_437_184
+            }
+        }
+    });
+    let capture = super::relay::capture_path(&message, "video/webm").expect("a capture result");
+    let line = serde_json::to_vec(&message).expect("line");
+    let answer: Value = serde_json::from_slice(&super::relay::withhold(
+        &mut message,
+        &capture,
+        super::relay::Withheld::TooLarge,
+        &line,
+    ))
+    .expect("an answer");
+    assert_eq!(
+        answer["result"]["structuredContent"]["inline_withheld"],
+        json!(true),
+        "the structured result marks the withheld bytes"
+    );
+    assert_eq!(
+        answer["result"]["structuredContent"]["path"],
+        json!("/srv/state/captures/record.webm"),
+        "the private remote path stays"
+    );
+    assert_eq!(answer["result"]["structuredContent"]["bytes_written"], json!(9_437_184));
+    let text = answer["result"]["content"][1]["text"].as_str().expect("a text block");
+    assert!(text.contains("larger than the 8388608 byte inline bound"), "{text}");
+    assert!(text.contains("withheld its bytes"), "{text}");
+    assert_eq!(
+        answer["result"]["content"].as_array().expect("content").len(),
+        2,
+        "no resource block is added for a withheld capture"
+    );
+}
+
+#[test]
+fn a_capture_that_the_bridge_could_not_read_is_marked_too() {
+    let mut message = json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+            "content": [{"type": "text", "text": "{}"}],
+            "structuredContent": {"path": "/srv/state/captures/record.webm"}
+        }
+    });
+    let capture = super::relay::capture_path(&message, "application/x-ndjson").expect("a capture result");
+    let line = serde_json::to_vec(&message).expect("line");
+    let answer: Value = serde_json::from_slice(&super::relay::withhold(
+        &mut message,
+        &capture,
+        super::relay::Withheld::Unreadable,
+        &line,
+    ))
+    .expect("an answer");
+    assert_eq!(answer["result"]["structuredContent"]["inline_withheld"], json!(true));
+    let text = answer["result"]["content"][1]["text"].as_str().expect("a text block");
+    assert!(text.contains("could not read the capture"), "{text}");
+}
+
+#[test]
+fn a_capture_below_the_bound_still_crosses_inline_and_carries_no_marker() {
+    let mut message = json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+            "content": [{"type": "text", "text": "{}"}],
+            "structuredContent": {"path": "/srv/state/captures/record.webm"}
+        }
+    });
+    let capture = super::relay::capture_path(&message, "video/webm").expect("a capture result");
+    super::relay::add_capture(&mut message, &capture, b"webm").expect("an added block");
+    assert!(
+        message["result"]["structuredContent"].get("inline_withheld").is_none(),
+        "a capture that crossed inline holds no withheld marker"
+    );
+    assert_eq!(message["result"]["content"][1]["type"], json!("resource"));
+}
+
+#[test]
 fn a_missing_actor_is_a_typed_refusal() {
     let message = RemoteBridgeError::ActorUnavailable.to_string();
     assert!(message.contains("HORIZON_BROWSER_ACTOR"), "{message}");
