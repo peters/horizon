@@ -60,7 +60,7 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    private file, a host file or a Docker host. Boundaries:
    `browser-profile-host`, `browser-remote-bridge`, `browser-remote-panel`,
    `standalone-remote-host`, `native-client-file`, `checkout-search`,
-   `docker-host-provider`.
+   `docker-host-provider`, `device-key-input`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
    drop a file, answer a passkey request or judge a semantic action. Boundaries:
    `browser-webauthn`, `browser-semantic-actions`, `cloud-browser-uploads`,

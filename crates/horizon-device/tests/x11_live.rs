@@ -404,3 +404,161 @@ fn capture_options_keep_original_geometry(target: &Target) -> Result<(), Box<dyn
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
+fn letter_chords_deliver_lowercase_keysyms_and_release_modifiers() -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::{Duration, Instant};
+    use x11rb::protocol::{
+        Event,
+        xproto::{CreateWindowAux, EventMask, InputFocus, WindowClass},
+    };
+
+    let _serialized = exclusive_display();
+    let config = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
+    let target: Target = serde_json::from_slice(&std::fs::read(config)?)?;
+    let horizon_device::Endpoint::LocalX11 { display } = &target.endpoint else {
+        return Err("requires local X11".into());
+    };
+    let (connection, screen) = x11rb::connect(Some(display))?;
+    let root = connection.setup().roots[screen].root;
+    let window = connection.generate_id()?;
+    connection
+        .create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            root,
+            0,
+            0,
+            240,
+            120,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new()
+                .override_redirect(1)
+                .event_mask(EventMask::KEY_PRESS | EventMask::KEY_RELEASE),
+        )?
+        .check()?;
+    connection.map_window(window)?.check()?;
+    connection
+        .set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)?
+        .check()?;
+    let mut device = Device::connect(&target)?;
+
+    let mut stale = device.screenshot()?.geometry;
+    stale.revision.push_str("stale");
+    assert!(matches!(
+        device.act(&ActRequest {
+            geometry: stale,
+            action: Action::Key {
+                key: Key::A,
+                modifiers: vec![Modifier::Control],
+            },
+        }),
+        Err(DeviceError::StaleGeometry)
+    ));
+    let quiet = Instant::now() + Duration::from_millis(200);
+    while Instant::now() < quiet {
+        assert!(
+            !matches!(
+                connection.poll_for_event()?,
+                Some(Event::KeyPress(_) | Event::KeyRelease(_))
+            ),
+            "stale geometry sent a key event"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        u16::from(connection.query_pointer(root)?.reply()?.mask) & 0x0005,
+        0,
+        "stale geometry left Control or Shift held"
+    );
+
+    let mut send = |key: Key, modifiers: Vec<Modifier>, keysym: u32, state: u16| {
+        let geometry = device.screenshot()?.geometry;
+        device.act(&ActRequest {
+            geometry,
+            action: Action::Key { key, modifiers },
+        })?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pressed = false;
+        while Instant::now() < deadline && !pressed {
+            while let Some(event) = connection.poll_for_event()? {
+                let Event::KeyPress(event) = event else {
+                    continue;
+                };
+                let mapping = connection.get_keyboard_mapping(event.detail, 1)?.reply()?;
+                let symbol = mapping.keysyms.first().copied().unwrap_or_default();
+                // Each modifier press is part of the chord; only the shortcut key
+                // itself must report the expected lowercase keysym.
+                if matches!(symbol, 0xffe1..=0xffe4) {
+                    continue;
+                }
+                assert_eq!(symbol, keysym, "unexpected keysym for {key:?}");
+                assert_eq!(
+                    u16::from(event.state) & 0x0005,
+                    state,
+                    "unexpected Control/Shift state for {key:?}"
+                );
+                pressed = true;
+            }
+            if !pressed {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert!(pressed, "no KeyPress event for {key:?} within 2 seconds");
+        assert_eq!(
+            u16::from(connection.query_pointer(root)?.reply()?.mask) & 0x0005,
+            0,
+            "Control or Shift stayed held after {key:?}"
+        );
+        Ok::<(), Box<dyn std::error::Error>>(())
+    };
+
+    let keys = [
+        Key::A,
+        Key::B,
+        Key::C,
+        Key::D,
+        Key::E,
+        Key::F,
+        Key::G,
+        Key::H,
+        Key::I,
+        Key::J,
+        Key::K,
+        Key::L,
+        Key::M,
+        Key::N,
+        Key::O,
+        Key::P,
+        Key::Q,
+        Key::R,
+        Key::S,
+        Key::T,
+        Key::U,
+        Key::V,
+        Key::W,
+        Key::X,
+        Key::Y,
+        Key::Z,
+    ];
+    for (index, key) in keys.into_iter().enumerate() {
+        send(
+            key,
+            vec![Modifier::Control],
+            u32::from(b'a') + u32::try_from(index)?,
+            0x0004,
+        )?;
+    }
+    send(
+        Key::P,
+        vec![Modifier::Control, Modifier::Shift],
+        u32::from(b'p'),
+        0x0005,
+    )?;
+    send(Key::Enter, vec![Modifier::Control, Modifier::Shift], 0xff0d, 0x0005)?;
+    connection.destroy_window(window)?.check()?;
+    Ok(())
+}
