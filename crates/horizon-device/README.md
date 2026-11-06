@@ -39,6 +39,21 @@ accept the same JSON object:
 Other actions: `drag` with `from`, `to`, `duration_ms`; `scroll` with `at`,
 `vertical_notches`, `horizontal_notches`; `type` with UTF-8 `text`; `key` with
 `key` and `modifiers`. See the Rust enums or MCP tool schema for supported keys.
+
+Lowercase letter shortcuts use the same `key` action: Ctrl+Q is
+`{"kind":"key","key":"q","modifiers":["control"]}` and Ctrl+Shift+P is
+`{"kind":"key","key":"p","modifiers":["control","shift"]}`. Letter key names
+are strictly lowercase `a`–`z`; uppercase names are refused. Supply geometry
+from a fresh screenshot of the same explicit private target, as above:
+
+```json
+{"geometry":{"target_id":"lab","surface_id":"display","width":1280,"height":800,"revision":"COPY FROM YOUR SCREENSHOT"},"action":{"kind":"key","key":"q","modifiers":["control"]}}
+```
+
+```json
+{"geometry":{"target_id":"lab","surface_id":"display","width":1280,"height":800,"revision":"COPY FROM YOUR SCREENSHOT"},"action":{"kind":"key","key":"p","modifiers":["control","shift"]}}
+```
+
 Input limits: drag 1–2000 ms, scroll ±100 notches per axis, text 256 Unicode
 scalars and 4096 UTF-8 bytes without NUL, up to four modifiers. X11 text is paced
 at 20 ms per character with a final 100 ms drain interval; split longer text into
