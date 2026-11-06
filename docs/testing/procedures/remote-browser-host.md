@@ -134,8 +134,16 @@ local connect client.
 2. Ask the agent to call `browser_video` with `operation` `start`, one action on
    the page, then `operation` `stop`.
 
-   Result: the result holds a resource block with `video/webm`, or a message that
-   the file is larger than 8 MiB.
+   Result: the result holds a resource block with `video/webm` when the file is
+   smaller than 8 MiB, and it holds no `inline_withheld` field.
+
+3. Record a capture that is larger than 8 MiB: start `browser_video`, let it run
+   until the file is larger, then `operation` `stop`.
+
+   Result: the result holds no resource block, its structured content holds
+   `"inline_withheld": true`, and its content holds one text block with
+   `larger than the 8388608 byte inline bound` and the path of the file on the
+   remote machine. Every other field of the result stays as the host wrote it.
 
 ### 6.4 R4 — the parity test
 
@@ -235,7 +243,9 @@ local connect client.
 
 ## 7. Pass criteria
 
-- R1 to R8 pass, and R8 shows that a page behind the bridge offers no handoff
+- R1 to R8 pass, and R3 shows that a capture above the bound is marked
+  `inline_withheld` while one below it crosses inline.
+- R8 shows that a page behind the bridge offers no handoff
   while a page of this computer keeps it.
 - With a `browser_host` entry that names `browser-vm` and `mail`, the `.mcp.json`
   of the Claude plugin holds

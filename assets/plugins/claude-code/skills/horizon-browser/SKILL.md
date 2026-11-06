@@ -389,7 +389,8 @@ comes from the `profile-host.json` of that machine.
   when the answer arrives.
 - A `browser_video` or `browser_network` result carries its bytes as an MCP
   resource block up to 8 MiB. A larger capture stays a path on the remote
-  machine, which you cannot open from here.
+  machine, which you cannot open from here, and its answer states
+  `inline_withheld: true` with a text block that names the bound and the path.
 - `HORIZON_BROWSER_REMOTE_ROOT` names another runtime root on that machine, and
   `HORIZON_BROWSER_REMOTE_EXECUTABLE` names another `horizon-browser` program.
   The SSH target must answer without a prompt.

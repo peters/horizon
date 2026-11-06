@@ -69,7 +69,11 @@ the bridge forwards.
   never deletes a profile folder. The bridge rewrites no create that names its
   own target.
 - A result is forwarded unchanged, except for the two rewrites. A capture is
-  read only when the structured result names a `path`, and only up to 8 MiB.
+  read only when the structured result names a `path`, and only up to 8 MiB. A
+  capture that does not cross inline, because it is larger or because the bridge
+  could not read it, marks its answer with `inline_withheld: true` and one text
+  block that states the reason and the path; the bridge never reports a withheld
+  capture as if the path were the whole answer.
 - The bytes of a capture are the bytes that the page produced. The person reads
   them as data, not as a command.
 

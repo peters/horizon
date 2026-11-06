@@ -191,11 +191,11 @@ impl Relay {
                     limit = MAX_INLINE_BYTES,
                     "the capture is larger than the inline bound and stays a remote path"
                 );
-                line.to_vec()
+                withhold(&mut message, &capture, Withheld::TooLarge, line)
             }
             Err(error) => {
                 tracing::warn!(%error, path = %capture.path, "the capture stays a remote path");
-                line.to_vec()
+                withhold(&mut message, &capture, Withheld::Unreadable, line)
             }
         }
     }
@@ -293,6 +293,52 @@ pub(super) fn capture_path(message: &Value, mime_type: &'static str) -> Option<C
         path: path.to_string(),
         mime_type,
     })
+}
+
+/// Why a capture did not cross inline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Withheld {
+    /// The capture is larger than [`MAX_INLINE_BYTES`].
+    TooLarge,
+    /// The bridge could not read the file on the remote machine.
+    Unreadable,
+}
+
+impl Withheld {
+    pub(super) const FIELD: &'static str = "inline_withheld";
+
+    fn says(self, capture: &Capture) -> String {
+        match self {
+            Self::TooLarge => format!(
+                "the capture at {} is larger than the {} byte inline bound, so the bridge withheld its bytes; read it on the machine that runs the page",
+                capture.path, MAX_INLINE_BYTES
+            ),
+            Self::Unreadable => format!(
+                "the bridge could not read the capture at {}, so it withheld its bytes; read it on the machine that runs the page",
+                capture.path
+            ),
+        }
+    }
+}
+
+/// Mark an answer whose capture did not cross inline.
+///
+/// The flag is one field of the structured result, and the same words are one text
+/// block, so a program and an agent both learn that the bytes are withheld instead
+/// of taking a path for the whole answer.
+pub(super) fn withhold(message: &mut Value, capture: &Capture, reason: Withheld, line: &[u8]) -> Vec<u8> {
+    if let Some(structured) = message
+        .pointer_mut("/result/structuredContent")
+        .and_then(Value::as_object_mut)
+    {
+        structured.insert(Withheld::FIELD.to_string(), Value::Bool(true));
+    } else if let Some(result) = message.get_mut("result").and_then(Value::as_object_mut) {
+        result.insert(Withheld::FIELD.to_string(), Value::Bool(true));
+    }
+    if let Some(content) = message.pointer_mut("/result/content").and_then(Value::as_array_mut) {
+        content.push(json!({"type": "text", "text": reason.says(capture)}));
+    }
+    serde_json::to_vec(message).unwrap_or_else(|_| line.to_vec())
 }
 
 /// Add the bytes of a capture as an MCP resource block. The client keeps the
