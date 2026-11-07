@@ -128,6 +128,7 @@ jobs:
       rust_inputs: ${{ steps.changes.outputs.rust_inputs }}
       speech_inputs: ${{ steps.changes.outputs.speech_inputs }}
       packaging_inputs: ${{ steps.changes.outputs.packaging_inputs }}
+      vnc_pin: ${{ steps.changes.outputs.vnc_pin }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -221,7 +222,12 @@ jobs:
       - run: cargo build --locked -p horizon-device-vnc
       - run: python3 scripts/device-smoke/resize_permission.py --binary target/debug/horizon-device-vnc
       - run: cargo clippy --locked -p horizon-device-vnc --all-targets -- -D warnings
+      # The decoder's own quality gates read the pinned rev and an upstream commit that
+      # cannot change, so a run without a new rev repeats a result nobody can
+      # invalidate. The detector names the rev change, not a manifest change, because
+      # most manifest changes keep the pin.
       - name: Qualify pinned VNC decoder
+        if: ${{ !cancelled() && needs.changes.outputs.vnc_pin == 'true' }}
         run: |
           decoder_dir=$(mktemp -d)
           decoder_rev=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["dependencies"]["vnc"]["rev"])')

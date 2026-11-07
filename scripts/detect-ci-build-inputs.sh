@@ -6,8 +6,9 @@
 # Usage: detect-ci-build-inputs.sh <event-name> <base-sha> <head-sha>
 #
 # Prints `release_inputs=<bool>`, `macos_release_inputs=<bool>`,
-# `rust_inputs=<bool>`, `speech_inputs=<bool>` and `packaging_inputs=<bool>`, in
-# the `key=value` form a workflow step appends to $GITHUB_OUTPUT. Runs in the current working
+# `rust_inputs=<bool>`, `speech_inputs=<bool>`, `packaging_inputs=<bool>` and
+# `vnc_pin=<bool>` in the `key=value` form a workflow step appends to
+# $GITHUB_OUTPUT. Runs in the current working
 # directory, which must be the repository checkout.
 #
 # `release_inputs` gates the Linux release build on main. The workflow files
@@ -47,6 +48,13 @@
 # image pins its own image tag and its own package list. A push that changes
 # nothing there keeps it false, because that push publishes the image anyway. An
 # unknown diff and a manual dispatch build it.
+#
+# `vnc_pin` is true when the `vnc` decoder rev in Cargo.toml differs from the
+# base, which is the only input of the qualification that runs the decoder's own
+# formatting, tests and Clippy. The rev names an upstream commit that cannot
+# change under it, so a run without a new rev repeats a result that nobody can
+# invalidate, and a run with one is the first to see it. Removing the dependency
+# leaves no pin to qualify, so the step skips.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -59,8 +67,18 @@ base_sha=$2
 head_sha=$3
 
 emit() {
-  printf 'release_inputs=%s\nmacos_release_inputs=%s\nrust_inputs=%s\nspeech_inputs=%s\npackaging_inputs=%s\n' \
-    "$1" "$2" "$3" "$4" "$5"
+  printf 'release_inputs=%s\nmacos_release_inputs=%s\nrust_inputs=%s\nspeech_inputs=%s\npackaging_inputs=%s\nvnc_pin=%s\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6"
+}
+
+# The `vnc` decoder rev in the Cargo.toml of one tree, or nothing when that tree
+# has no such dependency or no readable manifest.
+vnc_rev_at() {
+  # A tree without the manifest prints nothing; `|| true` keeps `pipefail` and
+  # `set -e` from treating that as a failed detection.
+  { git show "$1:Cargo.toml" 2>/dev/null || true; } \
+    | sed -n 's/^vnc[[:space:]]*=.*rev[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -n 1
 }
 
 # Prints the files under crates/ that name the speech feature in the base or
@@ -100,7 +118,7 @@ outside_rust() {
 if [ "$event_name" = "workflow_dispatch" ] \
   || ! git rev-parse --verify --quiet "${base_sha}^{commit}" > /dev/null 2>&1 \
   || ! changed_paths=$(git diff -z --name-only --no-renames "$base_sha" "$head_sha" 2>/dev/null | tr '\0' '\n'); then
-  emit true true true true true
+  emit true true true true true true
   exit 0
 fi
 
@@ -151,4 +169,10 @@ while IFS= read -r path; do
   esac
 done <<< "$changed_paths"
 
-emit "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs" "$packaging_inputs"
+head_vnc_pin=$(vnc_rev_at "$head_sha")
+vnc_pin=false
+if [ -n "$head_vnc_pin" ] && [ "$head_vnc_pin" != "$(vnc_rev_at "$base_sha")" ]; then
+  vnc_pin=true
+fi
+
+emit "$release_inputs" "$macos_release_inputs" "$rust_inputs" "$speech_inputs" "$packaging_inputs" "$vnc_pin"
