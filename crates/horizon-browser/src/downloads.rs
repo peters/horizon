@@ -176,6 +176,11 @@ impl DownloadState {
             },
             download_file_name,
         );
+        // Firefox reports no byte counts, so a finished file is measured on
+        // disk. Only a path inside the panel folder is read.
+        let size = completed
+            .then(|| path.as_deref().and_then(|path| self.saved_file_size(path)))
+            .flatten();
         self.upsert(ObservedDownload {
             id,
             row: BrowserDownload {
@@ -185,11 +190,19 @@ impl DownloadState {
                 } else {
                     BrowserDownloadState::Canceled
                 },
-                received_bytes: known.as_ref().map_or(0, |known| known.row.received_bytes),
-                total_bytes: known.and_then(|known| known.row.total_bytes),
+                received_bytes: size.unwrap_or_else(|| known.as_ref().map_or(0, |known| known.row.received_bytes)),
+                total_bytes: size.or_else(|| known.and_then(|known| known.row.total_bytes)),
                 path: completed.then_some(path).flatten(),
             },
         });
+    }
+
+    /// The size of a file the browser named, when that path is inside this
+    /// panel's folder. A path outside it is not this panel's file to read.
+    fn saved_file_size(&self, path: &str) -> Option<u64> {
+        let path = Path::new(path);
+        path.strip_prefix(&self.directory).ok()?;
+        std::fs::metadata(path).ok()?.len().into()
     }
 
     /// Record one download, replacing the row with the same identity and
@@ -320,6 +333,48 @@ mod tests {
             list.downloads[0].path.as_deref(),
             Some("/home/alice/Horizon/downloads/invoice.pdf")
         );
+    }
+
+    #[test]
+    fn a_finished_firefox_download_is_measured_on_disk_inside_the_folder() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        let saved = folder.path().join("invoice.pdf");
+        std::fs::write(&saved, b"report bytes").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        downloads.firefox_event(
+            "browsingContext.downloadWillBegin",
+            &json!({"context": "ctx", "download": "d1", "suggestedFilename": "invoice.pdf"}),
+            Some("ctx"),
+        );
+        downloads.firefox_event(
+            "browsingContext.downloadEnd",
+            &json!({
+                "context": "ctx",
+                "download": "d1",
+                "status": "complete",
+                "filepath": saved.to_string_lossy(),
+            }),
+            Some("ctx"),
+        );
+        let row = downloads.list().downloads.remove(0);
+        assert_eq!(row.received_bytes, 12);
+        assert_eq!(row.total_bytes, Some(12));
+
+        // A path that is not inside this panel's folder is named, not read.
+        let mut outside = DownloadState::new(folder.path().join("other").to_string_lossy().to_string(), true);
+        outside.firefox_event(
+            "browsingContext.downloadEnd",
+            &json!({
+                "context": "ctx",
+                "download": "d2",
+                "status": "complete",
+                "filepath": saved.to_string_lossy(),
+            }),
+            Some("ctx"),
+        );
+        let row = outside.list().downloads.remove(0);
+        assert_eq!(row.received_bytes, 0);
+        assert_eq!(row.total_bytes, None);
     }
 
     #[test]

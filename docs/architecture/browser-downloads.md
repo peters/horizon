@@ -67,14 +67,25 @@ folder; the session reports `reporting: false` because it cannot name what it
 saved. Rows for another browsing context are ignored, so a popup's download
 stays out of this panel's report.
 
-Firefox reports the final path when the download ends, and no byte counts. A
-row therefore keeps `0` for `received_bytes` and `total_bytes` there.
+Firefox reports the final path when the download ends, and no byte counts. The
+engine measures a finished file on disk instead, so a completed Firefox row
+reports the same size in `received_bytes` and `total_bytes` as a Chromium row. It
+reads only a path inside this panel's folder; a path outside it is named in the
+row and never opened.
 
 ## Safari and remote sessions
 
 Safari's classic `WebDriver` exposes no download events and no download folder,
 and a remote device writes files on the provider's machine. Both answer
 `unsupported_backend`, and neither advertises the `downloads` capability.
+
+## A repeated file name
+
+A page can download two files with the same name. The two engines answer
+differently, and the report shows what each did: Chromium replaces the earlier
+file at the same path, and Firefox saves the second file beside the first with a
+suffix (`report-1.pdf`). A row always names the path the browser wrote, so the
+report never claims a file that is no longer there.
 
 ## What a report holds
 

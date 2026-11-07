@@ -231,7 +231,9 @@ download that the browser still writes has no `path` yet: call the tool again.
 Inspect the panel's `downloads` capability first, and read `reporting`: when it
 is false this session could not observe downloads, so an empty list is not proof
 that nothing was saved. Rows are bounded and `dropped` counts reports that this
-session forgot; their files stay in the folder. Read a saved file with ordinary
+session forgot; their files stay in the folder. A page that downloads two files
+of one name replaces the first under Chromium and saves the second beside it
+under Firefox, so trust the `path` in each row. Read a saved file with ordinary
 read-only tools. The tool starts no download, writes no file, and returns no
 download URL, because a download URL can carry a credential. Safari and remote
 sessions return `unsupported_backend`.

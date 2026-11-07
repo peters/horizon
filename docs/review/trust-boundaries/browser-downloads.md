@@ -49,5 +49,8 @@ bytes they contain.
   Rows describe the browser's downloads, not one panel's share of them.
 - A download that a page cancels, or that the network ends early, leaves a
   partial file that the browser may keep. A `canceled` row names no path.
+- A page that downloads two files of one name replaces the first one under
+  Chromium, while Firefox saves the second beside it. The rows name the paths
+  the browser wrote; Horizon does not keep a copy of a replaced file.
 - The report is bounded to 64 rows. Older rows leave the report and their files
   stay in the folder.
