@@ -145,7 +145,11 @@ impl DownloadState {
         {
             return;
         }
-        let Some(id) = text(params, "download") else {
+        // Firefox names the download `download` and the navigation that started
+        // it `navigation`; one navigation can start several downloads, so the
+        // download wins. The BiDi specification states only `navigation`, which
+        // is the identity an engine that sends no separate one provides.
+        let Some(id) = text(params, "download").or_else(|| text(params, "navigation")) else {
             return;
         };
         if method == "browsingContext.downloadWillBegin" {
@@ -375,6 +379,51 @@ mod tests {
         let row = outside.list().downloads.remove(0);
         assert_eq!(row.received_bytes, 0);
         assert_eq!(row.total_bytes, None);
+    }
+
+    #[test]
+    fn firefox_downloads_of_one_navigation_stay_separate_rows() {
+        // Firefox 159 sends one `navigation` for every file a navigation
+        // starts, so rows that keyed on it alone would merge.
+        let mut downloads = state();
+        for (order, name) in ["one.pdf", "two.pdf"].into_iter().enumerate() {
+            downloads.firefox_event(
+                "browsingContext.downloadWillBegin",
+                &json!({
+                    "context": "ctx",
+                    "download": format!("file-{order}"),
+                    "navigation": "navigation-1",
+                    "suggestedFilename": name,
+                }),
+                Some("ctx"),
+            );
+        }
+        let list = downloads.list();
+        assert_eq!(list.downloads.len(), 2);
+        assert_eq!(list.downloads[0].file_name, "one.pdf");
+        assert_eq!(list.downloads[1].file_name, "two.pdf");
+    }
+
+    #[test]
+    fn a_firefox_event_with_only_the_specified_navigation_identity_is_recorded() {
+        let mut downloads = state();
+        downloads.firefox_event(
+            "browsingContext.downloadWillBegin",
+            &json!({
+                "context": "ctx",
+                "navigation": "navigation-2",
+                "suggestedFilename": "report.pdf",
+            }),
+            Some("ctx"),
+        );
+        downloads.firefox_event(
+            "browsingContext.downloadEnd",
+            &json!({"context": "ctx", "navigation": "navigation-2", "status": "canceled"}),
+            Some("ctx"),
+        );
+        let list = downloads.list();
+        assert_eq!(list.downloads.len(), 1);
+        assert_eq!(list.downloads[0].state, BrowserDownloadState::Canceled);
     }
 
     #[test]

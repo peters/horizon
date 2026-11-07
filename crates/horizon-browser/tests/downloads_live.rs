@@ -12,16 +12,77 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_browser::{
-    BackendKind, BrowserCommand, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot,
+    AgentAction, AgentActionResult, BackendKind, BrowserCommand, BrowserConfig, BrowserControlAction,
+    BrowserControlValue, BrowserEvent, BrowserSession, BrowserSessionConfig, CoordinationSignals, FrameSlot,
     start_session,
 };
+use horizon_browser::{BrowserCoordination, CoordinationState};
 
 const PDF: &[u8] = b"%PDF-1.4 synthetic download fixture\n%%EOF\n";
+
+/// A host that serves one `downloads` action and keeps its answer, so the live
+/// check reads the report the way an agent does.
+#[derive(Debug, Default)]
+struct Queue {
+    served: AtomicU64,
+    results: Mutex<Vec<AgentActionResult>>,
+}
+
+impl BrowserCoordination for Queue {
+    fn prepare(&self, _panel_local_id: &str, _timeout: Duration) -> bool {
+        true
+    }
+
+    fn initialize(&self, _panel_local_id: &str, _state: &CoordinationState) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn update(&self, _panel_local_id: &str, _state: &CoordinationState) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn set_user_active(&self, _panel_local_id: &str, _active: bool) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    /// Serve the same read-only action on every poll, so the check reads the
+    /// report again after the page's downloads have finished.
+    fn signals(&self, _panel_local_id: &str) -> std::io::Result<CoordinationSignals> {
+        let sequence = self.served.fetch_add(1, Ordering::AcqRel);
+        Ok(CoordinationSignals {
+            owner: None,
+            handoff: None,
+            actions: vec![AgentAction {
+                action_id: format!("downloads-{sequence}"),
+                actor: "live-test".to_string(),
+                requested_at_millis: 0,
+                action: BrowserControlAction::Downloads,
+            }],
+        })
+    }
+
+    fn acknowledge_handoff(&self, _panel_local_id: &str, _request_id: &str) -> std::io::Result<bool> {
+        Ok(false)
+    }
+
+    fn complete_action(&self, _panel_local_id: &str, result: &AgentActionResult) -> std::io::Result<()> {
+        self.results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(result.clone());
+        Ok(())
+    }
+
+    fn remove(&self, _panel_local_id: &str, _timeout: Duration) -> bool {
+        true
+    }
+}
 
 /// Three downloads that no click started: the page starts them itself, two
 /// seconds apart, which is the sequence a person reported in the issue.
@@ -48,7 +109,7 @@ fn firefox_saves_every_download_a_page_starts() {
 }
 
 fn assert_page_downloads_land_in_the_panel_folder(backend: BackendKind) {
-    let (session, _frame_slot, temp) = start(backend);
+    let (session, _frame_slot, temp, queue) = start(backend);
     wait_until_loaded(&session);
     let downloads = wait_for_downloads(&temp, 3);
     let mut names: Vec<String> = downloads
@@ -60,7 +121,48 @@ fn assert_page_downloads_land_in_the_panel_folder(backend: BackendKind) {
     for path in &downloads {
         assert_eq!(std::fs::read(path).unwrap_or_default(), PDF, "{}", path.display());
     }
+    assert_report_lists_every_download(&queue, &downloads, 3);
     assert!(session.send(BrowserCommand::Stop));
+}
+
+/// The agent's answer names each file, its state and its size, and the folder
+/// the browser wrote into.
+fn assert_report_lists_every_download(queue: &Arc<Queue>, files: &[PathBuf], count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        let answered = queue
+            .results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .rev()
+            .find_map(|result| match &result.outcome {
+                horizon_browser::BrowserActionOutcome::Completed {
+                    value: BrowserControlValue::Downloads { downloads },
+                } if downloads.downloads.len() == count => Some(downloads.clone()),
+                _ => None,
+            });
+        let Some(report) = answered else {
+            thread::sleep(Duration::from_millis(100));
+            continue;
+        };
+        assert!(report.reporting, "the session must report its downloads");
+        assert_eq!(report.dropped, 0);
+        assert_eq!(report.downloads.len(), count, "{report:?}");
+        for row in &report.downloads {
+            assert_eq!(row.state, horizon_browser::BrowserDownloadState::Completed, "{row:?}");
+            let path = row.path.as_deref().unwrap_or_default();
+            assert!(
+                files.iter().any(|file| file.to_string_lossy() == path),
+                "{path} is not one of the saved files {files:?}"
+            );
+            assert_eq!(row.received_bytes, PDF.len() as u64, "{row:?}");
+            assert_eq!(row.total_bytes, Some(PDF.len() as u64), "{row:?}");
+            assert!(path.starts_with(&report.directory), "{row:?}");
+        }
+        return;
+    }
+    panic!("the session did not answer the downloads action");
 }
 
 fn wait_for_downloads(temp: &tempfile::TempDir, count: usize) -> Vec<PathBuf> {
@@ -118,12 +220,13 @@ fn find_downloads_folder(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn start(backend: BackendKind) -> (BrowserSession, Arc<FrameSlot>, tempfile::TempDir) {
+fn start(backend: BackendKind) -> (BrowserSession, Arc<FrameSlot>, tempfile::TempDir, Arc<Queue>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
     let addr = listener.local_addr().expect("addr");
     thread::spawn(move || serve_fixture(&listener));
     let temp = session_tempdir();
     let frame_slot = Arc::new(FrameSlot::new());
+    let queue = Arc::new(Queue::default());
     let session = start_session(BrowserSessionConfig {
         browser: BrowserConfig {
             backend,
@@ -135,13 +238,13 @@ fn start(backend: BackendKind) -> (BrowserSession, Arc<FrameSlot>, tempfile::Tem
         width: 800,
         height: 600,
         frame_slot: Arc::clone(&frame_slot),
-        coordination: None,
+        coordination: Some(queue.clone()),
         capture_directory: None,
         video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
         remote: None,
     })
     .expect("start");
-    (session, frame_slot, temp)
+    (session, frame_slot, temp, queue)
 }
 
 /// A temporary profile root that a confined browser can read. Snap Chromium
