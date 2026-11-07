@@ -141,7 +141,22 @@ impl HorizonApp {
             .get(&group.issue)
             .and_then(|runtime| runtime.state.as_ref())
             .filter(|state| state.cloud_id == id);
-        entry(id, &self.cloud_facts(group, now), state)
+        // A session is recorded when its terminal attaches. That record goes to a worker
+        // thread, and the deployment thread's snapshots need not carry it, so a live worker
+        // whose session was saved after the last snapshot holds none here. The sessions this
+        // window added itself answer for it, from memory: a list answer never reads the
+        // record on the UI thread.
+        let added = match state {
+            Some(state) if !state.sessions.is_empty() => Vec::new(),
+            _ => self
+                .cloud_prototype
+                .production
+                .runtimes
+                .get(&group.issue)
+                .map(|runtime| runtime.sessions.added())
+                .unwrap_or_default(),
+        };
+        entry(id, &self.cloud_facts(group, now), state, &added)
     }
 
     /// Moves the view to cloud `index` as a click on its row does: to its first
@@ -179,8 +194,20 @@ impl HorizonApp {
     }
 }
 
-/// One cloud of a `list` answer.
-fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtime::state::Deployment>) -> Value {
+/// One cloud of a `list` answer. `added` names the sessions this window added to the cloud's
+/// record, used only when the runtime state of this window holds no session of it.
+fn entry(
+    id: &str,
+    facts: &CloudFacts,
+    state: Option<&horizon_core::cloud_runtime::state::Deployment>,
+    added: &[horizon_core::cloud_runtime::state::Session],
+) -> Value {
+    // Sessions this window added replace a runtime state that names none: they are the only
+    // source of one then.
+    let sessions: Vec<&horizon_core::cloud_runtime::state::Session> = match state {
+        Some(state) if !state.sessions.is_empty() => state.sessions.iter().collect(),
+        _ => added.iter().collect(),
+    };
     json!({
         "cloud": id,
         "name": facts.name,
@@ -193,12 +220,12 @@ fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtim
         "image_publication": state.and_then(|state| state.publication.as_ref()),
         // The sessions the worker runs, so a caller can name one to the agent tools. A
         // session's panel ID is its name on the worker, and nothing here is a secret.
-        "sessions": state.map(|state| state.sessions.iter().map(|session| json!({
+        "sessions": sessions.iter().map(|session| json!({
             "panel_id": session.panel_id,
             "agent": session.agent,
             "branch": session.branch,
             "worktree": session.worktree,
-        })).collect::<Vec<Value>>()).unwrap_or_default(),
+        })).collect::<Vec<Value>>(),
     })
 }
 

@@ -314,3 +314,32 @@ fn the_list_names_the_sessions_a_caller_can_address() {
     let encoded = serde_json::to_string(&listed).unwrap();
     assert!(!encoded.contains("secret") && !encoded.contains("token"), "{encoded}");
 }
+
+#[test]
+fn a_session_this_window_recorded_is_listed_without_reading_the_record() {
+    // A live worker saves its session to the record, which a worker thread writes; the
+    // deployment thread's snapshot holds none, so a list answer taken from it named no
+    // session and a caller had no panel ID to address. The window keeps the session it
+    // added, and the answer reads that instead of the record: a list request must not read
+    // a file on the UI thread.
+    let (_temp, mut app, actor) = cloud_with_agent();
+    let ctx = egui::Context::default();
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(listed["clouds"][0]["sessions"], json!([]), "nothing is recorded yet");
+
+    let session =
+        horizon_core::cloud_runtime::state::Session::new("panel-live", "claude", "/workspace/checkout".into());
+    runtime(&mut app).sessions.remember(&session);
+
+    let listed = app.answer_cloud_list(&request(&actor, "list", None), &ctx).unwrap();
+    assert_eq!(
+        listed["clouds"][0]["sessions"],
+        json!([{
+            "panel_id": "panel-live",
+            "agent": "claude",
+            "branch": "",
+            "worktree": "/workspace/checkout",
+        }]),
+        "the session this window recorded is named: {listed}"
+    );
+}
