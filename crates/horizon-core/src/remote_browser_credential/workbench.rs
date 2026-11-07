@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use horizon_browser::remote::{CredentialReference, CredentialStoreKind, RemoteBrowserConfig, RemoteProviderProfile};
 
@@ -86,6 +87,9 @@ pub enum NoticeKind {
 }
 
 /// How the OS store addresses an item: endpoint origin plus slot. Two
+/// Longest time that a cached presence stands before the store is asked again.
+const REVALIDATE_AFTER: Duration = Duration::from_secs(10);
+
 /// references bound to one slot are one item, so presence is cached per
 /// address rather than per reference.
 type OsAddress = (String, String);
@@ -174,6 +178,12 @@ pub struct CredentialWorkbench {
     keychain: Option<KeychainLink>,
     keychain_state: KeychainState,
     presence: BTreeMap<OsAddress, CredentialState>,
+    /// When the presence of each OS item was last asked for, so a store that
+    /// locks under a running Horizon is noticed without a restart. One entry per
+    /// address, because Settings reads one profile at a time.
+    probed_at: BTreeMap<OsAddress, Instant>,
+    /// How long a cached presence may stand before the workbench asks again.
+    revalidate_after: Duration,
     /// Rows that set a session value, with the origin their value lives
     /// under, so clearing every value can tell each of them.
     session_rows: BTreeMap<Row, String>,
@@ -223,6 +233,8 @@ impl CredentialWorkbench {
             }),
             keychain_state: KeychainState::Opening,
             presence: BTreeMap::new(),
+            probed_at: BTreeMap::new(),
+            revalidate_after: REVALIDATE_AFTER,
             session_rows: BTreeMap::new(),
             in_flight: 0,
             notices: Vec::new(),
@@ -324,6 +336,12 @@ impl CredentialWorkbench {
     /// Readiness for display. Session values are answered immediately; OS-store
     /// values come from the presence cache and show `Checking` until probed.
     pub fn readiness(&mut self, profile: &RemoteProviderProfile) -> Vec<CredentialReadiness> {
+        // A store can lock under a running Horizon: the Secret Service daemon
+        // restarts, or the person locks the keychain. The cached presence then
+        // says `Present` while every read answers `Locked`, so each address is
+        // asked again on its own bound instead of once per start. The cached
+        // state stays visible until the answer arrives, so a list does not
+        // flicker every interval.
         self.request_probe(profile);
         let cache = CachedKeychain {
             presence: &self.presence,
@@ -559,6 +577,30 @@ impl CredentialWorkbench {
         self.keychain.as_ref().map(|link| Arc::clone(&link.store))
     }
 
+    /// How long until the next cached address is due for another probe, so a
+    /// reader that only asks on a frame can schedule that frame. `None` when no
+    /// address is cached and nothing is due.
+    #[must_use]
+    pub fn next_revalidation_in(&self) -> Option<Duration> {
+        if self.keychain_state != KeychainState::Available {
+            return None;
+        }
+        self.probed_at
+            .values()
+            .map(|at| self.revalidate_after.saturating_sub(at.elapsed()))
+            // An address that is already due is probed by the frame that reads
+            // it, so asking for a frame now would spin: the worker answer brings
+            // the next frame instead.
+            .filter(|due| !due.is_zero())
+            .min()
+    }
+
+    /// Ask the store again on the next read, whatever the bound says.
+    #[cfg(test)]
+    pub(crate) fn revalidate_on_next_read(&mut self) {
+        self.revalidate_after = Duration::ZERO;
+    }
+
     fn request_probe(&mut self, profile: &RemoteProviderProfile) {
         let Some(commands) = self.keychain.as_ref().map(|link| link.commands.clone()) else {
             return;
@@ -578,15 +620,31 @@ impl CredentialWorkbench {
             let Some(address) = os_address(&locator) else {
                 continue;
             };
-            if let std::collections::btree_map::Entry::Vacant(entry) = self.presence.entry(address) {
-                entry.insert(CredentialState::Checking);
-                wanted.push(locator);
+            // A due address keeps the state that the person sees and is asked
+            // again, so a relocked store replaces it with `Locked`.
+            let due = self
+                .probed_at
+                .get(&address)
+                .is_none_or(|at| at.elapsed() >= self.revalidate_after);
+            match self.presence.entry(address.clone()) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(CredentialState::Checking);
+                    wanted.push(locator);
+                }
+                std::collections::btree_map::Entry::Occupied(_) if due => wanted.push(locator),
+                std::collections::btree_map::Entry::Occupied(_) => {}
             }
         }
         if !wanted.is_empty() {
             let count = wanted.len();
-            if commands.send(Command::Probe(wanted)).is_ok() {
+            if commands.send(Command::Probe(wanted.clone())).is_ok() {
                 self.in_flight += count;
+                let now = Instant::now();
+                for locator in &wanted {
+                    if let Some(address) = os_address(locator) {
+                        self.probed_at.insert(address, now);
+                    }
+                }
             }
         }
     }

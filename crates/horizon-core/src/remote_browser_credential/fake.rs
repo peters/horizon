@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use horizon_browser::remote::CredentialStoreKind;
 use zeroize::Zeroizing;
@@ -17,12 +19,24 @@ use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sea
 pub struct FakeCredentialStore {
     entries: BTreeMap<(String, String), Zeroizing<Vec<u8>>>,
     locked: bool,
+    /// A lock that the test flips while the store is already in the worker, as a
+    /// Secret Service restart does to the daemon behind a running Horizon.
+    shared_lock: Option<Arc<AtomicBool>>,
 }
 
 impl FakeCredentialStore {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A store whose lock this handle can flip while another thread holds it.
+    #[must_use]
+    pub fn with_shared_lock(shared_lock: Arc<AtomicBool>) -> Self {
+        Self {
+            shared_lock: Some(shared_lock),
+            ..Self::default()
+        }
     }
 
     pub fn lock(&mut self) {
@@ -34,7 +48,12 @@ impl FakeCredentialStore {
     }
 
     fn guard(&self) -> Result<(), RemoteCredentialError> {
-        if self.locked {
+        if self.locked
+            || self
+                .shared_lock
+                .as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+        {
             Err(RemoteCredentialError::Locked)
         } else {
             Ok(())
@@ -89,6 +108,7 @@ impl fmt::Debug for FakeCredentialStore {
             .debug_struct("FakeCredentialStore")
             .field("entries", &self.entries.len())
             .field("locked", &self.locked)
+            .field("shared_lock", &self.shared_lock.is_some())
             .finish()
     }
 }
