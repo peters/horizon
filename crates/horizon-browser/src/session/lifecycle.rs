@@ -136,20 +136,29 @@ impl DriverState {
             return false;
         }
         self.write_manifest(true);
-        let capabilities = crate::ActiveBackendCapabilities {
+        let capabilities = self.active_capabilities();
+        frame_slot.publish_backend_capabilities(capabilities);
+        let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
+        let _ = event_tx.send(BrowserEvent::Ready);
+        !self.stop_requested.load(Ordering::Acquire)
+    }
+
+    /// What this Chromium session established: the backend's own claims, minus
+    /// a download claim it could not confirm. A browser that refused the panel
+    /// folder keeps its own destination and reports nothing.
+    fn active_capabilities(&self) -> crate::ActiveBackendCapabilities {
+        let mut capabilities = crate::BackendKind::ChromiumCdp.capabilities();
+        capabilities.downloads &= self.downloads.reporting();
+        crate::ActiveBackendCapabilities {
             backend: crate::BackendKind::ChromiumCdp,
-            capabilities: crate::BackendKind::ChromiumCdp.capabilities(),
+            capabilities,
             bidi: false,
             automation_disclosure: self
                 .config
                 .browser
                 .automation_disclosure
                 .ready_status(crate::BackendKind::ChromiumCdp),
-        };
-        frame_slot.publish_backend_capabilities(capabilities);
-        let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
-        let _ = event_tx.send(BrowserEvent::Ready);
-        !self.stop_requested.load(Ordering::Acquire)
+        }
     }
 
     fn hide_embedded_native_window(

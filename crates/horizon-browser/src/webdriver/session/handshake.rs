@@ -58,6 +58,13 @@ pub(super) fn new_session_capabilities(
             validate_firefox_args(&config.extra_args)?;
             let profile = config.profile_dir(panel_local_id);
             prepare_profile(&profile)?;
+            let downloads = config.downloads_dir(panel_local_id);
+            if let Err(error) = crate::downloads::prepare_directory(&downloads) {
+                // Firefox asks for the folder it cannot write into. A missing
+                // folder must not stop the session; the download then fails in
+                // the browser where the panel can report it.
+                tracing::warn!(target: "browser", "failed to prepare the download folder: {error}");
+            }
             let mut options = Map::new();
             let mut args = Vec::with_capacity(5 + config.extra_args.len());
             if config.headless {
@@ -79,6 +86,16 @@ pub(super) fn new_session_capabilities(
                     "widget.gtk.overlay-scrollbars.enabled": false,
                     "ui.useOverlayScrollbars": 0,
                     "remote.bidi.dismiss_file_pickers.enabled": manual_file_chooser,
+                    // Save every download of this panel into the panel folder
+                    // without a prompt. Firefox otherwise asks a person, and a
+                    // headless or unattended panel then saves nothing.
+                    "browser.download.folderList": 2,
+                    "browser.download.dir": downloads.to_string_lossy(),
+                    "browser.download.useDownloadDir": true,
+                    "browser.download.start_downloads_in_tmp_dir": false,
+                    "browser.download.manager.showWhenStarting": false,
+                    "browser.download.always_ask_before_handling_new_types": false,
+                    "browser.helperApps.neverAsk.saveToDisk": "application/pdf,application/octet-stream,application/zip,application/x-zip-compressed,application/msword,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg",
                 }),
             );
             if let Some(command) = &config.firefox_command {

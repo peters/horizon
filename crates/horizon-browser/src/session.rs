@@ -616,6 +616,8 @@ struct DriverState {
     http_auth: crate::http_auth::HttpAuthState,
     network: crate::network::NetworkCaptureState,
     video: crate::video::VideoCaptureState,
+    /// The panel's download folder and the downloads this session observed.
+    downloads: crate::downloads::DownloadState,
     pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
     http_body_evidence: http_bodies::HttpBodyEvidenceTable,
     passkeys: Option<webauthn::CdpPasskeys>,
@@ -684,6 +686,9 @@ impl DriverState {
             challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             http_auth: crate::http_auth::HttpAuthState::default(),
             network: crate::network::NetworkCaptureState::default(),
+            // The driver sets the panel folder once it knows whether this
+            // browser profile is shared, before any page can download.
+            downloads: crate::downloads::DownloadState::default(),
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             pending_http_bodies: VecDeque::new(),
             http_body_evidence: http_bodies::HttpBodyEvidenceTable::default(),

@@ -200,6 +200,10 @@ pub enum BrowserControlValue {
     Video {
         capture: crate::BrowserVideoCapture,
     },
+    /// One panel's download folder and the downloads this session observed.
+    Downloads {
+        downloads: crate::BrowserDownloadList,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

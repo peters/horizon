@@ -18,6 +18,7 @@ use super::host::DriverHost;
 mod bidi;
 mod coordination;
 mod document;
+mod downloads;
 mod file_chooser;
 mod file_drop;
 mod frames;
@@ -41,7 +42,7 @@ mod webauthn;
 use frames::AdaptiveFrames;
 use handshake::{NewSession, create_webdriver_session, initial_safari_input};
 use shutdown::Completion;
-use startup::{BidiLink, establish_bidi, firefox_bidi_mode, start_local, start_remote};
+use startup::{BidiLink, establish_bidi, firefox_bidi_mode, start_remote};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
@@ -128,6 +129,8 @@ struct Driver {
     http_auth: crate::http_auth::HttpAuthState,
     network: crate::network::NetworkCaptureState,
     video: crate::video::VideoCaptureState,
+    /// The panel's download folder and the downloads this session observed.
+    downloads: crate::downloads::DownloadState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
     pending_http_bodies: VecDeque<(String, Option<String>)>,
     panel_slot: Arc<FrameSlot>,
@@ -261,6 +264,29 @@ pub(crate) fn run_webdriver(
     driver.settle_pending_wait_for_shutdown(Instant::now());
     driver.close(event_tx);
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+}
+
+/// The local browser session of this panel, or the shared session of the
+/// profile that the panel follows. A shared profile reuses one Firefox process
+/// and one set of preferences, so its panel identity is the profile identity.
+fn local_session(
+    config: &BrowserSessionConfig,
+    process_control: &ChromeProcessControl,
+    stop_requested: &AtomicBool,
+    group: Option<&super::SharedFirefoxSession>,
+) -> Result<(DriverHost, NewSession), String> {
+    let Some(group) = group else {
+        return startup::start_local(config, process_control, stop_requested);
+    };
+    let mut shared_config = config.clone();
+    group.profile_id().clone_into(&mut shared_config.panel_local_id);
+    group.acquire(
+        &shared_config.browser,
+        shared_config.frame_slot.file_chooser().has_consumer(),
+        process_control,
+        stop_requested,
+        |control| startup::start_local(&shared_config, control, stop_requested),
+    )
 }
 
 fn safari_input_for_host(
@@ -407,19 +433,7 @@ impl Driver {
                 );
                 (host, session, Some(device.summary()), transfer, Some(orientation))
             } else {
-                let (host, session) = if let Some(group) = group {
-                    let mut shared_config = config.clone();
-                    group.profile_id().clone_into(&mut shared_config.panel_local_id);
-                    group.acquire(
-                        &shared_config.browser,
-                        shared_config.frame_slot.file_chooser().has_consumer(),
-                        process_control,
-                        stop_requested,
-                        |control| start_local(&shared_config, control, stop_requested),
-                    )?
-                } else {
-                    start_local(config, process_control, stop_requested)?
-                };
+                let (host, session) = local_session(config, process_control, stop_requested, group)?;
                 (host, session, None, None, None)
             };
         let NewSession {
@@ -431,7 +445,9 @@ impl Driver {
             context_id,
             automation_ws,
             disclosure,
+            downloads_reported,
         } = establish_bidi(config, &mut host, &session_id, &capabilities, stop_requested)?;
+        let downloads = downloads::panel_downloads(config, group, downloads_reported);
         let safari = safari_input_for_host(&host, &session_id, config.browser.backend)?;
         Ok(Self {
             config: config.clone(),
@@ -485,6 +501,7 @@ impl Driver {
             http_auth: crate::http_auth::HttpAuthState::default(),
             network: crate::network::NetworkCaptureState::default(),
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
+            downloads,
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
@@ -574,10 +591,13 @@ impl Driver {
         // The backend names the browser family; what the session can do is a
         // property of where it runs, and a remote grid offers less than any
         // local browser of that family.
-        let capabilities = if self.host.is_remote() {
-            crate::BackendCapabilities::remote_session()
-        } else {
-            self.config.browser.backend.capabilities()
+        let Some(capabilities) = self.local_capabilities() else {
+            return crate::ActiveBackendCapabilities {
+                backend: self.config.browser.backend,
+                capabilities: crate::BackendCapabilities::remote_session(),
+                bidi: self.bidi.is_some(),
+                automation_disclosure: self.disclosure_status,
+            };
         };
         crate::ActiveBackendCapabilities {
             backend: self.config.browser.backend,
@@ -585,6 +605,17 @@ impl Driver {
             bidi: self.bidi.is_some(),
             automation_disclosure: self.disclosure_status,
         }
+    }
+
+    /// What this exact session established on a local browser: the backend's
+    /// own claims, minus a download claim that its events did not confirm.
+    fn local_capabilities(&self) -> Option<crate::BackendCapabilities> {
+        if self.host.is_remote() {
+            return None;
+        }
+        let mut capabilities = self.config.browser.backend.capabilities();
+        capabilities.downloads &= self.downloads.reporting();
+        Some(capabilities)
     }
 
     fn disable_optional_bidi(&mut self, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
@@ -1142,6 +1173,20 @@ mod tests {
         assert_eq!(prefs["widget.gtk.overlay-scrollbars.enabled"], false);
         assert_eq!(prefs["ui.useOverlayScrollbars"], 0);
         assert_eq!(prefs["remote.bidi.dismiss_file_pickers.enabled"], true);
+        // A panel saves its page's downloads into its own folder, without a
+        // prompt that an unattended panel cannot answer.
+        let downloads = config.downloads_dir("panel");
+        assert_eq!(prefs["browser.download.dir"], downloads.to_string_lossy().as_ref());
+        assert_eq!(prefs["browser.download.folderList"], 2);
+        assert_eq!(prefs["browser.download.useDownloadDir"], true);
+        assert_eq!(prefs["browser.download.start_downloads_in_tmp_dir"], false);
+        assert_eq!(prefs["browser.download.always_ask_before_handling_new_types"], false);
+        assert!(
+            prefs["browser.helperApps.neverAsk.saveToDisk"]
+                .as_str()
+                .is_some_and(|types| types.split(',').any(|content_type| content_type == "application/pdf"))
+        );
+        assert!(downloads.is_dir());
 
         let visible = new_session_capabilities(
             &BrowserConfig {

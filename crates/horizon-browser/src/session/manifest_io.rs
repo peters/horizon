@@ -13,6 +13,12 @@ use super::{
 };
 
 impl DriverState {
+    /// Bind the panel's download folder and whether this browser reports what
+    /// it saves there. Called once before any page can start a download.
+    pub(super) fn set_downloads(&mut self, downloads: crate::downloads::DownloadState) {
+        self.downloads = downloads;
+    }
+
     /// Make the next `tick_signals` re-read the manifest regardless of the
     /// interval, so ownership and handoff state is current.
     pub(super) fn request_signal_refresh(&mut self) {

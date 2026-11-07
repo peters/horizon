@@ -183,6 +183,10 @@ pub(super) struct BidiLink {
     pub(super) context_id: Option<String>,
     pub(super) automation_ws: String,
     pub(super) disclosure: crate::AutomationDisclosureStatus,
+    /// Whether this session subscribed to the download events. A browser
+    /// older than those events still saves the panel's downloads; it just
+    /// cannot report them.
+    pub(super) downloads_reported: bool,
 }
 
 /// Connect the `BiDi` channel a local browser advertised. A remote grid may
@@ -273,6 +277,16 @@ pub(super) fn establish_bidi(
         bidi = None;
         context_id = None;
     }
+    let mut downloads_reported = false;
+    if config.remote.is_none()
+        && config.browser.backend == BackendKind::FirefoxBidi
+        && let Some(link) = bidi.as_mut()
+    {
+        downloads_reported = match context_id.as_deref() {
+            Some(context) => super::bidi::subscribe_download_events(link, context).is_ok(),
+            None => false,
+        };
+    }
     let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
     let disclosure = crate::disclosure::established_disclosure_status(
         config.browser.automation_disclosure,
@@ -285,6 +299,7 @@ pub(super) fn establish_bidi(
         context_id,
         automation_ws,
         disclosure,
+        downloads_reported,
     })
 }
 

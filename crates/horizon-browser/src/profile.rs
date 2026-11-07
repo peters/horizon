@@ -23,6 +23,16 @@ pub(crate) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> PathB
     profile_dir_with_default_root(config, panel_local_id, &default_root)
 }
 
+/// The folder one panel saves its page's downloads into. It sits beside the
+/// backend profiles of the same panel, so a panel keeps one folder when it
+/// switches engine, and it is a private directory under the profile root the
+/// host selected.
+#[must_use]
+pub(crate) fn downloads_dir(config: &BrowserConfig, panel_local_id: &str) -> PathBuf {
+    let default_root = paths::default_root().join("profiles");
+    panel_profile_dir_with_default_root(config, panel_local_id, &default_root).join("downloads")
+}
+
 #[must_use]
 pub(crate) fn profile_dir_with_default_root(
     config: &BrowserConfig,

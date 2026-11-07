@@ -208,6 +208,8 @@ pub enum BrowserAuditAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         username_characters: Option<usize>,
     },
+    /// A read-only report of the panel's download folder and its downloads.
+    Downloads,
     HandoffRequested,
     HandoffDone,
     SelectOption {
@@ -349,6 +351,7 @@ impl BrowserAuditAction {
                     .and_then(|origin| crate::parse_http_auth_origin(origin).ok()),
                 username_characters: username.as_ref().map(|username| username.as_str().chars().count()),
             },
+            BrowserControlAction::Downloads => Self::Downloads,
         }
     }
 

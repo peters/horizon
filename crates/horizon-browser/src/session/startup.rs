@@ -78,6 +78,9 @@ struct DriverConnection {
     target_id: String,
     session_id: String,
     native_user_agent_metadata: Option<serde_json::Value>,
+    /// Whether this browser accepted the panel download folder and reports
+    /// the downloads it saves there.
+    downloads_reporting: bool,
 }
 
 fn initialize_driver(
@@ -138,7 +141,13 @@ fn initialize_driver(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
+    // A panel that shares a browser profile shares its download folder too:
+    // the folder is one browser-wide setting, and the profile is the unit
+    // that already names the shared identity.
+    let downloads_dir = config
+        .browser
+        .downloads_dir(group.map_or(config.panel_local_id.as_str(), SharedBrowserSession::profile_id));
+    initialize_target(config, event_tx, stop_requested, chrome, link, ws_url, &downloads_dir)
 }
 
 pub(super) fn start_chrome(
@@ -216,6 +225,7 @@ fn initialize_target(
     mut chrome: DriverProcess,
     mut link: CdpLink,
     ws_url: String,
+    downloads_dir: &std::path::Path,
 ) -> Option<DriverConnection> {
     let _ = call_during_startup(
         &mut link,
@@ -287,6 +297,7 @@ fn initialize_target(
     if cancel_target_startup(stop_requested, &mut chrome, &mut link, &target_id, event_tx) {
         return None;
     }
+    let downloads_reporting = configure_downloads(&mut link, event_tx, stop_requested, downloads_dir);
     Some(DriverConnection {
         chrome,
         link,
@@ -294,6 +305,7 @@ fn initialize_target(
         target_id,
         session_id,
         native_user_agent_metadata,
+        downloads_reporting,
     })
 }
 
@@ -466,6 +478,43 @@ fn call_during_startup(
     .result
 }
 
+/// Save this panel's downloads into its own folder, and report each one the
+/// browser saves there.
+///
+/// The same browser-wide setting is what lifts Chromium's limit of one
+/// page-initiated download per document: with the default behavior Chromium
+/// drops every later download and reports nothing, which looked like a page
+/// that saved a file when it did not. A browser that refuses the setting keeps
+/// the previous behavior, so the panel states that it reports no downloads
+/// instead of claiming an empty folder means no download happened.
+fn configure_downloads(
+    link: &mut CdpLink,
+    event_tx: &BrowserEventSender,
+    stop_requested: &AtomicBool,
+    directory: &std::path::Path,
+) -> bool {
+    if let Err(error) = crate::downloads::prepare_directory(directory) {
+        tracing::warn!(target: "browser", "failed to prepare the download folder: {error}");
+    }
+    let params = serde_json::json!({
+        "behavior": "allow",
+        "downloadPath": directory.to_string_lossy(),
+        "eventsEnabled": true,
+    });
+    eprintln!("DEBUG configure_downloads dir={} prepare={:?}", directory.display(), crate::downloads::prepare_directory(directory));
+    match call_during_startup(link, stop_requested, "Browser.setDownloadBehavior", &params) {
+        Ok(_) => { eprintln!("DEBUG setDownloadBehavior ok"); true },
+        Err(error) => {
+            eprintln!("DEBUG setDownloadBehavior ERR {error}");
+            tracing::warn!(target: "browser", "browser refused the download folder: {error}");
+            let _ = event_tx.send(BrowserEvent::Warning(format!(
+                "this browser saves downloads to its own folder and reports none: {error}"
+            )));
+            false
+        }
+    }
+}
+
 pub(super) struct DriverLaunch {
     pub(super) completion_tx: mpsc::Sender<()>,
     pub(super) process_control: ChromeProcessControl,
@@ -511,6 +560,18 @@ pub(super) fn run_driver(
         connection.native_user_agent_metadata.take(),
         Arc::clone(stop_requested),
     );
+    let downloads_directory = config.browser.downloads_dir(
+        completion_guard
+            .group
+            .as_ref()
+            .map_or(config.panel_local_id.as_str(), |reservation| {
+                SharedBrowserSession::profile_id(&reservation.session)
+            }),
+    );
+    state.set_downloads(crate::downloads::DownloadState::new(
+        downloads_directory.to_string_lossy().to_string(),
+        connection.downloads_reporting,
+    ));
     state.initialize_manifest();
     if !state.attach_setup(
         &mut connection.link,
