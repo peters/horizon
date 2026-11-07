@@ -9,7 +9,14 @@ use horizon_core::cloud_runtime::{
     provider,
     setup::{self, Draft},
 };
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::{
+    sync::mpsc::{Receiver, TryRecvError, channel},
+    time::{Duration, Instant},
+};
+
+/// How often an open card reads the rent record again. The file is small, and the
+/// figure moves only when an agent's create is admitted.
+const REREAD: Duration = Duration::from_secs(5);
 
 /// What the card holds while a person fills it in, and what it waits for.
 #[derive(Default)]
@@ -27,6 +34,9 @@ pub(in crate::app::cloud_panel) struct Card {
     spent: Option<Spent>,
     spent_for: Option<String>,
     reading: Option<Receiver<Option<Spent>>>,
+    /// When the record is read again, so a rent that arrives while the card is open
+    /// shows without reopening the dialog.
+    next: Option<Instant>,
 }
 
 impl Card {
@@ -57,15 +67,23 @@ impl Card {
         });
     }
 
-    /// Reads what the approved envelope already paid for, once for each approval. A
-    /// record that cannot be read shows nothing rather than a wrong figure.
+    /// Reads what the approved envelope already paid for: once when the approval
+    /// changes, then again while the card stays open.
     fn read_spent(&mut self, ctx: &egui::Context, draft: &Draft) {
         let Some(approved) = draft.settings.spending_envelope.clone() else {
             self.spent = None;
             self.spent_for = None;
+            self.next = None;
             return;
         };
-        if self.reading.is_some() || self.spent_for.as_deref() == Some(approved.approved_at.as_str()) {
+        if self.reading.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        let changed = self.spent_for.as_deref() != Some(approved.approved_at.as_str());
+        if !changed && let Some(next) = self.next.filter(|next| now < *next) {
+            // An idle card draws no frame by itself; wake it for the next read.
+            ctx.request_repaint_after(next - now);
             return;
         }
         let (tx, rx) = channel();
@@ -92,9 +110,10 @@ impl Card {
                     .spending_envelope
                     .as_ref()
                     .map(|approved| approved.approved_at.clone());
+                self.next = Some(Instant::now() + REREAD);
                 self.reading = None;
             }
-            Err(TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+            Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(250)),
             Err(TryRecvError::Disconnected) => self.reading = None,
         }
     }
@@ -144,7 +163,8 @@ fn approved_state(ui: &mut egui::Ui, draft: &Draft, card: &mut Card, envelope: &
     );
     // What the record says the envelope already paid for, and what that leaves. A
     // person cannot judge a bound without the figure that moves toward it.
-    if let Some(spent) = card.spent {
+    // Nothing rented needs no line: the limits above already say what is left.
+    if let Some(spent) = card.spent.filter(|spent| spent.hours > 0.0 || spent.amount > 0.0) {
         let left = envelope.remaining(spent);
         caption(
             ui,
