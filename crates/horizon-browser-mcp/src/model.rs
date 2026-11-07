@@ -1,3 +1,4 @@
+mod downloads;
 mod http_auth;
 mod recovery;
 pub(crate) use recovery::RemoteAllocationsInput;
@@ -8,6 +9,7 @@ pub(crate) use orientation::{OrientationInput, OrientationOutput};
 pub(crate) use viewport::{ResizeInput, ResizeOutput, ZoomInput, ZoomOutput};
 mod video;
 
+pub(crate) use downloads::{DownloadsInput, DownloadsOutput};
 pub(crate) use http_auth::{HttpAuthInput, HttpAuthOutput};
 pub(crate) use network::{
     NetworkInput, NetworkOutput, NetworkWatchCaptureState, NetworkWatchDeliveryState, NetworkWatchEventKind,

@@ -6,10 +6,11 @@ introduced for [#1994](https://github.com/peters/horizon/issues/1994), where a
 page's second download was dropped without a prompt or an error, and where a
 person's download from the built-in PDF viewer left no file.
 
-A caller reads the report through the panel's `downloads` control action. The
-trust boundary is
+The public contract is the `browser_downloads` tool in
+`crates/horizon-browser-mcp/README.md`. The trust boundary is
 [`docs/review/trust-boundaries/browser-downloads.md`](../review/trust-boundaries/browser-downloads.md).
-The live check is `crates/horizon-browser/tests/downloads_live.rs`.
+The repeatable check is
+[`docs/testing/procedures/browser-downloads.md`](../testing/procedures/browser-downloads.md).
 
 ## One folder for each panel
 

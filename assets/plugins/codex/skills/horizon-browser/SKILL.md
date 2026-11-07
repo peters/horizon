@@ -219,6 +219,23 @@ Use `operation: status` to inspect the active or last recording without changing
 Page pixels never enter the action audit. The recording samples the existing
 decoded frame slot on Chromium, Firefox, and Safari.
 
+`browser_downloads` reports the panel's download folder and the downloads that
+this session observed, newest last. A local Chromium or Firefox panel saves
+every download of its page into that one panel folder without a prompt,
+including a download that the person starts, so a page-initiated download never
+ends silently: after the click, call `browser_downloads` instead of guessing
+where the file went. Each row gives `file_name`, `state` (`in_progress`,
+`completed` or `canceled`), `received_bytes`, `total_bytes` when the response
+stated it, and the absolute `path` once the browser named the file it wrote. A
+download that the browser still writes has no `path` yet: call the tool again.
+Inspect the panel's `downloads` capability first, and read `reporting`: when it
+is false this session could not observe downloads, so an empty list is not proof
+that nothing was saved. Rows are bounded and `dropped` counts reports that this
+session forgot; their files stay in the folder. Read a saved file with ordinary
+read-only tools. The tool starts no download, writes no file, and returns no
+download URL, because a download URL can carry a credential. Safari and remote
+sessions return `unsupported_backend`.
+
 Chromium HTTP bodies and WebSocket frames are protocol-native, but CDP cannot
 return a `fetch()` body the page drained with `response.blob()`; that
 `http_response_body` record carries an `error` and no `payload`, so when the

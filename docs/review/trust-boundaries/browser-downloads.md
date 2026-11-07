@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-protocol/src/downloads.rs,crates/horizon-browser-protocol/src/control.rs,crates/horizon-browser/src/downloads.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/events.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/webdriver/session.rs,crates/horizon-browser/src/webdriver/session/handshake.rs,crates/horizon-browser/src/webdriver/session/bidi.rs,crates/horizon-browser/src/webdriver/session/downloads.rs,crates/horizon-browser/src/webdriver/session/semantic.rs"
+applyTo: "crates/horizon-browser-protocol/src/downloads.rs,crates/horizon-browser/src/downloads.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/events.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/webdriver/session/handshake.rs,crates/horizon-browser/src/webdriver/session/bidi.rs,crates/horizon-browser/src/webdriver/session/downloads.rs,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser-mcp/src/model/downloads.rs"
 ---
 
 # Trust boundary of browser panel downloads
@@ -8,18 +8,16 @@ A browser panel saves every download of its page into one folder that Horizon
 owns for that panel, and reports what it saved. The design is in
 [`docs/architecture/browser-downloads.md`](../../architecture/browser-downloads.md).
 
-## Trusted: the permitted caller
+## Trusted: the agent request
 
-A caller that already controls the panel asks one read-only question through
-the panel's `downloads` control action.
+The agent asks one read-only question through `browser_downloads` on a panel it
+is permitted to control.
 
 - The lookup starts no download and writes no file.
 - The answer holds the panel folder and the rows this exact session observed. It
   never holds a download URL, because that URL can carry a credential.
 - A row holds the file name, the state, the byte counts and the path. It holds
   no page text and no response headers.
-- A remote browser host and a Safari backend refuse the action with
-  `unsupported_backend`: their files are written on another machine.
 
 ## Untrusted: the page and its downloads
 
