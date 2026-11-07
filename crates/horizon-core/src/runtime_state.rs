@@ -27,9 +27,26 @@ pub use agent_sessions::{
     reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
+/// What a saved panel records about its browser: the profile it used, the
+/// backend that served it, and the browser host of another machine when one
+/// served the page, so a restart puts the panel back on that host and profile.
+fn browser_profile_state(browser: &crate::browser::BrowserPanelState, hidden: bool) -> BrowserProfileState {
+    BrowserProfileState {
+        session_id: browser.shared_profile_id().map(str::to_string),
+        root: browser.profile_root_for_persistence().map(Path::to_path_buf),
+        backend: Some(browser.backend()),
+        hidden,
+        remote_target: browser.remote_target().map(str::to_string),
+        host: browser.remote_host_target().map(|ssh_target| BrowserHostState {
+            ssh_target: ssh_target.to_string(),
+            profile: browser.remote_host_profile().map(str::to_string),
+        }),
+    }
+}
+
 pub use models::{
-    AgentSessionBinding, AgentSessionKey, BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef,
-    RemoteWorkspaceReference, WorkspaceState, WorkspaceTemplateRef,
+    AgentSessionBinding, AgentSessionKey, BrowserHostState, BrowserProfileState, DetachedWorkspaceState, PanelState,
+    PanelTemplateRef, RemoteWorkspaceReference, WorkspaceState, WorkspaceTemplateRef,
 };
 
 const RUNTIME_STATE_VERSION: u32 = 3;
@@ -347,12 +364,11 @@ impl RuntimeState {
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
                             browser_profile: browser
-                                .map(|browser| BrowserProfileState {
-                                    session_id: browser.shared_profile_id().map(str::to_string),
-                                    root: browser.profile_root_for_persistence().map(Path::to_path_buf),
-                                    backend: Some(browser.backend()),
-                                    hidden: !panel.visible && !board.is_hidden_for_disposal(panel.id),
-                                    remote_target: browser.remote_target().map(str::to_string),
+                                .map(|browser| {
+                                    browser_profile_state(
+                                        browser,
+                                        !panel.visible && !board.is_hidden_for_disposal(panel.id),
+                                    )
                                 })
                                 .or_else(|| {
                                     panel.disconnected_browser_profile.clone().map(|mut profile| {

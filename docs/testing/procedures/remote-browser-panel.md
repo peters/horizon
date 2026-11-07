@@ -25,10 +25,6 @@ page scroll, the navigation and the fixed limit of the pointer.
   pulls of #1780 add them. It does not test the pointer of the person on a
   remote page, because the MCP contract has no coordinate pointer operation. Use
   the task `R4` for that limit.
-- It does not test a restart of Horizon that keeps a remote-host panel on its
-  host. The saved state does not record the backend of a browser panel yet, so a
-  restart brings such a panel back on the local browser. The task `R7` shows
-  this result.
 
 ## 3. Safety
 
@@ -239,7 +235,7 @@ person.
    it keeps the SSH target and the profile of the entry. Retry never starts the
    browser of this computer.
 
-### 6.7 R7 — an existing panel keeps its host, and a new panel follows the entry
+### 6.7 R7 — an existing panel keeps its host, a restart restores it, and a new panel follows the entry
 
 1. With the panel of R2 on screen, name another SSH target in the settings, or
    remove the `browser_host` section.
@@ -248,11 +244,29 @@ person.
 
 2. Close Horizon and start it again.
 
-   Result: Horizon restores the panel of R2 on the local browser, because the
-   saved state does not record the backend of a browser panel yet. The chrome of
-   that panel shows the engine picker and neither of the two lines.
+   Result: Horizon restores the panel of R2 on the browser host and the profile
+   that served it. The panel shows the SSH target of that host and its page, and
+   its chrome shows neither the engine picker nor a local backend.
 
-3. Create a new browser panel as in steps 6.2.1 and 6.2.2.
+3. Prove the profile, not only the host: in the restored panel, open a page that
+   signs in, in the profile of the host. Then close Horizon and start it again.
+
+   Result: the restored panel holds the same page and the same sign-in. The
+   profile of the host outlives both runs.
+
+4. Stop the browser host on the remote machine, then close Horizon and start it
+   again.
+
+   > **CAUTION:** THIS STEP STOPS THE BROWSER HOST ON THE REMOTE MACHINE. EVERY PAGE OF THAT HOST CLOSES.
+
+   Result: the restored panel keeps the host in its chrome and shows the typed
+   reason of the channel with a Retry. It does not fall back to the local browser.
+
+5. Start the browser host again and press Retry in the panel.
+
+   Result: the panel shows the page of the host again.
+
+6. Create a new browser panel as in steps 6.2.1 and 6.2.2.
 
    Result: the new panel follows the entry: it shows the second SSH target, or,
    when the entry is removed, it uses the local browser and shows no SSH target.

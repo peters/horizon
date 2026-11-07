@@ -396,6 +396,7 @@ impl PanelState {
                 .browser_profile
                 .as_ref()
                 .and_then(|profile| profile.remote_target.clone()),
+            browser_host: self.browser_profile.as_ref().and_then(|profile| profile.host.clone()),
             transcript_root: None,
             #[cfg(feature = "cloud-workspaces")]
             cloud_connection: None,
@@ -448,8 +449,21 @@ pub struct BrowserProfileState {
     /// comes back stopped: its session ended with the previous run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_target: Option<String>,
+    /// The browser host of another machine that served this panel, with the
+    /// profile it used. A restart restores the panel on that host and profile;
+    /// a live page cannot move between machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<BrowserHostState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+}
+
+/// The browser host that served a panel, and the profile of that host.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BrowserHostState {
+    pub ssh_target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

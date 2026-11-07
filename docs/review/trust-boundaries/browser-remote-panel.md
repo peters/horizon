@@ -31,10 +31,14 @@ space or a control character, and that is longer than 255 characters.
   for stays on the browser of this computer, and the entry of that agent reaches
   the host over the bridge instead, so a signed-in profile of the person takes no
   page that an agent asked for.
-- A panel that already exists keeps the backend that it was created with: a
-  restore of a saved panel and a page of a local profile that a panel duplicates
-  take the path they took before the entry existed, so a change of the entry
-  moves no live page between machines.
+- A panel that already exists keeps the backend that it was created with: a page
+  of a local profile that a panel duplicates takes the path it took before the
+  entry existed, so a change of the entry moves no live page between machines.
+- A saved panel restores on the browser host and the profile that served it. The
+  saved state carries the target and the profile, and the restore validates the
+  target with the same rule as a new panel, so a value that `ssh` reads as an
+  option gives no panel and no channel. The entry of today's settings decides no
+  saved panel.
 - The actor of every page of a panel is the constant `horizon:person:browser-panel`.
   A person never supplies it, and no agent identity uses it.
 - The panel uses the OpenSSH client of this computer. The host key is the host key
@@ -82,6 +86,14 @@ a key press on the focused element, a page scroll, a navigation, a viewport.
 
 ## What the panel does not protect
 
+- A restored panel opens the host and the profile that the saved state names, and
+  it verifies neither that the profile still exists on that host nor that the
+  host still answers. A host that is gone, or a profile that the person deleted
+  there, gives the typed reason of the channel and the Retry of a person, not a
+  panel on the local browser.
+- The saved target and profile are the record of a previous run of this computer.
+  A person who edits `~/.horizon/session.sqlite` moves the page of a panel to
+  another host, the same way that any saved panel state is theirs to edit.
 - The remote host decides which profile a page belongs to and which page an
   actor sees. The panel adds no scope of its own, and it does not verify that the
   page of its frame is the page that the create asked for.
