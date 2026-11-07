@@ -46,10 +46,14 @@ and the machine settings section in
   caller omits it. The offer that is ranked and the estimate that is checked are
   priced for exactly that duration, so a longer rent cannot pass the amount bound
   by being measured in hours.
-- The rent is recorded before this computer reads the repository's GitHub access,
-  because that step can spend money too. The line names the cloud, the provider,
-  the hours, the rate, the estimate, the currency, the approving person and the
-  calling actor, and it holds no credential.
+- The rent is recorded after every refusal that a read of this computer can
+  decide: the repository, the price list, the agent policy, the GitHub access and
+  the worker's public key are read first. A create that one of them refuses
+  records nothing, so an envelope is never spent on a cloud that was never asked
+  for. What runs after the line can rent a worker, which is why a rent stays
+  recorded when the deployment that follows fails. The line names the cloud, the
+  provider, the hours, the rate, the estimate, the currency, the approving person
+  and the calling actor, and it holds no credential.
 - The provider of an agent's cloud is chosen from the offers of the providers the
   section allows: the cheapest offer that meets the quick-start requirements
   wins, by the one order `cloud_offers` uses, and a tie keeps the first offer of
