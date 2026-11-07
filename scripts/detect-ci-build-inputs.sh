@@ -71,14 +71,25 @@ emit() {
     "$1" "$2" "$3" "$4" "$5" "$6"
 }
 
-# The `vnc` decoder rev in the Cargo.toml of one tree, or nothing when that tree
-# has no such dependency or no readable manifest.
+# The `vnc` decoder rev in the Cargo.toml of one tree. Prints nothing when that
+# tree has no manifest or no such dependency, and `?` when a manifest is there but
+# the pin cannot be read, so an unreadable pin is qualified rather than skipped.
 vnc_rev_at() {
   # A tree without the manifest prints nothing; `|| true` keeps `pipefail` and
   # `set -e` from treating that as a failed detection.
-  { git show "$1:Cargo.toml" 2>/dev/null || true; } \
-    | sed -n 's/^vnc[[:space:]]*=.*rev[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -n 1
+  { git show "$1:Cargo.toml" 2>/dev/null || true; } | python3 -c '
+import sys, tomllib
+text = sys.stdin.read()
+if not text.strip():
+    raise SystemExit
+try:
+    manifest = tomllib.loads(text)
+except tomllib.TOMLDecodeError:
+    print("?")
+    raise SystemExit
+pinned = manifest.get("workspace", {}).get("dependencies", {}).get("vnc")
+print(pinned.get("rev", "?") if isinstance(pinned, dict) else "")
+'
 }
 
 # Prints the files under crates/ that name the speech feature in the base or
