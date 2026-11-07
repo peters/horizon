@@ -302,6 +302,20 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "cloud_lifecycle",
+        description = "Stop or resume one cloud's worker without a person, on the machine's own provider credentials. operation submit needs cloud, the ID cloud_list reports in your workspace, and action stop or resume; Horizon answers once it accepted the operation, so poll operation status with the same operation_id until it is done. Horizon acts only on a cloud that an agent panel created for the same actor as yours: a cloud a person created, or one that another agent created, is refused with cloud_lifecycle_refused, and the person stops it on its card. A cloud another operation owns is cloud_lifecycle_busy. stop ends the worker's compute and keeps what the provider keeps of it, so the workspace volume stays and resume finds the same files; a cloud that is already stopped answers stopped and sends nothing. resume starts a stopped cloud's worker again with the same volume and the same SSH route, and the agent sessions of the cloud then reconnect to it. A stop or a resume cannot be recalled once its provider request is sent, so there is no cancel: a lost answer is read with status, never sent again. The answer names the phase, the cloud's stage after it, what stop kept, and the reason it failed. To delete the cloud and prove its resources absent, use cloud_delete. No provider, force, repository or worker argument."
+    )]
+    async fn cloud_lifecycle(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::provider_usage::CloudLifecycleRequest>,
+    ) -> Result<Json<crate::model::HostJson>, String> {
+        self.controller
+            .cloud_lifecycle(input)
+            .await
+            .map(|value| Json(crate::model::HostJson(value)))
+    }
+
+    #[tool(
         name = "cloud_list",
         description = "The cloud list of the Horizon sidebar for the clouds in your workspace. operation list (the default) returns each cloud's ID, name, group (needs_you, cloud or parked), status line, hourly rate and whether an agent works on it, and `sessions`: the panel ID, agent, branch and worktree of every session its worker runs, which is the identifier cloud_agent_message and cloud_agent_read take. worker_image and image_publication describe that cloud's retained image and publisher metadata when its matching runtime is loaded, otherwise null. An unresolved image is null too. Registry publisher metadata includes its opaque nonsecret grant ID, never credential values or paths. They read no credentials and do not prove current registry access. attach moves the person's view to the cloud, as a click on its row does; its terminals attach when the cloud stays in view. park parks the terminals of a cloud that is out of view now instead of after the grace period; a cloud in view is refused, because it attaches again. Requires the running Horizon."
     )]
@@ -1021,6 +1035,7 @@ mod tests {
                 "cloud_delete",
                 "cloud_exec",
                 "cloud_image_destination",
+                "cloud_lifecycle",
                 "cloud_list",
                 "cloud_offers",
                 "device_panel",

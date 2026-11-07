@@ -10,6 +10,7 @@ pub use super::cloud_agent::{
 pub use super::cloud_companion::{CompanionAction, CompanionRequest, new_operation_id};
 pub use super::cloud_create::{CloudCreateOperation, CloudCreateRequest};
 pub use super::cloud_delete::{CloudDeleteOperation, CloudDeleteRequest};
+pub use super::cloud_lifecycle::{CloudLifecycleAction, CloudLifecycleOperation, CloudLifecycleRequest};
 pub use super::cloud_list::{CloudListOperation, CloudListRequest, STOP_REMOVED};
 pub use super::exec::{
     ANSWER_HEADROOM_MILLIS, CloudExecAudit, CloudExecOutcome, CloudExecRequest, DEFAULT_TIMEOUT_MILLIS,
@@ -61,6 +62,10 @@ pub struct UsageRequest {
     /// host's own thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_delete: Option<CloudDeleteRequest>,
+    /// A cloud lifecycle request, which stops or resumes a cloud's worker on the host's
+    /// own thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_lifecycle: Option<CloudLifecycleRequest>,
     /// One bounded command for a cloud's worker, run by the host's recorded route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_exec: Option<CloudExecRequest>,
@@ -103,6 +108,10 @@ pub struct UsageResult {
     /// The host's answer to a cloud delete request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_delete: Option<serde_json::Value>,
+    /// The host's answer to a cloud lifecycle request: the phase of the stopped or resumed
+    /// worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_lifecycle: Option<serde_json::Value>,
     /// The host's answer to a cloud command: its exit status, both streams and its account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_exec: Option<serde_json::Value>,
@@ -136,6 +145,7 @@ impl UsageRequest {
             cloud_list: None,
             cloud_create: None,
             cloud_delete: None,
+            cloud_lifecycle: None,
             cloud_exec: None,
             cloud_agent_message: None,
             cloud_agent_read: None,
@@ -358,6 +368,35 @@ fn enqueue_cloud_delete_at(
     )
 }
 
+/// Queues a cloud lifecycle request for the live host, which stops or resumes the worker of
+/// the cloud the caller's agent panel created.
+/// # Errors
+/// Invalid host identity, malformed request, a full queue or unavailable private storage.
+pub fn enqueue_cloud_lifecycle(identity: AgentIdentity<'_>, request: CloudLifecycleRequest) -> std::io::Result<String> {
+    enqueue_cloud_lifecycle_at(BrowserRuntimePaths::resolve().root(), identity, request)
+}
+
+fn enqueue_cloud_lifecycle_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    request: CloudLifecycleRequest,
+) -> std::io::Result<String> {
+    if !request.valid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid cloud lifecycle request",
+        ));
+    }
+    enqueue_request_at(
+        root,
+        identity,
+        Ask {
+            cloud_lifecycle: Some(request),
+            ..Ask::default()
+        },
+    )
+}
+
 /// Queues one bounded command for a cloud's worker, which the host runs as the worker's
 /// agent user through its recorded route. The host answers the exit status, both streams
 /// and the account; nothing here spends compute or names a user.
@@ -550,6 +589,7 @@ struct Ask {
     cloud_list: Option<CloudListRequest>,
     cloud_create: Option<CloudCreateRequest>,
     cloud_delete: Option<CloudDeleteRequest>,
+    cloud_lifecycle: Option<CloudLifecycleRequest>,
     cloud_exec: Option<CloudExecRequest>,
     cloud_agent_message: Option<CloudAgentMessageRequest>,
     cloud_agent_read: Option<CloudAgentReadRequest>,
@@ -569,6 +609,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_list,
         cloud_create,
         cloud_delete,
+        cloud_lifecycle,
         cloud_exec,
         cloud_agent_message,
         cloud_agent_read,
@@ -623,6 +664,7 @@ fn enqueue_request_at(root: &Path, identity: AgentIdentity<'_>, ask: Ask) -> std
         cloud_list,
         cloud_create,
         cloud_delete,
+        cloud_lifecycle,
         cloud_exec,
         cloud_agent_message,
         cloud_agent_read,

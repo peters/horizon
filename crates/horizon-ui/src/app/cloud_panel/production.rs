@@ -19,6 +19,7 @@ mod first_panel;
 mod github_requests;
 mod launch;
 mod lifecycle;
+mod lifecycle_agent;
 mod list;
 mod local_network;
 #[cfg(debug_assertions)]
@@ -129,6 +130,8 @@ pub(super) struct Production {
     create_agent: create_agent::State,
     /// Cloud delete operations of agents, answered in the next frame.
     delete_agent: delete_agent::State,
+    /// Cloud stop and resume operations of agents, answered in the next frame.
+    lifecycle_agent: lifecycle_agent::State,
     /// Prices sent to ready workers for their agents' cloud offers.
     offer_publication: offer_publication::State,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
