@@ -260,9 +260,7 @@ applies to the next session, usage sample or device list.
 
 The host serves the public MCP contract over stdio. `browser_create` with a
 configured `target`, or a target from `browser_provider_devices`, opens a
-session. `browser_close` releases it. It answers `release_failed` or
-`release_unknown`, as the desktop host does, when the provider did not confirm
-the release, and the provider slot stays held until a check confirms it. `browser_provider_usage` samples the
+session. `browser_close` releases it. `browser_provider_usage` samples the
 configured providers and `browser_remote_allocations` lists and reconciles the
 holds of the host. The host starts no local browser: a create without a target
 fails with `target_required`. Requests that need a Horizon host, such as the
@@ -393,6 +391,19 @@ cancelling after allocation releases the owned session.
   exact session id and shown as unresolved cleanup. Release is `released` only
   when the provider reports a terminal status where such an API exists;
   otherwise the state is `released_unverified` and the documentation says so.
+- A close decides its answer from provider evidence, not from the release
+  request alone. The DELETE of one exact session path counts as absence when
+  the provider answers 404, whatever error code or body it uses, because that
+  answer says the provider does not have the session. When the release request
+  is refused or unanswered, the host keeps the close open and checks the exact
+  session record. A record that shows the session is gone answers `closed`, as
+  reconciliation does. `release_failed` is reported only when that record still
+  shows the session as active. Any other check result answers
+  `release_unknown`, and its message names the cause, such as a rejected
+  credential or a provider that gave no trustworthy answer. The close deadline
+  bounds the wait; the provider slot stays held until a check confirms the
+  release. Both hosts use the same rule
+  (`horizon-browser-control/src/remote_release.rs`).
 - Provider idle and lifetime expiry are requested where supported and a local
   hard-deadline and idle watchdog always runs on its own thread, started when
   allocation succeeds, so a driver blocked in a long classic command cannot

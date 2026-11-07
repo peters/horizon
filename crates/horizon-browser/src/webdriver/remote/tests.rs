@@ -219,12 +219,24 @@ fn release_is_verified_or_reported_unknown_after_bounded_attempts() {
     assert_eq!(host.release("abc"), RemoteReleaseOutcome::Released);
     assert_eq!(released.recorded()[0].path, "/session/abc");
 
-    let gone = Server::start(vec![Reply::json(
-        404,
-        &json!({"value": {"error": "invalid session id", "message": "gone"}}),
-    )]);
+    // Every provider answer about a session it does not have is absence,
+    // whatever its error code or body: the panel is gone either way.
+    for body in [
+        json!({"value": {"error": "invalid session id", "message": "gone"}}),
+        json!({"value": {"error": "session not found", "message": "no such session"}}),
+        json!({"value": {"message": "Invalid session ID"}}),
+    ] {
+        let gone = Server::start(vec![Reply::json(404, &body)]);
+        let mut host = RemoteHost::connect(&request(&gone.endpoint(""))).expect("connect");
+        assert_eq!(host.release("abc"), RemoteReleaseOutcome::AlreadyGone, "{body}");
+    }
+    let gone = Server::start(vec![Reply::json(404, &json!("no such session"))]);
     let mut host = RemoteHost::connect(&request(&gone.endpoint(""))).expect("connect");
-    assert_eq!(host.release("abc"), RemoteReleaseOutcome::AlreadyGone);
+    assert_eq!(
+        host.release("abc"),
+        RemoteReleaseOutcome::AlreadyGone,
+        "a 404 without a W3C error envelope is still absence"
+    );
 
     let refused = Server::start(vec![Reply::json(
         500,

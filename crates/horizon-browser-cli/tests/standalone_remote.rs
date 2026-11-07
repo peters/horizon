@@ -28,6 +28,16 @@ struct Seen {
     authorization: Option<String>,
 }
 
+/// How the fixture provider answers the release request of one exact session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Release {
+    /// Accepted, as a W3C grid answers a delete.
+    Accepted,
+    /// Refused with a server error after the session ended, as a grid under
+    /// load answers a delete of a session it already stopped.
+    Refused,
+}
+
 /// A loopback provider. Sessions in `ended` answer as gone, as after the
 /// provider's own idle timeout.
 struct Provider {
@@ -37,6 +47,10 @@ struct Provider {
 }
 
 fn provider() -> Provider {
+    provider_answering(Release::Accepted)
+}
+
+fn provider_answering(release: Release) -> Provider {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind provider");
     let endpoint = format!("http://{}/wd/hub", listener.local_addr().expect("address"));
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -46,7 +60,7 @@ fn provider() -> Provider {
         let mut sessions = 0;
         for stream in listener.incoming().flatten() {
             let Some(request) = read_request(&stream) else { continue };
-            let (status, body) = answer(&request, &mut sessions, &mut gone.lock().expect("ended"));
+            let (status, body) = answer(&request, &mut sessions, &mut gone.lock().expect("ended"), release);
             record.lock().expect("record").push(request);
             let body = body.to_string();
             let _ = write!(
@@ -92,7 +106,7 @@ fn read_request(stream: &TcpStream) -> Option<Seen> {
     })
 }
 
-fn answer(request: &Seen, sessions: &mut u32, ended: &mut BTreeSet<String>) -> (u16, Value) {
+fn answer(request: &Seen, sessions: &mut u32, ended: &mut BTreeSet<String>, release: Release) -> (u16, Value) {
     let path = request.path.as_str();
     if request.method == "POST" && path == "/wd/hub/session" {
         *sessions += 1;
@@ -115,6 +129,12 @@ fn answer(request: &Seen, sessions: &mut u32, ended: &mut BTreeSet<String>) -> (
         }
         if request.method == "DELETE" && !path.ends_with("/window") {
             ended.insert(session);
+            if release == Release::Refused {
+                return (
+                    500,
+                    json!({"value": {"error": "unknown error", "message": "fixture release refused"}}),
+                );
+            }
         }
     }
     let value = if path.ends_with("/screenshot") {
@@ -320,6 +340,40 @@ fn a_configured_target_opens_answers_and_is_released_on_close_and_on_exit() {
         left.is_empty(),
         "a host that released everything leaves no files: {left:?}"
     );
+}
+
+#[test]
+fn a_release_the_provider_refused_is_closed_when_its_session_record_proves_absence() {
+    let root = tempfile::tempdir().expect("root");
+    let Provider { endpoint, seen, .. } = provider_answering(Release::Refused);
+    let mut host = Host::start(root.path(), &endpoint);
+
+    let created = host
+        .tool("browser_create", &json!({"target": "desktop"}))
+        .expect("create");
+    let panel = created["panel"]["panel_id"].as_str().expect("panel id").to_owned();
+    // The provider refuses the release request of a session it already ended.
+    host.tool("browser_close", &json!({"panel_id": panel}))
+        .expect("the close is confirmed by the exact session record");
+
+    let released = deletes(&seen);
+    assert_eq!(released.len(), 1, "the release request was sent once: {released:?}");
+    let recorded = seen.lock().expect("seen").clone();
+    assert!(
+        recorded
+            .iter()
+            .any(|seen| seen.method == "GET" && seen.path == "/wd/hub/session/fixture-1/url"),
+        "the exact session record decided the close: {recorded:?}"
+    );
+    let after = host
+        .tool("browser_remote_allocations", &json!({"operation": "list"}))
+        .expect("allocations after close");
+    assert_eq!(after["allocations"][0]["status"], "released", "{after}");
+
+    let (success, stderr) = host.finish();
+    assert!(success, "{stderr}");
+    let holds = root.path().join(".horizon").join("standalone-remote-holds");
+    assert!(walk(&holds).is_empty(), "the released hold leaves no files");
 }
 
 fn walk(dir: &Path) -> Vec<std::path::PathBuf> {

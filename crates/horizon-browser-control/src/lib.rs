@@ -8,7 +8,9 @@ pub mod manifest;
 pub mod paths;
 pub mod remote_authorization;
 pub mod remote_host;
+pub mod remote_release;
 pub mod remote_slots;
 
 pub use attachments::{AttachmentPolicy, AttachmentPolicyError, AuthorizedFile, MAX_ATTACHMENT_BYTES};
 pub use paths::BrowserRuntimePaths;
+pub use remote_release::{CloseRelease, CloseReleaseFailure};

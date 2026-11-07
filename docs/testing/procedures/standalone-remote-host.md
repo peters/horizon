@@ -89,6 +89,13 @@ Give each task an ID. A report uses the ID to give a result.
 
    Result: The provider gets one session delete. The allocation shows `released`.
 
+5. Use a test provider that refuses the delete of a session that it already
+   ended, and that answers a read of the exact session as absent. Do steps 1
+   and 4 again.
+
+   Result: `browser_close` succeeds. The provider gets one delete and one read
+   of the exact session. The allocation shows `released`.
+
 ### 6.3 SRH-EXIT: Release at the end of stdin
 
 1. Call `browser_create` with the target. Then close stdin of the host.

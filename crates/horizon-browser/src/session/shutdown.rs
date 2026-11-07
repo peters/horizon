@@ -310,6 +310,17 @@ impl BrowserShutdownSignal {
     #[doc(hidden)]
     #[must_use]
     pub fn completed_remote_for_test(provider: &str, release: Option<RemoteReleaseOutcome>) -> Self {
+        Self::completed_remote_recovery_for_test(provider, release, None)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn completed_remote_recovery_for_test(
+        provider: &str,
+        release: Option<RemoteReleaseOutcome>,
+        recovery: Option<crate::RemoteAllocation>,
+    ) -> Self {
         let (completion_tx, completion_rx) = mpsc::channel();
         drop(completion_tx);
         let process_control = ChromeProcessControl::default();
@@ -318,7 +329,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: Arc::new(Mutex::new(release)),
             remote_provider: Some(provider.to_string()),
-            remote_recovery: None,
+            remote_recovery: recovery,
             remote_quota_key: Some(provider.to_string()),
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
