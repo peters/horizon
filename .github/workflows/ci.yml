@@ -227,7 +227,7 @@ jobs:
       # invalidate. The detector names the rev change, not a manifest change, because
       # most manifest changes keep the pin.
       - name: Qualify pinned VNC decoder
-        if: ${{ !cancelled() && needs.changes.outputs.vnc_pin == 'true' }}
+        if: ${{ !cancelled() && needs.changes.outputs.vnc_pin != 'false' }}
         run: |
           decoder_dir=$(mktemp -d)
           decoder_rev=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["dependencies"]["vnc"]["rev"])')
