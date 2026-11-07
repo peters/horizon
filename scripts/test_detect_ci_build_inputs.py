@@ -106,6 +106,15 @@ class DetectionTests(unittest.TestCase):
         self.commit("Cargo.toml", contents={"Cargo.toml": manifest.format("a" * 40) + "# note\n"})
         self.assert_gates(self.detect(base=pinned), release="true", vnc="false")
 
+    def test_a_change_to_the_qualification_itself_runs_it_once(self):
+        for path in [".github/workflows/ci.yml", "scripts/detect-ci-build-inputs.sh"]:
+            with self.subTest(path=path):
+                self.setUp()
+                self.commit(path)
+                # ci.yml is a release input; both paths also feed the browser image step.
+                self.assert_gates(self.detect(), vnc="true", packaging="true",
+                                  release="true" if path.endswith("ci.yml") else "false")
+
     def test_a_manifest_the_detector_cannot_read_qualifies_the_decoder(self):
         pinned = self.commit("Cargo.toml", contents={"Cargo.toml": "[workspace]\n"})
         self.commit("Cargo.toml", contents={"Cargo.toml": "this is not TOML\n"})
@@ -129,9 +138,10 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                # A manifest the detector cannot read is qualified rather than skipped.
+                # A manifest the detector cannot read is qualified rather than skipped, and
+                # the workflow holds the qualification step itself.
                 self.assert_gates(self.detect(), release="true",
-                                  vnc="true" if path == "Cargo.toml" else "false")
+                                  vnc="true" if path in ("Cargo.toml", ".github/workflows/ci.yml") else "false")
 
     def test_packaging_changes_stay_out_of_the_release_matrix(self):
         for path in ["packaging/linux/horizon.desktop", "packaging/linux/install.sh"]:
@@ -187,7 +197,8 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), release="true", packaging=packaging)
+                self.assert_gates(self.detect(), release="true", packaging=packaging,
+                                  vnc="true" if path.endswith("ci.yml") else "false")
 
     def test_artifact_build_definition_builds_macos_at_once(self):
         for path in [".github/workflows/release-artifacts.yml",

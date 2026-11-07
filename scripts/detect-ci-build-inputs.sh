@@ -50,11 +50,13 @@
 # unknown diff and a manual dispatch build it.
 #
 # `vnc_pin` is true when the `vnc` decoder rev in Cargo.toml differs from the
-# base, which is the only input of the qualification that runs the decoder's own
-# formatting, tests and Clippy. The rev names an upstream commit that cannot
-# change under it, so a run without a new rev repeats a result that nobody can
-# invalidate, and a run with one is the first to see it. Removing the dependency
-# leaves no pin to qualify, so the step skips.
+# base, which is the input that runs the decoder's own formatting, tests and
+# Clippy. The rev names an upstream commit that cannot change under it, so a run
+# without a new rev repeats a result that nobody can invalidate, and a run with one
+# is the first to see it. Removing the dependency leaves no pin to qualify, so the
+# step skips. The step and this script are inputs too: a change to either runs the
+# qualification once, so a broken step fails on its own change instead of on a
+# later one that moves the rev.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -138,6 +140,7 @@ macos_release_inputs=false
 rust_inputs=false
 speech_inputs=false
 packaging_inputs=false
+vnc_step_changed=false
 speech_gated=
 if [ "$event_name" != "pull_request" ]; then
   rust_inputs=true
@@ -160,6 +163,11 @@ while IFS= read -r path; do
     rust_inputs=true
   fi
   case "$path" in
+    .github/workflows/ci.yml|scripts/detect-ci-build-inputs.sh)
+      vnc_step_changed=true
+      ;;
+  esac
+  case "$path" in
     packaging/browser-vm/*|crates/horizon-browser-cli/*|crates/horizon-browser/* \
       |.github/workflows/browser-vm-image.yml \
       |.github/workflows/ci.yml|scripts/detect-ci-build-inputs.sh)
@@ -181,7 +189,7 @@ while IFS= read -r path; do
 done <<< "$changed_paths"
 
 head_vnc_pin=$(vnc_rev_at "$head_sha")
-vnc_pin=false
+vnc_pin=$vnc_step_changed
 if [ -n "$head_vnc_pin" ] && [ "$head_vnc_pin" != "$(vnc_rev_at "$base_sha")" ]; then
   vnc_pin=true
 fi
