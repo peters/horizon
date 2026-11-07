@@ -181,6 +181,10 @@ pub struct PanelOptions {
     /// Configured remote target name for a browser panel restored from a
     /// previous run; it comes back stopped because its session ended then.
     pub remote_target: Option<String>,
+    /// The browser host and profile that served a browser panel restored from a
+    /// previous run. The panel comes back on that host, not on the local browser
+    /// and not on the host that the settings of today name.
+    pub browser_host: Option<crate::runtime_state::BrowserHostState>,
     pub transcript_root: Option<PathBuf>,
     pub restore_as_disconnected_snapshot: bool,
     /// True when this panel is being restored from persisted state rather
@@ -221,6 +225,7 @@ impl Default for PanelOptions {
             cloud_connection: None,
             remote_session: None,
             remote_target: None,
+            browser_host: None,
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: false,

@@ -241,6 +241,10 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
                 (None, Some(target)) => BrowserSpawnMode::RestoredRemote(target),
                 (None, None) => BrowserSpawnMode::Local(opts.browser_session_id.take()),
             };
+            // A saved panel comes back on the browser host and profile that served
+            // it. The host of today's settings does not decide a saved panel, and a
+            // live page cannot move between machines.
+            let remote = restored_browser_mode(remote, opts.browser_host.take())?;
             #[cfg(feature = "cloud-workspaces")]
             let remote = opts
                 .cloud_connection
@@ -420,6 +424,9 @@ enum BrowserSpawnMode {
     RestoredRemote(String),
     /// The browser host of another machine that the settings name.
     RemoteHost(crate::browser::RemoteHostBackend),
+    /// The browser host and profile that served a panel in a previous run. It
+    /// comes back on that host, as a page cannot move between machines.
+    RestoredHost(crate::browser::RemoteHostBackend),
     #[cfg(feature = "cloud-workspaces")]
     Cloud(crate::cloud_runtime::ssh::Connection, Option<String>),
 }
@@ -437,6 +444,28 @@ enum BrowserSpawnMode {
 /// # Errors
 /// Returns the reason that `RemoteHostBackend::new` gives for a target that `ssh`
 /// would take as an option or split, so no such value reaches a channel.
+/// The mode of a browser panel that a previous run saved: the browser host and
+/// profile that served it, when the saved panel carries them, and otherwise the
+/// mode that its other saved fields give.
+///
+/// The entry of today's settings takes no part: a saved panel keeps the host
+/// that served it, and a live page cannot move between machines.
+///
+/// # Errors
+/// Returns the reason that `RemoteHostBackend::new` gives for a saved target that
+/// `ssh` would take as an option or split, so no such value reaches a channel.
+fn restored_browser_mode(
+    mode: BrowserSpawnMode,
+    browser_host: Option<crate::runtime_state::BrowserHostState>,
+) -> Result<BrowserSpawnMode> {
+    match (browser_host, mode) {
+        (Some(host), BrowserSpawnMode::Local(None)) => Ok(BrowserSpawnMode::RestoredHost(
+            crate::browser::RemoteHostBackend::new(host.ssh_target, host.profile)?,
+        )),
+        (_, mode) => Ok(mode),
+    }
+}
+
 fn browser_spawn_mode(
     mode: BrowserSpawnMode,
     browser_host: Option<&crate::BrowserHostConfig>,
@@ -504,12 +533,14 @@ fn spawn_browser(
         // A panel of a browser host returns at once: the channel of the host
         // opens on its worker thread, and a host that never answers is a state
         // of the panel.
-        BrowserSpawnMode::RemoteHost(backend) => crate::browser::BrowserPanelState::start_remote_host(
-            seed.local_id.clone(),
-            &browser_config,
-            initial_url.clone(),
-            &backend,
-        ),
+        BrowserSpawnMode::RemoteHost(backend) | BrowserSpawnMode::RestoredHost(backend) => {
+            crate::browser::BrowserPanelState::start_remote_host(
+                seed.local_id.clone(),
+                &browser_config,
+                initial_url.clone(),
+                &backend,
+            )
+        }
     };
     tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
 
@@ -1435,6 +1466,51 @@ mod tests {
         assert!(
             matches!(provider, BrowserSpawnMode::RestoredRemote(target) if target == "target"),
             "a provider remote panel keeps its target"
+        );
+    }
+
+    #[test]
+    fn a_saved_browser_host_and_profile_restore_the_panel_on_that_host() {
+        let restored = restored_browser_mode(
+            BrowserSpawnMode::Local(None),
+            Some(crate::runtime_state::BrowserHostState {
+                ssh_target: "browser-vm".to_string(),
+                profile: Some("signed-in".to_string()),
+            }),
+        )
+        .expect("the restored host mode");
+        let BrowserSpawnMode::RestoredHost(backend) = restored else {
+            panic!("a saved host restores the panel on that host");
+        };
+        assert_eq!(backend.ssh_target(), "browser-vm");
+        assert_eq!(backend.profile(), Some("signed-in"));
+    }
+
+    #[test]
+    fn a_saved_host_target_that_ssh_would_read_as_an_option_is_refused() {
+        let refused = restored_browser_mode(
+            BrowserSpawnMode::Local(None),
+            Some(crate::runtime_state::BrowserHostState {
+                ssh_target: "-oProxyCommand=evil".to_string(),
+                profile: None,
+            }),
+        );
+        assert!(refused.is_err(), "a target that ssh reads as an option is refused");
+    }
+
+    #[test]
+    fn a_saved_page_of_a_local_profile_keeps_its_profile() {
+        let shared = restored_browser_mode(
+            BrowserSpawnMode::Local(Some("profile-page-1".to_string())),
+            Some(crate::runtime_state::BrowserHostState {
+                ssh_target: "browser-vm".to_string(),
+                profile: None,
+            }),
+        )
+        .expect("the mode of a restored shared page");
+        assert!(
+            matches!(shared, BrowserSpawnMode::Local(Some(id)) if id == "profile-page-1"),
+            "a shared local page never moves to a host"
         );
     }
 

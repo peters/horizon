@@ -139,6 +139,7 @@ fn persisted_browser_profile_root_survives_other_config_changes() {
             backend: None,
             hidden: false,
             remote_target: None,
+            host: None,
         }),
         ..PanelState::default()
     };
@@ -255,6 +256,7 @@ fn a_persisted_remote_target_restores_as_a_stopped_remote_panel() {
             backend: None,
             hidden: false,
             remote_target: Some("ios_phone".to_string()),
+            host: None,
         }),
         ..PanelState::default()
     };
@@ -445,4 +447,41 @@ workspaces:
         vec![("Shell", PanelKind::Shell)],
         "the panel of the removed kind goes; the other panel stays"
     );
+}
+
+#[test]
+fn a_persisted_browser_host_restores_the_panel_on_that_host_and_profile() {
+    let panel = PanelState {
+        kind: PanelKind::Browser,
+        browser_profile: Some(BrowserProfileState {
+            session_id: None,
+            root: None,
+            backend: None,
+            hidden: false,
+            remote_target: None,
+            host: Some(crate::runtime_state::BrowserHostState {
+                ssh_target: "browser-vm".to_string(),
+                profile: Some("signed-in".to_string()),
+            }),
+        }),
+        ..PanelState::default()
+    };
+    let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+    let host = options.browser_host.expect("the saved host");
+    assert_eq!(host.ssh_target, "browser-vm");
+    assert_eq!(host.profile.as_deref(), Some("signed-in"));
+    assert!(
+        !options.follows_browser_host,
+        "the settings of today do not decide a saved panel"
+    );
+}
+
+#[test]
+fn a_saved_panel_without_a_browser_host_restores_no_host() {
+    let panel = PanelState {
+        kind: PanelKind::Browser,
+        ..PanelState::default()
+    };
+    let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+    assert!(options.browser_host.is_none());
 }

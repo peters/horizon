@@ -80,6 +80,7 @@ pub(in crate::panel) fn placeholder_panel(
         backend: opts.browser_config.as_ref().map(|config| config.backend),
         hidden: !visible,
         remote_target: opts.remote_target.clone(),
+        host: opts.browser_host.clone(),
     });
     if opts.remote_workspace.is_some() {
         RemoteWorkspaceReference::validate_client_panel(
