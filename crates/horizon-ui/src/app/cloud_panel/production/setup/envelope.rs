@@ -5,7 +5,7 @@ use super::dashboard::{Tone, caption, header, label, surface};
 use crate::{app::util::chrome_button, theme};
 use egui::RichText;
 use horizon_core::cloud_runtime::{
-    envelope::{self, Envelope, LONGEST_HOURS},
+    envelope::{self, Envelope, LONGEST_HOURS, Spent},
     provider,
     setup::{self, Draft},
 };
@@ -22,6 +22,11 @@ pub(in crate::app::cloud_panel) struct Card {
     /// A save under way, and the message it left.
     saving: Option<Receiver<Result<Saved, String>>>,
     message: Option<String>,
+    /// What the approved envelope already paid for, and the approval it belongs to. The
+    /// record is read off the UI thread, so a slow disk never stalls a frame.
+    spent: Option<Spent>,
+    spent_for: Option<String>,
+    reading: Option<Receiver<Option<Spent>>>,
 }
 
 impl Card {
@@ -50,6 +55,48 @@ impl Card {
             let _ = tx.send(result);
             ctx.request_repaint();
         });
+    }
+
+    /// Reads what the approved envelope already paid for, once for each approval. A
+    /// record that cannot be read shows nothing rather than a wrong figure.
+    fn read_spent(&mut self, ctx: &egui::Context, draft: &Draft) {
+        let Some(approved) = draft.settings.spending_envelope.clone() else {
+            self.spent = None;
+            self.spent_for = None;
+            return;
+        };
+        if self.reading.is_some() || self.spent_for.as_deref() == Some(approved.approved_at.as_str()) {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.reading = Some(rx);
+        let root = draft.root().to_owned();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let spent = envelope::Ledger::at(&root).spent(&approved).ok();
+            let _ = tx.send(spent);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Takes the reading of the record when it arrives.
+    fn poll_spent(&mut self, ctx: &egui::Context, draft: &Draft) {
+        let Some(rx) = &self.reading else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(spent) => {
+                self.spent = spent;
+                self.spent_for = draft
+                    .settings
+                    .spending_envelope
+                    .as_ref()
+                    .map(|approved| approved.approved_at.clone());
+                self.reading = None;
+            }
+            Err(TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+            Err(TryRecvError::Disconnected) => self.reading = None,
+        }
     }
 
     fn poll(&mut self, ui: &egui::Ui, draft: &mut Draft) {
@@ -81,6 +128,54 @@ struct Saved {
     envelope: Option<Envelope>,
 }
 
+/// The approved envelope: its limits, who approved it, what it already paid for, and the
+/// way to take it away.
+fn approved_state(ui: &mut egui::Ui, draft: &Draft, card: &mut Card, envelope: &Envelope) {
+    label(
+        ui,
+        &format!(
+            "{} · up to {} h · up to {:.2} {}",
+            envelope.provider, envelope.max_hours, envelope.max_total, envelope.currency
+        ),
+    );
+    caption(
+        ui,
+        &format!("Approved by {} at {}.", envelope.approved_by, envelope.approved_at),
+    );
+    // What the record says the envelope already paid for, and what that leaves. A
+    // person cannot judge a bound without the figure that moves toward it.
+    if let Some(spent) = card.spent {
+        let left = envelope.remaining(spent);
+        caption(
+            ui,
+            &format!(
+                "Rented so far: {} of {} h · {:.2} of {:.2} {}. Left: {} h · {:.2} {}.",
+                count(spent.hours),
+                count(envelope.max_hours),
+                spent.amount,
+                envelope.max_total,
+                envelope.currency,
+                count(left.hours),
+                left.amount,
+                left.currency
+            ),
+        );
+    }
+    if ui.add_enabled(card.saving.is_none(), chrome_button("Revoke")).clicked() {
+        let root = draft.root().to_owned();
+        card.save(ui.ctx(), root, Some(envelope.clone()), None);
+    }
+}
+
+/// Hours without a needless decimal, as the envelope itself writes them.
+fn count(hours: f64) -> String {
+    if hours.fract().abs() < 1e-9 {
+        format!("{hours:.0}")
+    } else {
+        format!("{hours:.1}")
+    }
+}
+
 /// The providers an envelope may name: the ones that rent compute, never a saved host.
 fn providers() -> Vec<&'static provider::Description> {
     vec![&provider::RUNPOD, &provider::HETZNER, &provider::AZURE]
@@ -88,6 +183,8 @@ fn providers() -> Vec<&'static provider::Description> {
 
 pub(in crate::app::cloud_panel) fn card(ui: &mut egui::Ui, draft: &mut Draft, card: &mut Card) {
     card.poll(ui, draft);
+    card.read_spent(ui.ctx(), draft);
+    card.poll_spent(ui.ctx(), draft);
     let approved = draft.settings.spending_envelope.clone();
     surface(ui, |ui| {
         header(
@@ -105,21 +202,7 @@ pub(in crate::app::cloud_panel) fn card(ui: &mut egui::Ui, draft: &mut Draft, ca
             "An agent rents clouds only inside this approval. Without one, no agent rents anything here.",
         );
         if let Some(envelope) = &approved {
-            label(
-                ui,
-                &format!(
-                    "{} · up to {} h · up to {:.2} {}",
-                    envelope.provider, envelope.max_hours, envelope.max_total, envelope.currency
-                ),
-            );
-            caption(
-                ui,
-                &format!("Approved by {} at {}.", envelope.approved_by, envelope.approved_at),
-            );
-            if ui.add_enabled(card.saving.is_none(), chrome_button("Revoke")).clicked() {
-                let root = draft.root().to_owned();
-                card.save(ui.ctx(), root, approved.clone(), None);
-            }
+            approved_state(ui, draft, card, envelope);
         } else {
             ui.horizontal(|ui| {
                 for description in providers() {

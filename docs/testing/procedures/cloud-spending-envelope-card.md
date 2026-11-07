@@ -71,7 +71,29 @@ plainly when there is none.
    Result: The second window refuses with a message that the envelope was changed
    in another window, and the file keeps the approval of the first window.
 
-### 6.3 ENVELOPE-3 — A person revokes it
+### 6.3 ENVELOPE-3 — The card shows what the envelope already paid for
+
+> **CAUTION:** THIS STEP WRITES SYNTHETIC RENTS INTO THE RECORD OF THIS COMPUTER.
+> Copy `HORIZON_HOME/cloud/envelope-rents.jsonl` first, and put the copy back in
+> step 8. A wrong record changes how much of the envelope Horizon allows.
+
+1. Stop Horizon, and add two rents to `HORIZON_HOME/cloud/envelope-rents.jsonl`
+   that name the `provider`, the `currency` and the `approved_at` of the
+   approved envelope, with 1.5 and 0.5 hours and the amounts 0.21 and 0.13.
+
+   Result: The file holds two lines, each one rent.
+
+2. Start Horizon, open **Cloud settings**, and read the approved card.
+
+   Result: The card shows `Rented so far: 2 of 6 h · 0.34 of 2.00 EUR. Left: 4 h ·
+   1.66 EUR.` under the approval line.
+
+3. Remove the record file, and open **Cloud settings** again.
+
+   Result: The card shows the limits and the approval line, and no rented line,
+   because nothing has been rented.
+
+### 6.4 ENVELOPE-4 — A person revokes it
 
 1. Click **Revoke**.
 
@@ -88,10 +110,15 @@ plainly when there is none.
   settings.
 - The card revokes them and leaves every other setting as it was.
 - A window that showed another envelope never overwrites a newer one.
+- The card shows what the envelope has paid for and what is left of it, and shows
+  no rented line when the record holds nothing for this approval.
 
 ## 8. Cleanup
 
-1. Leave the envelope revoked unless the person wants it.
+1. Put the copy of `envelope-rents.jsonl` back, or remove the file when there was
+   none.
+
+2. Leave the envelope revoked unless the person wants it.
 
    Result: No agent can rent on this machine, and no cloud was started.
 
