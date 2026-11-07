@@ -8,6 +8,7 @@ use horizon_browser::session::{SharedBrowserSession, SharedSessionGroup};
 
 use super::{BackendKind, BrowserConfig, BrowserPanelState, BrowserStatus};
 use crate::panel::{PanelKind, PanelOptions};
+use crate::runtime_state::BrowserHostState;
 
 pub(super) type ProfileSession = SharedSessionGroup;
 
@@ -78,26 +79,37 @@ impl BrowserPanelState {
     #[must_use]
     pub fn can_duplicate(&self) -> bool {
         !self.is_remote()
-            && !self.is_remote_host()
             && matches!(self.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
             && matches!(self.status, BrowserStatus::Ready)
-            && self.shared_session.is_some()
+            // A local profile shares one session group. A page of a browser host
+            // shares one profile of that host instead, and the host limits the
+            // pages of a profile.
+            && (self.is_remote_host() || self.shared_session.is_some())
     }
 
     /// Construct a new page's launch options without copying profile files.
     ///
     /// # Errors
-    /// The source must be a ready local Chromium or Firefox page.
+    /// The source must be a ready local Chromium or Firefox page, or a ready page
+    /// of a browser host.
     pub fn duplicate_options(&self) -> crate::error::Result<PanelOptions> {
         if !self.can_duplicate() {
             return Err(crate::error::Error::State(
-                "duplicate panel requires a ready local Chromium or Firefox panel".into(),
+                "duplicate panel requires a ready local Chromium or Firefox panel, or a ready page of a browser host"
+                    .into(),
             ));
         }
         Ok(PanelOptions {
             kind: PanelKind::Browser,
             command: self.url.clone().or_else(|| self.requested_url.clone()),
             browser_config: Some(self.config.clone()),
+            // A page of a browser host comes back on that host and in that
+            // profile: one profile is one sign-in, and the host serves up to
+            // `MAX_PAGES` pages of it, `MAX_ACTOR_PAGES` for each actor.
+            browser_host: self.remote_host_target().map(|ssh_target| BrowserHostState {
+                ssh_target: ssh_target.to_string(),
+                profile: self.remote_host_profile().map(str::to_string),
+            }),
             browser_session_id: self.shared_profile_id().map(str::to_string),
             ..PanelOptions::default()
         })
@@ -139,6 +151,50 @@ mod tests {
         state.status = BrowserStatus::Ready;
         state.url = Some("https://example.test/current".into());
         state
+    }
+
+    /// A page of a browser host, as the settings name it.
+    fn host_panel(target: &str, profile: &str) -> BrowserPanelState {
+        let backend =
+            crate::browser::RemoteHostBackend::new(target, Some(profile.to_string())).expect("the host target");
+        let mut state = BrowserPanelState::start_remote_host(
+            "host-page".to_string(),
+            &BrowserConfig::default(),
+            Some("https://example.test/current".to_string()),
+            &backend,
+        );
+        state.status = BrowserStatus::Ready;
+        state
+    }
+
+    #[test]
+    fn a_page_of_a_browser_host_duplicates_onto_that_host_and_profile() {
+        let source = host_panel("browser-vm", "signed-in");
+        assert!(
+            source.can_duplicate(),
+            "a ready page of a browser host opens a second page"
+        );
+        let options = source.duplicate_options().expect("the duplicate options");
+        let host = options.browser_host.expect("the host of the source page");
+        assert_eq!(host.ssh_target, "browser-vm");
+        assert_eq!(host.profile.as_deref(), Some("signed-in"));
+        assert_eq!(
+            options.browser_session_id, None,
+            "a host panel holds no local shared profile"
+        );
+        assert_eq!(
+            options.command.as_deref(),
+            Some("https://example.test/current"),
+            "the second page opens at the page of the source"
+        );
+    }
+
+    #[test]
+    fn a_page_of_a_browser_host_that_is_not_ready_does_not_duplicate() {
+        let mut source = host_panel("browser-vm", "signed-in");
+        source.status = BrowserStatus::Starting;
+        assert!(!source.can_duplicate());
+        assert!(source.duplicate_options().is_err());
     }
 
     #[test]

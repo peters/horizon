@@ -34,6 +34,10 @@ space or a control character, and that is longer than 255 characters.
 - A panel that already exists keeps the backend that it was created with: a page
   of a local profile that a panel duplicates takes the path it took before the
   entry existed, so a change of the entry moves no live page between machines.
+- A duplicated panel opens on the host and profile of its source panel, not on the
+  host of today's settings. The source must be ready, a provider remote page is
+  refused, and the host limits the pages of one profile (`MAX_PAGES`) and of one
+  actor (`MAX_ACTOR_PAGES`), so a refusal comes from the host that owns the limit.
 - A saved panel restores on the browser host and the profile that served it. The
   saved state carries the target and the profile, and the restore validates the
   target with the same rule as a new panel, so a value that `ssh` reads as an

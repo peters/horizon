@@ -293,8 +293,8 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
     ),
     (
         "browser_duplicate",
-        Parity::No,
-        "a host page cannot duplicate yet (issue 1970)",
+        Parity::Partial,
+        "a host panel duplicates from Horizon onto the same host and profile; over the bridge the call states that its server has no Horizon host instance",
     ),
     ("browser_evaluate", Parity::Yes, ""),
     (

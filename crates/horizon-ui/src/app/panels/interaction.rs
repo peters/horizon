@@ -177,7 +177,7 @@ impl HorizonApp {
                 if ui
                     .add_enabled(supported, egui::Button::new("Duplicate panel"))
                     .on_hover_text(
-                        "Open the same URL in a new panel, sharing login and website storage. Requires local Chromium or Firefox.",
+                        "Open the same URL in a new panel, sharing login and website storage. Works on local Chromium and Firefox, and on a page of a browser host, which shares the profile of that host.",
                     )
                     .clicked()
                 {

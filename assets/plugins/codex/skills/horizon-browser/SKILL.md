@@ -90,8 +90,11 @@ before an action when the page may have changed.
 
 When the user explicitly requests another panel sharing an existing login, call
 `browser_duplicate` with the source `panel_id`. The source must be a ready local
-Chromium or Firefox panel in your workspace; ownership and handoff guards still
-apply. The panels share cookies and persistent site storage, so logging out in
+Chromium or Firefox panel, or a ready page of a browser host, in your workspace;
+ownership and handoff guards still apply. A page of a browser host opens on that
+host and in that profile, which serves 16 pages and 4 for each actor; a call
+through the bridge states that its server has no Horizon host instance, so the
+person duplicates such a page in Horizon. The panels share cookies and persistent site storage, so logging out in
 one affects the others. Navigation and input are independent; forms, history,
 and live JavaScript state are not copied. This does not authorize helper panels
 as a workaround for iframe, popup, dialog, or consent interactions.

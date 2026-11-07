@@ -271,6 +271,27 @@ person.
    Result: the new panel follows the entry: it shows the second SSH target, or,
    when the entry is removed, it uses the local browser and shows no SSH target.
 
+### 6.8 R9 — a second panel opens on the same signed-in page
+
+1. Sign in to a site in the panel of step 6.2.
+
+2. Right-click the panel and choose **Duplicate panel**.
+
+   Result: Horizon opens a second panel whose chrome names the same SSH target, and
+   the new panel shows the same signed-in page. The first panel keeps painting.
+
+3. Sign out of the site in the second panel, then reload the first panel.
+
+   Result: the first panel is signed out too. One profile of the host is one
+   sign-in.
+
+4. Open 4 pages of this profile, then try a fifth page for the same actor.
+
+   > **CAUTION:** THE HOST CLOSES AN IDLE PAGE AFTER ONE HOUR. KEEP THE PAGES THAT YOU STILL NEED.
+
+   Result: the host refuses the fifth page with its typed reason, and the panel
+   shows a state with Retry instead of a page.
+
 ### 6.8 R8 — a store that locks again shows locked without a restart
 
 This task needs a Linux computer with a Secret Service daemon, for example
