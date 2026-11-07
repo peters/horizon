@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser/src/semantic.rs,crates/horizon-browser/src/semantic_keys.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/session/semantic/**,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser/src/webdriver/session/semantic/**"
+applyTo: "crates/horizon-browser/src/pointer.rs,crates/horizon-browser/src/semantic.rs,crates/horizon-browser/src/semantic_keys.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/session/semantic/**,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser/src/webdriver/session/semantic/**"
 ---
 
 # Trust boundary of browser semantic actions
@@ -41,6 +41,13 @@ The frame reports its own positions.
   typed failure, not a completion. A same-process child dispatches the point
   that the browser reports for the element, so the frame's padding and
   transforms are included.
+- A click that names a point instead of a target is checked against the page
+  viewport that the engine last drew: a point on or beyond its right or bottom
+  edge, a negative point and a point that is not a finite number are refused
+  with `invalid_input`, and the message names the point and the size. The engine
+  sends one trusted press and one trusted release at that point, so the page
+  cannot tell it from a person's click. A page that covers another page at that
+  point takes the click, as it does for a person.
 - A frame document that does not take focus after a click is a typed failure.
 - A fill that the page did not keep is a typed failure. An editable host is
   compared by its rendered text, so a stored line break or a no-break space

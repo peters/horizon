@@ -13,7 +13,7 @@ use horizon_browser::{BrowserCommand, BrowserInput, BrowserKey, BrowserModifiers
 use serde_json::{Value, json};
 
 use super::view::{HostChannel, HostOpener, HostPage, HostView};
-use super::{PANEL_ACTOR, POINTER_NOTE, RemoteHostFailure, RemoteHostRefusal, RemoteHostSlot};
+use super::{HOST_INPUT_NOTE, PANEL_ACTOR, RemoteHostFailure, RemoteHostRefusal, RemoteHostSlot};
 use crate::browser::{BackendKind, BrowserConfig, BrowserPanelState, BrowserStatus};
 
 /// A 1x1 PNG, as a screenshot result inlines it.
@@ -404,38 +404,146 @@ fn a_navigation_reaches_the_page_of_the_host() {
     );
 }
 
+/// One left press and one left release of the pointer, as the panel sends them.
+fn press_and_release(click_count: u32, button: horizon_browser::BrowserButton) -> [BrowserCommand; 2] {
+    [
+        BrowserCommand::Input(BrowserInput::MousePress {
+            x: 30.5,
+            y: 40.25,
+            button,
+            click_count,
+            buttons: 1,
+            modifiers: BrowserModifiers::none(),
+        }),
+        BrowserCommand::Input(BrowserInput::MouseRelease {
+            x: 30.5,
+            y: 40.25,
+            button,
+            click_count,
+            buttons: 0,
+            modifiers: BrowserModifiers::none(),
+        }),
+    ]
+}
+
+/// The calls of `browser_act` that clicked the page.
+fn clicks(script: &Script) -> Vec<Value> {
+    script
+        .calls_of("browser_act")
+        .into_iter()
+        .filter(|call| call["action"] == json!("click"))
+        .collect()
+}
+
 #[test]
-fn a_pointer_position_is_refused_with_a_typed_reason_and_the_panel_names_the_device_view() {
+fn a_release_reaches_the_host_as_one_click_at_its_point() {
     let script = Script::new();
     let mut panel = panel(&script);
     assert_eq!(settled(&mut panel), BrowserStatus::Ready);
-    let click = BrowserCommand::Input(BrowserInput::MousePress {
-        x: 30.0,
-        y: 40.0,
-        button: horizon_browser::BrowserButton::Left,
-        click_count: 1,
-        buttons: 1,
-        modifiers: BrowserModifiers::none(),
-    });
+    let [press, release] = press_and_release(1, horizon_browser::BrowserButton::Left);
     assert_eq!(
-        panel.remote_host_refusal(&click),
-        Some(RemoteHostRefusal::Pointer),
-        "the contract has no coordinate pointer operation"
+        panel.remote_host_refusal(&release),
+        None,
+        "a pointer position crosses as a click at its point"
     );
-    assert!(!panel.try_send(click), "a refused command never reaches the host");
+    assert!(panel.try_send(press), "the press is queued and becomes nothing");
+    assert!(panel.try_send(release), "the click reaches the host");
+    script.wait_for("browser_act");
     assert_eq!(
-        RemoteHostRefusal::Pointer.code(),
-        "remote_host_pointer_unsupported",
-        "the reason is typed"
+        clicks(&script),
+        vec![json!({ "action": "click", "x": 30.5, "y": 40.25, "count": 1, "panel_id": PAGE })],
+        "the release alone clicks the point, and the press adds no click"
     );
     assert_eq!(
         panel.remote_host_note(),
-        Some(POINTER_NOTE),
-        "the panel shows one short line about the way to click the page"
+        Some(HOST_INPUT_NOTE),
+        "the panel states what a click carries and what it does not"
     );
     assert!(
-        POINTER_NOTE.contains("device panel"),
-        "the line names the device view: {POINTER_NOTE}"
+        HOST_INPUT_NOTE.contains("drag does not cross"),
+        "the line states the pointer limit that stays: {HOST_INPUT_NOTE}"
+    );
+}
+
+#[test]
+fn a_double_click_reaches_the_host_as_two_single_clicks_and_never_as_three() {
+    let script = Script::new();
+    let mut panel = panel(&script);
+    assert_eq!(settled(&mut panel), BrowserStatus::Ready);
+    // The pointer of a double click sends a press and a release for each click,
+    // and the second pair carries the click count two.
+    for click_count in 1..=2 {
+        for command in press_and_release(click_count, horizon_browser::BrowserButton::Left) {
+            assert!(panel.try_send(command), "the pointer of a double click is queued");
+        }
+    }
+    script.wait_until("browser_act", |calls| {
+        calls.iter().filter(|call| call.contains("\"click\"")).count() >= 2
+    });
+    // The contract presses again for every click of its own count, so a count
+    // from the release would add a third press here.
+    assert_eq!(
+        clicks(&script),
+        vec![
+            json!({ "action": "click", "x": 30.5, "y": 40.25, "count": 1, "panel_id": PAGE }),
+            json!({ "action": "click", "x": 30.5, "y": 40.25, "count": 1, "panel_id": PAGE }),
+        ],
+        "two presses of the person are two clicks of the page"
+    );
+}
+
+#[test]
+fn a_panel_of_a_browser_host_carries_no_pointer_button_state() {
+    let script = Script::new();
+    let mut panel = panel(&script);
+    assert_eq!(settled(&mut panel), BrowserStatus::Ready);
+    assert!(
+        !panel.carries_pointer_button_state(),
+        "the channel carries no press, so a release that the person did not make is one click"
+    );
+    assert!(
+        BrowserPanelState::inert().carries_pointer_button_state(),
+        "a local engine holds a pressed button until its release"
+    );
+}
+
+#[test]
+fn a_release_of_another_mouse_button_is_refused_and_the_panel_names_the_left_click() {
+    let script = Script::new();
+    let mut panel = panel(&script);
+    assert_eq!(settled(&mut panel), BrowserStatus::Ready);
+    let [press, release] = press_and_release(1, horizon_browser::BrowserButton::Right);
+    assert!(panel.try_send(press), "the press is queued and becomes nothing");
+    assert!(
+        panel.try_send(release),
+        "the release is queued and the channel refuses it"
+    );
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        panel.drain_events();
+        if panel.navigation_error.is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the panel never showed the reason of the refused button"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        panel.navigation_error.as_deref(),
+        Some(RemoteHostRefusal::Button.message()),
+        "the panel names the left click and the way forward"
+    );
+    assert_eq!(
+        RemoteHostRefusal::Button.code(),
+        "remote_host_button_unsupported",
+        "the reason is typed"
+    );
+    assert!(
+        clicks(&script).is_empty(),
+        "a right click never reaches the page as a left click: {:?}",
+        clicks(&script)
     );
 }
 
