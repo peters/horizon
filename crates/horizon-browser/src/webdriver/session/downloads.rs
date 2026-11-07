@@ -19,8 +19,8 @@ pub(super) fn panel_downloads(
 
 impl Driver {
     /// `browsingContext.downloadWillBegin` and `browsingContext.downloadEnd`
-    /// for the panel's own top-level context. Other events are ignored, so a
-    /// popup's download stays out of this panel's report.
+    /// for this browser. A download a child frame starts names that frame's
+    /// context, so the context is not a filter here.
     pub(super) fn handle_download_bidi_event(&mut self, event: &Value) -> bool {
         let Some(method) = event.get("method").and_then(Value::as_str) else {
             return false;
@@ -29,7 +29,7 @@ impl Driver {
             return false;
         }
         let params = event.get("params").unwrap_or(&Value::Null);
-        self.downloads.firefox_event(method, params, self.context_id.as_deref());
+        self.downloads.firefox_event(method, params);
         true
     }
 }

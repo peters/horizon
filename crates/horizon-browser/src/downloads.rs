@@ -136,15 +136,10 @@ impl DownloadState {
     }
 
     /// Firefox's `browsingContext.downloadWillBegin` and `downloadEnd` events.
-    /// They arrive per browsing context, so only the panel's own context is
-    /// recorded.
-    pub(crate) fn firefox_event(&mut self, method: &str, params: &serde_json::Value, context_id: Option<&str>) {
-        if context_id
-            .zip(text(params, "context").as_deref())
-            .is_some_and(|(expected, reported)| expected != reported)
-        {
-            return;
-        }
+    /// A page can start a download in a child frame, and the event then names
+    /// that frame's context, so the context is not a filter: every event of this
+    /// browser names a file the browser saved in the panel folder.
+    pub(crate) fn firefox_event(&mut self, method: &str, params: &serde_json::Value) {
         // Firefox names the download `download` and the navigation that started
         // it `navigation`; one navigation can start several downloads, so the
         // download wins. The BiDi specification states only `navigation`, which
@@ -314,7 +309,6 @@ mod tests {
                 "suggestedFilename": "invoice.pdf",
                 "url": "https://example.test/invoice.pdf",
             }),
-            Some("ctx"),
         );
         assert_eq!(downloads.list().downloads[0].state, BrowserDownloadState::InProgress);
 
@@ -326,7 +320,6 @@ mod tests {
                 "status": "complete",
                 "filepath": "/home/alice/Horizon/downloads/invoice.pdf",
             }),
-            Some("ctx"),
         );
 
         let list = downloads.list();
@@ -348,7 +341,6 @@ mod tests {
         downloads.firefox_event(
             "browsingContext.downloadWillBegin",
             &json!({"context": "ctx", "download": "d1", "suggestedFilename": "invoice.pdf"}),
-            Some("ctx"),
         );
         downloads.firefox_event(
             "browsingContext.downloadEnd",
@@ -358,7 +350,6 @@ mod tests {
                 "status": "complete",
                 "filepath": saved.to_string_lossy(),
             }),
-            Some("ctx"),
         );
         let row = downloads.list().downloads.remove(0);
         assert_eq!(row.received_bytes, 12);
@@ -374,7 +365,6 @@ mod tests {
                 "status": "complete",
                 "filepath": saved.to_string_lossy(),
             }),
-            Some("ctx"),
         );
         let row = outside.list().downloads.remove(0);
         assert_eq!(row.received_bytes, 0);
@@ -395,7 +385,6 @@ mod tests {
                     "navigation": "navigation-1",
                     "suggestedFilename": name,
                 }),
-                Some("ctx"),
             );
         }
         let list = downloads.list();
@@ -414,12 +403,10 @@ mod tests {
                 "navigation": "navigation-2",
                 "suggestedFilename": "report.pdf",
             }),
-            Some("ctx"),
         );
         downloads.firefox_event(
             "browsingContext.downloadEnd",
             &json!({"context": "ctx", "navigation": "navigation-2", "status": "canceled"}),
-            Some("ctx"),
         );
         let list = downloads.list();
         assert_eq!(list.downloads.len(), 1);
@@ -427,14 +414,30 @@ mod tests {
     }
 
     #[test]
-    fn firefox_events_for_another_context_are_not_recorded() {
+    fn a_download_a_child_frame_starts_is_recorded() {
+        // The event names the frame's context, and the file still lands in the
+        // panel folder, so the row must not be filtered away.
         let mut downloads = state();
         downloads.firefox_event(
             "browsingContext.downloadWillBegin",
-            &json!({"context": "elsewhere", "download": "d1", "suggestedFilename": "x.pdf"}),
-            Some("ctx"),
+            &json!({
+                "context": "frame-context",
+                "download": "d1",
+                "suggestedFilename": "report.pdf",
+            }),
         );
-        assert!(downloads.list().downloads.is_empty());
+        downloads.firefox_event(
+            "browsingContext.downloadEnd",
+            &json!({
+                "context": "frame-context",
+                "download": "d1",
+                "status": "complete",
+                "filepath": "/home/alice/Horizon/downloads/report.pdf",
+            }),
+        );
+        let list = downloads.list();
+        assert_eq!(list.downloads.len(), 1);
+        assert_eq!(list.downloads[0].state, BrowserDownloadState::Completed);
     }
 
     #[test]

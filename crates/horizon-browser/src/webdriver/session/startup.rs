@@ -282,10 +282,7 @@ pub(super) fn establish_bidi(
         && config.browser.backend == BackendKind::FirefoxBidi
         && let Some(link) = bidi.as_mut()
     {
-        downloads_reported = match context_id.as_deref() {
-            Some(context) => super::bidi::subscribe_download_events(link, context).is_ok(),
-            None => false,
-        };
+        downloads_reported = super::bidi::subscribe_download_events(link).is_ok();
     }
     let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
     let disclosure = crate::disclosure::established_disclosure_status(

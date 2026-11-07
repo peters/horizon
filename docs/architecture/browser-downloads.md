@@ -61,11 +61,15 @@ answer that question, so the session sets these preferences at creation:
 | `browser.helperApps.neverAsk.saveToDisk` | document, archive, image and text types |
 
 The driver then subscribes to `browsingContext.downloadWillBegin` and
-`browsingContext.downloadEnd` for the panel's top-level context. Firefox 144
-and 145 introduced those events. An older Firefox still saves into the panel
-folder; the session reports `reporting: false` because it cannot name what it
-saved. Rows for another browsing context are ignored, so a popup's download
-stays out of this panel's report.
+`browsingContext.downloadEnd`. Firefox 144 and 145 introduced those events. An
+older Firefox still saves into the panel folder; the session reports
+`reporting: false` because it cannot name what it saved.
+
+The subscription carries no context filter. A page can start a download in a
+child frame, and the event then names that frame's context; a filter on the
+panel's top-level context would drop a file the panel did save. The rows
+therefore describe the downloads of this browser, which is what Chromium's
+browser-level events already report.
 
 Firefox reports the final path when the download ends, and no byte counts. The
 engine measures a finished file on disk instead, so a completed Firefox row

@@ -85,16 +85,24 @@ impl BrowserCoordination for Queue {
 }
 
 /// Three downloads that no click started: the page starts them itself, two
-/// seconds apart, which is the sequence a person reported in the issue.
+/// seconds apart, which is the sequence a person reported in the issue. The
+/// fourth download starts in a child frame, so its event names the frame's
+/// context.
 const FIXTURE: &str = r#"<!doctype html><title>downloads live</title><body>
 <a id="one" href="/files/one.pdf" download>one</a>
 <a id="two" href="/files/two.pdf" download>two</a>
 <a id="three" href="/files/three.pdf">three</a>
+<iframe src="/frame" width="300" height="120"></iframe>
 <script>
 for (const id of ['one', 'two', 'three']) {
     setTimeout(() => document.getElementById(id).click(), 500 + 800 * ['one', 'two', 'three'].indexOf(id));
 }
 </script></body>"#;
+
+/// The child frame's own download, started without a click.
+const FRAME: &str = r#"<!doctype html><title>downloads frame</title><body>
+<a id="frame" href="/files/frame.pdf" download>frame</a>
+<script>setTimeout(() => document.getElementById('frame').click(), 3000);</script></body>"#;
 
 #[test]
 #[ignore = "requires a local Chromium browser"]
@@ -111,19 +119,22 @@ fn firefox_saves_every_download_a_page_starts() {
 fn assert_page_downloads_land_in_the_panel_folder(backend: BackendKind) {
     let (session, _frame_slot, temp, queue) = start(backend);
     wait_until_loaded(&session);
-    let downloads = wait_for_downloads(&temp, 3);
+    let downloads = wait_for_downloads(&temp, EXPECTED_DOWNLOADS);
     let mut names: Vec<String> = downloads
         .iter()
         .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().to_string()))
         .collect();
     names.sort();
-    assert_eq!(names, ["one.pdf", "three.pdf", "two.pdf"], "{downloads:?}");
+    assert_eq!(names, ["frame.pdf", "one.pdf", "three.pdf", "two.pdf"], "{downloads:?}");
     for path in &downloads {
         assert_eq!(std::fs::read(path).unwrap_or_default(), PDF, "{}", path.display());
     }
-    assert_report_lists_every_download(&queue, &downloads, 3);
+    assert_report_lists_every_download(&queue, &downloads, EXPECTED_DOWNLOADS);
     assert!(session.send(BrowserCommand::Stop));
 }
+
+/// Three top-level downloads and one from the child frame.
+const EXPECTED_DOWNLOADS: usize = 4;
 
 /// The agent's answer names each file, its state and its size, and the folder
 /// the browser wrote into.
@@ -266,7 +277,15 @@ fn serve_fixture(listener: &TcpListener) {
         let _ = stream.read(&mut buf);
         let request = String::from_utf8_lossy(&buf);
         let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
-        if path.starts_with("/files/") {
+        if path.starts_with("/frame") {
+            let body = FRAME.as_bytes();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(body);
+        } else if path.starts_with("/files/") {
             let _ = write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

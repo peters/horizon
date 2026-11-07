@@ -32,7 +32,9 @@ bytes they contain.
 - A row states what the browser reported. A download the browser blocked
   before it began produces no row at all, so an empty list is not proof that the
   page did not try.
-- Firefox rows for another browsing context are dropped.
+- A download a child frame, or another page of the same browser, starts is a row
+  too: the report describes the downloads of this browser, which is the unit
+  that owns the folder.
 
 ## Does not guarantee
 
