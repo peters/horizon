@@ -223,26 +223,35 @@ class WorkflowTests(unittest.TestCase):
 
     def test_skipped_cloud_worker_tests_fail_on_github_and_warn_locally(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("bash scripts/run-cloud-worker-tests.sh", workflow)
         match = re.search(
-            r"^( +)if grep -q 'skipped=' \"\$RUNNER_TEMP/cloud-worker-tests\.log\"; then\n.*?^\1fi\n",
+            r"^( +)if \[ \"\$status\" -eq 3 \]; then\n.*?^\1fi\n",
             workflow,
             re.M | re.S,
         )
-        self.assertIsNotNone(match)
+        self.assertIsNotNone(match, "the step keeps its skip rule")
         check = "\n".join(line[len(match.group(1)):] for line in match.group(0).splitlines())
-        with tempfile.TemporaryDirectory() as temp:
-            Path(temp, "cloud-worker-tests.log").write_text("OK (skipped=1)\n")
-            for localci, code, annotation in [("", 1, "::error::"), ("true", 0, "::warning::")]:
-                with self.subTest(localci=localci):
-                    env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": temp, "LOCALCI": localci}
-                    result = subprocess.run(["bash", "-c", check], env=env, capture_output=True, text=True)
-                    self.assertEqual(result.returncode, code)
-                    self.assertIn(annotation, result.stdout)
-            Path(temp, "cloud-worker-tests.log").write_text("OK\n")
-            result = subprocess.run(["bash", "-c", check], env={"PATH": os.environ["PATH"], "RUNNER_TEMP": temp},
-                                    capture_output=True, text=True)
-            self.assertEqual((result.returncode, result.stdout), (0, ""))
-
+        for localci, code, annotation in [("", 1, "::error::"), ("true", 0, "::warning::")]:
+            with self.subTest(localci=localci):
+                env = {"PATH": os.environ["PATH"], "LOCALCI": localci, "status": "3"}
+                result = subprocess.run(["bash", "-c", check], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, code)
+                self.assertIn(annotation, result.stdout)
+        # Any other nonzero code is a failure: a failed module, or the runner refusing to run.
+        failure = re.search(
+            r"^( +)elif \[ \"\$status\" -ne 0 \]; then\n.*?^\1fi\n",
+            workflow,
+            re.M | re.S,
+        )
+        self.assertIsNotNone(failure)
+        rest = "\n".join(line[len(failure.group(1)):] for line in failure.group(0).splitlines())
+        # The block is the `elif` of the skip rule; on its own it starts an `if`.
+        rest = rest.replace('elif [ "$status" -ne 0 ]; then', 'if [ "$status" -ne 0 ]; then', 1)
+        for status in ["1", "2", "5"]:
+            with self.subTest(status=status):
+                env = {"PATH": os.environ["PATH"], "status": status}
+                result = subprocess.run(["bash", "-c", rest], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, "a run that passed nothing fails the step")
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,6 +93,8 @@ jobs:
         run: python3 scripts/check-browser-client-dependencies.py
       - name: Verify CI change detection
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
+      - name: Verify the cloud worker test runner
+        run: python3 -B scripts/test_run_cloud_worker_tests.py -v
       - name: Verify the local browser VM launcher
         run: python3 -B scripts/test_browser_vm_local.py -v
       - name: Verify the nightly macOS release builds watcher
@@ -520,15 +522,23 @@ jobs:
         shell: bash
         run: |
           cargo build --locked -p horizon-cloud-worker -p horizon-browser-cli
+          # One process per module, four at a time: the suite waits on real
+          # processes, so it takes 58 s instead of 162 s. The script exits 3 when
+          # a module skipped a test, which the check below turns into the same
+          # failure it always was.
+          status=0
           HORIZON_TEST_CLOUD_WORKER="$PWD/target/debug/horizon-cloud-worker" \
-            python3 -B -m unittest discover -s examples/cloud-worker -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/cloud-worker-tests.log"
-          if grep -q 'skipped=' "$RUNNER_TEMP/cloud-worker-tests.log"; then
+            bash scripts/run-cloud-worker-tests.sh "$RUNNER_TEMP/cloud-worker-tests.log" 4 || status=$?
+          if [ "$status" -eq 3 ]; then
             if [ -n "${LOCALCI:-}" ]; then
               echo "::warning::Cloud worker tests were skipped on this computer; GitHub CI runs them."
             else
               echo "::error::Cloud worker tests were skipped; install their prerequisites instead."
               exit 1
             fi
+          elif [ "$status" -ne 0 ]; then
+            # A failed module, or the runner's own refusal: either way nothing passed.
+            exit 1
           fi
 
   # Docs/CI-only pushes to main must not pay for release builds, so this job
