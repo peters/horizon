@@ -201,8 +201,9 @@ guarantee that the code gives, and what the code does not guarantee.
     (`0700`) folder of its panel, never into a path a page names; a reported
     name keeps only its last path component, loses control characters and is cut
     to 128 bytes; a report holds no download URL; rows are bounded to 64 and the
-    rest are counted; a Firefox row for another browsing context is dropped; a
-    session that could not observe downloads states `reporting: false`.
+    rest are counted; a download a child frame or another page of the same
+    browser starts is a row too, because that browser owns the folder; a session
+    that could not observe downloads states `reporting: false`.
   - Does not guarantee: a page can fill the panel folder and Horizon limits no
     size and inspects no content; Chromium saves the second and later
     page-initiated downloads without the prompt that would let a person refuse
