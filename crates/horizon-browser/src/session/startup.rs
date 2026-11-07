@@ -501,11 +501,9 @@ fn configure_downloads(
         "downloadPath": directory.to_string_lossy(),
         "eventsEnabled": true,
     });
-    eprintln!("DEBUG configure_downloads dir={} prepare={:?}", directory.display(), crate::downloads::prepare_directory(directory));
     match call_during_startup(link, stop_requested, "Browser.setDownloadBehavior", &params) {
-        Ok(_) => { eprintln!("DEBUG setDownloadBehavior ok"); true },
+        Ok(_) => true,
         Err(error) => {
-            eprintln!("DEBUG setDownloadBehavior ERR {error}");
             tracing::warn!(target: "browser", "browser refused the download folder: {error}");
             let _ = event_tx.send(BrowserEvent::Warning(format!(
                 "this browser saves downloads to its own folder and reports none: {error}"
