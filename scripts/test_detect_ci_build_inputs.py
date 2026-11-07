@@ -68,10 +68,13 @@ class DetectionTests(unittest.TestCase):
         )
         return result.stdout.strip()
 
-    def commit(self, *paths):
+    def commit(self, *paths, contents=None):
         for path in paths:
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
+            if contents and path in contents:
+                target.write_text(contents[path])
+                continue
             target.write_text(f"{path}\n{len(self.repo.name)}\n")
         self.git("add", "-A")
         self.git("commit", "-m", f"touch {' '.join(paths)}")
@@ -86,10 +89,44 @@ class DetectionTests(unittest.TestCase):
         return dict(line.split("=", 1) for line in result.stdout.split())
 
     def assert_gates(self, outputs, *, release, macos="false", rust="true", speech="true",
-                     packaging="false"):
+                     packaging="false", vnc="false"):
         self.assertEqual(outputs, {"release_inputs": release,
                                    "macos_release_inputs": macos, "rust_inputs": rust,
-                                   "speech_inputs": speech, "packaging_inputs": packaging})
+                                   "speech_inputs": speech, "packaging_inputs": packaging,
+                                   "vnc_pin": vnc})
+
+    def test_a_new_decoder_rev_qualifies_the_pinned_decoder(self):
+        manifest = ('[workspace.dependencies]\n'
+                    'vnc = {{ package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", '
+                    'rev = "{}" }}\n')
+        pinned = self.commit("Cargo.toml", contents={"Cargo.toml": manifest.format("a" * 40)})
+        self.assert_gates(self.detect(), release="true", vnc="true")
+        # The same rev again is the same upstream commit, so nothing new is qualified,
+        # even when the rest of the manifest changed.
+        self.commit("Cargo.toml", contents={"Cargo.toml": manifest.format("a" * 40) + "# note\n"})
+        self.assert_gates(self.detect(base=pinned), release="true", vnc="false")
+
+    def test_a_change_to_the_qualification_itself_runs_it_once(self):
+        for path in [".github/workflows/ci.yml", "scripts/detect-ci-build-inputs.sh"]:
+            with self.subTest(path=path):
+                self.setUp()
+                self.commit(path)
+                # ci.yml is a release input; both paths also feed the browser image step.
+                self.assert_gates(self.detect(), vnc="true", packaging="true",
+                                  release="true" if path.endswith("ci.yml") else "false")
+
+    def test_a_manifest_the_detector_cannot_read_qualifies_the_decoder(self):
+        pinned = self.commit("Cargo.toml", contents={"Cargo.toml": "[workspace]\n"})
+        self.commit("Cargo.toml", contents={"Cargo.toml": "this is not TOML\n"})
+        self.assert_gates(self.detect(base=pinned), release="true", vnc="true")
+
+    def test_removing_the_decoder_pin_leaves_nothing_to_qualify(self):
+        manifest = ('[workspace.dependencies]\n'
+                    'vnc = {{ package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", '
+                    'rev = "{}" }}\n')
+        pinned = self.commit("Cargo.toml", contents={"Cargo.toml": manifest.format("b" * 40)})
+        self.commit("Cargo.toml", contents={"Cargo.toml": "[workspace]\nmembers = []\n"})
+        self.assert_gates(self.detect(base=pinned), release="true", vnc="false")
 
     def test_documentation_only_change_gates_the_release_builds_off(self):
         self.commit("docs/architecture/maintainability.md", "README.md")
@@ -101,7 +138,10 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), release="true")
+                # A manifest the detector cannot read is qualified rather than skipped, and
+                # the workflow holds the qualification step itself.
+                self.assert_gates(self.detect(), release="true",
+                                  vnc="true" if path in ("Cargo.toml", ".github/workflows/ci.yml") else "false")
 
     def test_packaging_changes_stay_out_of_the_release_matrix(self):
         for path in ["packaging/linux/horizon.desktop", "packaging/linux/install.sh"]:
@@ -157,7 +197,8 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), release="true", packaging=packaging)
+                self.assert_gates(self.detect(), release="true", packaging=packaging,
+                                  vnc="true" if path.endswith("ci.yml") else "false")
 
     def test_artifact_build_definition_builds_macos_at_once(self):
         for path in [".github/workflows/release-artifacts.yml",
@@ -191,12 +232,12 @@ class DetectionTests(unittest.TestCase):
         for base in ["", ZERO_SHA, "0" * 38, "deadbeef" * 5, "refs/heads/missing"]:
             with self.subTest(base=base):
                 self.assert_gates(self.detect(base=base), release="true", macos="true",
-                              packaging="true")
+                                  packaging="true", vnc="true")
 
     def test_workflow_dispatch_builds_everything_from_a_resolvable_base(self):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="workflow_dispatch"), release="true",
-                          macos="true", packaging="true")
+                          macos="true", packaging="true", vnc="true")
 
     def test_pull_request_outside_rust_skips_the_rust_jobs(self):
         for paths in [["docs/plan.md"], ["README.md", "AGENTS.md"],
@@ -249,7 +290,7 @@ class DetectionTests(unittest.TestCase):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="push"), release="false", rust="true")
         self.assert_gates(self.detect(event="pull_request", base=ZERO_SHA),
-                          release="true", macos="true", rust="true", packaging="true")
+                          release="true", macos="true", rust="true", packaging="true", vnc="true")
 
     def write(self, path, text):
         target = self.repo / path
