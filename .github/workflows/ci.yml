@@ -529,9 +529,6 @@ jobs:
           status=0
           HORIZON_TEST_CLOUD_WORKER="$PWD/target/debug/horizon-cloud-worker" \
             bash scripts/run-cloud-worker-tests.sh "$RUNNER_TEMP/cloud-worker-tests.log" 4 || status=$?
-          if [ "$status" -eq 1 ]; then
-            exit 1
-          fi
           if [ "$status" -eq 3 ]; then
             if [ -n "${LOCALCI:-}" ]; then
               echo "::warning::Cloud worker tests were skipped on this computer; GitHub CI runs them."
@@ -539,6 +536,9 @@ jobs:
               echo "::error::Cloud worker tests were skipped; install their prerequisites instead."
               exit 1
             fi
+          elif [ "$status" -ne 0 ]; then
+            # A failed module, or the runner's own refusal: either way nothing passed.
+            exit 1
           fi
 
   # Docs/CI-only pushes to main must not pay for release builds, so this job

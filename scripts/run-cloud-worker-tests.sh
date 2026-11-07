@@ -36,7 +36,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# The children run inside the module folder, so a relative path must become
+# absolute before anything else touches it.
 mkdir -p "$(dirname "$log")"
+log=$(cd "$(dirname "$log")" && printf '%s/%s\n' "$PWD" "$(basename "$log")")
 per_module="${log%.log}.d"
 rm -rf "$per_module"
 mkdir -p "$per_module"
@@ -73,7 +76,10 @@ echo "Ran ${ran:-0} tests across $(printf '%s\n' "$modules" | wc -l) modules wit
 
 if [ "$status" -ne 0 ]; then
   echo "A module failed:" >&2
-  grep -lE "^(FAIL|ERROR):" "$per_module"/*.log | sed 's/^/  /' >&2
+  for failed in $(grep -lE "^(FAIL|ERROR):" "$per_module"/*.log); do
+    echo "--- $failed" >&2
+    cat "$failed" >&2
+  done
   exit 1
 fi
 if [ "${skipped:-0}" -gt 0 ]; then
