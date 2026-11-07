@@ -323,6 +323,20 @@ shell commands, files, or other MCP servers.
   delivery. It accepts no file path, excludes payloads by default, reports
   sequence gaps and capture health explicitly, and wakes on a matching record,
   capture stop, capture replacement, or timeout.
+- `browser_downloads` reports the panel's download folder and the downloads this
+  session observed, newest last. A local Chromium or Firefox panel saves every
+  download of its page into that panel-owned folder without a prompt, including
+  a download that a person starts, so a page-initiated download is never silent:
+  read the list instead of guessing where a file went. A row holds `file_name`,
+  `state` (`in_progress`, `completed` or `canceled`), `received_bytes`,
+  `total_bytes` when the response stated it, and the absolute `path` once the
+  browser named the file it wrote. `reporting: false` means this session could
+  not observe downloads, so an empty list is not proof that nothing was saved.
+  Rows are bounded to 64 and `dropped` counts reports this session forgot; their
+  files stay in the folder. A report never holds the download URL, because that
+  URL can carry a credential. The tool starts no download and writes no file.
+  Safari and remote sessions return `unsupported_backend`. The engine behavior
+  is in `docs/architecture/browser-downloads.md`.
 - `browser_handoff` pauses automation so the user can steer, and waits until
   they hand the panel back (`handoff_pending: false`) unless `wait` is false.
   Remote sessions do not advertise handoff and return `unsupported_backend`

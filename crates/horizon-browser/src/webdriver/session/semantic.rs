@@ -263,6 +263,17 @@ impl Driver {
                 self.video_action(&request.action_id, *operation, options.as_ref())
             }
             BrowserControlAction::HttpAuth { .. } => self.http_auth_action(&request.action),
+            BrowserControlAction::Downloads => {
+                if self.host.is_remote() || self.config.browser.backend == crate::BackendKind::SafariWebDriver {
+                    return Err(BrowserControlFailure::new(
+                        "unsupported_backend",
+                        "downloads need a local Chromium or Firefox panel",
+                    ));
+                }
+                Ok(BrowserControlValue::Downloads {
+                    downloads: self.downloads.list(),
+                })
+            }
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload
             | BrowserControlAction::Back

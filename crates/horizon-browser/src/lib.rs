@@ -13,6 +13,7 @@ pub mod cdp;
 mod challenge;
 mod coordination;
 mod disclosure;
+mod downloads;
 mod egress;
 mod error;
 mod evaluation;
@@ -59,16 +60,17 @@ pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
 pub use horizon_browser_protocol::remote::{self, RemoteBrowserConfig};
 pub use horizon_browser_protocol::{
-    AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserHttpAuthOperation,
-    BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation,
-    BrowserVideoQuality, BrowserVideoState, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
-    DEFAULT_PRESS_COUNT, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES,
-    DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT,
-    MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_PRESS_COUNT, MAX_QUERY_RESULTS, MAX_REMOTE_ATTACHMENT_BYTES,
-    MAX_REMOTE_ATTACHMENT_REQUEST_BYTES, MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES,
-    MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS, MAX_ZOOM_PERCENT,
-    MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, MIN_ZOOM_PERCENT, NavigationWait,
-    SecretString, normalize_navigation_target, zoomed_viewport,
+    AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserDownload,
+    BrowserDownloadList, BrowserDownloadState, BrowserHttpAuthOperation, BrowserVideoCapture,
+    BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoQuality,
+    BrowserVideoState, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_PRESS_COUNT,
+    DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY,
+    DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_ATTACHMENT_FILES, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS,
+    MAX_PRESS_COUNT, MAX_QUERY_RESULTS, MAX_REMOTE_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES,
+    MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH,
+    MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS, MAX_ZOOM_PERCENT, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS,
+    MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, MIN_ZOOM_PERCENT, NavigationWait, SecretString,
+    normalize_navigation_target, zoomed_viewport,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers};
 pub use native_select::{NativeSelectOption, NativeSelectPopup};
@@ -248,6 +250,12 @@ impl BrowserConfig {
         profile::profile_dir(self, panel_local_id)
     }
 
+    /// The panel-owned folder its page's downloads are saved into.
+    #[must_use]
+    pub fn downloads_dir(&self, panel_local_id: &str) -> PathBuf {
+        profile::downloads_dir(self, panel_local_id)
+    }
+
     /// Resolve the profile root selected for this backend. An explicit
     /// `profile_root` wins; otherwise the supplied host default is used,
     /// except that confined Snap browsers use a non-hidden, cross-backend
@@ -315,11 +323,17 @@ mod tests {
                 .capabilities()
                 .automation_disclosure_minimization
         );
+        // Both local engines save a page's downloads into the panel folder.
+        assert!(BackendKind::ChromiumCdp.capabilities().downloads);
+        assert!(BackendKind::FirefoxBidi.capabilities().downloads);
         let safari = BackendKind::SafariWebDriver.capabilities();
         assert_eq!(safari.frame_delivery, FrameDelivery::AdaptiveScreenshot);
         assert_eq!(safari.max_sessions, Some(1));
         assert!(!safari.persistent_profile);
+        assert!(!safari.downloads);
         assert!(!safari.automation_disclosure_minimization);
+        // A remote grid has no local folder to save a download into.
+        assert!(!crate::BackendCapabilities::remote_session().downloads);
     }
 
     #[test]

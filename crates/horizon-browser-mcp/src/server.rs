@@ -18,10 +18,11 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AttachedFileOutput, AuditInput, AuditOutput, BrowserListOutput, CloseInput,
-    CloseOutput, CreateInput, CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, HttpAuthInput,
-    HttpAuthOutput, NavigateInput, NavigateOutput, NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput,
-    NodeOutput, NodesOutput, PanelInput, QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput,
-    VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, ZoomInput, ZoomOutput,
+    CloseOutput, CreateInput, CreateOutput, DownloadsInput, DownloadsOutput, EvaluateInput, EvaluateOutput,
+    HandoffInput, HandoffOutput, HttpAuthInput, HttpAuthOutput, NavigateInput, NavigateOutput, NetworkInput,
+    NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput, ResizeInput,
+    ResizeOutput, SnapshotInput, SnapshotOutput, VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput,
+    WaitOutput, ZoomInput, ZoomOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -737,6 +738,25 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_downloads",
+        description = "Read the panel's download folder and the downloads this session observed, newest last: each row reports the file name, state (in_progress, completed or canceled), received bytes, total bytes when known, and the absolute path once the browser named the file it wrote. A local Chromium or Firefox panel saves every download of its page into that one panel-owned folder, including a download a person starts, so a page-initiated download is no longer silent: read this list instead of guessing where a file went. reporting=false means this exact session could not observe downloads, so an empty list is not proof that nothing was saved. Rows are bounded; dropped counts reports this session forgot, and their files stay in the folder. Read the file at its path with ordinary read-only tools; this tool starts no download, writes no file and returns no download URL, because a download URL can carry a credential. Safari and remote sessions return unsupported_backend."
+    )]
+    async fn browser_downloads(
+        &self,
+        Parameters(input): Parameters<DownloadsInput>,
+    ) -> Result<Json<DownloadsOutput>, String> {
+        let receipt = self
+            .controller
+            .execute(&input.panel_id, BrowserControlAction::Downloads, input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        let BrowserControlValue::Downloads { downloads } = receipt.value else {
+            return Err("browser returned an unexpected download list".to_string());
+        };
+        Ok(Json(DownloadsOutput::new(input.panel_id, receipt.action_id, downloads)))
+    }
+
+    #[tool(
         name = "browser_wait",
         description = "Wait for a CSS selector to become present, visible, or hidden as one audited engine-side action: the browser driver observes the page itself (no repeated queries) and returns the matched nodes and elapsed_millis, or a typed failure (wait_timeout, wait_navigation_invalidated when the page navigated, wait_ownership_lost, wait_handoff_pending, wait_superseded when a later wait on the same panel replaced it, browser_unavailable when the browser backend stops). timeout_millis is 1000-60000 (default 10000) and is enforced in full by the engine; poll_millis is accepted for compatibility and ignored."
     )]
@@ -987,6 +1007,7 @@ mod tests {
                 "browser_audit",
                 "browser_close",
                 "browser_create",
+                "browser_downloads",
                 "browser_duplicate",
                 "browser_evaluate",
                 "browser_handoff",

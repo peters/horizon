@@ -9,6 +9,7 @@ mod audit;
 pub mod cloud_view;
 mod command;
 mod control;
+mod downloads;
 mod http_auth;
 pub mod input;
 mod network;
@@ -27,6 +28,10 @@ pub use control::{
     MAX_QUERY_RESULTS, MAX_REMOTE_ATTACHMENT_BYTES, MAX_REMOTE_ATTACHMENT_REQUEST_BYTES, MAX_SNAPSHOT_NODES,
     MAX_WAIT_TIMEOUT_MILLIS, MAX_ZOOM_PERCENT, MIN_ZOOM_PERCENT, NavigationWait, normalize_navigation_target,
     zoomed_viewport,
+};
+pub use downloads::{
+    BrowserDownload, BrowserDownloadList, BrowserDownloadState, MAX_BROWSER_DOWNLOAD_NAME_BYTES, MAX_BROWSER_DOWNLOADS,
+    download_file_name,
 };
 pub use http_auth::{
     BrowserHttpAuthOperation, MAX_HTTP_AUTH_ORIGIN_BYTES, MAX_HTTP_AUTH_PASSWORD_BYTES, MAX_HTTP_AUTH_USERNAME_BYTES,
@@ -82,6 +87,8 @@ pub struct BackendCapabilities {
     pub physical_keys: bool,
     pub ime: bool,
     pub clipboard: bool,
+    /// Whether the backend saves a page's downloads into the panel's own
+    /// folder without a prompt, instead of the browser's default destination.
     pub downloads: bool,
     pub persistent_profile: bool,
     /// Whether the backend can install common-signal minimization before
@@ -129,7 +136,7 @@ impl BackendKind {
                 physical_keys: true,
                 ime: true,
                 clipboard: true,
-                downloads: false,
+                downloads: true,
                 persistent_profile: true,
                 automation_disclosure_minimization: true,
                 max_sessions: None,
@@ -140,7 +147,7 @@ impl BackendKind {
                 physical_keys: false,
                 ime: true,
                 clipboard: false,
-                downloads: false,
+                downloads: true,
                 persistent_profile: true,
                 automation_disclosure_minimization: true,
                 max_sessions: None,

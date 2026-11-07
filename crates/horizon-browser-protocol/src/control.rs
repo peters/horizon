@@ -219,6 +219,9 @@ pub enum BrowserControlAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         options: Option<BrowserVideoCaptureOverrides>,
     },
+    /// Read the panel's download folder and the downloads this session
+    /// observed. A read-only action: it starts no download and writes no file.
+    Downloads,
     /// Set or clear HTTP Basic/Digest credentials for server auth challenges.
     HttpAuth {
         operation: BrowserHttpAuthOperation,
@@ -349,7 +352,7 @@ impl BrowserControlAction {
                 password,
                 origin,
             } => validate_http_auth(*operation, username.as_deref(), password.as_ref(), origin.as_deref()),
-            Self::Reload | Self::Back | Self::Forward => Ok(()),
+            Self::Reload | Self::Back | Self::Forward | Self::Downloads => Ok(()),
         }
     }
 
@@ -376,7 +379,8 @@ impl BrowserControlAction {
             | Self::Evaluate { .. }
             | Self::Network { .. }
             | Self::Video { .. }
-            | Self::HttpAuth { .. } => None,
+            | Self::HttpAuth { .. }
+            | Self::Downloads => None,
         }
     }
 }

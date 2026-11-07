@@ -292,6 +292,12 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
         "the bridge gives the named browser profile",
     ),
     (
+        "browser_downloads",
+        Parity::Partial,
+        "a saved file stays on the filesystem of the machine that serves the page \
+         (issue 1962)",
+    ),
+    (
         "browser_duplicate",
         Parity::No,
         "a host page cannot duplicate yet (issue 1970)",

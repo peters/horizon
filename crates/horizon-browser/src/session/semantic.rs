@@ -131,6 +131,9 @@ impl DriverState {
                 self.video_action(frame_slot, &request.action_id, *operation, options.as_ref())
             }
             BrowserControlAction::HttpAuth { .. } => self.http_auth_action(link, event_tx, frame_slot, &request.action),
+            BrowserControlAction::Downloads => Ok(BrowserControlValue::Downloads {
+                downloads: self.downloads.list(),
+            }),
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload
             | BrowserControlAction::Back

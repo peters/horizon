@@ -76,6 +76,7 @@ impl Driver {
         if self.handle_file_chooser_event(event, event_tx)
             || self.handle_passkey_bidi_event(event, event_tx)
             || self.handle_network_bidi_event(event)
+            || self.handle_download_bidi_event(event)
         {
             return;
         }
@@ -280,6 +281,21 @@ pub(super) fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id:
     }
     Ok(())
 }
+
+/// The two download events a Firefox session subscribes to. They arrived in
+/// Firefox 144 and 145, so a subscription can fail on an older browser; the
+/// session then saves the panel's downloads without reporting them.
+///
+/// The subscription carries no context filter. A page can start a download in
+/// a child frame, and the event then names that frame's context; a filter on the
+/// panel's top-level context would drop the file the panel did save. The rows
+/// therefore describe the downloads of this browser, like Chromium's
+/// browser-level events already do.
+pub(super) fn subscribe_download_events(link: &mut JsonWsLink) -> Result<(), String> {
+    subscribe_bidi_events(link, DOWNLOAD_EVENTS, None)
+}
+
+pub(super) const DOWNLOAD_EVENTS: &[&str] = &["browsingContext.downloadWillBegin", "browsingContext.downloadEnd"];
 
 pub(super) fn subscribe_bidi_events(
     link: &mut JsonWsLink,

@@ -444,6 +444,7 @@ pub(in crate::webdriver::session) mod tests {
             http_auth: crate::http_auth::HttpAuthState::default(),
             network: crate::network::NetworkCaptureState::default(),
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
+            downloads: crate::downloads::DownloadState::default(),
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),

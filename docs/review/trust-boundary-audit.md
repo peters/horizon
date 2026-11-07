@@ -194,6 +194,22 @@ guarantee that the code gives, and what the code does not guarantee.
     still reports completion; a page can move focus after taking a click; a
     same-process child shares the page's focus, so its focus cannot prove that
     one click arrived; a fill readback is an immediate postcondition.
+- [`browser-downloads`](trust-boundaries/browser-downloads.md)
+  - Untrusted: the page, the file names it suggests, the number of downloads it
+    starts and the bytes it saves.
+  - Guarantees: a download is written by the browser into the private
+    (`0700`) folder of its panel, never into a path a page names; a reported
+    name keeps only its last path component, loses control characters and is cut
+    to 128 bytes; a report holds no download URL; rows are bounded to 64 and the
+    rest are counted; a download a child frame or another page of the same
+    browser starts is a row too, because that browser owns the folder; a session
+    that could not observe downloads states `reporting: false`.
+  - Does not guarantee: a page can fill the panel folder and Horizon limits no
+    size and inspects no content; Chromium saves the second and later
+    page-initiated downloads without the prompt that would let a person refuse
+    them; a browser that refused the folder, or a Firefox older than its download
+    events, saves without reporting; a panel that shares a browser profile shares
+    that profile's folder; a canceled download can leave a partial file.
 - [`cloud-browser-uploads`](trust-boundaries/cloud-browser-uploads.md)
   - Untrusted: the page and its `accept` and `origin` text, the agents of the
     worker, and the control service toward the host.

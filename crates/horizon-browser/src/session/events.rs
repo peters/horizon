@@ -18,6 +18,14 @@ use super::{BrowserEvent, BrowserEventSender, DriverState, normalized_committed_
 use crate::navigation::NavigationSignal;
 
 impl DriverState {
+    /// Browser-level download events of the panel's own folder. They carry no
+    /// page session, and they are the only report of a file a page saved.
+    pub(super) fn note_download_event(&mut self, event: &CdpEvent<'_>) {
+        if event.session_id.is_none() {
+            self.downloads.chromium_event(event.method, event.params);
+        }
+    }
+
     pub(super) fn tick_title_fetch(
         &mut self,
         link: &mut CdpLink,
@@ -102,6 +110,7 @@ impl DriverState {
         message: CdpMsg,
     ) {
         if let Some(event) = message.event() {
+            self.note_download_event(&event);
             if !self.handle_passkey_event(link, event_tx, frame_slot, &event) {
                 self.handle_event(link, event_tx, frame_slot, event);
             }
