@@ -603,6 +603,12 @@ pub(crate) struct ActInput {
     /// Consecutive trusted clicks for `click` (1-3, default 1), or presses
     /// for `press` (1-100, default 1).
     pub(crate) count: Option<u32>,
+    /// Horizontal point for a `click` that names no ref or selector, in CSS
+    /// pixels of the page. A point outside the page viewport is refused.
+    pub(crate) x: Option<f64>,
+    /// Vertical point for a `click` that names no ref or selector, in CSS
+    /// pixels of the page.
+    pub(crate) y: Option<f64>,
     /// Absolute host paths for `set_files` or `drop_files` (1-32). Each must resolve to a
     /// regular file under the agent work root (`HORIZON_WORK_ROOT`, else the
     /// server's working directory) or a root in
@@ -626,16 +632,22 @@ impl ActInput {
         if !matches!(self.action, ActKind::SetFiles | ActKind::DropFiles) && self.files.is_some() {
             return Err("files is only accepted for set_files or drop_files".to_string());
         }
+        if !matches!(self.action, ActKind::Click) && (self.x.is_some() || self.y.is_some()) {
+            return Err("x and y are only accepted for click".to_string());
+        }
         match self.action {
             ActKind::Click => {
                 let count = self.count.unwrap_or(horizon_browser::DEFAULT_CLICK_COUNT);
                 if !(horizon_browser::DEFAULT_CLICK_COUNT..=horizon_browser::MAX_CLICK_COUNT).contains(&count) {
                     return Err("click count must be between one and three".to_string());
                 }
-                Ok(BrowserControlAction::Click {
-                    target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
-                    count,
-                })
+                let target = optional_target(self.reference.as_deref(), self.selector.as_deref())?;
+                match (target, self.x, self.y) {
+                    (Some(target), None, None) => Ok(BrowserControlAction::Click { target, count }),
+                    (None, Some(x), Some(y)) => Ok(BrowserControlAction::ClickPoint { x, y, count }),
+                    (None, _, _) => Err("click needs a ref, a selector, or both x and y".to_string()),
+                    (Some(_), _, _) => Err("click takes a ref or a selector, or a point, not both".to_string()),
+                }
             }
             ActKind::Fill => Ok(BrowserControlAction::Fill {
                 target: required_target(self.reference.as_deref(), self.selector.as_deref())?,
@@ -1122,9 +1134,59 @@ mod tests {
             delta_y: None,
             key: None,
             count: None,
+            x: None,
+            y: None,
             files: None,
             timeout_millis: None,
         }
+    }
+
+    #[test]
+    fn a_click_at_a_point_builds_one_point_action() {
+        let mut click = act(ActKind::Click);
+        click.x = Some(120.5);
+        click.y = Some(240.0);
+        click.count = Some(2);
+        let Ok(action) = click.build_action() else {
+            panic!("a point click must build");
+        };
+        assert_eq!(
+            action,
+            horizon_browser::BrowserControlAction::ClickPoint {
+                x: 120.5,
+                y: 240.0,
+                count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn a_click_that_names_both_a_target_and_a_point_is_refused() {
+        let mut click = act(ActKind::Click);
+        click.selector = Some("#go".to_string());
+        click.x = Some(10.0);
+        click.y = Some(10.0);
+        let refused = click.build_action().expect_err("no second target");
+        assert!(refused.contains("not both"), "{refused}");
+    }
+
+    #[test]
+    fn a_click_that_names_half_a_point_or_nothing_is_refused() {
+        let mut half = act(ActKind::Click);
+        half.x = Some(10.0);
+        let refused = half.build_action().expect_err("x without y");
+        assert!(refused.contains("both x and y"), "{refused}");
+
+        let empty = act(ActKind::Click);
+        assert!(empty.build_action().is_err());
+    }
+
+    #[test]
+    fn a_point_is_refused_on_every_other_action() {
+        let mut scroll = act(ActKind::Scroll);
+        scroll.x = Some(1.0);
+        let refused = scroll.build_action().expect_err("a point names a click");
+        assert!(refused.contains("only accepted for click"), "{refused}");
     }
 
     #[test]

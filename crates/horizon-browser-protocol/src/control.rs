@@ -159,6 +159,17 @@ pub enum BrowserControlAction {
         #[serde(default = "default_click_count")]
         count: u32,
     },
+    /// Click one point of the page, in CSS pixels, through the backend input
+    /// path: one trusted press and release for each click. A point outside the
+    /// page viewport, and a point that is not a finite non-negative number, is
+    /// refused, so no caller aims at the chrome of the browser or at another
+    /// panel.
+    ClickPoint {
+        x: f64,
+        y: f64,
+        #[serde(default = "default_click_count")]
+        count: u32,
+    },
     /// Focus, clear, and type into an editable element through backend input.
     Fill {
         target: BrowserTarget,
@@ -349,6 +360,10 @@ impl BrowserControlAction {
                 password,
                 origin,
             } => validate_http_auth(*operation, username.as_deref(), password.as_ref(), origin.as_deref()),
+            Self::ClickPoint { x, y, count } => {
+                validate_point(*x, *y)?;
+                validate_click_count(*count)
+            }
             Self::Reload | Self::Back | Self::Forward => Ok(()),
         }
     }
@@ -376,7 +391,8 @@ impl BrowserControlAction {
             | Self::Evaluate { .. }
             | Self::Network { .. }
             | Self::Video { .. }
-            | Self::HttpAuth { .. } => None,
+            | Self::HttpAuth { .. }
+            | Self::ClickPoint { .. } => None,
         }
     }
 }

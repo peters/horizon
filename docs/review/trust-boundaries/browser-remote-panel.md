@@ -67,10 +67,12 @@ call of the panel.
 The input of the person becomes the calls of the contract, which are semantic:
 a key press on the focused element, a page scroll, a navigation, a viewport.
 
-- A pointer position never reaches the host. The panel refuses a press and a
-  release of a pointer with the typed reason `remote_host_pointer_unsupported`,
-  and the person sees one line that names the device panel of the machine as the
-  way to click the page. A mouse move and a key release change nothing.
+- A click of the person crosses as one click at its point: the release of the
+  pointer becomes one `browser_act` click with `x` and `y` in CSS pixels of the
+  page, and the press alone becomes nothing. A drag therefore does not cross, and
+  its release clicks where the pointer let go. A mouse move and a key release
+  change nothing. The host refuses a point outside the page viewport, and the
+  panel states the drag limit in its note.
 - Text crosses as one key press for each character that the US layout holds. A
   character that the layout does not hold is refused with
   `remote_host_text_unsupported`, and it is never sent as page script.

@@ -141,6 +141,13 @@ pub enum BrowserAuditAction {
         #[serde(default = "default_click_count")]
         count: u32,
     },
+    /// A click at a point of the page, in CSS pixels.
+    ClickPoint {
+        x: f64,
+        y: f64,
+        #[serde(default = "default_click_count")]
+        count: u32,
+    },
     Fill {
         target: String,
         characters: usize,
@@ -247,6 +254,29 @@ impl BrowserAuditAction {
         }
     }
 
+    /// One attachment or drop, audited as the files that the caller authorized.
+    ///
+    /// A host queue that staged private copies audits the authorized sources, in
+    /// every lifecycle record.
+    fn file_transfer(
+        target: &crate::BrowserTarget,
+        paths: &[std::path::PathBuf],
+        sources: &[std::path::PathBuf],
+        set: bool,
+    ) -> Self {
+        let audited = if sources.is_empty() { paths } else { sources };
+        let paths = audited.iter().map(|path| path.to_string_lossy().into_owned()).collect();
+        let target = audit_target(target);
+        if set {
+            Self::SetFiles { target, paths }
+        } else {
+            Self::DropFiles {
+                target,
+                file_count: paths.len(),
+            }
+        }
+    }
+
     #[must_use]
     pub fn from_control(action: &BrowserControlAction) -> Self {
         match action {
@@ -280,6 +310,11 @@ impl BrowserAuditAction {
                 target: audit_target(target),
                 count: *count,
             },
+            BrowserControlAction::ClickPoint { x, y, count } => Self::ClickPoint {
+                x: *x,
+                y: *y,
+                count: *count,
+            },
             BrowserControlAction::Fill { target, value } => Self::Fill {
                 target: audit_target(target),
                 characters: value.chars().count(),
@@ -298,19 +333,10 @@ impl BrowserAuditAction {
                 delta_x: *delta_x,
                 delta_y: *delta_y,
             },
-            BrowserControlAction::DropFiles { target, paths, .. } => Self::DropFiles {
-                target: audit_target(target),
-                file_count: paths.len(),
-            },
-            BrowserControlAction::SetFiles { target, paths, sources } => Self::SetFiles {
-                target: audit_target(target),
-                // A host queue that staged private copies audits the
-                // authorized sources, in every lifecycle record.
-                paths: if sources.is_empty() { paths } else { sources }
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect(),
-            },
+            BrowserControlAction::DropFiles { target, paths, .. } => Self::file_transfer(target, paths, &[], false),
+            BrowserControlAction::SetFiles { target, paths, sources } => {
+                Self::file_transfer(target, paths, sources, true)
+            }
             BrowserControlAction::Evaluate { expression, .. } => Self::Evaluate {
                 expression_characters: expression.chars().count(),
             },

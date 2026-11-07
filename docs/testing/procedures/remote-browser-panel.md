@@ -25,10 +25,8 @@ page scroll, the navigation and the fixed limit of the pointer.
   pulls of #1780 add them. It does not test the pointer of the person on a
   remote page, because the MCP contract has no coordinate pointer operation. Use
   the task `R4` for that limit.
-- It does not test a restart of Horizon that keeps a remote-host panel on its
-  host. The saved state does not record the backend of a browser panel yet, so a
-  restart brings such a panel back on the local browser. The task `R7` shows
-  this result.
+- It does not test a drag on a remote page. A drag does not cross the channel:
+  the task `R4` states that limit.
 
 ## 3. Safety
 
@@ -186,23 +184,34 @@ page scroll, the navigation and the fixed limit of the pointer.
    Result: the next frame of the panel shows the new page, and `panel.url` gives
    its address.
 
-### 6.4 R4 — the limit of the pointer is typed and visible
+### 6.4 R4 — a click of the person reaches the page, and a drag does not
 
-1. Send a click:
+1. Click a link of the page in the panel of step 6.2.
 
-   ```rust
-   let click = BrowserCommand::Input(BrowserInput::MousePress { x: 30.0, y: 40.0,
-       button: BrowserButton::Left, click_count: 1, buttons: 1,
-       modifiers: BrowserModifiers::none() });
+   Result: the page of the host changes to that link, and the next frame shows
+   the new page. The click crossed as one click at its point.
+
+2. Click a control that needs a real pointer position, such as a canvas, a map or
+   a video control, or let an agent click one point:
+
+   ```
+   browser_act { "panel_id": "<id>", "action": "click", "x": 120, "y": 240 }
    ```
 
-   Result: `panel.remote_host_refusal(&click)` is `Some(RemoteHostRefusal::Pointer)`
-   and `panel.try_send(click)` returns false. The page does not change.
+   Result: the point of the page reacts. The answer is `completed`.
 
-2. Examine the panel.
+3. Ask the agent to click a point outside the page viewport, for example
+   `x: 5000`.
 
-   Result: the first line of step 6.2.4 gives the device panel of the machine as
-   the way to click the page.
+   Result: the answer is `invalid_input`, and its message names the point and the
+   size of the viewport. The page does not change.
+
+4. Drag inside the page, for example across a slider.
+
+   > **CAUTION:** A DRAG DOES NOT CROSS THE CHANNEL. THE PANEL CLICKS WHERE THE POINTER LET GO.
+
+   Result: the panel clicks the point where the drag ended, and the page does not
+   follow the path of the drag. The note of the panel states this limit.
 
 ### 6.5 R5 — the pages of the person and of an agent stay apart
 

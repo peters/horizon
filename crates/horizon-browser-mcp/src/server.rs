@@ -609,7 +609,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_act",
-        description = "Click (including trusted double-click with count=2), fill, press a key or chord on the focused element (key such as Tab, Shift+Tab, Enter, Escape, ArrowDown or Control+a, optional count 1-100; read focus afterward with browser_evaluate or browser_screenshot), scroll, reload, go back, go forward, drop_files on a visible drop target (local Chromium and Firefox), or set_files to attach host files to an input[type=file] (target the input itself, even when hidden; files are absolute paths under your work root; the result lists the attached names and sizes). Prefer a fresh ref from browser_snapshot or browser_query over a selector."
+        description = "Click (including trusted double-click with count=2), click a point with x and y in CSS pixels of the page (a point outside the page viewport is refused), fill, press a key or chord on the focused element (key such as Tab, Shift+Tab, Enter, Escape, ArrowDown or Control+a, optional count 1-100; read focus afterward with browser_evaluate or browser_screenshot), scroll, reload, go back, go forward, drop_files on a visible drop target (local Chromium and Firefox), or set_files to attach host files to an input[type=file] (target the input itself, even when hidden; files are absolute paths under your work root; the result lists the attached names and sizes). Prefer a fresh ref from browser_snapshot or browser_query over a selector."
     )]
     async fn browser_act(&self, Parameters(input): Parameters<ActInput>) -> Result<Json<ActionOutput>, String> {
         // Request shape errors are backend-independent: the builder and the

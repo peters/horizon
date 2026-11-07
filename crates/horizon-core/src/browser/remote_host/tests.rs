@@ -13,7 +13,7 @@ use horizon_browser::{BrowserCommand, BrowserInput, BrowserKey, BrowserModifiers
 use serde_json::{Value, json};
 
 use super::view::{HostChannel, HostOpener, HostPage, HostView};
-use super::{PANEL_ACTOR, POINTER_NOTE, RemoteHostFailure, RemoteHostRefusal, RemoteHostSlot};
+use super::{HOST_INPUT_NOTE, PANEL_ACTOR, RemoteHostFailure, RemoteHostSlot};
 use crate::browser::{BackendKind, BrowserConfig, BrowserPanelState, BrowserStatus};
 
 /// A 1x1 PNG, as a screenshot result inlines it.
@@ -405,37 +405,32 @@ fn a_navigation_reaches_the_page_of_the_host() {
 }
 
 #[test]
-fn a_pointer_position_is_refused_with_a_typed_reason_and_the_panel_names_the_device_view() {
+fn a_release_reaches_the_host_as_one_click_at_its_point() {
     let script = Script::new();
     let mut panel = panel(&script);
     assert_eq!(settled(&mut panel), BrowserStatus::Ready);
-    let click = BrowserCommand::Input(BrowserInput::MousePress {
-        x: 30.0,
-        y: 40.0,
+    let release = BrowserCommand::Input(BrowserInput::MouseRelease {
+        x: 30.5,
+        y: 40.25,
         button: horizon_browser::BrowserButton::Left,
-        click_count: 1,
-        buttons: 1,
+        click_count: 2,
+        buttons: 0,
         modifiers: BrowserModifiers::none(),
     });
     assert_eq!(
-        panel.remote_host_refusal(&click),
-        Some(RemoteHostRefusal::Pointer),
-        "the contract has no coordinate pointer operation"
+        panel.remote_host_refusal(&release),
+        None,
+        "a pointer position crosses as a click at its point"
     );
-    assert!(!panel.try_send(click), "a refused command never reaches the host");
-    assert_eq!(
-        RemoteHostRefusal::Pointer.code(),
-        "remote_host_pointer_unsupported",
-        "the reason is typed"
-    );
+    assert!(panel.try_send(release), "the click reaches the host");
     assert_eq!(
         panel.remote_host_note(),
-        Some(POINTER_NOTE),
-        "the panel shows one short line about the way to click the page"
+        Some(HOST_INPUT_NOTE),
+        "the panel states what a click carries and what it does not"
     );
     assert!(
-        POINTER_NOTE.contains("device panel"),
-        "the line names the device view: {POINTER_NOTE}"
+        HOST_INPUT_NOTE.contains("drag does not cross"),
+        "the line states the pointer limit that stays: {HOST_INPUT_NOTE}"
     );
 }
 

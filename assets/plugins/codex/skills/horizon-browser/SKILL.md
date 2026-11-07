@@ -402,6 +402,17 @@ comes from the `profile-host.json` of that machine.
 a trusted double-click with 2. Use a fresh ref or selector and examine the visible
 result.
 
+A click also takes a point with `x` and `y` in CSS pixels of the page, and then
+takes no ref and no selector. Use the point when the page has no element to name:
+a canvas, a map, a video control or a picture. A point outside the page viewport
+is refused with `invalid_input`, and the message names the point and the size of
+the viewport. A point click is one trusted press and release for each click.
+
+On a page that a browser host on another machine serves, a click of the person in
+the panel crosses as one click at its point, and a drag does not cross: the
+release of a drag clicks where the pointer let go. A page that needs a drag, such
+as a slider, needs the display of that machine in a device panel.
+
 For keyboard checks, `press` sends trusted key presses to the element that has
 focus: `key` is a named key (`Tab`, `Enter`, `Escape`, `Space`, `Backspace`,
 `Delete`, `Home`, `End`, `PageUp`, `PageDown`, arrows such as `ArrowDown`,

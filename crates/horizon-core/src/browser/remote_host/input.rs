@@ -1,10 +1,10 @@
 //! What a panel command becomes on the channel of a browser host.
 //!
 //! The channel is the MCP contract of that host, so a command reaches the page
-//! as the call of one tool. The contract is semantic: it takes a click on an
-//! element, never a pointer position. A keyboard key, an untargeted page scroll
-//! and a navigation cross it, and a pointer position does not, so this module
-//! names that difference instead of dropping the command.
+//! as the call of one tool. The contract is semantic: a click names an element or
+//! one point of the page. A keyboard key, an untargeted page scroll, a navigation
+//! and a click at a point cross it, and the button state of a drag does not, so
+//! this module names that difference instead of dropping the command.
 
 use horizon_browser::{
     BrowserCommand, BrowserEditCommand, BrowserInput, BrowserKey, BrowserKeyChord, BrowserModifiers,
@@ -73,10 +73,16 @@ fn press(panel_id: &str, key: &str) -> HostAction {
 
 fn input_actions(input: &BrowserInput, panel_id: &str) -> Result<Vec<HostAction>, RemoteHostRefusal> {
     Ok(match input {
-        // The contract carries no pointer position, so a move changes nothing on
-        // the page that this panel can see.
-        BrowserInput::MouseMove { .. } | BrowserInput::KeyUp { .. } => Vec::new(),
-        BrowserInput::MousePress { .. } | BrowserInput::MouseRelease { .. } => return Err(RemoteHostRefusal::Pointer),
+        // A move changes nothing on the page that this panel can see: the
+        // contract carries no pointer state, only the point of a click. A press
+        // alone is not a click either, so only the release below crosses. A drag
+        // therefore does not cross, and its release clicks where the pointer let
+        // go.
+        BrowserInput::MouseMove { .. } | BrowserInput::KeyUp { .. } | BrowserInput::MousePress { .. } => Vec::new(),
+        BrowserInput::MouseRelease { x, y, click_count, .. } => vec![HostAction::act(
+            panel_id,
+            serde_json::json!({ "action": "click", "x": x, "y": y, "count": click_count }),
+        )],
         // A wheel over the page is a page scroll. The contract scrolls the page
         // and takes no point, so the deltas cross and the point does not.
         BrowserInput::Wheel { delta_x, delta_y, .. } => vec![HostAction::act(

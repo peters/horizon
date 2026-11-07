@@ -282,7 +282,7 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
     (
         "browser_act",
         Parity::Partial,
-        "set_files stages one file up to 512 MiB; drop_files needs a local drag",
+        "a ref, a selector, a key, a scroll and a point click cross; set_files stages one file up to 512 MiB and drop_files needs a local drag",
     ),
     ("browser_audit", Parity::Yes, ""),
     ("browser_close", Parity::Yes, ""),
