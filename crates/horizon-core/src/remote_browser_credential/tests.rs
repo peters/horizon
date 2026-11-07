@@ -966,3 +966,5 @@ fn read_answer(reply: &mut CredentialValueReply) -> Result<Vec<u8>, RemoteCreden
 
 #[cfg(target_os = "linux")]
 mod native_keyring;
+
+mod relock;

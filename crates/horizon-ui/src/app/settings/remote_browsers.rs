@@ -233,6 +233,12 @@ pub(super) fn render(
     usage: &mut super::remote_usage::UsagePanels,
 ) -> bool {
     workbench.poll();
+    // A store can relock while this tab is idle. The re-probe happens on a read,
+    // so the frame that shows the bound must come, or a locked store would show
+    // as present until the pointer moved.
+    if let Some(due) = workbench.next_revalidation_in() {
+        ui.ctx().request_repaint_after(due);
+    }
     let notices = workbench.take_notices();
     if !notices.is_empty() {
         usage.clear();

@@ -257,9 +257,65 @@ person.
    Result: the new panel follows the entry: it shows the second SSH target, or,
    when the entry is removed, it uses the local browser and shows no SSH target.
 
+### 6.8 R8 — a store that locks again shows locked without a restart
+
+This task needs a Linux computer with a Secret Service daemon, for example
+GNOME Keyring or `kwalletd` behind `gnome-keyring-daemon`.
+
+1. Open Settings > Remote browsers with a value of a provider in the OS store,
+   and keep the section on screen.
+
+   Result: the entry shows the value as present.
+
+2. Lock the default collection of the store, so that every item needs the
+   person again.
+
+   ```sh
+   busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
+     org.freedesktop.Secret.Service Lock ao 1 \
+     /org/freedesktop/secrets/collection/login
+   ```
+
+   Result: The call answers with two arrays. Then read the property:
+
+   ```sh
+   busctl --user get-property org.freedesktop.secrets \
+     /org/freedesktop/secrets/collection/login \
+     org.freedesktop.Secret.Collection Locked
+   ```
+
+   Result: The answer is `b true`. When `org.freedesktop.secrets` has no
+   `collection/login`, read the object list and use the path that holds the
+   collection of the session:
+
+   ```sh
+   busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
+     org.freedesktop.DBus.Properties Get ss \
+     org.freedesktop.Secret.Service Collections
+   ```
+
+   The entry of step 1 keeps its state for a moment.
+
+3. Wait 10 s without closing Horizon.
+
+   Result: the entry shows `locked`, not present. Its text keeps the reference
+   and names the store.
+
+4. Ask for a remote session of that provider.
+
+   Result: the answer is refused with `credentials_not_ready`, and no session is
+   allocated at the provider.
+
+5. Unlock the store, for example by signing in to the session again, and wait
+   10 s.
+
+   Result: the entry shows the value as present again, without a restart of
+   Horizon.
+
 ## 7. Pass criteria
 
-- R1 to R7 pass.
+- R1 to R8 pass, and R8 shows `locked` after a relock and no allocation of a
+  refused create.
 - Retry of a panel whose host stopped keeps the SSH target and the profile, and
   the panel paints a page of that host again.
 - With the settings entry, a new browser panel shows the SSH target in its
