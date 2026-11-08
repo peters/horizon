@@ -63,13 +63,14 @@ impl DownloadState {
 
     #[must_use]
     pub(crate) fn list(&self) -> BrowserDownloadList {
+        let incomplete = self.incomplete_files();
         BrowserDownloadList {
             directory: self.directory.clone(),
             reporting: self.reporting,
             downloads: self
                 .observed
                 .iter()
-                .map(|observed| self.with_progress(observed))
+                .map(|observed| Self::with_progress(observed, &incomplete))
                 .collect(),
             dropped: self.dropped,
         }
@@ -84,32 +85,41 @@ impl DownloadState {
     /// Chromium adds `.crdownload` and Firefox adds `.part` — and the folder is
     /// this panel's own, so a read measures the transfer without reading the
     /// page's content.
-    fn with_progress(&self, observed: &ObservedDownload) -> BrowserDownload {
+    fn with_progress(observed: &ObservedDownload, incomplete: &[(String, u64)]) -> BrowserDownload {
         let mut row = observed.row.clone();
         if row.state != BrowserDownloadState::InProgress || row.received_bytes > 0 {
             return row;
         }
-        if let Some(size) = self.partial_size(&row.file_name) {
+        let size = incomplete
+            .iter()
+            .filter(|(name, _)| names_one_transfer(&row.file_name, name))
+            .map(|(_, size)| *size)
+            .max();
+        if let Some(size) = size {
             row.received_bytes = row.total_bytes.map_or(size, |total| size.min(total));
         }
         row
     }
 
-    /// The bytes of the incomplete file of one download, when the browser wrote
-    /// a file beside the name it will save. The name is one path component, so
-    /// the lookup stays in the panel folder.
-    fn partial_size(&self, file_name: &str) -> Option<u64> {
-        let name = Path::new(file_name);
-        if name.file_name() != Some(name.as_os_str()) {
-            return None;
-        }
-        ["crdownload", "part"]
-            .into_iter()
-            .filter_map(|suffix| {
-                let partial = Path::new(&self.directory).join(format!("{file_name}.{suffix}"));
-                std::fs::metadata(partial).ok().map(|data| data.len())
+    /// The files of the panel folder that a transfer is still writing, with the
+    /// bytes each one holds.
+    ///
+    /// Both engines write the bytes they have beside the file they will save:
+    /// Chromium adds `.crdownload` to the whole name, and Firefox writes
+    /// `<stem>.<random>.<extension>.part`. One listing serves every row of one
+    /// report, so a folder with many downloads is read once.
+    fn incomplete_files(&self) -> Vec<(String, u64)> {
+        let Ok(entries) = std::fs::read_dir(&self.directory) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let name = entry.file_name().to_str()?.to_string();
+                let size = entry.metadata().ok()?.len();
+                is_incomplete(&name).then_some((name, size))
             })
-            .max()
+            .collect()
     }
 
     /// One Chromium browser-level download event.
@@ -261,6 +271,42 @@ impl DownloadState {
     fn known(&self, id: &str) -> Option<&ObservedDownload> {
         self.observed.iter().find(|known| known.id == id)
     }
+}
+
+/// Whether a name in the panel folder is a file that a browser is still
+/// writing. Both engines keep the part of the name a person sees.
+fn is_incomplete(name: &str) -> bool {
+    // The suffix is compared without case, because a browser states its own
+    // spelling and a file that a transfer writes is still that transfer's file.
+    [".crdownload", ".part"]
+        .iter()
+        .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
+}
+
+/// Whether an incomplete file belongs to the download whose file name this is.
+///
+/// Chromium states the whole name and appends its suffix. Firefox keeps the stem
+/// and the extension and puts a random part between them, so the comparison
+/// covers both shapes and never matches a different extension.
+fn names_one_transfer(file_name: &str, incomplete: &str) -> bool {
+    if file_name.is_empty() {
+        return false;
+    }
+    if incomplete == format!("{file_name}.crdownload") || incomplete == format!("{file_name}.part") {
+        return true;
+    }
+    let stem = file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem);
+    let extension = file_name.rsplit_once('.').map(|(_, extension)| extension);
+    let Some(rest) = incomplete.strip_prefix(&format!("{stem}.")) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_suffix(".part") else {
+        return false;
+    };
+    let Some((random, billed)) = rest.rsplit_once('.') else {
+        return false;
+    };
+    !random.is_empty() && Some(billed) == extension
 }
 
 fn text(params: &serde_json::Value, field: &str) -> Option<String> {
@@ -429,6 +475,25 @@ mod tests {
         // The transfer continues, so the next read states the new size.
         std::fs::write(folder.path().join("slow.pdf.part"), b"1200more").expect("write");
         assert_eq!(downloads.list().downloads.remove(0).received_bytes, 8);
+    }
+
+    #[test]
+    fn a_firefox_transfer_is_measured_through_its_random_part_name() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        // Firefox writes `<stem>.<random>.<extension>.part`, so the name a row
+        // states is not the name of the file that holds the bytes.
+        std::fs::write(folder.path().join("slow.2ImBNVAW.bin.part"), b"1200").expect("write");
+        std::fs::write(folder.path().join("slow.bin"), b"").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        downloads.firefox_event(
+            "browsingContext.downloadWillBegin",
+            &json!({"context": "ctx", "download": "d1", "suggestedFilename": "slow.bin"}),
+        );
+        assert_eq!(downloads.list().downloads.remove(0).received_bytes, 4);
+
+        // Another extension is another transfer.
+        std::fs::write(folder.path().join("other.9Xq.bin.part"), b"12345678").expect("write");
+        assert_eq!(downloads.list().downloads.remove(0).received_bytes, 4);
     }
 
     #[test]

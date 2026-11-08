@@ -80,9 +80,11 @@ opened.
 The same rule covers a transfer that is still running. Firefox reports no
 progress at all, so an in-progress Firefox row would read zero bytes until the
 file finished. Both engines write the bytes they have into a file beside the one
-they will save — Chromium adds `.crdownload` and Firefox adds `.part` — so a read
-measures that file when a row carries no count of its own, and never reports more
-than the total the browser stated. A browser that reports its own progress keeps
+they will save: Chromium adds `.crdownload` to the whole name, and Firefox writes
+`<stem>.<random>.<extension>.part` and leaves an empty file under the name it will
+keep. A read measures the incomplete file that carries the stem and the extension
+of the row when the row has no count of its own, and never reports more than the
+total the browser stated. A browser that reports its own progress keeps
 its number, and a finished or canceled row is never measured.
 
 ## Safari and remote sessions
