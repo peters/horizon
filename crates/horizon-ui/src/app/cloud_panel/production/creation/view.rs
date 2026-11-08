@@ -37,6 +37,10 @@ impl HorizonApp {
     /// Brings the draft's workspace back to the middle of the canvas when the canvas changes,
     /// with the zoom the person chose. A pan of their own is kept: only a change of the canvas
     /// itself moves the view.
+    ///
+    /// Only the workspace the person works in moves. The form stays open while they go to
+    /// another workspace, and a resize there must not pull them back to the draft. Nothing takes
+    /// focus either, so a panel they type in keeps the keyboard.
     pub(in crate::app::cloud_panel::production) fn follow_cloud_creation_view(&mut self, ctx: &Context) {
         let canvas = self.canvas_rect(ctx);
         if !self.cloud_prototype.production.record_canvas(canvas) {
@@ -51,9 +55,9 @@ impl HorizonApp {
         else {
             return;
         };
-        if self.workspace_is_detached(workspace) {
+        if self.board.active_workspace != Some(workspace) || self.workspace_is_detached(workspace) {
             return;
         }
-        self.focus_workspace_in_rect(workspace, canvas);
+        self.center_workspace_in_rect(workspace, canvas);
     }
 }

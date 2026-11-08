@@ -79,6 +79,12 @@ screen must not pull the fields and the **Summary** column apart.
 
    Result: The form moves with its workspace and stays where the drag put it.
 
+5. Click a terminal in another workspace, type one character, and then resize the
+   window. Do not close the form.
+
+   Result: The view stays on that workspace, the form does not come back, and the
+   terminal keeps the keyboard. What you type next goes to that terminal.
+
 ### 6.3 WINDOW-3 — A wide screen does not stretch the form
 
 1. Move the Horizon window to the screen of more than 2000 pixels in width.

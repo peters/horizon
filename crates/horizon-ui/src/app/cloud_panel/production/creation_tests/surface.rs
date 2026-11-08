@@ -234,6 +234,36 @@ fn the_view_follows_the_window_so_the_form_stays_in_front() {
 }
 
 #[test]
+fn a_resize_in_another_workspace_keeps_the_view_and_the_keyboard() {
+    let (_temp, ctx, mut app) = ready_app();
+    let elsewhere = workspace_with_panel(&mut app, "sample project", [900.0, 700.0]);
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    frames_at(&ctx, &mut app, [2800.0, 1000.0], 6);
+    // The person leaves the draft and works in their own workspace, with the form still open.
+    app.board.focus_workspace(elsewhere);
+    frames_at(&ctx, &mut app, [2800.0, 1000.0], 2);
+    let focused = app.board.focused;
+    assert!(focused.is_some(), "the panel of that workspace has the keyboard");
+    let before = form_rect(&ctx).expect("the form stays drawn");
+    // Only the height changes, so the form keeps its width and any move is the view moving.
+    frames_at(&ctx, &mut app, [2800.0, 760.0], 4);
+    let after = form_rect(&ctx).expect("the form stays drawn");
+    assert!(
+        (after.left() - before.left()).abs() < 0.5,
+        "the resize pulled the view back to the draft: {after:?}, from {before:?}"
+    );
+    assert_eq!(
+        app.board.focused, focused,
+        "the resize took the keyboard from the panel the person works in"
+    );
+    assert_eq!(
+        app.board.active_workspace,
+        Some(elsewhere),
+        "the resize changed the workspace the person works in"
+    );
+}
+
+#[test]
 fn a_workspace_the_person_made_keeps_its_size_and_the_form_keeps_its_floor() {
     let (_temp, ctx, mut app) = ready_app();
     let workspace = app.board.create_workspace("small workspace");
