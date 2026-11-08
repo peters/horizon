@@ -767,6 +767,76 @@ fn render_empty_state(ui: &mut egui::Ui) {
         });
 }
 
+/// The label, the badges, the counts and the short identifier of one session.
+fn render_session_card_identity(ui: &mut egui::Ui, session: &SessionSummary, is_current: bool) {
+    ui.vertical(|ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG()));
+            if is_current {
+                ui.label(RichText::new("Current").size(10.5).color(theme::ACCENT()).strong());
+            }
+            if session.is_live && !is_current {
+                ui.label(RichText::new("Live").size(10.5).color(theme::PALETTE_RED()).strong());
+            }
+        });
+        ui.label(
+            RichText::new(format!(
+                "{} workspaces · {} panels · {}",
+                session.workspace_count,
+                session.panel_count,
+                format_relative_time(session.last_active_at)
+            ))
+            .size(12.0)
+            .color(theme::FG_SOFT()),
+        );
+        ui.label(
+            RichText::new(format!(
+                "Session {}",
+                super::util::short_session_id(&session.session_id)
+            ))
+            .size(11.0)
+            .color(theme::FG_DIM())
+            .monospace(),
+        );
+    });
+}
+
+/// The **Delete** button of a card, or the question that it opens. `confirm_remove` is
+/// `None` for the button, and `Some(unreadable)` for the question, where `unreadable` is
+/// true for a board that this Horizon cannot read.
+fn render_session_card_remove_row(
+    ui: &mut egui::Ui,
+    session: &SessionSummary,
+    confirm_remove: Option<bool>,
+) -> Option<SessionCardAction> {
+    let Some(unreadable_board) = confirm_remove else {
+        return ui
+            .add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0)))
+            .clicked()
+            .then(|| SessionCardAction::BeginRemove(session.session_id.clone()));
+    };
+
+    let mut action = None;
+    if ui.add(danger_button("Yes").min_size(Vec2::new(46.0, 0.0))).clicked() {
+        action = Some(if unreadable_board {
+            SessionCardAction::ConfirmRemoveWithUnreadableBoard(session.session_id.clone())
+        } else {
+            SessionCardAction::ConfirmRemove(session.session_id.clone())
+        });
+    }
+    if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
+        action = Some(SessionCardAction::CancelRemove);
+    }
+    let color = if unreadable_board {
+        theme::PALETTE_RED()
+    } else {
+        theme::FG_DIM()
+    };
+    ui.label(RichText::new(remove_question(unreadable_board)).size(10.5).color(color));
+    action
+}
+
 /// `confirm_remove` is `None` while the card shows **Delete**, and `Some(unreadable)`
 /// while it asks the question. `unreadable` is true for a board that this Horizon cannot
 /// read, which the question names.
@@ -803,37 +873,7 @@ fn render_session_card(
                 if ui.radio(selected, "").clicked() {
                     card_action = SessionCardAction::Select;
                 }
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG()));
-                        if is_current {
-                            ui.label(RichText::new("Current").size(10.5).color(theme::ACCENT()).strong());
-                        }
-                        if session.is_live && !is_current {
-                            ui.label(RichText::new("Live").size(10.5).color(theme::PALETTE_RED()).strong());
-                        }
-                    });
-                    ui.label(
-                        RichText::new(format!(
-                            "{} workspaces · {} panels · {}",
-                            session.workspace_count,
-                            session.panel_count,
-                            format_relative_time(session.last_active_at)
-                        ))
-                        .size(12.0)
-                        .color(theme::FG_SOFT()),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "Session {}",
-                            super::util::short_session_id(&session.session_id)
-                        ))
-                        .size(11.0)
-                        .color(theme::FG_DIM())
-                        .monospace(),
-                    );
-                });
+                render_session_card_identity(ui, session, is_current);
             });
             selection_rect = Some(content_response.response.rect);
 
@@ -842,26 +882,8 @@ fn render_session_card(
                 ui.horizontal(|ui| {
                     ui.add_space(22.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if let Some(unreadable_board) = confirm_remove {
-                            if ui.add(danger_button("Yes").min_size(Vec2::new(46.0, 0.0))).clicked() {
-                                card_action = if unreadable_board {
-                                    SessionCardAction::ConfirmRemoveWithUnreadableBoard(session.session_id.clone())
-                                } else {
-                                    SessionCardAction::ConfirmRemove(session.session_id.clone())
-                                };
-                            }
-                            if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
-                                card_action = SessionCardAction::CancelRemove;
-                            }
-                            ui.label(RichText::new(remove_question(unreadable_board)).size(10.5).color(
-                                if unreadable_board {
-                                    theme::PALETTE_RED()
-                                } else {
-                                    theme::FG_DIM()
-                                },
-                            ));
-                        } else if ui.add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0))).clicked() {
-                            card_action = SessionCardAction::BeginRemove(session.session_id.clone());
+                        if let Some(row_action) = render_session_card_remove_row(ui, session, confirm_remove) {
+                            card_action = row_action;
                         }
                     });
                 });
