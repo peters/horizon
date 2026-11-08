@@ -66,9 +66,50 @@ impl DownloadState {
         BrowserDownloadList {
             directory: self.directory.clone(),
             reporting: self.reporting,
-            downloads: self.observed.iter().map(|observed| observed.row.clone()).collect(),
+            downloads: self
+                .observed
+                .iter()
+                .map(|observed| self.with_progress(observed))
+                .collect(),
             dropped: self.dropped,
         }
+    }
+
+    /// The row of one observed download, with the bytes of a transfer that the
+    /// browser does not count measured on disk.
+    ///
+    /// Firefox reports no byte counts at all, so an in-progress row of its
+    /// session would otherwise read zero until the file finished. Both engines
+    /// write the bytes they have into a file beside the one they will save —
+    /// Chromium adds `.crdownload` and Firefox adds `.part` — and the folder is
+    /// this panel's own, so a read measures the transfer without reading the
+    /// page's content.
+    fn with_progress(&self, observed: &ObservedDownload) -> BrowserDownload {
+        let mut row = observed.row.clone();
+        if row.state != BrowserDownloadState::InProgress || row.received_bytes > 0 {
+            return row;
+        }
+        if let Some(size) = self.partial_size(&row.file_name) {
+            row.received_bytes = row.total_bytes.map_or(size, |total| size.min(total));
+        }
+        row
+    }
+
+    /// The bytes of the incomplete file of one download, when the browser wrote
+    /// a file beside the name it will save. The name is one path component, so
+    /// the lookup stays in the panel folder.
+    fn partial_size(&self, file_name: &str) -> Option<u64> {
+        let name = Path::new(file_name);
+        if name.file_name() != Some(name.as_os_str()) {
+            return None;
+        }
+        ["crdownload", "part"]
+            .into_iter()
+            .filter_map(|suffix| {
+                let partial = Path::new(&self.directory).join(format!("{file_name}.{suffix}"));
+                std::fs::metadata(partial).ok().map(|data| data.len())
+            })
+            .max()
     }
 
     /// One Chromium browser-level download event.
@@ -369,6 +410,61 @@ mod tests {
         let row = outside.list().downloads.remove(0);
         assert_eq!(row.received_bytes, 0);
         assert_eq!(row.total_bytes, None);
+    }
+
+    #[test]
+    fn an_in_progress_row_counts_the_bytes_the_browser_wrote_so_far() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        std::fs::write(folder.path().join("slow.pdf.part"), b"1200").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        downloads.firefox_event(
+            "browsingContext.downloadWillBegin",
+            &json!({"context": "ctx", "download": "d1", "suggestedFilename": "slow.pdf"}),
+        );
+        let row = downloads.list().downloads.remove(0);
+        assert_eq!(row.state, BrowserDownloadState::InProgress);
+        assert_eq!(row.received_bytes, 4);
+        assert_eq!(row.total_bytes, None);
+
+        // The transfer continues, so the next read states the new size.
+        std::fs::write(folder.path().join("slow.pdf.part"), b"1200more").expect("write");
+        assert_eq!(downloads.list().downloads.remove(0).received_bytes, 8);
+    }
+
+    #[test]
+    fn an_in_progress_chromium_row_never_overstates_its_total() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        std::fs::write(folder.path().join("slow.pdf.crdownload"), b"1200").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        downloads.chromium_will_begin(&json!({"guid": "g1", "suggestedFilename": "slow.pdf"}));
+        // Chromium states its own count when it reports progress, so only a row
+        // without one is measured.
+        assert_eq!(downloads.list().downloads.remove(0).received_bytes, 4);
+        downloads.chromium_progress(&json!({"guid": "g2", "suggestedFilename": "other.pdf", "receivedBytes": 2, "totalBytes": 3, "state": "inProgress"}));
+        let row = downloads.list().downloads.remove(1);
+        assert_eq!(row.received_bytes, 2);
+        assert_eq!(row.total_bytes, Some(3));
+
+        // A measured size never passes the total that the browser stated.
+        std::fs::write(folder.path().join("small.pdf.crdownload"), b"1200").expect("write");
+        downloads.chromium_progress(&json!({"guid": "g3", "suggestedFilename": "small.pdf", "receivedBytes": 0, "totalBytes": 2, "state": "inProgress"}));
+        let row = downloads.list().downloads.remove(2);
+        assert_eq!(row.received_bytes, 2);
+        assert_eq!(row.total_bytes, Some(2));
+    }
+
+    #[test]
+    fn a_finished_row_keeps_the_count_of_the_browser() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        std::fs::write(folder.path().join("done.pdf.part"), b"999999").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        downloads.firefox_event(
+            "browsingContext.downloadEnd",
+            &json!({"context": "ctx", "download": "d1", "status": "canceled"}),
+        );
+        let row = downloads.list().downloads.remove(0);
+        assert_eq!(row.state, BrowserDownloadState::Canceled);
+        assert_eq!(row.received_bytes, 0);
     }
 
     #[test]

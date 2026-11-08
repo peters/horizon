@@ -72,10 +72,18 @@ therefore describe the downloads of this browser, which is what Chromium's
 browser-level events already report.
 
 Firefox reports the final path when the download ends, and no byte counts. The
-engine measures a finished file on disk instead, so a completed Firefox row
-reports the same size in `received_bytes` and `total_bytes` as a Chromium row. It
-reads only a path inside this panel's folder; a path outside it is named in the
-row and never opened.
+engine measures the file on disk instead, so a completed Firefox row reports the
+same size in `received_bytes` and `total_bytes` as a Chromium row. It reads only a
+path inside this panel's folder; a path outside it is named in the row and never
+opened.
+
+The same rule covers a transfer that is still running. Firefox reports no
+progress at all, so an in-progress Firefox row would read zero bytes until the
+file finished. Both engines write the bytes they have into a file beside the one
+they will save — Chromium adds `.crdownload` and Firefox adds `.part` — so a read
+measures that file when a row carries no count of its own, and never reports more
+than the total the browser stated. A browser that reports its own progress keeps
+its number, and a finished or canceled row is never measured.
 
 ## Safari and remote sessions
 
