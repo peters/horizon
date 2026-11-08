@@ -77,13 +77,32 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
 
 #[test]
 fn missing_required_owned_journals_and_foreign_provider_records_do_not_confirm_absence() {
+    // A provider that has written no journal at all has proven nothing. RunPod's managed
+    // storage says so with the marker that sits beside its journal.
+    for provider in provider::ALL {
+        let (_temp, store, state) = fixture(provider);
+        if provider.id == "runpod" {
+            std::fs::write(store.root().join("workspace-volume.required"), []).unwrap();
+        }
+        assert!(
+            !confirmed(&store, &state).unwrap_or(false),
+            "{} confirms an absence with no journal on disk",
+            provider.id
+        );
+    }
     // Every file that a provider keeps shows an absence that is not proven while it
-    // exists: neither the journal that a delete settles nor the marker beside it.
+    // exists: neither the journal that a delete settles nor the marker beside it. An
+    // unparseable journal is refused rather than read as a proof, so this states that the
+    // answer is never `Ok(true)` instead of letting an error stand in for a refusal.
     for provider in provider::ALL {
         for file in provider.journals {
             let (_temp, store, state) = fixture(provider);
             std::fs::write(store.root().join(file), []).unwrap();
-            assert!(!confirmed(&store, &state).unwrap_or(false), "{file}");
+            assert!(
+                !matches!(confirmed(&store, &state), Ok(true)),
+                "{} confirms an absence while {file} exists",
+                provider.id
+            );
         }
     }
     // RunPod's legacy unmanaged storage has no required marker, so its own absence is
