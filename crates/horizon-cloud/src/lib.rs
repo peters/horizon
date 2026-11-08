@@ -2,6 +2,7 @@
 //! panel layout, repository preparation and agent execution do not.
 #![forbid(unsafe_code)]
 
+pub mod aws;
 pub mod azure;
 pub mod browser_vm;
 mod capabilities;
