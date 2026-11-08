@@ -38,7 +38,8 @@ pub(super) const FORM_MIN_WIDTH: f32 = 640.0;
 const BODY_MIN_HEIGHT: f32 = 320.0;
 /// Room for the form's own margins beside its content, both sides together.
 pub(super) const SIDE_MARGIN: f32 = 64.0;
-/// The strip the name badge of a workspace stands in, above the form that workspace holds.
+/// The strip the name badge of a workspace stands in, above the form that workspace holds. The
+/// badge belongs to the board, so it grows with the zoom while the form does not.
 const BADGE_STRIP: f32 = crate::app::WS_TITLE_HEIGHT + crate::app::WS_BG_PAD;
 /// The widest form: the room the workspace that **+ New cloud** makes keeps for it
 /// (`WS_CLOUD_FORM_SIZE` less `SIDE_MARGIN`). Every line of the form fits from 1056 on, so a
@@ -512,10 +513,9 @@ impl HorizonApp {
             .unwrap_or_else(|| Vec2::new(width + SIDE_MARGIN, body + CHROME_HEIGHT));
         let form = Rect::from_min_size(origin, size);
         // The frame of the workspace keeps the strip its name badge stands in, above the form.
-        Some(Rect::from_min_max(
-            Pos2::new(form.left(), form.top() - BADGE_STRIP),
-            form.max,
-        ))
+        // The badge is drawn on the board, so the strip takes the room the zoom gives it.
+        let strip = BADGE_STRIP * self.canvas_view.zoom.max(0.0);
+        Some(Rect::from_min_max(Pos2::new(form.left(), form.top() - strip), form.max))
     }
 
     fn cloud_creation_surface(&self, ctx: &Context) -> Option<Rect> {

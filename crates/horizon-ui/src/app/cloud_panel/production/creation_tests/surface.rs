@@ -321,13 +321,18 @@ fn the_frame_holds_the_form_in_the_first_frame_after_a_pan() {
 fn the_frame_follows_the_zoom_so_it_keeps_holding_the_form() {
     let (_temp, ctx, mut app) = ready_app();
     app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
-    for zoom in [0.6_f32, 0.8, 1.0, 1.4] {
+    for zoom in [0.6_f32, 0.8, 1.0, 1.4, 2.0] {
         app.canvas_view.set_zoom(zoom);
         frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
         let (frame, form) = frame_and_form(&app, &ctx);
         assert!(
             frame.expand(1.0).contains_rect(form),
             "zoom {zoom}: the frame {frame:?} does not hold the form {form:?}"
+        );
+        // The badge is drawn on the board, so it is taller the further the person zooms in.
+        assert!(
+            form.top() >= frame.top() + crate::app::WS_TITLE_HEIGHT * zoom,
+            "zoom {zoom}: the name badge covers the form {form:?} in {frame:?}"
         );
     }
 }
