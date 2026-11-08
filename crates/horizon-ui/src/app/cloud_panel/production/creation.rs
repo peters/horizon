@@ -22,6 +22,7 @@ pub(super) mod siblings;
 pub(super) mod source;
 mod storage;
 pub(super) mod uncommitted;
+mod view;
 pub(in crate::app::cloud_panel::production) mod watch;
 
 /// The configuration summary's width beside the catalog.
@@ -126,8 +127,11 @@ impl HorizonApp {
     /// workspace and its card is the way back.
     pub(in crate::app::cloud_panel) fn render_cloud_creation(&mut self, ctx: &Context) {
         if !self.cloud_prototype.production.creation_dialog_open() {
+            self.cloud_prototype.production.forget_creation_canvas();
             return;
         }
+        // A window resize moves the canvas under the form, and the form follows its workspace.
+        self.follow_cloud_creation_view(ctx);
         let Some(surface) = self.cloud_creation_surface_now(ctx) else {
             return;
         };
