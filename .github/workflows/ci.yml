@@ -95,8 +95,6 @@ jobs:
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
       - name: Verify the cloud worker test runner
         run: python3 -B scripts/test_run_cloud_worker_tests.py -v
-      - name: Verify the local browser VM launcher
-        run: python3 -B scripts/test_browser_vm_local.py -v
       - name: Verify the nightly macOS release builds watcher
         run: python3 -B scripts/test_nightly_release_watch.py -v
       - name: Verify the PR readiness check

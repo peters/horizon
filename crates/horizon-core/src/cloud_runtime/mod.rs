@@ -57,6 +57,9 @@ pub use worker_contract::{SelfStop, WorkerContract};
 pub enum Error {
     #[error("{0}")]
     Invalid(&'static str),
+    /// A failure of the local browser VM, with the reason that a person can act on.
+    #[error("{0}")]
+    Local(String),
     #[error("Cloud state I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("Invalid cloud state or settings")]

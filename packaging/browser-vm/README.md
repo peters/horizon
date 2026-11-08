@@ -286,16 +286,17 @@ Do not depend on this image to stop a profile that has no proxy.
 ## 9. The local container
 
 The image of sections 1 to 8 runs on this computer too.
-The script `scripts/browser-vm-local.sh` builds the target `browser-vm-local`,
+The command `horizon --browser-vm-local up` builds the target `browser-vm-local`,
 which adds an SSH server, and runs the container with two loopback ports.
 
 ```sh
-scripts/browser-vm-local.sh up
+horizon --browser-vm-local up --build .
 ```
 
 The task `up` does these steps:
 
-1. It writes an Ed25519 key in the state directory.
+1. It writes an Ed25519 key in the state directory of Horizon,
+   `browser-vm/browser-vm-local/id_ed25519`.
 2. It builds the image when the image is absent, with the target
    `browser-vm-local`.
 3. It runs the container with this start:
@@ -311,8 +312,10 @@ The task `up` does these steps:
      horizon-browser-vm-local:latest
    ```
 
-4. It waits until the two loopback ports answer.
-5. It prints the block of `~/.ssh/config` that names the container.
+4. It waits until the SSH server of the container names its host key, then
+   writes the ssh entry `horizon-browser-vm` with the key, the port and the host
+   keys of the container.
+5. It prints the ssh target and the loopback address that a Device panel takes.
 
 The SSH server accepts one key: the public key in
 `HORIZON_BROWSER_VM_SSH_PUBKEY`.
@@ -326,41 +329,28 @@ A start of that target with `HORIZON_BROWSER_VM_SSH=1` stops with an error.
 
 | Task | Result |
 |---|---|
-| `up` | The container runs, the two ports answer on the loopback, and the script prints the alias block. `--write-alias` also writes the block to `~/.ssh/config`, once for that name. |
-| `down` | The container stops and is removed. The state volume and the key stay. |
-| `status` | It prints the container, the two ports, the state volume, the key and the SSH target. |
-| `alias` | It prints the block of `~/.ssh/config`. |
-| `key` | It prints the public key that the container accepts. |
+| `up` | The container runs, the SSH server names its host key, and the ssh entry is written. The command prints the target and the loopback address. |
+| `down` | The container stops and is removed. The state volume, the key and the ssh entry stay. |
+| `status` | It prints whether the container runs, both loopback addresses, the state volume and the image. |
 
-The block of a name starts with the line
-`# >>> horizon-browser-vm-local:<name> >>>` and ends with
-`# <<< horizon-browser-vm-local:<name> <<<`.
-A second name adds a second block, and a rewrite removes only the block of its
-own name.
+The options `--name`, `--image`, `--vnc-port`, `--ssh-port` and `--build` name
+another container, image, ports or repository.
 
-The state directory is `${XDG_STATE_HOME:-~/.local/state}/horizon/browser-vm-local`.
-It holds the key, one known-host file for each name
-(`known_hosts-<name>`), and the alias block.
-A name has its own host file, because a new state volume brings a new host key
-and `ssh` refuses a changed key for a known host.
-The script reads the host key of the container through Docker, and not through
-the network, and it writes the entry `[127.0.0.1]:<port>` in that file before
-the first login.
-It replaces an earlier entry of the same address, so a start after a removed
-volume works, and the alias block sets `StrictHostKeyChecking yes`.
-The options `--name`, `--image`, `--vnc-port`, `--ssh-port`, `--state` and
-`--docker` change the names, the ports and the Docker command.
+The key is made once and kept, the state volume is `<name>-state`, and the host
+keys of the container come from the container itself through Docker, so no
+connection is trusted before its key is known. A new state volume brings a new
+host key, and the entry is written again with it.
 
 A Horizon that reaches this container over SSH names it as the entry
 `browser_host.ssh_target` of its settings:
 
 ```yaml
 browser_host:
-  ssh_target: horizon-browser-vm-local
+  ssh_target: horizon-browser-vm
   profile: probe
 ```
 
-The entry applies at the next start of Horizon.
+The container publishes both ports on the loopback of this computer only.
 
 ## 10. Limits
 

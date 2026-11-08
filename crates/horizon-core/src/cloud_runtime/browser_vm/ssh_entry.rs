@@ -42,6 +42,8 @@ pub(super) struct Entry<'a> {
     /// The cloud root of this Horizon, which holds the managed `known_hosts` file.
     root: &'a Path,
     scan: HostKeyScan,
+    /// The port of the SSH server, when it is not the default 22 of a rented machine.
+    port: Option<u16>,
 }
 
 /// What a written entry holds beyond its block.
@@ -86,6 +88,18 @@ impl<'a> Entry<'a> {
             home,
             root,
             scan: HostKeyScan::default(),
+            port: None,
+        }
+    }
+
+    /// An entry for a machine whose SSH server listens on `port`, such as the local
+    /// container of the browser image.
+    pub(super) fn with_port_and_scan(home: &'a Path, root: &'a Path, port: u16, scan: HostKeyScan) -> Self {
+        Self {
+            home,
+            root,
+            scan,
+            port: Some(port),
         }
     }
 
@@ -176,8 +190,13 @@ impl<'a> Entry<'a> {
                 "The browser VM has no address or identity that the ssh configuration can take on one line",
             ));
         }
+        let port = self
+            .port
+            .filter(|port| *port != 22)
+            .map(|port| format!("  Port {port}\n"))
+            .unwrap_or_default();
         Ok(format!(
-            "{BEGIN}\nHost {ALIAS}\n  HostName {address}\n  User {USER}\n  IdentityFile {}\n  \
+            "{BEGIN}\nHost {ALIAS}\n  HostName {address}\n{port}  User {USER}\n  IdentityFile {}\n  \
              IdentitiesOnly yes\n  UserKnownHostsFile {}\n  HostKeyAlias {ALIAS}\n{END}\n",
             values[1], values[2]
         )
@@ -207,12 +226,12 @@ impl<'a> Entry<'a> {
             if attempt > 0 {
                 std::thread::sleep(self.scan.pause);
             }
-            let output = Command::new(&self.scan.program)
-                .arg("-T")
-                .arg(self.scan.connect_timeout_secs.to_string())
-                .arg(address)
-                .stdin(Stdio::null())
-                .output();
+            let mut scan = Command::new(&self.scan.program);
+            scan.arg("-T").arg(self.scan.connect_timeout_secs.to_string());
+            if let Some(port) = self.port.filter(|port| *port != 22) {
+                scan.arg("-p").arg(port.to_string());
+            }
+            let output = scan.arg(address).stdin(Stdio::null()).output();
             let output = match output {
                 Ok(output) => output,
                 // The program cannot run at all, so no further attempt can succeed.
@@ -239,7 +258,12 @@ impl<'a> Entry<'a> {
 #[cfg(test)]
 impl<'a> Entry<'a> {
     pub(super) fn with_scan(home: &'a Path, root: &'a Path, scan: HostKeyScan) -> Self {
-        Self { home, root, scan }
+        Self {
+            home,
+            root,
+            scan,
+            port: None,
+        }
     }
 }
 

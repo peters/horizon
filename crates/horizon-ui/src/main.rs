@@ -5,6 +5,7 @@ mod agent_work_hook;
 mod app;
 mod badge;
 mod branding;
+mod browser_vm_local_command;
 mod browser_widget;
 mod clipboard_image;
 mod command_palette;
@@ -37,6 +38,7 @@ use std::path::PathBuf;
 
 use agent_integrations::AgentIntegrations;
 use app::HorizonApp;
+use browser_vm_local_command::{Action, LocalCommand};
 use std::sync::Arc;
 
 use eframe::{egui_wgpu, wgpu};
@@ -388,6 +390,7 @@ fn run_command(command: &Command, config_path: &std::path::Path) -> ! {
     let code = match command {
         Command::ExportConfig(destination) => run_export_config_command(config_path, destination.as_deref()),
         Command::RemoteProfile(profile) => run_remote_profile_command(config_path, profile),
+        Command::BrowserVmLocal(local) => local.run(config_path),
     };
     plugin_install::exit_after_releasing_plugins(code)
 }
@@ -580,6 +583,8 @@ fn init_tracing() {
 
 const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
        horizon [--config <path>] --export-config [<path>]
+       horizon [--config <path>] --browser-vm-local <up|down|status> [--build <repository>]
+               [--name <name>] [--image <reference>] [--vnc-port <port>] [--ssh-port <port>]
        horizon [--config <path>] --export-remote-profile <path>
        horizon [--config <path>] --import-remote-profile <path>";
 
@@ -603,6 +608,8 @@ enum Command {
     /// Write the settings as YAML. `None` uses the settings path itself.
     ExportConfig(Option<PathBuf>),
     RemoteProfile(RemoteProfileCommand),
+    /// Start, stop or report the local container of the browser image.
+    BrowserVmLocal(LocalCommand),
 }
 
 /// Parse the launch flags. The remote-profile commands take exactly one
@@ -644,6 +651,18 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
                 };
                 set_command(&mut command, Command::RemoteProfile(profile))?;
             }
+            "--browser-vm-local" => {
+                let action = args.next().unwrap_or_default();
+                set_command(
+                    &mut command,
+                    Command::BrowserVmLocal(LocalCommand::new(Action::parse(&action)?)),
+                )?;
+            }
+            // The flags of `--browser-vm-local` may follow the action or precede it.
+            flag if LocalCommand::handles(flag) => match &mut command {
+                Some(Command::BrowserVmLocal(local)) => local.apply(&arg, &mut args)?,
+                _ => return Err(format!("{flag} belongs to --browser-vm-local up")),
+            },
             "--new-session" => new_session = true,
             "--ephemeral" => ephemeral = true,
             "--blank" => blank = true,
@@ -664,7 +683,7 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
 fn set_command(command: &mut Option<Command>, next: Command) -> Result<(), String> {
     if command.replace(next).is_some() {
         return Err(
-            "give one command only, once: --export-config, --export-remote-profile or --import-remote-profile"
+            "give one command only, once: --export-config, --export-remote-profile, --import-remote-profile or --browser-vm-local"
                 .to_string(),
         );
     }
@@ -708,7 +727,7 @@ mod log_filter_tests {
 
 #[cfg(test)]
 mod cli_args_tests {
-    use super::{Command, RemoteProfileCommand, parse_cli_args};
+    use super::{Action, Command, LocalCommand, RemoteProfileCommand, parse_cli_args};
 
     fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
         parse_cli_args(args.iter().map(|arg| (*arg).to_string()))
@@ -749,6 +768,24 @@ mod cli_args_tests {
 
     #[test]
     fn export_config_takes_an_optional_path_and_runs_alone() {
+        let args = parse(&["--browser-vm-local", "up"]).expect("start the local browser VM");
+        assert_eq!(
+            args.command,
+            Some(Command::BrowserVmLocal(LocalCommand::new(Action::Up)))
+        );
+        let args = parse(&["--browser-vm-local", "up", "--build", "/src/horizon"]).expect("build first");
+        let mut expected = LocalCommand::new(Action::Up);
+        expected
+            .apply("--build", &mut ["/src/horizon".to_string()].into_iter())
+            .expect("a build path");
+        assert_eq!(args.command, Some(Command::BrowserVmLocal(expected)));
+        assert!(parse(&["--browser-vm-local"]).is_err());
+        assert!(parse(&["--browser-vm-local", "restart"]).is_err());
+        assert!(
+            parse(&["--build", "/src/horizon"]).is_err(),
+            "--build belongs to the container command"
+        );
+
         let args = parse(&["--export-config"]).expect("export to the settings path");
         assert_eq!(args.command, Some(Command::ExportConfig(None)));
         let args = parse(&["--export-config", "out.yaml"]).expect("export to a path");
