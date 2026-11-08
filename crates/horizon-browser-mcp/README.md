@@ -330,7 +330,9 @@ shell commands, files, or other MCP servers.
   read the list instead of guessing where a file went. A row holds `file_name`,
   `state` (`in_progress`, `completed` or `canceled`), `received_bytes`,
   `total_bytes` when the response stated it, and the absolute `path` once the
-  browser named the file it wrote. `reporting: false` means this session could
+  browser named the file it wrote. A row whose browser reports no byte counts —
+  a Firefox transfer, for example — states the bytes the browser has written
+  so far, measured on disk beside the file it will save. `reporting: false` means this session could
   not observe downloads, so an empty list is not proof that nothing was saved.
   Rows are bounded to 64 and `dropped` counts reports this session forgot; their
   files stay in the folder. A report never holds the download URL, because that

@@ -82,10 +82,29 @@ therefore describe the downloads of this browser, which is what Chromium's
 browser-level events already report.
 
 Firefox reports the final path when the download ends, and no byte counts. The
-engine measures a finished file on disk instead, so a completed Firefox row
-reports the same size in `received_bytes` and `total_bytes` as a Chromium row. It
-reads only a path inside this panel's folder; a path outside it is named in the
-row and never opened.
+engine measures the file on disk instead, so a completed Firefox row reports the
+same size in `received_bytes` and `total_bytes` as a Chromium row. It reads only a
+path inside this panel's folder; a path outside it is named in the row and never
+opened.
+
+The same rule covers a transfer that is still running. Firefox reports no
+progress at all, so an in-progress Firefox row would read zero bytes until the
+file finished. Both engines write the bytes they have into a file beside the one
+they will save: Chromium adds `.crdownload` to the whole name, and Firefox writes
+`<stem>.<random>.<extension>.part` and leaves an empty file under the name it will
+keep. A read measures the incomplete file that carries the stem and the extension
+of the row when the row has no count of its own, and never reports more than the
+total the browser stated. Two transfers can share a name, and a browser states a
+different name for the second one (`export(1).csv`), or leaves a stale file of an
+earlier run beside it. A name that matches more than one row without a count of
+its own, or one file that more than one running row could claim, describes no
+single transfer, so the row states no size instead of another transfer's bytes.
+A row that counts its own bytes still holds its own file, so it is counted as a
+claimant too. The folder outlives a
+session, so a part file that an earlier session left is skipped as well: a row
+measures only a file that was written while the row was already observed, and a
+new download of the same name writes a file of its own. A browser that reports its own progress keeps
+its number, and a finished or canceled row is never measured.
 
 ## Safari and remote sessions
 
