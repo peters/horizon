@@ -182,14 +182,11 @@ impl<'a> Entry<'a> {
         self.root.join(KNOWN_HOSTS)
     }
 
-    /// One line of a `known_hosts` file for `address`, with the key that the machine presents.
-    /// A nonstandard port is written in the bracketed form that ssh matches.
-    fn host_line(&self, address: &str, key: &str) -> String {
-        let key = key.trim();
-        match self.port.filter(|port| *port != 22) {
-            Some(port) => format!("[{address}]:{port} {key}"),
-            None => format!("{address} {key}"),
-        }
+    /// One line of a `known_hosts` file for the machine, with the key that the container
+    /// presents. The line is keyed by the alias, because the block sets `HostKeyAlias`, so ssh
+    /// looks the key up under that name and not under the address and port of the machine.
+    fn host_line(key: &str) -> String {
+        format!("{ALIAS} {}", key.trim())
     }
 
     /// The block, exactly as Horizon writes it and nothing else.
@@ -225,7 +222,7 @@ impl<'a> Entry<'a> {
         let keys = match &self.keys {
             // The caller read the key where the machine keeps it, so no network answer can
             // stand between that key and the entry that trusts it.
-            Some(key) => format!("{}\n", self.host_line(address, key)).into_bytes(),
+            Some(key) => format!("{}\n", Self::host_line(key)).into_bytes(),
             None => match self.scan_keys(address) {
                 Ok(keys) => keys,
                 Err(reason) => return Ok(Some(reason)),

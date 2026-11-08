@@ -190,10 +190,11 @@ fn a_start_writes_the_ssh_entry_with_the_port_and_the_key_of_the_container() {
     assert!(config.contains("  HostKeyAlias horizon-browser-vm\n"), "{config}");
     let known = std::fs::read_to_string(fixture.root.path().join("browser-vm").join("browser-vm-known-hosts"))
         .expect("host keys");
-    // The key comes from the container itself, in the bracketed form of a nondefault port; no
-    // scan of the network stands between that key and the entry.
+    // The key comes from the container itself, and it is keyed by the alias that the block
+    // names in `HostKeyAlias`: no scan of the network and no lookup by address stand between
+    // that key and the entry that trusts it.
     assert!(
-        known.contains("[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyOfTheTest"),
+        known.contains("horizon-browser-vm ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyOfTheTest"),
         "{known}"
     );
     assert!(
