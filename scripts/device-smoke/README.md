@@ -415,6 +415,9 @@ The debug Horizon gets a changed environment:
 - `HORIZON_HOME` is `<state>/horizon-home`. Horizon keeps all of its state
   there, never in `/workspace/home/.horizon`, which is the root of the worker's
   browser service.
+- `browser.downloads_root` of the fixture configuration is
+  `<state>/browser-downloads`, because `HOME` stays the home of the worker and a
+  panel would otherwise save a page's downloads there.
 - The command removes the worker identity variables `HORIZON`,
   `HORIZON_BROWSER_ACTOR`, `HORIZON_BROWSER_HOST_INSTANCE`,
   `HORIZON_BROWSER_ROOT`, `HORIZON_DEVICE_ACTOR`, `HORIZON_CLOUD_ACTOR` and

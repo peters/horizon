@@ -178,12 +178,16 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
                 {'name': 'Device input test', 'command': '/bin/bash',
                  'args': ['--noprofile', '--norc'],
                  'position': [630, 60], 'size': [550, 420]}]}]}
+    # A panel saves its page's downloads into the Downloads folder of its home.
+    # The fixture keeps them in its own state directory instead, so a run leaves
+    # nothing behind in the Downloads folder of the person or of a worker.
+    browser = {'downloads_root': os.path.join(cwd, 'browser-downloads')}
     if device_address:
         fixture['workspaces'][0]['terminals'] = [
             {'name': 'Native device view', 'kind': 'device', 'command': device_address,
              'position': [40, 60], 'size': [1150, 780]}]
     if firefox_system_access:
-        fixture['browser'] = {'backend': 'firefox', 'firefox_system_access': True}
+        browser.update({'backend': 'firefox', 'firefox_system_access': True})
         if not device_address:
             fixture['workspaces'][0]['terminals'] = [
                 {'name': 'Google sign-in', 'kind': 'browser',
@@ -196,6 +200,7 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
                  'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
                  'position': [40, 720], 'size': [550, 140]},
             ]
+    fixture['browser'] = browser
     if browser_host:
         # A browser host that a browser panel follows, so a procedure proves the
         # panel route without a hand edit of the private settings of the fixture.
