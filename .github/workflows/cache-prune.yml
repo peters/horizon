@@ -1,0 +1,118 @@
+name: Cache prune
+
+# Deletes the cache generations that no run can reach any more.
+#
+# Every cache key below ends in a hash of the lockfile, so each lockfile change
+# adds a generation beside the one before it. GitHub keeps all of them until the
+# repository reaches its 10 GB cache limit, and then deletes the least recently
+# accessed entries until the total fits. That order is the problem: the entries
+# it reaches first are the warm ones of a lane that runs seldom, such as the
+# macOS release builds that save once a night, so the budget of a busy day is
+# paid by a cold build in another lane. A cache saved on main also counts
+# against the same budget as the superseded copies of itself.
+#
+# Measured once by hand before this workflow existed: 10.02 GB in 19 entries, of
+# which 5.31 GB in 10 entries were superseded generations of a key whose current
+# generation was also present. Deleting them left 4.71 GB, which is the headroom
+# a key needs to stay warm.
+#
+# scripts/prune-actions-caches.py decides what to delete. This workflow only
+# fetches the list and carries out that decision, so the rule is unit tested
+# without the API.
+on:
+  # After the run that saved the entries, so a just-written generation is the
+  # one that survives. CI is the workflow that saves most of them.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report the superseded entries without deleting them.
+        type: boolean
+        default: true
+      keep:
+        description: Generations to keep per cache key.
+        type: string
+        default: '1'
+
+permissions:
+  contents: read
+  # The cache delete endpoint writes an Actions resource.
+  actions: write
+
+# One prune at a time: two runs would read the same list and the second would
+# delete ids the first already removed.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune superseded cache entries
+    # A cache that a pull request run restored but never saved is not this
+    # workflow's business, and a fork's run must not reach the delete endpoint.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The decision script only.
+          sparse-checkout: scripts/prune-actions-caches.py
+          sparse-checkout-cone-mode: false
+      - name: Prune
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The automatic run deletes. A dispatch reports unless it is told to
+          # delete, so the list can be read before anything is removed.
+          # Rendered as the string `true` or `false`. Comparing the input to a
+          # boolean in the expression would let GitHub cast both sides to a
+          # number, where an unchecked box can come out as `true`.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          KEEP: ${{ github.event_name == 'workflow_dispatch' && inputs.keep || '1' }}
+        run: |
+          set -euo pipefail
+          # `--paginate` repeats the response object per page, so collect the
+          # pages and flatten their lists into one. The cache usage endpoint is
+          # not used here: it reported a stale total right after a delete, while
+          # this list was already correct.
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
+            | jq '[.[].actions_caches[]]' > caches.json
+          before_count=$(jq 'length' caches.json)
+          before_bytes=$(jq '[.[].size_in_bytes] | add // 0' caches.json)
+          python3 -B scripts/prune-actions-caches.py \
+            --caches caches.json --keep "$KEEP" > stale.tsv
+          stale_count=$(wc -l < stale.tsv)
+          stale_bytes=$(awk -F'\t' '{total += $2} END {print total + 0}' stale.tsv)
+          {
+            printf '| Caches | Entries | Size |\n|---|---|---|\n'
+            printf '| Before | %s | %s |\n' "$before_count" "$(numfmt --to=iec "$before_bytes")"
+            printf '| Superseded | %s | %s |\n' "$stale_count" "$(numfmt --to=iec "$stale_bytes")"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$stale_count" -eq 0 ]; then
+            echo "::notice::No superseded cache generations."
+            exit 0
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo '## Not deleted: this run reports only' >> "$GITHUB_STEP_SUMMARY"
+            sed 's/^/    /' stale.tsv >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # A failed delete fails the step: a missing `actions: write` permission
+          # must be visible, not a quiet no-op that lets the budget fill again.
+          failed=0
+          while IFS=$'\t' read -r id size key; do
+            if gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" --silent; then
+              printf -- '- deleted %s %s\n' "$(numfmt --to=iec "$size")" "$key" >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf -- '- FAILED %s %s\n' "$(numfmt --to=iec "$size")" "$key" >> "$GITHUB_STEP_SUMMARY"
+              failed=$((failed + 1))
+            fi
+          done < stale.tsv
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$failed cache entries could not be deleted"
+            exit 1
+          fi

@@ -110,6 +110,8 @@ jobs:
         run: python3 -B scripts/test_check_pr_readiness.py -v
       - name: Verify platform test shards
         run: python3 -B scripts/test_ci_cargo_test_shard.py -v
+      - name: Verify the Actions cache pruner
+        run: python3 -B scripts/test_prune_actions_caches.py -v
       - name: Verify the test focus helper
         run: python3 -B scripts/test_test_focus.py -v
       - name: Verify the test duration helper
