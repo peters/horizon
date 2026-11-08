@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-protocol/src/downloads.rs,crates/horizon-browser/src/downloads.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/events.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/webdriver/session/handshake.rs,crates/horizon-browser/src/webdriver/session/bidi.rs,crates/horizon-browser/src/webdriver/session/downloads.rs,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser-mcp/src/model/downloads.rs"
+applyTo: "crates/horizon-browser-protocol/src/downloads.rs,crates/horizon-browser/src/downloads.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/events.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/webdriver/session/handshake.rs,crates/horizon-browser/src/webdriver/session/bidi.rs,crates/horizon-browser/src/webdriver/session/downloads.rs,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser-mcp/src/model/downloads.rs,crates/horizon-browser-mcp/src/download.rs,crates/horizon-browser-mcp/src/download/tests.rs,crates/horizon-browser-mcp/src/server.rs"
 ---
 
 # Trust boundary of browser panel downloads
