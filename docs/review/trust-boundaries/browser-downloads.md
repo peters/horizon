@@ -25,7 +25,8 @@ A page names its own downloads, starts any number of them, and decides what
 bytes they contain.
 
 - The browser, not the page, chooses the file it writes, and the folder is the
-  panel folder. The engine never joins a page-supplied name into a path.
+  panel folder under the Downloads folder of the person. The engine never joins
+  a page-supplied name into a path.
 - A reported name keeps only its last path component, loses control characters
   and is cut to 128 bytes, so a page cannot present a name that looks like a
   host path.
@@ -39,8 +40,10 @@ bytes they contain.
 ## Does not guarantee
 
 - A page can fill the panel folder, and Horizon does not limit the folder's size
-  or inspect file contents. A person deletes the folder to reclaim space. The
-  files a page saved are as untrusted as the page.
+  or inspect file contents. The folder sits in the Downloads folder of the
+  person, so a page can place a file where a person keeps real downloads; a
+  person deletes the `Horizon` folder to reclaim space. The files a page saved
+  are as untrusted as the page.
 - Chromium saves the panel's downloads without the prompt that would let a person
   refuse the second one. This is a deliberate change: the prompt is not visible
   in an unattended panel, and its absence was the silent failure in #1994.

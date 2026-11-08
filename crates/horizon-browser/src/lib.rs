@@ -149,6 +149,11 @@ pub struct BrowserConfig {
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
     pub every_nth_frame: u32,
     pub profile_root: Option<PathBuf>,
+    /// Parent folder for the per-panel download folders. `None` uses
+    /// `Downloads/Horizon` in the home directory, where a person looks for a
+    /// download. Each panel saves into its own subfolder of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloads_root: Option<PathBuf>,
     /// Defaults for page-pixel `WebM` capture. Per-recording options may
     /// override individual fields. An omitted host `max_width` uses source-frame
     /// dimensions with codec-block alignment and automatic safety limits;
@@ -189,6 +194,7 @@ impl Default for BrowserConfig {
             quality: 60,
             every_nth_frame: 1,
             profile_root: None,
+            downloads_root: None,
             video: BrowserVideoCaptureOptions::default(),
             remote: RemoteBrowserConfig::default(),
             webauthn_command: Vec::new(),

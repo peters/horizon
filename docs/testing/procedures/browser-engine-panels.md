@@ -61,6 +61,7 @@ engine still needs `allow_additional`.
    version: 11
    browser:
      profile_root: <home folder>/profiles
+     downloads_root: <home folder>/downloads
      firefox_command: /usr/lib/firefox/firefox
      geckodriver_command: <path to geckodriver>
    workspaces:

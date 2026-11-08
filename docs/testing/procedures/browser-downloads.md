@@ -39,7 +39,10 @@ download URL.
   that fixture's filesystem namespace. A private display keeps the run isolated
   in the same way, as the [engine panels procedure](browser-engine-panels.md)
   does.
-- A frozen candidate binary and its SHA-256 digest.
+- A frozen candidate binary and its SHA-256 digest. When the private home is not
+  the home of the person, the default folder is already private to the run. When
+  it is, give the candidate its own `browser.downloads_root` beneath the private
+  home, so that the run never writes into the Downloads folder of the person.
 - Chromium, Firefox, and geckodriver. Give the candidate a private home and a
   `browser.profile_root` beneath that home: Snap Chromium cannot read a profile
   under a hidden folder or under `/tmp`.
@@ -110,7 +113,9 @@ download URL.
 3. Call `browser_downloads` with the panel id.
 
    Result: `reporting` is `true`. One row has `state: completed`, the file name
-   `report.pdf`, and an absolute `path` under a folder that ends in `downloads`.
+   `report.pdf`, and an absolute `path` under the folder that `directory` states,
+   which is `<downloads root>/<panel id>` and, without a configured
+   `browser.downloads_root`, `Downloads/Horizon/<panel id>` of the private home.
 
 4. Read the reported path with a read-only tool.
 
@@ -226,9 +231,27 @@ no file.
    Result: The journal holds a `downloads` record for each `browser_downloads`
    call, and no record holds a file path or a URL.
 
+### 6.9 P09 — The default folder is the Downloads folder of the home
+
+1. Remove `browser.downloads_root` from the configuration, start the candidate
+   again and create one Chromium panel.
+
+   Result: The panel is ready.
+
+2. Click the download link of P01 and call `browser_downloads`.
+
+   Result: `directory` ends with `Downloads/Horizon/<panel id>` of the home of
+   the candidate, and the panel folder has mode `0700`.
+
+3. Close the panel with `browser_close` and wait for the host to remove the
+   profile of the ended panel.
+
+   Result: The file of step 2 is still in its folder with the same bytes, because
+   the folder lives outside the profile.
+
 ## 7. Pass criteria
 
-- P01 through P08 pass for both engines on each tested platform.
+- P01 through P09 pass for both engines on each tested platform.
 - Each reported `path` exists in the panel folder and holds the bytes of the
   server.
 - No row and no audit record holds a download URL or a token.

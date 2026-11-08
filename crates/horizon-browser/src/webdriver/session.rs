@@ -1157,6 +1157,7 @@ mod tests {
         let config = BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             profile_root: Some(profile_root.path().to_path_buf()),
+            downloads_root: Some(profile_root.path().join("downloads")),
             ..BrowserConfig::default()
         };
         let capabilities = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();
@@ -1282,6 +1283,7 @@ mod tests {
             let config = BrowserConfig {
                 backend,
                 profile_root: Some(profile_root.path().to_path_buf()),
+                downloads_root: Some(profile_root.path().join("downloads")),
                 ..BrowserConfig::default()
             };
             let capabilities = new_session_capabilities(&config, "panel", true, true).unwrap_or_default();

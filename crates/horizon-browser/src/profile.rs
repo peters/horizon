@@ -23,14 +23,24 @@ pub(crate) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> PathB
     profile_dir_with_default_root(config, panel_local_id, &default_root)
 }
 
-/// The folder one panel saves its page's downloads into. It sits beside the
-/// backend profiles of the same panel, so a panel keeps one folder when it
-/// switches engine, and it is a private directory under the profile root the
-/// host selected.
+/// The folder one panel saves its page's downloads into.
+///
+/// The default is `Downloads/Horizon` in the home directory, where a person
+/// opens a download afterwards. Each panel gets its own subfolder so that two
+/// panels never replace each other's file of one name, and a panel that shares
+/// a browser profile shares that profile's subfolder.
 #[must_use]
 pub(crate) fn downloads_dir(config: &BrowserConfig, panel_local_id: &str) -> PathBuf {
-    let default_root = paths::default_root().join("profiles");
-    panel_profile_dir_with_default_root(config, panel_local_id, &default_root).join("downloads")
+    downloads_dir_in(config, panel_local_id, &paths::home_dir())
+}
+
+#[must_use]
+pub(crate) fn downloads_dir_in(config: &BrowserConfig, panel_local_id: &str, home: &Path) -> PathBuf {
+    let root = config.downloads_root.as_ref().map_or_else(
+        || home.join("Downloads").join("Horizon"),
+        |root| paths::expand_tilde(&root.to_string_lossy()),
+    );
+    root.join(paths::readable_id(panel_local_id))
 }
 
 #[must_use]
@@ -250,6 +260,40 @@ mod tests {
             Path::new("/tmp/horizon/browser-profiles"),
             home
         ));
+    }
+
+    #[test]
+    fn a_panel_saves_downloads_in_its_own_folder_in_the_home_downloads_folder() {
+        let home = PathBuf::from("/home/alice");
+        assert_eq!(
+            downloads_dir_in(&BrowserConfig::default(), "panel-1", &home),
+            PathBuf::from("/home/alice/Downloads/Horizon/panel-1")
+        );
+    }
+
+    #[test]
+    fn an_explicit_downloads_root_holds_one_folder_for_each_panel() {
+        let config = BrowserConfig {
+            downloads_root: Some(PathBuf::from("/data/downloads")),
+            ..BrowserConfig::default()
+        };
+        assert_eq!(
+            downloads_dir_in(&config, "panel-1", Path::new("/home/alice")),
+            PathBuf::from("/data/downloads/panel-1")
+        );
+    }
+
+    #[test]
+    fn a_shared_profile_keeps_one_download_folder_of_its_own() {
+        let config = BrowserConfig::default();
+        assert_eq!(
+            downloads_dir_in(&config, "shared-profile", Path::new("/home/alice")),
+            downloads_dir_in(&config, "shared-profile", Path::new("/home/alice"))
+        );
+        assert_ne!(
+            downloads_dir_in(&config, "shared-profile", Path::new("/home/alice")),
+            downloads_dir_in(&config, "other-panel", Path::new("/home/alice"))
+        );
     }
 
     #[test]
