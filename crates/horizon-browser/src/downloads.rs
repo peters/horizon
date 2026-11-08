@@ -64,16 +64,56 @@ impl DownloadState {
     #[must_use]
     pub(crate) fn list(&self) -> BrowserDownloadList {
         let incomplete = self.incomplete_files();
+        let waiting: Vec<&str> = self
+            .observed
+            .iter()
+            .filter(|observed| Self::is_waiting(&observed.row))
+            .map(|observed| observed.row.file_name.as_str())
+            .collect();
         BrowserDownloadList {
             directory: self.directory.clone(),
             reporting: self.reporting,
             downloads: self
                 .observed
                 .iter()
-                .map(|observed| Self::with_progress(observed, &incomplete))
+                .map(|observed| {
+                    let size = Self::is_waiting(&observed.row)
+                        .then(|| Self::measured(&observed.row.file_name, &incomplete, &waiting))
+                        .flatten();
+                    Self::with_progress(observed, size)
+                })
                 .collect(),
             dropped: self.dropped,
         }
+    }
+
+    /// Whether a transfer still runs without a byte count of its own, which is
+    /// the only row that a file on disk can describe.
+    fn is_waiting(row: &BrowserDownload) -> bool {
+        row.state == BrowserDownloadState::InProgress && row.received_bytes == 0
+    }
+
+    /// The bytes of the one file on disk that belongs to this download.
+    ///
+    /// Two transfers can share a name, and a browser then states a different one
+    /// for the second (`export(1).csv`), or leaves a stale file of an earlier
+    /// run beside it. A name that matches more than one row, or one file that
+    /// more than one waiting row could claim, describes no single transfer, so it
+    /// states no size instead of another transfer's bytes.
+    fn measured(file_name: &str, incomplete: &[(String, u64)], waiting: &[&str]) -> Option<u64> {
+        let mut matched = incomplete
+            .iter()
+            .filter(|(name, _)| names_one_transfer(file_name, name));
+        let (name, size) = matched.next()?;
+        if matched.next().is_some() {
+            return None;
+        }
+        let mut claimants = waiting.iter().filter(|other| names_one_transfer(other, name));
+        claimants.next()?;
+        if claimants.next().is_some() {
+            return None;
+        }
+        Some(*size)
     }
 
     /// The row of one observed download, with the bytes of a transfer that the
@@ -85,17 +125,9 @@ impl DownloadState {
     /// Chromium adds `.crdownload` and Firefox adds `.part` — and the folder is
     /// this panel's own, so a read measures the transfer without reading the
     /// page's content.
-    fn with_progress(observed: &ObservedDownload, incomplete: &[(String, u64)]) -> BrowserDownload {
+    fn with_progress(observed: &ObservedDownload, size: Option<u64>) -> BrowserDownload {
         let mut row = observed.row.clone();
-        if row.state != BrowserDownloadState::InProgress || row.received_bytes > 0 {
-            return row;
-        }
-        let size = incomplete
-            .iter()
-            .filter(|(name, _)| names_one_transfer(&row.file_name, name))
-            .map(|(_, size)| *size)
-            .max();
-        if let Some(size) = size {
+        if let Some(size) = size.filter(|_| Self::is_waiting(&row)) {
             row.received_bytes = row.total_bytes.map_or(size, |total| size.min(total));
         }
         row
@@ -494,6 +526,31 @@ mod tests {
         // Another extension is another transfer.
         std::fs::write(folder.path().join("other.9Xq.bin.part"), b"12345678").expect("write");
         assert_eq!(downloads.list().downloads.remove(0).received_bytes, 4);
+    }
+
+    #[test]
+    fn two_transfers_of_one_name_never_state_one_file_twice() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        std::fs::write(folder.path().join("export.2ImBNVAW.csv.part"), b"1200").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        for download in ["d1", "d2"] {
+            downloads.firefox_event(
+                "browsingContext.downloadWillBegin",
+                &json!({"context": "ctx", "download": download, "suggestedFilename": "export.csv"}),
+            );
+        }
+        let rows = downloads.list().downloads;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].received_bytes, 0);
+        assert_eq!(rows[1].received_bytes, 0);
+
+        // One transfer of that name is one file, so it states its size.
+        let mut single = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        single.firefox_event(
+            "browsingContext.downloadWillBegin",
+            &json!({"context": "ctx", "download": "d1", "suggestedFilename": "export.csv"}),
+        );
+        assert_eq!(single.list().downloads.remove(0).received_bytes, 4);
     }
 
     #[test]

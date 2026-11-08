@@ -84,7 +84,11 @@ they will save: Chromium adds `.crdownload` to the whole name, and Firefox write
 `<stem>.<random>.<extension>.part` and leaves an empty file under the name it will
 keep. A read measures the incomplete file that carries the stem and the extension
 of the row when the row has no count of its own, and never reports more than the
-total the browser stated. A browser that reports its own progress keeps
+total the browser stated. Two transfers can share a name, and a browser states a
+different name for the second one (`export(1).csv`), or leaves a stale file of an
+earlier run beside it. A name that matches more than one waiting row, or one file
+that more than one waiting row could claim, describes no single transfer, so the
+row states no size instead of another transfer's bytes. A browser that reports its own progress keeps
 its number, and a finished or canceled row is never measured.
 
 ## Safari and remote sessions
