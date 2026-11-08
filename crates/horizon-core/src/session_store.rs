@@ -35,6 +35,16 @@ const SESSION_META_VERSION: u32 = 1;
 const SESSION_LEASE_VERSION: u32 = 1;
 const LEASE_STALE_AFTER_MILLIS: i64 = 15_000;
 
+/// What the removal of a session does with a board that this Horizon cannot read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnreadableBoard {
+    /// Stop the removal and keep every file of the session. A later Horizon still reads
+    /// the board, and an older Horizon must not destroy it.
+    Keep,
+    /// Remove the session. Only a person who saw that reason asks for this.
+    Remove,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionStore {
     home: HorizonHome,
@@ -193,11 +203,34 @@ impl SessionStore {
     /// Delete an inactive saved session from disk, and queue its removal from the profile
     /// index for the session writer.
     ///
+    /// A board that this Horizon cannot read keeps the whole session, so an older Horizon
+    /// cannot destroy the board of a later one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnreadableBoard`] if its board is not one this Horizon can read,
+    /// which [`Self::delete_session_with_unreadable_board`] answers. Returns another error
+    /// if the session does not belong to the current profile, is still live, or its files
+    /// cannot be removed.
+    pub fn delete_session(&self, session_id: &str) -> Result<()> {
+        self.remove_session(session_id, UnreadableBoard::Keep)
+    }
+
+    /// Delete an inactive saved session whose board this Horizon cannot read.
+    ///
+    /// Only a person who saw that reason asks for this: the board goes with the session,
+    /// and a later Horizon cannot read it again. The browser profile folders of that board
+    /// stay, because only the board names them.
+    ///
     /// # Errors
     ///
     /// Returns an error if the session does not belong to the current profile,
     /// is still live, or its files cannot be removed.
-    pub fn delete_session(&self, session_id: &str) -> Result<()> {
+    pub fn delete_session_with_unreadable_board(&self, session_id: &str) -> Result<()> {
+        self.remove_session(session_id, UnreadableBoard::Remove)
+    }
+
+    fn remove_session(&self, session_id: &str, unreadable: UnreadableBoard) -> Result<()> {
         let session = self
             .load_profile_snapshot()?
             .sessions
@@ -211,30 +244,57 @@ impl SessionStore {
         }
         // The writer leaves the session alone and keeps its board until the delete succeeds.
         let direct = self.writer.reserve(session_id)?;
-        if let Some(runtime_state) = self.load_runtime(session_id)? {
-            for workspace in &runtime_state.workspaces {
-                for panel in &workspace.panels {
-                    if panel.kind == crate::panel::PanelKind::Browser {
-                        let browser_config = panel.browser_config_for_restore(&runtime_state.browser);
-                        let profile_dir = crate::browser::profile_dir_for_home(
-                            &browser_config,
-                            &self.home,
-                            panel
-                                .browser_profile
-                                .as_ref()
-                                .and_then(|profile| profile.session_id.as_deref())
-                                .unwrap_or(&panel.local_id),
-                        );
-                        remove_dir_if_exists(&profile_dir)?;
-                    }
-                }
-            }
-        }
+        self.remove_browser_profiles(session_id, unreadable)?;
         self.index.forget(session_id);
         remove_dir_if_exists(&self.home.session_dir(session_id))?;
         self.writer
             .queue_index(self, IndexChange::Remove(session_id.to_owned()));
         direct.forget();
+        Ok(())
+    }
+
+    /// Remove the browser profile folders that the board of `session_id` names.
+    ///
+    /// Only the board names those folders, so a board that this Horizon cannot read keeps
+    /// them. `unreadable` says whether such a board stops the removal of the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the board cannot be read and `unreadable` is
+    /// [`UnreadableBoard::Keep`], or if a profile folder cannot be removed.
+    fn remove_browser_profiles(&self, session_id: &str, unreadable: UnreadableBoard) -> Result<()> {
+        let runtime_state = match (self.load_runtime(session_id), unreadable) {
+            (Ok(Some(runtime_state)), _) => runtime_state,
+            (Ok(None), _) => return Ok(()),
+            (Err(error), UnreadableBoard::Keep) => {
+                return Err(Error::UnreadableBoard {
+                    session_id: session_id.to_owned(),
+                    reason: error.to_string(),
+                });
+            }
+            (Err(error), UnreadableBoard::Remove) => {
+                tracing::warn!("session {session_id} is removed without its browser profiles: {error}");
+                return Ok(());
+            }
+        };
+        for workspace in &runtime_state.workspaces {
+            for panel in &workspace.panels {
+                if panel.kind != crate::panel::PanelKind::Browser {
+                    continue;
+                }
+                let browser_config = panel.browser_config_for_restore(&runtime_state.browser);
+                let profile_dir = crate::browser::profile_dir_for_home(
+                    &browser_config,
+                    &self.home,
+                    panel
+                        .browser_profile
+                        .as_ref()
+                        .and_then(|profile| profile.session_id.as_deref())
+                        .unwrap_or(&panel.local_id),
+                );
+                remove_dir_if_exists(&profile_dir)?;
+            }
+        }
         Ok(())
     }
 

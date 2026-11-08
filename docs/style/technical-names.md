@@ -12,6 +12,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | frozen candidate | A copy of the candidate in a task-owned directory. Nothing changes it during the test. | — |
 | isolated desktop | A task-owned desktop with its own display, input and private application state. On Linux, it is an Xvfb display with its own window manager and D-Bus. On macOS, it is a dedicated machine, VM or desktop session. | test desktop, sandbox desktop |
 | fixture | The script that starts the isolated desktop and the candidate. | harness, lab |
+| candidate window | The operating-system window of the candidate on the isolated desktop. | Horizon window, app window |
+| state path | The directory of one run, given to the fixture with `--state`. It holds the private home. | state dir, evidence dir |
+| private home | The home directory that the fixture gives the candidate inside the state path. | sandbox home, fake home |
+| session folder | The directory of one session under `.horizon/sessions` in the private home. | session dir |
 | Device panel | A Horizon panel that shows a VNC desktop. Agents can only read it. | native viewer, Device viewer, VNC viewer |
 | live view | A Device panel that shows the isolated desktop with frames that advance. | — |
 | lane | One platform or provider path through a procedure, for example "Hetzner lane". | track, leg |
@@ -44,6 +48,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | menu search field | The search control at the top of a menu. The **Move to Workspace** menu uses one. | search bar, default text frame |
 | panel | One terminal, agent, browser, device or cloud area on the board. | window, pane, tile |
 | session | The saved state of a board. An ephemeral session is not saved. | profile |
+| Sessions dialog | The dialog of **Menu** › **Sessions**. It lists the saved sessions of the candidate. | session manager, session window |
+| session card | One session in the **Sessions** dialog, with its label, its counts and its **Delete** button. | session row, session entry |
+| backdrop | The dim rectangle that a dialog paints over the board behind it. | overlay, scrim, dim rectangle |
 | cloud | A Horizon cloud panel and its remote worker, storage and sessions. | cloud workspace, cloud panel instance |
 | cloud body | The area of a cloud without panels. It shows the steps and the output of the cloud. | empty cloud view |
 | stage track | The row of step marks under the header of a cloud. | stepper, progress bar |

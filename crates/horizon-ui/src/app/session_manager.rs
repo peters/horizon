@@ -40,6 +40,9 @@ pub(super) struct RuntimeSessionManagerState {
     error: Option<String>,
     confirm_clear_others: bool,
     confirm_remove_session_id: Option<String>,
+    /// Whether the board of `confirm_remove_session_id` is one this Horizon cannot read.
+    /// The question names that, and the answer removes the board with the session.
+    confirm_remove_unreadable_board: bool,
     opened_at: Instant,
 }
 
@@ -65,6 +68,7 @@ impl RuntimeSessionManagerState {
             error,
             confirm_clear_others: false,
             confirm_remove_session_id: None,
+            confirm_remove_unreadable_board: false,
             opened_at: Instant::now(),
         }
     }
@@ -91,6 +95,7 @@ enum SessionManagerAction {
     CreateNewSession,
     SwitchTo(String),
     Remove(String),
+    RemoveWithUnreadableBoard(String),
     RemoveAll(Vec<String>),
 }
 
@@ -172,8 +177,20 @@ impl HorizonApp {
             },
             SessionManagerAction::Remove(session_id) => match self.session_store.delete_session(&session_id) {
                 Ok(()) => self.reload_session_manager(None, None),
+                // The removal read the board for its browser profiles and refused it. Ask
+                // the person again, with the reason, before the board goes with the session.
+                Err(horizon_core::Error::UnreadableBoard { reason, .. }) => {
+                    tracing::info!("session {session_id} keeps its board until a person answers: {reason}");
+                    self.ask_to_remove_an_unreadable_board(session_id);
+                }
                 Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
             },
+            SessionManagerAction::RemoveWithUnreadableBoard(session_id) => {
+                match self.session_store.delete_session_with_unreadable_board(&session_id) {
+                    Ok(()) => self.reload_session_manager(None, None),
+                    Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
+                }
+            }
             SessionManagerAction::RemoveAll(session_ids) => {
                 for session_id in session_ids {
                     if let Err(error) = self.session_store.delete_session(&session_id) {
@@ -209,11 +226,24 @@ impl HorizonApp {
             .and_then(|state| state.selected_session_id.clone())
     }
 
+    /// Asks the second question of a card whose board this Horizon cannot read. The first
+    /// answer removed the session; this one removes its board with it.
+    fn ask_to_remove_an_unreadable_board(&mut self, session_id: String) {
+        if let Some(state) = self.session_manager.as_mut() {
+            state.selected_session_id = Some(session_id.clone());
+            state.confirm_clear_others = false;
+            state.confirm_remove_session_id = Some(session_id);
+            state.confirm_remove_unreadable_board = true;
+            state.error = None;
+        }
+    }
+
     fn set_session_manager_error(&mut self, error: String) {
         if let Some(state) = self.session_manager.as_mut() {
             state.error = Some(error);
             state.confirm_clear_others = false;
             state.confirm_remove_session_id = None;
+            state.confirm_remove_unreadable_board = false;
         }
     }
 
@@ -500,6 +530,13 @@ fn render_session_manager_window(
     let mut action = SessionManagerAction::None;
     let view_state = SessionManagerViewState::new(state, current_session_id);
 
+    // A press on the backdrop raises it inside the Debug order, and egui keeps that order
+    // when the dialog opens again. The card is the backdrop's sublayer in each frame, so
+    // it is spliced directly above the backdrop whatever was raised last. Without this the
+    // dim rectangle paints over the dialog and takes every click.
+    let backdrop_layer = egui::LayerId::new(egui::Order::Debug, Id::unique("session_manager_backdrop"));
+    let modal_layer = egui::LayerId::new(egui::Order::Debug, Id::unique("session_manager_modal"));
+    ctx.memory_mut(|memory| memory.areas_mut().set_sublayer(backdrop_layer, modal_layer));
     egui::Window::new("session_manager_modal")
         .id(Id::unique("session_manager_modal"))
         .title_bar(false)
@@ -569,12 +606,13 @@ fn render_session_list(
         .auto_shrink([false, true])
         .show(ui, |ui| {
             for session in &state.sessions {
+                let confirm_remove = state.confirm_remove_session_id.as_deref() == Some(session.session_id.as_str());
                 let card_action = render_session_card(
                     ui,
                     session,
                     state.selected_session_id.as_deref() == Some(session.session_id.as_str()),
                     current_session_id,
-                    state.confirm_remove_session_id.as_deref() == Some(session.session_id.as_str()),
+                    confirm_remove.then_some(state.confirm_remove_unreadable_board),
                 );
 
                 match card_action {
@@ -589,11 +627,18 @@ fn render_session_list(
                         state.selected_session_id = Some(session_id.clone());
                         state.confirm_clear_others = false;
                         state.confirm_remove_session_id = Some(session_id);
+                        state.confirm_remove_unreadable_board = false;
                         state.error = None;
                     }
-                    SessionCardAction::CancelRemove => state.confirm_remove_session_id = None,
+                    SessionCardAction::CancelRemove => {
+                        state.confirm_remove_session_id = None;
+                        state.confirm_remove_unreadable_board = false;
+                    }
                     SessionCardAction::ConfirmRemove(session_id) => {
                         *action = SessionManagerAction::Remove(session_id);
+                    }
+                    SessionCardAction::ConfirmRemoveWithUnreadableBoard(session_id) => {
+                        *action = SessionManagerAction::RemoveWithUnreadableBoard(session_id);
                     }
                 }
 
@@ -729,12 +774,85 @@ fn render_empty_state(ui: &mut egui::Ui) {
         });
 }
 
+/// The label, the badges, the counts and the short identifier of one session.
+fn render_session_card_identity(ui: &mut egui::Ui, session: &SessionSummary, is_current: bool) {
+    ui.vertical(|ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG()));
+            if is_current {
+                ui.label(RichText::new("Current").size(10.5).color(theme::ACCENT()).strong());
+            }
+            if session.is_live && !is_current {
+                ui.label(RichText::new("Live").size(10.5).color(theme::PALETTE_RED()).strong());
+            }
+        });
+        ui.label(
+            RichText::new(format!(
+                "{} workspaces · {} panels · {}",
+                session.workspace_count,
+                session.panel_count,
+                format_relative_time(session.last_active_at)
+            ))
+            .size(12.0)
+            .color(theme::FG_SOFT()),
+        );
+        ui.label(
+            RichText::new(format!(
+                "Session {}",
+                super::util::short_session_id(&session.session_id)
+            ))
+            .size(11.0)
+            .color(theme::FG_DIM())
+            .monospace(),
+        );
+    });
+}
+
+/// The **Delete** button of a card, or the question that it opens. `confirm_remove` is
+/// `None` for the button, and `Some(unreadable)` for the question, where `unreadable` is
+/// true for a board that this Horizon cannot read.
+fn render_session_card_remove_row(
+    ui: &mut egui::Ui,
+    session: &SessionSummary,
+    confirm_remove: Option<bool>,
+) -> Option<SessionCardAction> {
+    let Some(unreadable_board) = confirm_remove else {
+        return ui
+            .add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0)))
+            .clicked()
+            .then(|| SessionCardAction::BeginRemove(session.session_id.clone()));
+    };
+
+    let mut action = None;
+    if ui.add(danger_button("Yes").min_size(Vec2::new(46.0, 0.0))).clicked() {
+        action = Some(if unreadable_board {
+            SessionCardAction::ConfirmRemoveWithUnreadableBoard(session.session_id.clone())
+        } else {
+            SessionCardAction::ConfirmRemove(session.session_id.clone())
+        });
+    }
+    if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
+        action = Some(SessionCardAction::CancelRemove);
+    }
+    let color = if unreadable_board {
+        theme::PALETTE_RED()
+    } else {
+        theme::FG_DIM()
+    };
+    ui.label(RichText::new(remove_question(unreadable_board)).size(10.5).color(color));
+    action
+}
+
+/// `confirm_remove` is `None` while the card shows **Delete**, and `Some(unreadable)`
+/// while it asks the question. `unreadable` is true for a board that this Horizon cannot
+/// read, which the question names.
 fn render_session_card(
     ui: &mut egui::Ui,
     session: &SessionSummary,
     selected: bool,
     current_session_id: Option<&str>,
-    confirm_remove: bool,
+    confirm_remove: Option<bool>,
 ) -> SessionCardAction {
     let is_current = current_session_id == Some(session.session_id.as_str());
     let can_remove = is_session_removable(session, current_session_id);
@@ -762,37 +880,7 @@ fn render_session_card(
                 if ui.radio(selected, "").clicked() {
                     card_action = SessionCardAction::Select;
                 }
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(&session.label).size(14.5).strong().color(theme::FG()));
-                        if is_current {
-                            ui.label(RichText::new("Current").size(10.5).color(theme::ACCENT()).strong());
-                        }
-                        if session.is_live && !is_current {
-                            ui.label(RichText::new("Live").size(10.5).color(theme::PALETTE_RED()).strong());
-                        }
-                    });
-                    ui.label(
-                        RichText::new(format!(
-                            "{} workspaces · {} panels · {}",
-                            session.workspace_count,
-                            session.panel_count,
-                            format_relative_time(session.last_active_at)
-                        ))
-                        .size(12.0)
-                        .color(theme::FG_SOFT()),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "Session {}",
-                            super::util::short_session_id(&session.session_id)
-                        ))
-                        .size(11.0)
-                        .color(theme::FG_DIM())
-                        .monospace(),
-                    );
-                });
+                render_session_card_identity(ui, session, is_current);
             });
             selection_rect = Some(content_response.response.rect);
 
@@ -801,16 +889,8 @@ fn render_session_card(
                 ui.horizontal(|ui| {
                     ui.add_space(22.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if confirm_remove {
-                            if ui.add(danger_button("Yes").min_size(Vec2::new(46.0, 0.0))).clicked() {
-                                card_action = SessionCardAction::ConfirmRemove(session.session_id.clone());
-                            }
-                            if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
-                                card_action = SessionCardAction::CancelRemove;
-                            }
-                            ui.label(RichText::new("Delete?").size(10.5).color(theme::FG_DIM()));
-                        } else if ui.add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0))).clicked() {
-                            card_action = SessionCardAction::BeginRemove(session.session_id.clone());
+                        if let Some(row_action) = render_session_card_remove_row(ui, session, confirm_remove) {
+                            card_action = row_action;
                         }
                     });
                 });
@@ -842,12 +922,23 @@ fn is_session_removable(session: &SessionSummary, current_session_id: Option<&st
     Some(session.session_id.as_str()) != current_session_id && !session.is_live
 }
 
+/// The question of the **Delete** button. A board that this Horizon cannot read goes with
+/// its session and no later Horizon reads it again, so the question says so.
+const fn remove_question(unreadable_board: bool) -> &'static str {
+    if unreadable_board {
+        "Horizon cannot read this board. Delete the session and its board?"
+    } else {
+        "Delete?"
+    }
+}
+
 enum SessionCardAction {
     None,
     Select,
     BeginRemove(String),
     CancelRemove,
     ConfirmRemove(String),
+    ConfirmRemoveWithUnreadableBoard(String),
 }
 
 #[cfg(test)]
