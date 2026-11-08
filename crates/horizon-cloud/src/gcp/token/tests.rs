@@ -243,6 +243,32 @@ fn an_assertion_never_travels_in_clear_text() {
 }
 
 #[test]
+fn the_assertion_goes_only_to_a_google_token_host() {
+    // The key document is untrusted and its `token_uri` is the destination of a signed
+    // assertion, so a host that merely looks like a name is not enough. `aud` is that same
+    // uri, so a stolen assertion is not replayable at Google, but it must not be sent at all.
+    for uri in [
+        "https://oauth2.googleapis.com/token",
+        "https://accounts.google.com/o/oauth2/token",
+    ] {
+        assert!(ServiceAccount::parse(&document(uri)).is_ok(), "{uri}");
+    }
+    for uri in [
+        "https://attacker.example/token",
+        "https://oauth2.googleapis.com.attacker.example/token",
+        "https://evil.oauth2.googleapis.com/token",
+        "https://oauth2.googleapis.com:8443/token",
+        "https://127.0.0.1/token",
+    ] {
+        assert_eq!(
+            ServiceAccount::parse(&document(uri)).unwrap_err(),
+            Error::Field("token_uri"),
+            "{uri}"
+        );
+    }
+}
+
+#[test]
 fn the_assertion_is_exactly_as_documented() {
     let account = account(TOKEN_URI);
     let unsigned = jwt::unsigned(&account, 1_767_225_600).unwrap();

@@ -443,14 +443,20 @@ fn valid_project_id(project: &str) -> bool {
 /// test uses: an assertion must never travel in clear text over a network. The
 /// endpoint comes from the key document, so that document decides where its own
 /// assertion goes; only clear text is refused here.
+/// The hosts that issue a Google access token. A key document is untrusted, and its
+/// `token_uri` is where the signed assertion is sent, so the host is pinned rather than
+/// merely required to look like a name. A real service-account key names the first; a key
+/// made before 2021 names the second.
+const TOKEN_HOSTS: [&str; 2] = ["oauth2.googleapis.com", "accounts.google.com"];
+
 fn safe_token_uri(uri: &str) -> bool {
     if uri.len() > 200 || !uri.bytes().all(|b| b.is_ascii_graphic()) {
         return false;
     }
     if let Some(rest) = uri.strip_prefix("https://") {
-        let host = authority(rest);
-        return host.contains('.') && !host.starts_with('.') && !host.ends_with('.');
+        return TOKEN_HOSTS.contains(&authority(rest));
     }
+    // Clear text reaches a loopback endpoint only, which is what a test binds.
     uri.strip_prefix("http://")
         .is_some_and(|rest| loopback(authority(rest)))
 }
