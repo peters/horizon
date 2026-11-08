@@ -1,11 +1,16 @@
 ---
-applyTo: "crates/horizon-cloud/src/browser_vm.rs,crates/horizon-cloud/src/browser_vm/**,crates/horizon-core/src/cloud_runtime/browser_vm.rs,crates/horizon-core/src/cloud_runtime/browser_vm/**,crates/horizon-browser-control/src/manifest/browser_vm.rs,crates/horizon-browser-mcp/src/controller/browser_vm.rs,crates/horizon-ui/src/app/browser_vm_requests.rs,crates/horizon-ui/src/app/settings/browser_vm/**"
+applyTo: "crates/horizon-cloud/src/browser_vm.rs,crates/horizon-cloud/src/browser_vm/**,crates/horizon-core/src/cloud_runtime/browser_vm.rs,crates/horizon-core/src/cloud_runtime/browser_vm/**,crates/horizon-browser-control/src/manifest/browser_vm.rs,crates/horizon-browser-mcp/src/controller/browser_vm.rs,crates/horizon-ui/src/app/browser_vm_requests.rs,crates/horizon-ui/src/app/settings/browser_vm/**,crates/horizon-ui/src/browser_vm_local_command.rs"
 ---
 
 # Trust boundary of the browser VM deploy
 
 `horizon_cloud::browser_vm` rents one Hetzner server with a state volume and runs
-the browser image of `packaging/browser-vm` on it.
+the browser image of `packaging/browser-vm` on it. `provider: local` runs the same
+image in a Docker container on this computer instead
+(`crates/horizon-core/src/cloud_runtime/browser_vm/local.rs`), and
+`horizon --browser-vm-local up|down|status`
+(`crates/horizon-ui/src/browser_vm_local_command.rs`) reaches that container with
+no Horizon window.
 `cloud_runtime::browser_vm` keeps its record, reads the credential of the machine,
 writes and removes the ssh entry that reaches the machine, and carries stop,
 resume and delete out. An agent asks for it with the
@@ -21,13 +26,20 @@ the worker hosts share.
   settings name. The settings file, the token file and the key pair are private
   files of the person on this computer.
 - The image reference. A person publishes the image, and the machine pulls it.
-  This code does not build an image.
+  This code does not build the rented image; only the local mode builds, from the
+  recipe of the checkout that the person names on the command line, and the
+  result is a tag on the computer of that person.
 - The Hetzner API answers. A server, a volume or a key that does not carry the
   operation label `browser-vm` and its recorded name is never changed or used.
 - The ssh configuration of the person and the ssh tools of this computer. Horizon
   reads that file, writes one marked block at its top, and reads the host keys of
   the machine with `ssh-keyscan`. It trusts nothing else in that file and no other
   file that the configuration includes.
+- The Docker daemon of this computer, for the local mode. Horizon runs `docker`
+  from `PATH` with no shell in between and no user input in an argument that could
+  leave it: the container name, the image tag, the volume name and both port
+  mappings are built by Horizon from checked values. The daemon and the images on
+  it are trusted as the person's own.
 
 ## What Horizon guarantees
 
@@ -59,6 +71,23 @@ the worker hosts share.
   sign-in.
 - The answer holds the SSH target and the Device panel route. It holds no token,
   no key material and no provider session.
+- The local mode publishes both ports on `127.0.0.1` of this computer and on no
+  other interface, and it reports the address of the Device panel only after the
+  VNC server of the container answers with the four bytes that RFC 6143 defines.
+  The key of the container is made once, with `ssh-keygen`, at
+  `<cloud root>/browser-vm/browser-vm-local/id_ed25519` with the folder at 0700 and
+  the key at 0600, and its public half reaches the container as one `--env`
+  argument. The state volume `<name>-state` is kept by a stop and by a delete,
+  because it holds the sign-ins, and only the typed deletion of issue 1969 removes
+  it.
+- The local mode reads the host key of the container from
+  `/state/ssh/ssh_host_ed25519_key.pub` through `docker exec`, and writes that key
+  into the managed known_hosts file itself. No scan of the network stands between
+  that key and the entry that trusts it, and the entry therefore trusts the
+  container and no other host.
+- A Docker call that fails is an error, never an absent container: a stop or a
+  status on a computer whose Docker daemon does not answer fails with the answer
+  of Docker, so no run reports a stop that did not happen.
 - Horizon writes one marked block into `~/.ssh/config`, at the top, so that the
   first matching value of each keyword is Horizon's even below a `Host *`:
   `Host horizon-browser-vm`, the address of the machine, `User root`, the
@@ -110,4 +139,13 @@ the worker hosts share.
   to change that file again, and the answer says so.
 - The host keys are trusted because the scan reached the address that the provider
   returned for this machine. Horizon does not compare them with a key that a
-  person read out of band.
+  person read out of band. The local mode needs no such comparison: it reads the
+  key where the container keeps it.
+- The local image is a tag of this computer, built from the checkout that the
+  person names with `--build`, and Horizon does not check what that checkout
+  contains. It builds the target `browser-vm-local` of the recipe and runs what
+  the build produced.
+- The local container shares one ssh entry with a rented machine. Both write
+  `Host horizon-browser-vm`, so a person who runs a local container and rents a
+  machine at the same time reaches whichever wrote the entry last, and neither
+  mode detects the other.

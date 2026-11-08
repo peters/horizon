@@ -44,6 +44,9 @@ pub(super) struct Entry<'a> {
     scan: HostKeyScan,
     /// The port of the SSH server, when it is not the default 22 of a rented machine.
     port: Option<u16>,
+    /// The host key of the machine, when the caller already read it through a channel that
+    /// does not trust the network, such as the Docker socket of a local container.
+    keys: Option<String>,
 }
 
 /// What a written entry holds beyond its block.
@@ -89,17 +92,20 @@ impl<'a> Entry<'a> {
             root,
             scan: HostKeyScan::default(),
             port: None,
+            keys: None,
         }
     }
 
-    /// An entry for a machine whose SSH server listens on `port`, such as the local
-    /// container of the browser image.
-    pub(super) fn with_port_and_scan(home: &'a Path, root: &'a Path, port: u16, scan: HostKeyScan) -> Self {
+    /// An entry for a machine whose host key this Horizon read through a channel that does not
+    /// trust the network: the key is written to the managed `known_hosts` file as it is, and no
+    /// scan runs.
+    pub(super) fn with_port_and_keys(home: &'a Path, root: &'a Path, port: u16, host_key: &str) -> Self {
         Self {
             home,
             root,
-            scan,
+            scan: HostKeyScan::default(),
             port: Some(port),
+            keys: Some(host_key.to_owned()),
         }
     }
 
@@ -176,6 +182,16 @@ impl<'a> Entry<'a> {
         self.root.join(KNOWN_HOSTS)
     }
 
+    /// One line of a `known_hosts` file for `address`, with the key that the machine presents.
+    /// A nonstandard port is written in the bracketed form that ssh matches.
+    fn host_line(&self, address: &str, key: &str) -> String {
+        let key = key.trim();
+        match self.port.filter(|port| *port != 22) {
+            Some(port) => format!("[{address}]:{port} {key}"),
+            None => format!("{address} {key}"),
+        }
+    }
+
     /// The block, exactly as Horizon writes it and nothing else.
     fn block(&self, address: &str, identity: &Path) -> Result<Vec<u8>> {
         let identity = absolute(identity)?;
@@ -206,9 +222,14 @@ impl<'a> Entry<'a> {
     /// Puts the keys of `address` in the `known_hosts` file of this Horizon, and reports the
     /// reason they are not there instead of failing a deploy that already rented the machine.
     fn trust(&self, address: &str) -> Result<Option<String>> {
-        let keys = match self.scan_keys(address) {
-            Ok(keys) => keys,
-            Err(reason) => return Ok(Some(reason)),
+        let keys = match &self.keys {
+            // The caller read the key where the machine keeps it, so no network answer can
+            // stand between that key and the entry that trusts it.
+            Some(key) => format!("{}\n", self.host_line(address, key)).into_bytes(),
+            None => match self.scan_keys(address) {
+                Ok(keys) => keys,
+                Err(reason) => return Ok(Some(reason)),
+            },
         };
         let known = self.known_hosts();
         if read(&known)? == keys {
@@ -263,6 +284,7 @@ impl<'a> Entry<'a> {
             root,
             scan,
             port: None,
+            keys: None,
         }
     }
 }

@@ -72,7 +72,6 @@ pub struct LocalBrowserVm {
     vnc_port: u16,
     ssh_port: u16,
     docker: PathBuf,
-    keyscan: PathBuf,
     keygen: PathBuf,
 }
 
@@ -89,15 +88,13 @@ impl LocalBrowserVm {
             vnc_port: DEFAULT_VNC_PORT,
             ssh_port: DEFAULT_SSH_PORT,
             docker: PathBuf::from("docker"),
-            keyscan: PathBuf::from("ssh-keyscan"),
             keygen: PathBuf::from("ssh-keygen"),
         }
     }
 
     #[cfg(test)]
-    pub(super) fn with_programs(mut self, docker: &Path, keyscan: &Path) -> Self {
+    pub(super) fn with_programs(mut self, docker: &Path) -> Self {
         self.docker = docker.to_path_buf();
-        self.keyscan = keyscan.to_path_buf();
         self
     }
 
@@ -115,12 +112,24 @@ impl LocalBrowserVm {
         self
     }
 
-    /// Other loopback ports, when the default ones belong to another container.
+    /// Another loopback port of the display.
     #[must_use]
-    pub fn with_ports(mut self, vnc_port: u16, ssh_port: u16) -> Self {
-        self.vnc_port = vnc_port;
-        self.ssh_port = ssh_port;
+    pub fn with_vnc_port(mut self, port: u16) -> Self {
+        self.vnc_port = port;
         self
+    }
+
+    /// Another loopback port of the SSH server.
+    #[must_use]
+    pub fn with_ssh_port(mut self, port: u16) -> Self {
+        self.ssh_port = port;
+        self
+    }
+
+    /// Both loopback ports at once, when the default ones belong to another container.
+    #[must_use]
+    pub fn with_ports(self, vnc_port: u16, ssh_port: u16) -> Self {
+        self.with_vnc_port(vnc_port).with_ssh_port(ssh_port)
     }
 
     #[must_use]
@@ -150,13 +159,13 @@ impl LocalBrowserVm {
     /// [`KEY_WAIT`].
     pub fn up(&self, build: Option<&Path>) -> Result<Route> {
         let key = self.ensure_key()?;
-        if self.exists(&["container", "inspect", &self.name])? {
+        if self.container_exists()? {
             return Err(Error::Local(format!(
                 "the container {} exists; stop it with `horizon --browser-vm-local down` first",
                 self.name
             )));
         }
-        if !self.exists(&["image", "inspect", &self.image])? {
+        if !self.image_exists()? {
             let Some(repository) = build else {
                 return Err(Error::Local(format!(
                     "the image {} is absent; build it with `horizon --browser-vm-local up --build <repository>`",
@@ -170,7 +179,7 @@ impl LocalBrowserVm {
         let host_key = self.wait_for_host_key()?;
         tracing::info!(container = %self.name, host_key = %host_key.len(), "the local browser VM answers");
         self.greets()?;
-        let route = self.write_entry(&key)?;
+        let route = self.write_entry(&key, &host_key)?;
         Ok(route)
     }
 
@@ -197,6 +206,18 @@ impl LocalBrowserVm {
         }
     }
 
+    /// The loopback address of the VNC server, as a Device panel takes it.
+    #[must_use]
+    pub fn vnc_address(&self) -> String {
+        self.vnc_socket().to_string()
+    }
+
+    /// The loopback address of the SSH server of the container.
+    #[must_use]
+    pub fn ssh_address(&self) -> String {
+        format!("127.0.0.1:{}", self.ssh_port)
+    }
+
     /// The loopback address of the VNC server.
     fn vnc_socket(&self) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], self.vnc_port))
@@ -208,11 +229,19 @@ impl LocalBrowserVm {
     /// # Errors
     /// Reports a Docker call that fails.
     pub fn down(&self) -> Result<()> {
-        if !self.exists(&["container", "inspect", &self.name])? {
+        if !self.container_exists()? {
             return Ok(());
         }
-        let _ = self.output(&["stop", &self.name])?;
-        let _ = self.output(&["rm", &self.name])?;
+        let stopped = self.output(&["stop", &self.name])?;
+        // A container that stopped on its own is not running, which is the state the caller
+        // asked for.
+        if !stopped.status.success() && !says(&stopped, "is not running") {
+            return Err(self.failure("stop", &stopped));
+        }
+        let removed = self.output(&["rm", &self.name])?;
+        if !removed.status.success() && !says(&removed, "No such container") {
+            return Err(self.failure("rm", &removed));
+        }
         Ok(())
     }
 
@@ -224,18 +253,21 @@ impl LocalBrowserVm {
         let running = self.running()?;
         // The image of the container that runs, not the one this call would start:
         // a person who passed another tag must read what is actually there.
-        let image = self
-            .output(&["container", "inspect", "--format", "{{.Config.Image}}", &self.name])
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            .filter(|image| !image.is_empty())
-            .unwrap_or_else(|| self.image.clone());
+        let image = if running {
+            let inspected = self.output(&["container", "inspect", "--format", "{{.Config.Image}}", &self.name])?;
+            if !inspected.status.success() {
+                return Err(self.failure("inspect", &inspected));
+            }
+            let image = String::from_utf8_lossy(&inspected.stdout).trim().to_owned();
+            if image.is_empty() { self.image.clone() } else { image }
+        } else {
+            self.image.clone()
+        };
         Ok(LocalStatus {
             running,
             image,
             vnc_address: self.vnc_socket().to_string(),
-            ssh_address: format!("127.0.0.1:{}", self.ssh_port),
+            ssh_address: self.ssh_address(),
             volume: self.volume(),
         })
     }
@@ -353,7 +385,7 @@ impl LocalBrowserVm {
         )))
     }
 
-    fn write_entry(&self, key: &Path) -> Result<Route> {
+    fn write_entry(&self, key: &Path, host_key: &str) -> Result<Route> {
         let Some(home) = self.home.as_deref() else {
             return Ok(Route {
                 ssh_target: "root@127.0.0.1".to_owned(),
@@ -362,15 +394,9 @@ impl LocalBrowserVm {
                 )),
             });
         };
-        let entry = ssh_entry::Entry::with_port_and_scan(
-            home,
-            &self.root,
-            self.ssh_port,
-            ssh_entry::HostKeyScan {
-                program: self.keyscan.clone(),
-                ..ssh_entry::HostKeyScan::default()
-            },
-        );
+        // The host key comes from the container itself through Docker, so the entry trusts the
+        // key that the container presents and no key that the network named first.
+        let entry = ssh_entry::Entry::with_port_and_keys(home, &self.root, self.ssh_port, host_key);
         let trust = entry.write("127.0.0.1", key)?;
         Ok(Route {
             ssh_target: ALIAS.to_owned(),
@@ -379,13 +405,48 @@ impl LocalBrowserVm {
     }
 
     fn running(&self) -> Result<bool> {
+        if !self.container_exists()? {
+            return Ok(false);
+        }
         let output = self.output(&["container", "inspect", "--format", "{{.State.Running}}", &self.name])?;
-        Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true")
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
     }
 
-    fn exists(&self, args: &[&str]) -> Result<bool> {
-        let output = self.output(args)?;
-        Ok(output.status.success())
+    /// Whether the container exists. An absent container is a no; a Docker that cannot answer
+    /// is an error, so a stop never reports success when the daemon is down.
+    fn container_exists(&self) -> Result<bool> {
+        let output = self.output(&["container", "inspect", &self.name])?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        if says(&output, "No such object") || says(&output, "No such container") {
+            return Ok(false);
+        }
+        Err(self.failure("inspect", &output))
+    }
+
+    /// Whether the image is local. As with the container, a Docker that cannot answer is an
+    /// error rather than an absent image that Horizon would try to build.
+    fn image_exists(&self) -> Result<bool> {
+        let output = self.output(&["image", "inspect", &self.image])?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        if says(&output, "No such image") {
+            return Ok(false);
+        }
+        Err(self.failure("image inspect", &output))
+    }
+
+    fn failure(&self, call: &str, output: &std::process::Output) -> Error {
+        Error::Local(format!(
+            "docker {call} of {} failed: {}",
+            self.name,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
     }
 
     fn output(&self, args: &[&str]) -> Result<std::process::Output> {
@@ -400,6 +461,12 @@ impl LocalBrowserVm {
             .output()?;
         Ok(output)
     }
+}
+
+/// Whether the message of a Docker call names `needle`, which is how a call reports the state
+/// the caller asked for instead of a failure.
+fn says(output: &std::process::Output, needle: &str) -> bool {
+    String::from_utf8_lossy(&output.stderr).contains(needle)
 }
 
 #[cfg(all(test, unix))]

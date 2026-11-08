@@ -86,21 +86,31 @@ impl LocalCommand {
         Ok(())
     }
 
-    /// Run the action and print what it did. `settings` is the path of the settings store,
-    /// whose directory holds the key and the host keys of the container.
-    pub(crate) fn run(&self, settings: &Path) -> i32 {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let root = settings.parent().unwrap_or(Path::new(".")).join("browser-vm");
-        let mut vm = LocalBrowserVm::new(&root, home.as_deref());
+    /// The container this command acts on. Each flag sets its own field, so one port flag
+    /// alone changes the port it names and leaves the other at its default.
+    pub(crate) fn vm(&self, root: &Path, home: Option<&Path>) -> LocalBrowserVm {
+        let mut vm = LocalBrowserVm::new(root, home);
         if let Some(name) = self.name.as_deref() {
             vm = vm.named(name);
         }
         if let Some(image) = self.image.as_deref() {
             vm = vm.with_image(image);
         }
-        if let (Some(vnc), Some(ssh)) = (self.vnc_port, self.ssh_port) {
-            vm = vm.with_ports(vnc, ssh);
+        if let Some(port) = self.vnc_port {
+            vm = vm.with_vnc_port(port);
         }
+        if let Some(port) = self.ssh_port {
+            vm = vm.with_ssh_port(port);
+        }
+        vm
+    }
+
+    /// Run the action and print what it did. `settings` is the path of the settings store,
+    /// whose directory holds the key and the host keys of the container.
+    pub(crate) fn run(&self, settings: &Path) -> i32 {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let root = settings.parent().unwrap_or(Path::new(".")).join("browser-vm");
+        let vm = self.vm(&root, home.as_deref());
         let vnc_port = self.vnc_port.unwrap_or(DEFAULT_VNC_PORT);
         let result = match self.action {
             Action::Up => vm.up(self.build.as_deref()).map(|route| {
@@ -153,11 +163,32 @@ fn operand(flag: &str, args: &mut impl Iterator<Item = String>) -> Result<PathBu
 #[cfg(test)]
 mod tests {
     use super::{Action, LocalCommand};
+    use horizon_core::cloud_runtime::browser_vm::local::DEFAULT_VNC_PORT;
+    use std::path::Path;
 
     fn apply(command: &mut LocalCommand, args: &[&str]) -> Result<(), String> {
         let mut args = args.iter().map(|arg| (*arg).to_string());
         let flag = args.next().expect("a flag");
         command.apply(&flag, &mut args)
+    }
+
+    #[test]
+    fn one_port_flag_changes_the_port_it_names_and_no_other() {
+        let root = Path::new("/state/browser-vm");
+        let mut command = LocalCommand::new(Action::Up);
+        apply(&mut command, &["--vnc-port", "5994"]).expect("a port");
+        let vm = command.vm(root, None);
+        assert_eq!(vm.vnc_address(), "127.0.0.1:5994");
+
+        let mut other = LocalCommand::new(Action::Up);
+        apply(&mut other, &["--ssh-port", "2294"]).expect("a port");
+        let vm = other.vm(root, None);
+        assert_eq!(vm.vnc_address(), format!("127.0.0.1:{DEFAULT_VNC_PORT}"));
+        assert_eq!(
+            vm.ssh_address(),
+            "127.0.0.1:2294",
+            "the ssh port flag alone reaches the container"
+        );
     }
 
     #[test]

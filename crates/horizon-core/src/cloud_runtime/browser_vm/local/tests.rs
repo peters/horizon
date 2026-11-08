@@ -1,5 +1,5 @@
-//! The local browser VM against fake programs: Docker and `ssh-keyscan` are scripts that record
-//! what Horizon asks them and answer from a small state directory.
+//! The local browser VM against a fake program: Docker is a script that records what Horizon
+//! asks it and answers from a small state directory.
 
 use std::io::Write as _;
 use std::net::TcpListener;
@@ -27,7 +27,10 @@ case "${1:-}" in
     container)
         case "${2:-}" in
             inspect)
-                [[ -f "$state/container" ]] || exit 1
+                if [[ ! -f "$state/container" ]]; then
+                    printf 'Error: No such object: %s\n' "${3:-}" >&2
+                    exit 1
+                fi
                 if [[ "${3:-}" == "--format" ]]; then
                     case "${4:-}" in
                         *Config.Image*) cat "$state/image-of-container" ;;
@@ -40,7 +43,10 @@ case "${1:-}" in
         ;;
     image)
         [[ "${2:-}" == "inspect" ]] || exit 1
-        [[ -f "$state/image" ]] || exit 1
+        if [[ ! -f "$state/image" ]]; then
+            printf 'Error: No such image: %s\n' "${3:-}" >&2
+            exit 1
+        fi
         ;;
     exec)
         [[ -f "$state/host-key" ]] || exit 1
@@ -58,18 +64,11 @@ case "${1:-}" in
 esac
 "#;
 
-const FAKE_KEYSCAN: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >>"__STATE__/calls"
-printf '[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyOfTheTest\n'
-"#;
-
 struct Fixture {
     root: tempfile::TempDir,
     home: tempfile::TempDir,
     state: PathBuf,
     docker: PathBuf,
-    keyscan: PathBuf,
 }
 
 impl Fixture {
@@ -83,23 +82,17 @@ impl Fixture {
             "docker",
             &FAKE_DOCKER.replace("__STATE__", &state.to_string_lossy()),
         );
-        let keyscan = write_program(
-            root.path(),
-            "ssh-keyscan",
-            &FAKE_KEYSCAN.replace("__STATE__", &state.to_string_lossy()),
-        );
+
         Self {
             root,
             home,
             state,
             docker,
-            keyscan,
         }
     }
 
     fn vm(&self) -> LocalBrowserVm {
-        LocalBrowserVm::new(&self.root.path().join("browser-vm"), Some(self.home.path()))
-            .with_programs(&self.docker, &self.keyscan)
+        LocalBrowserVm::new(&self.root.path().join("browser-vm"), Some(self.home.path())).with_programs(&self.docker)
     }
 
     /// The same container, addressed on a VNC port that greets.
@@ -197,14 +190,15 @@ fn a_start_writes_the_ssh_entry_with_the_port_and_the_key_of_the_container() {
     assert!(config.contains("  HostKeyAlias horizon-browser-vm\n"), "{config}");
     let known = std::fs::read_to_string(fixture.root.path().join("browser-vm").join("browser-vm-known-hosts"))
         .expect("host keys");
-    assert!(known.contains("ssh-ed25519 "), "{known}");
+    // The key comes from the container itself, in the bracketed form of a nondefault port; no
+    // scan of the network stands between that key and the entry.
     assert!(
-        fixture.calls().contains("ssh-keyscan")
-            || fixture
-                .calls()
-                .lines()
-                .any(|line| line.starts_with("-T 5 -p 2222 127.0.0.1")),
-        "the host keys are scanned on the published port: {}",
+        known.contains("[127.0.0.1]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyOfTheTest"),
+        "{known}"
+    );
+    assert!(
+        !fixture.calls().lines().any(|line| line.contains("keyscan")),
+        "the start scans nothing: {}",
         fixture.calls()
     );
 }
@@ -265,6 +259,30 @@ fn a_stop_keeps_the_state_volume_and_the_key() {
     assert!(
         !calls.lines().any(|line| line.starts_with("volume")),
         "a stop must keep the volume that holds the sign-ins: {calls}"
+    );
+}
+
+#[test]
+fn a_docker_that_cannot_answer_is_an_error_and_not_an_absent_container() {
+    let fixture = Fixture::new();
+    let down = write_program(
+        fixture.root.path(),
+        "docker-down",
+        "#!/usr/bin/env bash\nprintf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock\n' >&2\nexit 1\n",
+    );
+    let vm =
+        LocalBrowserVm::new(&fixture.root.path().join("browser-vm"), Some(fixture.home.path())).with_programs(&down);
+    let error = vm.down().expect_err("a stop cannot report success without a daemon");
+    assert!(
+        error.to_string().contains("Cannot connect to the Docker daemon"),
+        "{error}"
+    );
+    let error = vm
+        .status()
+        .expect_err("a status cannot report a stopped container without a daemon");
+    assert!(
+        error.to_string().contains("Cannot connect to the Docker daemon"),
+        "{error}"
     );
 }
 
