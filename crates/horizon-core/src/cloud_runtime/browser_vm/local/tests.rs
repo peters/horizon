@@ -36,6 +36,20 @@ case "${1:-}" in
                     case "${4:-}" in
                         *Config.Image*) cat "$state/image-of-container" ;;
                         *Config.Env*) cat "$state/container-env" ;;
+                        *PortBindings*)
+                            printf '{'
+                            first=1
+                            while read -r spec; do
+                                host_ip="${spec%%:*}"
+                                rest="${spec#*:}"
+                                published="${rest%%:*}"
+                                container="${rest##*:}"
+                                if [[ "$first" == "1" ]]; then first=0; else printf ','; fi
+                                printf '"%s/tcp":[{"HostIp":"%s","HostPort":"%s"}]' \
+                                    "$container" "$host_ip" "$published"
+                            done <"$state/publish"
+                            printf '}\n'
+                            ;;
                         *) cat "$state/running" ;;
                     esac
                 fi
@@ -63,6 +77,12 @@ case "${1:-}" in
         : >"$state/container"
         printf 'true\n' >"$state/running"
         printf '%s\n' "${@: -1}" >"$state/image-of-container"
+        : >"$state/publish"
+        previous=""
+        for argument in "$@"; do
+            if [[ "$previous" == "--publish" ]]; then printf '%s\n' "$argument" >>"$state/publish"; fi
+            previous="$argument"
+        done
         ;;
     stop|rm)
         rm -f "$state/container"
@@ -299,6 +319,21 @@ fn a_start_adopts_the_container_of_its_own_image_and_refuses_another() {
         error.to_string().contains("accepts a key of another Horizon"),
         "{error}"
     );
+    fixture.carries_the_key_of(&vm);
+
+    // A container that publishes other ports answers on another display, so it is refused.
+    std::fs::write(
+        fixture.state.join("publish"),
+        "127.0.0.1:5901:5900\n127.0.0.1:2223:2222\n",
+    )
+    .expect("other ports");
+    let error = vm.up(None).expect_err("other ports hold the container");
+    assert!(error.to_string().contains("publishes the display on 5901"), "{error}");
+    std::fs::write(
+        fixture.state.join("publish"),
+        "127.0.0.1:5900:5900\n127.0.0.1:2222:2222\n",
+    )
+    .expect("the ports of the run");
 
     // A container of another image holds the name and is never touched.
     std::fs::write(fixture.state.join("image-of-container"), "another-image:1\n").expect("image");

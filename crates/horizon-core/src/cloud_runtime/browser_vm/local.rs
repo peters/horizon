@@ -52,6 +52,13 @@ pub struct Route {
     pub note: Option<String>,
 }
 
+/// One published port of a container, as `docker inspect` names it.
+#[derive(Debug, serde::Deserialize)]
+struct Binding {
+    #[serde(rename = "HostPort")]
+    host_port: String,
+}
+
 /// What the local browser VM is doing now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalStatus {
@@ -204,6 +211,15 @@ impl LocalBrowserVm {
             return Err(Error::Local(format!(
                 "the container {} accepts a key of another Horizon; stop it with `horizon --browser-vm-local down` first",
                 self.name
+            )));
+        }
+        // The route that this run reports names the ports of this driver, so a container that
+        // publishes other ports would answer on another display.
+        let published = self.published_ports()?;
+        if published != (self.vnc_port, self.ssh_port) {
+            return Err(Error::Local(format!(
+                "the container {} publishes the display on {} and its SSH server on {}, not {} and {}; stop it with `horizon --browser-vm-local down` first",
+                self.name, published.0, published.1, self.vnc_port, self.ssh_port
             )));
         }
         if self.running()? {
@@ -468,6 +484,35 @@ impl LocalBrowserVm {
             return Err(self.failure("inspect", &output));
         }
         Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+    }
+
+    /// The loopback ports that the container publishes, as (display, SSH).
+    fn published_ports(&self) -> Result<(u16, u16)> {
+        let output = self.output(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{json .HostConfig.PortBindings}}",
+            &self.name,
+        ])?;
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        let bindings: std::collections::BTreeMap<String, Vec<Binding>> = serde_json::from_slice(&output.stdout)
+            .map_err(|_| Error::Local(format!("the published ports of {} cannot be read", self.name)))?;
+        let port = |key: u16| {
+            bindings
+                .get(format!("{key}/tcp").as_str())
+                .and_then(|bindings| bindings.first())
+                .and_then(|binding| binding.host_port.parse::<u16>().ok())
+        };
+        match (port(CONTAINER_VNC_PORT), port(CONTAINER_SSH_PORT)) {
+            (Some(vnc), Some(ssh)) => Ok((vnc, ssh)),
+            _ => Err(Error::Local(format!(
+                "the container {} publishes no display and no SSH port",
+                self.name
+            ))),
+        }
     }
 
     /// The environment of the container that holds this name, one `NAME=value` per line.
