@@ -42,6 +42,10 @@ Use a new state path if it already exists. Pass `--reuse-state` to start a run
 in the private home that the earlier run at that state path left, and to keep
 that home when the run stops. Use it only for a state path that this task owns.
 
+The isolated desktop is 1600 by 1000 pixels. `--screen WIDTHxHEIGHT`, such as
+`--screen 2800x1000`, gives it another size, for a procedure that needs a wide
+or a tall screen.
+
 ### Restart the candidate in the same state
 
 A procedure that quits the candidate and starts it again needs `--reuse-state`
@@ -73,7 +77,8 @@ Mozilla documents the matching geckodriver flag as full system access for
 clients that reach the fixture driver port.
 
 The harness atomically allocates an
-unused 1600×1000 Xvfb display, disables MIT-SHM and starts its own window manager.
+unused Xvfb display of the `--screen` size, disables MIT-SHM and starts its own
+window manager.
 It launches an ephemeral Horizon with a heartbeat terminal and a plain Bash input
 terminal. Pass `--saved-session` to keep the session of the fixture in its private
 home instead, which starting a cloud needs: a cloud card belongs to a saved

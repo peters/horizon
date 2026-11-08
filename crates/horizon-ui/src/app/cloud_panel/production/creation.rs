@@ -37,6 +37,12 @@ pub(super) const FORM_MIN_WIDTH: f32 = 640.0;
 const BODY_MIN_HEIGHT: f32 = 320.0;
 /// Room for the form's own margins beside its content, both sides together.
 pub(super) const SIDE_MARGIN: f32 = 64.0;
+/// The widest form: the room the workspace that **+ New cloud** makes keeps for it
+/// (`WS_CLOUD_FORM_SIZE` less `SIDE_MARGIN`). Every line of the form fits from 1056 on, so a
+/// wider form only stretches its fields and moves the summary away from them.
+pub(super) const FORM_MAX_WIDTH: f32 = 1180.0;
+/// The widest form while a setup agent shows its output, which takes half the form.
+pub(super) const SETUP_MAX_WIDTH: f32 = 1480.0;
 
 /// The height the body takes in a window of `window`, which is also the tallest body.
 pub(super) fn body_ceiling(window: egui::Rect) -> f32 {
@@ -44,9 +50,10 @@ pub(super) fn body_ceiling(window: egui::Rect) -> f32 {
 }
 
 /// The form on `surface`: the width and body height it takes there, and where its frame starts. It
-/// takes the whole window it is open in, so a person never scrolls a form that would fit beside
-/// the workspace that holds it, and it stays on `canvas`, where an edge moves it back inside.
-fn form_layout(surface: Rect, canvas: Rect, ceiling: f32, widest: f32) -> (f32, f32, Pos2) {
+/// takes the height of the window it is open in and the width its own content can use, so a person
+/// never scrolls a form that would fit beside the workspace that holds it and never reads a form
+/// that a wide screen pulled apart. It stays on `canvas`, where an edge moves it back inside.
+pub(super) fn form_layout(surface: Rect, canvas: Rect, ceiling: f32, widest: f32) -> (f32, f32, Pos2) {
     // The room is the window, not the workspace the form is drawn on: a small workspace must not
     // crop a form the window beside it has room for.
     let room = surface.union(canvas);
@@ -124,9 +131,13 @@ impl HorizonApp {
         let Some(surface) = self.cloud_creation_surface_now(ctx) else {
             return;
         };
-        // A setup agent of this repository shows its output; both sizes leave the window's
-        // margins, and the form takes whatever the window has.
-        let widest = ctx.content_rect().width() - SIDE_MARGIN;
+        // A setup agent of this repository shows its output beside the fields, and that output
+        // uses width the fields alone do not.
+        let widest = if super::repository_setup::running_here(&self.cloud_prototype.production) {
+            SETUP_MAX_WIDTH
+        } else {
+            FORM_MAX_WIDTH
+        };
         let (width, body_height, origin) =
             form_layout(surface, self.canvas_rect(ctx), body_ceiling(ctx.content_rect()), widest);
         let mut actions = Actions::default();
