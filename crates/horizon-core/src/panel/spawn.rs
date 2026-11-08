@@ -804,6 +804,13 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: b
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
         // and history meter remain usable instead of hiding it in a fullscreen buffer.
+        //
+        // This costs something and overrides the user's own `tui` setting: Claude
+        // Code's inline renderer leaves a copy of the old frame in the scrollback
+        // after a width change, so drag-resizing a panel duplicates bands of a long
+        // answer. Idle panels stay clean. See
+        // `docs/architecture/claude-panel-rendering.md` for the measurements and for
+        // the two repairs that were tried and discarded.
         env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
     }
     env
