@@ -620,7 +620,7 @@ fn bind(
 
 pub(super) fn create(docker: &impl Docker, spec: &WorkerSpec, port: u16) -> Result<(), CloudError> {
     let (id, cpu, memory_gb) = (&spec.operation_id, spec.profile.cpu, spec.profile.memory_gb);
-    let shm_gb = crate::hetzner::cloud::shared_memory_gb(memory_gb);
+    let shm_gb = crate::vm::shared_memory_gb(memory_gb);
     let command = format!(
         "container create --name {} --label {} --cpus {cpu} --memory {memory_gb}g \
          --shm-size {shm_gb}g --publish 127.0.0.1:{port}:22 --mount type=volume,src={},dst=/workspace",

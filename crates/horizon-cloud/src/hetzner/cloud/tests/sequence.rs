@@ -8,6 +8,7 @@ use crate::{
         tests::provider,
     },
     host,
+    vm::throwaway_public_key,
 };
 use serde_json::{Value, json};
 
@@ -646,7 +647,7 @@ fn a_resumed_cloud_whose_volume_held_a_workspace_is_never_moved_when_sold_out() 
     let journal = Journal {
         location: Some("hel1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
-        key: Some(super::super::throwaway_public_key().unwrap()),
+        key: Some(throwaway_public_key().unwrap()),
         ..Journal::default()
     };
     let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
@@ -680,7 +681,7 @@ fn a_volume_reconciled_after_a_lost_answer_is_kept_where_it_is_when_sold_out() {
     let journal = Journal {
         location: Some("hel1".into()),
         volume: CreateState::Requested,
-        key: Some(super::super::throwaway_public_key().unwrap()),
+        key: Some(throwaway_public_key().unwrap()),
         ..Journal::default()
     };
     let rest: Vec<(u16, Value)> = catalog().into_iter().skip(1).collect();
@@ -710,7 +711,7 @@ fn a_cloud_whose_volume_is_outside_the_allowed_locations_is_placed_where_the_vol
     let journal = Journal {
         location: Some("fsn1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
-        key: Some(super::super::throwaway_public_key().unwrap()),
+        key: Some(throwaway_public_key().unwrap()),
         ..Journal::default()
     };
     // A volume is recorded, so nothing is listed by label; the catalog follows.
@@ -827,7 +828,7 @@ fn the_pull_login_is_checked_before_a_server_is_created_and_never_on_a_reconnect
     let mut journal = Journal {
         location: Some("hel1".into()),
         volume: CreateState::Bound { worker_id: "9".into() },
-        key: Some(super::super::throwaway_public_key().unwrap()),
+        key: Some(throwaway_public_key().unwrap()),
         ..Journal::default()
     };
     let _ = provision(

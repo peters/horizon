@@ -133,7 +133,7 @@ impl Planned {
             environment: spec.container_environment()?,
             registry: login,
             workspace_device: host::AZURE_DATA_DISK.to_owned(),
-            shm_gb: crate::hetzner::cloud::shared_memory_gb(spec.profile.memory_gb),
+            shm_gb: crate::vm::shared_memory_gb(spec.profile.memory_gb),
             exposure_ingress: spec.profile.bootstrap.exposure_ingress,
             platform: host::Platform::Azure,
             purpose: host::Purpose::Worker,
@@ -146,7 +146,7 @@ impl Planned {
             os_disk_gb,
             data_disk_gb,
             tags: tags(&spec.operation_id),
-            admin_key: crate::hetzner::cloud::throwaway_public_key()?,
+            admin_key: crate::vm::throwaway_public_key()?,
             custom_data,
         })
     }
