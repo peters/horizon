@@ -303,14 +303,17 @@ class TmuxTests(unittest.TestCase):
         return terminal
 
     def read_counts(self, terminal, count):
-        """Read until the terminal holds the first `count` numbers of the pane.
+        """Read until the pane history reaches its last row.
 
         `attach()` returns once the panel enabled bracketed paste, and the pane
-        history arrives after that. A test that compares the whole history
-        reads it first instead of comparing what happened to have arrived.
+        history arrives after that. A test that compares the whole history reads
+        it first instead of comparing what happened to have arrived. The wait
+        names the last row together with its line end, because a read can stop
+        inside that row and `numbers()` would count the piece as a row.
         """
-        terminal.read_until(lambda data: len(numbers(data)) >= count,
-                            missing='the first %d numbers of the pane history' % count)
+        last_row = b'\r\n%d\r\n' % count
+        terminal.read_until(lambda data: last_row in data,
+                            missing='the last row %d of the pane history' % count)
         return terminal
 
     def private(self, socket, *args):
