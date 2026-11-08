@@ -39,7 +39,9 @@ download URL.
   that fixture's filesystem namespace. A private display keeps the run isolated
   in the same way, as the [engine panels procedure](browser-engine-panels.md)
   does.
-- A frozen candidate binary and its SHA-256 digest.
+- A frozen candidate binary and its SHA-256 digest. Give the candidate its own
+  `browser.downloads_root` beneath the private home, so that the run never
+  writes into the Downloads folder of the person.
 - Chromium, Firefox, and geckodriver. Give the candidate a private home and a
   `browser.profile_root` beneath that home: Snap Chromium cannot read a profile
   under a hidden folder or under `/tmp`.
@@ -110,7 +112,8 @@ download URL.
 3. Call `browser_downloads` with the panel id.
 
    Result: `reporting` is `true`. One row has `state: completed`, the file name
-   `report.pdf`, and an absolute `path` under a folder that ends in `downloads`.
+   `report.pdf`, and an absolute `path` under
+   `Downloads/Horizon/<panel id>` of the private home.
 
 4. Read the reported path with a read-only tool.
 

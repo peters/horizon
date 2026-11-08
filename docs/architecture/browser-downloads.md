@@ -14,10 +14,20 @@ The repeatable check is
 
 ## One folder for each panel
 
-The folder is `<panel profile root>/<panel id>/downloads`. It is a private
-directory (`0700`) beside the backend profiles of the same panel, so a panel
-that switches engine keeps one folder, and a Snap-confined browser can write
-into it. `browser.profile_root` moves it together with the profile.
+A panel saves into `<home>/Downloads/Horizon/<panel id>`, where a person looks
+for a download afterwards. The engine creates the panel folder with mode `0700`;
+the Downloads folder around it keeps the mode of the desktop.
+
+Each panel has its own subfolder, so two panels never replace each other's file
+of one name, and the folder name keeps the characters of the panel id so a person
+can match it to the panel. `browser.downloads_root` names another parent folder,
+for example a folder on another disk; each panel still gets its own subfolder of
+it. A Snap-confined browser can read the default folder because it is not hidden
+beneath the home directory.
+
+The folder stays when a panel closes or when `browser_cleanup` removes its
+profile, because a person keeps a download after the panel that saved it is
+gone. Delete the `Horizon` folder to reclaim the space.
 
 A panel that shares a browser profile from `browser_duplicate` shares the
 download folder of that profile. The browser-wide setting that selects a

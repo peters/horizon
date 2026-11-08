@@ -203,10 +203,10 @@ fn wait_for_downloads(temp: &tempfile::TempDir, count: usize) -> Vec<PathBuf> {
 }
 
 /// The panel folder is the one the engine selects for this panel, so the check
-/// reads it the way a person would: the only `downloads` folder under the
-/// profile root of this session.
+/// reads it the way a person would: the only panel folder under the download
+/// root of this session.
 fn download_folder(temp: &tempfile::TempDir) -> PathBuf {
-    let root = temp.path().join("profiles");
+    let root = temp.path().join("downloads");
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if let Some(folder) = find_downloads_folder(&root) {
@@ -219,16 +219,10 @@ fn download_folder(temp: &tempfile::TempDir) -> PathBuf {
 
 fn find_downloads_folder(root: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(root).ok()?;
-    for entry in entries.filter_map(Result::ok) {
-        if !entry.file_type().ok()?.is_dir() {
-            continue;
-        }
-        let candidate = entry.path().join("downloads");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-    None
+    entries
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
 }
 
 fn start(backend: BackendKind) -> (BrowserSession, Arc<FrameSlot>, tempfile::TempDir, Arc<Queue>) {
@@ -242,6 +236,7 @@ fn start(backend: BackendKind) -> (BrowserSession, Arc<FrameSlot>, tempfile::Tem
         browser: BrowserConfig {
             backend,
             profile_root: Some(temp.path().join("profiles")),
+            downloads_root: Some(temp.path().join("downloads")),
             ..BrowserConfig::default()
         },
         panel_local_id: "downloads-live".into(),
