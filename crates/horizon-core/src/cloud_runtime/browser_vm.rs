@@ -435,7 +435,7 @@ pub fn run(
 /// reports the loopback address of the display, a stop keeps the state volume, and a delete
 /// removes the container and keeps the volume, because the volume holds the sign-ins.
 fn run_local(root: &Path, home: Option<&Path>, mut record: Record) -> Result<Status> {
-    let vm = local::LocalBrowserVm::new(root, home);
+    let vm = local_driver(root, home);
     let result = match record.phase {
         Phase::Deploying | Phase::Resuming => vm.up(None).map(|route| {
             record.phase = Phase::Ready;
@@ -460,6 +460,37 @@ fn run_local(root: &Path, home: Option<&Path>, mut record: Record) -> Result<Sta
     }
     record.save(root)?;
     Ok(record.status())
+}
+
+/// The driver of the container of this Horizon. `root` is the cloud root, which holds the
+/// driver under `browser-vm`, the same folder that `horizon --browser-vm-local` uses, so both
+/// callers reach one container with one key.
+fn local_driver(root: &Path, home: Option<&Path>) -> local::LocalBrowserVm {
+    local::LocalBrowserVm::new(&root.join("browser-vm"), home)
+}
+
+#[cfg(all(test, unix))]
+mod local_tests {
+    use super::local_driver;
+    use std::path::Path;
+
+    #[test]
+    fn the_tool_and_the_command_share_the_key_of_the_container() {
+        // `horizon --browser-vm-local` builds its driver at `<cloud>/browser-vm`, and this
+        // module must reach the same folder, or the two callers make two keys for one
+        // container and the ssh entry of one names a key the other refuses.
+        let cloud = Path::new("/home/person/.horizon/cloud");
+        let command = crate::cloud_runtime::browser_vm::local::LocalBrowserVm::new(&cloud.join("browser-vm"), None);
+        assert_eq!(
+            local_driver(cloud, None).key_path(),
+            command.key_path(),
+            "one key for the container of both callers"
+        );
+        assert_eq!(
+            local_driver(cloud, None).key_path(),
+            cloud.join("browser-vm/browser-vm-local/id_ed25519")
+        );
+    }
 }
 
 /// The request the record names, so a resume rents the same machine and volume.

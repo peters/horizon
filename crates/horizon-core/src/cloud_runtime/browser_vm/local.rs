@@ -245,14 +245,18 @@ impl LocalBrowserVm {
         self.vnc_socket().to_string()
     }
 
+    /// The private key that this run presents to the container.
+    #[must_use]
+    pub fn key_path(&self) -> PathBuf {
+        self.root.join("browser-vm-local").join("id_ed25519")
+    }
+
     /// The public key that this run presents, which the SSH server of the container accepts.
     ///
     /// # Errors
     /// Reports a key that cannot be read, which happens before a start makes one.
     pub fn accepted_public_key(&self) -> Result<String> {
-        Ok(std::fs::read_to_string(
-            self.root.join("browser-vm-local").join("id_ed25519.pub"),
-        )?)
+        Ok(std::fs::read_to_string(self.key_path().with_extension("pub"))?)
     }
 
     /// The loopback address of the SSH server of the container.
@@ -311,14 +315,16 @@ impl LocalBrowserVm {
 
     /// The private key that opens the container, made once and kept.
     fn ensure_key(&self) -> Result<PathBuf> {
-        let folder = self.root.join("browser-vm-local");
-        std::fs::create_dir_all(&folder)?;
+        let key = self.key_path();
+        let Some(folder) = key.parent() else {
+            return Err(Error::Local("the key of the container has no folder".into()));
+        };
+        std::fs::create_dir_all(folder)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))?;
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?;
         }
-        let key = folder.join("id_ed25519");
         if key.exists() {
             return Ok(key);
         }

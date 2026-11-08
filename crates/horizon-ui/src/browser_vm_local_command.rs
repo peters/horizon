@@ -181,6 +181,11 @@ mod tests {
         let vm = LocalCommand::new(Action::Up).vm(&cloud.join("browser-vm"), None);
         assert!(vm.name().starts_with("horizon-browser-vm"));
         assert_eq!(vm.volume(), format!("{}-state", vm.name()));
+        assert_eq!(
+            vm.key_path(),
+            cloud.join("browser-vm/browser-vm-local/id_ed25519"),
+            "the tool of a running Horizon keeps the key of the same container here"
+        );
     }
 
     #[test]
