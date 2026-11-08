@@ -42,6 +42,11 @@ pub(super) struct Entry<'a> {
     /// The cloud root of this Horizon, which holds the managed `known_hosts` file.
     root: &'a Path,
     scan: HostKeyScan,
+    /// The port of the SSH server, when it is not the default 22 of a rented machine.
+    port: Option<u16>,
+    /// The host key of the machine, when the caller already read it through a channel that
+    /// does not trust the network, such as the Docker socket of a local container.
+    keys: Option<String>,
 }
 
 /// What a written entry holds beyond its block.
@@ -86,6 +91,21 @@ impl<'a> Entry<'a> {
             home,
             root,
             scan: HostKeyScan::default(),
+            port: None,
+            keys: None,
+        }
+    }
+
+    /// An entry for a machine whose host key this Horizon read through a channel that does not
+    /// trust the network: the key is written to the managed `known_hosts` file as it is, and no
+    /// scan runs.
+    pub(super) fn with_port_and_keys(home: &'a Path, root: &'a Path, port: u16, host_key: &str) -> Self {
+        Self {
+            home,
+            root,
+            scan: HostKeyScan::default(),
+            port: Some(port),
+            keys: Some(host_key.to_owned()),
         }
     }
 
@@ -162,6 +182,13 @@ impl<'a> Entry<'a> {
         self.root.join(KNOWN_HOSTS)
     }
 
+    /// One line of a `known_hosts` file for the machine, with the key that the container
+    /// presents. The line is keyed by the alias, because the block sets `HostKeyAlias`, so ssh
+    /// looks the key up under that name and not under the address and port of the machine.
+    fn host_line(key: &str) -> String {
+        format!("{ALIAS} {}", key.trim())
+    }
+
     /// The block, exactly as Horizon writes it and nothing else.
     fn block(&self, address: &str, identity: &Path) -> Result<Vec<u8>> {
         let identity = absolute(identity)?;
@@ -176,8 +203,13 @@ impl<'a> Entry<'a> {
                 "The browser VM has no address or identity that the ssh configuration can take on one line",
             ));
         }
+        let port = self
+            .port
+            .filter(|port| *port != 22)
+            .map(|port| format!("  Port {port}\n"))
+            .unwrap_or_default();
         Ok(format!(
-            "{BEGIN}\nHost {ALIAS}\n  HostName {address}\n  User {USER}\n  IdentityFile {}\n  \
+            "{BEGIN}\nHost {ALIAS}\n  HostName {address}\n{port}  User {USER}\n  IdentityFile {}\n  \
              IdentitiesOnly yes\n  UserKnownHostsFile {}\n  HostKeyAlias {ALIAS}\n{END}\n",
             values[1], values[2]
         )
@@ -187,9 +219,14 @@ impl<'a> Entry<'a> {
     /// Puts the keys of `address` in the `known_hosts` file of this Horizon, and reports the
     /// reason they are not there instead of failing a deploy that already rented the machine.
     fn trust(&self, address: &str) -> Result<Option<String>> {
-        let keys = match self.scan_keys(address) {
-            Ok(keys) => keys,
-            Err(reason) => return Ok(Some(reason)),
+        let keys = match &self.keys {
+            // The caller read the key where the machine keeps it, so no network answer can
+            // stand between that key and the entry that trusts it.
+            Some(key) => format!("{}\n", Self::host_line(key)).into_bytes(),
+            None => match self.scan_keys(address) {
+                Ok(keys) => keys,
+                Err(reason) => return Ok(Some(reason)),
+            },
         };
         let known = self.known_hosts();
         if read(&known)? == keys {
@@ -207,12 +244,12 @@ impl<'a> Entry<'a> {
             if attempt > 0 {
                 std::thread::sleep(self.scan.pause);
             }
-            let output = Command::new(&self.scan.program)
-                .arg("-T")
-                .arg(self.scan.connect_timeout_secs.to_string())
-                .arg(address)
-                .stdin(Stdio::null())
-                .output();
+            let mut scan = Command::new(&self.scan.program);
+            scan.arg("-T").arg(self.scan.connect_timeout_secs.to_string());
+            if let Some(port) = self.port.filter(|port| *port != 22) {
+                scan.arg("-p").arg(port.to_string());
+            }
+            let output = scan.arg(address).stdin(Stdio::null()).output();
             let output = match output {
                 Ok(output) => output,
                 // The program cannot run at all, so no further attempt can succeed.
@@ -239,7 +276,13 @@ impl<'a> Entry<'a> {
 #[cfg(test)]
 impl<'a> Entry<'a> {
     pub(super) fn with_scan(home: &'a Path, root: &'a Path, scan: HostKeyScan) -> Self {
-        Self { home, root, scan }
+        Self {
+            home,
+            root,
+            scan,
+            port: None,
+            keys: None,
+        }
     }
 }
 

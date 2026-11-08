@@ -26,6 +26,8 @@ use horizon_cloud::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod local;
+
 use super::{Error, Result, settings::Settings};
 
 mod ssh_entry;
