@@ -328,6 +328,13 @@ impl HorizonApp {
         self.cloud_form_frame_rect(ctx)
     }
 
+    /// A build without clouds has no New cloud form, so every empty workspace keeps the frame of
+    /// an empty workspace.
+    #[cfg(not(feature = "cloud-workspaces"))]
+    fn cloud_form_frame(&self, _ctx: &Context, _workspace: WorkspaceId) -> Option<Rect> {
+        None
+    }
+
     #[profiling::function]
     fn workspace_visuals(
         &self,
