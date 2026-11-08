@@ -212,16 +212,27 @@ fn only_an_explicit_removal_takes_a_session_whose_board_this_horizon_cannot_read
         .load_runtime(&created.session_id)
         .expect_err("the board must stay unreadable for this test to mean anything");
     assert!(read_error.to_string().contains("moonbase"), "{read_error}");
-    assert!(!store.board_is_readable(&created.session_id));
-    assert!(store.board_is_readable(&kept.session_id));
 
     // The plain removal keeps the session, so an older Horizon cannot destroy the board
-    // of a later one.
-    store
+    // of a later one. Its refusal carries the reason, which the dialog asks about.
+    let refusal = store
         .delete_session(&created.session_id)
         .expect_err("an unreadable board keeps its session");
+    match &refusal {
+        crate::Error::UnreadableBoard { session_id, reason } => {
+            assert_eq!(session_id, &created.session_id);
+            assert!(reason.contains("moonbase"), "{reason}");
+        }
+        other => panic!("expected an unreadable board, got {other}"),
+    }
     assert!(home.session_dir(&created.session_id).exists());
     assert_eq!(store.list_profile_sessions().expect("list sessions").len(), 2);
+
+    // A readable board keeps the plain removal.
+    assert!(store.delete_session(&kept.session_id).is_ok());
+    let kept = store
+        .create_new_session(&Config::default())
+        .expect("create kept session");
 
     // The person saw that reason in the Sessions dialog and asked again.
     store

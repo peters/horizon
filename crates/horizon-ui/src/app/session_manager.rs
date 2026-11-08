@@ -94,7 +94,6 @@ enum SessionManagerAction {
     Close,
     CreateNewSession,
     SwitchTo(String),
-    BeginRemove(String),
     Remove(String),
     RemoveWithUnreadableBoard(String),
     RemoveAll(Vec<String>),
@@ -176,9 +175,14 @@ impl HorizonApp {
                 Ok(session) => self.activate_runtime_session(ctx, &session),
                 Err(error) => self.set_session_manager_error(format!("Failed to switch session: {error}")),
             },
-            SessionManagerAction::BeginRemove(session_id) => self.begin_session_removal(session_id),
             SessionManagerAction::Remove(session_id) => match self.session_store.delete_session(&session_id) {
                 Ok(()) => self.reload_session_manager(None, None),
+                // The removal read the board for its browser profiles and refused it. Ask
+                // the person again, with the reason, before the board goes with the session.
+                Err(horizon_core::Error::UnreadableBoard { reason, .. }) => {
+                    tracing::info!("session {session_id} keeps its board until a person answers: {reason}");
+                    self.ask_to_remove_an_unreadable_board(session_id);
+                }
                 Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
             },
             SessionManagerAction::RemoveWithUnreadableBoard(session_id) => {
@@ -222,15 +226,14 @@ impl HorizonApp {
             .and_then(|state| state.selected_session_id.clone())
     }
 
-    /// Asks the question of the **Delete** button, and reads the board first so the
-    /// question can name a board that this Horizon cannot read.
-    fn begin_session_removal(&mut self, session_id: String) {
-        let unreadable = !self.session_store.board_is_readable(&session_id);
+    /// Asks the second question of a card whose board this Horizon cannot read. The first
+    /// answer removed the session; this one removes its board with it.
+    fn ask_to_remove_an_unreadable_board(&mut self, session_id: String) {
         if let Some(state) = self.session_manager.as_mut() {
             state.selected_session_id = Some(session_id.clone());
             state.confirm_clear_others = false;
             state.confirm_remove_session_id = Some(session_id);
-            state.confirm_remove_unreadable_board = unreadable;
+            state.confirm_remove_unreadable_board = true;
             state.error = None;
         }
     }
@@ -621,7 +624,11 @@ fn render_session_list(
                         state.error = None;
                     }
                     SessionCardAction::BeginRemove(session_id) => {
-                        *action = SessionManagerAction::BeginRemove(session_id);
+                        state.selected_session_id = Some(session_id.clone());
+                        state.confirm_clear_others = false;
+                        state.confirm_remove_session_id = Some(session_id);
+                        state.confirm_remove_unreadable_board = false;
+                        state.error = None;
                     }
                     SessionCardAction::CancelRemove => {
                         state.confirm_remove_session_id = None;

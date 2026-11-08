@@ -200,16 +200,6 @@ impl SessionStore {
             .collect())
     }
 
-    /// Whether this Horizon can read the board of `session_id`.
-    ///
-    /// A board of a later Horizon, or a board that names something this Horizon does not
-    /// have, is not readable. [`Self::delete_session`] keeps such a session, and only
-    /// [`Self::delete_session_with_unreadable_board`] removes it.
-    #[must_use]
-    pub fn board_is_readable(&self, session_id: &str) -> bool {
-        self.load_runtime(session_id).is_ok()
-    }
-
     /// Delete an inactive saved session from disk, and queue its removal from the profile
     /// index for the session writer.
     ///
@@ -218,8 +208,10 @@ impl SessionStore {
     ///
     /// # Errors
     ///
-    /// Returns an error if the session does not belong to the current profile,
-    /// is still live, its board cannot be read, or its files cannot be removed.
+    /// Returns [`Error::UnreadableBoard`] if its board is not one this Horizon can read,
+    /// which [`Self::delete_session_with_unreadable_board`] answers. Returns another error
+    /// if the session does not belong to the current profile, is still live, or its files
+    /// cannot be removed.
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
         self.remove_session(session_id, UnreadableBoard::Keep)
     }
@@ -274,7 +266,12 @@ impl SessionStore {
         let runtime_state = match (self.load_runtime(session_id), unreadable) {
             (Ok(Some(runtime_state)), _) => runtime_state,
             (Ok(None), _) => return Ok(()),
-            (Err(error), UnreadableBoard::Keep) => return Err(error),
+            (Err(error), UnreadableBoard::Keep) => {
+                return Err(Error::UnreadableBoard {
+                    session_id: session_id.to_owned(),
+                    reason: error.to_string(),
+                });
+            }
             (Err(error), UnreadableBoard::Remove) => {
                 tracing::warn!("session {session_id} is removed without its browser profiles: {error}");
                 return Ok(());

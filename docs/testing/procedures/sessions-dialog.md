@@ -149,8 +149,7 @@ says so in its question before it removes that session.
 
 1. On the session card **Workspace 1**, click **Delete**.
 
-   Result: The card asks `Horizon cannot read this board. Delete the session and
-   its board?` in red, with **Yes** and **No**.
+   Result: The card asks `Delete?`, with **Yes** and **No**.
 
 2. Click **No**.
 
@@ -158,17 +157,35 @@ says so in its question before it removes that session.
 
 3. Click **Delete**.
 
-   Result: The card asks the same question again.
+   Result: The card asks `Delete?` again.
 
 4. Click **Yes**.
 
+   Result: The card asks `Horizon cannot read this board. Delete the session and
+   its board?` in red, with **Yes** and **No**. The list does not change, and the
+   dialog shows no error text.
+
+5. Click **No**.
+
+   Result: The card shows **Delete** again. The list does not change.
+
+6. Click **Delete**.
+
+   Result: The card asks `Delete?` again.
+
+7. Click **Yes**.
+
+   Result: The card asks the red question again.
+
+8. Click **Yes**.
+
    Result: The card leaves the list. The dialog shows no error text.
 
-5. Close the candidate window with the close button of the window manager.
+9. Close the candidate window with the close button of the window manager.
 
    Result: The candidate stops.
 
-6. Look in `<state>/data/home/.horizon/sessions`.
+10. Look in `<state>/data/home/.horizon/sessions`.
 
    Result: The session folder of the removed session is not there. The session
    folder of the current session is there.
@@ -204,7 +221,8 @@ says so in its question before it removes that session.
 - In tasks 6.1 and 6.2, the dialog is bright above a dim board each time that
   it opens.
 - Each click inside the dialog goes to the control under the pointer.
-- In task 6.3, the question names the board that the candidate cannot read.
+- In task 6.3, the first answer does not remove the session. The second question
+  names the board that the candidate cannot read.
 - In task 6.3, the dialog removes the session and its session folder, and it
   shows no error text.
 - In task 6.4, **Close** and **Escape** close the dialog.

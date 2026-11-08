@@ -11,6 +11,12 @@ pub enum Error {
     #[error("State error: {0}")]
     State(String),
 
+    /// The board of a saved session is not one this Horizon can read. A later Horizon
+    /// wrote it, or it names something this Horizon does not have. The session stays
+    /// whole until a person asks for it to go with its board.
+    #[error("the board of session {session_id} is not one this Horizon can read: {reason}")]
+    UnreadableBoard { session_id: String, reason: String },
+
     #[error("Editor error: {0}")]
     Editor(String),
 
