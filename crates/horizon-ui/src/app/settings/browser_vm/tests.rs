@@ -461,13 +461,25 @@ fn the_sign_in_panel_names_the_managed_entry_and_no_key() {
         user: "root".into(),
         vnc: "127.0.0.1:5900".into(),
     };
-    let connection = device_connection(&route);
+    let connection = device_connection(&route).expect("a rented machine is reached over ssh");
     let args = connection.to_command_args();
 
     assert!(!args.contains(&"-i".to_string()), "no key of its own: {args:?}");
     assert_eq!(connection.host, "horizon-browser-vm");
     assert_eq!(connection.user.as_deref(), Some("root"));
     assert_eq!(args.last().map(String::as_str), Some("root@horizon-browser-vm"));
+}
+
+#[test]
+fn a_container_on_this_computer_opens_its_panel_without_an_ssh_hop() {
+    // The display of the container is on the loopback of this computer, so a panel takes the
+    // endpoint itself: an ssh hop to `127.0.0.1:5900` would fail.
+    let route = DeviceRoute {
+        host: "127.0.0.1:5900".into(),
+        user: String::new(),
+        vnc: "127.0.0.1:5900".into(),
+    };
+    assert!(device_connection(&route).is_none(), "no ssh hop to the loopback");
 }
 
 #[test]

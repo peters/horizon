@@ -300,6 +300,12 @@ pub(in crate::app) struct DeviceRoute {
 }
 
 impl DeviceRoute {
+    /// Whether the display sits on the loopback of this computer, which a panel opens directly
+    /// and with no ssh hop. A rented machine's display is on the loopback of that machine.
+    pub(in crate::app) fn is_loopback(&self) -> bool {
+        self.user.is_empty()
+    }
+
     /// The route of `status`, or nothing unless a machine runs and the record names its host.
     ///
     /// A container on this computer publishes its display on the loopback, so its route is the

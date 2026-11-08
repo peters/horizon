@@ -324,11 +324,16 @@ Settings window removes the machine and the state volume.
 
 This task rents nothing. It runs the image in a container on the computer of the
 test, and it is the only task of this procedure that needs no Hetzner account.
+Run it after task D5, or on a Horizon that never ran a browser VM: one record
+names one machine, so the record must own nothing before a container starts.
 
-1. Stop the rented machine first, so one browser VM runs at a time.
+1. Read the phase of the record.
 
-   > **CAUTION:** STEP 6.7.1 STOPS THE RENTED MACHINE. The state volume and the
-   > sign-ins stay, and step 6.7.5 starts it again.
+   Ask the agent to call `browser_vm` with `{"operation": "status"}`.
+
+   Result: The phase is `deleted` or `idle`. A phase of `ready`, `stopped` or
+   `failed` means that this Horizon still owns a machine: run task D5 first, or
+   continue on a Horizon that never ran a browser VM.
 
 2. Ask the agent to call `browser_vm` with
    `{"operation": "deploy", "provider": "local"}`, then call it with
@@ -336,9 +341,10 @@ test, and it is the only task of this procedure that needs no Hetzner account.
 
    Result: The answer names `provider: local`, a `vnc_address` on `127.0.0.1`,
    `device_panel.endpoint` with that address, and `browser_host.ssh_target`
-   `horizon-browser-vm`. The answer holds no `hourly_net`.
+   `horizon-browser-vm`. The answer holds no `hourly_net`, and no cloud settings
+   are needed.
 
-3. Read the record.
+3. Read the container.
 
    ```sh
    docker ps --format '{{.Names}} {{.Image}}'
@@ -347,17 +353,33 @@ test, and it is the only task of this procedure that needs no Hetzner account.
    Result: The line names the container `horizon-browser-vm-local` and the image
    `horizon-browser-vm-local:latest`.
 
-4. Ask the agent to call `browser_vm` with `{"operation": "stop"}`.
+4. Open the display from the Settings window with `Open Device panel`.
+
+   Result: The panel shows the desktop of the container, and the window opens no
+   ssh connection to `127.0.0.1:5900`, because the display of this computer needs
+   no ssh hop.
+
+5. Ask the agent to call `browser_vm` with `{"operation": "stop"}`.
 
    Result: The phase is `stopped`, and `docker ps` names no container of this
    computer. `docker volume ls` still names `horizon-browser-vm-local-state`.
 
-5. Ask the agent to call `browser_vm` with `{"operation": "resume"}`, then start
-   the rented machine again with `{"operation": "resume"}` or from the Settings
-   window when the test needs it.
+6. Ask the agent to call `browser_vm` with `{"operation": "resume"}`, then call
+   it with `{"operation": "status"}` until the phase is `ready`.
 
    Result: The container runs again with the same state volume, so a site that
    was signed in on it stays signed in.
+
+7. Ask the agent to call `browser_vm` with `{"operation": "delete"}`.
+
+   Result: The phase is `deleted`, `docker ps` names no container of this
+   computer, and the state volume stays, because it holds the sign-ins.
+
+8. Start the rented machine again when the procedure needs it: ask the agent to
+   call `browser_vm` with a deploy of the same image and server type, or rent it
+   from the Settings window.
+
+   Result: The phase is `ready` again, with a rented machine.
 
 ## 7. Pass criteria
 
@@ -375,8 +397,9 @@ test, and it is the only task of this procedure that needs no Hetzner account.
 - D6 refuses a mutable tag in the Settings window and in the tool, before any
   request.
 - D7 runs the same image on this computer with no rental, names the loopback
-  endpoint of its display, and keeps its state volume across a stop and a
-  resume.
+  endpoint of its display, opens that display with no ssh hop, and keeps its
+  state volume across a stop and a resume. One record names one machine, so D7
+  starts from a record that owns nothing and leaves it deleted.
 
 ## 8. Cleanup
 
