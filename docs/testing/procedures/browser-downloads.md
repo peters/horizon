@@ -23,7 +23,7 @@ download URL.
 - Platforms: Linux and macOS, local panels only.
 - Engines: Chromium and Firefox. Repeat each engine task for both.
 - This procedure does not test Safari, a remote device, or a cloud worker
-  browser. Those answer `unsupported_backend`, and task P07 checks this answer.
+  browser. Those answer `unsupported_backend`, and task P06 checks this answer.
 
 ## 3. Safety
 
@@ -121,25 +121,7 @@ download URL.
 
    Result: The file exists and its bytes are the synthetic bytes of the server.
 
-### 6.2 P02 — The default folder is the Downloads folder of the home
-
-1. Remove `browser.downloads_root` from the configuration, start the candidate
-   again and create one Chromium panel.
-
-   Result: The panel is ready.
-
-2. Click the download link of P01 and call `browser_downloads`.
-
-   Result: `directory` ends with `Downloads/Horizon/<panel id>` of the home of
-   the candidate, and the panel folder has mode `0700`.
-
-3. Close the panel with `browser_close` and wait for the host to remove the
-   profile of the ended panel.
-
-   Result: The file of step 2 is still in its folder with the same bytes, because
-   the folder lives outside the profile.
-
-### 6.3 P03 — The second and later downloads are saved
+### 6.2 P02 — The second and later downloads are saved
 
 This step is the defect of issue 1994: the second page-initiated download left
 no file.
@@ -158,13 +140,13 @@ no file.
 
    Result: No row holds a URL, and no row holds a query string or a token.
 
-### 6.4 P04 — Firefox saves into the same panel folder
+### 6.3 P03 — Firefox saves into the same panel folder
 
 1. Call `browser_create` with `backend: firefox` and the fixture URL.
 
    Result: The Firefox panel is ready. A previous Chromium panel stays.
 
-2. Repeat P01 and P03 for this panel.
+2. Repeat P01 and P02 for this panel.
 
    Result: Each download is reported and each file exists. The Firefox panel
    folder is its own folder, not the folder of the Chromium panel.
@@ -173,7 +155,7 @@ no file.
 
    Result: The row holds `state: completed` and the path that Firefox named.
 
-### 6.5 P05 — A person's download is reported too
+### 6.4 P04 — A person's download is reported too
 
 1. On the isolated desktop, in the browser panel, click the `#first` link with
    the pointer.
@@ -191,7 +173,7 @@ no file.
    Result: The viewer starts one download and `browser_downloads` reports it
    with `state: completed` and a path.
 
-### 6.6 P06 — An in-progress download and a canceled download
+### 6.5 P05 — An in-progress download and a canceled download
 
 1. Serve a file whose body the server sends in 20 parts with one second between
    the parts. Click its link through `browser_act`.
@@ -212,7 +194,7 @@ no file.
 
    Result: The row has `state: canceled` and no `path`.
 
-### 6.7 P07 — Unsupported backends and the capability
+### 6.6 P06 — Unsupported backends and the capability
 
 1. Read the capabilities of the Chromium panel and of the Firefox panel through
    `browser_panel`.
@@ -227,7 +209,7 @@ no file.
 
    Result: The tool returns `unsupported_backend`.
 
-### 6.8 P08 — A shared profile states one folder
+### 6.7 P07 — A shared profile states one folder
 
 1. Call `browser_duplicate` on the Chromium panel.
 
@@ -238,7 +220,7 @@ no file.
    Result: Both downloads are saved, and both panels report the same folder and
    the same rows.
 
-### 6.9 P09 — Retention and the audit
+### 6.8 P08 — Retention and the audit
 
 1. Start more than 64 downloads through `browser_evaluate`.
 
@@ -248,6 +230,24 @@ no file.
 
    Result: The journal holds a `downloads` record for each `browser_downloads`
    call, and no record holds a file path or a URL.
+
+### 6.9 P09 — The default folder is the Downloads folder of the home
+
+1. Remove `browser.downloads_root` from the configuration, start the candidate
+   again and create one Chromium panel.
+
+   Result: The panel is ready.
+
+2. Click the download link of P01 and call `browser_downloads`.
+
+   Result: `directory` ends with `Downloads/Horizon/<panel id>` of the home of
+   the candidate, and the panel folder has mode `0700`.
+
+3. Close the panel with `browser_close` and wait for the host to remove the
+   profile of the ended panel.
+
+   Result: The file of step 2 is still in its folder with the same bytes, because
+   the folder lives outside the profile.
 
 ## 7. Pass criteria
 
