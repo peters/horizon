@@ -234,9 +234,12 @@ that nothing was saved. Rows are bounded and `dropped` counts reports that this
 session forgot; their files stay in the folder. A page that downloads two files
 of one name replaces the first under Chromium and saves the second beside it
 under Firefox, so trust the `path` in each row. Read a saved file with ordinary
-read-only tools. The tool starts no download, writes no file, and returns no
-download URL, because a download URL can carry a credential. Safari and remote
-sessions return `unsupported_backend`.
+read-only tools, or name one completed row in `fetch` and the answer also carries
+its bytes as an `application/octet-stream` resource block: that is how you reach a
+file saved on a browser host of another computer. The bound is 8 MiB, and a
+larger file stays there with `inline_withheld: true`. The tool starts no
+download, writes no file, and returns no download URL, because a download URL
+can carry a credential. Safari and remote sessions return `unsupported_backend`.
 
 Chromium HTTP bodies and WebSocket frames are protocol-native, but CDP cannot
 return a `fetch()` body the page drained with `response.blob()`; that

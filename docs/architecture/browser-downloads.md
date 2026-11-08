@@ -107,3 +107,26 @@ Use ordinary read-only tools on the reported path. A canceled download leaves no
 file. A page can start more downloads and fill the folder; Horizon does not limit
 the folder's size or examine what a page saved, so a person deletes the folder to
 reclaim space.
+
+A download is saved on the computer that runs the page, and an agent that works
+through a profile host of another computer cannot open that path with its own
+tools. `browser_downloads` therefore takes one optional `fetch` argument: the file
+name of one completed row. The answer keeps every row, and it adds the bytes of
+that file as an `application/octet-stream` resource block, with
+`fetched_file_name` and `fetched_bytes` in the structured result.
+
+The host reads the file that its own report named, so the caller never supplies a
+path. The report keeps this honest in three steps:
+
+- the requested name must be one path component, so `../` and an absolute path
+  cannot describe a file;
+- the canonical path of the file must stay inside the canonical panel folder, so
+  a symlink that leads outside it, or a row that names another folder, is
+  refused;
+- the answer holds at most 8 MiB, the same bound as an inlined capture. A larger
+  file sets `inline_withheld: true`, and the file stays on the computer that
+  saved it.
+
+A refusal, a name that no row reports, and an in-progress row each leave the bytes
+where they are and add one text block that says why. The bytes carry no media type
+of their own, because the engine does not sniff an untrusted file.

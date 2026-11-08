@@ -739,7 +739,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_downloads",
-        description = "Read the panel's download folder and the downloads this session observed, newest last: each row reports the file name, state (in_progress, completed or canceled), received bytes, total bytes when known, and the absolute path once the browser named the file it wrote. A local Chromium or Firefox panel saves every download of its page into that one panel-owned folder, including a download a person starts, so a page-initiated download is no longer silent: read this list instead of guessing where a file went. reporting=false means this exact session could not observe downloads, so an empty list is not proof that nothing was saved. Rows are bounded; dropped counts reports this session forgot, and their files stay in the folder. Read the file at its path with ordinary read-only tools; this tool starts no download, writes no file and returns no download URL, because a download URL can carry a credential. Safari and remote sessions return unsupported_backend."
+        description = "Read the panel's download folder and the downloads this session observed, newest last: each row reports the file name, state (in_progress, completed or canceled), received bytes, total bytes when known, and the absolute path once the browser named the file it wrote. A local Chromium or Firefox panel saves every download of its page into that one panel-owned folder, including a download a person starts, so a page-initiated download is no longer silent: read this list instead of guessing where a file went. reporting=false means this exact session could not observe downloads, so an empty list is not proof that nothing was saved. Rows are bounded; dropped counts reports this session forgot, and their files stay in the folder. Read the file at its path with ordinary read-only tools, or name one completed row in fetch to carry its bytes in the answer (at most 8 MiB, as an application/octet-stream resource block, when the file lives on a host of another computer); this tool starts no download, writes no file and returns no download URL, because a download URL can carry a credential. Safari and remote sessions return unsupported_backend."
     )]
     async fn browser_downloads(
         &self,
@@ -753,7 +753,8 @@ impl HorizonBrowserMcp {
         let BrowserControlValue::Downloads { downloads } = receipt.value else {
             return Err("browser returned an unexpected download list".to_string());
         };
-        Ok(Json(DownloadsOutput::new(input.panel_id, receipt.action_id, downloads)))
+        let output = DownloadsOutput::new(input.panel_id, receipt.action_id, downloads, input.fetch.as_deref());
+        Ok(Json(output))
     }
 
     #[tool(
@@ -857,10 +858,14 @@ impl ServerHandler for HorizonBrowserMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let screenshot = self.inline_screenshots && request.name == "browser_screenshot";
+        let fetch = requested_download(&request);
         let response = self
             .tool_router
             .call(ToolCallContext::new(self, request, context))
             .await?;
+        if let Some(file_name) = fetch {
+            return Ok(crate::download::attach(response, &file_name));
+        }
         if screenshot {
             let root = horizon_browser_control::BrowserRuntimePaths::resolve();
             return Ok(crate::screenshot::inline(response, root.root()));
@@ -893,6 +898,22 @@ const MIN_NAVIGATION_TIMEOUT_MILLIS: u64 = 1_000;
 
 /// The bound the engine enforces for a navigation action; the controller
 /// waits `RESULT_DELIVERY_HEADROOM_MILLIS` longer for the typed report.
+/// The file name that a request asks the answer of `browser_downloads` to carry.
+/// The handler states the name it resolved in its own result; this rewrite adds
+/// the bytes of that one file.
+fn requested_download(request: &rmcp::model::CallToolRequestParams) -> Option<String> {
+    if request.name != "browser_downloads" {
+        return None;
+    }
+    request
+        .arguments
+        .as_ref()?
+        .get("fetch")?
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
 fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
     crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
 }

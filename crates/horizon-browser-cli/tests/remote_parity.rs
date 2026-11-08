@@ -294,8 +294,8 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
     (
         "browser_downloads",
         Parity::Partial,
-        "a saved file stays on the filesystem of the machine that serves the page \
-         (issue 1962)",
+        "fetch carries the bytes of one finished file up to 8 MiB; a larger file \
+         stays on the machine that serves the page",
     ),
     (
         "browser_duplicate",
