@@ -183,6 +183,15 @@ impl Envelope {
     }
 }
 
+impl Remaining {
+    /// Whether nothing is left, so this envelope admits no further rent. The hours and
+    /// the amount are separate bounds: the first one to reach zero ends the envelope.
+    #[must_use]
+    pub fn used_up(&self) -> bool {
+        self.hours <= EPSILON || self.amount <= EPSILON
+    }
+}
+
 /// A float comparison's slack, so an amount that is exactly at the limit is inside it.
 const EPSILON: f64 = 1e-9;
 

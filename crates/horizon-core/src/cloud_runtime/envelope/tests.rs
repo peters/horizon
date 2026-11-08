@@ -311,3 +311,34 @@ fn the_approval_reads_back_as_it_was_written() {
         "a section with a field Horizon does not read is not an approval"
     );
 }
+
+#[test]
+fn either_bound_reaching_zero_uses_the_envelope_up() {
+    let approved = envelope();
+    let inside = approved.remaining(Spent {
+        hours: 4.0,
+        amount: 1.0,
+    });
+    assert!(!inside.used_up(), "with hours and amount left it admits a rent");
+
+    let no_hours = approved.remaining(Spent {
+        hours: 6.0,
+        amount: 0.5,
+    });
+    assert!(no_hours.used_up(), "hours alone can end an envelope");
+    assert_eq!(no_hours.hours, 0.0);
+
+    let no_amount = approved.remaining(Spent {
+        hours: 1.0,
+        amount: 2.0,
+    });
+    assert!(no_amount.used_up(), "the amount alone can end an envelope");
+    assert_eq!(no_amount.amount, 0.0);
+
+    let over = approved.remaining(Spent {
+        hours: 7.0,
+        amount: 3.0,
+    });
+    assert!(over.used_up(), "a rent past the bound leaves nothing");
+    assert_eq!((over.hours, over.amount), (0.0, 0.0));
+}
