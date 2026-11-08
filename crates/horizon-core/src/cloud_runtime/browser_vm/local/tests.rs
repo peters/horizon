@@ -4,6 +4,7 @@
 use std::io::Write as _;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use super::{DEFAULT_IMAGE, DEFAULT_NAME, LocalBrowserVm};
 
@@ -21,7 +22,7 @@ fn vnc_listener(greeting: Option<&'static [u8]>) -> (u16, std::thread::JoinHandl
 
 const FAKE_DOCKER: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
-state="__STATE__"
+state="$(cd "$(dirname "$0")" && pwd)/fake-state"
 printf '%s\n' "$*" >>"$state/calls"
 case "${1:-}" in
     container)
@@ -53,6 +54,10 @@ case "${1:-}" in
         cat "$state/host-key"
         ;;
     build) ;;
+    start)
+        [[ -f "$state/container" ]] || { printf 'Error: No such container: %s\n' "${2:-}" >&2; exit 1; }
+        printf 'true\n' >"$state/running"
+        ;;
     run)
         : >"$state/container"
         printf 'true\n' >"$state/running"
@@ -77,11 +82,12 @@ impl Fixture {
         let home = tempfile::tempdir().expect("home");
         let state = root.path().join("fake-state");
         std::fs::create_dir_all(&state).expect("state");
-        let docker = write_program(
-            root.path(),
-            "docker",
-            &FAKE_DOCKER.replace("__STATE__", &state.to_string_lossy()),
-        );
+        // One script for the whole test process, reached through a link in each fixture. A
+        // script written beside the test can still be open for writing when another thread
+        // starts it, and the kernel then refuses to run it with "Text file busy"; the shared
+        // script is written once, before any test starts one.
+        let docker = root.path().join("docker");
+        std::os::unix::fs::symlink(shared_docker(), &docker).expect("a link to the fake docker");
 
         Self {
             root,
@@ -134,6 +140,15 @@ impl Fixture {
         std::fs::write(self.state.join("image-of-container"), format!("{DEFAULT_IMAGE}\n")).expect("image");
         std::fs::write(self.state.join("running"), if running { "true\n" } else { "false\n" }).expect("running");
     }
+}
+
+/// The fake `docker` of this test process, written once.
+fn shared_docker() -> &'static Path {
+    static DOCKER: OnceLock<PathBuf> = OnceLock::new();
+    DOCKER.get_or_init(|| {
+        let folder = tempfile::tempdir().expect("a folder for the fake docker").keep();
+        write_program(&folder, "docker", FAKE_DOCKER)
+    })
 }
 
 fn write_program(root: &Path, name: &str, body: &str) -> PathBuf {
@@ -232,14 +247,43 @@ fn the_key_of_the_container_is_private_and_made_once() {
 }
 
 #[test]
-fn a_start_refuses_a_container_that_exists_and_an_image_that_is_absent() {
+fn a_start_adopts_the_container_of_its_own_image_and_refuses_another() {
     let fixture = Fixture::new();
-    let vm = fixture.vm();
+    fixture.mark_image();
+    fixture.start_ssh_server();
     fixture.mark_container(true);
-    let error = vm.up(None).expect_err("the container exists");
-    assert!(error.to_string().contains("stop it"), "{error}");
-    std::fs::remove_file(fixture.state.join("container")).expect("no container");
-    let error = vm.up(None).expect_err("the image is absent");
+    let vm = fixture.greeting_vm(2222);
+    // A run that broke after its container started is retried by adopting that container.
+    let route = vm.up(None).expect("the container of the same image is adopted");
+    assert_eq!(route.ssh_target, "horizon-browser-vm");
+    assert!(
+        !fixture.calls().lines().any(|line| line.starts_with("run ")),
+        "an adopted container is not started again: {}",
+        fixture.calls()
+    );
+
+    // A stopped container of the same image is started again.
+    std::fs::write(fixture.state.join("running"), "false\n").expect("stopped");
+    vm.up(None).expect("a stopped container of the same image is started");
+    assert!(
+        fixture
+            .calls()
+            .lines()
+            .any(|line| line == format!("start {DEFAULT_NAME}")),
+        "{}",
+        fixture.calls()
+    );
+
+    // A container of another image holds the name and is never touched.
+    std::fs::write(fixture.state.join("image-of-container"), "another-image:1\n").expect("image");
+    let error = vm.up(None).expect_err("another image holds the name");
+    assert!(error.to_string().contains("holds the image another-image:1"), "{error}");
+}
+
+#[test]
+fn a_start_refuses_an_image_that_is_absent_with_no_recipe() {
+    let fixture = Fixture::new();
+    let error = fixture.vm().up(None).expect_err("the image is absent");
     assert!(error.to_string().contains("--build"), "{error}");
 }
 

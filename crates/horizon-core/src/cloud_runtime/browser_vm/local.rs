@@ -159,28 +159,47 @@ impl LocalBrowserVm {
     /// [`KEY_WAIT`].
     pub fn up(&self, build: Option<&Path>) -> Result<Route> {
         let key = self.ensure_key()?;
-        if self.container_exists()? {
-            return Err(Error::Local(format!(
-                "the container {} exists; stop it with `horizon --browser-vm-local down` first",
-                self.name
-            )));
+        // A run that broke after its container started is retried by adopting that container,
+        // so a second start of the same name is never a dead end.
+        if let Some(image) = self.container_image()? {
+            self.adopt(&image)?;
+        } else {
+            if !self.image_exists()? {
+                let Some(repository) = build else {
+                    return Err(Error::Local(format!(
+                        "the image {} is absent; build it with `horizon --browser-vm-local up --build <repository>`",
+                        self.image
+                    )));
+                };
+                self.build(repository)?;
+            }
+            let public_key = std::fs::read_to_string(key.with_extension("pub"))?;
+            self.run(&public_key)?;
         }
-        if !self.image_exists()? {
-            let Some(repository) = build else {
-                return Err(Error::Local(format!(
-                    "the image {} is absent; build it with `horizon --browser-vm-local up --build <repository>`",
-                    self.image
-                )));
-            };
-            self.build(repository)?;
-        }
-        let public_key = std::fs::read_to_string(key.with_extension("pub"))?;
-        self.run(&public_key)?;
         let host_key = self.wait_for_host_key()?;
         tracing::info!(container = %self.name, host_key = %host_key.len(), "the local browser VM answers");
         self.greets()?;
         let route = self.write_entry(&key, &host_key)?;
         Ok(route)
+    }
+
+    /// Use the container that already holds this name: it must run the same image, and a
+    /// container that stopped is started again.
+    fn adopt(&self, image: &str) -> Result<()> {
+        if image != self.image {
+            return Err(Error::Local(format!(
+                "the container {} holds the image {image}, not {}; stop it with `horizon --browser-vm-local down` first",
+                self.name, self.image
+            )));
+        }
+        if self.running()? {
+            return Ok(());
+        }
+        let started = self.output(&["start", &self.name])?;
+        if !started.status.success() {
+            return Err(self.failure("start", &started));
+        }
+        Ok(())
     }
 
     /// Read the greeting of the VNC server on the loopback address.
@@ -253,16 +272,10 @@ impl LocalBrowserVm {
         let running = self.running()?;
         // The image of the container that runs, not the one this call would start:
         // a person who passed another tag must read what is actually there.
-        let image = if running {
-            let inspected = self.output(&["container", "inspect", "--format", "{{.Config.Image}}", &self.name])?;
-            if !inspected.status.success() {
-                return Err(self.failure("inspect", &inspected));
-            }
-            let image = String::from_utf8_lossy(&inspected.stdout).trim().to_owned();
-            if image.is_empty() { self.image.clone() } else { image }
-        } else {
-            self.image.clone()
-        };
+        let image = self
+            .container_image()?
+            .filter(|image| !image.is_empty())
+            .unwrap_or_else(|| self.image.clone());
         Ok(LocalStatus {
             running,
             image,
@@ -413,6 +426,18 @@ impl LocalBrowserVm {
             return Err(self.failure("inspect", &output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+    }
+
+    /// The image of the container that holds this name, or nothing when no container does.
+    fn container_image(&self) -> Result<Option<String>> {
+        if !self.container_exists()? {
+            return Ok(None);
+        }
+        let output = self.output(&["container", "inspect", "--format", "{{.Config.Image}}", &self.name])?;
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()))
     }
 
     /// Whether the container exists. An absent container is a no; a Docker that cannot answer

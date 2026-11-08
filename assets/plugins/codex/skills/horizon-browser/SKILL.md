@@ -499,8 +499,12 @@ Copy needed evidence before panel close or host exit; only eight exports remain.
   so a browser that reaches the container over ssh names the same target. A
   `stop` keeps the state volume and the container key, and a `delete` removes
   the container and keeps the volume, because the volume holds the sign-ins.
-  Run the container from a shell with `horizon --browser-vm-local up|down|status`
-  when no Horizon window runs.
+  The image must exist first: the tool starts it and never builds it, so a
+  person builds `horizon-browser-vm-local:latest` from
+  `packaging/browser-vm/Dockerfile` with the target `browser-vm-local`, or runs
+  `horizon --browser-vm-local up --build <checkout>`, which builds it and starts
+  the same container. A start adopts a container of the same image that a broken
+  run left behind, and refuses a container of another image that holds the name.
 - One run at a time. A second run is refused with `browser_vm_busy`. A failed
   run keeps its record, so you retry or delete it, and never rent twice.
 
