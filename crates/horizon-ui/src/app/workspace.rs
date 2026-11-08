@@ -140,7 +140,13 @@ impl HorizonApp {
     ) {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
-        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
+        let visuals = self.workspace_visuals(
+            ctx,
+            canvas_rect,
+            workspace_bounds,
+            overlay_zones,
+            visible_detached_workspace,
+        );
         let workspace_collision_ids = self.workspace_collision_scope(visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
@@ -310,9 +316,40 @@ impl HorizonApp {
         }
     }
 
+    /// The frame of `workspace` while it holds the New cloud form: the form, with the strip its
+    /// name badge stands in above it. The form is drawn in the main window, so this frame belongs
+    /// to that window; a detached window draws the workspace at its board place instead. The form takes its size from the window and is drawn in the
+    /// window, while a frame of a fixed size on the board cannot hold it at every window size and
+    /// zoom, so the frame follows the form.
+    #[cfg(feature = "cloud-workspaces")]
+    pub(in crate::app) fn cloud_form_frame(
+        &self,
+        ctx: &Context,
+        workspace: WorkspaceId,
+        visible_detached_workspace: Option<WorkspaceId>,
+    ) -> Option<Rect> {
+        if visible_detached_workspace.is_some() || !self.cloud_prototype.holds_cloud_form(workspace) {
+            return None;
+        }
+        self.cloud_form_frame_rect(ctx)
+    }
+
+    /// A build without clouds has no New cloud form, so every empty workspace keeps the frame of
+    /// an empty workspace.
+    #[cfg(not(feature = "cloud-workspaces"))]
+    fn cloud_form_frame(
+        &self,
+        _ctx: &Context,
+        _workspace: WorkspaceId,
+        _visible_detached_workspace: Option<WorkspaceId>,
+    ) -> Option<Rect> {
+        None
+    }
+
     #[profiling::function]
     fn workspace_visuals(
         &self,
+        ctx: &Context,
         canvas_rect: Rect,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
@@ -339,6 +376,14 @@ impl HorizonApp {
                         )
                         .intersect(canvas_rect);
                         (canvas_rect_local, screen_rect, false)
+                    } else if let Some(form) = self.cloud_form_frame(ctx, workspace.id, visible_detached_workspace) {
+                        // The form is drawn in the window, not on the canvas, so the frame of the
+                        // workspace that holds it follows the form instead of the other way round.
+                        let canvas_rect_local = Rect::from_min_max(
+                            self.screen_to_canvas(canvas_rect, form.min),
+                            self.screen_to_canvas(canvas_rect, form.max),
+                        );
+                        (canvas_rect_local, form.intersect(canvas_rect), true)
                     } else {
                         let canvas_rect_local = Rect::from_min_size(
                             Pos2::new(workspace.position[0], workspace.position[1]),

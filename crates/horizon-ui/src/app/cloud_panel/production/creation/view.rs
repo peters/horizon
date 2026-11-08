@@ -27,9 +27,25 @@ impl Production {
             .is_some_and(|before| !same_canvas(before, now))
     }
 
+    /// The size the last drawn form had, which this frame's rect takes.
+    pub(in crate::app::cloud_panel::production) fn drawn_form_size(&self) -> Option<egui::Vec2> {
+        self.creation_form_size
+    }
+
+    /// Keeps the size a drawn form had, and says whether it is new, so the caller can ask for the
+    /// frame that draws the workspace around that size.
+    pub(in crate::app::cloud_panel::production) fn record_form_size(&mut self, size: egui::Vec2) -> bool {
+        let changed = self
+            .creation_form_size
+            .is_none_or(|last| (last - size).abs().max_elem() > 0.5);
+        self.creation_form_size = Some(size);
+        changed
+    }
+
     /// Forgets the canvas, so that a form which opens again starts from the canvas it opens in.
     pub(in crate::app::cloud_panel::production) fn forget_creation_canvas(&mut self) {
         self.creation_canvas = None;
+        self.creation_form_size = None;
     }
 }
 

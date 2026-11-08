@@ -38,12 +38,20 @@ pub(super) const FORM_MIN_WIDTH: f32 = 640.0;
 const BODY_MIN_HEIGHT: f32 = 320.0;
 /// Room for the form's own margins beside its content, both sides together.
 pub(super) const SIDE_MARGIN: f32 = 64.0;
+/// The strip the name badge of a workspace stands in, above the form that workspace holds. The
+/// badge belongs to the board, so it grows with the zoom while the form does not.
+const BADGE_STRIP: f32 = crate::app::WS_TITLE_HEIGHT + crate::app::WS_BG_PAD;
 /// The widest form: the room the workspace that **+ New cloud** makes keeps for it
 /// (`WS_CLOUD_FORM_SIZE` less `SIDE_MARGIN`). Every line of the form fits from 1056 on, so a
 /// wider form only stretches its fields and moves the summary away from them.
 pub(super) const FORM_MAX_WIDTH: f32 = 1180.0;
 /// The widest form while a setup agent shows its output, which takes half the form.
 pub(super) const SETUP_MAX_WIDTH: f32 = 1480.0;
+
+/// The width the form takes at most, which a setup agent's output beside the fields raises.
+fn widest_form(setup_output: bool) -> f32 {
+    if setup_output { SETUP_MAX_WIDTH } else { FORM_MAX_WIDTH }
+}
 
 /// The height the body takes in a window of `window`, which is also the tallest body.
 pub(super) fn body_ceiling(window: egui::Rect) -> f32 {
@@ -137,11 +145,7 @@ impl HorizonApp {
         };
         // A setup agent of this repository shows its output beside the fields, and that output
         // uses width the fields alone do not.
-        let widest = if super::repository_setup::running_here(&self.cloud_prototype.production) {
-            SETUP_MAX_WIDTH
-        } else {
-            FORM_MAX_WIDTH
-        };
+        let widest = widest_form(super::repository_setup::running_here(&self.cloud_prototype.production));
         let (width, body_height, origin) =
             form_layout(surface, self.canvas_rect(ctx), body_ceiling(ctx.content_rect()), widest);
         let mut actions = Actions::default();
@@ -152,7 +156,7 @@ impl HorizonApp {
         // landed under the fields, below the fold of a scrolling column, which reads as no
         // answer at all.
         let refused = self.cloud_prototype.error.clone();
-        egui::Area::new(Id::unique("cloud-creation"))
+        let drawn = egui::Area::new(Id::unique("cloud-creation"))
             .order(Order::Middle)
             .fixed_pos(origin)
             .constrain(false)
@@ -193,6 +197,16 @@ impl HorizonApp {
                         }
                     });
             });
+        // The frame of the workspace that holds the draft is drawn around the form, from the size
+        // this draw settled. A form whose content gives it another size asks for the frame that
+        // draws the workspace around that size.
+        if self
+            .cloud_prototype
+            .production
+            .record_form_size(drawn.response.rect.size())
+        {
+            ctx.request_repaint();
+        }
         if actions.hide {
             self.hide_cloud_creation(ctx);
             return;
@@ -479,6 +493,31 @@ impl HorizonApp {
     /// The screen-space rect the form sits on: the on-screen frame of the workspace that holds
     /// the draft, so the form moves with a pan. `None` while that frame is off the canvas or the
     /// workspace is detached. A draft that no workspace holds sits on the canvas.
+    /// The frame of the workspace that holds the form: the form with the strip its name badge
+    /// stands in above it, settled from the inputs the form itself uses, so the frame never
+    /// trails the form through a pan, a zoom or a resize. The form's size is the one it had when
+    /// it was last drawn, because its content decides that; a form that then draws to another
+    /// size asks for one more frame.
+    pub(in crate::app) fn cloud_form_frame_rect(&self, ctx: &Context) -> Option<Rect> {
+        if !self.cloud_prototype.production.creation_dialog_open() {
+            return None;
+        }
+        let surface = self.cloud_creation_surface(ctx)?;
+        let widest = widest_form(super::repository_setup::running_here(&self.cloud_prototype.production));
+        let (width, body, origin) =
+            form_layout(surface, self.canvas_rect(ctx), body_ceiling(ctx.content_rect()), widest);
+        let size = self
+            .cloud_prototype
+            .production
+            .drawn_form_size()
+            .unwrap_or_else(|| Vec2::new(width + SIDE_MARGIN, body + CHROME_HEIGHT));
+        let form = Rect::from_min_size(origin, size);
+        // The frame of the workspace keeps the strip its name badge stands in, above the form.
+        // The badge is drawn on the board, so the strip takes the room the zoom gives it.
+        let strip = BADGE_STRIP * self.canvas_view.zoom.max(0.0);
+        Some(Rect::from_min_max(Pos2::new(form.left(), form.top() - strip), form.max))
+    }
+
     fn cloud_creation_surface(&self, ctx: &Context) -> Option<Rect> {
         let canvas = self.canvas_rect(ctx);
         let Some(local) = self.cloud_prototype.production.creation_workspace() else {

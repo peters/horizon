@@ -7,7 +7,7 @@ mod image_destinations;
 mod new_cloud_draft;
 mod new_cloud_view;
 mod ownership;
-mod production;
+pub(in crate::app) mod production;
 mod render;
 mod resize;
 mod route;

@@ -233,6 +233,110 @@ fn the_view_follows_the_window_so_the_form_stays_in_front() {
     );
 }
 
+/// The on-screen frame of the workspace that holds the draft, and the form drawn on it.
+fn frame_and_form(app: &HorizonApp, ctx: &egui::Context) -> (Rect, Rect) {
+    let canvas = app.canvas_rect(ctx);
+    let local = app
+        .cloud_prototype
+        .production
+        .creation_workspace()
+        .expect("the draft belongs to a workspace");
+    let workspace = app
+        .board
+        .workspace_id_by_local_id(&local)
+        .expect("the workspace is on the board");
+    let _ = workspace;
+    let frame = app
+        .cloud_form_frame_rect(ctx)
+        .expect("the workspace that holds the form has its frame");
+    let _ = canvas;
+    (frame, form_rect(ctx).expect("the form is drawn"))
+}
+
+#[test]
+fn the_workspace_frame_holds_the_form_and_its_badge() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    for size in [[1480.0, 900.0], [1920.0, 1080.0], [2800.0, 1000.0], [1100.0, 700.0]] {
+        frames_at(&ctx, &mut app, size, 6);
+        let (frame, form) = frame_and_form(&app, &ctx);
+        assert!(
+            // The frame takes the size the form last drew at, so it holds the form to the pixel
+            // while the content of the form settles.
+            frame.expand(1.0).contains_rect(form),
+            "{size:?}: the frame {frame:?} does not hold the form {form:?}"
+        );
+        assert!(
+            form.top() >= frame.top() + crate::app::WS_TITLE_HEIGHT,
+            "{size:?}: the name badge of the workspace covers the form {form:?} in {frame:?}"
+        );
+    }
+}
+
+/// A detached window draws the workspace that holds the form at its board place, because the
+/// form itself is drawn in the main window and its rect means nothing in another one.
+#[test]
+fn a_detached_window_draws_the_workspace_at_its_board_place() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
+    let local = app
+        .cloud_prototype
+        .production
+        .creation_workspace()
+        .expect("the draft belongs to a workspace");
+    let holder = app
+        .board
+        .workspace_id_by_local_id(&local)
+        .expect("the workspace is on the board");
+    let elsewhere = workspace_with_panel(&mut app, "detached project", [900.0, 700.0]);
+    assert!(
+        app.cloud_form_frame(&ctx, holder, None).is_some(),
+        "the main window draws the frame around the form"
+    );
+    assert!(
+        app.cloud_form_frame(&ctx, holder, Some(elsewhere)).is_none(),
+        "a detached window draws the workspace at its board place, not around the form"
+    );
+}
+
+#[test]
+fn the_frame_holds_the_form_in_the_first_frame_after_a_pan() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
+    // One pan and one frame: the frame of the workspace is drawn before the form, so a frame
+    // that took the place of an earlier frame would trail the form here and stay behind it.
+    app.canvas_view.pan_offset[0] += 140.0;
+    app.canvas_view.pan_offset[1] += 60.0;
+    frames_at(&ctx, &mut app, [1920.0, 1080.0], 1);
+    let (frame, form) = frame_and_form(&app, &ctx);
+    assert!(
+        frame.expand(1.0).contains_rect(form),
+        "the frame {frame:?} trails the form {form:?} after one pan"
+    );
+}
+
+#[test]
+fn the_frame_follows_the_zoom_so_it_keeps_holding_the_form() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    for zoom in [0.6_f32, 0.8, 1.0, 1.4, 2.0] {
+        app.canvas_view.set_zoom(zoom);
+        frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
+        let (frame, form) = frame_and_form(&app, &ctx);
+        assert!(
+            frame.expand(1.0).contains_rect(form),
+            "zoom {zoom}: the frame {frame:?} does not hold the form {form:?}"
+        );
+        // The badge is drawn on the board, so it is taller the further the person zooms in.
+        assert!(
+            form.top() >= frame.top() + crate::app::WS_TITLE_HEIGHT * zoom,
+            "zoom {zoom}: the name badge covers the form {form:?} in {frame:?}"
+        );
+    }
+}
+
 #[test]
 fn a_resize_in_another_workspace_keeps_the_view_and_the_keyboard() {
     let (_temp, ctx, mut app) = ready_app();
