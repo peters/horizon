@@ -35,6 +35,14 @@ name: Cache prune
 # whatever triggered it, so the step reads the event, the branch and the head
 # repository of the run it is about to read and refuses anything else, on the
 # dispatch paths as well.
+#
+# The run also has to stand on the current tip of main. A re-run of an older run,
+# an older run id given to the dispatch, or a parallel run that finishes late all
+# name the keys of their own commit, and if the lockfile has moved since, those
+# are the superseded generations: the script would then read the live ones as
+# stale and delete them. A run behind the tip is a normal race during a burst of
+# merges, so it is skipped with a notice rather than failed, and the run of the
+# last merge of that burst does the work.
 on:
   # After the run that saved the entries, and reading that run's own log.
   workflow_run:
@@ -109,14 +117,27 @@ jobs:
           # Only a push to main of this repository saves an entry, so only such a
           # run names a live key. Checked by id, so it holds however the id
           # arrived: the trigger, the fallback above, or the dispatch input.
-          read -r run_event run_branch run_repo < <(gh api \
+          read -r run_event run_branch run_repo run_sha < <(gh api \
             "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
-            --jq '[.event, .head_branch, .head_repository.full_name] | @tsv')
+            --jq '[.event, .head_branch, .head_repository.full_name, .head_sha] | @tsv')
           if [ "$run_event" != "push" ] || [ "$run_branch" != "main" ] \
             || [ "$run_repo" != "$GITHUB_REPOSITORY" ]; then
             echo "::error::Run $run_id is $run_event on $run_branch of $run_repo;" \
               "only a push to main of $GITHUB_REPOSITORY names the live cache keys"
             exit 1
+          fi
+          # The keys a run names are the keys of its own commit. Behind the tip
+          # they can be the superseded generations, and acting on them would
+          # delete the live ones.
+          tip_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$run_branch" --jq '.sha')
+          if [ -z "$tip_sha" ]; then
+            echo "::error::Could not read the tip of $run_branch"
+            exit 1
+          fi
+          if [ "$run_sha" != "$tip_sha" ]; then
+            echo "::notice::Run $run_id stands on $run_sha and $run_branch is at" \
+              "$tip_sha; a later run prunes instead."
+            exit 0
           fi
           run_ref="refs/heads/$run_branch"
           # The log of that run names the key each job used. Without it there is

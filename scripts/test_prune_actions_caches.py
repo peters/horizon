@@ -270,6 +270,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('[ "$run_branch" != "main" ]', workflow)
         self.assertIn('[ "$run_repo" != "$GITHUB_REPOSITORY" ]', workflow)
 
+    def test_a_run_behind_the_tip_of_main_is_not_trusted(self):
+        workflow = WORKFLOW.read_text()
+        # A re-run of an older run, an older run id given to the dispatch, or a
+        # parallel run that finishes late all name the keys of their own commit.
+        # Behind the tip those can be the superseded generations, and acting on
+        # them would delete the live ones.
+        self.assertIn(".head_sha", workflow)
+        self.assertIn('gh api "repos/$GITHUB_REPOSITORY/commits/$run_branch"', workflow)
+        self.assertIn('[ "$run_sha" != "$tip_sha" ]', workflow)
+        # A race during a burst of merges is skipped, not failed.
+        behind = workflow.split('[ "$run_sha" != "$tip_sha" ]', 1)[1]
+        self.assertIn("::notice::", behind.split("fi", 1)[0])
+        self.assertIn("exit 0", behind.split("fi", 1)[0])
+
     def test_the_workflow_feeds_the_log_and_ref_of_the_triggering_run(self):
         workflow = WORKFLOW.read_text()
         self.assertIn("--log", workflow)
