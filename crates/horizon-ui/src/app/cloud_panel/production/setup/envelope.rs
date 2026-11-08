@@ -45,6 +45,18 @@ impl Card {
         self.saving.is_some()
     }
 
+    /// Whether the envelope that is approved admits nothing more, which the card says
+    /// plainly: the rents of this approval have reached its hours or its amount.
+    fn used_up(&self, envelope: &Envelope) -> bool {
+        let Some(spent) = self
+            .spent
+            .filter(|_| self.spent_for.as_deref() == Some(envelope.approved_at.as_str()))
+        else {
+            return false;
+        };
+        envelope.remaining(spent).used_up()
+    }
+
     fn save(&mut self, ctx: &egui::Context, root: std::path::PathBuf, shown: Option<Envelope>, next: Option<Envelope>) {
         let (tx, rx) = channel();
         self.saving = Some(rx);
@@ -163,6 +175,12 @@ fn approved_state(ui: &mut egui::Ui, draft: &Draft, card: &mut Card, envelope: &
     );
     // What the record says the envelope already paid for, and what that leaves. A
     // person cannot judge a bound without the figure that moves toward it.
+    if card.used_up(envelope) {
+        caption(
+            ui,
+            "This approval is used up, so no agent rents anything until a person approves a new one.",
+        );
+    }
     // Nothing rented needs no line: the limits above already say what is left.
     if let Some(spent) = card.spent.filter(|spent| spent.hours > 0.0 || spent.amount > 0.0) {
         let left = envelope.remaining(spent);
@@ -211,10 +229,10 @@ pub(in crate::app::cloud_panel) fn card(ui: &mut egui::Ui, draft: &mut Draft, ca
             ui,
             "Spending envelope",
             "What an agent's clouds may cost",
-            Some(if approved.is_some() {
-                (Tone::Ready, "Approved")
-            } else {
-                (Tone::Attention, "None")
+            Some(match &approved {
+                None => (Tone::Attention, "None"),
+                Some(envelope) if card.used_up(envelope) => (Tone::Attention, "Used up"),
+                Some(_) => (Tone::Ready, "Approved"),
             }),
         );
         caption(

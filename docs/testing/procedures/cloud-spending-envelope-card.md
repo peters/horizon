@@ -93,7 +93,37 @@ plainly when there is none.
    Result: The card shows the limits and the approval line, and no rented line,
    because nothing has been rented.
 
-### 6.4 ENVELOPE-4 — A person revokes it
+### 6.4 ENVELOPE-4 — The card says an approval is used up
+
+> **CAUTION:** THIS STEP WRITES SYNTHETIC RENTS INTO THE RECORD OF THIS COMPUTER.
+> Put the copy of `HORIZON_HOME/cloud/envelope-rents.jsonl` back in step 8.
+
+1. Stop Horizon, and make the record hold rents of this approval whose hours add
+   up to the `max_hours` of the envelope **and** whose amounts add up to its
+   `max_total`, for example 6 h and 2.00 EUR of a 6 h and 2.00 EUR approval.
+
+   Result: The file holds rents of this one approval that reach both bounds.
+
+2. Start Horizon, open **Cloud settings**, and read the approved card.
+
+   Result: The badge says **Used up** in the attention colour, the card shows
+   `This approval is used up, so no agent rents anything until a person approves a
+   new one.`, and the rented line reads `Rented so far: 6 of 6 h · 2.00 of 2.00
+   EUR. Left: 0 h · 0.00 EUR.`
+
+3. Change the record so that only one bound is reached, for example 6 h and 1.00
+   EUR, and open **Cloud settings** again.
+
+   Result: The badge still says **Used up**, because the first bound to reach zero
+   ends the envelope, and the rented line keeps the figure that is left of the
+   other bound: `Left: 0 h · 1.00 EUR.`
+
+4. Call `cloud_create` with `operation submit` and a repository of the
+   `agent_lifecycle` policy.
+
+   Result: The create is refused, and no cloud card appears.
+
+### 6.5 ENVELOPE-5 — A person revokes it
 
 1. Click **Revoke**.
 
@@ -112,6 +142,7 @@ plainly when there is none.
 - A window that showed another envelope never overwrites a newer one.
 - The card shows what the envelope has paid for and what is left of it, and shows
   no rented line when the record holds nothing for this approval.
+- A used-up approval says so, and an agent rents nothing under it.
 
 ## 8. Cleanup
 
