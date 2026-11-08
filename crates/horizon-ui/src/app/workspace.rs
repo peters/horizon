@@ -140,7 +140,13 @@ impl HorizonApp {
     ) {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
-        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
+        let visuals = self.workspace_visuals(
+            ctx,
+            canvas_rect,
+            workspace_bounds,
+            overlay_zones,
+            visible_detached_workspace,
+        );
         let workspace_collision_ids = self.workspace_collision_scope(visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
@@ -310,9 +316,22 @@ impl HorizonApp {
         }
     }
 
+    /// The frame of `workspace` while it holds the New cloud form: the form, with the strip its
+    /// name badge stands in above it. The form takes its size from the window and is drawn in the
+    /// window, while a frame of a fixed size on the board cannot hold it at every window size and
+    /// zoom, so the frame follows the form.
+    #[cfg(feature = "cloud-workspaces")]
+    fn cloud_form_frame(&self, ctx: &Context, workspace: WorkspaceId) -> Option<Rect> {
+        if !self.cloud_prototype.holds_cloud_form(workspace) {
+            return None;
+        }
+        self.cloud_form_frame_rect(ctx)
+    }
+
     #[profiling::function]
     fn workspace_visuals(
         &self,
+        ctx: &Context,
         canvas_rect: Rect,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
@@ -339,7 +358,7 @@ impl HorizonApp {
                         )
                         .intersect(canvas_rect);
                         (canvas_rect_local, screen_rect, false)
-                    } else if let Some(form) = self.cloud_prototype.cloud_form_frame(workspace.id) {
+                    } else if let Some(form) = self.cloud_form_frame(ctx, workspace.id) {
                         // The form is drawn in the window, not on the canvas, so the frame of the
                         // workspace that holds it follows the form instead of the other way round.
                         let canvas_rect_local = Rect::from_min_max(

@@ -7,7 +7,7 @@ mod image_destinations;
 mod new_cloud_draft;
 mod new_cloud_view;
 mod ownership;
-mod production;
+pub(in crate::app) mod production;
 mod render;
 mod resize;
 mod route;
@@ -91,14 +91,6 @@ impl CloudPrototype {
     /// Whether the empty `workspace` is the one that holds the New cloud form drawn now.
     pub(super) fn holds_cloud_form(&self, workspace: WorkspaceId) -> bool {
         self.production.holds_cloud_form(workspace)
-    }
-
-    /// The rect the frame of `workspace` is drawn at while it holds the New cloud form, which is
-    /// the form with the strip of its name badge above it.
-    pub(super) fn cloud_form_frame(&self, workspace: WorkspaceId) -> Option<egui::Rect> {
-        self.holds_cloud_form(workspace)
-            .then(|| self.production.cloud_form_frame())
-            .flatten()
     }
 }
 

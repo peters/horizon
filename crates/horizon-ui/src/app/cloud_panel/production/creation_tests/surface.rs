@@ -245,9 +245,9 @@ fn frame_and_form(app: &HorizonApp, ctx: &egui::Context) -> (Rect, Rect) {
         .board
         .workspace_id_by_local_id(&local)
         .expect("the workspace is on the board");
+    let _ = workspace;
     let frame = app
-        .cloud_prototype
-        .cloud_form_frame(workspace)
+        .cloud_form_frame_rect(ctx)
         .expect("the workspace that holds the form has its frame");
     let _ = canvas;
     (frame, form_rect(ctx).expect("the form is drawn"))
@@ -261,7 +261,9 @@ fn the_workspace_frame_holds_the_form_and_its_badge() {
         frames_at(&ctx, &mut app, size, 6);
         let (frame, form) = frame_and_form(&app, &ctx);
         assert!(
-            frame.contains_rect(form),
+            // The frame takes the size the form last drew at, so it holds the form to the pixel
+            // while the content of the form settles.
+            frame.expand(1.0).contains_rect(form),
             "{size:?}: the frame {frame:?} does not hold the form {form:?}"
         );
         assert!(
@@ -269,6 +271,23 @@ fn the_workspace_frame_holds_the_form_and_its_badge() {
             "{size:?}: the name badge of the workspace covers the form {form:?} in {frame:?}"
         );
     }
+}
+
+#[test]
+fn the_frame_holds_the_form_in_the_first_frame_after_a_pan() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
+    // One pan and one frame: the frame of the workspace is drawn before the form, so a frame
+    // that took the place of an earlier frame would trail the form here and stay behind it.
+    app.canvas_view.pan_offset[0] += 140.0;
+    app.canvas_view.pan_offset[1] += 60.0;
+    frames_at(&ctx, &mut app, [1920.0, 1080.0], 1);
+    let (frame, form) = frame_and_form(&app, &ctx);
+    assert!(
+        frame.expand(1.0).contains_rect(form),
+        "the frame {frame:?} trails the form {form:?} after one pan"
+    );
 }
 
 #[test]
@@ -280,7 +299,7 @@ fn the_frame_follows_the_zoom_so_it_keeps_holding_the_form() {
         frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
         let (frame, form) = frame_and_form(&app, &ctx);
         assert!(
-            frame.contains_rect(form),
+            frame.expand(1.0).contains_rect(form),
             "zoom {zoom}: the frame {frame:?} does not hold the form {form:?}"
         );
     }

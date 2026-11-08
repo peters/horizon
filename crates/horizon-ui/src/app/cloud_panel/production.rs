@@ -5,7 +5,7 @@ pub(super) mod cards;
 mod close;
 mod companions;
 mod create_agent;
-mod creation;
+pub(in crate::app) mod creation;
 mod creation_job;
 #[cfg(all(test, unix))]
 mod creation_tests;
@@ -134,9 +134,9 @@ pub(super) struct Production {
     /// The canvas the form was drawn on last, so that a window resize or the sidebar brings the
     /// draft's workspace back to the middle of the new canvas. `None` while the form is closed.
     creation_canvas: Option<egui::Rect>,
-    /// The rect the form was drawn at last, so that the frame of the workspace that holds it is
-    /// drawn around it. `None` while the form is closed.
-    creation_form_rect: Option<egui::Rect>,
+    /// The size the form had when it was last drawn, which its content decides. The frame of the
+    /// workspace that holds it is drawn around that size. `None` while the form is closed.
+    creation_form_size: Option<egui::Vec2>,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
     new_workspace: Option<new_workspace::Intent>,
     /// Where a dismissal parked the draft: its workspace and the card that brings it back.
