@@ -91,6 +91,17 @@ pub struct Description {
     /// provider even when the section is missing, so that it can say what to add; a
     /// provider with a credential form is listed only once this machine has one.
     pub needs_settings: bool,
+    /// What a worker's hourly rate here covers, and what it leaves out, so a card states
+    /// it without naming the provider.
+    pub rate_covers: &'static str,
+    /// Why a chosen worker needs an exact location, for a provider that prices one server
+    /// type in one location. Empty for a provider that places a worker another way, which
+    /// never reads it.
+    pub exact_placement_refusal: &'static str,
+    /// The files a cloud's record keeps this provider's own resources in, from the one a
+    /// delete proves to any marker beside it. A file here that Horizon finds without its
+    /// deployment may still name resources at the provider.
+    pub journals: &'static [&'static str],
 }
 
 /// How a provider moves a ready worker onto a rebuilt image.
@@ -128,6 +139,9 @@ pub const RUNPOD: Description = Description {
         *crate::runpod::volumes::REQUEST_SIZE_GB.start(),
         *crate::runpod::volumes::REQUEST_SIZE_GB.end(),
     ),
+    rate_covers: "Last reported worker hourly rate. Storage and other provider charges may be additional.",
+    exact_placement_refusal: "",
+    journals: &["workspace-volume.json", "workspace-volume.required"],
 };
 
 pub const HETZNER: Description = Description {
@@ -150,6 +164,12 @@ pub const HETZNER: Description = Description {
         *crate::hetzner::volumes::SIZE_GB.start(),
         *crate::hetzner::volumes::SIZE_GB.end(),
     ),
+    rate_covers: "Hetzner's hourly price for the server type, in euros net of VAT: compute only. Not included: the \
+             workspace volume, which a stop keeps, the primary IPv4 address, traffic over the included amount and \
+             VAT. Hetzner bills each started hour, up to a monthly cap, so the run estimate can trail its bill by up \
+             to an hour.",
+    exact_placement_refusal: "Choose an exact Hetzner worker location",
+    journals: &["hetzner.json"],
 };
 
 /// Microsoft Azure: one VM per cloud in its own resource group. A stop deallocates the
@@ -172,6 +192,12 @@ pub const AZURE: Description = Description {
     needs_settings: true,
     site: "azure.microsoft.com",
     cpu_volume_gb: (4, 32_767),
+    rate_covers: "Azure reports no hourly rate to Horizon, so none is shown. A running worker bills, in US dollars \
+             without VAT, for its VM size, its OS and workspace disks and its Standard static IPv4 address. A stop \
+             deallocates the VM, which ends the compute charge; the disks and the address bill until the cloud is \
+             deleted.",
+    exact_placement_refusal: "Choose an exact Azure VM size and region",
+    journals: &["azure.json"],
 };
 
 /// A Docker engine the person already runs: this computer's, or one reached over SSH
@@ -194,6 +220,9 @@ pub const DOCKER_HOST: Description = Description {
     site: "your own machine",
     // A Docker volume has no size of its own; it shares the host's disk.
     cpu_volume_gb: (1, 65_535),
+    rate_covers: "No rent: the worker runs on a Docker host you already have.",
+    exact_placement_refusal: "",
+    journals: &["docker-host.json"],
 };
 
 /// Which provider a description is, for code that must handle every provider: a
@@ -205,6 +234,26 @@ pub enum Kind {
     Hetzner,
     DockerHost,
     Azure,
+}
+
+impl Kind {
+    /// The description of this provider. This is the one match on `Kind` in Horizon that
+    /// only names providers, so a new provider is added here and nowhere else.
+    #[must_use]
+    pub const fn description(self) -> &'static Description {
+        match self {
+            Self::RunPod => &RUNPOD,
+            Self::Hetzner => &HETZNER,
+            Self::DockerHost => &DOCKER_HOST,
+            Self::Azure => &AZURE,
+        }
+    }
+}
+
+/// Every provider journal file, so a caller that must reject a foreign provider's record
+/// never keeps its own list.
+pub fn journals() -> impl Iterator<Item = &'static str> {
+    ALL.iter().flat_map(|provider| provider.journals.iter().copied())
 }
 
 /// Every provider a cloud can run on, in the order they are offered.
@@ -376,6 +425,79 @@ mod tests {
     }
 
     #[test]
+    fn every_provider_kind_names_its_own_description() {
+        for provider in ALL {
+            assert_eq!(provider.kind.description(), provider, "{}", provider.id);
+            assert_eq!(by_id(provider.id), Some(provider), "{}", provider.id);
+        }
+    }
+
+    #[test]
+    fn only_a_provider_priced_by_server_type_in_a_location_refuses_a_missing_location() {
+        // `ChosenWorker::for_profile` reads this string only for that shape, so it must be
+        // present exactly there and empty everywhere else.
+        for provider in ALL {
+            let exact = (provider.placement, provider.pricing) == (Placement::Locations, Pricing::ServerTypes);
+            assert_eq!(
+                !provider.exact_placement_refusal.is_empty(),
+                exact,
+                "{} says {:?}",
+                provider.id,
+                provider.exact_placement_refusal
+            );
+        }
+        assert_eq!(
+            HETZNER.exact_placement_refusal,
+            "Choose an exact Hetzner worker location"
+        );
+        assert_eq!(
+            AZURE.exact_placement_refusal,
+            "Choose an exact Azure VM size and region"
+        );
+    }
+
+    #[test]
+    fn each_provider_keeps_its_own_journal_files() {
+        let all: Vec<&str> = journals().collect();
+        assert!(!all.is_empty());
+        for provider in ALL {
+            assert!(!provider.journals.is_empty(), "{} keeps no journal", provider.id);
+            for file in provider.journals {
+                assert_eq!(
+                    all.iter().filter(|other| *other == file).count(),
+                    1,
+                    "{file} belongs to more than one provider"
+                );
+            }
+        }
+        // The pair RunPod keeps, and the one file each of the others, are all named.
+        assert!(RUNPOD.journals.contains(&"workspace-volume.json"));
+        assert!(RUNPOD.journals.contains(&"workspace-volume.required"));
+        assert_eq!(HETZNER.journals, ["hetzner.json"]);
+        assert_eq!(AZURE.journals, ["azure.json"]);
+        assert_eq!(DOCKER_HOST.journals, ["docker-host.json"]);
+    }
+
+    #[test]
+    fn every_provider_states_what_its_rate_covers() {
+        for provider in ALL {
+            assert!(
+                !provider.rate_covers.is_empty(),
+                "{} states no rate coverage",
+                provider.id
+            );
+            assert_eq!(
+                ALL.into_iter()
+                    .filter(|other| other.rate_covers == provider.rate_covers)
+                    .count(),
+                1,
+                "{} repeats another provider's rate coverage",
+                provider.id
+            );
+        }
+    }
+
+    #[test]
     fn a_docker_host_offers_cpu_clouds_without_rent_or_rebuild() {
         let (cpu, gpu) = (profile(false), profile(true));
         assert_eq!(by_id("docker-host"), Some(&DOCKER_HOST));
@@ -411,10 +533,15 @@ mod tests {
             (HETZNER.stopped, HETZNER.rebuild),
             (StoppedCost::ServerDeleted, Rebuild::NewServer)
         );
-        assert!(
-            [&RUNPOD, &HETZNER, &DOCKER_HOST]
-                .iter()
-                .all(|other| (other.stopped, other.rebuild) != (AZURE.stopped, AZURE.rebuild))
+        // Stated over every provider, so a second one with this pair cannot land silently.
+        assert_eq!(
+            ALL.into_iter()
+                .filter(|provider| (provider.stopped, provider.rebuild)
+                    == (StoppedCost::WorkerKept, Rebuild::NewServer))
+                .count(),
+            1,
+            "Azure alone keeps its worker on a stop and needs a new server for a rebuild; another \
+             such provider must say how its release differs"
         );
         assert_eq!(
             (AZURE.placement, AZURE.pricing, AZURE.currency, AZURE.net_of_vat),

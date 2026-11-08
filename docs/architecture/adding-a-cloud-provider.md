@@ -84,6 +84,55 @@ Consequences of the rule:
   profile, because `supports(profile)` is the same test that the lifecycle
   applies to the profile.
 
+### What a new provider adds to the code
+
+A new provider adds data, not branches. One constant per provider describes it,
+and one match in `crates/horizon-cloud/src/provider.rs` resolves a `Kind` to that
+constant.
+
+To add a provider, do these steps:
+
+1. Add one `Description` constant to `crates/horizon-cloud/src/provider.rs`.
+   Fill every field from the provider's own rules.
+1. Add one `Kind` variant. Add its arm to `Kind::description` and its entry to
+   `provider::ALL`.
+1. Fill the fields that carry a string a person reads. The table below names them.
+1. Add the lifecycle implementation under
+   `crates/horizon-core/src/cloud_runtime/providers/`.
+1. Add the settings section, the `bound()` of the provider's prices state and the
+   line in `configured()` that the chooser reads, as the section above describes.
+1. Run `cargo check -p horizon-cloud -p horizon-core --all-targets`. The compiler
+   then names the files that need a decision.
+
+A new provider breaks the build in four files. Each of them encodes behavior that
+the data does not hold, so each needs a decision:
+
+| File | The decision |
+|---|---|
+| `crates/horizon-core/src/cloud_runtime/providers/mod.rs` | Which lifecycle, compute, preflight and credential code the provider gets |
+| `crates/horizon-core/src/cloud_runtime/providers/deletion.rs` | What proves that the provider's resources are gone |
+| `crates/horizon-core/src/cloud_runtime/deployment/reconnect.rs` | When a reconnect admits a recorded worker |
+| `crates/horizon-core/src/cloud_runtime/companions/lifecycle/execution.rs` | Which credential a power action needs |
+
+Do not add an exhaustive match on `Kind` in another file. Read a field of the
+`Description` instead. `Kind::description` is the only match on `Kind` that
+restates a description. Before this rule, one new variant stopped the build in ten
+files with sixteen errors. Six of those files only restated data.
+
+The `Description` fields below carry a per-provider string:
+
+| Field | What it holds |
+|---|---|
+| `label`, `site` | The name and the site that a card shows |
+| `rate_covers` | What an hourly rate covers, and what it leaves out. The cost view shows it as it is. |
+| `exact_placement_refusal` | The refusal when a chosen worker names no location, for a provider that places one server type in one location. It names the provider, so code never builds it from `label`. It is empty where that rule does not apply. |
+| `journals` | The files that the provider keeps its cloud resources in, from the journal that a delete proves to the marker beside it |
+
+The tests in `crates/horizon-cloud/src/provider.rs` state the invariants of these
+fields over `provider::ALL`. They fail for a new provider that leaves a field
+empty, that shares a journal file with another provider, or that repeats another
+provider's stop and rebuild pair.
+
 ### An informational offer must not hide a provider
 
 `rentable: false` marks an offer as comparison only: its price is real, and

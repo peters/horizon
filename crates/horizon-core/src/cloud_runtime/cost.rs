@@ -4,7 +4,7 @@
 use super::progress;
 use horizon_cloud::{
     Worker, WorkerStatus,
-    provider::{Description, Kind},
+    provider::Description,
     runpod::billing::{BillingBucket, BucketSize},
 };
 use std::time::{Duration, SystemTime};
@@ -76,22 +76,7 @@ pub fn sum_by_currency(rates: impl IntoIterator<Item = Rate>) -> Vec<Rate> {
 /// What a worker's hourly rate on `provider` covers, and what it leaves out.
 #[must_use]
 pub fn rate_coverage(provider: &Description) -> &'static str {
-    match provider.kind {
-        Kind::RunPod => "Last reported worker hourly rate. Storage and other provider charges may be additional.",
-        Kind::DockerHost => "No rent: the worker runs on a Docker host you already have.",
-        Kind::Hetzner => {
-            "Hetzner's hourly price for the server type, in euros net of VAT: compute only. Not included: the \
-             workspace volume, which a stop keeps, the primary IPv4 address, traffic over the included amount and \
-             VAT. Hetzner bills each started hour, up to a monthly cap, so the run estimate can trail its bill by up \
-             to an hour."
-        }
-        Kind::Azure => {
-            "Azure reports no hourly rate to Horizon, so none is shown. A running worker bills, in US dollars \
-             without VAT, for its VM size, its OS and workspace disks and its Standard static IPv4 address. A stop \
-             deallocates the VM, which ends the compute charge; the disks and the address bill until the cloud is \
-             deleted."
-        }
-    }
+    provider.rate_covers
 }
 
 /// Why a worker has no current-run estimate.

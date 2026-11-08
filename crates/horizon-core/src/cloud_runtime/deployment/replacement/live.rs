@@ -21,7 +21,7 @@ use crate::cloud_runtime::{
 };
 use horizon_cloud::{
     Build, Cancellation, CloudConfig, CloudError, CreateState, Profile, WorkerSpec,
-    provider::{Description, Kind, Rebuild},
+    provider::{Description, Rebuild, StoppedCost},
     runpod::{RunPod, replacement::Observed},
 };
 use std::{
@@ -89,24 +89,24 @@ impl Provider for Pod<'_> {
 /// A provider that rebuilds on a new server, and so how its server is released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Host {
-    /// A Hetzner stop deletes the server and keeps the volume, so the release is that stop.
+    /// The provider's stop deletes the server and keeps the volume, so the release is
+    /// that stop.
     Hetzner,
-    /// An Azure stop keeps the VM, so the release deletes the VM and keeps the workspace disk.
+    /// The provider's stop keeps the VM, so the release deletes the VM and keeps the
+    /// workspace disk.
     Azure,
 }
 
 /// The server a rebuild releases: `None` for a provider that switches the worker in
 /// place, the host for one that rebuilds on a new server.
 /// # Errors
-/// Refuses a provider that offers no rebuild.
-pub(super) fn host(rebuild: Rebuild, kind: Kind) -> Result<Option<Host>> {
-    match (rebuild, kind) {
+/// Refuses a provider that offers no rebuild or no release that a stop describes.
+pub(super) fn host(rebuild: Rebuild, stopped: StoppedCost) -> Result<Option<Host>> {
+    match (rebuild, stopped) {
         (Rebuild::InPlace, _) => Ok(None),
-        (Rebuild::NewServer, Kind::Hetzner) => Ok(Some(Host::Hetzner)),
-        (Rebuild::NewServer, Kind::Azure) => Ok(Some(Host::Azure)),
-        (Rebuild::NewServer, Kind::RunPod | Kind::DockerHost) | (Rebuild::Unsupported, _) => {
-            Err(Error::Invalid(super::UNSUPPORTED))
-        }
+        (Rebuild::NewServer, StoppedCost::ServerDeleted) => Ok(Some(Host::Hetzner)),
+        (Rebuild::NewServer, StoppedCost::WorkerKept) => Ok(Some(Host::Azure)),
+        (Rebuild::Unsupported, _) => Err(Error::Invalid(super::UNSUPPORTED)),
     }
 }
 
@@ -123,7 +123,7 @@ impl<'a> Released<'a> {
     /// Refuses a provider that does not rebuild on a new server.
     pub(super) fn of(profile: &Profile, settings: &'a Settings, cancel: &'a Cancellation) -> Result<Self> {
         let description = Description::of(profile);
-        let host = host(description.rebuild, description.kind)?.ok_or(Error::Invalid(IN_PLACE))?;
+        let host = host(description.rebuild, description.stopped)?.ok_or(Error::Invalid(IN_PLACE))?;
         Ok(Self { host, settings, cancel })
     }
 }
@@ -209,7 +209,7 @@ impl<'a> Live<'a> {
             Description::of(&state.profile).kind,
         )?;
         let description = Description::of(&state.profile);
-        let (provider, server) = match host(description.rebuild, description.kind)? {
+        let (provider, server) = match host(description.rebuild, description.stopped)? {
             None => (Some(RunPod::new(settings.credential()?)), None),
             Some(host) => (None, Some(Released { host, settings, cancel })),
         };
@@ -494,23 +494,33 @@ impl Recipe for Runner<'_> {
 #[cfg(test)]
 mod tests {
     use super::{Host, host};
-    use horizon_cloud::provider::{Kind, Rebuild};
+    use horizon_cloud::provider::{ALL, Rebuild, StoppedCost};
 
     #[test]
     fn a_new_server_rebuild_is_released_by_its_own_provider() {
-        let kinds = [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure];
-        for kind in kinds {
-            assert_eq!(host(Rebuild::InPlace, kind).ok(), Some(None), "{kind:?}");
-            assert!(host(Rebuild::Unsupported, kind).is_err(), "{kind:?}");
+        for provider in ALL {
+            let released = host(provider.rebuild, provider.stopped);
+            match provider.rebuild {
+                Rebuild::NewServer => assert!(
+                    matches!(released, Ok(Some(_))),
+                    "{} rebuilds on a new server",
+                    provider.id
+                ),
+                Rebuild::InPlace => assert_eq!(released.ok(), Some(None), "{}", provider.id),
+                Rebuild::Unsupported => assert!(released.is_err(), "{}", provider.id),
+            }
         }
-        assert_eq!(host(Rebuild::NewServer, Kind::Hetzner).ok(), Some(Some(Host::Hetzner)));
+        // The release follows what the provider's stop leaves: a stop that deletes the
+        // server is the release, and a stop that keeps the VM makes the release delete it
+        // and keep the disk.
         assert_eq!(
-            host(Rebuild::NewServer, Kind::Azure).ok(),
+            host(Rebuild::NewServer, StoppedCost::ServerDeleted).ok(),
+            Some(Some(Host::Hetzner))
+        );
+        assert_eq!(
+            host(Rebuild::NewServer, StoppedCost::WorkerKept).ok(),
             Some(Some(Host::Azure)),
             "an Azure VM is never released as a Hetzner stop"
         );
-        for kind in [Kind::RunPod, Kind::DockerHost] {
-            assert!(host(Rebuild::NewServer, kind).is_err(), "no release for {kind:?}");
-        }
     }
 }

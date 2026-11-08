@@ -1,6 +1,6 @@
 //! Read-only durable deletion checks. No provider credential or fresh request.
 use super::{CreateState, Deployment, Result, Store, kind};
-use crate::cloud_runtime::{Stage, deployment::storage};
+use crate::cloud_runtime::{Stage, deployment::storage, provider::journals};
 use horizon_cloud::{azure::provision::Journal as AzureJournal, hetzner::cloud::Journal, provider::Kind};
 
 pub(in crate::cloud_runtime) fn confirmed(store: &Store, state: &Deployment) -> Result<bool> {
@@ -18,14 +18,10 @@ pub(in crate::cloud_runtime) fn confirmed(store: &Store, state: &Deployment) -> 
     storage::resize::require_settled(store.root())?;
     storage::growth::require_settled(store.root())?;
     let provider = kind(&state.profile);
-    for (file, allowed) in [
-        ("hetzner.json", provider == Kind::Hetzner),
-        ("docker-host.json", provider == Kind::DockerHost),
-        ("workspace-volume.json", provider == Kind::RunPod),
-        ("workspace-volume.required", provider == Kind::RunPod),
-        ("azure.json", provider == Kind::Azure),
-    ] {
-        if !allowed && store.root().join(file).try_exists()? {
+    // Only this provider's own journals may remain: any other one still names resources.
+    let own = provider.description().journals;
+    for file in journals() {
+        if !own.contains(&file) && store.root().join(file).try_exists()? {
             return Ok(false);
         }
     }

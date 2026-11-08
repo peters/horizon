@@ -12,13 +12,7 @@ pub(super) fn plan(store: &Store, binding: &Binding, intent: &Intent, state: Opt
         Some(state) if deletion_pending(store, state)? => Observation::DeletionPending,
         Some(state) => Observation::Existing(state),
         None => {
-            for file in [
-                "hetzner.json",
-                "docker-host.json",
-                "workspace-volume.json",
-                "workspace-volume.required",
-                "azure.json",
-            ] {
+            for file in horizon_cloud::provider::journals() {
                 if store.root().join(file).try_exists()? {
                     return Err(Error::Invalid(
                         "Provider journal exists without its deployment; reconcile it first",

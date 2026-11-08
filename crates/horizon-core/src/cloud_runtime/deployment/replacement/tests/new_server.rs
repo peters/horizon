@@ -453,7 +453,7 @@ fn every_provider_is_released_by_its_own_rebuild() {
     use super::super::live::{Host, host};
     use horizon_cloud::provider::{AZURE, DOCKER_HOST, HETZNER, RUNPOD};
     let of = |description: &horizon_cloud::provider::Description| {
-        host(description.rebuild, description.kind).map_err(|error| error.to_string())
+        host(description.rebuild, description.stopped).map_err(|error| error.to_string())
     };
     assert_eq!(of(&RUNPOD), Ok(None), "RunPod switches the worker in place");
     assert_eq!(of(&HETZNER), Ok(Some(Host::Hetzner)));

@@ -72,27 +72,25 @@ impl WorkerChoice {
         }
         let size = self.vcpu.zip(self.memory_gb);
         let mut placement = Placement::default();
-        match provider.kind {
-            provider::Kind::RunPod if profile.gpu => placement.gpu_types = vec![self.id.clone()],
-            provider::Kind::RunPod => {
+        match (provider.placement, provider.pricing) {
+            (provider::Placement::DataCenters, _) if profile.gpu => placement.gpu_types = vec![self.id.clone()],
+            (provider::Placement::DataCenters, _) => {
                 let (cpu, memory) = size.ok_or(Error::Invalid("CPU worker has no size"))?;
                 if self.id != format!("cpu-{cpu}-{memory}") {
                     return Err(Error::Invalid("CPU worker identity does not match its size"));
                 }
             }
-            provider::Kind::DockerHost => placement.data_centers = vec![self.id.clone()],
-            // One server type or VM size in one location; for Azure, `Settings::for_cloud`
-            // narrows the settings to it, so no other size or region is tried.
-            provider::Kind::Hetzner | provider::Kind::Azure => {
+            (provider::Placement::Hosts, _) => placement.data_centers = vec![self.id.clone()],
+            // A provider that places workers in named locations takes one server type or
+            // VM size in one of them, however it prices them; for Azure,
+            // `Settings::for_cloud` narrows the settings to it, so no other size or region
+            // is tried. The refusal names the provider, so it comes from its description.
+            (provider::Placement::Locations, _) => {
                 let location = self
                     .location
                     .as_ref()
                     .filter(|location| !location.is_empty())
-                    .ok_or(Error::Invalid(if provider.kind == provider::Kind::Azure {
-                        "Choose an exact Azure VM size and region"
-                    } else {
-                        "Choose an exact Hetzner worker location"
-                    }))?;
+                    .ok_or(Error::Invalid(provider.exact_placement_refusal))?;
                 placement.cpu_types = vec![self.id.clone()];
                 placement.data_centers = vec![location.clone()];
             }
