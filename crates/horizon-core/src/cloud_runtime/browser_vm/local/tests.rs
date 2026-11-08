@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::{DEFAULT_IMAGE, DEFAULT_NAME, LocalBrowserVm};
+use super::{DEFAULT_IMAGE, DEFAULT_NAME, KEY_ENV, LocalBrowserVm};
 
 /// A listener on the loopback that answers like a VNC server, or that answers nothing.
 fn vnc_listener(greeting: Option<&'static [u8]>) -> (u16, std::thread::JoinHandle<()>) {
@@ -35,6 +35,7 @@ case "${1:-}" in
                 if [[ "${3:-}" == "--format" ]]; then
                     case "${4:-}" in
                         *Config.Image*) cat "$state/image-of-container" ;;
+                        *Config.Env*) cat "$state/container-env" ;;
                         *) cat "$state/running" ;;
                     esac
                 fi
@@ -61,6 +62,7 @@ case "${1:-}" in
     run)
         : >"$state/container"
         printf 'true\n' >"$state/running"
+        printf '%s\n' "${@: -1}" >"$state/image-of-container"
         ;;
     stop|rm)
         rm -f "$state/container"
@@ -99,6 +101,13 @@ impl Fixture {
 
     fn vm(&self) -> LocalBrowserVm {
         LocalBrowserVm::new(&self.root.path().join("browser-vm"), Some(self.home.path())).with_programs(&self.docker)
+    }
+
+    /// The container that the fixture runs carries the public key of this run, as the SSH
+    /// server of the image reads it.
+    fn carries_the_key_of(&self, vm: &LocalBrowserVm) {
+        let key = vm.accepted_public_key().expect("the public key of this run");
+        std::fs::write(self.state.join("container-env"), format!("{KEY_ENV}={key}\n")).expect("the key");
     }
 
     /// The same container, addressed on a VNC port that greets.
@@ -251,15 +260,19 @@ fn a_start_adopts_the_container_of_its_own_image_and_refuses_another() {
     let fixture = Fixture::new();
     fixture.mark_image();
     fixture.start_ssh_server();
-    fixture.mark_container(true);
     let vm = fixture.greeting_vm(2222);
+    vm.up(None).expect("a first start");
+    fixture.carries_the_key_of(&vm);
+
     // A run that broke after its container started is retried by adopting that container.
+    let calls = fixture.state.join("calls");
+    std::fs::remove_file(&calls).expect("a fresh log");
     let route = vm.up(None).expect("the container of the same image is adopted");
     assert_eq!(route.ssh_target, "horizon-browser-vm");
+    let log = fixture.calls();
     assert!(
-        !fixture.calls().lines().any(|line| line.starts_with("run ")),
-        "an adopted container is not started again: {}",
-        fixture.calls()
+        !log.lines().any(|line| line.starts_with("run ")),
+        "an adopted container is not started again: {log}"
     );
 
     // A stopped container of the same image is started again.
@@ -272,6 +285,19 @@ fn a_start_adopts_the_container_of_its_own_image_and_refuses_another() {
             .any(|line| line == format!("start {DEFAULT_NAME}")),
         "{}",
         fixture.calls()
+    );
+
+    // A container that accepts the key of another Horizon is never adopted: the entry that
+    // this run would write names a key that its SSH server refuses.
+    std::fs::write(
+        fixture.state.join("container-env"),
+        format!("{KEY_ENV}=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnotherKeyOfAnotherHorizon\n"),
+    )
+    .expect("another key");
+    let error = vm.up(None).expect_err("another key holds the container");
+    assert!(
+        error.to_string().contains("accepts a key of another Horizon"),
+        "{error}"
     );
 
     // A container of another image holds the name and is never touched.

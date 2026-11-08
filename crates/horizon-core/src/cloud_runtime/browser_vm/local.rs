@@ -31,6 +31,10 @@ const KEY_WAIT: Duration = Duration::from_secs(30);
 const KEY_PAUSE: Duration = Duration::from_millis(500);
 /// How long one start waits for the VNC greeting of the container.
 const PROBE: Duration = Duration::from_secs(5);
+/// The variable that turns the SSH server of the image on.
+const SSH_ENV: &str = "HORIZON_BROWSER_VM_SSH=1";
+/// The variable that names the one key the SSH server of the image accepts.
+const KEY_ENV: &str = "HORIZON_BROWSER_VM_SSH_PUBKEY";
 /// The first four bytes of a VNC server, RFC 6143 section 7.1.1.
 const VNC_GREETING: [u8; 4] = *b"RFB ";
 /// The port inside the container, which the image declares.
@@ -161,8 +165,9 @@ impl LocalBrowserVm {
         let key = self.ensure_key()?;
         // A run that broke after its container started is retried by adopting that container,
         // so a second start of the same name is never a dead end.
+        let public_key = std::fs::read_to_string(key.with_extension("pub"))?;
         if let Some(image) = self.container_image()? {
-            self.adopt(&image)?;
+            self.adopt(&image, &public_key)?;
         } else {
             if !self.image_exists()? {
                 let Some(repository) = build else {
@@ -173,7 +178,6 @@ impl LocalBrowserVm {
                 };
                 self.build(repository)?;
             }
-            let public_key = std::fs::read_to_string(key.with_extension("pub"))?;
             self.run(&public_key)?;
         }
         let host_key = self.wait_for_host_key()?;
@@ -183,13 +187,23 @@ impl LocalBrowserVm {
         Ok(route)
     }
 
-    /// Use the container that already holds this name: it must run the same image, and a
-    /// container that stopped is started again.
-    fn adopt(&self, image: &str) -> Result<()> {
+    /// Use the container that already holds this name: it must run the same image, it must
+    /// accept the key of this run, and a container that stopped is started again.
+    fn adopt(&self, image: &str, public_key: &str) -> Result<()> {
         if image != self.image {
             return Err(Error::Local(format!(
                 "the container {} holds the image {image}, not {}; stop it with `horizon --browser-vm-local down` first",
                 self.name, self.image
+            )));
+        }
+        // A container that another Horizon started accepts another key, so adopting it would
+        // write an ssh entry that its SSH server refuses.
+        let accepted = self.container_env()?;
+        let expected = format!("{KEY_ENV}={}", public_key.trim());
+        if !accepted.lines().any(|line| line.trim() == expected) {
+            return Err(Error::Local(format!(
+                "the container {} accepts a key of another Horizon; stop it with `horizon --browser-vm-local down` first",
+                self.name
             )));
         }
         if self.running()? {
@@ -229,6 +243,16 @@ impl LocalBrowserVm {
     #[must_use]
     pub fn vnc_address(&self) -> String {
         self.vnc_socket().to_string()
+    }
+
+    /// The public key that this run presents, which the SSH server of the container accepts.
+    ///
+    /// # Errors
+    /// Reports a key that cannot be read, which happens before a start makes one.
+    pub fn accepted_public_key(&self) -> Result<String> {
+        Ok(std::fs::read_to_string(
+            self.root.join("browser-vm-local").join("id_ed25519.pub"),
+        )?)
     }
 
     /// The loopback address of the SSH server of the container.
@@ -341,7 +365,7 @@ impl LocalBrowserVm {
         let vnc = format!("127.0.0.1:{}:{}", self.vnc_port, CONTAINER_VNC_PORT);
         let ssh = format!("127.0.0.1:{}:{}", self.ssh_port, CONTAINER_SSH_PORT);
         let volume = format!("{}:/state", self.volume());
-        let key = format!("HORIZON_BROWSER_VM_SSH_PUBKEY={}", public_key.trim());
+        let key = format!("{KEY_ENV}={}", public_key.trim());
         let output = self.docker(
             &[
                 "run",
@@ -357,7 +381,7 @@ impl LocalBrowserVm {
                 "--shm-size",
                 "1g",
                 "--env",
-                "HORIZON_BROWSER_VM_SSH=1",
+                SSH_ENV,
                 "--env",
                 key.as_str(),
                 self.image.as_str(),
@@ -438,6 +462,21 @@ impl LocalBrowserVm {
             return Err(self.failure("inspect", &output));
         }
         Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+    }
+
+    /// The environment of the container that holds this name, one `NAME=value` per line.
+    fn container_env(&self) -> Result<String> {
+        let output = self.output(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            &self.name,
+        ])?;
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     /// Whether the container exists. An absent container is a no; a Docker that cannot answer

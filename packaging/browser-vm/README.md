@@ -295,8 +295,9 @@ horizon --browser-vm-local up --build .
 
 The task `up` does these steps:
 
-1. It writes an Ed25519 key in the state directory of Horizon,
-   `browser-vm/browser-vm-local/id_ed25519`.
+1. It writes an Ed25519 key in the cloud root of Horizon,
+   `~/.horizon/cloud/browser-vm/browser-vm-local/id_ed25519`, which is the key
+   that the `browser_vm` tool of a running Horizon uses for the same container.
 2. It builds the image when the image is absent, with the target
    `browser-vm-local`.
 3. It runs the container with this start:
@@ -329,7 +330,7 @@ A start of that target with `HORIZON_BROWSER_VM_SSH=1` stops with an error.
 
 | Task | Result |
 |---|---|
-| `up` | The container runs, the SSH server names its host key, and the ssh entry is written. The command prints the target and the loopback address. |
+| `up` | The container runs, the SSH server names its host key, and the ssh entry is written. The command prints the target and the loopback address. A container that this Horizon already started is adopted when it runs the same image and carries the same key, and refused otherwise. |
 | `down` | The container stops and is removed. The state volume, the key and the ssh entry stay. |
 | `status` | It prints whether the container runs, both loopback addresses, the state volume and the image. |
 

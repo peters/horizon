@@ -91,8 +91,9 @@ the files of the profiles across a stop and a start.
    ssh -G horizon-browser-vm | grep -E '^(hostname|port|identityfile) '
    ```
 
-   Result: The lines name `127.0.0.1`, the port `$SSH_PORT` and the key under
-   the state directory of Horizon, `browser-vm/browser-vm-local/id_ed25519`.
+   Result: The lines name `127.0.0.1`, the port `$SSH_PORT` and the key
+   `~/.horizon/cloud/browser-vm/browser-vm-local/id_ed25519`, which is the key
+   that the `browser_vm` tool of a running Horizon uses for the same container.
 
 ## 6. Tasks
 
