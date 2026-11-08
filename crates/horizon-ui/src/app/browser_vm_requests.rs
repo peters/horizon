@@ -223,12 +223,13 @@ fn work(
     };
     // Every action that rents, stops, resumes or deletes reaches the provider and needs the
     // account settings; a read reaches only the record of this Horizon and needs none.
-    // A stop, a resume or a delete names no provider: the record says whether the machine is a
-    // container on this computer, and such a machine reaches no cloud settings at all.
-    let local = browser_vm::status(root).map_or_else(
-        |_| request.provider == Some(BrowserVmProvider::Local),
-        |status| status.provider == Provider::Local,
-    );
+    // A deploy names the provider it starts, because a Horizon that never ran a browser VM has
+    // no record to read. A stop, a resume or a delete names none: the record says whether the
+    // machine is a container on this computer, and such a machine reaches no cloud settings.
+    let local = match request.action {
+        BrowserVmAction::Deploy => request.provider == Some(BrowserVmProvider::Local),
+        _ => browser_vm::status(root).is_ok_and(|status| status.provider == Provider::Local),
+    };
     let settings = (runs_provider(request.action) && !local)
         .then(|| run_settings(root))
         .transpose()?;
@@ -495,6 +496,18 @@ mod tests {
         .save(root.path())
         .unwrap();
         root
+    }
+
+    #[test]
+    fn a_first_local_deploy_reads_no_cloud_settings() {
+        // No record and no `settings.json`: the request alone decides the provider here.
+        let root = tempfile::tempdir().unwrap();
+        let mut request = request(BrowserVmAction::Deploy);
+        request.provider = Some(BrowserVmProvider::Local);
+        let begun = work(root.path(), None, &request, &Cancellation::default(), &mut |_, _, _| {})
+            .expect("a first local deploy");
+        assert_eq!(begun.phase, Phase::Deploying);
+        assert_eq!(begun.provider, Provider::Local);
     }
 
     #[test]
