@@ -500,6 +500,13 @@ fn render_session_manager_window(
     let mut action = SessionManagerAction::None;
     let view_state = SessionManagerViewState::new(state, current_session_id);
 
+    // A press on the backdrop raises it inside the Debug order, and egui keeps that order
+    // when the dialog opens again. The card is the backdrop's sublayer in each frame, so
+    // it is spliced directly above the backdrop whatever was raised last. Without this the
+    // dim rectangle paints over the dialog and takes every click.
+    let backdrop_layer = egui::LayerId::new(egui::Order::Debug, Id::unique("session_manager_backdrop"));
+    let modal_layer = egui::LayerId::new(egui::Order::Debug, Id::unique("session_manager_modal"));
+    ctx.memory_mut(|memory| memory.areas_mut().set_sublayer(backdrop_layer, modal_layer));
     egui::Window::new("session_manager_modal")
         .id(Id::unique("session_manager_modal"))
         .title_bar(false)

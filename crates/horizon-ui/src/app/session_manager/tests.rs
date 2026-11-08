@@ -1,5 +1,6 @@
 use horizon_core::{CanvasViewState, Config, RuntimeState, StartupDecision, WindowConfig};
 
+use super::super::HorizonApp;
 use super::super::session_manager::{SessionSwitchShutdownState, session_switch_shutdown_state};
 use super::super::test_support::{
     editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_config_and_startup,
@@ -216,4 +217,76 @@ fn session_switch_cancels_native_input_before_panel_ids_are_reused() {
     );
     input.native_paste(pending, vec![std::path::PathBuf::from("/tmp/later.png")]);
     assert!(input.take_native_pastes().is_empty());
+}
+
+fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]
+}
+
+fn session_manager_frame(
+    ctx: &egui::Context,
+    app: &mut HorizonApp,
+    events: Vec<egui::Event>,
+    probe: Option<egui::Pos2>,
+) -> Option<egui::LayerId> {
+    use crate::test_egui::DiscardTextures;
+
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.events = events;
+    let mut top_layer = None;
+    let mut frame = eframe::Frame::_new_kittest();
+    let _ = ctx
+        .run_ui(input, |ui| {
+            eframe::App::ui(app, ui, &mut frame);
+            top_layer = probe.and_then(|pos| ui.ctx().layer_id_at(pos));
+        })
+        .discard_textures();
+    top_layer
+}
+
+#[test]
+fn the_session_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &Config::default(),
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        },
+    );
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+
+    app.toggle_session_manager();
+    let opened_at = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(1))
+        .expect("the process started more than a second ago");
+    app.session_manager.as_mut().expect("the manager is open").opened_at = opened_at;
+    session_manager_frame(&ctx, &mut app, Vec::new(), None);
+    session_manager_frame(&ctx, &mut app, Vec::new(), None);
+
+    let outside = egui::Pos2::new(8.0, 880.0);
+    let mut click = click_events(outside, true);
+    click.extend(click_events(outside, false));
+    session_manager_frame(&ctx, &mut app, click, None);
+    assert!(app.session_manager.is_none(), "a backdrop click closes the manager");
+    // Frames pass before the manager opens again, so egui sees both areas as new and
+    // raises both: a stable sort then keeps the order that the backdrop click left.
+    session_manager_frame(&ctx, &mut app, Vec::new(), None);
+    session_manager_frame(&ctx, &mut app, Vec::new(), None);
+
+    app.toggle_session_manager();
+    session_manager_frame(&ctx, &mut app, Vec::new(), None);
+    let centre = egui::Pos2::new(700.0, 450.0);
+    let layer = session_manager_frame(&ctx, &mut app, Vec::new(), Some(centre));
+    assert_eq!(
+        layer.expect("a layer under the card").id,
+        egui::Id::unique("session_manager_modal"),
+        "the reopened card must sit above the backdrop"
+    );
 }
