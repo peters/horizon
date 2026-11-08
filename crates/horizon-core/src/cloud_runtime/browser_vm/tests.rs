@@ -464,3 +464,45 @@ fn a_rented_record_keeps_the_default_provider_so_an_old_record_still_reads() {
     let read: Record = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(read.provider, Provider::Hetzner);
 }
+
+#[test]
+fn a_deploy_never_overwrites_a_record_that_owns_a_machine_of_the_other_provider() {
+    let root = root(&["fsn1"]);
+    // A rented machine that is ready owns a server and a volume.
+    super::begin(root.path(), &Operation::Deploy(deploy())).unwrap();
+    let mut record = Record::load(root.path()).unwrap();
+    record.phase = Phase::Ready;
+    record.save(root.path()).unwrap();
+    let local = Operation::Deploy(Deploy {
+        provider: Provider::Local,
+        image: String::new(),
+        server_type: String::new(),
+        location: String::new(),
+        volume_gb: 0,
+    });
+    let error = super::begin(root.path(), &local).unwrap_err();
+    assert!(error.to_string().contains("stop and delete it"), "{error}");
+    assert_eq!(
+        Record::load(root.path()).unwrap().provider,
+        Provider::Hetzner,
+        "the record still names the machine that bills"
+    );
+
+    // The other direction: a container on this computer is not overwritten by a rental.
+    let mut record = Record::load(root.path()).unwrap();
+    record.provider = Provider::Local;
+    record.phase = Phase::Failed;
+    record.save(root.path()).unwrap();
+    let error = super::begin(root.path(), &Operation::Deploy(deploy())).unwrap_err();
+    assert!(error.to_string().contains("container on this computer"), "{error}");
+    assert_eq!(Record::load(root.path()).unwrap().provider, Provider::Local);
+
+    // A record whose machine is gone takes either provider again.
+    let mut record = Record::load(root.path()).unwrap();
+    record.phase = Phase::Deleted;
+    record.save(root.path()).unwrap();
+    assert!(
+        super::begin(root.path(), &Operation::Deploy(deploy())).is_ok(),
+        "a deleted record owns nothing"
+    );
+}

@@ -296,6 +296,19 @@ pub fn begin(root: &Path, operation: &Operation) -> Result<Status> {
                 record.operation = CreateState::Prepared;
                 record.journal = Journal::default();
             }
+            // A record that still owns a machine keeps its provider: a deploy of the other
+            // provider would overwrite it, and the machine it owns would keep billing with no
+            // record that names it.
+            if !matches!(record.phase, Phase::Idle | Phase::Deleted) && record.provider != deploy.provider {
+                return Err(Error::Invalid(match record.provider {
+                    Provider::Hetzner => {
+                        "The browser VM of this Horizon is a rented machine; stop and delete it before a deploy on this computer"
+                    }
+                    Provider::Local => {
+                        "The browser VM of this Horizon is a container on this computer; stop and delete it before a deploy that rents a machine"
+                    }
+                }));
+            }
             record.provider = deploy.provider;
             record.vnc_address = None;
             match deploy.provider {

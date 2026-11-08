@@ -223,7 +223,12 @@ fn work(
     };
     // Every action that rents, stops, resumes or deletes reaches the provider and needs the
     // account settings; a read reaches only the record of this Horizon and needs none.
-    let local = request.provider == Some(BrowserVmProvider::Local);
+    // A stop, a resume or a delete names no provider: the record says whether the machine is a
+    // container on this computer, and such a machine reaches no cloud settings at all.
+    let local = browser_vm::status(root).map_or_else(
+        |_| request.provider == Some(BrowserVmProvider::Local),
+        |status| status.provider == Provider::Local,
+    );
     let settings = (runs_provider(request.action) && !local)
         .then(|| run_settings(root))
         .transpose()?;
@@ -476,6 +481,33 @@ mod tests {
         .unwrap();
         assert_eq!(answered.phase, Phase::Stopping);
         assert_eq!(started, 1);
+    }
+
+    /// The record of a container on this computer, with no cloud settings beside it.
+    fn local_root() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        Record {
+            phase: Phase::Ready,
+            provider: Provider::Local,
+            image: Some("horizon-browser-vm-local:latest".into()),
+            ..Record::default()
+        }
+        .save(root.path())
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_local_stop_reads_no_cloud_settings() {
+        // The fixture holds no `settings.json`, so any read of them is the refusal of a Horizon
+        // that has no cloud support.
+        let root = local_root();
+        for action in [BrowserVmAction::Stop, BrowserVmAction::Resume, BrowserVmAction::Delete] {
+            let request = request(action);
+            let begun = work(root.path(), None, &request, &Cancellation::default(), &mut |_, _, _| {})
+                .unwrap_or_else(|error| panic!("{action:?} of a local container: {error}"));
+            assert_eq!(begun.provider, Provider::Local, "{action:?}");
+        }
     }
 
     #[test]
