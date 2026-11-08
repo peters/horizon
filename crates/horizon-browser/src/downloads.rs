@@ -66,10 +66,10 @@ impl DownloadState {
     #[must_use]
     pub(crate) fn list(&self) -> BrowserDownloadList {
         let incomplete = self.incomplete_files();
-        let waiting: Vec<&str> = self
+        let running: Vec<&str> = self
             .observed
             .iter()
-            .filter(|observed| Self::is_waiting(&observed.row))
+            .filter(|observed| observed.row.state == BrowserDownloadState::InProgress)
             .map(|observed| observed.row.file_name.as_str())
             .collect();
         BrowserDownloadList {
@@ -80,7 +80,7 @@ impl DownloadState {
                 .iter()
                 .map(|observed| {
                     let size = Self::is_waiting(&observed.row)
-                        .then(|| Self::measured(&observed.row.file_name, observed.started, &incomplete, &waiting))
+                        .then(|| Self::measured(&observed.row.file_name, observed.started, &incomplete, &running))
                         .flatten();
                     Self::with_progress(observed, size)
                 })
@@ -106,7 +106,7 @@ impl DownloadState {
         file_name: &str,
         started: std::time::SystemTime,
         incomplete: &[PartFile],
-        waiting: &[&str],
+        running: &[&str],
     ) -> Option<u64> {
         let mut matched = incomplete
             .iter()
@@ -116,7 +116,9 @@ impl DownloadState {
         if matched.next().is_some() {
             return None;
         }
-        let mut claimants = waiting.iter().filter(|other| names_one_transfer(other, &part.name));
+        // Every running row that the file could describe is a claimant: a row
+        // that states its own count still holds the bytes of its own file.
+        let mut claimants = running.iter().filter(|other| names_one_transfer(other, &part.name));
         claimants.next()?;
         if claimants.next().is_some() {
             return None;
@@ -623,6 +625,23 @@ mod tests {
         // The transfer writes its own file, which this row may measure.
         std::fs::write(folder.path().join("export.xyz.csv.part"), b"1200").expect("write");
         assert_eq!(downloads.list().downloads.remove(0).received_bytes, 4);
+    }
+
+    #[test]
+    fn a_row_that_states_its_own_count_still_claims_its_file() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        std::fs::write(folder.path().join("export.csv.crdownload"), b"1200").expect("write");
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        // The first row states its own count, so it is not waiting; the second
+        // row of the same name must still not claim the first row's file.
+        downloads.chromium_will_begin(&json!({"guid": "g1", "suggestedFilename": "export.csv"}));
+        downloads.chromium_progress(
+            &json!({"guid": "g1", "suggestedFilename": "export.csv", "receivedBytes": 7, "state": "inProgress"}),
+        );
+        downloads.chromium_will_begin(&json!({"guid": "g2", "suggestedFilename": "export.csv"}));
+        let rows = downloads.list().downloads;
+        assert_eq!(rows[0].received_bytes, 7);
+        assert_eq!(rows[1].received_bytes, 0);
     }
 
     #[test]
