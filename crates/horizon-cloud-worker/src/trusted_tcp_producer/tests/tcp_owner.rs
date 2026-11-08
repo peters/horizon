@@ -180,14 +180,26 @@ fn address(text: &str, v6: bool) -> Result<SocketAddr, Error> {
     ))
 }
 
+/// A bound for one observation of this test.
+///
+/// A bound states how long one read of the socket and `/proc` may take, not how
+/// long the whole test may take: the order of the steps is the property under
+/// test, and a shard that runs many tests at once can spend seconds between two
+/// of them. One budget for the whole test made the last step fail on a busy
+/// machine with `Error::Deadline`, which is no statement about ownership.
+fn bound() -> Instant {
+    Instant::now() + std::time::Duration::from_secs(20)
+}
+
 #[tokio::test]
 async fn connected_socket_requires_original_server_accept_before_ownership_passes() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
-    let until = Instant::now() + std::time::Duration::from_secs(3);
     let pid = rustix::process::getpid();
-    assert!(matches!(prove_once(&client, pid, until), Err(Error::Observation)));
-    let proof = prove_owned(&client, pid, until);
+    assert!(matches!(prove_once(&client, pid, bound()), Err(Error::Observation)));
+    // One future, created before the server accepts, so its own bound has to
+    // outlast the wait for the accept.
+    let proof = prove_owned(&client, pid, bound());
     tokio::pin!(proof);
     tokio::select! {
         _ = &mut proof => panic!("An unaccepted connection cannot prove server ownership"),
@@ -196,7 +208,7 @@ async fn connected_socket_requires_original_server_accept_before_ownership_passe
     let (accepted, _) = listener.accept().await.unwrap();
     let proof = proof.await.unwrap();
     assert_eq!(proof.binding.reverse, rustix::fs::fstat(&accepted).unwrap().st_ino);
-    recheck(&client, pid, &proof, until).unwrap();
+    recheck(&client, pid, &proof, bound()).unwrap();
 }
 
 #[tokio::test]
