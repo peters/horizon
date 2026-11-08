@@ -166,6 +166,56 @@ fn a_file_larger_than_the_bound_stays_where_it_was_saved() {
 }
 
 #[test]
+fn a_withheld_file_states_no_name_that_the_answer_carries() {
+    let folder = folder_with(
+        NAME,
+        &vec![b'a'; usize::try_from(MAX_INLINE_BYTES).unwrap_or(usize::MAX) + 1],
+    );
+    let CallToolResponse::Complete(mut result) =
+        answer(folder.path(), &serde_json::json!([completed(folder.path(), NAME)]))
+    else {
+        panic!("complete result");
+    };
+    if let Some(structured) = result
+        .structured_content
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        structured.insert("fetched_file_name".to_string(), serde_json::Value::String(NAME.into()));
+    }
+    let response = attach(CallToolResponse::Complete(result), NAME);
+    assert_eq!(structured(&response)["inline_withheld"], true);
+    assert!(structured(&response).get("fetched_file_name").is_none());
+}
+
+#[test]
+fn a_long_name_that_the_row_cut_still_names_its_file() {
+    // The engine cuts a file name to 128 bytes, so the row states fewer bytes
+    // than the browser wrote. The bytes of that file still cross.
+    let long = format!("{}.pdf", "a".repeat(200));
+    let folder = folder_with(&long, b"hello");
+    let row_name = &long[..128];
+    let rows = serde_json::json!([{
+        "file_name": row_name,
+        "state": "completed",
+        "received_bytes": 5,
+        "total_bytes": 5,
+        "path": folder.path().join(&long),
+    }]);
+    let response = attach(answer(folder.path(), &rows), row_name);
+    assert_eq!(structured(&response)["fetched_bytes"], 5);
+    assert_eq!(blobs(&response).len(), 1);
+}
+
+#[test]
+fn a_path_shaped_name_speaks_the_folder_rule() {
+    let folder = folder_with(NAME, b"hello");
+    let response = attach(answer(folder.path(), &serde_json::json!([])), "../secret");
+    assert!(blobs(&response).is_empty());
+    assert!(refusal(&response).contains("outside the panel's download folder"));
+}
+
+#[test]
 fn an_error_answer_keeps_its_error() {
     let folder = folder_with(NAME, b"hello");
     let CallToolResponse::Complete(mut result) =

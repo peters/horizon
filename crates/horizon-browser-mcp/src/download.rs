@@ -74,10 +74,12 @@ pub fn attach(response: CallToolResponse, file_name: &str) -> CallToolResponse {
     let Some(structured) = result.structured_content.clone() else {
         return CallToolResponse::Complete(result);
     };
-    match found(&structured, file_name).and_then(|path| {
-        let directory = structured.get("directory").and_then(Value::as_str).unwrap_or_default();
-        resolve(directory, &path, file_name).and_then(|path| read(&path).map(|bytes| (path, bytes)))
-    }) {
+    match one_component(file_name)
+        .and_then(|()| found(&structured, file_name))
+        .and_then(|path| {
+            let directory = structured.get("directory").and_then(Value::as_str).unwrap_or_default();
+            resolve(directory, &path).and_then(|path| read(&path).map(|bytes| (path, bytes)))
+        }) {
         Ok((path, bytes)) => {
             let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
             result.content.push(ContentBlock::resource(
@@ -97,10 +99,13 @@ pub fn attach(response: CallToolResponse, file_name: &str) -> CallToolResponse {
         }
         Err(refusal) => {
             tracing::info!(file_name, ?refusal, "the download bytes do not cross");
-            if refusal.withholds()
-                && let Some(structured) = result.structured_content.as_mut().and_then(Value::as_object_mut)
-            {
-                structured.insert(WITHHELD_FIELD.to_string(), Value::Bool(true));
+            if let Some(structured) = result.structured_content.as_mut().and_then(Value::as_object_mut) {
+                // The field states the file whose bytes this answer carries, so
+                // an answer that carries none of them states no file.
+                structured.remove("fetched_file_name");
+                if refusal.withholds() {
+                    structured.insert(WITHHELD_FIELD.to_string(), Value::Bool(true));
+                }
             }
             result.content.push(ContentBlock::text(refusal.says(file_name)));
         }
@@ -129,17 +134,25 @@ fn found(structured: &Value, file_name: &str) -> Result<String, Refusal> {
         .ok_or(Refusal::NotReported)
 }
 
-/// One file of the panel folder, never another one: the name is one path
-/// component, and the canonical path of the file stays inside the canonical
-/// folder, so a symlink or a reported path cannot reach outside it.
-fn resolve(directory: &str, path: &str, file_name: &str) -> Result<PathBuf, Refusal> {
+/// The requested name is a name and not a path. The row that reports it names
+/// the file of the folder, so the answer never takes a path from the caller.
+fn one_component(file_name: &str) -> Result<(), Refusal> {
     let name = Path::new(file_name);
     if name.file_name() != Some(name.as_os_str()) || file_name == "." || file_name == ".." {
         return Err(Refusal::OutsideFolder);
     }
+    Ok(())
+}
+
+/// One file of the panel folder, never another one: the canonical path of the
+/// file stays inside the canonical folder, so a symlink or a reported path
+/// cannot reach outside it. The name on disk is the browser's own, and it can
+/// differ from the row's name when the engine cut a long one, so the disk name
+/// is not compared with the requested name.
+fn resolve(directory: &str, path: &str) -> Result<PathBuf, Refusal> {
     let folder = Path::new(directory).canonicalize().map_err(|_| Refusal::Unreadable)?;
     let path = Path::new(path).canonicalize().map_err(|_| Refusal::Unreadable)?;
-    if !path.starts_with(&folder) || path.file_name() != Some(name.as_os_str()) {
+    if !path.starts_with(&folder) {
         return Err(Refusal::OutsideFolder);
     }
     Ok(path)

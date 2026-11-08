@@ -110,10 +110,12 @@ reclaim space.
 
 A download is saved on the computer that runs the page, and an agent that works
 through a profile host of another computer cannot open that path with its own
-tools. `browser_downloads` therefore takes one optional `fetch` argument: the file
-name of one completed row. The answer keeps every row, and it adds the bytes of
-that file as an `application/octet-stream` resource block, with
-`fetched_file_name` and `fetched_bytes` in the structured result.
+tools. `browser_downloads` therefore takes one optional `fetch` argument: the file name
+of one completed row. The answer keeps every row, and it adds the bytes of that
+file as an `application/octet-stream` resource block, with `fetched_file_name` and
+`fetched_bytes` in the structured result. Those two fields state the file whose
+bytes this answer carries, so an answer that carries none of them states neither:
+a file above the bound answers `inline_withheld: true` alone.
 
 The host reads the file that its own report named, so the caller never supplies a
 path. The report keeps this honest in three steps:

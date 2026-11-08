@@ -21,7 +21,8 @@ is permitted to control.
 - One optional `fetch` argument names the file name of one completed row. An
   answer holds the bytes of that file when it is inside the panel folder and at
   most 8 MiB, as one `application/octet-stream` resource block, so an agent that
-  works through a host of another computer reaches the file it asked for. A
+  works through a host of another computer reaches the file it asked for. The
+  answer names that file in `fetched_file_name` only when it carries its bytes; a
   larger file sets `inline_withheld: true` and stays on that computer.
 
 The host reads the file that its own report named, never a path from the caller:
