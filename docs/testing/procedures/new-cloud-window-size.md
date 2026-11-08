@@ -101,17 +101,23 @@ screen must not pull the fields and the **Summary** column apart.
    Result: The form stands in the middle of the canvas, with the empty board on
    both sides of it.
 
-4. Look at the distance between the fields and the **Summary** column.
+4. Look at the frame of the workspace behind the form.
+
+   Result: The frame holds the form on all four sides. No part of the form is
+   outside the frame, and the name badge of the workspace covers no text of the
+   form.
+
+5. Look at the distance between the fields and the **Summary** column.
 
    Result: **Summary** stands next to the fields it summarizes, with one gutter
    between them. It does not stand at the other side of the screen.
 
-5. Look at the height of the form.
+6. Look at the height of the form.
 
    Result: The form keeps the height of the window. A full form uses every row,
    so the height has no limit of its own.
 
-6. Type a path into **Where is your code?** and look at the field.
+7. Type a path into **Where is your code?** and look at the field.
 
    Result: The field is as wide as the fields column, not as wide as the window.
 
@@ -130,6 +136,7 @@ screen must not pull the fields and the **Summary** column apart.
   it keeps the height of the window.
 - The form comes back to the middle of the canvas after a resize, and a pan of
   the person's own stays.
+- The frame of the workspace holds the form at each window size.
 - The two-column layout survives a resize, and the footer stays visible.
 - The form never leaves the canvas, and it stays usable in the narrowest window.
 

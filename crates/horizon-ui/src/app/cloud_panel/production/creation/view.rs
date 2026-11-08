@@ -27,9 +27,26 @@ impl Production {
             .is_some_and(|before| !same_canvas(before, now))
     }
 
+    /// Keeps the rect the form was drawn at this frame.
+    pub(in crate::app::cloud_panel::production) fn record_form_rect(&mut self, form: Rect) {
+        self.creation_form_rect = Some(form);
+    }
+
+    /// The frame to draw for the workspace that holds the form: the form itself, with the strip
+    /// its name badge stands in above it. `None` while no form is drawn, and the workspace then
+    /// keeps the frame of an empty workspace.
+    pub(in crate::app) fn cloud_form_frame(&self) -> Option<Rect> {
+        let form = self.creation_form_rect?;
+        Some(Rect::from_min_max(
+            egui::Pos2::new(form.left(), form.top() - super::BADGE_STRIP),
+            form.max,
+        ))
+    }
+
     /// Forgets the canvas, so that a form which opens again starts from the canvas it opens in.
     pub(in crate::app::cloud_panel::production) fn forget_creation_canvas(&mut self) {
         self.creation_canvas = None;
+        self.creation_form_rect = None;
     }
 }
 

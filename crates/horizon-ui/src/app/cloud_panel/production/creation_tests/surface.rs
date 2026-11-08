@@ -233,6 +233,59 @@ fn the_view_follows_the_window_so_the_form_stays_in_front() {
     );
 }
 
+/// The on-screen frame of the workspace that holds the draft, and the form drawn on it.
+fn frame_and_form(app: &HorizonApp, ctx: &egui::Context) -> (Rect, Rect) {
+    let canvas = app.canvas_rect(ctx);
+    let local = app
+        .cloud_prototype
+        .production
+        .creation_workspace()
+        .expect("the draft belongs to a workspace");
+    let workspace = app
+        .board
+        .workspace_id_by_local_id(&local)
+        .expect("the workspace is on the board");
+    let frame = app
+        .cloud_prototype
+        .cloud_form_frame(workspace)
+        .expect("the workspace that holds the form has its frame");
+    let _ = canvas;
+    (frame, form_rect(ctx).expect("the form is drawn"))
+}
+
+#[test]
+fn the_workspace_frame_holds_the_form_and_its_badge() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    for size in [[1480.0, 900.0], [1920.0, 1080.0], [2800.0, 1000.0], [1100.0, 700.0]] {
+        frames_at(&ctx, &mut app, size, 6);
+        let (frame, form) = frame_and_form(&app, &ctx);
+        assert!(
+            frame.contains_rect(form),
+            "{size:?}: the frame {frame:?} does not hold the form {form:?}"
+        );
+        assert!(
+            form.top() >= frame.top() + crate::app::WS_TITLE_HEIGHT,
+            "{size:?}: the name badge of the workspace covers the form {form:?} in {frame:?}"
+        );
+    }
+}
+
+#[test]
+fn the_frame_follows_the_zoom_so_it_keeps_holding_the_form() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    for zoom in [0.6_f32, 0.8, 1.0, 1.4] {
+        app.canvas_view.set_zoom(zoom);
+        frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
+        let (frame, form) = frame_and_form(&app, &ctx);
+        assert!(
+            frame.contains_rect(form),
+            "zoom {zoom}: the frame {frame:?} does not hold the form {form:?}"
+        );
+    }
+}
+
 #[test]
 fn a_resize_in_another_workspace_keeps_the_view_and_the_keyboard() {
     let (_temp, ctx, mut app) = ready_app();

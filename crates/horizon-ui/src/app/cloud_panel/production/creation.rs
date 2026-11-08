@@ -38,6 +38,8 @@ pub(super) const FORM_MIN_WIDTH: f32 = 640.0;
 const BODY_MIN_HEIGHT: f32 = 320.0;
 /// Room for the form's own margins beside its content, both sides together.
 pub(super) const SIDE_MARGIN: f32 = 64.0;
+/// The strip the name badge of a workspace stands in, above the form that workspace holds.
+pub(super) const BADGE_STRIP: f32 = crate::app::WS_TITLE_HEIGHT + crate::app::WS_BG_PAD;
 /// The widest form: the room the workspace that **+ New cloud** makes keeps for it
 /// (`WS_CLOUD_FORM_SIZE` less `SIDE_MARGIN`). Every line of the form fits from 1056 on, so a
 /// wider form only stretches its fields and moves the summary away from them.
@@ -152,7 +154,7 @@ impl HorizonApp {
         // landed under the fields, below the fold of a scrolling column, which reads as no
         // answer at all.
         let refused = self.cloud_prototype.error.clone();
-        egui::Area::new(Id::unique("cloud-creation"))
+        let drawn = egui::Area::new(Id::unique("cloud-creation"))
             .order(Order::Middle)
             .fixed_pos(origin)
             .constrain(false)
@@ -193,6 +195,9 @@ impl HorizonApp {
                         }
                     });
             });
+        // The frame of the workspace that holds the draft is drawn around this rect, so the form
+        // is inside its workspace however the person pans, zooms or resizes.
+        self.cloud_prototype.production.record_form_rect(drawn.response.rect);
         if actions.hide {
             self.hide_cloud_creation(ctx);
             return;

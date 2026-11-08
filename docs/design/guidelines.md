@@ -538,6 +538,12 @@ New cloud surface:
   brings that workspace into view instead of parking.
 - The workspace that **+ New cloud** makes is large enough to hold the form
   (`WS_CLOUD_FORM_SIZE`); a workspace the person made keeps its own size.
+- While the form is drawn, the frame of the workspace that holds it is drawn
+  around the form, with the strip of its name badge above it. The form takes its
+  size from the window and the frame is board geometry, so a frame of a fixed
+  size cannot hold it at every window size and zoom. The frame follows the form
+  instead. Where the form reaches the top of the canvas, the badge strip falls
+  outside the canvas and the name shows in the sidebar only.
 - Size from that rect and the canvas together, so a small workspace never crops a
   form the window has room for: width `(room.width - 64).clamp(640, 1180)` and
   body height `(room.height - 270).max(320)`, where `room` is the union of the two

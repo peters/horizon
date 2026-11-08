@@ -339,6 +339,14 @@ impl HorizonApp {
                         )
                         .intersect(canvas_rect);
                         (canvas_rect_local, screen_rect, false)
+                    } else if let Some(form) = self.cloud_prototype.cloud_form_frame(workspace.id) {
+                        // The form is drawn in the window, not on the canvas, so the frame of the
+                        // workspace that holds it follows the form instead of the other way round.
+                        let canvas_rect_local = Rect::from_min_max(
+                            self.screen_to_canvas(canvas_rect, form.min),
+                            self.screen_to_canvas(canvas_rect, form.max),
+                        );
+                        (canvas_rect_local, form.intersect(canvas_rect), true)
                     } else {
                         let canvas_rect_local = Rect::from_min_size(
                             Pos2::new(workspace.position[0], workspace.position[1]),
