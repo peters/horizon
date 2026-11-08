@@ -18,7 +18,10 @@ name: Cache prune
 #
 # scripts/prune-actions-caches.py decides what to delete. This workflow only
 # fetches the list and carries out that decision, so the rule is unit tested
-# without the API.
+# without the API. An entry has to be both outside the newest generations of its
+# key and unread for two days, because a pull request run restores the entries of
+# its base branch: a branch still on the old lockfile keeps reading the old
+# generation, and that read alone must not retire the one main uses.
 on:
   # After the run that saved the entries, so a just-written generation is the
   # one that survives. CI is the workflow that saves most of them.

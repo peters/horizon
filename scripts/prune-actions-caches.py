@@ -17,13 +17,26 @@ entries that share a restore key are generations of one cache, and a run reaches
 only the generation whose hash matches its own lockfile. This script reports the
 rest, keeping `--keep` per restore key and per ref.
 
-Generations are ordered by `last_accessed_at`, never by `created_at`. The hash
-is not a sequence: a lockfile can return to an earlier state, so the generation
-that runs restore today can be the oldest one by creation. In this repository
-the live `linux-test` entry was created three minutes before the superseded one
-beside it and was still the only one any run had touched in two days. Access
-time is also the currency GitHub itself uses, both for the 7-day removal and for
-the eviction order at the cache limit.
+Neither timestamp alone identifies the generation that main uses.
+
+`created_at` does not: the hash is not a sequence, so a lockfile that returns to
+an earlier state keeps an older entry live. In this repository the live
+`linux-test` entry was created three minutes before the superseded one beside
+it, and the newest entry by creation was the superseded one for two of the
+heaviest keys, 1.28 GB that a rule anchored on creation would keep for ever.
+
+`last_accessed_at` does not either: a pull request run restores the entries of
+its base branch, so a branch still on the old lockfile can take an exact hit on
+the old generation after main has already saved the new one. The old generation
+then becomes the most recently accessed, and a rule that keeps only that one
+would delete the generation main itself restores.
+
+So an entry has to clear both tests to be reported: it is outside the `--keep`
+most recently accessed of its group, and nothing has read it for
+`--max-idle-days`. A generation that any branch still exact-matches keeps being
+read, which holds it above the idle threshold whatever its place in the order.
+Measured on this repository, the separation is wide: every live generation had
+been read the same day, and all ten superseded ones had been idle 2.3 days.
 
 A ref is part of the group because cache scoping is directional: a run restores
 entries of its own branch, the default branch and, for a pull request, the base
@@ -36,10 +49,11 @@ repository cache limit it deletes the least recently accessed entries until the
 total fits. So a group with one member reports nothing, even when a toolchain or
 lockfile change has made its restore key unreachable.
 
-With the default `--keep 1`, a lockfile change retires the generation before it
-on the next prune. A pull request still on the old lockfile then finds no exact
-match and falls back to the restore key, which serves the new entry, so it pays
-a partial build once rather than keeping a second copy of every cache.
+A lockfile change therefore retires the generation before it only once every
+branch has stopped reading it. A branch that comes back to an old lockfile after
+that finds no exact match and falls back to the restore key, which serves the
+newest entry, so it pays a partial build once rather than keeping a second copy
+of every cache alive for ever.
 
 An entry is also never reported when it was created less than --min-age-minutes
 ago, because a run can sit between the save of one job and the restore of the
@@ -56,6 +70,10 @@ from datetime import datetime, timedelta, timezone
 # of the same run restoring it.
 DEFAULT_MIN_AGE_MINUTES = 60
 DEFAULT_KEEP = 1
+# A generation that any branch still exact-matches is read by those runs. Two
+# days is above every live entry measured here, which had all been read the same
+# day, and below the 2.3 days that the superseded ones had been idle.
+DEFAULT_MAX_IDLE_DAYS = 2
 
 
 def restore_key(key):
@@ -104,10 +122,17 @@ def cache_entries(payload):
     return entries
 
 
-def superseded(payload, keep=DEFAULT_KEEP, min_age_minutes=DEFAULT_MIN_AGE_MINUTES, now=None):
+def superseded(
+    payload,
+    keep=DEFAULT_KEEP,
+    min_age_minutes=DEFAULT_MIN_AGE_MINUTES,
+    max_idle_days=DEFAULT_MAX_IDLE_DAYS,
+    now=None,
+):
     """The entries to delete, most recently accessed first."""
     now = now or datetime.now(timezone.utc)
     youngest_allowed = now - timedelta(minutes=min_age_minutes)
+    idle_before = now - timedelta(days=max_idle_days)
     groups = {}
     for entry in cache_entries(payload):
         # An entry without a readable access time cannot be placed in the
@@ -118,12 +143,15 @@ def superseded(payload, keep=DEFAULT_KEEP, min_age_minutes=DEFAULT_MIN_AGE_MINUT
     stale = []
     for group in groups.values():
         group.sort(key=lambda entry: (entry["accessed"], entry["id"]), reverse=True)
-        # A fresh entry is kept whatever its place in the order: a run can sit
-        # between the save of one job and the restore of the next.
+        # Two keepers besides the order: an entry that something still reads,
+        # and a fresh one, because a run can sit between the save of one job and
+        # the restore of the next.
         stale.extend(
             entry
             for entry in group[keep:]
-            if entry["created"] is not None and entry["created"] <= youngest_allowed
+            if entry["accessed"] <= idle_before
+            and entry["created"] is not None
+            and entry["created"] <= youngest_allowed
         )
     stale.sort(key=lambda entry: (entry["accessed"], entry["id"]), reverse=True)
     return stale
@@ -144,12 +172,20 @@ def main(argv=None):
         default=DEFAULT_MIN_AGE_MINUTES,
         help=f"never report an entry younger than this (default {DEFAULT_MIN_AGE_MINUTES})",
     )
+    parser.add_argument(
+        "--max-idle-days",
+        type=float,
+        default=DEFAULT_MAX_IDLE_DAYS,
+        help=f"only report an entry nothing has read for this long (default {DEFAULT_MAX_IDLE_DAYS})",
+    )
     parser.add_argument("--now", help="the current time, for tests")
     arguments = parser.parse_args(argv)
     if arguments.keep < 1:
         parser.error("--keep must keep at least one generation")
     if arguments.min_age_minutes < 0:
         parser.error("--min-age-minutes cannot be negative")
+    if arguments.max_idle_days < 0:
+        parser.error("--max-idle-days cannot be negative")
     now = parse_time(arguments.now) if arguments.now else None
     if arguments.now and now is None:
         parser.error("--now must be an ISO 8601 time")
@@ -157,7 +193,13 @@ def main(argv=None):
     with open(arguments.caches, encoding="utf-8") as handle:
         payload = json.load(handle)
 
-    stale = superseded(payload, arguments.keep, arguments.min_age_minutes, now)
+    stale = superseded(
+        payload,
+        arguments.keep,
+        arguments.min_age_minutes,
+        arguments.max_idle_days,
+        now,
+    )
     for entry in stale:
         print(f"{entry['id']}\t{entry['size']}\t{entry['key']}")
     reclaimed = sum(entry["size"] for entry in stale)

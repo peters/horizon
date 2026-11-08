@@ -55,6 +55,9 @@ def ids(payload, **kwargs):
     return [item["id"] for item in prune.superseded(payload, **kwargs)]
 
 
+IDLE = 3  # days without a read, past the default threshold
+
+
 class RestoreKeyTests(unittest.TestCase):
     def test_the_trailing_lock_hash_is_not_part_of_the_group(self):
         self.assertEqual(prune.restore_key(f"{RUST_KEY}-af2d2e7c"), RUST_KEY)
@@ -74,8 +77,8 @@ class RestoreKeyTests(unittest.TestCase):
 class SupersededTests(unittest.TestCase):
     def test_the_generation_runs_still_use_survives(self):
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed_days=2),
-            entry(2, f"{RUST_KEY}-b", accessed_days=2),
+            entry(1, f"{RUST_KEY}-a", accessed_days=IDLE),
+            entry(2, f"{RUST_KEY}-b", accessed_days=IDLE),
             entry(3, f"{RUST_KEY}-c", accessed_days=0),
         ]
         self.assertEqual(ids(payload), [2, 1])
@@ -86,8 +89,40 @@ class SupersededTests(unittest.TestCase):
         # any run had touched in two days. The hash is not a sequence, so a
         # lockfile that returns to an earlier state keeps an older entry live.
         live = entry(1, f"{RUST_KEY}-af2d2e7c", created_days=2, accessed_days=0)
-        superseded = entry(2, f"{RUST_KEY}-83b9b9f8", created=stamp(days=2, minutes=-3), accessed_days=2)
+        superseded = entry(2, f"{RUST_KEY}-83b9b9f8", created=stamp(days=2, minutes=-3), accessed_days=IDLE)
         self.assertEqual(ids([live, superseded]), [2])
+
+    def test_a_generation_a_branch_still_reads_survives_the_order(self):
+        # A pull request run restores the entries of its base branch, so a
+        # branch still on the old lockfile can take an exact hit on the old
+        # generation after main has saved the new one. That read puts the old
+        # generation first in the order, and main's own generation second.
+        # Deleting the second would give main a cold build, so a generation
+        # that anything still reads is kept whatever its place.
+        old_generation = entry(1, f"{RUST_KEY}-old", created_days=9, accessed=stamp(minutes=60))
+        mains_generation = entry(2, f"{RUST_KEY}-new", created_days=8, accessed=stamp(minutes=120))
+        self.assertEqual(ids([old_generation, mains_generation]), [])
+
+    def test_the_old_generation_goes_once_no_branch_reads_it(self):
+        old_generation = entry(1, f"{RUST_KEY}-old", created_days=9, accessed_days=IDLE)
+        mains_generation = entry(2, f"{RUST_KEY}-new", created_days=8, accessed=stamp(minutes=120))
+        self.assertEqual(ids([old_generation, mains_generation]), [1])
+
+    def test_the_newest_entry_by_creation_is_not_protected(self):
+        # Measured here: for `linux-test` and `macos-test-libs` the newest entry
+        # by creation was the superseded one, 1.28 GB that a rule anchored on
+        # creation would keep for ever.
+        live = entry(1, f"{RUST_KEY}-af2d2e7c", created=stamp(days=2, minutes=3), accessed_days=0)
+        newest_created = entry(2, f"{RUST_KEY}-83b9b9f8", created=stamp(days=2), accessed_days=IDLE)
+        self.assertEqual(ids([live, newest_created]), [2])
+
+    def test_max_idle_days_sets_how_long_a_quiet_generation_waits(self):
+        payload = [
+            entry(1, f"{RUST_KEY}-a", created_days=9, accessed_days=1),
+            entry(2, f"{RUST_KEY}-b", created_days=8, accessed_days=0),
+        ]
+        self.assertEqual(ids(payload), [])
+        self.assertEqual(ids(payload, max_idle_days=0.5), [1])
 
     def test_a_single_generation_is_never_reported(self):
         # A toolchain change leaves a group of one behind. GitHub removes it
@@ -97,17 +132,17 @@ class SupersededTests(unittest.TestCase):
 
     def test_keep_can_hold_more_than_one_generation(self):
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed_days=3),
-            entry(2, f"{RUST_KEY}-b", accessed_days=2),
+            entry(1, f"{RUST_KEY}-a", accessed_days=4),
+            entry(2, f"{RUST_KEY}-b", accessed_days=IDLE),
             entry(3, f"{RUST_KEY}-c", accessed_days=0),
         ]
         self.assertEqual(ids(payload, keep=2), [1])
 
     def test_each_restore_key_keeps_its_own_survivor(self):
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed_days=3),
+            entry(1, f"{RUST_KEY}-a", accessed_days=IDLE),
             entry(2, f"{RUST_KEY}-b", accessed_days=0),
-            entry(3, f"{PLAIN_KEY}-a", accessed_days=3),
+            entry(3, f"{PLAIN_KEY}-a", accessed_days=IDLE),
             entry(4, f"{PLAIN_KEY}-b", accessed_days=0),
         ]
         self.assertEqual(sorted(ids(payload)), [1, 3])
@@ -116,14 +151,14 @@ class SupersededTests(unittest.TestCase):
         # A run cannot restore a sibling branch's cache, so main's entry does
         # not supersede the branch's one.
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed_days=3, ref="refs/heads/feature"),
+            entry(1, f"{RUST_KEY}-a", accessed_days=IDLE, ref="refs/heads/feature"),
             entry(2, f"{RUST_KEY}-b", accessed_days=0, ref="refs/heads/main"),
         ]
         self.assertEqual(ids(payload), [])
 
     def test_a_ref_with_several_generations_is_pruned_within_that_ref(self):
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed_days=3, ref="refs/heads/feature"),
+            entry(1, f"{RUST_KEY}-a", accessed_days=IDLE, ref="refs/heads/feature"),
             entry(2, f"{RUST_KEY}-b", accessed_days=0, ref="refs/heads/feature"),
             entry(3, f"{RUST_KEY}-c", accessed_days=0, ref="refs/heads/main"),
         ]
@@ -135,8 +170,10 @@ class SupersededTests(unittest.TestCase):
             entry(1, f"{RUST_KEY}-a", created=stamp(minutes=10), accessed=stamp(minutes=10)),
             entry(2, f"{RUST_KEY}-b", created=stamp(minutes=5), accessed=stamp(minutes=5)),
         ]
-        self.assertEqual(ids(payload, min_age_minutes=60), [])
-        self.assertEqual(ids(payload, min_age_minutes=1), [1])
+        # max_idle_days=0 takes the idle condition out of the way, so this
+        # case tests the youth guard on its own.
+        self.assertEqual(ids(payload, min_age_minutes=60, max_idle_days=0), [])
+        self.assertEqual(ids(payload, min_age_minutes=1, max_idle_days=0), [1])
 
     def test_an_unreadable_access_time_is_never_reported(self):
         payload = [
@@ -147,7 +184,7 @@ class SupersededTests(unittest.TestCase):
 
     def test_an_entry_without_an_access_time_does_not_take_a_kept_slot(self):
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed=None, accessed_days=3),
+            entry(1, f"{RUST_KEY}-a", accessed=None, accessed_days=IDLE),
             entry(2, f"{RUST_KEY}-b", accessed_days=0),
             entry(3, f"{RUST_KEY}-c", accessed="not a time"),
         ]
@@ -157,7 +194,7 @@ class SupersededTests(unittest.TestCase):
 
     def test_an_unreadable_creation_time_is_never_reported(self):
         payload = [
-            entry(1, f"{RUST_KEY}-a", accessed_days=3, created="not a time"),
+            entry(1, f"{RUST_KEY}-a", accessed_days=IDLE, created="not a time"),
             entry(2, f"{RUST_KEY}-b", accessed_days=0),
         ]
         self.assertEqual(ids(payload), [])
@@ -166,14 +203,14 @@ class SupersededTests(unittest.TestCase):
         payload = [
             "not an entry",
             {"key": f"{RUST_KEY}-a"},
-            {"id": "x", "key": f"{RUST_KEY}-b", "last_accessed_at": stamp(days=3)},
-            entry(1, f"{RUST_KEY}-c", accessed_days=3),
+            {"id": "x", "key": f"{RUST_KEY}-b", "last_accessed_at": stamp(days=IDLE)},
+            entry(1, f"{RUST_KEY}-c", accessed_days=IDLE),
             entry(2, f"{RUST_KEY}-d", accessed_days=0),
         ]
         self.assertEqual(ids(payload), [1])
 
     def test_both_response_shapes_are_accepted(self):
-        rows = [entry(1, f"{RUST_KEY}-a", accessed_days=3), entry(2, f"{RUST_KEY}-b", accessed_days=0)]
+        rows = [entry(1, f"{RUST_KEY}-a", accessed_days=IDLE), entry(2, f"{RUST_KEY}-b", accessed_days=0)]
         self.assertEqual(ids(rows), [1])
         self.assertEqual(ids({"total_count": 2, "actions_caches": rows}), [1])
         self.assertEqual(ids({}), [])
@@ -196,7 +233,7 @@ class CommandTests(unittest.TestCase):
 
     def test_it_prints_the_id_size_and_key_of_each_entry(self):
         payload = [
-            entry(11, f"{RUST_KEY}-a", accessed_days=3, size=2048),
+            entry(11, f"{RUST_KEY}-a", accessed_days=IDLE, size=2048),
             entry(22, f"{RUST_KEY}-b", accessed_days=0),
         ]
         result = self.run_script(payload)
