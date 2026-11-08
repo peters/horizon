@@ -302,6 +302,17 @@ class TmuxTests(unittest.TestCase):
         self.addCleanup(terminal.close)
         return terminal
 
+    def read_counts(self, terminal, count):
+        """Read until the terminal holds the first `count` numbers of the pane.
+
+        `attach()` returns once the panel enabled bracketed paste, and the pane
+        history arrives after that. A test that compares the whole history
+        reads it first instead of comparing what happened to have arrived.
+        """
+        terminal.read_until(lambda data: len(numbers(data)) >= count,
+                            missing='the first %d numbers of the pane history' % count)
+        return terminal
+
     def private(self, socket, *args):
         result = subprocess.run(['tmux', '-S', socket, *args], env=self.env, capture_output=True, text=True, timeout=10)
         return result.stdout if result.returncode == 0 else None
@@ -309,7 +320,7 @@ class TmuxTests(unittest.TestCase):
     def test_history_and_later_output_reach_the_terminal_in_full(self):
         self.tmux('send-keys', '-t', '=a:', 'seq 1 3000', 'Enter')
         self.wait_for(lambda: '3000' in self.tmux('capture-pane', '-p', '-t', '=a:'))
-        terminal = self.attach()
+        terminal = self.read_counts(self.attach(), 3000)
         self.assertEqual(numbers(terminal.data), list(range(1, 3001)))
         # A plain tmux client redraws a full screen instead and leaves gaps.
         terminal.write(b'seq 3001 30000\r')
@@ -325,7 +336,7 @@ class TmuxTests(unittest.TestCase):
         self.assertEqual(self.tmux('list-clients', '-t', '=a'), '')
         self.tmux('send-keys', '-t', '=a:', 'seq 1 100', 'Enter')
         self.wait_for(lambda: '100' in self.tmux('capture-pane', '-p', '-t', '=a:'))
-        second = self.attach()
+        second = self.read_counts(self.attach(), 100)
         self.assertIn(b'\x1b[3J', second.data)
         rows = plain(second.data.split(b'\x1b[3J', 1)[1])
         self.assertEqual(rows.count('before'), 1)
@@ -475,7 +486,7 @@ class TmuxTests(unittest.TestCase):
         self.wait_for(lambda: self.private(socket, 'capture-pane', '-p', '-t', pane).strip() == '$')
         self.private(socket, 'send-keys', '-t', pane, 'seq 1 3000', 'Enter')
         self.wait_for(lambda: '3000' in self.private(socket, 'capture-pane', '-p', '-t', pane))
-        terminal = self.attach(arguments=['--socket', socket, pane])
+        terminal = self.read_counts(self.attach(arguments=['--socket', socket, pane]), 3000)
         self.assertEqual(numbers(terminal.data), list(range(1, 3001)))
         terminal.write(b'echo private-socket\r')
         terminal.read_until(lambda data: b'\r\nprivate-socket\r\n' in data)
