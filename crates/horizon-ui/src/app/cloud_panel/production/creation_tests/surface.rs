@@ -273,6 +273,33 @@ fn the_workspace_frame_holds_the_form_and_its_badge() {
     }
 }
 
+/// A detached window draws the workspace that holds the form at its board place, because the
+/// form itself is drawn in the main window and its rect means nothing in another one.
+#[test]
+fn a_detached_window_draws_the_workspace_at_its_board_place() {
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    frames_at(&ctx, &mut app, [1920.0, 1080.0], 6);
+    let local = app
+        .cloud_prototype
+        .production
+        .creation_workspace()
+        .expect("the draft belongs to a workspace");
+    let holder = app
+        .board
+        .workspace_id_by_local_id(&local)
+        .expect("the workspace is on the board");
+    let elsewhere = workspace_with_panel(&mut app, "detached project", [900.0, 700.0]);
+    assert!(
+        app.cloud_form_frame(&ctx, holder, None).is_some(),
+        "the main window draws the frame around the form"
+    );
+    assert!(
+        app.cloud_form_frame(&ctx, holder, Some(elsewhere)).is_none(),
+        "a detached window draws the workspace at its board place, not around the form"
+    );
+}
+
 #[test]
 fn the_frame_holds_the_form_in_the_first_frame_after_a_pan() {
     let (_temp, ctx, mut app) = ready_app();
