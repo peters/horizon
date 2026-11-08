@@ -670,6 +670,12 @@ provider reports; it keeps no journal, so callers record intent first.
 pod billing, which covers CPU and GPU workers and uses RFC 3339 bucket bounds.
 `host` renders provider-neutral `#cloud-config` user data that runs the unchanged
 worker image under Docker on a rented virtual machine; it performs no provider I/O.
+`vm` holds what every virtual-machine provider shares, so that none of them reaches
+into another for a helper that belongs to neither. Today that is `vm::spec`: the
+Chromium shared memory of a worker, the registry an image reference pulls from and a
+throwaway SSH key. Azure and the Docker host read these from `vm`, not from
+`hetzner::cloud`, which keeps no copy. A new virtual-machine provider adds its
+adapter beside the others and reads these helpers from `vm`.
 `provider` describes each provider a new cloud can use: its id, label, billing
 currency, GPU support, placement kind (data centers or locations), what happens to
 the worker on stop, the choices it supports, what its hourly-rate statement covers
