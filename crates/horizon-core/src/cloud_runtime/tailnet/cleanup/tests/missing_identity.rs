@@ -104,7 +104,9 @@ fn prior_ready_or_resume_history_without_a_selected_tailnet_stays_quiet() {
 #[test]
 fn deleted_volume_journals_alone_do_not_claim_a_prepared_cloud_enrolled_a_node() {
     let (_directory, store, mut state) = prepared();
-    state.profile.provider = provider_id(Kind::Hetzner);
+    horizon_cloud::provider::HETZNER
+        .id
+        .clone_into(&mut state.profile.provider);
     state.spec.as_mut().unwrap().profile = state.profile.clone();
     store.save(&state).unwrap();
     let journal = horizon_cloud::hetzner::cloud::Journal {

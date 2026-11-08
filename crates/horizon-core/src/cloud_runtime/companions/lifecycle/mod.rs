@@ -115,18 +115,11 @@ pub fn bind(request: &Request<'_>, binding: Binding) -> Result<()> {
             .any(|target| target.cloud_id == binding.target().cloud_id)
             || target.load()?.is_some()
             || receipt::load(target.root())?.is_some()
-            || [
-                "hetzner.json",
-                "docker-host.json",
-                "workspace-volume.json",
-                "workspace-volume.required",
-                "azure.json",
-            ]
-            .iter()
-            .map(|file| target.root().join(file).try_exists())
-            .collect::<std::io::Result<Vec<_>>>()?
-            .into_iter()
-            .any(|exists| exists)
+            || horizon_cloud::provider::journals()
+                .map(|file| target.root().join(file).try_exists())
+                .collect::<std::io::Result<Vec<_>>>()?
+                .into_iter()
+                .any(|exists| exists)
         {
             return Err(Error::Invalid(
                 "Reserve a fresh cloud identity; an existing target requires selection",

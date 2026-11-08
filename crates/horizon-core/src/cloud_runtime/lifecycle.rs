@@ -1,6 +1,6 @@
 //! Explicit worker power actions, independent of local presentation lifetime.
 use super::{
-    Cancellation, CreateState, Error, Result, Stage, mutation,
+    Cancellation, CreateState, Error, Result, Stage, mutation, provider,
     settings::Settings,
     ssh::Connection,
     state::{Deployment, Store},
@@ -72,13 +72,7 @@ pub fn can_remove(store: &Store, state: &Deployment) -> Result<bool> {
 /// # Errors
 /// The record directory cannot be read.
 pub fn can_remove_without_deployment(store: &Store) -> Result<bool> {
-    for file in [
-        "hetzner.json",
-        "docker-host.json",
-        "workspace-volume.json",
-        "workspace-volume.required",
-        "azure.json",
-    ] {
+    for file in provider::journals() {
         if store.root().join(file).try_exists()? {
             return Ok(false);
         }

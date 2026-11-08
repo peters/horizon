@@ -5,17 +5,9 @@ mod missing_identity;
 use crate::cloud_runtime::tailnet::receipt::{
     AllocationRequestId, CaptureAttempt, DeviceId, EnrollmentLedger, EnrollmentProvider, TailnetId, WorkerId,
 };
-use horizon_cloud::{provider::Kind, tailnet::RetentionReason};
+use horizon_cloud::provider::{self, Description, Kind};
+use horizon_cloud::tailnet::RetentionReason;
 use horizon_cloud_protocol::OperationId;
-
-fn provider_id(kind: Kind) -> String {
-    horizon_cloud::provider::ALL
-        .into_iter()
-        .find(|provider| provider.kind == kind)
-        .unwrap()
-        .id
-        .into()
-}
 
 fn fixture() -> (tempfile::TempDir, state::Store, state::Deployment) {
     let directory = tempfile::tempdir().unwrap();
@@ -447,16 +439,19 @@ fn one_saved_tailnet_confirmation_does_not_claim_the_same_device_in_another_save
 
 #[test]
 fn default_provider_receipts_use_the_same_automatic_cleanup_after_durable_absence() {
-    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
+    for provider in provider::ALL {
         let (_directory, store, mut state) = fixture();
-        state.profile.provider = provider_id(provider);
+        provider.id.clone_into(&mut state.profile.provider);
         state.spec.as_mut().unwrap().profile = state.profile.clone();
+        let enrollment = EnrollmentProvider::try_from(provider.id.to_owned()).unwrap();
         let mut ledger = serde_json::to_value(&state.tailnet_enrollment).unwrap();
-        ledger["receipts"][0]["provider"] = serde_json::json!(EnrollmentProvider::new(provider));
+        ledger["receipts"][0]["provider"] = serde_json::json!(enrollment);
         state.tailnet_enrollment = serde_json::from_value(ledger).unwrap();
-        match provider {
-            Kind::RunPod => {}
-            Kind::Hetzner => {
+        // The settled durable journal of each provider, selected by its own id so that a
+        // new provider must add one here instead of compiling without it.
+        match provider.id {
+            "runpod" => {}
+            "hetzner" => {
                 let journal = horizon_cloud::hetzner::cloud::Journal {
                     location: Some("fixture-location".into()),
                     deleting: true,
@@ -467,8 +462,8 @@ fn default_provider_receipts_use_the_same_automatic_cleanup_after_durable_absenc
                 };
                 std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
             }
-            Kind::DockerHost => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
-            Kind::Azure => {
+            "docker-host" => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
+            "azure" => {
                 let group = format!(
                     "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/horizon-ws-{}",
                     state.cloud_id
@@ -478,11 +473,12 @@ fn default_provider_receipts_use_the_same_automatic_cleanup_after_durable_absenc
                 });
                 std::fs::write(store.root().join("azure.json"), journal.to_string()).unwrap();
             }
+            id => panic!("add the settled durable journal of provider {id}"),
         }
         store.save(&state).unwrap();
         let mut calls = 0;
         run(&store, &mut state, &|_| {}, |receipt, _| {
-            assert_eq!(receipt.provider, EnrollmentProvider::new(provider));
+            assert_eq!(receipt.provider, enrollment);
             calls += 1;
             NodeDeletion::ConfirmedDeleted
         })

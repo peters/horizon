@@ -672,15 +672,24 @@ pod billing, which covers CPU and GPU workers and uses RFC 3339 bucket bounds.
 worker image under Docker on a rented virtual machine; it performs no provider I/O.
 `provider` describes each provider a new cloud can use: its id, label, billing
 currency, GPU support, placement kind (data centers or locations), what happens to
-the worker on stop, and the choices it supports. Interfaces read this description
+the worker on stop, the choices it supports, what its hourly-rate statement covers
+and the files it keeps its cloud resources in. Interfaces read this description
 to show exactly the fields that apply instead of branching on provider names.
+`Kind::description` is the only match on `Kind` that restates a description; every
+other exhaustive match on `Kind` encodes provider behavior, and only four files keep
+one: `cloud_runtime::providers` (`mod.rs` and `deletion.rs`), `deployment::reconnect`
+and `companions::lifecycle::execution`. A new provider must decide those four and
+nothing else. [What a new provider adds to the code](adding-a-cloud-provider.md)
+lists what else it adds.
 `offers::workers` assembles policy-filtered provider catalogs for a repository's
 requirements. `offers::{exchange, comparison}` own dated reference rates and the
 common estimated-total ordering used by UI, CLI and MCP. The worker's
 `offers::exchange` caches reference rates in a background job shared by requests,
 so FX cannot block its host loop. The UI's `prices::exchange`
 fetches reference rates off the render thread. `cloud_panel::selection` translates
-an offer identity to launch size and persisted placement. Explicit Hetzner choices
+an offer identity to launch size and persisted placement: it keys the
+one-size-in-one-location rule on the provider's `placement` and `pricing`, and it
+reads the refusal from the provider's description. Explicit Hetzner choices
 set `WorkerSpec::exact_placement`; allocation and lifecycle policy intersect those
 saved types and locations with current machine policy, preserving legacy fallback
 semantics for records without the flag.

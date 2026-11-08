@@ -10,7 +10,7 @@ use horizon_cloud::{
 };
 use serde_json::json;
 
-fn fixture(provider: Kind) -> (tempfile::TempDir, Store, Deployment) {
+fn fixture(provider: &'static Description) -> (tempfile::TempDir, Store, Deployment) {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::lock(&temp.path().join("cloud")).unwrap();
     let mut state: Deployment = serde_json::from_value(json!({
@@ -20,7 +20,7 @@ fn fixture(provider: Kind) -> (tempfile::TempDir, Store, Deployment) {
         "worker":null,"spec":null,"sessions":[]
     }))
     .unwrap();
-    state.profile.provider = provider_id(provider);
+    provider.id.clone_into(&mut state.profile.provider);
     state.spec = Some(
         serde_json::from_value(json!({
             "operation_id":"cloud","image_digest":"sha256:synthetic","profile":state.profile,
@@ -41,10 +41,10 @@ fn managed_record(spec: &WorkerSpec) -> serde_json::Value {
 
 #[test]
 fn each_default_provider_uses_settled_durable_journals_without_credentials() {
-    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
+    for provider in provider::ALL {
         let (_temp, store, state) = fixture(provider);
-        match provider {
-            Kind::RunPod => {
+        match provider.id {
+            "runpod" => {
                 std::fs::write(store.root().join("workspace-volume.required"), []).unwrap();
                 std::fs::write(
                     store.root().join("workspace-volume.json"),
@@ -52,7 +52,7 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
                 )
                 .unwrap();
             }
-            Kind::Hetzner => {
+            "hetzner" => {
                 let journal = Journal {
                     location: Some("fixture-location".into()),
                     deleting: true,
@@ -63,12 +63,13 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
                 };
                 std::fs::write(store.root().join("hetzner.json"), serde_json::to_vec(&journal).unwrap()).unwrap();
             }
-            Kind::DockerHost => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
-            Kind::Azure => std::fs::write(
+            "docker-host" => std::fs::write(store.root().join("docker-host.json"), "{}").unwrap(),
+            "azure" => std::fs::write(
                 store.root().join("azure.json"),
                 serde_json::to_vec(&azure_proof("cloud")).unwrap(),
             )
             .unwrap(),
+            id => panic!("add the settled durable journal of provider {id}"),
         }
         assert!(confirmed(&store, &state).unwrap());
     }
@@ -76,14 +77,19 @@ fn each_default_provider_uses_settled_durable_journals_without_credentials() {
 
 #[test]
 fn missing_required_owned_journals_and_foreign_provider_records_do_not_confirm_absence() {
-    for provider in [Kind::RunPod, Kind::Hetzner, Kind::DockerHost, Kind::Azure] {
-        let (_temp, store, state) = fixture(provider);
-        if provider == Kind::RunPod {
-            std::fs::write(store.root().join("workspace-volume.required"), []).unwrap();
+    // Every file that a provider keeps shows an absence that is not proven while it
+    // exists: neither the journal that a delete settles nor the marker beside it.
+    for provider in provider::ALL {
+        for file in provider.journals {
+            let (_temp, store, state) = fixture(provider);
+            std::fs::write(store.root().join(file), []).unwrap();
+            assert!(!confirmed(&store, &state).unwrap_or(false), "{file}");
         }
-        assert!(!confirmed(&store, &state).unwrap_or(false));
     }
-    let (_temp, store, state) = fixture(Kind::RunPod);
+    // RunPod's legacy unmanaged storage has no required marker, so its own absence is
+    // proven without one.
+    let runpod = provider::by_id("runpod").unwrap();
+    let (_temp, store, state) = fixture(runpod);
     assert!(
         confirmed(&store, &state).unwrap(),
         "legacy unmanaged storage has no required marker"
@@ -94,7 +100,7 @@ fn missing_required_owned_journals_and_foreign_provider_records_do_not_confirm_a
 
 #[test]
 fn unsettle_or_masked_fields_cannot_replace_a_confirmed_provider_journal() {
-    let (_temp, store, state) = fixture(Kind::RunPod);
+    let (_temp, store, state) = fixture(&provider::RUNPOD);
     let original = managed_record(state.spec.as_ref().unwrap());
     for change in 0..4 {
         let mut value = original.clone();
@@ -111,7 +117,7 @@ fn unsettle_or_masked_fields_cannot_replace_a_confirmed_provider_journal() {
         .unwrap();
         assert!(!confirmed(&store, &state).unwrap_or(false));
     }
-    let (_temp, store, state) = fixture(Kind::DockerHost);
+    let (_temp, store, state) = fixture(&provider::DOCKER_HOST);
     for text in [
         r#"{"volume":true}"#,
         r#"{"host":"other-host"}"#,
@@ -120,7 +126,7 @@ fn unsettle_or_masked_fields_cannot_replace_a_confirmed_provider_journal() {
         std::fs::write(store.root().join("docker-host.json"), text).unwrap();
         assert!(!confirmed(&store, &state).unwrap());
     }
-    let (_temp, store, state) = fixture(Kind::Hetzner);
+    let (_temp, store, state) = fixture(&provider::HETZNER);
     for journal in [
         Journal::default(),
         Journal {
@@ -151,7 +157,7 @@ fn azure_proof(cloud: &str) -> serde_json::Value {
 
 #[test]
 fn an_azure_deletion_is_confirmed_only_by_its_own_complete_proof() {
-    let (_temp, store, state) = fixture(Kind::Azure);
+    let (_temp, store, state) = fixture(&provider::AZURE);
     // Without journals, as a provider that needs none would be confirmed.
     assert!(!confirmed(&store, &state).unwrap());
     let write = |journal: &serde_json::Value| {
@@ -183,7 +189,7 @@ fn an_azure_deletion_is_confirmed_only_by_its_own_complete_proof() {
     };
     assert!(!confirmed(&store, &running).unwrap());
     // An Azure journal does not stand in for another provider's.
-    let (_temp, store, state) = fixture(Kind::DockerHost);
+    let (_temp, store, state) = fixture(&provider::DOCKER_HOST);
     std::fs::write(store.root().join("docker-host.json"), "{}").unwrap();
     std::fs::write(
         store.root().join("azure.json"),
@@ -195,15 +201,12 @@ fn an_azure_deletion_is_confirmed_only_by_its_own_complete_proof() {
 
 #[test]
 fn oversized_provider_journals_cannot_confirm_deletion() {
-    for (provider, path) in [
-        (Kind::RunPod, "workspace-volume.json"),
-        (Kind::Hetzner, "hetzner.json"),
-        (Kind::DockerHost, "docker-host.json"),
-        (Kind::Azure, "azure.json"),
-    ] {
-        let (_temp, store, state) = fixture(provider);
-        std::fs::write(store.root().join(path), vec![b' '; 1024 * 1024 + 1]).unwrap();
-        assert!(!confirmed(&store, &state).unwrap_or(false));
+    for provider in provider::ALL {
+        for path in provider.journals {
+            let (_temp, store, state) = fixture(provider);
+            std::fs::write(store.root().join(path), vec![b' '; 1024 * 1024 + 1]).unwrap();
+            assert!(!confirmed(&store, &state).unwrap_or(false), "{path}");
+        }
     }
 }
 

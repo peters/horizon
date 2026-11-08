@@ -82,12 +82,7 @@ impl EnrollmentProvider {
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
-        match self.0 {
-            Kind::RunPod => provider::RUNPOD.id,
-            Kind::Hetzner => provider::HETZNER.id,
-            Kind::DockerHost => provider::DOCKER_HOST.id,
-            Kind::Azure => provider::AZURE.id,
-        }
+        self.0.description().id
     }
 }
 
