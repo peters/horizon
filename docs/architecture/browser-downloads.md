@@ -88,7 +88,10 @@ total the browser stated. Two transfers can share a name, and a browser states a
 different name for the second one (`export(1).csv`), or leaves a stale file of an
 earlier run beside it. A name that matches more than one waiting row, or one file
 that more than one waiting row could claim, describes no single transfer, so the
-row states no size instead of another transfer's bytes. A browser that reports its own progress keeps
+row states no size instead of another transfer's bytes. The folder outlives a
+session, so a part file that an earlier session left is skipped as well: a row
+measures only a file that was written while the row was already observed, and a
+new download of the same name writes a file of its own. A browser that reports its own progress keeps
 its number, and a finished or canceled row is never measured.
 
 ## Safari and remote sessions

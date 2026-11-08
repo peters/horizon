@@ -28,11 +28,13 @@ pub(crate) fn prepare_directory(directory: &Path) -> std::io::Result<()> {
 }
 
 /// One observed download. `id` is the engine's own identity for it and never
-/// leaves this module.
+/// leaves this module. `started` states when this session first saw it, which
+/// separates this transfer's file on disk from one an earlier session left.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ObservedDownload {
     id: String,
     row: BrowserDownload,
+    started: std::time::SystemTime,
 }
 
 /// The downloads observed by one session, newest last.
@@ -78,7 +80,7 @@ impl DownloadState {
                 .iter()
                 .map(|observed| {
                     let size = Self::is_waiting(&observed.row)
-                        .then(|| Self::measured(&observed.row.file_name, &incomplete, &waiting))
+                        .then(|| Self::measured(&observed.row.file_name, observed.started, &incomplete, &waiting))
                         .flatten();
                     Self::with_progress(observed, size)
                 })
@@ -100,20 +102,26 @@ impl DownloadState {
     /// run beside it. A name that matches more than one row, or one file that
     /// more than one waiting row could claim, describes no single transfer, so it
     /// states no size instead of another transfer's bytes.
-    fn measured(file_name: &str, incomplete: &[(String, u64)], waiting: &[&str]) -> Option<u64> {
+    fn measured(
+        file_name: &str,
+        started: std::time::SystemTime,
+        incomplete: &[PartFile],
+        waiting: &[&str],
+    ) -> Option<u64> {
         let mut matched = incomplete
             .iter()
-            .filter(|(name, _)| names_one_transfer(file_name, name));
-        let (name, size) = matched.next()?;
+            .filter(|part| part.written_at_or_after(started))
+            .filter(|part| names_one_transfer(file_name, &part.name));
+        let part = matched.next()?;
         if matched.next().is_some() {
             return None;
         }
-        let mut claimants = waiting.iter().filter(|other| names_one_transfer(other, name));
+        let mut claimants = waiting.iter().filter(|other| names_one_transfer(other, &part.name));
         claimants.next()?;
         if claimants.next().is_some() {
             return None;
         }
-        Some(*size)
+        Some(part.size)
     }
 
     /// The row of one observed download, with the bytes of a transfer that the
@@ -140,7 +148,7 @@ impl DownloadState {
     /// Chromium adds `.crdownload` to the whole name, and Firefox writes
     /// `<stem>.<random>.<extension>.part`. One listing serves every row of one
     /// report, so a folder with many downloads is read once.
-    fn incomplete_files(&self) -> Vec<(String, u64)> {
+    fn incomplete_files(&self) -> Vec<PartFile> {
         let Ok(entries) = std::fs::read_dir(&self.directory) else {
             return Vec::new();
         };
@@ -148,8 +156,12 @@ impl DownloadState {
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let name = entry.file_name().to_str()?.to_string();
-                let size = entry.metadata().ok()?.len();
-                is_incomplete(&name).then_some((name, size))
+                let data = entry.metadata().ok()?;
+                is_incomplete(&name).then_some(PartFile {
+                    name,
+                    size: data.len(),
+                    written: data.modified().ok(),
+                })
             })
             .collect()
     }
@@ -172,6 +184,7 @@ impl DownloadState {
         let file_name = download_file_name(text(params, "suggestedFilename").unwrap_or_default().as_str());
         self.upsert(ObservedDownload {
             id,
+            started: std::time::SystemTime::now(),
             row: BrowserDownload {
                 file_name,
                 state: BrowserDownloadState::InProgress,
@@ -215,7 +228,11 @@ impl DownloadState {
             total_bytes: count_optional(params, "totalBytes"),
             path: path.or_else(|| known.and_then(|known| known.row.path)),
         };
-        self.upsert(ObservedDownload { id, row });
+        self.upsert(ObservedDownload {
+            id,
+            row,
+            started: std::time::SystemTime::now(),
+        });
     }
 
     /// Firefox's `browsingContext.downloadWillBegin` and `downloadEnd` events.
@@ -234,6 +251,7 @@ impl DownloadState {
             let file_name = download_file_name(text(params, "suggestedFilename").unwrap_or_default().as_str());
             self.upsert(ObservedDownload {
                 id,
+                started: std::time::SystemTime::now(),
                 row: BrowserDownload {
                     file_name,
                     state: BrowserDownloadState::InProgress,
@@ -265,6 +283,7 @@ impl DownloadState {
             .flatten();
         self.upsert(ObservedDownload {
             id,
+            started: std::time::SystemTime::now(),
             row: BrowserDownload {
                 file_name,
                 state: if completed {
@@ -289,9 +308,12 @@ impl DownloadState {
 
     /// Record one download, replacing the row with the same identity and
     /// keeping the newest [`MAX_BROWSER_DOWNLOADS`] rows.
-    fn upsert(&mut self, observed: ObservedDownload) {
-        if let Some(position) = self.observed.iter().position(|known| known.id == observed.id) {
-            self.observed.remove(position);
+    fn upsert(&mut self, mut observed: ObservedDownload) {
+        let known = self.observed.iter().position(|known| known.id == observed.id);
+        if let Some(position) = known
+            && let Some(known) = self.observed.remove(position)
+        {
+            observed.started = known.started;
         }
         self.observed.push_back(observed);
         while self.observed.len() > MAX_BROWSER_DOWNLOADS {
@@ -302,6 +324,27 @@ impl DownloadState {
 
     fn known(&self, id: &str) -> Option<&ObservedDownload> {
         self.observed.iter().find(|known| known.id == id)
+    }
+}
+
+/// One file in the panel folder that a browser is still writing.
+struct PartFile {
+    name: String,
+    size: u64,
+    written: Option<std::time::SystemTime>,
+}
+
+impl PartFile {
+    /// Whether this file was written while the row was already observed.
+    ///
+    /// The folder belongs to the panel and outlives a session, so a killed
+    /// session can leave a part file behind. An earlier file states another
+    /// transfer's bytes and never this row's. A second of tolerance covers a
+    /// file system that stamps a modification time more coarsely than the row
+    /// starts.
+    fn written_at_or_after(&self, started: std::time::SystemTime) -> bool {
+        let tolerance = std::time::Duration::from_secs(1);
+        self.written.is_none_or(|written| written + tolerance >= started)
     }
 }
 
@@ -551,6 +594,35 @@ mod tests {
             &json!({"context": "ctx", "download": "d1", "suggestedFilename": "export.csv"}),
         );
         assert_eq!(single.list().downloads.remove(0).received_bytes, 4);
+    }
+
+    #[test]
+    fn a_part_file_of_an_earlier_run_is_not_this_transfer() {
+        let folder = tempfile::tempdir().expect("temp folder");
+        let stale = folder.path().join("export.abc.csv.part");
+        std::fs::write(&stale, b"12345678").expect("write");
+        let earlier = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .expect("open")
+            .set_modified(earlier)
+            .expect("set the time");
+
+        let mut downloads = DownloadState::new(folder.path().to_string_lossy().to_string(), true);
+        downloads.firefox_event(
+            "browsingContext.downloadWillBegin",
+            &json!({"context": "ctx", "download": "d1", "suggestedFilename": "export.csv"}),
+        );
+        assert_eq!(
+            downloads.list().downloads.remove(0).received_bytes,
+            0,
+            "a file that an earlier run left states another transfer's bytes"
+        );
+
+        // The transfer writes its own file, which this row may measure.
+        std::fs::write(folder.path().join("export.xyz.csv.part"), b"1200").expect("write");
+        assert_eq!(downloads.list().downloads.remove(0).received_bytes, 4);
     }
 
     #[test]
