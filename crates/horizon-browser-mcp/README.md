@@ -336,7 +336,11 @@ shell commands, files, or other MCP servers.
   not observe downloads, so an empty list is not proof that nothing was saved.
   Rows are bounded to 64 and `dropped` counts reports this session forgot; their
   files stay in the folder. A report never holds the download URL, because that
-  URL can carry a credential. The tool starts no download and writes no file.
+  URL can carry a credential. Name one completed row in `fetch` and the answer
+  also carries that file as an `application/octet-stream` resource block, which
+  is how an agent reaches a file that was saved on a host of another computer;
+  a file above 8 MiB stays there and the answer states `inline_withheld: true`.
+  The tool starts no download and writes no file.
   Safari and remote sessions return `unsupported_backend`. The engine behavior
   is in `docs/architecture/browser-downloads.md`.
 - `browser_handoff` pauses automation so the user can steer, and waits until

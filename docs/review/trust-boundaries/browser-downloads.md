@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-protocol/src/downloads.rs,crates/horizon-browser/src/downloads.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/events.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/webdriver/session/handshake.rs,crates/horizon-browser/src/webdriver/session/bidi.rs,crates/horizon-browser/src/webdriver/session/downloads.rs,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser-mcp/src/model/downloads.rs"
+applyTo: "crates/horizon-browser-protocol/src/downloads.rs,crates/horizon-browser/src/downloads.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/events.rs,crates/horizon-browser/src/session/semantic.rs,crates/horizon-browser/src/webdriver/session/handshake.rs,crates/horizon-browser/src/webdriver/session/bidi.rs,crates/horizon-browser/src/webdriver/session/downloads.rs,crates/horizon-browser/src/webdriver/session/semantic.rs,crates/horizon-browser-mcp/src/model/downloads.rs,crates/horizon-browser-mcp/src/download.rs,crates/horizon-browser-mcp/src/download/tests.rs,crates/horizon-browser-mcp/src/server.rs"
 ---
 
 # Trust boundary of browser panel downloads
@@ -18,6 +18,18 @@ is permitted to control.
   never holds a download URL, because that URL can carry a credential.
 - A row holds the file name, the state, the byte counts and the path. It holds
   no page text and no response headers.
+- One optional `fetch` argument names the file name of one completed row. An
+  answer holds the bytes of that file when it is inside the panel folder and at
+  most 8 MiB, as one `application/octet-stream` resource block, so an agent that
+  works through a host of another computer reaches the file it asked for. The
+  answer names that file in `fetched_file_name` only when it carries its bytes; a
+  larger file sets `inline_withheld: true` and stays on that computer.
+
+The host reads the file that its own report named, never a path from the caller:
+the name must be one path component, and the canonical path of the file must stay
+inside the canonical panel folder, so a symlink or a reported path cannot reach
+outside it. The bytes carry no media type of their own, because the engine does
+not sniff an untrusted file.
 
 ## Untrusted: the page and its downloads
 

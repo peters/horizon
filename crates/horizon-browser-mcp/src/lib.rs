@@ -7,6 +7,7 @@
 //! details and are deliberately absent from every tool schema.
 
 mod controller;
+mod download;
 mod model;
 mod network_watch;
 pub mod remote;

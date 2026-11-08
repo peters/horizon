@@ -209,7 +209,26 @@ no file.
 
    Result: The tool returns `unsupported_backend`.
 
-### 6.7 P07 — A shared profile states one folder
+### 6.7 P07 — The bytes of one file cross in the answer
+
+1. Call `browser_downloads` with the panel id and `fetch` set to the file name of
+   a row whose state is `completed`.
+
+   Result: The structured result holds `fetched_file_name` and `fetched_bytes`,
+   and the answer holds one resource block with the bytes of that file.
+
+2. Call `browser_downloads` with `fetch` set to the file name of a row whose
+   state is `in_progress`.
+
+   Result: The answer holds no bytes and one text block that says no completed
+   download has that name.
+
+3. Call `browser_downloads` with `fetch` set to `../secret`.
+
+   Result: The answer holds no bytes and one text block that states the panel
+   folder rule. The panel keeps control of the path.
+
+### 6.8 P08 — A shared profile states one folder
 
 1. Call `browser_duplicate` on the Chromium panel.
 
@@ -220,7 +239,7 @@ no file.
    Result: Both downloads are saved, and both panels report the same folder and
    the same rows.
 
-### 6.8 P08 — Retention and the audit
+### 6.9 P09 — Retention and the audit
 
 1. Start more than 64 downloads through `browser_evaluate`.
 

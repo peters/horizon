@@ -578,6 +578,20 @@ fn assert_resize_contract(tools: &Value) {
     assert!(description.contains("25-500") && description.contains("unsupported_backend"));
 }
 
+fn assert_download_fetch_contract(tools: &Value) {
+    let downloads = listed_tool(tools, "browser_downloads");
+    let arguments = downloads["inputSchema"]["properties"]
+        .as_object()
+        .expect("download arguments");
+    assert!(arguments.contains_key("fetch"), "the answer can carry one file");
+    assert!(
+        downloads["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("8 MiB")),
+        "the description states the bound of the bytes that cross"
+    );
+}
+
 fn assert_credential_request_contract(tools: &Value) {
     let credential = listed_tool(tools, "tailnet_api_credential");
     let arguments = credential["inputSchema"]["properties"]
@@ -596,6 +610,7 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(43));
     assert_credential_request_contract(tools);
+    assert_download_fetch_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);

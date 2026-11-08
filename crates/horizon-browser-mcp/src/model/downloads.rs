@@ -10,6 +10,10 @@ pub(crate) struct DownloadsInput {
     pub(crate) panel_id: String,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,
+    /// File name of one completed row whose bytes this answer should carry. An
+    /// answer holds the bytes when the file is at most 8 MiB inside the panel
+    /// folder; a larger file stays where the browser saved it.
+    pub(crate) fetch: Option<String>,
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -29,6 +33,11 @@ pub(crate) struct DownloadsOutput {
     dropped: u64,
     /// What the caller can do with this result.
     next_step: String,
+    /// The file name this answer carries the bytes of, when the request asked
+    /// for one with `fetch` and a completed row reports it. The bytes arrive as
+    /// a resource block of the content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fetched_file_name: Option<String>,
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -65,8 +74,21 @@ impl From<BrowserDownload> for DownloadRow {
 }
 
 impl DownloadsOutput {
-    pub(crate) fn new(panel_id: String, action_id: String, downloads: BrowserDownloadList) -> Self {
+    pub(crate) fn new(
+        panel_id: String,
+        action_id: String,
+        downloads: BrowserDownloadList,
+        fetch: Option<&str>,
+    ) -> Self {
         let next_step = next_step(&downloads);
+        let fetched_file_name = fetch
+            .filter(|name| {
+                downloads
+                    .downloads
+                    .iter()
+                    .any(|row| row.state == BrowserDownloadState::Completed && row.file_name == *name)
+            })
+            .map(str::to_string);
         Self {
             panel_id,
             action_id,
@@ -74,6 +96,7 @@ impl DownloadsOutput {
             reporting: downloads.reporting,
             downloads: downloads.downloads.into_iter().map(DownloadRow::from).collect(),
             dropped: downloads.dropped,
+            fetched_file_name,
             next_step,
         }
     }
@@ -134,6 +157,7 @@ mod tests {
             "panel".to_string(),
             "action".to_string(),
             list(true, vec![row(BrowserDownloadState::Completed)]),
+            None,
         );
         let encoded = serde_json::to_value(&output).unwrap_or_default();
         assert_eq!(encoded["directory"], "/home/alice/Horizon/downloads");
@@ -153,8 +177,46 @@ mod tests {
     }
 
     #[test]
+    fn a_fetch_name_is_stated_only_for_a_completed_row() {
+        let saved = BrowserDownload {
+            file_name: "report.pdf".to_string(),
+            state: BrowserDownloadState::Completed,
+            received_bytes: 5,
+            total_bytes: Some(5),
+            path: Some("/home/alice/Downloads/Horizon/panel/report.pdf".to_string()),
+        };
+        let running = BrowserDownload {
+            state: BrowserDownloadState::InProgress,
+            file_name: "slow.pdf".to_string(),
+            received_bytes: 1,
+            total_bytes: None,
+            path: None,
+        };
+        let list = |rows: Vec<BrowserDownload>| BrowserDownloadList {
+            directory: "/home/alice/Downloads/Horizon/panel".to_string(),
+            reporting: true,
+            downloads: rows,
+            dropped: 0,
+        };
+        let completed = DownloadsOutput::new(
+            "panel".to_string(),
+            "action".to_string(),
+            list(vec![saved.clone()]),
+            Some("report.pdf"),
+        );
+        assert_eq!(completed.fetched_file_name.as_deref(), Some("report.pdf"));
+        let in_progress = DownloadsOutput::new(
+            "panel".to_string(),
+            "action".to_string(),
+            list(vec![saved, running]),
+            Some("slow.pdf"),
+        );
+        assert!(in_progress.fetched_file_name.is_none());
+    }
+
+    #[test]
     fn an_unreported_session_does_not_claim_an_empty_folder() {
-        let output = DownloadsOutput::new("panel".to_string(), "action".to_string(), list(false, Vec::new()));
+        let output = DownloadsOutput::new("panel".to_string(), "action".to_string(), list(false, Vec::new()), None);
         let encoded = serde_json::to_value(&output).unwrap_or_default();
         assert_eq!(encoded["reporting"], false);
         assert!(
@@ -171,6 +233,7 @@ mod tests {
             "panel".to_string(),
             "action".to_string(),
             list(true, vec![row(BrowserDownloadState::InProgress)]),
+            None,
         );
         let encoded = serde_json::to_value(&output).unwrap_or_default();
         assert_eq!(encoded["downloads"][0]["state"], "in_progress");
