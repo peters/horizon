@@ -25,6 +25,16 @@ name: Cache prune
 # use, never because of a guess from the timestamps the API reports. A run that
 # skipped a job names no key of that job's cache, so a docs-only merge, which
 # skips the Rust jobs, cannot retire a Rust generation.
+#
+# Which run may be trusted for that is checked, not assumed. Only a push to main
+# of this repository saves an entry, so only such a run names a live key. CI also
+# runs on every pull request, a fork's included, and a fork pull request opened
+# from a branch called `main` would otherwise pass a branch-name gate: its run
+# computes its own lockfile hash, so trusting its log would retire the real
+# generations of main. A `workflow_run` job holds this repository's permissions
+# whatever triggered it, so the step reads the event, the branch and the head
+# repository of the run it is about to read and refuses anything else, on the
+# dispatch paths as well.
 on:
   # After the run that saved the entries, and reading that run's own log.
   workflow_run:
@@ -56,9 +66,14 @@ concurrency:
 jobs:
   prune:
     name: Prune superseded cache entries
-    # Only main saves an entry, and a fork's run must not reach the delete
-    # endpoint.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == 'main' }}
+    # An early exit for everything but a push to main of this repository. The
+    # step checks the run again by its id, which also covers the dispatch paths.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' || (
+        github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+      ) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -78,18 +93,32 @@ jobs:
           # number, where an unchecked box can come out as `true`.
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-          RUN_REF: refs/heads/${{ github.event.workflow_run.head_branch || 'main' }}
         run: |
           set -euo pipefail
           run_id="$RUN_ID"
           if [ -z "$run_id" ]; then
-            run_id=$(gh run list --workflow ci.yml --branch main --status completed \
-              --limit 1 --json databaseId --jq '.[0].databaseId')
+            # `--event push` matters: a pull request run of a fork can carry the
+            # branch name `main` and would otherwise be picked here.
+            run_id=$(gh run list --workflow ci.yml --branch main --event push \
+              --status completed --limit 1 --json databaseId --jq '.[0].databaseId')
           fi
           if [ -z "$run_id" ]; then
             echo "::error::No CI run to read the live cache keys from"
             exit 1
           fi
+          # Only a push to main of this repository saves an entry, so only such a
+          # run names a live key. Checked by id, so it holds however the id
+          # arrived: the trigger, the fallback above, or the dispatch input.
+          read -r run_event run_branch run_repo < <(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+            --jq '[.event, .head_branch, .head_repository.full_name] | @tsv')
+          if [ "$run_event" != "push" ] || [ "$run_branch" != "main" ] \
+            || [ "$run_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Run $run_id is $run_event on $run_branch of $run_repo;" \
+              "only a push to main of $GITHUB_REPOSITORY names the live cache keys"
+            exit 1
+          fi
+          run_ref="refs/heads/$run_branch"
           # The log of that run names the key each job used. Without it there is
           # no live set, and the script then reports nothing, so a failure here
           # is reported rather than passed over.
@@ -107,14 +136,14 @@ jobs:
           before_count=$(jq 'length' caches.json)
           before_bytes=$(jq '[.[].size_in_bytes] | add // 0' caches.json)
           python3 -B scripts/prune-actions-caches.py \
-            --caches caches.json --log run.log --ref "$RUN_REF" > stale.tsv
+            --caches caches.json --log run.log --ref "$run_ref" > stale.tsv
           stale_count=$(wc -l < stale.tsv)
           stale_bytes=$(awk -F'\t' '{total += $2} END {print total + 0}' stale.tsv)
           {
             printf '| Caches | Entries | Size |\n|---|---|---|\n'
             printf '| Before | %s | %s |\n' "$before_count" "$(numfmt --to=iec "$before_bytes")"
             printf '| Superseded | %s | %s |\n' "$stale_count" "$(numfmt --to=iec "$stale_bytes")"
-            printf '\nLive keys read from run %s on `%s`.\n' "$run_id" "$RUN_REF"
+            printf '\nLive keys read from run %s on `%s`.\n' "$run_id" "$run_ref"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$stale_count" -eq 0 ]; then
             echo "::notice::No superseded cache generations."

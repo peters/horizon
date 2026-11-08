@@ -251,6 +251,25 @@ class WorkflowTests(unittest.TestCase):
         # A dispatch must be able to report without deleting.
         self.assertIn("dry_run", workflow)
 
+    def test_only_a_push_to_main_of_this_repository_is_trusted(self):
+        workflow = WORKFLOW.read_text()
+        # CI also runs on every pull request, a fork's included, and a fork
+        # pull request from a branch called `main` passes a branch-name gate.
+        # Its run computes its own lockfile hash, so trusting its log would
+        # retire the real generations of main.
+        self.assertIn("github.event.workflow_run.event == 'push'", workflow)
+        self.assertIn(
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            workflow,
+        )
+        # The fallback that picks a run must not pick such a run either.
+        self.assertIn("--event push", workflow)
+        # And the run is checked by id, which covers the dispatch input too.
+        self.assertIn("actions/runs/$run_id", workflow)
+        self.assertIn('[ "$run_event" != "push" ]', workflow)
+        self.assertIn('[ "$run_branch" != "main" ]', workflow)
+        self.assertIn('[ "$run_repo" != "$GITHUB_REPOSITORY" ]', workflow)
+
     def test_the_workflow_feeds_the_log_and_ref_of_the_triggering_run(self):
         workflow = WORKFLOW.read_text()
         self.assertIn("--log", workflow)
