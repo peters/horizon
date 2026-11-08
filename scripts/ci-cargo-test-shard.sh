@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # One platform test shard. On Linux, ui, libs, libs-extra, and speech run as
-# separate jobs and share the OS cache entry. Only the speech job saves that
-# entry, and only on main. A cold main entry is filled by building the whole
-# workspace in that job before the speech feature, so the saved target is not
-# speech-only.
+# separate jobs. ui, libs-extra, and speech share the OS cache entry, which only
+# the speech job saves, and only on main. A cold main entry is filled by building
+# the whole workspace in that job before the speech feature, so the saved target
+# is not speech-only. `libs` keeps its own entry and saves it itself: cargo
+# resolves features per selection, so the shared entry was a full match that
+# still recompiled the whole selection on every run.
 #
 # `libs` runs the one workspace selection that carries the opt-in features with
 # `cargo nextest`, which schedules the tests of every binary in one pool, and

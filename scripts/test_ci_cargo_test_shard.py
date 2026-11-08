@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The platform test shards keep one warm cache entry per OS."""
+"""The platform test shards keep one warm cache entry per build graph."""
 
+import collections
 import os
 import re
 import subprocess
@@ -282,16 +283,43 @@ class WorkflowShardTests(unittest.TestCase):
                 ("macOS arm64", "speech"),
             },
         )
-        # Exactly one job per cache key saves the entry it restores.
+        # Exactly one job per cache key saves the entry it restores. A second
+        # saver would make the two jobs overwrite each other's entry, and none
+        # would leave the key empty after a lock bump.
+        savers_by_key = collections.Counter(
+            entry["cache_key"] for entry in entries if entry.get("save_cache") == "true"
+        )
+        self.assertEqual(
+            savers_by_key,
+            collections.Counter({entry["cache_key"]: 1 for entry in entries}),
+            "every cache key needs exactly one saving shard",
+        )
         savers = {(entry["name"], entry["shard"]) for entry in entries if entry.get("save_cache") == "true"}
         self.assertEqual(
             savers,
-            {("Linux x64", "speech"), ("macOS arm64", "libs"), ("macOS arm64", "speech")},
+            {
+                ("Linux x64", "libs"),
+                ("Linux x64", "speech"),
+                ("macOS arm64", "libs"),
+                ("macOS arm64", "speech"),
+            },
         )
-        self.assertIn("cache_key: linux-test", rust)
-        # The macOS shards build different graphs, so they keep one key each.
-        self.assertIn("cache_key: macos-test-libs", rust)
-        self.assertIn("cache_key: macos-test-speech", rust)
+        # A shard that resolves its own feature selection keeps its own key, so
+        # the entry it restores was filled by that same selection. Compare the
+        # parsed values, because `linux-test` is a prefix of `linux-test-libs`
+        # and a substring check cannot tell the shared key from the dedicated one.
+        self.assertEqual(
+            {(entry["shard"], entry["cache_key"]) for entry in entries},
+            {
+                ("ui", "linux-test"),
+                ("libs", "linux-test-libs"),
+                ("libs-extra", "linux-test"),
+                ("speech", "linux-test"),
+                ("libs", "macos-test-libs"),
+                ("libs-extra", "macos-test-libs"),
+                ("speech", "macos-test-speech"),
+            },
+        )
         self.assertIn("key: ${{ matrix.cache_key }}", rust)
         self.assertNotIn("matrix.shard", rust.split("save-if:", 1)[0].split("key:", 1)[-1])
         self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}", rust)
