@@ -9,24 +9,34 @@ const MAX_CHARS: usize = 160;
 pub struct Reason(Option<String>);
 
 impl Reason {
-    /// No reason is kept when the text repeats `secret` (printable ASCII), however
-    /// its characters are separated, and the check precedes truncation so a cut
-    /// cannot leave part of it visible.
+    /// As `from_body_all` for one secret.
     pub(crate) fn from_body(body: &[u8], secret: &str) -> Self {
+        Self::from_body_all(body, &[secret])
+    }
+
+    /// No reason is kept when the text repeats any of `secrets` (printable ASCII),
+    /// however its characters are separated, and the check precedes truncation so a
+    /// cut cannot leave part of one visible. A provider with a credential pair, such
+    /// as an access key id and a secret access key, passes both.
+    pub(crate) fn from_body_all(body: &[u8], secrets: &[&str]) -> Self {
         let Ok(serde_json::Value::Object(fields)) = serde_json::from_slice(body) else {
             return Self::default();
         };
         let Some(raw) = FIELDS.iter().find_map(|name| fields.get(*name)?.as_str()) else {
             return Self::default();
         };
-        Self::from_text(raw, secret)
+        Self::from_text_all(raw, secrets)
     }
 
-    /// As `from_body`, for an explanation the caller already took from a body
-    /// whose shape differs, such as a message nested inside an error object.
+    /// As `from_text_all` for one secret.
     pub(crate) fn from_text(raw: &str, secret: &str) -> Self {
-        let mut remaining = raw.chars();
-        if !secret.is_empty() && secret.chars().all(|expected| remaining.any(|c| c == expected)) {
+        Self::from_text_all(raw, &[secret])
+    }
+
+    /// As `from_body_all`, for an explanation the caller already took from a body
+    /// whose shape differs, such as a message nested inside an error object.
+    pub(crate) fn from_text_all(raw: &str, secrets: &[&str]) -> Self {
+        if secrets.iter().any(|secret| repeats(raw, secret)) {
             return Self::default();
         }
         let text = collapse(raw);
@@ -40,6 +50,12 @@ impl Reason {
     pub(crate) fn suffix(&self) -> String {
         self.0.as_ref().map_or_else(String::new, |text| format!(": {text}"))
     }
+}
+
+/// Whether `raw` repeats `secret` in order, however the characters are separated.
+fn repeats(raw: &str, secret: &str) -> bool {
+    let mut remaining = raw.chars();
+    !secret.is_empty() && secret.chars().all(|expected| remaining.any(|c| c == expected))
 }
 
 fn collapse(raw: &str) -> String {
@@ -172,6 +188,46 @@ mod tests {
         assert_eq!(
             Reason::from_body(br#"{"error":"bad key secret-test-key"}"#, "other").suffix(),
             ": bad key secret-test-key"
+        );
+    }
+
+    #[test]
+    fn a_credential_pair_is_dropped_when_the_message_repeats_either_half() {
+        const ACCESS_KEY_ID: &str = "AKIASYNTHETICKEYID01";
+        const SECRET_ACCESS_KEY: &str = "synthetic/secret+access/key/forRequestSign";
+        let pair = [ACCESS_KEY_ID, SECRET_ACCESS_KEY];
+        let body = |message: &str| format!(r#"{{"message":"{message}"}}"#);
+        assert_eq!(
+            Reason::from_body_all(
+                body(&format!(
+                    "signature for {ACCESS_KEY_ID} with {SECRET_ACCESS_KEY} does not match"
+                ))
+                .as_bytes(),
+                &pair
+            ),
+            Reason::default(),
+            "a message that repeats both halves is dropped"
+        );
+        assert_eq!(
+            Reason::from_body_all(
+                body(&format!("the secret {SECRET_ACCESS_KEY} is not valid")).as_bytes(),
+                &pair
+            ),
+            Reason::default(),
+            "the secret half alone is enough to drop the message"
+        );
+        assert_eq!(
+            Reason::from_body_all(
+                body(&format!("the access key {ACCESS_KEY_ID} is not authorized")).as_bytes(),
+                &pair
+            ),
+            Reason::default(),
+            "the key id alone is enough, which is the half a provider echoes most"
+        );
+        assert_eq!(
+            Reason::from_body_all(body("the region refused the request").as_bytes(), &pair).suffix(),
+            ": the region refused the request",
+            "a message that repeats neither half is kept"
         );
     }
 }
