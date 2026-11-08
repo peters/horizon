@@ -290,7 +290,7 @@ class TmuxTests(unittest.TestCase):
         terminal = self.start(arguments or [session], cols, rows)
         terminal.read_until(lambda data: attach.COLOR_QUERY in data)
         terminal.write(answer)
-        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
+        terminal.read_until(lambda data: b'\x1b[?2004h' in data, missing='the panel enables bracketed paste')
         return terminal
 
     def start(self, arguments, cols=80, rows=24):
@@ -302,6 +302,20 @@ class TmuxTests(unittest.TestCase):
         self.addCleanup(terminal.close)
         return terminal
 
+    def read_counts(self, terminal, count):
+        """Read until the pane history reaches its last row.
+
+        `attach()` returns once the panel enabled bracketed paste, and the pane
+        history arrives after that. A test that compares the whole history reads
+        it first instead of comparing what happened to have arrived. The wait
+        names the last row together with its line end, because a read can stop
+        inside that row and `numbers()` would count the piece as a row.
+        """
+        last_row = b'\r\n%d\r\n' % count
+        terminal.read_until(lambda data: last_row in data,
+                            missing='the last row %d of the pane history' % count)
+        return terminal
+
     def private(self, socket, *args):
         result = subprocess.run(['tmux', '-S', socket, *args], env=self.env, capture_output=True, text=True, timeout=10)
         return result.stdout if result.returncode == 0 else None
@@ -309,7 +323,7 @@ class TmuxTests(unittest.TestCase):
     def test_history_and_later_output_reach_the_terminal_in_full(self):
         self.tmux('send-keys', '-t', '=a:', 'seq 1 3000', 'Enter')
         self.wait_for(lambda: '3000' in self.tmux('capture-pane', '-p', '-t', '=a:'))
-        terminal = self.attach()
+        terminal = self.read_counts(self.attach(), 3000)
         self.assertEqual(numbers(terminal.data), list(range(1, 3001)))
         # A plain tmux client redraws a full screen instead and leaves gaps.
         terminal.write(b'seq 3001 30000\r')
@@ -325,7 +339,7 @@ class TmuxTests(unittest.TestCase):
         self.assertEqual(self.tmux('list-clients', '-t', '=a'), '')
         self.tmux('send-keys', '-t', '=a:', 'seq 1 100', 'Enter')
         self.wait_for(lambda: '100' in self.tmux('capture-pane', '-p', '-t', '=a:'))
-        second = self.attach()
+        second = self.read_counts(self.attach(), 100)
         self.assertIn(b'\x1b[3J', second.data)
         rows = plain(second.data.split(b'\x1b[3J', 1)[1])
         self.assertEqual(rows.count('before'), 1)
@@ -391,7 +405,8 @@ class TmuxTests(unittest.TestCase):
         terminal.write(b'echo $((6*7))\r')
         time.sleep(3)
         # The session is not shown yet, and the keys did not reach it.
-        self.assertFalse(terminal.data.endswith(b'\x1b[?2004h'))
+        terminal.drain()
+        self.assertNotIn(b'\x1b[?2004h', terminal.data)
         self.assertNotIn('42', self.tmux('capture-pane', '-p', '-t', '=a:'))
         terminal.write(PANEL_COLORS)
         terminal.read_until(lambda data: b'\r\n42\r\n' in data)
@@ -400,7 +415,9 @@ class TmuxTests(unittest.TestCase):
     def test_an_answer_after_the_wait_is_removed_also_in_pieces(self):
         terminal = self.start(['a'])
         terminal.read_until(lambda data: attach.COLOR_QUERY in data)
-        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'), seconds=attach.COLOR_SECONDS + 10)
+        terminal.read_until(lambda data: b'\x1b[?2004h' in data,
+                            seconds=attach.COLOR_SECONDS + 10,
+                            missing='the panel enables bracketed paste after the wait')
         terminal.write(b'echo before\r\x1b]11;rgb:10')
         time.sleep(0.5)
         terminal.write(b'10/2020/3030\x1b\\\x1b[?62;22cecho after\r')
@@ -472,7 +489,7 @@ class TmuxTests(unittest.TestCase):
         self.wait_for(lambda: self.private(socket, 'capture-pane', '-p', '-t', pane).strip() == '$')
         self.private(socket, 'send-keys', '-t', pane, 'seq 1 3000', 'Enter')
         self.wait_for(lambda: '3000' in self.private(socket, 'capture-pane', '-p', '-t', pane))
-        terminal = self.attach(arguments=['--socket', socket, pane])
+        terminal = self.read_counts(self.attach(arguments=['--socket', socket, pane]), 3000)
         self.assertEqual(numbers(terminal.data), list(range(1, 3001)))
         terminal.write(b'echo private-socket\r')
         terminal.read_until(lambda data: b'\r\nprivate-socket\r\n' in data)
@@ -521,12 +538,19 @@ class Terminal:
         self.data = bytearray()
         self.status = None
 
-    def read_until(self, condition, seconds=20):
+    def read_until(self, condition, seconds=20, missing=None):
+        """Read until the condition holds for everything this terminal received.
+
+        `missing` names what the caller waits for, so a timeout states it next to
+        the bytes that did arrive.
+        """
         deadline = time.monotonic() + seconds
         while not condition(bytes(self.data)):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise AssertionError('terminal output did not arrive: %r' % bytes(self.data[-200:]))
+                waited = ' waited for: %s' % missing if missing else ''
+                raise AssertionError('terminal output did not arrive%s: %r'
+                                     % (waited, bytes(self.data[-200:])))
             if select.select([self.fd], [], [], remaining)[0]:
                 try:
                     chunk = os.read(self.fd, 65536)
@@ -535,6 +559,26 @@ class Terminal:
                 if not chunk:
                     raise AssertionError('the attach ended: %r' % bytes(self.data[-200:]))
                 self.data += chunk
+
+    def drain(self, seconds=0.2):
+        """Read what the panel sent so far, without waiting for a marker.
+
+        An assertion about the absence of a marker needs the bytes: without a
+        read, the buffer holds only what an earlier call read, and a panel that
+        showed itself too early would still pass.
+        """
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            if not select.select([self.fd], [], [], remaining)[0]:
+                return
+            try:
+                chunk = os.read(self.fd, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            self.data += chunk
 
     def write(self, data):
         os.write(self.fd, data)
