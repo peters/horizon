@@ -883,6 +883,10 @@ impl HorizonApp {
                 saved.sessions.push(session.clone());
                 (session, true)
             })?;
+            // The record this window wrote is on its way to a worker thread, and the
+            // deployment thread's snapshots need not carry it: the window keeps the session
+            // it added, so the list answer names it without a read of the record.
+            runtime.sessions.remember(&session);
             options.cloud_connection = Some(connection);
             options.command = Some("ssh".into());
             options.args = Connection::new(worker, &settings, &directory)?.attach_args(&session, &launch.revision)?;

@@ -856,6 +856,9 @@ The refusals:
   Open the session on the cloud's card and try again.
 - `cloud_agent_write_failed`: the worker's terminal did not accept the write.
   Nothing arrived; send the instruction again.
+- `cloud_agent_read_failed`: the terminal did not answer its screen, so the text
+  is not what the session holds and nothing was typed. Read the session again; if
+  the refusal repeats, open the session on the cloud's card.
 - `cloud_agent_timed_out`: Horizon did not answer. The write may have arrived, so
   read the session before you send the instruction again.
 - `cloud_agent_result_unavailable`: Horizon's answer could not be read. Read the

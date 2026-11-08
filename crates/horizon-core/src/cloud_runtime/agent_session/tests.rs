@@ -119,6 +119,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 target="${target#=}"
+target="${target%:}"
 [ "$buffer" = "" ] || [ -f "$state/buffer-$buffer" ] || [ "$command" = load-buffer ] || exit 7
 case "$command" in
     has-session) [ -f "$state/sessions/$target" ];;
@@ -277,16 +278,25 @@ fn the_answer_keeps_the_newest_text_and_cuts_its_start_on_a_line() {
 fn the_text_names_the_socket_the_session_and_no_other_program() {
     let text = message_text("panel-1", "go", "horizon-agent-f");
     assert!(text.contains("tmux -L 'horizon-cloud'"), "{text}");
-    assert!(text.contains("-t '=panel-1'"), "the target is exact and quoted: {text}");
+    assert!(
+        text.contains("-t '=panel-1:'"),
+        "the pane target is the exact session and its active pane: {text}"
+    );
     assert!(
         text.contains("load-buffer -"),
         "the text arrives through a buffer: {text}"
     );
-    assert!(text.contains("send-keys -t '=panel-1' Enter"), "{text}");
+    assert!(text.contains("send-keys -t '=panel-1:' Enter"), "{text}");
     assert!(text.contains("capture-pane -p -J"), "{text}");
     assert!(!text.contains("sudo") && !text.contains("su "));
     let read = read_text("panel-2", 120);
     assert!(read.contains("-S -120"), "{read}");
+    assert!(
+        read.contains("capture-pane -p -J -t '=panel-2:' -S -120 || exit 6"),
+        "a capture that tmux refuses is its own code: {read}"
+    );
+    // The guard names the session itself, which is what tmux accepts without a colon.
+    assert!(text.contains("has-session -t '=panel-1' 2>/dev/null"), "{text}");
     assert!(!read.contains("load-buffer") && !read.contains("send-keys"), "{read}");
     assert_ne!(buffer(), buffer(), "each call uses its own buffer name");
     assert!(buffer().starts_with("horizon-agent-"));
@@ -318,6 +328,52 @@ fn a_write_pastes_its_own_text_and_never_the_top_of_the_shared_buffer_stack() {
     assert_eq!(sandbox.pane("panel-2"), "❯ ", "the other session receives nothing");
     // The named buffer is deleted after the paste, so the worker keeps no instruction.
     assert!(!sandbox.state().join("buffer-horizon-agent-mine").exists());
+}
+
+#[test]
+fn a_message_that_was_delivered_is_not_a_failure_when_its_confirmation_was_not() {
+    // The instruction is typed before the confirmation is read back, so a confirmation that
+    // tmux refuses must not fail the call: a caller that retried would type it twice. Only a
+    // refused paste or Enter is the write's own failure.
+    let text = message_text("panel-1", "go", "horizon-agent-f");
+    assert!(
+        text.contains("capture-pane -p -J -t '=panel-1:' -S -40 || true"),
+        "the confirming read cannot fail the call: {text}"
+    );
+    assert!(
+        text.contains("|| exit 5"),
+        "a refused paste or Enter is still the write's failure: {text}"
+    );
+    assert!(!text.contains("|| exit 6"), "a message names no read code: {text}");
+}
+
+#[test]
+fn a_tmux_call_that_never_answered_is_a_failure_and_never_an_empty_answer() {
+    // The live worker answered a capture on `=<id>` with "can't find pane" and status 1, and
+    // the read arrived as a successful empty terminal. Every status that is not a success is
+    // now a typed failure, so a caller cannot mistake a broken call for an empty screen.
+    for status in [1, 2, 127, 143] {
+        let answer = Answer {
+            exit_status: status,
+            uid: 10001,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration: Duration::ZERO,
+        };
+        assert_eq!(interpret(answer).unwrap_err(), Failure::Read, "status {status}");
+    }
+    let refused_capture = Answer {
+        exit_status: READ_FAILED,
+        uid: 10001,
+        stdout: String::new(),
+        stderr: "can't find pane".to_owned(),
+        duration: Duration::ZERO,
+    };
+    assert_eq!(interpret(refused_capture).unwrap_err(), Failure::Read);
+    assert!(
+        Failure::Read.to_string().starts_with("cloud_agent_read_failed"),
+        "the caller reads a code it can act on"
+    );
 }
 
 #[test]

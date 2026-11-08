@@ -134,14 +134,19 @@ impl HorizonApp {
 
     fn listed_cloud_entry(&self, index: usize, id: &str, now: SystemTime) -> Value {
         let group = &self.cloud_prototype.groups.0[index];
-        let state = self
-            .cloud_prototype
-            .production
-            .runtimes
-            .get(&group.issue)
+        let runtime = self.cloud_prototype.production.runtimes.get(&group.issue);
+        let state = runtime
             .and_then(|runtime| runtime.state.as_ref())
             .filter(|state| state.cloud_id == id);
-        entry(id, &self.cloud_facts(group, now), state)
+        // A session is recorded when its terminal attaches. That record goes to a worker
+        // thread, and the deployment thread's snapshots need not carry it, so a live worker
+        // whose session was saved after the last snapshot holds no session of it here. The
+        // sessions this window added itself answer for those, from memory: a list answer
+        // never reads the record on the UI thread. Both sources answer together, because a
+        // restored record names the sessions it already had and this window names the ones
+        // it added after that.
+        let added = runtime.map(|runtime| runtime.sessions.added()).unwrap_or_default();
+        entry(id, &self.cloud_facts(group, now), state, &added)
     }
 
     /// Moves the view to cloud `index` as a click on its row does: to its first
@@ -179,8 +184,25 @@ impl HorizonApp {
     }
 }
 
-/// One cloud of a `list` answer.
-fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtime::state::Deployment>) -> Value {
+/// One cloud of a `list` answer. `added` names the sessions this window added to the cloud's
+/// record, which the runtime state of this window need not carry.
+fn entry<'a>(
+    id: &str,
+    facts: &CloudFacts,
+    state: Option<&'a horizon_core::cloud_runtime::state::Deployment>,
+    added: &'a [horizon_core::cloud_runtime::state::Session],
+) -> Value {
+    // The runtime state and this window answer together: the state holds the sessions a
+    // restored record already carried, and this window holds the ones it added after that.
+    // A session both hold is listed once, by the panel ID that names it on the worker.
+    let held: Vec<&horizon_core::cloud_runtime::state::Session> =
+        state.map(|state| state.sessions.iter().collect()).unwrap_or_default();
+    let mut sessions = held.clone();
+    sessions.extend(
+        added
+            .iter()
+            .filter(|added| !held.iter().any(|known| known.panel_id == added.panel_id)),
+    );
     json!({
         "cloud": id,
         "name": facts.name,
@@ -193,12 +215,12 @@ fn entry(id: &str, facts: &CloudFacts, state: Option<&horizon_core::cloud_runtim
         "image_publication": state.and_then(|state| state.publication.as_ref()),
         // The sessions the worker runs, so a caller can name one to the agent tools. A
         // session's panel ID is its name on the worker, and nothing here is a secret.
-        "sessions": state.map(|state| state.sessions.iter().map(|session| json!({
+        "sessions": sessions.iter().map(|session| json!({
             "panel_id": session.panel_id,
             "agent": session.agent,
             "branch": session.branch,
             "worktree": session.worktree,
-        })).collect::<Vec<Value>>()).unwrap_or_default(),
+        })).collect::<Vec<Value>>(),
     })
 }
 

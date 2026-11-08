@@ -18,9 +18,11 @@ pub const CONFIRM_LINES: u32 = 40;
 /// How long the terminal has to react to the Enter before the answer shows it. An agent's
 /// user interface redraws after the key, and the answer must not show the text still waiting.
 const SETTLE: Duration = Duration::from_secs(1);
-/// The exit code of a session the worker does not run, and of a write that tmux refused.
+/// The exit code of a session the worker does not run, of a write that tmux refused and of a
+/// read that tmux refused.
 const NO_SESSION: i32 = 4;
 pub(super) const WRITE_FAILED: i32 = 5;
+pub(super) const READ_FAILED: i32 = 6;
 /// Where the write of one session serializes with another write of the same session, under
 /// the agent user's home. The lock is held until the call's own shell exits, so a paste and
 /// its Enter are never split by another instruction of that session.
@@ -42,6 +44,8 @@ pub enum Failure {
     NotRunning,
     #[error("cloud_agent_write_failed: the worker's terminal did not accept the instruction")]
     Write,
+    #[error("cloud_agent_read_failed: the worker's terminal did not answer its screen")]
+    Read,
     #[error("{0}")]
     Exec(ExecFailure),
 }
@@ -127,7 +131,11 @@ fn interpret(answer: Answer) -> Result<Outcome, Failure> {
     match exit_status {
         NO_SESSION if stderr.contains(NO_SESSION_MARKER) => return Err(Failure::NotRunning),
         NO_SESSION | WRITE_FAILED => return Err(Failure::Write),
-        _ => {}
+        READ_FAILED => return Err(Failure::Read),
+        // Anything else that is not a success is a tmux call that never answered: an empty
+        // answer would read as an empty terminal.
+        0 => {}
+        _ => return Err(Failure::Read),
     }
     let (text, truncated) = tail(&stdout, horizon_browser_control::manifest::cloud_agent::MAX_READ_BYTES);
     Ok(Outcome {
@@ -153,7 +161,7 @@ pub fn buffer() -> String {
 /// flags, and an unnamed buffer is the top of a stack that every session of the worker shares.
 #[must_use]
 pub fn message_text(tmux: &str, text: &str, buffer: &str) -> String {
-    let target = target(tmux);
+    let target = pane(tmux);
     let socket = cloud_exec::quote(TMUX_SOCKET);
     let buffer = cloud_exec::quote(buffer);
     format!(
@@ -165,7 +173,7 @@ pub fn message_text(tmux: &str, text: &str, buffer: &str) -> String {
          && tmux -L {socket} send-keys -t {target} Enter \
          || exit {WRITE_FAILED}\n\
          sleep {settle}\n\
-         tmux -L {socket} capture-pane -p -J -t {target} -S -{CONFIRM_LINES}\n",
+         tmux -L {socket} capture-pane -p -J -t {target} -S -{CONFIRM_LINES} || true\n",
         guard = guard(tmux),
         lock = LOCK,
         tmux = tmux,
@@ -178,10 +186,10 @@ pub fn message_text(tmux: &str, text: &str, buffer: &str) -> String {
 #[must_use]
 pub fn read_text(tmux: &str, lines: u32) -> String {
     format!(
-        "{guard}tmux -L {socket} capture-pane -p -J -t {target} -S -{lines}\n",
+        "{guard}tmux -L {socket} capture-pane -p -J -t {target} -S -{lines} || exit {READ_FAILED}\n",
         guard = guard(tmux),
         socket = cloud_exec::quote(TMUX_SOCKET),
-        target = target(tmux),
+        target = pane(tmux),
     )
 }
 
@@ -192,15 +200,24 @@ fn guard(tmux: &str) -> String {
         "if ! tmux -L {socket} has-session -t {target} 2>/dev/null; then \
          printf '%s\\n' {marker} >&2; exit {NO_SESSION}; fi\n",
         socket = cloud_exec::quote(TMUX_SOCKET),
-        target = target(tmux),
+        target = session_target(tmux),
         marker = cloud_exec::quote(NO_SESSION_MARKER),
     )
 }
 
-/// The tmux target of one session. The `=` prefix makes tmux read the name exactly, so a
-/// session whose ID is the beginning of another one's is never mistaken for it.
-fn target(tmux: &str) -> String {
+/// The tmux target of one session, for a call that names a session. The `=` prefix makes tmux
+/// read the name exactly, so a session whose ID is the beginning of another one's is never
+/// mistaken for it.
+fn session_target(tmux: &str) -> String {
     cloud_exec::quote(&format!("={tmux}"))
+}
+
+/// The tmux target of one session for a call that names a pane, which is every call that
+/// writes or reads the terminal. The colon is what makes tmux read a pane target: `=<name>`
+/// answers `can't find pane` on tmux 3.4, while `=<name>:` is the exact session's current
+/// window and its active pane.
+fn pane(tmux: &str) -> String {
+    cloud_exec::quote(&format!("={tmux}:"))
 }
 
 /// The last `max_bytes` bytes of `text`, starting on a line, and whether the start was cut.

@@ -44,6 +44,10 @@ pub(super) struct Sessions {
     flight: RefCell<Option<Arc<Mutex<Flight>>>>,
     /// This runtime showed that save's failure.
     shown: Cell<bool>,
+    /// The sessions this runtime added to its record. The record is written on a worker
+    /// thread and the deployment thread's snapshots of it need not carry them, so a reader
+    /// of this window keeps them here rather than read the record on the UI thread.
+    added: RefCell<Vec<cloud_runtime::state::Session>>,
 }
 
 /// A record being saved, and how often it changed since the save began.
@@ -93,6 +97,21 @@ impl HorizonApp {
 }
 
 impl Sessions {
+    /// Keeps `session` as one this window added to its record, so a list answer names it
+    /// without a read of the record.
+    pub(in crate::app::cloud_panel::production) fn remember(&self, session: &cloud_runtime::state::Session) {
+        let mut added = self.added.borrow_mut();
+        if !added.iter().any(|known| known.panel_id == session.panel_id) {
+            added.push(session.clone());
+        }
+    }
+
+    /// The sessions this window added to its record, as far as it knows without a read of
+    /// the record: the ones it recorded while it ran.
+    pub(in crate::app::cloud_panel::production) fn added(&self) -> Vec<cloud_runtime::state::Session> {
+        self.added.borrow().clone()
+    }
+
     /// The sessions of a runtime that a session switch rebuilt; it joins the save that
     /// still runs for its cloud, so the cloud stays busy until that save ends.
     pub(super) fn of(directory: &Path) -> Self {
