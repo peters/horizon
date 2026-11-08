@@ -468,7 +468,7 @@ Fixed metrics:
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
 | Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
 | Directory picker | 520 wide, 34 row, at most 460 tall |
-| Dialog width | viewport width minus 64, so the dialog takes the window; two columns from 800 (summary column 330, gutter 24) |
+| Dialog width | viewport width minus 64, up to 1180 (1480 while a setup agent shows its output); two columns from 800 (summary column 330, gutter 24) |
 
 ### Strokes
 
@@ -539,10 +539,15 @@ New cloud surface:
 - The workspace that **+ New cloud** makes is large enough to hold the form
   (`WS_CLOUD_FORM_SIZE`); a workspace the person made keeps its own size.
 - Size from that rect and the canvas together, so a small workspace never crops a
-  form the window has room for: width `(room.width - 64).clamp(640, window width
-  - 64)` and body height `(room.height - 270).clamp(320, window body)`, where
-  `room` is the union of the two rects. The form moves back inside the canvas at
-  an edge, so it never leaves the screen.
+  form the window has room for: width `(room.width - 64).clamp(640, 1180)` and
+  body height `(room.height - 270).max(320)`, where `room` is the union of the two
+  rects. The form moves back inside the canvas at an edge, so it never leaves the
+  screen.
+- The width stops where the content stops gaining: every line of the form fits
+  from 1056 on, so a wider form only stretches its fields and moves the summary
+  away from them. A setup agent's output takes half the form, so it gets 1480. The
+  body keeps following the window, because a form with a repository, its profiles,
+  a place and its storage fills every row a tall screen can give it.
 - A click outside it does nothing. Escape closes nothing and loses no choice: it
   only ends the search of an open folder picker. **Cancel** ends the draft, and the
   setup view's **Close** parks it.

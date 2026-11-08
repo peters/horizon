@@ -264,6 +264,9 @@ def main():
     parser.add_argument('--horizon', type=Path, required=True, help='Horizon debug binary for an isolated smoke')
     parser.add_argument('--tools', type=Path, help='Optional unpacked Debian tools root')
     parser.add_argument('--native-view', action='store_true', help='Expose direct VNC without noVNC/websockify')
+    parser.add_argument(
+        '--screen', default='1600x1000',
+        help='Size of the isolated desktop as WIDTHxHEIGHT, such as 2800x1000 for a wide screen')
     parser.add_argument('--device-address', help='Read-only native Device panel endpoint inside the Horizon fixture')
     parser.add_argument(
         '--firefox-system-access', action='store_true',
@@ -316,6 +319,13 @@ def main():
         parser.error(str(problem))
     if args.browser_host_profile and not args.browser_host:
         parser.error('--browser-host-profile needs --browser-host')
+    try:
+        width, height = (int(part) for part in args.screen.lower().split('x', 1))
+    except ValueError:
+        parser.error('--screen takes WIDTHxHEIGHT, such as 2800x1000')
+    if not 640 <= width <= 8192 or not 480 <= height <= 8192:
+        parser.error('--screen takes 640-8192 by 480-8192 pixels')
+    args.screen = f'{width}x{height}'
     args.state = sandbox.prepare_state(args.state, reuse=args.reuse_state).resolve()
     app = args.horizon.resolve(strict=True)
     extra_ro_binds = [app]
@@ -385,7 +395,7 @@ def main():
         log = log_path('xvfb').open('wb')
         logs.append(log)
         xvfb = sandbox.start(['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
-                                 '1600x1000x24', '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
+                                 f'{args.screen}x24', '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
                                 pass_fds=(write_fd,), stdout=log, stderr=log, env=host_env)
         children.append(xvfb)
         os.close(write_fd)

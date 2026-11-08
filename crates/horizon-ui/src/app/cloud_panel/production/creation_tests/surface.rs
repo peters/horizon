@@ -97,7 +97,8 @@ fn the_form_takes_the_window_and_stays_on_the_canvas() {
     let canvas = app.canvas_rect(&ctx);
     let form = form_rect(&ctx).expect("the form is drawn");
     // A window with room beside a small workspace gives the form that room, so nothing scrolls
-    // that the window could show.
+    // that the window could show. This window is narrower than the widest form, so the form
+    // takes all of it.
     assert!(
         form.width() > surface.width(),
         "the form {form:?} is no wider than its workspace {surface:?}"
@@ -112,14 +113,7 @@ fn the_form_takes_the_window_and_stays_on_the_canvas() {
     );
     // The body takes its height from the window, not from the workspace it is drawn on.
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let body = output
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            Shape::Text(text) if text.galley.job.text == "Cloud title" => Some(shape.clip_rect.height()),
-            _ => None,
-        })
-        .expect("the body shows its first field");
+    let body = body_height(&output);
     let ceiling = super::super::creation::body_ceiling(ctx.content_rect());
     // The body follows the window, not the 700 px workspace it is drawn on.
     assert!(
@@ -146,6 +140,54 @@ fn the_form_takes_the_window_and_stays_on_the_canvas() {
         app.canvas_rect(&ctx).contains_rect(moved),
         "the form stays on the canvas after a pan: {moved:?}"
     );
+}
+
+/// The body of the form, which the first field is clipped to.
+fn body_height(output: &egui::FullOutput) -> f32 {
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == "Cloud title" => Some(shape.clip_rect.height()),
+            _ => None,
+        })
+        .expect("the body shows its first field")
+}
+
+#[test]
+fn the_form_stops_growing_where_its_content_does() {
+    use super::super::creation::{CHROME_HEIGHT, FORM_MAX_WIDTH, SETUP_MAX_WIDTH, body_ceiling, form_layout};
+    let (_temp, ctx, mut app) = ready_app();
+    app.create_new_workspace(&ctx, NewWorkspace::Cloud, None);
+    // A screen that is wider than the form can use.
+    for _ in 0..6 {
+        run_app_frame_with_input(&ctx, &mut app, raw_input([5055.0, 1338.0], None));
+    }
+    let canvas = app.canvas_rect(&ctx);
+    let form = form_rect(&ctx).expect("the form is drawn");
+    assert!(
+        form.width() <= crate::app::WS_CLOUD_FORM_SIZE[0],
+        "the form {form:?} grew past the frame its workspace keeps for it"
+    );
+    assert!(
+        form.width() < canvas.width() * 0.5,
+        "the form {form:?} still follows the canvas {canvas:?} on a very large screen"
+    );
+    // The widths themselves, where no window hides which one the form took, and the height,
+    // which still follows the window because a full form needs every row it can show.
+    let room = Rect::from_min_size(Pos2::ZERO, Vec2::new(6000.0, 3000.0));
+    for (widest, name) in [(FORM_MAX_WIDTH, "the form"), (SETUP_MAX_WIDTH, "a setup agent's form")] {
+        let (width, body, _) = form_layout(room, room, body_ceiling(room), widest);
+        assert!(
+            (width - widest).abs() < 0.5,
+            "{name} takes {width} px of room it cannot use, not {widest}"
+        );
+        assert!(
+            (body - (room.height() - CHROME_HEIGHT)).abs() < 0.5,
+            "{name} is {body} px tall, not the {} px the window leaves",
+            room.height() - CHROME_HEIGHT
+        );
+    }
 }
 
 #[test]
