@@ -613,7 +613,8 @@ guarantee that the code gives, and what the code does not guarantee.
     when the asked hours and the offer's estimate for them fit what is left; a
     refusal names the limit and what is left, records nothing and requests no
     worker; a record longer than `MAX_LEDGER_BYTES` admits nothing; the rent is
-    recorded before the GitHub access step.
+    recorded after the repository, price, policy, GitHub access and worker-key
+    reads, and before the request leaves for the provider.
   - Does not guarantee: a charge that the provider adds after its quote; that a
     deployment which fails after admission stops being counted; that Horizon stops
     a worker when the envelope's hours are used up, because the bounds are checked

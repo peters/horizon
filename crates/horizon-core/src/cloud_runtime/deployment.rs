@@ -575,8 +575,13 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
     Ok(state)
 }
 
-/// The public key deployment sends to the provider: the one beside the identity.
-pub(super) fn current_public_key(identity: &std::path::Path) -> Result<String> {
+/// The public key deployment sends to the provider: the one beside the identity. A caller that
+/// must decide before it spends anything reads the pair first, as `cloud_create` does.
+///
+/// # Errors
+/// [`Error::Invalid`] for a missing or unsupported public key, and [`Error::Io`] for an
+/// unreadable one.
+pub fn current_public_key(identity: &std::path::Path) -> Result<String> {
     // Appended to the path itself: a name that is not valid UTF-8 keeps its own bytes.
     let mut public = identity.as_os_str().to_owned();
     public.push(".pub");

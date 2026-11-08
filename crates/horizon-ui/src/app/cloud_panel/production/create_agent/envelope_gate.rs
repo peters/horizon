@@ -29,8 +29,10 @@ pub(super) fn approval(machine: &Settings, root: &Path) -> Result<record::Envelo
 
 /// The envelope's own admission of one rent, and the line that a later audit and the cost
 /// view read. A refusal writes nothing, so a cloud that is refused leaves no record and no
-/// budget consumed. The line stands once it is written, because a worker may be rented after
-/// it even when the deployment that follows fails.
+/// budget consumed. The rent is asked for last, after every check that a read of this computer
+/// can decide, so only a create that may rent a worker spends the envelope. The line stands
+/// once it is written, because a worker may be rented after it even when the deployment that
+/// follows fails.
 pub(super) fn admit(
     root: &Path,
     envelope: &record::Envelope,
