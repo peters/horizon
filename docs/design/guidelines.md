@@ -542,8 +542,11 @@ New cloud surface:
   around the form, with the strip of its name badge above it. The form takes its
   size from the window and the frame is board geometry, so a frame of a fixed
   size cannot hold it at every window size and zoom. The frame follows the form
-  instead. Where the form reaches the top of the canvas, the badge strip falls
-  outside the canvas and the name shows in the sidebar only.
+  instead. The frame is drawn earlier in a frame than the form, so it is settled
+  from the same inputs the form uses and never trails the form through a pan;
+  only the size the form's content gives it comes from the last draw, and another
+  size asks for one more frame. Where the form reaches the top of the canvas, the
+  badge strip falls outside the canvas and the name shows in the sidebar only.
 - Size from that rect and the canvas together, so a small workspace never crops a
   form the window has room for: width `(room.width - 64).clamp(640, 1180)` and
   body height `(room.height - 270).max(320)`, where `room` is the union of the two
