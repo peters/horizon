@@ -29,8 +29,17 @@ env:
 # Cache policy: every rust-cache step below and in release-artifacts.yml
 # sets `save-if: github.ref == 'refs/heads/main'`. The platform test jobs also
 # require one saver per cache key (`matrix.save_cache`), so each key keeps one
-# entry. The Linux shards share `linux-test`; each macOS shard has its own key,
-# because libs and speech build different graphs.
+# entry. A shard keeps its own key when it builds its own graph: `libs` resolves
+# features over `--workspace --exclude horizon-ui` with the opt-in features, so
+# `linux-test-libs` and `macos-test-libs` are saved by that shard itself. The
+# remaining Linux shards share `linux-test`, which the speech shard saves, and
+# the macOS speech shard saves `macos-test-speech`.
+# Cargo resolves features per package selection, so an entry filled by another
+# selection is a full match that still rebuilds: the Linux `libs` shard shared
+# `linux-test` with a saver that builds `--workspace`, and recompiled 74 crates
+# in 8m 10s on every hit, while the macOS `libs` shard on its own key recompiled
+# only the 25 workspace crates that had changed. A dedicated key is worth one
+# entry of the budget below.
 # Pull-request runs restore from main's entry but never write their own.
 # A per-branch copy of each build
 # cache pushed the repository past GitHub's 10 GB budget, and the resulting
@@ -328,10 +337,13 @@ jobs:
     # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
     # rebuilds the vendored speech C++ tree, and a job that times out skips
     # the cache save, so the next run starts cold again.
-    # On Linux, ui, libs, libs-extra, and speech run as four jobs. They restore
-    # one cache entry per OS; the key still includes this job id. Only the
-    # speech shard saves, and a miss on main rebuilds the whole workspace there
-    # before the speech feature.
+    # On Linux, ui, libs, libs-extra, and speech run as four jobs. ui,
+    # libs-extra, and speech restore `linux-test`, which the speech shard saves;
+    # a miss on main rebuilds the whole workspace there before the speech
+    # feature. `libs` restores `linux-test-libs` and saves it itself, because its
+    # package selection resolves features that no other shard builds; sharing the
+    # other entry made every hit recompile 74 crates. Each key still includes
+    # this job id.
     # `libs` runs the one workspace selection with the opt-in features, and
     # `libs-extra` runs the single-package lanes and the example that need their
     # own feature resolution. The two ran as one job before this split: cargo
@@ -351,7 +363,7 @@ jobs:
     # On a pull request that changes no speech input, horizon-ui included
     # (see Detect changed inputs), the Linux speech job skips its steps
     # instead of the whole job: a job-level `if` cannot read the matrix, and
-    # a separate job would change the job id in the shared linux-test cache
+    # a separate job would change the job id in the shared `linux-test` cache
     # key. Clippy still compiles the speech code on every pull request. A
     # push never skips, because this job saves the Linux cache on main. Only
     # an explicit false skips, so a failed detection still runs the tests.
@@ -374,8 +386,9 @@ jobs:
             shard: ui
           - os: ubuntu-latest
             name: Linux x64
-            cache_key: linux-test
+            cache_key: linux-test-libs
             shard: libs
+            save_cache: true
           - os: ubuntu-latest
             name: Linux x64
             cache_key: linux-test
