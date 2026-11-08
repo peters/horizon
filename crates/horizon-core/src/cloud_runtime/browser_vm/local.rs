@@ -39,7 +39,7 @@ const CONTAINER_SSH_PORT: u16 = 2222;
 const CONTAINER_VNC_PORT: u16 = 5900;
 
 /// Where the local browser VM of this computer is addressed, as every route names it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Route {
     /// The ssh target: the alias of the managed entry, or the address when Horizon could not
     /// write an entry because it does not know the home directory of this computer.

@@ -2,7 +2,7 @@
 //! answer once Horizon recorded the phase it started; the caller polls `status`.
 use super::BrowserController;
 use horizon_browser_control::manifest::provider_usage::{
-    self, BrowserVmAction, BrowserVmRequest, REQUEST_DEADLINE_MILLIS,
+    self, BrowserVmAction, BrowserVmProvider, BrowserVmRequest, REQUEST_DEADLINE_MILLIS,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -16,6 +16,10 @@ pub(crate) struct BrowserVmInput {
     /// `deploy` rents the machine, `stop` releases the server and keeps the state
     /// volume, `resume` rents a new server on that volume, and `delete` removes both.
     pub operation: BrowserVmAction,
+    /// Where to run the machine: `hetzner` (the default) rents one, and `local` runs the
+    /// image in a container on this computer with both ports on its loopback. A local deploy
+    /// takes no image, server type, location or volume.
+    pub provider: Option<BrowserVmProvider>,
     /// An immutable image reference of the browser VM image,
     /// `[registry/]name@sha256:<64 hex>`. Required by `deploy`, and refused with a tag.
     pub image: Option<String>,
@@ -35,6 +39,7 @@ impl BrowserController {
     pub(crate) async fn browser_vm(&self, input: BrowserVmInput) -> Result<Value, String> {
         let request = BrowserVmRequest {
             action: input.operation,
+            provider: input.provider,
             image: input.image,
             server_type: input.server_type,
             location: input.location,
@@ -44,7 +49,7 @@ impl BrowserController {
             match error.kind() {
                 std::io::ErrorKind::PermissionDenied => "browser_vm_unavailable: requires a Horizon agent panel",
                 std::io::ErrorKind::InvalidInput => {
-                    "browser_vm_invalid_request: deploy needs an image with a digest and a ccx server type; the other operations take no machine"
+                    "browser_vm_invalid_request: a deploy of a rented machine needs an image with a digest and a ccx server type, a local deploy takes no machine, and the other operations take neither"
                 }
                 _ => "browser_vm_unavailable: could not queue the request",
             }
@@ -88,5 +93,6 @@ mod tests {
         .unwrap();
         assert_eq!(deploy.operation, BrowserVmAction::Deploy);
         assert!(deploy.location.is_none());
+        assert!(deploy.provider.is_none(), "the rented machine stays the default");
     }
 }

@@ -7,7 +7,7 @@ use egui::{Context, RawInput};
 use horizon_core::Config;
 use horizon_core::StartupDecision;
 use horizon_core::browser::manifest::provider_usage::{BrowserVmAction, BrowserVmRequest};
-use horizon_core::cloud_runtime::browser_vm::{Phase, Status};
+use horizon_core::cloud_runtime::browser_vm::{Phase, Provider, Status};
 use tempfile::TempDir;
 
 use super::app::device_connection;
@@ -30,6 +30,8 @@ fn app() -> (TempDir, Context, HorizonApp) {
 
 fn ready() -> Status {
     Status {
+        provider: Provider::Hetzner,
+        vnc_address: None,
         phase: Phase::Ready,
         ssh_target: Some("horizon-browser-vm".into()),
         ssh_note: None,
@@ -306,6 +308,8 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
     panel.absorb(
         BrowserVmAction::Status,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Deploying,
             ..ready()
         }),
@@ -317,6 +321,8 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
     panel.absorb(
         BrowserVmAction::Status,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Deleting,
             ..ready()
         }),
@@ -426,6 +432,8 @@ fn the_section_draws_no_sign_in_before_a_machine_is_ready() {
     panel.absorb(
         BrowserVmAction::Status,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Idle,
             ssh_target: None,
             image: None,
@@ -545,6 +553,8 @@ fn a_run_that_failed_inside_the_provider_shows_its_recorded_reason() {
     panel.absorb(
         BrowserVmAction::Deploy,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Failed,
             ssh_target: None,
             error: Some(reason.into()),

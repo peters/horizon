@@ -207,6 +207,7 @@ impl Panel {
         let field = |value: &str| Some(value.trim().to_string()).filter(|value| !value.is_empty());
         let mut request = BrowserVmRequest {
             action,
+            provider: None,
             image: None,
             server_type: None,
             location: None,

@@ -320,6 +320,45 @@ Settings window removes the machine and the state volume.
    Result: The tool refuses with the same reason, and the Hetzner project holds
    no new server.
 
+### 6.7 D7: the same image runs on this computer
+
+This task rents nothing. It runs the image in a container on the computer of the
+test, and it is the only task of this procedure that needs no Hetzner account.
+
+1. Stop the rented machine first, so one browser VM runs at a time.
+
+   > **CAUTION:** STEP 6.7.1 STOPS THE RENTED MACHINE. The state volume and the
+   > sign-ins stay, and step 6.7.5 starts it again.
+
+2. Ask the agent to call `browser_vm` with
+   `{"operation": "deploy", "provider": "local"}`, then call it with
+   `{"operation": "status"}` until the phase is `ready`.
+
+   Result: The answer names `provider: local`, a `vnc_address` on `127.0.0.1`,
+   `device_panel.endpoint` with that address, and `browser_host.ssh_target`
+   `horizon-browser-vm`. The answer holds no `hourly_net`.
+
+3. Read the record.
+
+   ```sh
+   docker ps --format '{{.Names}} {{.Image}}'
+   ```
+
+   Result: The line names the container `horizon-browser-vm-local` and the image
+   `horizon-browser-vm-local:latest`.
+
+4. Ask the agent to call `browser_vm` with `{"operation": "stop"}`.
+
+   Result: The phase is `stopped`, and `docker ps` names no container of this
+   computer. `docker volume ls` still names `horizon-browser-vm-local-state`.
+
+5. Ask the agent to call `browser_vm` with `{"operation": "resume"}`, then start
+   the rented machine again with `{"operation": "resume"}` or from the Settings
+   window when the test needs it.
+
+   Result: The container runs again with the same state volume, so a site that
+   was signed in on it stays signed in.
+
 ## 7. Pass criteria
 
 - D1 rents one machine, and its state volume is mounted at `/state`. Horizon
@@ -335,6 +374,9 @@ Settings window removes the machine and the state volume.
   volume in the Hetzner project.
 - D6 refuses a mutable tag in the Settings window and in the tool, before any
   request.
+- D7 runs the same image on this computer with no rental, names the loopback
+  endpoint of its display, and keeps its state volume across a stop and a
+  resume.
 
 ## 8. Cleanup
 

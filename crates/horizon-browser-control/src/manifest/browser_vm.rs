@@ -22,10 +22,26 @@ pub enum BrowserVmAction {
     Delete,
 }
 
+/// Where the browser VM runs.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserVmProvider {
+    /// A machine rented from Hetzner, which a person stops when it is not needed.
+    #[default]
+    Hetzner,
+    /// A container of the image on this computer, with both of its ports on the loopback.
+    Local,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserVmRequest {
     pub action: BrowserVmAction,
+    /// Where to run the machine. A deploy on this computer needs no image digest, no server
+    /// type, no location and no volume, and the other actions read the provider of the
+    /// record instead of this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<BrowserVmProvider>,
     /// An immutable image reference, `[registry/]name@sha256:<64 hex>`, of the browser VM
     /// image. Required by `deploy`; a tag is refused, because a machine must not change
     /// what it runs between two rents.
@@ -59,6 +75,14 @@ impl BrowserVmRequest {
             })
         };
         match self.action {
+            // The container of this computer takes its image tag, its name and its ports
+            // from Horizon, so a local deploy names no machine at all.
+            BrowserVmAction::Deploy if self.provider == Some(BrowserVmProvider::Local) => {
+                self.image.is_none()
+                    && self.server_type.is_none()
+                    && self.location.is_none()
+                    && self.volume_gb.is_none()
+            }
             BrowserVmAction::Deploy => {
                 name(&self.image, 512)
                     && self.image.as_deref().is_some_and(|image| image.contains("@sha256:"))
@@ -67,7 +91,8 @@ impl BrowserVmRequest {
                     && self.volume_gb.is_none_or(|gb| (10..=10_240).contains(&gb))
             }
             BrowserVmAction::Status | BrowserVmAction::Stop | BrowserVmAction::Resume | BrowserVmAction::Delete => {
-                self.image.is_none()
+                self.provider.is_none()
+                    && self.image.is_none()
                     && self.server_type.is_none()
                     && self.location.is_none()
                     && self.volume_gb.is_none()
@@ -104,6 +129,36 @@ mod tests {
         let mut small = deploy;
         small["volume_gb"] = 5.into();
         assert!(!serde_json::from_value::<BrowserVmRequest>(small).unwrap().valid());
+    }
+
+    #[test]
+    fn a_local_deploy_names_no_machine_at_all() {
+        let local = json!({"action": "deploy", "provider": "local"});
+        assert!(
+            serde_json::from_value::<BrowserVmRequest>(local.clone())
+                .unwrap()
+                .valid()
+        );
+        let mut with_image = local.clone();
+        with_image["image"] = format!("horizon-browser-vm-local@sha256:{}", "a".repeat(64)).into();
+        assert!(
+            !serde_json::from_value::<BrowserVmRequest>(with_image).unwrap().valid(),
+            "the container takes its image from Horizon"
+        );
+        let mut on_a_status = json!({"action": "status"});
+        on_a_status["provider"] = "local".into();
+        assert!(
+            !serde_json::from_value::<BrowserVmRequest>(on_a_status).unwrap().valid(),
+            "a read takes the provider from the record"
+        );
+        // The default stays the rented machine, so an older caller reads the same request.
+        let rented = serde_json::from_value::<BrowserVmRequest>(json!({
+            "action": "deploy", "image": format!("ghcr.io/example/vm@sha256:{}", "a".repeat(64)),
+            "server_type": "ccx13",
+        }))
+        .unwrap();
+        assert_eq!(rented.provider, None);
+        assert!(rented.valid());
     }
 
     #[test]
