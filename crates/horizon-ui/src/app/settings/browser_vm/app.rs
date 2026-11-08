@@ -74,7 +74,7 @@ impl HorizonApp {
             name: Some(DEVICE_PANEL_NAME.to_string()),
             kind: PanelKind::Device,
             command: Some(route.vnc.clone()),
-            ssh_connection: Some(device_connection(&route)),
+            ssh_connection: device_connection(&route),
             ..PanelOptions::default()
         };
         match self.create_panel_with_options(options, workspace) {
@@ -98,10 +98,15 @@ impl HorizonApp {
 /// The SSH route of the Device panel. It names the managed entry of the machine, and the entry
 /// of the ssh configuration carries the key that the deploy installed together with the host
 /// keys that Horizon trusted, so the panel presents no key of its own.
-pub(super) fn device_connection(route: &DeviceRoute) -> SshConnection {
-    SshConnection {
+/// The ssh hop that reaches the display of a rented machine, or nothing for a container on this
+/// computer, whose display the panel opens on the loopback endpoint itself.
+pub(super) fn device_connection(route: &DeviceRoute) -> Option<SshConnection> {
+    if route.is_loopback() {
+        return None;
+    }
+    Some(SshConnection {
         host: route.host.clone(),
         user: Some(route.user.clone()),
         ..SshConnection::default()
-    }
+    })
 }

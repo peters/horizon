@@ -5,10 +5,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 
-use horizon_core::browser::manifest::provider_usage::{BrowserVmAction, BrowserVmRequest, UsageRequest};
+use horizon_core::browser::manifest::provider_usage::{
+    BrowserVmAction, BrowserVmProvider, BrowserVmRequest, UsageRequest,
+};
 use horizon_core::cloud_runtime::{
     Cancellation,
-    browser_vm::{self, Deploy, Operation, Phase, Status},
+    browser_vm::{self, Deploy, Operation, Phase, Provider, Status},
     settings::Settings,
 };
 use serde_json::{Value, json};
@@ -195,6 +197,10 @@ fn operation(request: &BrowserVmRequest) -> Option<Operation> {
         BrowserVmAction::Stop => Operation::Stop,
         BrowserVmAction::Delete => Operation::Delete,
         BrowserVmAction::Deploy => Operation::Deploy(Deploy {
+            provider: match request.provider {
+                Some(BrowserVmProvider::Local) => Provider::Local,
+                Some(BrowserVmProvider::Hetzner) | None => Provider::Hetzner,
+            },
             image: request.image.clone().unwrap_or_default(),
             server_type: request.server_type.clone().unwrap_or_default(),
             location: request.location.clone().unwrap_or_default(),
@@ -217,9 +223,19 @@ fn work(
     };
     // Every action that rents, stops, resumes or deletes reaches the provider and needs the
     // account settings; a read reaches only the record of this Horizon and needs none.
-    let settings = runs_provider(request.action).then(|| run_settings(root)).transpose()?;
+    // A deploy names the provider it starts, because a Horizon that never ran a browser VM has
+    // no record to read. A stop, a resume or a delete names none: the record says whether the
+    // machine is a container on this computer, and such a machine reaches no cloud settings.
+    let local = match request.action {
+        BrowserVmAction::Deploy => request.provider == Some(BrowserVmProvider::Local),
+        _ => browser_vm::status(root).is_ok_and(|status| status.provider == Provider::Local),
+    };
+    let settings = (runs_provider(request.action) && !local)
+        .then(|| run_settings(root))
+        .transpose()?;
     if let Operation::Deploy(deploy) = &mut operation
         && deploy.location.is_empty()
+        && deploy.provider == Provider::Hetzner
     {
         deploy.location = first_location(settings.as_ref())?;
     }
@@ -284,10 +300,27 @@ pub(in crate::app) struct DeviceRoute {
 }
 
 impl DeviceRoute {
+    /// Whether the display sits on the loopback of this computer, which a panel opens directly
+    /// and with no ssh hop. A rented machine's display is on the loopback of that machine.
+    pub(in crate::app) fn is_loopback(&self) -> bool {
+        self.user.is_empty()
+    }
+
     /// The route of `status`, or nothing unless a machine runs and the record names its host.
+    ///
+    /// A container on this computer publishes its display on the loopback, so its route is the
+    /// address itself and needs no ssh hop; a rented machine's display sits on the loopback of
+    /// that machine, which a panel reaches through the ssh entry.
     pub(in crate::app) fn of(status: &Status) -> Option<Self> {
         if status.phase != Phase::Ready {
             return None;
+        }
+        if let Some(address) = &status.vnc_address {
+            return Some(Self {
+                host: address.clone(),
+                user: String::new(),
+                vnc: address.clone(),
+            });
         }
         let host = status.ssh_host()?;
         let user = status
@@ -307,6 +340,8 @@ impl DeviceRoute {
 fn describe(status: &Status) -> Value {
     let mut answer = json!({
         "phase": status.phase,
+        "provider": status.provider,
+        "vnc_address": status.vnc_address,
         "ssh_target": status.ssh_target,
         "ssh_note": status.ssh_note,
         "image": status.image,
@@ -317,12 +352,19 @@ fn describe(status: &Status) -> Value {
         "error": status.error,
     });
     if let Some(route) = DeviceRoute::of(status) {
-        answer["device_panel"] = json!({
-            "ssh": {"host": route.host, "user": route.user, "vnc": route.vnc}
+        answer["device_panel"] = match status.vnc_address {
+            // A container of this computer: the panel takes the loopback endpoint directly.
+            Some(_) => json!({ "endpoint": route.vnc }),
+            None => json!({
+                "ssh": {"host": route.host, "user": route.user, "vnc": route.vnc}
+            }),
+        };
+        answer["person_step"] = json!(match status.vnc_address {
+            Some(_) =>
+                "A person must sign in now: call device_panel with the loopback endpoint above, which is the display of the container on this computer, and sign in to the sites there. The state volume keeps those sign-ins across a stop and a start. An agent cannot do this step.",
+            None =>
+                "A person must sign in now: call device_panel with the ssh route above, which is the ssh entry horizon-browser-vm that Horizon wrote, and sign in to the sites on the display of the machine. The entry names the key of the machine and the host keys that Horizon trusted, so the route needs no key and no host-key step of its own. The state volume keeps those sign-ins across a stop and a resume. An agent cannot do this step.",
         });
-        answer["person_step"] = json!(
-            "A person must sign in now: call device_panel with the ssh route above, which is the ssh entry horizon-browser-vm that Horizon wrote, and sign in to the sites on the display of the machine. The entry names the key of the machine and the host keys that Horizon trusted, so the route needs no key and no host-key step of its own. The state volume keeps those sign-ins across a stop and a resume. An agent cannot do this step."
-        );
         answer["browser_host"] = json!({
             "ssh_target": status.ssh_target,
             "note": "set this entry in the Settings window or the exported config; it applies at the next start of Horizon",
@@ -339,6 +381,7 @@ mod tests {
     fn request(action: BrowserVmAction) -> BrowserVmRequest {
         BrowserVmRequest {
             action,
+            provider: None,
             image: None,
             server_type: None,
             location: None,
@@ -447,6 +490,45 @@ mod tests {
         assert_eq!(started, 1);
     }
 
+    /// The record of a container on this computer, with no cloud settings beside it.
+    fn local_root() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        Record {
+            phase: Phase::Ready,
+            provider: Provider::Local,
+            image: Some("horizon-browser-vm-local:latest".into()),
+            ..Record::default()
+        }
+        .save(root.path())
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_first_local_deploy_reads_no_cloud_settings() {
+        // No record and no `settings.json`: the request alone decides the provider here.
+        let root = tempfile::tempdir().unwrap();
+        let mut request = request(BrowserVmAction::Deploy);
+        request.provider = Some(BrowserVmProvider::Local);
+        let begun = work(root.path(), None, &request, &Cancellation::default(), &mut |_, _, _| {})
+            .expect("a first local deploy");
+        assert_eq!(begun.phase, Phase::Deploying);
+        assert_eq!(begun.provider, Provider::Local);
+    }
+
+    #[test]
+    fn a_local_stop_reads_no_cloud_settings() {
+        // The fixture holds no `settings.json`, so any read of them is the refusal of a Horizon
+        // that has no cloud support.
+        let root = local_root();
+        for action in [BrowserVmAction::Stop, BrowserVmAction::Resume, BrowserVmAction::Delete] {
+            let request = request(action);
+            let begun = work(root.path(), None, &request, &Cancellation::default(), &mut |_, _, _| {})
+                .unwrap_or_else(|error| panic!("{action:?} of a local container: {error}"));
+            assert_eq!(begun.provider, Provider::Local, "{action:?}");
+        }
+    }
+
     #[test]
     fn a_refused_action_runs_nothing() {
         // Nothing was ever rented, so the delete is refused before the provider.
@@ -467,6 +549,8 @@ mod tests {
     fn ready() -> Status {
         Status {
             phase: Phase::Ready,
+            provider: Provider::Hetzner,
+            vnc_address: None,
             ssh_target: Some("horizon-browser-vm".into()),
             ssh_note: None,
             image: Some("ghcr.io/example/browser-vm@sha256:synthetic".into()),
@@ -494,6 +578,50 @@ mod tests {
             "the step where a person is needed is stated plainly"
         );
         assert_eq!(answer["browser_host"]["ssh_target"], "horizon-browser-vm");
+    }
+
+    /// The ready status of a container on this computer.
+    fn local() -> Status {
+        Status {
+            provider: Provider::Local,
+            vnc_address: Some("127.0.0.1:5900".into()),
+            server_type: None,
+            location: None,
+            volume_gb: None,
+            hourly_net: None,
+            ..ready()
+        }
+    }
+
+    #[test]
+    fn a_container_on_this_computer_names_its_loopback_endpoint() {
+        let answer = describe(&local());
+        assert_eq!(answer["provider"], "local");
+        assert_eq!(answer["vnc_address"], "127.0.0.1:5900");
+        assert_eq!(answer["device_panel"]["endpoint"], "127.0.0.1:5900");
+        assert!(
+            answer["device_panel"].get("ssh").is_none(),
+            "the display of this computer needs no ssh hop"
+        );
+        assert!(answer["person_step"].as_str().unwrap().contains("loopback endpoint"));
+        // The ssh entry is still written, so a browser that reaches the container over ssh
+        // names the same target as a rented machine.
+        assert_eq!(answer["browser_host"]["ssh_target"], "horizon-browser-vm");
+        assert_eq!(answer["hourly_net"], Value::Null, "a container rents nothing");
+    }
+
+    #[test]
+    fn a_local_deploy_asks_for_the_container_and_not_a_rental() {
+        let mut request = request(BrowserVmAction::Deploy);
+        request.provider = Some(BrowserVmProvider::Local);
+        let operation = operation(&request).expect("a deploy");
+        match operation {
+            Operation::Deploy(deploy) => {
+                assert_eq!(deploy.provider, Provider::Local);
+                assert!(deploy.image.is_empty(), "the record names the image of the container");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

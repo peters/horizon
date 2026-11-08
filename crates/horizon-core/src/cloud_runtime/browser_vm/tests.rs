@@ -33,6 +33,7 @@ fn root(locations: &[&str]) -> tempfile::TempDir {
 
 fn deploy() -> Deploy {
     Deploy {
+        provider: Provider::Hetzner,
         image: IMAGE.into(),
         server_type: "ccx13".into(),
         location: "fsn1".into(),
@@ -280,6 +281,8 @@ fn a_delete_and_a_stop_with_nothing_refuse() {
 fn the_ssh_target_names_the_person_who_signs_in() {
     let status = Status {
         phase: Phase::Ready,
+        provider: Provider::Hetzner,
+        vnc_address: None,
         ssh_target: Some("root@203.0.113.10".into()),
         ssh_note: None,
         image: None,
@@ -300,6 +303,8 @@ fn an_alias_of_the_managed_entry_is_its_own_ssh_host() {
     // the block in the ssh configuration of the person turns it into the machine.
     let status = Status {
         phase: Phase::Ready,
+        provider: Provider::Hetzner,
+        vnc_address: None,
         ssh_target: Some(ssh_entry::ALIAS.into()),
         ssh_note: None,
         image: None,
@@ -416,4 +421,88 @@ fn a_deploy_names_the_alias_and_a_stop_removes_the_entry() {
     assert_eq!(resumed, ssh_entry::ALIAS);
     let written = std::fs::read_to_string(home.path().join(".ssh").join("config")).unwrap();
     assert!(written.contains("  HostName 198.51.100.7\n"), "{written}");
+}
+
+#[test]
+fn a_local_deploy_needs_no_cloud_settings_and_names_the_image_it_runs() {
+    // No `settings.json` at all: a container on this computer reaches no provider.
+    let root = tempfile::tempdir().unwrap();
+    let began = super::begin(
+        root.path(),
+        &Operation::Deploy(Deploy {
+            provider: Provider::Local,
+            image: String::new(),
+            server_type: String::new(),
+            location: String::new(),
+            volume_gb: 0,
+        }),
+    )
+    .unwrap();
+    assert_eq!(began.phase, Phase::Deploying);
+    assert_eq!(began.provider, Provider::Local);
+    assert_eq!(began.image.as_deref(), Some(local::DEFAULT_IMAGE));
+    assert!(began.server_type.is_none(), "a container has no rented server type");
+    assert!(
+        began.vnc_address.is_none(),
+        "the address is known once the container runs"
+    );
+
+    // A resume of the recorded container reaches no provider either.
+    let mut record = Record::load(root.path()).unwrap();
+    record.phase = Phase::Stopped;
+    record.save(root.path()).unwrap();
+    let resumed = super::begin(root.path(), &Operation::Resume).unwrap();
+    assert_eq!(resumed.phase, Phase::Resuming);
+    assert_eq!(resumed.provider, Provider::Local);
+}
+
+#[test]
+fn a_rented_record_keeps_the_default_provider_so_an_old_record_still_reads() {
+    let root = root(&["fsn1"]);
+    super::begin(root.path(), &Operation::Deploy(deploy())).unwrap();
+    let bytes = std::fs::read(root.path().join(RECORD)).unwrap();
+    let read: Record = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(read.provider, Provider::Hetzner);
+}
+
+#[test]
+fn a_deploy_never_overwrites_a_record_that_owns_a_machine_of_the_other_provider() {
+    let root = root(&["fsn1"]);
+    // A rented machine that is ready owns a server and a volume.
+    super::begin(root.path(), &Operation::Deploy(deploy())).unwrap();
+    let mut record = Record::load(root.path()).unwrap();
+    record.phase = Phase::Ready;
+    record.save(root.path()).unwrap();
+    let local = Operation::Deploy(Deploy {
+        provider: Provider::Local,
+        image: String::new(),
+        server_type: String::new(),
+        location: String::new(),
+        volume_gb: 0,
+    });
+    let error = super::begin(root.path(), &local).unwrap_err();
+    assert!(error.to_string().contains("stop and delete it"), "{error}");
+    assert_eq!(
+        Record::load(root.path()).unwrap().provider,
+        Provider::Hetzner,
+        "the record still names the machine that bills"
+    );
+
+    // The other direction: a container on this computer is not overwritten by a rental.
+    let mut record = Record::load(root.path()).unwrap();
+    record.provider = Provider::Local;
+    record.phase = Phase::Failed;
+    record.save(root.path()).unwrap();
+    let error = super::begin(root.path(), &Operation::Deploy(deploy())).unwrap_err();
+    assert!(error.to_string().contains("container on this computer"), "{error}");
+    assert_eq!(Record::load(root.path()).unwrap().provider, Provider::Local);
+
+    // A record whose machine is gone takes either provider again.
+    let mut record = Record::load(root.path()).unwrap();
+    record.phase = Phase::Deleted;
+    record.save(root.path()).unwrap();
+    assert!(
+        super::begin(root.path(), &Operation::Deploy(deploy())).is_ok(),
+        "a deleted record owns nothing"
+    );
 }

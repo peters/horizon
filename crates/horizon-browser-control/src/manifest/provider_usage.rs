@@ -1,7 +1,7 @@
 //! Bounded host-scoped requests for the live host: shared provider usage, catalogs and
 //! cloud offers only read; companion requests and the `attach` and `park` of a cloud
 //! list request change clouds, and the host authorizes each one.
-pub use super::browser_vm::{BrowserVmAction, BrowserVmRequest};
+pub use super::browser_vm::{BrowserVmAction, BrowserVmProvider, BrowserVmRequest};
 pub use super::cloud_agent::{
     CloudAgentAction, CloudAgentAudit, CloudAgentMessageRequest, CloudAgentOutcome, CloudAgentReadRequest,
     MAX_MESSAGE_BYTES, MAX_READ_BYTES, MAX_READ_LINES, MIN_READ_LINES, append_cloud_agent_audit,

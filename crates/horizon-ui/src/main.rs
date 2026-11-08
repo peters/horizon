@@ -390,7 +390,10 @@ fn run_command(command: &Command, config_path: &std::path::Path) -> ! {
     let code = match command {
         Command::ExportConfig(destination) => run_export_config_command(config_path, destination.as_deref()),
         Command::RemoteProfile(profile) => run_remote_profile_command(config_path, profile),
-        Command::BrowserVmLocal(local) => local.run(config_path),
+        Command::BrowserVmLocal(local) => {
+            let cloud = horizon_core::HorizonHome::resolve().root().join("cloud");
+            local.run(&cloud)
+        }
     };
     plugin_install::exit_after_releasing_plugins(code)
 }

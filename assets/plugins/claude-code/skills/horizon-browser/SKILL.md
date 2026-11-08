@@ -495,6 +495,21 @@ Copy needed evidence before panel close or host exit; only eight exports remain.
   were not scanned yet. `ssh_target` is then `root@<address>` for the missing
   entry, and the routes of that answer use the address. Do not edit the ssh
   configuration of the person to make room.
+- `provider: local` runs the same image in a container on this computer instead
+  of renting a machine. A local `deploy` names no image, server type, location
+  or volume: Horizon owns the container name, the image tag and the ports, both
+  of which it publishes on `127.0.0.1` only. The answer holds `vnc_address` and
+  a Device panel `endpoint` for that loopback address, because this computer's
+  display needs no ssh hop; the ssh entry `horizon-browser-vm` is still written,
+  so a browser that reaches the container over ssh names the same target. A
+  `stop` keeps the state volume and the container key, and a `delete` removes
+  the container and keeps the volume, because the volume holds the sign-ins.
+  The image must exist first: the tool starts it and never builds it, so a
+  person builds `horizon-browser-vm-local:latest` from
+  `packaging/browser-vm/Dockerfile` with the target `browser-vm-local`, or runs
+  `horizon --browser-vm-local up --build <checkout>`, which builds it and starts
+  the same container. A start adopts a container of the same image that a broken
+  run left behind, and refuses a container of another image that holds the name.
 - One run at a time. A second run is refused with `browser_vm_busy`. A failed
   run keeps its record, so you retry or delete it, and never rent twice.
 

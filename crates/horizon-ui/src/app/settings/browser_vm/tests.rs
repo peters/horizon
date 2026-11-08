@@ -7,7 +7,7 @@ use egui::{Context, RawInput};
 use horizon_core::Config;
 use horizon_core::StartupDecision;
 use horizon_core::browser::manifest::provider_usage::{BrowserVmAction, BrowserVmRequest};
-use horizon_core::cloud_runtime::browser_vm::{Phase, Status};
+use horizon_core::cloud_runtime::browser_vm::{Phase, Provider, Status};
 use tempfile::TempDir;
 
 use super::app::device_connection;
@@ -30,6 +30,8 @@ fn app() -> (TempDir, Context, HorizonApp) {
 
 fn ready() -> Status {
     Status {
+        provider: Provider::Hetzner,
+        vnc_address: None,
         phase: Phase::Ready,
         ssh_target: Some("horizon-browser-vm".into()),
         ssh_note: None,
@@ -306,6 +308,8 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
     panel.absorb(
         BrowserVmAction::Status,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Deploying,
             ..ready()
         }),
@@ -317,6 +321,8 @@ fn a_run_that_a_crash_left_in_progress_is_taken_over_or_deleted() {
     panel.absorb(
         BrowserVmAction::Status,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Deleting,
             ..ready()
         }),
@@ -426,6 +432,8 @@ fn the_section_draws_no_sign_in_before_a_machine_is_ready() {
     panel.absorb(
         BrowserVmAction::Status,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Idle,
             ssh_target: None,
             image: None,
@@ -453,13 +461,25 @@ fn the_sign_in_panel_names_the_managed_entry_and_no_key() {
         user: "root".into(),
         vnc: "127.0.0.1:5900".into(),
     };
-    let connection = device_connection(&route);
+    let connection = device_connection(&route).expect("a rented machine is reached over ssh");
     let args = connection.to_command_args();
 
     assert!(!args.contains(&"-i".to_string()), "no key of its own: {args:?}");
     assert_eq!(connection.host, "horizon-browser-vm");
     assert_eq!(connection.user.as_deref(), Some("root"));
     assert_eq!(args.last().map(String::as_str), Some("root@horizon-browser-vm"));
+}
+
+#[test]
+fn a_container_on_this_computer_opens_its_panel_without_an_ssh_hop() {
+    // The display of the container is on the loopback of this computer, so a panel takes the
+    // endpoint itself: an ssh hop to `127.0.0.1:5900` would fail.
+    let route = DeviceRoute {
+        host: "127.0.0.1:5900".into(),
+        user: String::new(),
+        vnc: "127.0.0.1:5900".into(),
+    };
+    assert!(device_connection(&route).is_none(), "no ssh hop to the loopback");
 }
 
 #[test]
@@ -545,6 +565,8 @@ fn a_run_that_failed_inside_the_provider_shows_its_recorded_reason() {
     panel.absorb(
         BrowserVmAction::Deploy,
         Ok(Status {
+            provider: Provider::Hetzner,
+            vnc_address: None,
             phase: Phase::Failed,
             ssh_target: None,
             error: Some(reason.into()),

@@ -31,6 +31,10 @@ const KEY_WAIT: Duration = Duration::from_secs(30);
 const KEY_PAUSE: Duration = Duration::from_millis(500);
 /// How long one start waits for the VNC greeting of the container.
 const PROBE: Duration = Duration::from_secs(5);
+/// The variable that turns the SSH server of the image on.
+const SSH_ENV: &str = "HORIZON_BROWSER_VM_SSH=1";
+/// The variable that names the one key the SSH server of the image accepts.
+const KEY_ENV: &str = "HORIZON_BROWSER_VM_SSH_PUBKEY";
 /// The first four bytes of a VNC server, RFC 6143 section 7.1.1.
 const VNC_GREETING: [u8; 4] = *b"RFB ";
 /// The port inside the container, which the image declares.
@@ -39,13 +43,20 @@ const CONTAINER_SSH_PORT: u16 = 2222;
 const CONTAINER_VNC_PORT: u16 = 5900;
 
 /// Where the local browser VM of this computer is addressed, as every route names it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Route {
     /// The ssh target: the alias of the managed entry, or the address when Horizon could not
     /// write an entry because it does not know the home directory of this computer.
     pub ssh_target: String,
     /// Why the managed entry is missing, when it is.
     pub note: Option<String>,
+}
+
+/// One published port of a container, as `docker inspect` names it.
+#[derive(Debug, serde::Deserialize)]
+struct Binding {
+    #[serde(rename = "HostPort")]
+    host_port: String,
 }
 
 /// What the local browser VM is doing now.
@@ -159,28 +170,66 @@ impl LocalBrowserVm {
     /// [`KEY_WAIT`].
     pub fn up(&self, build: Option<&Path>) -> Result<Route> {
         let key = self.ensure_key()?;
-        if self.container_exists()? {
-            return Err(Error::Local(format!(
-                "the container {} exists; stop it with `horizon --browser-vm-local down` first",
-                self.name
-            )));
-        }
-        if !self.image_exists()? {
-            let Some(repository) = build else {
-                return Err(Error::Local(format!(
-                    "the image {} is absent; build it with `horizon --browser-vm-local up --build <repository>`",
-                    self.image
-                )));
-            };
-            self.build(repository)?;
-        }
+        // A run that broke after its container started is retried by adopting that container,
+        // so a second start of the same name is never a dead end.
         let public_key = std::fs::read_to_string(key.with_extension("pub"))?;
-        self.run(&public_key)?;
+        if let Some(image) = self.container_image()? {
+            self.adopt(&image, &public_key)?;
+        } else {
+            if !self.image_exists()? {
+                let Some(repository) = build else {
+                    return Err(Error::Local(format!(
+                        "the image {} is absent; build it with `horizon --browser-vm-local up --build <repository>`",
+                        self.image
+                    )));
+                };
+                self.build(repository)?;
+            }
+            self.run(&public_key)?;
+        }
         let host_key = self.wait_for_host_key()?;
         tracing::info!(container = %self.name, host_key = %host_key.len(), "the local browser VM answers");
         self.greets()?;
         let route = self.write_entry(&key, &host_key)?;
         Ok(route)
+    }
+
+    /// Use the container that already holds this name: it must run the same image, it must
+    /// accept the key of this run, and a container that stopped is started again.
+    fn adopt(&self, image: &str, public_key: &str) -> Result<()> {
+        if image != self.image {
+            return Err(Error::Local(format!(
+                "the container {} holds the image {image}, not {}; stop it with `horizon --browser-vm-local down` first",
+                self.name, self.image
+            )));
+        }
+        // A container that another Horizon started accepts another key, so adopting it would
+        // write an ssh entry that its SSH server refuses.
+        let accepted = self.container_env()?;
+        let expected = format!("{KEY_ENV}={}", public_key.trim());
+        if !accepted.lines().any(|line| line.trim() == expected) {
+            return Err(Error::Local(format!(
+                "the container {} accepts a key of another Horizon; stop it with `horizon --browser-vm-local down` first",
+                self.name
+            )));
+        }
+        // The route that this run reports names the ports of this driver, so a container that
+        // publishes other ports would answer on another display.
+        let published = self.published_ports()?;
+        if published != (self.vnc_port, self.ssh_port) {
+            return Err(Error::Local(format!(
+                "the container {} publishes the display on {} and its SSH server on {}, not {} and {}; stop it with `horizon --browser-vm-local down` first",
+                self.name, published.0, published.1, self.vnc_port, self.ssh_port
+            )));
+        }
+        if self.running()? {
+            return Ok(());
+        }
+        let started = self.output(&["start", &self.name])?;
+        if !started.status.success() {
+            return Err(self.failure("start", &started));
+        }
+        Ok(())
     }
 
     /// Read the greeting of the VNC server on the loopback address.
@@ -210,6 +259,20 @@ impl LocalBrowserVm {
     #[must_use]
     pub fn vnc_address(&self) -> String {
         self.vnc_socket().to_string()
+    }
+
+    /// The private key that this run presents to the container.
+    #[must_use]
+    pub fn key_path(&self) -> PathBuf {
+        self.root.join("browser-vm-local").join("id_ed25519")
+    }
+
+    /// The public key that this run presents, which the SSH server of the container accepts.
+    ///
+    /// # Errors
+    /// Reports a key that cannot be read, which happens before a start makes one.
+    pub fn accepted_public_key(&self) -> Result<String> {
+        Ok(std::fs::read_to_string(self.key_path().with_extension("pub"))?)
     }
 
     /// The loopback address of the SSH server of the container.
@@ -253,16 +316,10 @@ impl LocalBrowserVm {
         let running = self.running()?;
         // The image of the container that runs, not the one this call would start:
         // a person who passed another tag must read what is actually there.
-        let image = if running {
-            let inspected = self.output(&["container", "inspect", "--format", "{{.Config.Image}}", &self.name])?;
-            if !inspected.status.success() {
-                return Err(self.failure("inspect", &inspected));
-            }
-            let image = String::from_utf8_lossy(&inspected.stdout).trim().to_owned();
-            if image.is_empty() { self.image.clone() } else { image }
-        } else {
-            self.image.clone()
-        };
+        let image = self
+            .container_image()?
+            .filter(|image| !image.is_empty())
+            .unwrap_or_else(|| self.image.clone());
         Ok(LocalStatus {
             running,
             image,
@@ -274,14 +331,16 @@ impl LocalBrowserVm {
 
     /// The private key that opens the container, made once and kept.
     fn ensure_key(&self) -> Result<PathBuf> {
-        let folder = self.root.join("browser-vm-local");
-        std::fs::create_dir_all(&folder)?;
+        let key = self.key_path();
+        let Some(folder) = key.parent() else {
+            return Err(Error::Local("the key of the container has no folder".into()));
+        };
+        std::fs::create_dir_all(folder)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))?;
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?;
         }
-        let key = folder.join("id_ed25519");
         if key.exists() {
             return Ok(key);
         }
@@ -328,7 +387,7 @@ impl LocalBrowserVm {
         let vnc = format!("127.0.0.1:{}:{}", self.vnc_port, CONTAINER_VNC_PORT);
         let ssh = format!("127.0.0.1:{}:{}", self.ssh_port, CONTAINER_SSH_PORT);
         let volume = format!("{}:/state", self.volume());
-        let key = format!("HORIZON_BROWSER_VM_SSH_PUBKEY={}", public_key.trim());
+        let key = format!("{KEY_ENV}={}", public_key.trim());
         let output = self.docker(
             &[
                 "run",
@@ -344,7 +403,7 @@ impl LocalBrowserVm {
                 "--shm-size",
                 "1g",
                 "--env",
-                "HORIZON_BROWSER_VM_SSH=1",
+                SSH_ENV,
                 "--env",
                 key.as_str(),
                 self.image.as_str(),
@@ -413,6 +472,62 @@ impl LocalBrowserVm {
             return Err(self.failure("inspect", &output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+    }
+
+    /// The image of the container that holds this name, or nothing when no container does.
+    fn container_image(&self) -> Result<Option<String>> {
+        if !self.container_exists()? {
+            return Ok(None);
+        }
+        let output = self.output(&["container", "inspect", "--format", "{{.Config.Image}}", &self.name])?;
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+    }
+
+    /// The loopback ports that the container publishes, as (display, SSH).
+    fn published_ports(&self) -> Result<(u16, u16)> {
+        let output = self.output(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{json .HostConfig.PortBindings}}",
+            &self.name,
+        ])?;
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        let bindings: std::collections::BTreeMap<String, Vec<Binding>> = serde_json::from_slice(&output.stdout)
+            .map_err(|_| Error::Local(format!("the published ports of {} cannot be read", self.name)))?;
+        let port = |key: u16| {
+            bindings
+                .get(format!("{key}/tcp").as_str())
+                .and_then(|bindings| bindings.first())
+                .and_then(|binding| binding.host_port.parse::<u16>().ok())
+        };
+        match (port(CONTAINER_VNC_PORT), port(CONTAINER_SSH_PORT)) {
+            (Some(vnc), Some(ssh)) => Ok((vnc, ssh)),
+            _ => Err(Error::Local(format!(
+                "the container {} publishes no display and no SSH port",
+                self.name
+            ))),
+        }
+    }
+
+    /// The environment of the container that holds this name, one `NAME=value` per line.
+    fn container_env(&self) -> Result<String> {
+        let output = self.output(&[
+            "container",
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            &self.name,
+        ])?;
+        if !output.status.success() {
+            return Err(self.failure("inspect", &output));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     /// Whether the container exists. An absent container is a no; a Docker that cannot answer

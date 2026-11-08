@@ -73,9 +73,22 @@ impl Phase {
     }
 }
 
+/// Where the browser VM runs.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    /// A machine rented from Hetzner.
+    #[default]
+    Hetzner,
+    /// A container of the image on this computer, with both ports on the loopback.
+    Local,
+}
+
 /// What a person asks for when a browser VM is rented.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Deploy {
+    /// Where the machine runs. A local deploy names no server type, location or volume.
+    pub provider: Provider,
     /// An immutable reference of the browser VM image, `name@sha256:<64 hex>`.
     pub image: String,
     /// The dedicated `ccx` server type, such as `ccx13`.
@@ -89,6 +102,11 @@ pub struct Deploy {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub phase: Phase,
+    /// Where the machine runs.
+    pub provider: Provider,
+    /// The VNC address of the display as a Device panel takes it on this computer, when the
+    /// machine is a container here: a loopback address with no ssh route in front of it.
+    pub vnc_address: Option<String>,
     /// The SSH target that every route names: the alias `horizon-browser-vm` while the managed
     /// ssh entry exists, else `root@<address>`. The settings entry `browser_host` names it.
     pub ssh_target: Option<String>,
@@ -124,6 +142,10 @@ impl Status {
 pub struct Record {
     #[serde(default)]
     pub phase: Phase,
+    #[serde(default)]
+    pub provider: Provider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vnc_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +180,8 @@ impl Default for Record {
     fn default() -> Self {
         Self {
             phase: Phase::Idle,
+            provider: Provider::Hetzner,
+            vnc_address: None,
             image: None,
             server_type: None,
             location: None,
@@ -206,6 +230,8 @@ impl Record {
     pub fn status(&self) -> Status {
         Status {
             phase: self.phase,
+            provider: self.provider,
+            vnc_address: self.vnc_address.clone(),
             ssh_target: self.ssh_target.clone(),
             ssh_note: self.ssh_note.clone(),
             image: self.image.clone(),
@@ -270,20 +296,51 @@ pub fn begin(root: &Path, operation: &Operation) -> Result<Status> {
                 record.operation = CreateState::Prepared;
                 record.journal = Journal::default();
             }
-            admission(root, deploy)?;
-            record.image = Some(deploy.image.clone());
-            record.server_type = Some(deploy.server_type.clone());
-            record.location = Some(deploy.location.clone());
-            record.volume_gb = Some(deploy.volume_gb);
+            // A record that still owns a machine keeps its provider: a deploy of the other
+            // provider would overwrite it, and the machine it owns would keep billing with no
+            // record that names it.
+            if !matches!(record.phase, Phase::Idle | Phase::Deleted) && record.provider != deploy.provider {
+                return Err(Error::Invalid(match record.provider {
+                    Provider::Hetzner => {
+                        "The browser VM of this Horizon is a rented machine; stop and delete it before a deploy on this computer"
+                    }
+                    Provider::Local => {
+                        "The browser VM of this Horizon is a container on this computer; stop and delete it before a deploy that rents a machine"
+                    }
+                }));
+            }
+            record.provider = deploy.provider;
+            record.vnc_address = None;
+            match deploy.provider {
+                // The container of this computer needs no provider settings and no machine
+                // of its own: Horizon owns its name, its image and its ports.
+                Provider::Local => {
+                    record.image = Some(local::DEFAULT_IMAGE.to_owned());
+                    record.server_type = None;
+                    record.location = None;
+                    record.volume_gb = None;
+                }
+                Provider::Hetzner => {
+                    admission(root, deploy)?;
+                    record.image = Some(deploy.image.clone());
+                    record.server_type = Some(deploy.server_type.clone());
+                    record.location = Some(deploy.location.clone());
+                    record.volume_gb = Some(deploy.volume_gb);
+                }
+            }
         }
         Operation::Resume => {
             let deploy = recorded_deploy(&record)?;
-            admission(root, &deploy)?;
-            browser_vm::prepare_resume(
-                &mut record.operation,
-                &mut record.journal,
-                record.phase == Phase::Stopped,
-            )?;
+            if deploy.provider == Provider::Local {
+                record.vnc_address = None;
+            } else {
+                admission(root, &deploy)?;
+                browser_vm::prepare_resume(
+                    &mut record.operation,
+                    &mut record.journal,
+                    record.phase == Phase::Stopped,
+                )?;
+            }
         }
         Operation::Stop | Operation::Delete => {
             if record.phase == Phase::Idle {
@@ -318,6 +375,11 @@ pub fn run(
     progress: &mut dyn FnMut(Progress),
 ) -> Result<Status> {
     let record = Record::load(root)?;
+    // A container on this computer has no provider journal, no server and no volume record:
+    // every phase of it is one call to Docker.
+    if record.provider == Provider::Local {
+        return run_local(root, home, record);
+    }
     match record.phase {
         Phase::Deploying | Phase::Resuming => {
             let deploy = recorded_deploy(&record)?;
@@ -367,9 +429,83 @@ pub fn run(
     }
 }
 
+/// Carries out one phase of a container on this computer.
+///
+/// A local machine is `LocalBrowserVm` of this crate: a start writes the managed ssh entry and
+/// reports the loopback address of the display, a stop keeps the state volume, and a delete
+/// removes the container and keeps the volume, because the volume holds the sign-ins.
+fn run_local(root: &Path, home: Option<&Path>, mut record: Record) -> Result<Status> {
+    let vm = local_driver(root, home);
+    let result = match record.phase {
+        Phase::Deploying | Phase::Resuming => vm.up(None).map(|route| {
+            record.phase = Phase::Ready;
+            record.ssh_target = Some(route.ssh_target);
+            record.ssh_note = route.note;
+            record.vnc_address = Some(vm.vnc_address());
+        }),
+        Phase::Stopping => vm.down().map(|()| record.phase = Phase::Stopped),
+        Phase::Deleting => vm.down().map(|()| record.phase = Phase::Deleted),
+        Phase::Ready | Phase::Stopped | Phase::Deleted | Phase::Failed | Phase::Idle => {
+            return Err(Error::Invalid(
+                "No browser VM run is recorded; begin one before running it",
+            ));
+        }
+    };
+    match result {
+        Ok(()) => record.error = None,
+        Err(error) => {
+            record.phase = Phase::Failed;
+            record.error = Some(error.to_string());
+        }
+    }
+    record.save(root)?;
+    Ok(record.status())
+}
+
+/// The driver of the container of this Horizon. `root` is the cloud root, which holds the
+/// driver under `browser-vm`, the same folder that `horizon --browser-vm-local` uses, so both
+/// callers reach one container with one key.
+fn local_driver(root: &Path, home: Option<&Path>) -> local::LocalBrowserVm {
+    local::LocalBrowserVm::new(&root.join("browser-vm"), home)
+}
+
+#[cfg(all(test, unix))]
+mod local_tests {
+    use super::local_driver;
+    use std::path::Path;
+
+    #[test]
+    fn the_tool_and_the_command_share_the_key_of_the_container() {
+        // `horizon --browser-vm-local` builds its driver at `<cloud>/browser-vm`, and this
+        // module must reach the same folder, or the two callers make two keys for one
+        // container and the ssh entry of one names a key the other refuses.
+        let cloud = Path::new("/home/person/.horizon/cloud");
+        let command = crate::cloud_runtime::browser_vm::local::LocalBrowserVm::new(&cloud.join("browser-vm"), None);
+        assert_eq!(
+            local_driver(cloud, None).key_path(),
+            command.key_path(),
+            "one key for the container of both callers"
+        );
+        assert_eq!(
+            local_driver(cloud, None).key_path(),
+            cloud.join("browser-vm/browser-vm-local/id_ed25519")
+        );
+    }
+}
+
 /// The request the record names, so a resume rents the same machine and volume.
 fn recorded_deploy(record: &Record) -> Result<Deploy> {
+    if record.provider == Provider::Local {
+        return Ok(Deploy {
+            provider: Provider::Local,
+            image: local::DEFAULT_IMAGE.to_owned(),
+            server_type: String::new(),
+            location: String::new(),
+            volume_gb: 0,
+        });
+    }
     Ok(Deploy {
+        provider: Provider::Hetzner,
         image: record
             .image
             .clone()

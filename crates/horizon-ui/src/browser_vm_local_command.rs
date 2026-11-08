@@ -105,12 +105,12 @@ impl LocalCommand {
         vm
     }
 
-    /// Run the action and print what it did. `settings` is the path of the settings store,
-    /// whose directory holds the key and the host keys of the container.
-    pub(crate) fn run(&self, settings: &Path) -> i32 {
+    /// Run the action and print what it did. `cloud` is the cloud root of this Horizon, which
+    /// holds the key and the host keys of the container. The `browser_vm` tool of a running
+    /// Horizon uses the same root, so both callers reach one container with one key.
+    pub(crate) fn run(&self, cloud: &Path) -> i32 {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let root = settings.parent().unwrap_or(Path::new(".")).join("browser-vm");
-        let vm = self.vm(&root, home.as_deref());
+        let vm = self.vm(&cloud.join("browser-vm"), home.as_deref());
         let vnc_port = self.vnc_port.unwrap_or(DEFAULT_VNC_PORT);
         let result = match self.action {
             Action::Up => vm.up(self.build.as_deref()).map(|route| {
@@ -170,6 +170,22 @@ mod tests {
         let mut args = args.iter().map(|arg| (*arg).to_string());
         let flag = args.next().expect("a flag");
         command.apply(&flag, &mut args)
+    }
+
+    #[test]
+    fn the_container_of_the_command_lives_in_the_cloud_root_of_this_horizon() {
+        // The `browser_vm` tool keeps the key of the same container under
+        // `<cloud root>/browser-vm`, so the command must reach that root and no other, or the
+        // two callers make two keys for one container.
+        let cloud = Path::new("/home/person/.horizon/cloud");
+        let vm = LocalCommand::new(Action::Up).vm(&cloud.join("browser-vm"), None);
+        assert!(vm.name().starts_with("horizon-browser-vm"));
+        assert_eq!(vm.volume(), format!("{}-state", vm.name()));
+        assert_eq!(
+            vm.key_path(),
+            cloud.join("browser-vm/browser-vm-local/id_ed25519"),
+            "the tool of a running Horizon keeps the key of the same container here"
+        );
     }
 
     #[test]
