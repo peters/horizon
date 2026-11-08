@@ -193,6 +193,48 @@ fn a_delete_that_fails_keeps_the_newest_board_that_is_not_written() {
 }
 
 #[test]
+fn only_an_explicit_removal_takes_a_session_whose_board_this_horizon_cannot_read() {
+    let root_dir = test_root("delete-unreadable-board");
+    let root = root_dir.path().to_path_buf();
+    let home = HorizonHome::from_root(root.clone());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let kept = store
+        .create_new_session(&Config::default())
+        .expect("create kept session");
+    let created = store.create_new_session(&Config::default()).expect("create session");
+    // A board that another Horizon wrote: this one has no such panel kind, so it cannot read it.
+    std::fs::write(
+        home.session_runtime_path(&created.session_id),
+        "version: 2\nworkspaces:\n- local_id: w1\n  name: Workspace 1\n  panels:\n  - local_id: p1\n    name: Panel\n    kind: moonbase\n",
+    )
+    .expect("write a board of another Horizon");
+    let read_error = store
+        .load_runtime(&created.session_id)
+        .expect_err("the board must stay unreadable for this test to mean anything");
+    assert!(read_error.to_string().contains("moonbase"), "{read_error}");
+    assert!(!store.board_is_readable(&created.session_id));
+    assert!(store.board_is_readable(&kept.session_id));
+
+    // The plain removal keeps the session, so an older Horizon cannot destroy the board
+    // of a later one.
+    store
+        .delete_session(&created.session_id)
+        .expect_err("an unreadable board keeps its session");
+    assert!(home.session_dir(&created.session_id).exists());
+    assert_eq!(store.list_profile_sessions().expect("list sessions").len(), 2);
+
+    // The person saw that reason in the Sessions dialog and asked again.
+    store
+        .delete_session_with_unreadable_board(&created.session_id)
+        .expect("delete session");
+
+    assert!(!home.session_dir(&created.session_id).exists());
+    let sessions = store.list_profile_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, kept.session_id);
+}
+
+#[test]
 fn delete_session_rejects_live_sessions() {
     let root_dir = test_root("delete-live-store");
     let root = root_dir.path().to_path_buf();

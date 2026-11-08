@@ -40,6 +40,9 @@ pub(super) struct RuntimeSessionManagerState {
     error: Option<String>,
     confirm_clear_others: bool,
     confirm_remove_session_id: Option<String>,
+    /// Whether the board of `confirm_remove_session_id` is one this Horizon cannot read.
+    /// The question names that, and the answer removes the board with the session.
+    confirm_remove_unreadable_board: bool,
     opened_at: Instant,
 }
 
@@ -65,6 +68,7 @@ impl RuntimeSessionManagerState {
             error,
             confirm_clear_others: false,
             confirm_remove_session_id: None,
+            confirm_remove_unreadable_board: false,
             opened_at: Instant::now(),
         }
     }
@@ -90,7 +94,9 @@ enum SessionManagerAction {
     Close,
     CreateNewSession,
     SwitchTo(String),
+    BeginRemove(String),
     Remove(String),
+    RemoveWithUnreadableBoard(String),
     RemoveAll(Vec<String>),
 }
 
@@ -170,10 +176,17 @@ impl HorizonApp {
                 Ok(session) => self.activate_runtime_session(ctx, &session),
                 Err(error) => self.set_session_manager_error(format!("Failed to switch session: {error}")),
             },
+            SessionManagerAction::BeginRemove(session_id) => self.begin_session_removal(session_id),
             SessionManagerAction::Remove(session_id) => match self.session_store.delete_session(&session_id) {
                 Ok(()) => self.reload_session_manager(None, None),
                 Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
             },
+            SessionManagerAction::RemoveWithUnreadableBoard(session_id) => {
+                match self.session_store.delete_session_with_unreadable_board(&session_id) {
+                    Ok(()) => self.reload_session_manager(None, None),
+                    Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
+                }
+            }
             SessionManagerAction::RemoveAll(session_ids) => {
                 for session_id in session_ids {
                     if let Err(error) = self.session_store.delete_session(&session_id) {
@@ -209,11 +222,25 @@ impl HorizonApp {
             .and_then(|state| state.selected_session_id.clone())
     }
 
+    /// Asks the question of the **Delete** button, and reads the board first so the
+    /// question can name a board that this Horizon cannot read.
+    fn begin_session_removal(&mut self, session_id: String) {
+        let unreadable = !self.session_store.board_is_readable(&session_id);
+        if let Some(state) = self.session_manager.as_mut() {
+            state.selected_session_id = Some(session_id.clone());
+            state.confirm_clear_others = false;
+            state.confirm_remove_session_id = Some(session_id);
+            state.confirm_remove_unreadable_board = unreadable;
+            state.error = None;
+        }
+    }
+
     fn set_session_manager_error(&mut self, error: String) {
         if let Some(state) = self.session_manager.as_mut() {
             state.error = Some(error);
             state.confirm_clear_others = false;
             state.confirm_remove_session_id = None;
+            state.confirm_remove_unreadable_board = false;
         }
     }
 
@@ -576,12 +603,13 @@ fn render_session_list(
         .auto_shrink([false, true])
         .show(ui, |ui| {
             for session in &state.sessions {
+                let confirm_remove = state.confirm_remove_session_id.as_deref() == Some(session.session_id.as_str());
                 let card_action = render_session_card(
                     ui,
                     session,
                     state.selected_session_id.as_deref() == Some(session.session_id.as_str()),
                     current_session_id,
-                    state.confirm_remove_session_id.as_deref() == Some(session.session_id.as_str()),
+                    confirm_remove.then_some(state.confirm_remove_unreadable_board),
                 );
 
                 match card_action {
@@ -593,14 +621,17 @@ fn render_session_list(
                         state.error = None;
                     }
                     SessionCardAction::BeginRemove(session_id) => {
-                        state.selected_session_id = Some(session_id.clone());
-                        state.confirm_clear_others = false;
-                        state.confirm_remove_session_id = Some(session_id);
-                        state.error = None;
+                        *action = SessionManagerAction::BeginRemove(session_id);
                     }
-                    SessionCardAction::CancelRemove => state.confirm_remove_session_id = None,
+                    SessionCardAction::CancelRemove => {
+                        state.confirm_remove_session_id = None;
+                        state.confirm_remove_unreadable_board = false;
+                    }
                     SessionCardAction::ConfirmRemove(session_id) => {
                         *action = SessionManagerAction::Remove(session_id);
+                    }
+                    SessionCardAction::ConfirmRemoveWithUnreadableBoard(session_id) => {
+                        *action = SessionManagerAction::RemoveWithUnreadableBoard(session_id);
                     }
                 }
 
@@ -736,12 +767,15 @@ fn render_empty_state(ui: &mut egui::Ui) {
         });
 }
 
+/// `confirm_remove` is `None` while the card shows **Delete**, and `Some(unreadable)`
+/// while it asks the question. `unreadable` is true for a board that this Horizon cannot
+/// read, which the question names.
 fn render_session_card(
     ui: &mut egui::Ui,
     session: &SessionSummary,
     selected: bool,
     current_session_id: Option<&str>,
-    confirm_remove: bool,
+    confirm_remove: Option<bool>,
 ) -> SessionCardAction {
     let is_current = current_session_id == Some(session.session_id.as_str());
     let can_remove = is_session_removable(session, current_session_id);
@@ -808,14 +842,24 @@ fn render_session_card(
                 ui.horizontal(|ui| {
                     ui.add_space(22.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if confirm_remove {
+                        if let Some(unreadable_board) = confirm_remove {
                             if ui.add(danger_button("Yes").min_size(Vec2::new(46.0, 0.0))).clicked() {
-                                card_action = SessionCardAction::ConfirmRemove(session.session_id.clone());
+                                card_action = if unreadable_board {
+                                    SessionCardAction::ConfirmRemoveWithUnreadableBoard(session.session_id.clone())
+                                } else {
+                                    SessionCardAction::ConfirmRemove(session.session_id.clone())
+                                };
                             }
                             if ui.add(chrome_button("No").min_size(Vec2::new(42.0, 0.0))).clicked() {
                                 card_action = SessionCardAction::CancelRemove;
                             }
-                            ui.label(RichText::new("Delete?").size(10.5).color(theme::FG_DIM()));
+                            ui.label(RichText::new(remove_question(unreadable_board)).size(10.5).color(
+                                if unreadable_board {
+                                    theme::PALETTE_RED()
+                                } else {
+                                    theme::FG_DIM()
+                                },
+                            ));
                         } else if ui.add(danger_button("Delete").min_size(Vec2::new(64.0, 0.0))).clicked() {
                             card_action = SessionCardAction::BeginRemove(session.session_id.clone());
                         }
@@ -849,12 +893,23 @@ fn is_session_removable(session: &SessionSummary, current_session_id: Option<&st
     Some(session.session_id.as_str()) != current_session_id && !session.is_live
 }
 
+/// The question of the **Delete** button. A board that this Horizon cannot read goes with
+/// its session and no later Horizon reads it again, so the question says so.
+const fn remove_question(unreadable_board: bool) -> &'static str {
+    if unreadable_board {
+        "Horizon cannot read this board. Delete the session and its board?"
+    } else {
+        "Delete?"
+    }
+}
+
 enum SessionCardAction {
     None,
     Select,
     BeginRemove(String),
     CancelRemove,
     ConfirmRemove(String),
+    ConfirmRemoveWithUnreadableBoard(String),
 }
 
 #[cfg(test)]
