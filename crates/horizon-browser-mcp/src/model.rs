@@ -1063,6 +1063,7 @@ fn semantic_capabilities(
         );
     }
     if !remote && matches!(backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi) {
+        capabilities.push("downloads".into());
         capabilities.push("drop_files".into());
     }
     if remote
@@ -1290,6 +1291,25 @@ mod tests {
         );
         assert!(
             !semantic_capabilities(BackendKind::FirefoxBidi, true, false, true, None).contains(&"drop_files".into())
+        );
+    }
+
+    #[test]
+    fn a_local_engine_states_the_downloads_it_observes() {
+        for backend in [BackendKind::ChromiumCdp, BackendKind::FirefoxBidi] {
+            assert!(
+                semantic_capabilities(backend, false, false, false, None).contains(&"downloads".into()),
+                "{backend:?} saves the downloads of its pages"
+            );
+        }
+        assert!(
+            !semantic_capabilities(BackendKind::SafariWebDriver, false, false, false, None)
+                .contains(&"downloads".into()),
+            "Safari's classic driver reports no download"
+        );
+        assert!(
+            !semantic_capabilities(BackendKind::ChromiumCdp, true, false, false, None).contains(&"downloads".into()),
+            "a remote device writes its files on the provider's machine"
         );
     }
 
