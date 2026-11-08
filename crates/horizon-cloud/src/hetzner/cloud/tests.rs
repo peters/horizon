@@ -2,7 +2,10 @@ use super::*;
 
 mod lifecycle;
 mod sequence;
-use crate::hetzner::{catalog::Offer, servers::Server, volumes::Volume};
+use crate::{
+    hetzner::{catalog::Offer, servers::Server, volumes::Volume},
+    vm::throwaway_public_key,
+};
 
 fn spec() -> WorkerSpec {
     let profile: crate::Profile = serde_json::from_value(serde_json::json!({

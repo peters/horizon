@@ -2,7 +2,7 @@
 //! record so a lost response never creates a second billed resource.
 use super::{
     HOST_IMAGE, Journal, PROBE_DEVICE, Policy, admitted, allowed, check_login, first_fit, fit, holds, plan, supported,
-    throwaway_public_key, volume_placement, worker,
+    volume_placement, worker,
 };
 use crate::{
     Cancellation, CloudError, CreateState, Progress, Worker, WorkerSpec,
@@ -13,6 +13,7 @@ use crate::{
         volumes::{SIZE_GB, Volume},
     },
     host,
+    vm::throwaway_public_key,
 };
 
 /// The records a caller keeps for a cloud. Each call returns only once the

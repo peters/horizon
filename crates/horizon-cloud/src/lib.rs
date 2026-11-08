@@ -23,6 +23,7 @@ pub use reason::Reason;
 pub use ssh_endpoint::{SshEndpoint, SshHost};
 pub use startup::StartupMetadata;
 pub mod runpod;
+pub mod vm;
 mod worker;
 pub use profile::{
     Bootstrap, Build, CloudConfig, DESIGN_EXAMPLE, EXAMPLE, IDLE_STOP_MINUTES, Lfs, Profile, ProfileError, Source,

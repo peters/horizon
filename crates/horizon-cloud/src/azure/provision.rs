@@ -209,7 +209,7 @@ pub fn inspect_worker(
 /// # Errors
 /// `Invalid` for either.
 pub fn check_login(login: Option<&host::RegistryLogin>, image: &str) -> Result<(), CloudError> {
-    use crate::hetzner::cloud::{image_registry, registry_host};
+    use crate::vm::{image_registry, registry_host};
     match login {
         Some(_) if image.to_ascii_lowercase().starts_with("registry-1.docker.io/") => Err(CloudError::Invalid(
             "Name a private Docker Hub image docker.io/... rather than registry-1.docker.io/... for Azure",

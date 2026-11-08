@@ -4,9 +4,9 @@ mod exposure_management;
 #[cfg(unix)]
 use super::worker;
 use super::{Journal, JournalFile as _};
-use horizon_cloud::hetzner::cloud::throwaway_public_key;
 #[cfg(unix)]
 use horizon_cloud::hetzner::{servers::Server, volumes::Volume};
+use horizon_cloud::vm::throwaway_public_key;
 use horizon_cloud::{CreateState, WorkerSpec};
 
 fn spec() -> WorkerSpec {
