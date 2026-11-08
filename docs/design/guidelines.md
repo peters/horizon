@@ -548,6 +548,12 @@ New cloud surface:
   away from them. A setup agent's output takes half the form, so it gets 1480. The
   body keeps following the window, because a form with a repository, its profiles,
   a place and its storage fills every row a tall screen can give it.
+- A canvas that changes, from a window resize or from the sidebar, brings the
+  draft's workspace back to the middle of the canvas with the person's own zoom,
+  so the form stays in front of them instead of against an edge. A pan of their
+  own is kept: only a change of the canvas moves the view. It moves only while
+  that workspace is the one they work in, and it takes focus from nothing, so a
+  panel they type in keeps the keyboard.
 - A click outside it does nothing. Escape closes nothing and loses no choice: it
   only ends the search of an open folder picker. **Cancel** ends the draft, and the
   setup view's **Close** parks it.

@@ -131,6 +131,9 @@ pub(super) struct Production {
     delete_agent: delete_agent::State,
     /// Prices sent to ready workers for their agents' cloud offers.
     offer_publication: offer_publication::State,
+    /// The canvas the form was drawn on last, so that a window resize or the sidebar brings the
+    /// draft's workspace back to the middle of the new canvas. `None` while the form is closed.
+    creation_canvas: Option<egui::Rect>,
     /// The workspace New workspace made for this dialog's cloud, and what it asked for.
     new_workspace: Option<new_workspace::Intent>,
     /// Where a dismissal parked the draft: its workspace and the card that brings it back.

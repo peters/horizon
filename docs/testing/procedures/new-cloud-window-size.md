@@ -13,7 +13,8 @@ owner: peters
 ## 1. Purpose
 
 This procedure makes sure that the **New cloud** dialog takes the room of the
-window it is open in, up to the width its content can use. A small workspace must
+window it is open in, up to the width its content can use, and that it stays in
+the middle of the canvas when the window changes. A small workspace must
 not force the person to scroll a form that the window can show. A very wide
 screen must not pull the fields and the **Summary** column apart.
 
@@ -69,6 +70,21 @@ screen must not pull the fields and the **Summary** column apart.
 
    Result: The form grows back and stays inside the window.
 
+3. Look at the position of the form in the window.
+
+   Result: The form stands in the middle of the canvas after each resize, not
+   against an edge.
+
+4. Drag the canvas with the middle mouse button and do not resize the window.
+
+   Result: The form moves with its workspace and stays where the drag put it.
+
+5. Click a terminal in another workspace, type one character, and then resize the
+   window. Do not close the form.
+
+   Result: The view stays on that workspace, the form does not come back, and the
+   terminal keeps the keyboard. What you type next goes to that terminal.
+
 ### 6.3 WINDOW-3 — A wide screen does not stretch the form
 
 1. Move the Horizon window to the screen of more than 2000 pixels in width.
@@ -80,17 +96,22 @@ screen must not pull the fields and the **Summary** column apart.
    Result: The form stops at about 1180 pixels in width. It does not grow to the
    width of the window.
 
-3. Look at the distance between the fields and the **Summary** column.
+3. Look at the position of the form in the window.
+
+   Result: The form stands in the middle of the canvas, with the empty board on
+   both sides of it.
+
+4. Look at the distance between the fields and the **Summary** column.
 
    Result: **Summary** stands next to the fields it summarizes, with one gutter
    between them. It does not stand at the other side of the screen.
 
-4. Look at the height of the form.
+5. Look at the height of the form.
 
    Result: The form keeps the height of the window. A full form uses every row,
    so the height has no limit of its own.
 
-5. Type a path into **Where is your code?** and look at the field.
+6. Type a path into **Where is your code?** and look at the field.
 
    Result: The field is as wide as the fields column, not as wide as the window.
 
@@ -107,6 +128,8 @@ screen must not pull the fields and the **Summary** column apart.
 - The form takes its size from the window, not from the workspace that holds it.
 - The form stops at about 1180 pixels in width, also on a much wider screen, and
   it keeps the height of the window.
+- The form comes back to the middle of the canvas after a resize, and a pan of
+  the person's own stays.
 - The two-column layout survives a resize, and the footer stays visible.
 - The form never leaves the canvas, and it stays usable in the narrowest window.
 

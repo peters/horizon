@@ -293,12 +293,21 @@ impl HorizonApp {
     }
 
     pub(super) fn focus_workspace_in_rect(&mut self, workspace_id: WorkspaceId, canvas_rect: Rect) -> bool {
+        if !self.center_workspace_in_rect(workspace_id, canvas_rect) {
+            return false;
+        }
+        self.board.focus_workspace(workspace_id);
+        true
+    }
+
+    /// Puts `workspace_id` in the middle of `canvas_rect` with the zoom the person chose, and
+    /// leaves focus where it is: a panel they type in keeps the keyboard.
+    pub(super) fn center_workspace_in_rect(&mut self, workspace_id: WorkspaceId, canvas_rect: Rect) -> bool {
         let Some((pos, size)) = self.workspace_focus_frame(workspace_id) else {
             return false;
         };
 
         let pan_offset = aligned_pan_offset(canvas_rect, pos, size, self.canvas_view.zoom, false);
-        self.board.focus_workspace(workspace_id);
         self.pan_target = None;
         self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
         self.mark_runtime_dirty();
