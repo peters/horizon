@@ -290,7 +290,7 @@ class TmuxTests(unittest.TestCase):
         terminal = self.start(arguments or [session], cols, rows)
         terminal.read_until(lambda data: attach.COLOR_QUERY in data)
         terminal.write(answer)
-        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'))
+        terminal.read_until(lambda data: b'\x1b[?2004h' in data, missing='the panel enables bracketed paste')
         return terminal
 
     def start(self, arguments, cols=80, rows=24):
@@ -391,7 +391,7 @@ class TmuxTests(unittest.TestCase):
         terminal.write(b'echo $((6*7))\r')
         time.sleep(3)
         # The session is not shown yet, and the keys did not reach it.
-        self.assertFalse(terminal.data.endswith(b'\x1b[?2004h'))
+        self.assertNotIn(b'\x1b[?2004h', terminal.data)
         self.assertNotIn('42', self.tmux('capture-pane', '-p', '-t', '=a:'))
         terminal.write(PANEL_COLORS)
         terminal.read_until(lambda data: b'\r\n42\r\n' in data)
@@ -400,7 +400,9 @@ class TmuxTests(unittest.TestCase):
     def test_an_answer_after_the_wait_is_removed_also_in_pieces(self):
         terminal = self.start(['a'])
         terminal.read_until(lambda data: attach.COLOR_QUERY in data)
-        terminal.read_until(lambda data: data.endswith(b'\x1b[?2004h'), seconds=attach.COLOR_SECONDS + 10)
+        terminal.read_until(lambda data: b'\x1b[?2004h' in data,
+                            seconds=attach.COLOR_SECONDS + 10,
+                            missing='the panel enables bracketed paste after the wait')
         terminal.write(b'echo before\r\x1b]11;rgb:10')
         time.sleep(0.5)
         terminal.write(b'10/2020/3030\x1b\\\x1b[?62;22cecho after\r')
@@ -521,12 +523,19 @@ class Terminal:
         self.data = bytearray()
         self.status = None
 
-    def read_until(self, condition, seconds=20):
+    def read_until(self, condition, seconds=20, missing=None):
+        """Read until the condition holds for everything this terminal received.
+
+        `missing` names what the caller waits for, so a timeout states it next to
+        the bytes that did arrive.
+        """
         deadline = time.monotonic() + seconds
         while not condition(bytes(self.data)):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise AssertionError('terminal output did not arrive: %r' % bytes(self.data[-200:]))
+                waited = ' waited for: %s' % missing if missing else ''
+                raise AssertionError('terminal output did not arrive%s: %r'
+                                     % (waited, bytes(self.data[-200:])))
             if select.select([self.fd], [], [], remaining)[0]:
                 try:
                     chunk = os.read(self.fd, 65536)
