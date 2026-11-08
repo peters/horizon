@@ -391,6 +391,7 @@ class TmuxTests(unittest.TestCase):
         terminal.write(b'echo $((6*7))\r')
         time.sleep(3)
         # The session is not shown yet, and the keys did not reach it.
+        terminal.drain()
         self.assertNotIn(b'\x1b[?2004h', terminal.data)
         self.assertNotIn('42', self.tmux('capture-pane', '-p', '-t', '=a:'))
         terminal.write(PANEL_COLORS)
@@ -544,6 +545,26 @@ class Terminal:
                 if not chunk:
                     raise AssertionError('the attach ended: %r' % bytes(self.data[-200:]))
                 self.data += chunk
+
+    def drain(self, seconds=0.2):
+        """Read what the panel sent so far, without waiting for a marker.
+
+        An assertion about the absence of a marker needs the bytes: without a
+        read, the buffer holds only what an earlier call read, and a panel that
+        showed itself too early would still pass.
+        """
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            if not select.select([self.fd], [], [], remaining)[0]:
+                return
+            try:
+                chunk = os.read(self.fd, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            self.data += chunk
 
     def write(self, data):
         os.write(self.fd, data)
