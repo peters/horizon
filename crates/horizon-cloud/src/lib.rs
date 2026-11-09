@@ -8,6 +8,7 @@ pub mod browser_vm;
 mod capabilities;
 pub mod companions;
 pub mod docker_host;
+pub mod gcp;
 pub mod github;
 pub mod hetzner;
 pub mod host;
