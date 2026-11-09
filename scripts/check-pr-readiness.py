@@ -25,6 +25,8 @@ CODE = {".rs", ".py", ".sh", ".ps1", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".swi
 SKILL_COPIES = ("assets/plugins/claude-code/skills/", "assets/plugins/codex/skills/")
 UI_CRATE = "crates/horizon-ui/"
 PROCEDURES = "docs/testing/procedures/"
+# A body that keeps an oversized outcome together must say so under this heading.
+SIZE_REASON = re.compile(r"^#+\s*review[ -]size", re.IGNORECASE | re.MULTILINE)
 MAX_FILES = 10
 MAX_LINES = 1500
 SKIP_MARKER = "[" + "skip ci]"
@@ -125,11 +127,18 @@ def check(repo, base, title, body, no_visible_change):
     source = [(p, a, d) for p, a, d, status in files if is_source(p) and not (status == "R" and a + d == 0)]
     lines = sum(a + d for _, a, d in source)
     if len(source) > MAX_FILES or lines > MAX_LINES:
-        notes.append(("scope", f"{len(source)} source or test files and {lines} changed lines exceeds the "
-                      f"review-size thresholds ({MAX_FILES} files or {MAX_LINES} lines). Split into "
-                      "cohesive, independently testable PRs where practical. If the outcome must stay "
-                      "together, explain why and how to review it in the PR body. Size alone does not "
-                      "require user approval."))
+        measured = (f"{len(source)} source or test files and {lines} changed lines exceeds the "
+                    f"review-size thresholds ({MAX_FILES} files or {MAX_LINES} lines).")
+        # This was a note, so it was read after the work was done and the split then cost a
+        # rewrite. An unexplained oversized PR is an error: decide the split while planning,
+        # or write down why the outcome must stay together.
+        if body is not None and SIZE_REASON.search(body):
+            notes.append(("scope", f"{measured} The body states why the outcome stays together."))
+        else:
+            errors.append(("scope", f"{measured} Split into cohesive, independently testable PRs, "
+                           "and decide the split before the work rather than after. If the outcome "
+                           "must stay together, add a \"Review size\" section to the body that says "
+                           "why and how to review it. Size alone does not require user approval."))
 
     # A deleted procedure does not count: the rule needs a procedure in the result.
     # Only a procedure that is written or edited counts: not a deletion, not a pure rename.
@@ -155,7 +164,10 @@ def check(repo, base, title, body, no_visible_change):
                 notes.append(("ui-gif", "AGENTS.md asks for the animated GIF at the top of the PR body."))
 
     if title and re.match(r"feat(\(|:|!)", title.strip()) and not procedure_changed:
-        errors.append(("feature-procedure", f"The title marks a feature, but no test procedure under {PROCEDURES} changed."))
+        errors.append(("feature-procedure", f"The title marks a feature, but no test procedure under {PROCEDURES} "
+                       "changed. A change is a feature when a person can do something new with it. If nothing "
+                       "calls the new code yet, it gives a person nothing new: title it refactor and say so in "
+                       "the body, and let the procedure land with the change that uses it."))
 
     for path in sorted(paths):
         for mine, other in (SKILL_COPIES, SKILL_COPIES[::-1]):

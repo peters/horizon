@@ -124,6 +124,8 @@ crates/
 - For documentation-only changes, run the applicable repository and documentation checks. Rust tests, Clippy and UI smoke are unnecessary for prose-only edits.
   Examine changed examples and commands separately. Test them when the edit changes their behavior.
   A document that a build, test or application consumes is an executable input, even if its extension is `.md`.
+- A full `cargo test --workspace` run fails sometimes in a crate that starts child processes, while the same tests pass when that crate runs alone. The messages read like real defects, such as `Process(Invalid)` or a wall-clock assertion. A low load average does not clear a branch: one such run failed at load 4.6.
+  Settle it with the cheap test instead of a rerun. Commit the work, then in the task worktree run the crate alone, run `git switch --detach origin/main`, run it again, and run `git switch <branch>`. The same machine and the same target directory then decide it in about three minutes. Put the four-point argument in the PR body: it passes alone, it passes alone on `main` too, the crate holds no reference to what the PR changed, and the test starts processes.
 - After a candidate passes, rerun only the checks whose inputs change. Reuse the other results under the rules below.
   Dependency, toolchain, build configuration and workflow changes can affect the full matrix. If the affected set is uncertain, run the full matrix.
 - Before each push, account for every applicable check with a new result or a valid reused result.
@@ -293,6 +295,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
 - Deliver one independently testable outcome per PR. Split multi-part issues, refactoring, migrations, and cleanup into serial PRs.
 - Use 10 source or test files and 1,500 non-generated changed source or test lines (additions plus deletions) as review-size thresholds. Test procedures and reports under `docs/testing/` do not count toward these thresholds. Above either threshold, first split the work into cohesive, independently testable PRs without asking permission.
+- Decide the split before the work, not after. Count the files that the plan touches, and give a subagent a brief that names its file set. A change that reaches the threshold and is split afterwards costs a second pass over code that already passed its checks. `scripts/check-pr-readiness.py` reports an oversized PR as an error unless the body holds a `Review size` section that says why the outcome stays together.
 - If splitting would leave incomplete behavior, break a shared contract, or require artificial intermediate changes, keep the outcome together. Explain why it must stay together and how to review it in the PR body. Size alone does not require user approval. Ask the user only when the work requires expanding the requested scope.
 - Before you keep a large feature together, try a feature flag: land its parts in serial PRs, for example the engine before its UI and the UI before the commit path, behind a flag that stays off until the last part merges. Large diffs make the PR review slow to converge. Each round reviews part of the diff and finds new items in code that did not change.
 - Start a stacked PR only when its base is ready to merge. Each change to the base costs a rebase and a new review of every PR on it.
@@ -308,6 +311,8 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 ### Pull Request Review and Merge Strategy
 
 - For implementation work, create a focused branch in a separate worktree from fresh `origin/main` unless the user explicitly asks to use the current checkout. Keep unrelated files in the primary checkout untouched.
+- A worktree costs 20 GB to 78 GB in its own `target/`, and the root file system runs near full. Remove the worktree and its branch as soon as its PR merges, under the cleanup rules below, rather than at the end of a lane. Reuse one worktree for a series of changes that cannot be in review at the same time. Do not share `CARGO_TARGET_DIR` between worktrees: a shared directory mixes artifacts, and the branch against `origin/main` comparison in the flake test above needs its own.
+- The gates of PRs that change different files run at the same time. Open the next PR while the previous one is in review, and keep only the merges in order. A PR whose base is behind needs the rebase rule below before it merges, so order the merges by what each one depends on.
 - Apply [Validation by changed inputs](#validation-by-changed-inputs) before the PR opens and after each change.
   Complete applicable local UI smoke, including the PR GIF described under [Isolated UI Testing Through Horizon Native VNC](#isolated-ui-testing-through-horizon-native-vnc), before the PR opens.
   Complete required cross-machine smoke before final readiness. Apply the same input comparison before reuse of smoke results.
@@ -437,6 +442,7 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 
 ### Testing
 
+- A change is a feature, and needs a procedure, when a person can do something new with it. A new module that nothing calls yet changes nothing that a person can do, so it is a `refactor` and its procedure lands with the change that uses it. Say that in the PR body rather than leaving the title to explain it. `scripts/check-pr-readiness.py` reads the title, so a title is the cheapest thing to change: do not retitle work that does give a person something new.
 - Unit tests close to code (`#[cfg(test)]`)
 - Integration tests under `crates/*/tests/`
 - Test panel creation, PTY lifecycle, resize, input routing
@@ -452,6 +458,8 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 
 - Show every change to the Horizon UI live in a **Horizon native VNC Device panel** in the current workspace, from the first build that carries the change. The person watches the development there, not only the final smoke test. A screenshot, a local desktop or a report alone does not show it.
 - All interactive Horizon UI testing must run on a task-owned isolated desktop viewed live through a **Horizon native VNC Device panel** in the user's current workspace. Always use this panel; do not use noVNC or a browser viewer. Screenshots, recordings, or a viewer on another isolated desktop alone do not satisfy the live-view requirement. Unit tests, headless integration tests and static checks do not need a viewer.
+- Pass `--reuse-state` to the fixture whenever a procedure stops and starts the candidate, or creates a cloud. Without it `scripts/device-smoke/serve.py` deletes `data/` when it stops, which removes `settings.json` and the provider journals.
+  > **CAUTION:** A STOP WITHOUT `--reuse-state` CAN LEAVE A RENTED MACHINE, A VOLUME AND AN ADDRESS BILLING WITH NOTHING LEFT THAT CAN DELETE THEM OR PROVE THEM GONE. Keep the state under the person's home. `/tmp` here is a tmpfs with a per-user quota, and a full `/tmp` makes every command fail, so never put state, a frozen binary or evidence there.
 - Start a Horizon instance for testing only through the fixture. Never launch one on the current desktop display, on a hand-allocated Xvfb display, or with a bare `horizon --config <path>` and no viewer: the person must see it in the native Device panel from the first launch. This rule holds for a probe, an architecture check and a check that only shows that the app starts, not only for a feature smoke test. When a scenario needs more than the fixture offers, such as another panel kind, a scripted agent panel or another argument, extend the fixture (`--presets`, `--horizon-arg`, or a new option) and keep the viewer. Do not bypass the fixture to save one step.
 - Run parallel application scenarios on distinct task-owned displays, control targets, ports, private state and evidence directories. Freeze candidate executables before launching and verify the actual application child PID and executable hash, not just a sandbox wrapper.
 - Keep internal application names, workflows, screenshots, videos and operational details out of public issues, PRs, logs and attachments. Public demonstrations use generic synthetic fixtures only.
