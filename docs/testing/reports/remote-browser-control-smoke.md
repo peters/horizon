@@ -1,6 +1,6 @@
 ---
 procedure: remote-browser-control-smoke
-candidate_commit: d051d06d03d049d6e2d00ccda06901f7a31a3612
+candidate_commit: fa1be8af435e54c5483b26c552bb87aeed8ebe96
 candidate_sha256: 30c3824f7af99a3d897b14bea454391d5e105996ecc67ad70799bb3fd9bc577a
 date: 2026-11-09
 lanes: [linux-local-container]
