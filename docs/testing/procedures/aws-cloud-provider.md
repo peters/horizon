@@ -121,21 +121,34 @@ credential.
 
    ```sh
    cargo build -p horizon-ui --bin horizon
-   smoke_bin=$(mktemp -d /tmp/horizon-aws-bin.XXXXXX)
+   mkdir -p "$HOME/horizon-smoke"
+   smoke_bin=$(mktemp -d "$HOME/horizon-smoke/aws-bin.XXXXXX")
    cp "$CARGO_TARGET_DIR/debug/horizon" "$smoke_bin/horizon"
    (cd "$smoke_bin" && sha256sum horizon > SHA256SUMS)
    ```
 
    Result: `$smoke_bin/SHA256SUMS` holds one SHA-256 value.
 
-2. Start the fixture with a private state directory.
+2. Start the fixture with a private state directory that it keeps.
+
+   `--reuse-state` is required. Without it the fixture deletes `data/` when it
+   stops, which removes `settings.json` and the provider journals. A later task
+   then cannot delete a cloud that still bills, or prove its resources gone.
+   `--reuse-state` also lets a task stop the candidate and start it again in the
+   same state, which tasks AWS-01 and the restart tasks need.
+
+   Do not put the state in `/tmp`. On this computer `/tmp` is a tmpfs with a
+   per-user quota, and a full `/tmp` makes every command fail.
 
    ```sh
+   export SMOKE_STATE="$HOME/horizon-smoke/aws-run"
+   mkdir -p "$SMOKE_STATE"
    python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
-     --native-view --saved-session --state /tmp/horizon-aws-run
+     --native-view --saved-session --reuse-state --state "$SMOKE_STATE"
    ```
 
-   Result: The fixture prints a manifest with `vnc_address`.
+   Result: The fixture prints a manifest with `vnc_address`. `$SMOKE_STATE/data`
+   exists and stays after a stop.
 
 3. Open a Device panel on `vnc_address`. Examine the viewer health.
 
@@ -171,11 +184,31 @@ credential.
    Result: The file is valid JSON. **Menu › Cloud settings** names the AWS
    credential, and **New cloud** shows an **AWS** entry.
 
-7. Declare the helpers of this procedure.
+7. Write the real access key id and the secret access key into the two
+   credential files.
+
+   > **CAUTION:** THIS PUTS A LIVE AWS CREDENTIAL ON THIS COMPUTER. Keep both
+   > files at mode `0600`. Every task from 6.4 onward sends real requests to
+   > AWS with it.
+
+   The synthetic pair of step 5 is refused by AWS, so a task that reads prices,
+   a region list or a quota fails with an authentication refusal while it is in
+   place. Write the real pair before task AWS-04.
+
+   ```sh
+   umask 077
+   printf '%s\n' "<access key id>" > "$AWSS/access-key-id"
+   printf '%s\n' "<secret access key>" > "$AWSS/secret-access-key"
+   ```
+
+   Result: Each file has mode `0600`. **Menu › Cloud settings** shows the AWS
+   credential as ready.
+
+8. Declare the helpers of this procedure.
 
    ```sh
    cdx() { cargo run -q -p horizon-core --example cloud_deploy -- "$@"; }
-   export CLOUD=/tmp/horizon-aws-run/data/home/.horizon/cloud
+   export CLOUD="$SMOKE_STATE/data/home/.horizon/cloud"
    ```
 
    Result: `cdx offers "$CLOUD/settings.json"` prints a JSON answer.
@@ -205,6 +238,11 @@ cloud for the agent panel. Task AWS-L7 deletes the cloud of task AWS-L1.
    `aws.json`.
 
 3. Stop the fixture with `Ctrl+C`.
+
+   > **CAUTION:** STOP THE FIXTURE ONLY WHILE NO AWS CLOUD EXISTS. A stop with
+   > `--reuse-state` keeps `data/`, so the journals survive. Without it the
+   > journals are deleted, and an instance, a volume and an Elastic IP continue
+   > to bill with nothing left that can delete them or prove them gone.
 
    Result: The fixture stops its display, its window manager and its Horizon.
 
@@ -432,8 +470,9 @@ cloud for the agent panel. Task AWS-L7 deletes the cloud of task AWS-L1.
 > ONE ELASTIC IP. They bill from the start until the delete completes. Do not
 > end the run before task AWS-L7 deletes the cloud.
 
-1. Write the real access key id and secret access key into the two credential
-   files.
+1. Confirm that the two credential files still hold the real pair that setup
+   step 7 wrote. Task AWS-05 replaces the secret and puts it back, so read it
+   again here.
 
    Result: Each file has mode `0600`, and **Menu › Cloud settings** shows the
    AWS credential as ready.
@@ -943,7 +982,7 @@ cloud for the agent panel. Task AWS-L7 deletes the cloud of task AWS-L1.
    copies of the run.
 
    ```sh
-   rm -rf /tmp/horizon-aws-run "$smoke_bin" "$AWSS"
+   rm -rf "$SMOKE_STATE" "$smoke_bin" "$AWSS"
    ```
 
    Result: The directories do not exist.

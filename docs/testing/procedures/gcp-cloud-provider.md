@@ -116,21 +116,34 @@ token.
 
    ```sh
    cargo build -p horizon-ui --bin horizon
-   smoke_bin=$(mktemp -d /tmp/horizon-gcp-bin.XXXXXX)
+   mkdir -p "$HOME/horizon-smoke"
+   smoke_bin=$(mktemp -d "$HOME/horizon-smoke/gcp-bin.XXXXXX")
    cp "$CARGO_TARGET_DIR/debug/horizon" "$smoke_bin/horizon"
    (cd "$smoke_bin" && sha256sum horizon > SHA256SUMS)
    ```
 
    Result: `$smoke_bin/SHA256SUMS` holds one SHA-256 value.
 
-2. Start the fixture with a private state directory.
+2. Start the fixture with a private state directory that it keeps.
+
+   `--reuse-state` is required. Without it the fixture deletes `data/` when it
+   stops, which removes `settings.json` and the provider journals. A later task
+   then cannot delete a cloud that still bills, or prove its resources gone.
+   `--reuse-state` also lets a task stop the candidate and start it again in the
+   same state, which tasks GCP-01 and the restart tasks need.
+
+   Do not put the state in `/tmp`. On this computer `/tmp` is a tmpfs with a
+   per-user quota, and a full `/tmp` makes every command fail.
 
    ```sh
+   export SMOKE_STATE="$HOME/horizon-smoke/gcp-run"
+   mkdir -p "$SMOKE_STATE"
    python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
-     --native-view --saved-session --state /tmp/horizon-gcp-run
+     --native-view --saved-session --reuse-state --state "$SMOKE_STATE"
    ```
 
-   Result: The fixture prints a manifest with `vnc_address`.
+   Result: The fixture prints a manifest with `vnc_address`. `$SMOKE_STATE/data`
+   exists and stays after a stop.
 
 3. Open a Device panel on `vnc_address`. Examine the viewer health.
 
@@ -154,7 +167,7 @@ token.
    export GCPR="$HOME/gcp-run"
    mkdir -p "$GCPR"
    cdx() { cargo run -q -p horizon-core --example cloud_deploy -- "$@"; }
-   export CLOUD=/tmp/horizon-gcp-run/data/home/.horizon/cloud
+   export CLOUD="$SMOKE_STATE/data/home/.horizon/cloud"
    ```
 
    Result: `cdx offers "$CLOUD/settings.json"` prints a JSON answer.
@@ -204,6 +217,11 @@ more than one hour. Task GCP-L8 deletes the cloud of task GCP-L1.
    has no `gcp.json`.
 
 3. Stop the fixture with `Ctrl+C`.
+
+   > **CAUTION:** STOP THE FIXTURE ONLY WHILE NO GOOGLE CLOUD CLOUD EXISTS. A
+   > stop with `--reuse-state` keeps `data/`, so `gcp.json` and
+   > `deployment.json` survive. Without them a disk and a static address
+   > continue to bill with nothing left that can delete them or prove them gone.
 
    Result: The fixture stops its display, its window manager and its Horizon.
 
@@ -1014,7 +1032,7 @@ more than one hour. Task GCP-L8 deletes the cloud of task GCP-L1.
    of the run.
 
    ```sh
-   rm -rf /tmp/horizon-gcp-run "$smoke_bin" "$GCPR"
+   rm -rf "$SMOKE_STATE" "$smoke_bin" "$GCPR"
    ```
 
    Result: The directories do not exist.
