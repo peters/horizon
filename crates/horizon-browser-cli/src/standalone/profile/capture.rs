@@ -28,6 +28,17 @@ pub fn folder(root: &Path, page: &str) -> PathBuf {
     captures(root).join(safe_local_id(page))
 }
 
+/// The folder that holds the streams of one page, such as a recording or a
+/// network export.
+///
+/// Horizon keeps those streams in a folder named `captures` inside the folder of
+/// the page, and its retention refuses any other shape, so a host that named the
+/// page folder for them was refused with `capture_retention`.
+#[must_use]
+pub fn streams(root: &Path, page: &str) -> PathBuf {
+    folder(root, page).join("captures")
+}
+
 /// Answer one screenshot of `input.panel_id` for `caller` from the newest
 /// frame of the page. `live` is the manifest of the page, and `now` the time
 /// in Unix milliseconds.
@@ -106,5 +117,37 @@ fn prune(dir: &Path, written: &Path) {
     let old = files.len().saturating_sub(MAX_CAPTURES - 1);
     for path in files.into_iter().take(old) {
         let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{folder, streams};
+    use std::path::Path;
+
+    #[test]
+    fn the_stream_folder_keeps_the_shape_that_retention_requires() {
+        // Horizon's retention accepts only `<folder named after the page>/captures`,
+        // and its refusal was the reason a host panel could record nothing.
+        let folder = folder(Path::new("/state/browser-root"), "panel-1");
+        let streams = streams(Path::new("/state/browser-root"), "panel-1");
+        assert_eq!(streams.parent(), Some(folder.as_path()));
+        assert_eq!(
+            streams
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .as_deref(),
+            Some("captures")
+        );
+    }
+
+    #[test]
+    fn a_page_name_stays_one_folder() {
+        let streams = streams(Path::new("/root"), "a/b");
+        assert!(
+            !streams.to_string_lossy().contains("a/b"),
+            "a page name is one folder name: {}",
+            streams.display()
+        );
     }
 }

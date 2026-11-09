@@ -81,6 +81,7 @@ class McpClient:
         timeout: float,
         actor: str,
         host_instance: str | None = None,
+        extra_args: Sequence[str] = (),
     ) -> None:
         self.log = log_path.open("w", encoding="utf-8")
         environment = os.environ.copy()
@@ -92,7 +93,7 @@ class McpClient:
             environment["HORIZON_BROWSER_HOST_INSTANCE"] = host_instance
         environment["RUST_LOG"] = "off"
         self.process = subprocess.Popen(
-            [str(command), "--browser-mcp"],
+            [str(command), "--browser-mcp", *extra_args],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self.log,
