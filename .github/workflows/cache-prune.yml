@@ -1,0 +1,192 @@
+name: Cache prune
+
+# Deletes the cache generations that no run can reach any more.
+#
+# Every cache key below ends in a hash of the lockfile, so each lockfile change
+# adds a generation beside the one before it. GitHub keeps all of them until the
+# repository reaches its 10 GB cache limit, and then deletes the least recently
+# accessed entries until the total fits. That order is the problem: the entries
+# it reaches first are the warm ones of a lane that runs seldom, such as the
+# macOS release builds that save once a night, so the budget of a busy day is
+# paid by a cold build in another lane.
+#
+# Measured once by hand before this workflow existed: 10.02 GB in 19 entries, of
+# which 5.31 GB in 10 entries were superseded generations of a key whose current
+# generation was also present. Deleting them left 4.71 GB, which is the headroom
+# a key needs to stay warm.
+#
+# scripts/prune-actions-caches.py decides what to delete, and its docstring holds
+# the reasoning. This workflow gives it the list of caches and the log of the run
+# that saved them, then carries out the decision, so the rule is unit tested
+# without the API.
+#
+# The log is what makes the decision safe. It names the key each job used, so a
+# generation is retired only because another generation of its own key was in
+# use, never because of a guess from the timestamps the API reports. A run that
+# skipped a job names no key of that job's cache, so a docs-only merge, which
+# skips the Rust jobs, cannot retire a Rust generation.
+#
+# Which run may be trusted for that is checked, not assumed. Only a push to main
+# of this repository saves an entry, so only such a run names a live key. CI also
+# runs on every pull request, a fork's included, and a fork pull request opened
+# from a branch called `main` would otherwise pass a branch-name gate: its run
+# computes its own lockfile hash, so trusting its log would retire the real
+# generations of main. A `workflow_run` job holds this repository's permissions
+# whatever triggered it, so the step reads the event, the branch and the head
+# repository of the run it is about to read and refuses anything else, on the
+# dispatch paths as well.
+#
+# The run also has to stand on the current tip of main. A re-run of an older run,
+# an older run id given to the dispatch, or a parallel run that finishes late all
+# name the keys of their own commit, and if the lockfile has moved since, those
+# are the superseded generations: the script would then read the live ones as
+# stale and delete them. A run behind the tip is a normal race during a burst of
+# merges, so it is skipped with a notice rather than failed, and the run of the
+# last merge of that burst does the work.
+on:
+  # After the run that saved the entries, and reading that run's own log.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report the superseded entries without deleting them.
+        type: boolean
+        default: true
+      run_id:
+        description: The CI run whose log names the live keys. Empty takes the newest on main.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  # The cache delete endpoint writes an Actions resource. Write covers the read
+  # of the triggering run's log as well.
+  actions: write
+
+# One prune at a time: two runs would read the same list and the second would
+# delete ids the first already removed.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune superseded cache entries
+    # An early exit for everything but a push to main of this repository. The
+    # step checks the run again by its id, which also covers the dispatch paths.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' || (
+        github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+      ) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The decision script only.
+          sparse-checkout: scripts/prune-actions-caches.py
+          sparse-checkout-cone-mode: false
+      - name: Prune
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The automatic run deletes. A dispatch reports unless it is told to
+          # delete, so the list can be read before anything is removed.
+          # Rendered as the string `true` or `false`. Comparing the input to a
+          # boolean in the expression would let GitHub cast both sides to a
+          # number, where an unchecked box can come out as `true`.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        run: |
+          set -euo pipefail
+          run_id="$RUN_ID"
+          if [ -z "$run_id" ]; then
+            # `--event push` matters: a pull request run of a fork can carry the
+            # branch name `main` and would otherwise be picked here.
+            run_id=$(gh run list --workflow ci.yml --branch main --event push \
+              --status completed --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          if [ -z "$run_id" ]; then
+            echo "::error::No CI run to read the live cache keys from"
+            exit 1
+          fi
+          # Only a push to main of this repository saves an entry, so only such a
+          # run names a live key. Checked by id, so it holds however the id
+          # arrived: the trigger, the fallback above, or the dispatch input.
+          read -r run_event run_branch run_repo run_sha < <(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+            --jq '[.event, .head_branch, .head_repository.full_name, .head_sha] | @tsv')
+          if [ "$run_event" != "push" ] || [ "$run_branch" != "main" ] \
+            || [ "$run_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Run $run_id is $run_event on $run_branch of $run_repo;" \
+              "only a push to main of $GITHUB_REPOSITORY names the live cache keys"
+            exit 1
+          fi
+          # The keys a run names are the keys of its own commit. Behind the tip
+          # they can be the superseded generations, and acting on them would
+          # delete the live ones.
+          tip_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$run_branch" --jq '.sha')
+          if [ -z "$tip_sha" ]; then
+            echo "::error::Could not read the tip of $run_branch"
+            exit 1
+          fi
+          if [ "$run_sha" != "$tip_sha" ]; then
+            echo "::notice::Run $run_id stands on $run_sha and $run_branch is at" \
+              "$tip_sha; a later run prunes instead."
+            exit 0
+          fi
+          run_ref="refs/heads/$run_branch"
+          # The log of that run names the key each job used. Without it there is
+          # no live set, and the script then reports nothing, so a failure here
+          # is reported rather than passed over.
+          if ! gh run view "$run_id" --log > run.log; then
+            echo "::error::Could not read the log of run $run_id; its logs may have expired"
+            exit 1
+          fi
+          # `--paginate` repeats the response object per page, so collect the
+          # pages and flatten their lists into one. The cache usage endpoint is
+          # not used here: it reported a stale total right after a delete, while
+          # this list was already correct.
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
+            | jq '[.[].actions_caches[]]' > caches.json
+          before_count=$(jq 'length' caches.json)
+          before_bytes=$(jq '[.[].size_in_bytes] | add // 0' caches.json)
+          python3 -B scripts/prune-actions-caches.py \
+            --caches caches.json --log run.log --ref "$run_ref" > stale.tsv
+          stale_count=$(wc -l < stale.tsv)
+          stale_bytes=$(awk -F'\t' '{total += $2} END {print total + 0}' stale.tsv)
+          {
+            printf '| Caches | Entries | Size |\n|---|---|---|\n'
+            printf '| Before | %s | %s |\n' "$before_count" "$(numfmt --to=iec "$before_bytes")"
+            printf '| Superseded | %s | %s |\n' "$stale_count" "$(numfmt --to=iec "$stale_bytes")"
+            printf '\nLive keys read from run %s on `%s`.\n' "$run_id" "$run_ref"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$stale_count" -eq 0 ]; then
+            echo "::notice::No superseded cache generations."
+            exit 0
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo '## Not deleted: this run reports only' >> "$GITHUB_STEP_SUMMARY"
+            sed 's/^/    /' stale.tsv >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # A failed delete fails the step: a missing `actions: write` permission
+          # must be visible, not a quiet no-op that lets the budget fill again.
+          failed=0
+          while IFS=$'\t' read -r id size key; do
+            if gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" --silent; then
+              printf -- '- deleted %s %s\n' "$(numfmt --to=iec "$size")" "$key" >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf -- '- FAILED %s %s\n' "$(numfmt --to=iec "$size")" "$key" >> "$GITHUB_STEP_SUMMARY"
+              failed=$((failed + 1))
+            fi
+          done < stale.tsv
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$failed cache entries could not be deleted"
+            exit 1
+          fi
