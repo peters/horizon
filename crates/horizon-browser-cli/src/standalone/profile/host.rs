@@ -255,7 +255,7 @@ impl ProfileHost {
                 height: horizon_browser::DEFAULT_VIEWPORT.1,
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: Some(Arc::new(ManifestCoordination::default())),
-                capture_directory: Some(super::capture::folder(&self.root, &id)),
+                capture_directory: Some(super::capture::streams(&self.root, &id)),
                 video: Arc::new(VideoCaptureHandle::default()),
                 remote: None,
             },
