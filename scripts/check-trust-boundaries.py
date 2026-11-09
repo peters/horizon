@@ -30,6 +30,15 @@ BACKTICKED = re.compile(r"`([^`\n]+)`")
 PATH_SHAPED = re.compile(r"^(crates|scripts|docs|auto|\.github)/[A-Za-z0-9_./*-]+$")
 
 
+def matches_a_file(pattern, root):
+    """Whether `pattern` matches at least one file under `root`.
+
+    `docs/review/README.md` requires a match on a file. A plain glob also matches a
+    folder, so a bare folder name would pass while routing nothing.
+    """
+    return any((root / hit).is_file() for hit in glob.glob(pattern, root_dir=root, recursive=True))
+
+
 def entries(text):
     """The `applyTo` globs of one page, in order."""
     found = APPLY_TO.search(text)
@@ -60,10 +69,11 @@ def check(root):
                     "reader does not match, so the boundary never routes"
                 )
                 continue
-            if not glob.glob(entry, root_dir=root, recursive=True):
+            if not matches_a_file(entry, root):
                 problems.append(
                     f"{name}: applyTo entry {entry!r} matches no file, so it routes nothing. "
-                    "Correct it or remove it."
+                    "A bare folder name matches the folder and routes nothing; name a tree "
+                    "with `/**`. Correct the entry or remove it."
                 )
         for token in BACKTICKED.findall(text):
             token = token.strip()

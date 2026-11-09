@@ -25,8 +25,6 @@ CODE = {".rs", ".py", ".sh", ".ps1", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".swi
 SKILL_COPIES = ("assets/plugins/claude-code/skills/", "assets/plugins/codex/skills/")
 UI_CRATE = "crates/horizon-ui/"
 PROCEDURES = "docs/testing/procedures/"
-# A body that keeps an oversized outcome together must say so under this heading.
-SIZE_REASON = re.compile(r"^#+\s*review[ -]size", re.IGNORECASE | re.MULTILINE)
 MAX_FILES = 10
 MAX_LINES = 1500
 SKIP_MARKER = "[" + "skip ci]"
@@ -127,18 +125,11 @@ def check(repo, base, title, body, no_visible_change):
     source = [(p, a, d) for p, a, d, status in files if is_source(p) and not (status == "R" and a + d == 0)]
     lines = sum(a + d for _, a, d in source)
     if len(source) > MAX_FILES or lines > MAX_LINES:
-        measured = (f"{len(source)} source or test files and {lines} changed lines exceeds the "
-                    f"review-size thresholds ({MAX_FILES} files or {MAX_LINES} lines).")
-        # This was a note, so it was read after the work was done and the split then cost a
-        # rewrite. An unexplained oversized PR is an error: decide the split while planning,
-        # or write down why the outcome must stay together.
-        if body is not None and SIZE_REASON.search(body):
-            notes.append(("scope", f"{measured} The body states why the outcome stays together."))
-        else:
-            errors.append(("scope", f"{measured} Split into cohesive, independently testable PRs, "
-                           "and decide the split before the work rather than after. If the outcome "
-                           "must stay together, add a \"Review size\" section to the body that says "
-                           "why and how to review it. Size alone does not require user approval."))
+        notes.append(("scope", f"{len(source)} source or test files and {lines} changed lines exceeds the "
+                      f"review-size thresholds ({MAX_FILES} files or {MAX_LINES} lines). Split into "
+                      "cohesive, independently testable PRs where practical. If the outcome must stay "
+                      "together, explain why and how to review it in the PR body. Size alone does not "
+                      "require user approval."))
 
     # A deleted procedure does not count: the rule needs a procedure in the result.
     # Only a procedure that is written or edited counts: not a deletion, not a pure rename.

@@ -85,6 +85,17 @@ class CheckTrustBoundaries(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("never routes", result.stderr)
 
+    def test_a_bare_folder_name_routes_nothing(self):
+        """A plain glob matches the folder itself, so a bare name would pass while routing
+        no file. docs/review/README.md requires a match on a file."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root, "crates/example/src")
+            result = run(root)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("matches no file", result.stderr)
+            self.assertIn("name a tree", result.stderr)
+
     def test_a_folder_tree_glob_routes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
