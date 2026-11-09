@@ -425,6 +425,7 @@ def write_report(
     run: Run,
     started: float,
     transcript: Path,
+    attachment_root: Path,
 ) -> None:
     report = {
         "candidate_commit": git_head(Path(__file__).resolve().parent.parent.parent),
@@ -433,7 +434,7 @@ def write_report(
         "profile": args.profile,
         "actor": args.actor,
         "page": args.page,
-        "attachment_root": str(Path(__file__).resolve().parent),
+        "attachment_root": str(attachment_root),
         "started_unix": int(started),
         "seconds": round(time.time() - started, 1),
         "transcript": transcript.name,
@@ -502,7 +503,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             client.close()
         except (AssertionError, OSError):
             pass
-    write_report(report_dir / "report.json", args, binary, run, started, transcript)
+    write_report(report_dir / "report.json", args, binary, run, started, transcript, report_dir)
     failed = run.failed
     print(f"{len(run.steps) - len(failed)} of {len(run.steps)} steps held; report in {report_dir / 'report.json'}")
     for step in failed:

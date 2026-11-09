@@ -212,10 +212,14 @@ class RemoteSmokeTest(unittest.TestCase):
         args = smoke.parse_args(["--remote", "horizon-browser-vm", "--profile", "probe",
                                  "--report-dir", self.folder.name])
         report_path = Path(self.folder.name) / "report.json"
-        smoke.write_report(report_path, args, Path(sys.executable), run, 0, Path("rpc-horizon-browser-vm.jsonl"))
+        smoke.write_report(
+            report_path, args, Path(sys.executable), run, 0, Path("rpc-horizon-browser-vm.jsonl"), Path(self.folder.name)
+        )
         report = json.loads(report_path.read_text(encoding="utf-8"))
         self.assertEqual(report["remote"], "horizon-browser-vm")
         self.assertEqual(report["profile"], "probe")
+        self.assertEqual(report["attachment_root"], str(Path(self.folder.name).resolve()),
+                         "the report names the folder that the run gave the bridge")
         self.assertEqual(len(report["candidate_binary_sha256"]), 64)
         self.assertEqual(len(report["steps"]), len(run.steps))
         self.assertTrue(report["held"])
