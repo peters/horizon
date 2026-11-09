@@ -13,6 +13,8 @@ SUPPLEMENTS = {
     ('rmcp-macros', '3.7.0'): ('modelcontextprotocol/rust-sdk', '5d6a11f2ae022f513aec0f6e0f10f89a57891a7f', ['LICENSE']),
     ('rmcp', '3.8.0'): ('modelcontextprotocol/rust-sdk', 'cd88056ffdc97756fbd98e5a12bbeb41758f0ce8', ['LICENSE']),
     ('rmcp-macros', '3.8.0'): ('modelcontextprotocol/rust-sdk', 'cd88056ffdc97756fbd98e5a12bbeb41758f0ce8', ['LICENSE']),
+    ('rmcp', '3.9.0'): ('modelcontextprotocol/rust-sdk', '5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc', ['LICENSE']),
+    ('rmcp-macros', '3.9.0'): ('modelcontextprotocol/rust-sdk', '5596a8a0bba2a1ec5519cc855cdadf23e4dcecdc', ['LICENSE']),
 }
 SUPPLEMENTED_NAMES = {name for name, version in SUPPLEMENTS}
 
