@@ -1,7 +1,7 @@
 ---
 procedure: remote-browser-control-smoke
-candidate_commit: 9752e96d9b52cbd371cfb385a1bcd3d4b8172abd
-candidate_sha256: 15a93d349bebc7f31ff71cd5722c6d8da7c7a9a1bb8104ebce932a895fbdfb41
+candidate_commit: d051d06d03d049d6e2d00ccda06901f7a31a3612
+candidate_sha256: 30c3824f7af99a3d897b14bea454391d5e105996ecc67ad70799bb3fd9bc577a
 date: 2026-11-09
 lanes: [linux-local-container]
 issue: https://github.com/peters/horizon/issues/1971
@@ -16,9 +16,10 @@ machine on the same computer. The run covered 21 steps: the twelve calls of the
 lane, the three refusals that the lane defines, and the checks that the page and
 its files stay on the other machine.
 
-The run found two defects before it could pass: the bridge looked for the remote
-host under the home of the remote user, and the host could record nothing and
-stage no attachment. Both were fixed in the same change and the run then passed.
+The run found four defects before it could pass: the bridge looked for the remote
+host under the home of the remote user, the host could record nothing, the host
+could stage no attachment, and a start gave the display only one moment to greet.
+All four were fixed in the same change and the run then passed.
 
 ## 2. Results
 
@@ -29,8 +30,8 @@ stage no attachment. Both were fixed in the same change and the run then passed.
 | S3 | pass | the second run closed the page of the first and then passed | — |
 
 The refusals of the run were `unsupported_backend` for a handoff of a page on
-another machine, the opt-in refusal for a second page, and `stale_reference` for
-a reference that the page does not have.
+another machine, the refusal of a second page without the opt-in, which carries
+no typed code, and `stale_reference` for a reference that the page does not have.
 
 ## 3. Defects
 
@@ -43,6 +44,9 @@ a reference that the page does not have.
 - Fixed in this change: an attachment over the bridge was refused
   `attachment_policy`, because the host allowed only the home of root. The image
   now names its staging folder in `HORIZON_BROWSER_ATTACHMENT_ROOTS`.
+- Fixed in this change: a start reported `no VNC greeting` when the display of the
+  container was still coming up. A start now retries the greeting for thirty
+  seconds, as it already waited that long for the SSH server.
 
 ## 4. Deviations from the procedure
 
