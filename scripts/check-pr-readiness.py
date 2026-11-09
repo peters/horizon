@@ -155,7 +155,10 @@ def check(repo, base, title, body, no_visible_change):
                 notes.append(("ui-gif", "AGENTS.md asks for the animated GIF at the top of the PR body."))
 
     if title and re.match(r"feat(\(|:|!)", title.strip()) and not procedure_changed:
-        errors.append(("feature-procedure", f"The title marks a feature, but no test procedure under {PROCEDURES} changed."))
+        errors.append(("feature-procedure", f"The title marks a feature, but no test procedure under {PROCEDURES} "
+                       "changed. A change is a feature when a person can do something new with it. If nothing "
+                       "calls the new code yet, it gives a person nothing new: title it refactor and say so in "
+                       "the body, and let the procedure land with the change that uses it."))
 
     for path in sorted(paths):
         for mine, other in (SKILL_COPIES, SKILL_COPIES[::-1]):
