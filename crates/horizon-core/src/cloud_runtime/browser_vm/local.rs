@@ -29,8 +29,12 @@ pub const DEFAULT_SSH_PORT: u16 = 2222;
 const KEY_WAIT: Duration = Duration::from_secs(30);
 /// Pause between two reads of the host key.
 const KEY_PAUSE: Duration = Duration::from_millis(500);
-/// How long one start waits for the VNC greeting of the container.
+/// How long one attempt waits for the VNC greeting of the container.
 const PROBE: Duration = Duration::from_secs(5);
+/// How long one start waits for the VNC server of the container to greet. The
+/// display needs a moment after the container starts, and a start that reported a
+/// route before it answered would send a person to a closed port.
+const GREET_WAIT: Duration = Duration::from_secs(30);
 /// The variable that turns the SSH server of the image on.
 const SSH_ENV: &str = "HORIZON_BROWSER_VM_SSH=1";
 /// The variable that names the one key the SSH server of the image accepts.
@@ -84,6 +88,9 @@ pub struct LocalBrowserVm {
     ssh_port: u16,
     docker: PathBuf,
     keygen: PathBuf,
+    /// How long a start waits for the display to greet, so a test does not wait
+    /// the whole bound of a real start.
+    greet_wait: Duration,
 }
 
 impl LocalBrowserVm {
@@ -100,12 +107,19 @@ impl LocalBrowserVm {
             ssh_port: DEFAULT_SSH_PORT,
             docker: PathBuf::from("docker"),
             keygen: PathBuf::from("ssh-keygen"),
+            greet_wait: GREET_WAIT,
         }
     }
 
     #[cfg(test)]
     pub(super) fn with_programs(mut self, docker: &Path) -> Self {
         self.docker = docker.to_path_buf();
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_greet_wait(mut self, wait: Duration) -> Self {
+        self.greet_wait = wait;
         self
     }
 
@@ -238,20 +252,31 @@ impl LocalBrowserVm {
     /// closed port.
     fn greets(&self) -> Result<()> {
         let address = self.vnc_socket();
-        let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE) else {
-            return Err(Error::Local(format!(
-                "the VNC server of {} does not answer on {address}",
-                self.name
-            )));
+        let deadline = Instant::now() + self.greet_wait;
+        let mut last = String::new();
+        while Instant::now() < deadline {
+            match self.greeting_once(&address) {
+                Ok(()) => return Ok(()),
+                Err(reason) => last = reason,
+            }
+            std::thread::sleep(KEY_PAUSE);
+        }
+        Err(Error::Local(last))
+    }
+
+    /// One attempt to read the greeting of the VNC server.
+    fn greeting_once(&self, address: &SocketAddr) -> std::result::Result<(), String> {
+        let Ok(mut stream) = TcpStream::connect_timeout(address, PROBE) else {
+            return Err(format!("the VNC server of {} does not answer on {address}", self.name));
         };
         let _ = stream.set_read_timeout(Some(PROBE));
         let mut greeting = [0_u8; VNC_GREETING.len()];
         match stream.read_exact(&mut greeting) {
             Ok(()) if greeting == VNC_GREETING => Ok(()),
-            _ => Err(Error::Local(format!(
+            _ => Err(format!(
                 "the VNC server of {} answers on {address} with no VNC greeting",
                 self.name
-            ))),
+            )),
         }
     }
 
