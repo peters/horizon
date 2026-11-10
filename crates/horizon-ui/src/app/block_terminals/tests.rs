@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+use horizon_browser_control::manifest::block_terminal::TerminalRoute;
 use horizon_core::browser::manifest;
 use horizon_core::{RuntimeState, StartupDecision};
 
@@ -49,6 +50,7 @@ fn open_terminal(title: Option<&str>, command: Option<&str>) -> block::Operation
         ssh: route("lab-1.invalid", Some("deploy"), Some(2222)),
         remote_command: command.map(str::to_string),
         title: title.map(str::to_string),
+        key: None,
     }
 }
 
@@ -128,6 +130,7 @@ fn a_title_is_one_trimmed_line_and_a_plain_shell_needs_no_tty() {
                 ssh: route("lab-1.invalid", None, None),
                 remote_command: None,
                 title: Some(long),
+                key: None,
             },
         ),
         &ctx,
@@ -194,6 +197,7 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
                 ssh: route("-oProxyCommand=touch /tmp/horizon-c5", None, None),
                 remote_command: None,
                 title: None,
+                key: None,
             },
             "invalid_ssh_route",
         ),
@@ -202,6 +206,7 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
                 ssh: route("lab-1.invalid", Some("-L2222"), None),
                 remote_command: None,
                 title: None,
+                key: None,
             },
             "invalid_ssh_route",
         ),
@@ -210,6 +215,7 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
                 ssh: route("lab-1.invalid", None, Some(0)),
                 remote_command: None,
                 title: None,
+                key: None,
             },
             "invalid_ssh_route",
         ),
@@ -218,6 +224,7 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
                 ssh: route("lab-1.invalid", None, None),
                 remote_command: Some("tmux new; id".into()),
                 title: None,
+                key: None,
             },
             "invalid_remote_command",
         ),
@@ -226,6 +233,7 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
                 ssh: route("lab-1.invalid", None, None),
                 remote_command: Some("-oProxyCommand=id".into()),
                 title: None,
+                key: None,
             },
             "invalid_remote_command",
         ),

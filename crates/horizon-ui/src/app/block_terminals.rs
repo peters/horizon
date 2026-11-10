@@ -5,7 +5,8 @@
 //! builds the `ssh` command line itself, puts the panel beside the calling
 //! agent panel, and leaves the keyboard focus where it was. The mark that the
 //! panel carries afterwards is Horizon's own text, never a string from the
-//! request.
+//! request. A terminal that names a machine key of the workspace connects with
+//! Horizon's own key pair for that machine, and offers no other key.
 //!
 //! After the panel exists it is an ordinary SSH panel: the person types in it
 //! and closes it, and the agent cannot read it, write to it or close it.
@@ -14,8 +15,8 @@ use std::collections::HashMap;
 
 use egui::Context;
 use horizon_browser_control::manifest::block;
-use horizon_browser_control::manifest::block_terminal::{self, TerminalRoute};
-use horizon_core::{BlockPanelState, PanelKind, PanelOptions, SshConnection};
+use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
+use horizon_core::{BlockPanelState, MachineKeyRef, PanelKind, PanelOptions, SshConnection};
 
 use super::HorizonApp;
 use super::browser_requests::ActorPanel;
@@ -46,20 +47,17 @@ impl AgentTerminals {
 
 impl HorizonApp {
     /// Open an SSH terminal panel in the caller's workspace, beside the calling
-    /// agent panel, without taking keyboard focus.
+    /// agent panel, without taking keyboard focus. `key` selects one machine key
+    /// of the workspace, whose options Horizon adds to the command line.
     pub(super) fn open_terminal(
         &mut self,
-        ssh: &TerminalRoute,
-        remote_command: Option<&str>,
+        terminal: &CheckedTerminal,
         title: Option<&str>,
+        key: Option<&MachineKeyRef>,
         actor: ActorPanel,
         owner: &str,
         ctx: &Context,
     ) -> block::Outcome {
-        let terminal = match block_terminal::check(ssh, remote_command) {
-            Ok(terminal) => terminal,
-            Err(refusal) => return block::Outcome::failed(refusal.code, &refusal.message),
-        };
         if !self.agent_terminals.allows(owner) {
             return block::Outcome::failed(
                 "too_many_terminals",
@@ -69,7 +67,10 @@ impl HorizonApp {
                 ),
             );
         }
-        let connection = SshConnection::for_agent_terminal(&terminal);
+        let connection = key.map_or_else(
+            || SshConnection::for_agent_terminal(terminal),
+            |key| SshConnection::for_agent_terminal_with_key(terminal, key),
+        );
         let name = title.map_or_else(|| connection.display_label(), BlockPanelState::normalize_title);
         let agent_name = self
             .board

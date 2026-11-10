@@ -1,17 +1,20 @@
 ---
-applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**"
+applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**"
 ---
 
 # Trust boundary of an agent-opened SSH terminal
 
 An agent asks Horizon to open an SSH terminal panel for the person with the
 `open_terminal` operation of `block_panel`. Horizon builds the `ssh` command
-line itself, so the agent chooses a host and a command, and nothing else. The
-module comment of
+line itself, so the agent chooses a host, a command and, when it wants one, the
+name of a key that Horizon keeps. The module comment of
 [`block_terminal.rs`](../../../crates/horizon-browser-control/src/manifest/block_terminal.rs)
 and the comment of
 [`block_terminals.rs`](../../../crates/horizon-ui/src/app/block_terminals.rs)
-describe the same boundary.
+describe the same boundary. The key half is described by
+[`block_keys.rs`](../../../crates/horizon-browser-control/src/manifest/block_keys.rs),
+[`machine_keys.rs`](../../../crates/horizon-core/src/ssh/machine_keys.rs) and
+[`block_machine_keys.rs`](../../../crates/horizon-ui/src/app/block_machine_keys.rs).
 
 ## Untrusted: every field from the agent
 
@@ -71,16 +74,89 @@ describe the same boundary.
   writes to or closes the terminal. The agent cannot type into it, and it has no
   card document and no `next_click`.
 
+## Machine keys
+
+A person's ssh agent can hold more keys than a server allows: 18 of 18
+authentication attempts failed at three providers when `ssh` offered the agent's
+keys, and `-o IdentitiesOnly=yes -o IdentityAgent=none -i <key>` logged in at
+once. A rented machine must also not receive the person's own key. Horizon
+therefore keeps its own key pair for each machine name, and an agent names the
+key instead of supplying one.
+
+### Untrusted: the name of the key
+
+`machine_key` and `delete_machine_key` take a `name`, and `open_terminal` takes
+an optional `key` with the same rule. `machine_keys` takes no input.
+
+- **A name is a name.** It is 1 to 40 characters of `a-z`, `0-9` and `-`, with
+  no `-` at either end, so it is one file name in the key directory and never a
+  path, a leading `-` or another file of that directory. A violation is
+  `invalid_key_name`, and the message names the rule.
+- **The check runs twice.** The MCP server refuses a bad name before the
+  request reaches the queue, and the UI checks the name again when it uses it.
+- **A name belongs to one workspace.** The directory is named after the saved
+  local id of the calling agent's workspace, so an agent of another workspace
+  cannot list, use or delete a key, and gets `key_unavailable` instead.
+
+### Guarantees for machine keys
+
+- **Fixed argv.** With `key`, Horizon adds exactly `-i <private key path>`,
+  `-o IdentitiesOnly=yes`, `-o IdentityAgent=none`,
+  `-o UserKnownHostsFile=<machine-keys dir>/<workspace>/<name>.known_hosts` and
+  `-o StrictHostKeyChecking=accept-new` to the command line that it builds. The
+  key options come before the destination and a remote command stays last. The
+  agent never passes a path, a passphrase, a key file or an ssh option.
+- **The person's own keys and agent are not offered.** `IdentitiesOnly` and
+  `IdentityAgent=none` keep the login to that one key, so a long agent key list
+  cannot exhaust `MaxAuthTries`, and a rented machine never holds the person's
+  public key.
+- **A per-key known-hosts file.** First contact with a host is accepted and
+  pinned for that key alone. A recycled address therefore cannot collide with
+  the person's own `known_hosts`, and a changed host key refuses that key's
+  login.
+- **The private half never leaves the Horizon home.** The answer, a log line, a
+  card and an error message hold the public line only. The key directory is
+  `0700` and the private key `0600`; `ssh-keygen` makes an ed25519 pair with no
+  passphrase. One workspace holds at most 32 pairs (`too_many_keys`).
+- **Workspace scope, not agent scope.** Every agent panel of the workspace may
+  use the workspace's keys, so an agent that starts later reaches a machine that
+  an earlier agent rented; an agent of another workspace cannot.
+- **No blocking frame.** The name rule runs on the frame; the directory work
+  and `ssh-keygen` run on the coordination worker, and the answer is written
+  when that work is done.
+- **The saved panel keeps the name.** The key name and its directory are saved
+  with the SSH panel and restored with it, so a restored panel builds the same
+  command line. A restored panel whose key was deleted starts and shows the
+  error of `ssh`.
+
+### Does not guarantee (machine keys)
+
+- **A local agent that runs as the same user can read the key file from disk.**
+  The key is a file under the Horizon home; Horizon keeps it from an answer, a
+  log line and a card, not from a process of the person.
+- **First contact is trust on first use.** Horizon pins the host key that the
+  first login sees. It does not verify that the machine is the one the agent
+  meant, and the person's own known-hosts entries do not apply to that key.
+- **Horizon does not put the public key on the machine.** The agent does that at
+  rent time, so Horizon cannot prove that the machine holds the key, and a
+  machine that the agent prepares with another key still accepts it.
+- **A deleted key is gone, not revoked.** `delete_machine_key` removes the
+  local files and the known-hosts file of that key. If the public key is still
+  in the `authorized_keys` of a machine, the machine still accepts it until the
+  person or the agent removes it.
+
 ## Does not guarantee
 
 - **The host is the agent's choice.** The agent selects the machine, and the
   person's OpenSSH configuration and known-host entries decide whether Horizon
-  reaches it. Horizon trusts no host key and accepts no key, fingerprint or
+  reaches it, unless the agent names a machine key: then the known-hosts file of
+  that key decides. Horizon trusts no host key and accepts no key, fingerprint or
   option from an agent.
 - **The host key question and the login are the person's.** `ssh` runs in the
   new panel, so an unknown host key and a password prompt wait for the person in
-  that terminal. Horizon answers neither, and it does not prove that a login
-  succeeded.
+  that terminal, unless the terminal names a machine key: then the known-hosts
+  file of that key accepts the first host key and pins it. Horizon answers
+  neither question, and it does not prove that a login succeeded.
 - **The remote command is the agent's choice.** The character set keeps it from
   being a second command in this shell, but it still runs on that host with the
   account that the person logs in as. A command such as `rm -rf` is a valid

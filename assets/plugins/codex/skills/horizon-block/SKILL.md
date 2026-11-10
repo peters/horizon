@@ -16,7 +16,8 @@ agent panel that Horizon launched and to its workspace. A caller without that
 panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
-`next_click`, `visibility`, `close` and `open_terminal`.
+`next_click`, `visibility`, `close`, `open_terminal`, `machine_key`,
+`machine_keys` and `delete_machine_key`.
 
 ## Create a card
 
@@ -142,6 +143,66 @@ titlebar of the panel carries the mark `opened by <agent>`, so the person knows
 that you opened it. The panel is an ordinary SSH terminal after that: the person
 types in it and closes it. You cannot read it, write to it or close it with this
 tool.
+
+## Keep a key for a machine
+
+A machine that you rent must not hold the person's own key, and the person's ssh
+agent must not offer a long list of keys to it. Horizon keeps one key pair per
+machine name in the workspace, and a terminal that names the key connects with
+that key alone.
+
+Ask for a key, put its public line on the machine at rent time, then open the
+terminal with it:
+
+```json
+{"operation": "machine_key", "name": "build-1"}
+{"status": "machine_key", "name": "build-1",
+ "public_key": "ssh-ed25519 AAAA... horizon-machine-build-1", "created": true}
+```
+
+1. Call `machine_key` with a name such as `build-1`.
+2. Put `public_key` in the `authorized_keys` of the machine, at rent time, from
+   the console or the cloud-init of the provider.
+3. Call `open_terminal` with `"key": "build-1"`:
+
+   ```json
+   {"operation": "open_terminal", "key": "build-1",
+    "ssh": {"host": "203.0.113.10", "user": "root"},
+    "remote_command": "tmux new -A -s build"}
+   ```
+
+4. Call `delete_machine_key` after you delete the machine.
+
+```json
+{"operation": "machine_keys"}
+{"operation": "delete_machine_key", "name": "build-1"}
+```
+
+- `name` is 1 to 40 characters of `a-z`, `0-9` and `-`, and cannot start or end
+  with `-`. A name that breaks the rule is `invalid_key_name`.
+- One workspace holds at most 32 keys. The 33rd name is `too_many_keys`; delete
+  a key that you no longer need.
+- Horizon makes an ed25519 pair with no passphrase, under its own home. The
+  answer holds the public line only. `created` is false when the pair was
+  already there, and the same public key comes back.
+- You pass no path, no passphrase, no key file and no ssh option. Horizon adds
+  `-i`, `IdentitiesOnly=yes`, `IdentityAgent=none`, its own known-hosts file for
+  that key, and `StrictHostKeyChecking=accept-new` to the command line that it
+  builds. The machine sees that one key, and the ssh agent of the person is not
+  offered.
+- Every agent panel of the workspace can use the workspace's keys, so an agent
+  that starts later reaches a machine that you rented. An agent of another
+  workspace gets `key_unavailable`.
+- `machine_keys` answers `keys`, each with `name`, `public_key` and
+  `created_at_millis`.
+- `delete_machine_key` removes the pair and its known-hosts file, and answers
+  `name`. An unknown or deleted key is `key_unavailable`. Call it after you
+  delete the machine.
+- The private key never appears in an answer, a log line or a card.
+
+The key is trust on first use: the first login with a key pins the host key in
+the known-hosts file of that key, and a later change refuses the login. Horizon
+does not verify the machine.
 
 ## The document
 
@@ -301,6 +362,12 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
   run. Closing a terminal does not free its place; ask the person to open the
   next one.
 - `terminal_unavailable`: Horizon could not open the terminal panel.
+- `invalid_key_name`: the key name breaks a rule. The message names it.
+- `too_many_keys`: the workspace holds the 32 keys that it may hold. Delete one
+  with `delete_machine_key`.
+- `key_unavailable`: the workspace has no key of that name, the pair is
+  incomplete, `ssh-keygen` is missing or failed, or another workspace holds the
+  key.
 - `request_expired`: Horizon did not apply the request in 10 seconds, or in the
   10 seconds and the wait that a `next_click` asks for. Call `list` before you
   retry, because the change may have completed.
@@ -325,3 +392,8 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - A terminal that you open with `open_terminal` is not a card. It has no
   document, no click and no `next_click`, and this tool cannot change it after
   it is open.
+- The key name is saved with the terminal. A key that you delete after you
+  opened a terminal leaves that terminal with ssh's own error when it restores.
+- A local agent that runs as the same user as Horizon can read the private key
+  file from disk. The key is not a secret that Horizon can keep from the person
+  or from a process of the person.

@@ -141,21 +141,31 @@ boundary pages went away with their features.
     events, saves without reporting; a panel that shares a browser profile shares
     that profile's folder; a canceled download can leave a partial file.
 - [`agent-terminal-open`](trust-boundaries/agent-terminal-open.md)
-  - Untrusted: the host, the user, the port, the remote command and the title
-    that an agent sends to `open_terminal`.
+  - Untrusted: the host, the user, the port, the remote command, the title and
+    the machine key name that an agent sends to `open_terminal`, and the key name
+    of `machine_key` and `delete_machine_key`.
   - Guarantees: the route is an object with three fields and refuses every other
     field, so no identity file, proxy or ssh option arrives; a host and a user
     pass the same label check as a Device viewer route, a port is 1 to 65535, and
     a remote command is one trimmed line of 512 characters from a fixed set with
-    no leading `-`; the same check runs in the MCP server and again in the UI;
-    Horizon builds the argv itself with `-t` for a remote command and the command
-    last, and the mark in the titlebar is Horizon's own text, saved with the
-    panel; one agent panel opens at most eight terminals in one run.
+    no leading `-`; a key name is 1 to 40 characters of `a-z`, `0-9` and `-` with
+    no `-` at either end, and it is never a path; the same checks run in the MCP
+    server and again in the UI; Horizon builds the argv itself with `-t` for a
+    remote command, with `-i`, `IdentitiesOnly=yes`, `IdentityAgent=none`, a
+    per-key known-hosts file and `accept-new` when a machine key is named, and
+    the command last; the mark in the titlebar is Horizon's own text, saved with
+    the panel; one agent panel opens at most eight terminals in one run; keys
+    belong to one workspace, stay in a `0700` directory with a `0600` private
+    key under the Horizon home, are made and read on the coordination worker, and
+    only the public line reaches an answer.
   - Does not guarantee: the agent chooses the host and the command, so the
     command runs with the account the person logs in as; the host key question
-    and the login wait for the person in that terminal; the text the person types
-    there leaves this computer; and the panel is an ordinary SSH terminal
-    afterwards that no operation of `block_panel` reads or changes.
+    and the login wait for the person in that terminal, or are pinned on first
+    contact when a machine key is named; the text the person types there leaves
+    this computer; the private key is a file that a local agent running as the
+    person can read; Horizon does not put the public key on the machine; and the
+    panel is an ordinary SSH terminal afterwards that no operation of
+    `block_panel` reads or changes.
 
 ## Follow-up work
 

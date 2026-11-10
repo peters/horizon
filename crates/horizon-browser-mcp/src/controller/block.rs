@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use horizon_browser_control::block::parse_document;
 use horizon_browser_control::manifest::block::{self, Operation, Outcome};
+use horizon_browser_control::manifest::block_keys;
 use horizon_browser_control::manifest::block_terminal;
 
 use super::BrowserController;
@@ -28,6 +29,9 @@ impl BrowserController {
             return Ok(refusal);
         }
         if let Some(refusal) = refused_terminal(&operation) {
+            return Ok(refusal);
+        }
+        if let Some(refusal) = refused_key(&operation) {
             return Ok(refusal);
         }
         // A `next_click` holds its request open for the wait it asks for, so
@@ -67,7 +71,10 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::NextClick { .. }
         | Operation::Visibility { .. }
         | Operation::Close { .. }
-        | Operation::OpenTerminal { .. } => {
+        | Operation::OpenTerminal { .. }
+        | Operation::MachineKey { .. }
+        | Operation::MachineKeys
+        | Operation::DeleteMachineKey { .. } => {
             return None;
         }
     };
@@ -88,6 +95,30 @@ fn refused_terminal(operation: &Operation) -> Option<Outcome> {
         return None;
     };
     block_terminal::check(ssh, remote_command.as_deref())
+        .err()
+        .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
+}
+
+/// The key name of an operation that carries one, checked before the queue
+/// holds it: the name becomes a file name under the Horizon home, and a refusal
+/// here writes no request file.
+fn refused_key(operation: &Operation) -> Option<Outcome> {
+    let name = match operation {
+        Operation::MachineKey { name } | Operation::DeleteMachineKey { name } => name,
+        Operation::OpenTerminal { key: Some(key), .. } => key,
+        Operation::Create { .. }
+        | Operation::Update { .. }
+        | Operation::List
+        | Operation::Inspect { .. }
+        | Operation::NextClick { .. }
+        | Operation::Visibility { .. }
+        | Operation::Close { .. }
+        | Operation::OpenTerminal { key: None, .. }
+        | Operation::MachineKeys => {
+            return None;
+        }
+    };
+    block_keys::check_name(name)
         .err()
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }

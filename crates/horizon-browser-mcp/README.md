@@ -672,6 +672,9 @@ button or on a selectable row reach the agent that owns the card.
 {"operation":"visibility","panel_id":"<returned id>","visible":false}
 {"operation":"close","panel_id":"<returned id>"}
 {"operation":"open_terminal","ssh":{"host":"lab-1","user":"deploy"},"remote_command":"tmux new -A -s build"}
+{"operation":"machine_key","name":"build-1"}
+{"operation":"machine_keys"}
+{"operation":"delete_machine_key","name":"build-1"}
 ```
 
 The document is at most 32 KiB and 64 components, with 24 `kv` rows, 32 `list`
@@ -777,6 +780,50 @@ The panel is an ordinary SSH terminal afterwards: the person types in it and
 closes it. No operation of `block_panel` reads it, writes to it or closes it.
 The agent chooses the host and the command, the host-key prompt and the login are
 the person's, and tell the person on a card what the terminal is for.
+
+## Machine keys
+
+A machine that an agent rents gets Horizon's own key, never the person's key and
+never the person's ssh agent. `machine_key` makes or reads one key of the
+caller's workspace:
+
+```json
+{"operation":"machine_key","name":"build-1"}
+{"status":"machine_key","name":"build-1","public_key":"ssh-ed25519 AAAA... horizon-machine-build-1","created":true}
+```
+
+Put `public_key` in the `authorized_keys` of the machine at rent time, then open
+the terminal with `key`:
+
+```json
+{"operation":"open_terminal","key":"build-1","ssh":{"host":"203.0.113.10","user":"root"},
+ "remote_command":"tmux new -A -s build"}
+```
+
+Horizon adds, itself, `-i <its private key> -o IdentitiesOnly=yes -o
+IdentityAgent=none -o UserKnownHostsFile=<its known-hosts file for that key>
+-o StrictHostKeyChecking=accept-new` to the command line that it builds. The
+machine sees one key, so a login does not fail on `MaxAuthTries` because an agent
+offers more keys; the person's own keys and ssh agent are not offered; the host
+key is pinned for that key on first contact and a changed key refuses the login.
+
+`name` is 1 to 40 characters of `a-z`, `0-9` and `-`, with no `-` at either end
+(`invalid_key_name`). Horizon makes an ed25519 pair with no passphrase under its
+own home, answers the public line only, and reports `created` false when the pair
+was already there. One workspace holds at most 32 keys (`too_many_keys`). An
+agent passes no path, no passphrase, no key file and no ssh option, and the
+private key never appears in an answer, a log line or a card.
+
+Every agent panel of the workspace may use the workspace's keys, so a later agent
+reaches a machine that an earlier agent rented; an agent of another workspace
+gets `key_unavailable`. `machine_keys` answers
+`{"keys":[{"name","public_key","created_at_millis"}]}` for the caller's
+workspace. `delete_machine_key` removes the pair and its known-hosts file, and an
+unknown or deleted key is `key_unavailable`; call it after the machine is
+deleted. The key name is saved with the panel, so a restored panel builds the
+same command line and a restored panel whose key was deleted shows ssh's own
+error. A local agent that runs as the person can read the key file from disk, and
+first contact with a host is trust on first use.
 
 Every operation needs the identity that Horizon injects into an agent panel;
 a caller without it gets `caller_unavailable`. A request expires before dispatch

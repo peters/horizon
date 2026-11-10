@@ -5,10 +5,13 @@
 //! `close` around it. A person's clicks on the card reach its owner through
 //! `next_click`, a request the host keeps open until a click arrives or the
 //! wait ends. `open_terminal` asks for an SSH terminal instead of a card, which
-//! the host opens for the person beside the calling agent panel. A request travels the path of a Device panel request: a
-//! bounded file under `runtime/block-panel-requests`, claimed by this host's
-//! UI on the coordination worker, applied on the UI thread, and answered with
-//! one result file that only the asking actor and its host consume.
+//! the host opens for the person beside the calling agent panel, and
+//! `machine_key`, `machine_keys` and `delete_machine_key` keep the SSH key pairs
+//! that such a terminal connects with. A request travels the path of a Device
+//! panel request: a bounded file under `runtime/block-panel-requests`, claimed
+//! by this host's UI on the coordination worker, applied on the UI thread, and
+//! answered with one result file that only the asking actor and its host
+//! consume.
 //!
 //! The document is untrusted text from an agent that Horizon draws in a
 //! person's workspace, so the UI validates every document again before it
@@ -109,7 +112,23 @@ pub enum Operation {
         /// `user@host`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// Name of a machine key of the caller's workspace, as `machine_key`
+        /// reports it. Horizon then connects with that key alone, through its
+        /// own known-hosts file. Omitted means no key: `ssh` offers the
+        /// person's own keys and ssh agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
     },
+    /// Make or read the key pair that Horizon keeps for one machine name in the
+    /// caller's workspace, and answer its public key. Horizon makes an ed25519
+    /// pair with no passphrase under its own home, so the private half never
+    /// leaves this computer and the person's own keys are not used.
+    MachineKey { name: String },
+    /// The key pairs of the calling agent's workspace, by name.
+    MachineKeys,
+    /// Delete one key pair of the calling agent's workspace, with its
+    /// known-hosts file. Call it after the machine is deleted.
+    DeleteMachineKey { name: String },
 }
 
 /// Public card input. Model providers refuse a tool whose input schema has
@@ -126,6 +145,18 @@ impl BlockPanelInput {
     pub fn into_operation(self) -> Operation {
         self.0
     }
+}
+
+/// One machine key of a workspace as `machine_keys` reports it. The private
+/// half stays in the Horizon home and never appears in an answer.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[schemars(extend("type" = "object"))]
+pub struct MachineKeySummary {
+    pub name: String,
+    /// The public key as `ssh-keygen` wrote it, one line, ready for
+    /// `authorized_keys` on the machine.
+    pub public_key: String,
+    pub created_at_millis: u64,
 }
 
 /// One card as `list` reports it.
@@ -191,6 +222,21 @@ pub enum Outcome {
     /// An SSH terminal panel that the caller now has in its workspace.
     Opened {
         panel_id: String,
+    },
+    /// One machine key pair of the caller's workspace, and whether Horizon
+    /// made it for this request.
+    MachineKey {
+        name: String,
+        public_key: String,
+        created: bool,
+    },
+    /// The machine key pairs of the caller's workspace.
+    MachineKeys {
+        keys: Vec<MachineKeySummary>,
+    },
+    /// One machine key pair that the caller deleted.
+    DeletedMachineKey {
+        name: String,
     },
     Failed {
         code: String,
@@ -492,6 +538,12 @@ mod tests {
             schema.to_string().contains("open_terminal"),
             "the terminal operation is described"
         );
+        for operation in ["machine_key", "machine_keys", "delete_machine_key"] {
+            assert!(
+                schema.to_string().contains(operation),
+                "the key operation {operation} is described: {schema}"
+            );
+        }
     }
 
     #[test]
@@ -504,6 +556,7 @@ mod tests {
             ssh,
             remote_command,
             title,
+            key,
         } = serde_json::from_value::<BlockPanelInput>(sent)
             .expect("public input")
             .into_operation()
@@ -515,6 +568,7 @@ mod tests {
         assert_eq!(ssh.port, None);
         assert_eq!(remote_command, None);
         assert_eq!(title, None);
+        assert_eq!(key, None, "a terminal without a key offers the person's own keys");
 
         let opened = serde_json::to_value(Outcome::Opened {
             panel_id: "panel".into(),
@@ -556,6 +610,15 @@ mod tests {
                 }),
                 "open_terminal",
             ),
+            (
+                serde_json::json!({"operation": "machine_key", "name": "build-1"}),
+                "machine_key",
+            ),
+            (serde_json::json!({"operation": "machine_keys"}), "machine_keys"),
+            (
+                serde_json::json!({"operation": "delete_machine_key", "name": "build-1"}),
+                "delete_machine_key",
+            ),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
             let name = match parsed {
@@ -567,6 +630,9 @@ mod tests {
                 Operation::Visibility { .. } => "visibility",
                 Operation::Close { .. } => "close",
                 Operation::OpenTerminal { .. } => "open_terminal",
+                Operation::MachineKey { .. } => "machine_key",
+                Operation::MachineKeys => "machine_keys",
+                Operation::DeleteMachineKey { .. } => "delete_machine_key",
             };
             assert_eq!(name, expected);
         }
@@ -603,6 +669,72 @@ mod tests {
             },
             "a wait without a panel_id covers every card of the caller"
         );
+    }
+
+    #[test]
+    fn the_key_operations_answer_the_public_key_and_never_the_private_half() {
+        let made = serde_json::from_value::<Operation>(serde_json::json!({
+            "operation": "machine_key", "name": "build-1"
+        }))
+        .expect("machine_key parses");
+        assert_eq!(made, Operation::MachineKey { name: "build-1".into() });
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::json!({"operation": "machine_keys"})).expect("list"),
+            Operation::MachineKeys
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "delete_machine_key", "name": "build-1"
+            }))
+            .expect("delete"),
+            Operation::DeleteMachineKey { name: "build-1".into() }
+        );
+        for unknown in [
+            serde_json::json!({"operation": "machine_key", "name": "build-1", "path": "/home/peters/.ssh/id"}),
+            serde_json::json!({"operation": "machine_key", "name": "build-1", "passphrase": ""}),
+            serde_json::json!({"operation": "delete_machine_key", "name": "build-1", "force": true}),
+        ] {
+            assert!(
+                serde_json::from_value::<Operation>(unknown.clone()).is_err(),
+                "an agent passes a name and nothing else: {unknown}"
+            );
+        }
+
+        let answer = serde_json::to_value(Outcome::MachineKey {
+            name: "build-1".into(),
+            public_key: "ssh-ed25519 AAAA horizon-machine-build-1".into(),
+            created: true,
+        })
+        .expect("serialize");
+        assert_eq!(answer["status"], serde_json::json!("machine_key"));
+        assert_eq!(answer["created"], serde_json::json!(true));
+        assert_eq!(
+            answer["public_key"],
+            serde_json::json!("ssh-ed25519 AAAA horizon-machine-build-1")
+        );
+        assert!(
+            !answer.to_string().contains("PRIVATE"),
+            "an answer never holds the private half: {answer}"
+        );
+
+        let list = serde_json::to_value(Outcome::MachineKeys {
+            keys: vec![MachineKeySummary {
+                name: "build-1".into(),
+                public_key: "ssh-ed25519 AAAA horizon-machine-build-1".into(),
+                created_at_millis: 1_700_000_000_000,
+            }],
+        })
+        .expect("serialize");
+        assert_eq!(list["status"], serde_json::json!("machine_keys"));
+        assert_eq!(list["keys"][0]["name"], serde_json::json!("build-1"));
+        assert_eq!(
+            list["keys"][0]["created_at_millis"],
+            serde_json::json!(1_700_000_000_000u64)
+        );
+
+        let deleted = serde_json::to_value(Outcome::DeletedMachineKey { name: "build-1".into() }).expect("serialize");
+        assert_eq!(deleted["status"], serde_json::json!("deleted_machine_key"));
+        assert_eq!(deleted["name"], serde_json::json!("build-1"));
     }
 
     #[test]

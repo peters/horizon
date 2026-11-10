@@ -1,6 +1,7 @@
 mod actions;
 mod answer_retries;
 mod block_clicks;
+mod block_machine_keys;
 mod block_requests;
 mod block_terminals;
 mod bootstrap;

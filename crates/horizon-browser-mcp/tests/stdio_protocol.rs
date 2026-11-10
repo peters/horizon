@@ -247,8 +247,15 @@ fn assert_block_panel_contract(tools: &Value) {
         "next_click",
         "visibility",
         "close",
+        "open_terminal",
+        "machine_key",
+        "machine_keys",
+        "delete_machine_key",
     ] {
         assert!(card.contains(operation), "missing card operation {operation}");
+    }
+    for key_field in ["remote_command", "ssh", "key", "public_key", "created_at_millis"] {
+        assert!(card.contains(key_field), "missing terminal or key field {key_field}");
     }
     for document_field in ["components", "heading", "buttons", "selection"] {
         assert!(card.contains(document_field), "missing document field {document_field}");
@@ -282,6 +289,14 @@ fn assert_block_panel_contract(tools: &Value) {
         "Its agent is not here",
         "Last seen: ",
         "A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.",
+        "invalid_ssh_route",
+        "invalid_remote_command",
+        "too_many_terminals",
+        "invalid_key_name",
+        "too_many_keys",
+        "key_unavailable",
+        "IdentitiesOnly=yes",
+        "accept-new",
     ] {
         assert!(description.contains(stated), "the description omits {stated}");
     }

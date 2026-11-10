@@ -124,6 +124,13 @@ impl HorizonHome {
         self.root.join("plugins")
     }
 
+    /// The key pairs that Horizon keeps for the machines an agent rents. A
+    /// rented machine holds Horizon's public key, never the person's own.
+    #[must_use]
+    pub fn machine_keys_dir(&self) -> PathBuf {
+        self.root.join("machine-keys")
+    }
+
     #[must_use]
     pub fn claude_plugin_dir(&self) -> PathBuf {
         self.plugins_dir().join("claude-code")

@@ -1,10 +1,12 @@
 mod config_parser;
 mod connection_status;
+mod machine_keys;
 
 use serde::{Deserialize, Serialize};
 
 pub use config_parser::{DiscoveredSshHost, discover_ssh_hosts};
 pub use connection_status::SshConnectionStatus;
+pub use machine_keys::{MachineKey, MachineKeyError, MachineKeyRef, MachineKeys};
 
 use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
 
@@ -18,6 +20,11 @@ pub struct SshConnection {
     pub proxy_jump: Option<String>,
     pub remote_command: Option<String>,
     pub extra_args: Vec<String>,
+    /// The machine key that Horizon keeps for this panel, when an agent opened
+    /// it with one. It is Horizon's own pair under the Horizon home, so the
+    /// person's own keys and ssh agent are not offered to the machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_key: Option<MachineKeyRef>,
 }
 
 impl SshConnection {
@@ -41,6 +48,17 @@ impl SshConnection {
             },
             ..Self::default()
         }
+    }
+
+    /// The connection of a terminal that connects with one machine key of the
+    /// caller's workspace. Horizon adds that key's own options to the command
+    /// line: the key file, `IdentitiesOnly`, no ssh agent, the known-hosts file
+    /// of this key, and `accept-new` so first contact is pinned for that key.
+    #[must_use]
+    pub fn for_agent_terminal_with_key(terminal: &CheckedTerminal, key: &MachineKeyRef) -> Self {
+        let mut connection = Self::for_agent_terminal(terminal);
+        connection.machine_key = Some(key.clone());
+        connection
     }
 
     #[must_use]
@@ -117,6 +135,9 @@ impl SshConnection {
         if batch_mode {
             args.extend(["-o".to_string(), "BatchMode=yes".to_string()]);
         }
+        if let Some(key) = self.machine_key.as_ref() {
+            args.extend(key.ssh_option_args());
+        }
 
         args.extend(default_keepalive_args());
         args.extend(self.extra_args.iter().cloned());
@@ -153,7 +174,15 @@ fn expand_tilde(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::SshConnection;
+    use crate::ssh::MachineKeyRef;
     use horizon_browser_control::manifest::block_terminal::{self, TerminalRoute};
+
+    fn key() -> MachineKeyRef {
+        MachineKeyRef {
+            directory: "/home/peters/.horizon/machine-keys/%666f6c64657231".to_string(),
+            name: "build-1".to_string(),
+        }
+    }
 
     fn agent_terminal(host: &str, user: Option<&str>, port: Option<i64>, command: Option<&str>) -> Vec<String> {
         let route = TerminalRoute {
@@ -163,6 +192,97 @@ mod tests {
         };
         let checked = block_terminal::check(&route, command).expect("the route and command are accepted");
         SshConnection::for_agent_terminal(&checked).to_command_args()
+    }
+
+    #[test]
+    fn an_agent_terminal_with_a_machine_key_offers_that_key_alone() {
+        let route = TerminalRoute {
+            host: "203.0.113.10".into(),
+            user: Some("root".into()),
+            port: None,
+        };
+        let checked = block_terminal::check(&route, Some("tmux new -A -s build")).expect("the route is accepted");
+        let connection = SshConnection::for_agent_terminal_with_key(&checked, &key());
+        assert_eq!(
+            connection.to_command_args(),
+            vec![
+                "-i".to_string(),
+                "/home/peters/.horizon/machine-keys/%666f6c64657231/build-1".to_string(),
+                "-o".to_string(),
+                "IdentitiesOnly=yes".to_string(),
+                "-o".to_string(),
+                "IdentityAgent=none".to_string(),
+                "-o".to_string(),
+                "UserKnownHostsFile=/home/peters/.horizon/machine-keys/%666f6c64657231/build-1.known_hosts".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=accept-new".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "-t".to_string(),
+                "root@203.0.113.10".to_string(),
+                "tmux new -A -s build".to_string(),
+            ],
+            "the key options come before the destination and the command stays last"
+        );
+        assert_eq!(
+            connection.identity_file, None,
+            "the key is not also carried as an identity file"
+        );
+        assert_eq!(
+            connection.machine_key.as_ref().map(|key| key.name.as_str()),
+            Some("build-1"),
+            "the panel carries the key name"
+        );
+    }
+
+    #[test]
+    fn a_terminal_without_a_key_is_the_command_line_of_today() {
+        let route = TerminalRoute {
+            host: "203.0.113.10".into(),
+            user: Some("root".into()),
+            port: None,
+        };
+        let checked = block_terminal::check(&route, Some("tmux new -A -s build")).expect("the route is accepted");
+        let with_key = SshConnection::for_agent_terminal_with_key(&checked, &key());
+        let without_key = SshConnection::for_agent_terminal(&checked);
+        assert!(
+            !without_key.to_command_args().iter().any(|argument| argument == "-i"),
+            "no key, no identity option: {:?}",
+            without_key.to_command_args()
+        );
+        assert!(
+            with_key.to_command_args().len() > without_key.to_command_args().len(),
+            "a key adds its own options"
+        );
+    }
+
+    #[test]
+    fn a_saved_panel_keeps_its_machine_key_and_an_older_one_still_parses() {
+        let saved = serde_json::to_value(SshConnection {
+            host: "lab-1".into(),
+            machine_key: Some(key()),
+            ..SshConnection::default()
+        })
+        .expect("serialize");
+        assert_eq!(saved["machine_key"]["name"], serde_json::json!("build-1"));
+        assert_eq!(
+            saved["machine_key"]["directory"],
+            serde_json::json!("/home/peters/.horizon/machine-keys/%666f6c64657231"),
+            "the directory comes with the name, so a restored panel builds the same line"
+        );
+        let restored: SshConnection = serde_json::from_value(saved).expect("parse a saved connection");
+        assert_eq!(restored.machine_key, Some(key()));
+        let restored_args = restored.to_command_args();
+
+        let older: SshConnection =
+            serde_json::from_value(serde_json::json!({"host": "lab-1"})).expect("an older panel keeps parsing");
+        assert_eq!(older.machine_key, None, "a panel of an older snapshot has no key");
+        assert!(
+            !restored_args.is_empty() && older.to_command_args().len() < restored_args.len(),
+            "the restored panel builds the command line of its key"
+        );
     }
 
     #[test]
@@ -233,6 +353,7 @@ mod tests {
             proxy_jump: Some("bastion".to_string()),
             remote_command: Some("tmux attach".to_string()),
             extra_args: vec!["-o".to_string(), "StrictHostKeyChecking=no".to_string()],
+            ..SshConnection::default()
         };
 
         assert_eq!(

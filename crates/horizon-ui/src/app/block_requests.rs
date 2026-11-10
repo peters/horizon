@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use egui::Context;
 use horizon_browser_control::block::{BlockDocument, parse_document};
+use horizon_browser_control::manifest::block_terminal;
 use horizon_core::browser::manifest::{
     self,
     block::{self, CardSummary, Operation, Outcome, Request},
@@ -19,6 +20,7 @@ use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, Wor
 
 use super::HorizonApp;
 use super::answer_retries::{RefusedAnswer, RefusedAnswers};
+use super::block_machine_keys;
 use super::browser_requests::{ActorPanel, actor_panel};
 use super::device_requests::HOST_REQUEST_POLL;
 
@@ -56,6 +58,10 @@ pub(in crate::app) struct BlockClaimState {
     pub(in crate::app) claimed: Vec<ClaimedBlockRequest>,
     /// Answers queued on the coordination worker whose outcome did not apply.
     writing: usize,
+    /// Key jobs of the coordination worker whose answer no frame wrote yet. A
+    /// key job does file work and starts `ssh-keygen`, so the frame that queued
+    /// it answers nothing, and the request pump must keep waking for the answer.
+    key_jobs: usize,
     /// Answers the worker could not write, for a later frame or pump wake and
     /// until each request's deadline.
     refused: RefusedAnswers<BlockAnswer>,
@@ -65,7 +71,17 @@ impl BlockClaimState {
     /// Whether a claim runs, a request it took waits, or an answer is not yet
     /// written: each needs a later frame or pump wake to settle.
     fn outstanding(&self) -> bool {
-        self.claiming || !self.claimed.is_empty() || self.writing > 0 || !self.refused.is_empty()
+        self.claiming || !self.claimed.is_empty() || self.writing > 0 || self.key_jobs > 0 || !self.refused.is_empty()
+    }
+
+    /// Counts one key job whose answer a later wake writes.
+    pub(in crate::app) fn key_job_started(&mut self) {
+        self.key_jobs += 1;
+    }
+
+    /// Counts one key job that answered, or that ended before it answered.
+    pub(in crate::app) fn key_job_finished(&mut self) {
+        self.key_jobs = self.key_jobs.saturating_sub(1);
     }
 }
 
@@ -129,6 +145,14 @@ impl HorizonApp {
             .expect("the request answers at once")
     }
 
+    /// Applies one request against an explicit queue directory, as a test does
+    /// for an operation whose answer the worker writes later. `None` means no
+    /// frame will answer it: the coordination worker owes the answer.
+    #[cfg(test)]
+    pub(super) fn apply_block_request_in(&mut self, request: &Request, root: &Path, ctx: &Context) -> Option<Outcome> {
+        self.apply_block_request_at(request, Some(root), ctx)
+    }
+
     /// Applies one request and returns its answer, or `None` for a `next_click`
     /// the host now holds open.
     fn apply_block_request_at(&mut self, request: &Request, root: Option<&Path>, ctx: &Context) -> Option<Outcome> {
@@ -156,14 +180,44 @@ impl HorizonApp {
                 ssh,
                 remote_command,
                 title,
-            } => Some(self.open_terminal(
-                ssh,
-                remote_command.as_deref(),
-                title.as_deref(),
-                actor,
-                &request.actor,
-                ctx,
-            )),
+                key,
+            } => {
+                let terminal = match block_terminal::check(ssh, remote_command.as_deref()) {
+                    Ok(terminal) => terminal,
+                    Err(refusal) => return Some(Outcome::failed(refusal.code, &refusal.message)),
+                };
+                match key {
+                    None => Some(self.open_terminal(&terminal, title.as_deref(), None, actor, &request.actor, ctx)),
+                    Some(key) => {
+                        // The key lives in a file, so the worker checks it and the
+                        // frame that applies the check opens the panel.
+                        self.answer_key_terminal(
+                            &block_machine_keys::KeyTerminal {
+                                terminal: &terminal,
+                                title: title.as_deref(),
+                                key,
+                            },
+                            actor,
+                            request,
+                            root,
+                            ctx,
+                        );
+                        None
+                    }
+                }
+            }
+            Operation::MachineKey { name } => {
+                self.answer_machine_key(name, actor, request, root, ctx);
+                None
+            }
+            Operation::MachineKeys => {
+                self.answer_machine_keys(actor, request, root, ctx);
+                None
+            }
+            Operation::DeleteMachineKey { name } => {
+                self.answer_deleted_machine_key(name, actor, request, root, ctx);
+                None
+            }
         }
     }
 

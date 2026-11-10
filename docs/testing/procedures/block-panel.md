@@ -24,11 +24,15 @@ scrolling of a card that is shorter than its content, the frame that a card fits
 for its own notices, the selected row of a card without its agent, and the press
 of a button at a low canvas zoom. The next tasks check that an agent can open an
 SSH terminal panel for the person: the checked route, each refusal, the keyboard
-focus, the mark of the agent that opened it, and the mark after a restart.
+focus, the mark of the agent that opened it, and the mark after a restart. The
+last checks of the terminals make sure that Horizon keeps one SSH key per rented
+machine: the key operations and their refusals, the private files, a terminal
+that connects with that key alone, the key of a workspace for every agent panel
+of that workspace, and a restored terminal whose key was deleted.
 
-The tasks B01 to B22 send their requests from a small MCP client that carries the
+The tasks B01 to B24 send their requests from a small MCP client that carries the
 identity of an agent panel, so one person reads each answer of the host. The
-tasks B23 to B26 use the scripted card agent instead: an agent panel that draws
+tasks B25 to B28 use the scripted card agent instead: an agent panel that draws
 its own cards, answers the clicks of the person and opens a terminal, without an
 AI model. Section 6 repeats the four interactions that a real agent must pass,
 with Claude Code and with a Codex panel.
@@ -41,7 +45,7 @@ with Claude Code and with a Codex panel.
 - The click tasks send pointer presses to the fixture display with `xdotool`,
   scoped to the display and the process of the fixture. A pointer press on a card
   gives the keyboard focus to that card, because the card is a panel.
-- The tasks B23 to B26 need the scripted card agent of the candidate's
+- The tasks B25 to B28 need the scripted card agent of the candidate's
   repository, `scripts/device-smoke/card_agent.py`, and Python 3. The script is
   deterministic: each click of the person makes one fixed change to its card, so
   a second run gives the same result.
@@ -527,7 +531,7 @@ every step on the fixture display that the native VNC Device panel shows.
 
    Result: The same card is drawn on paper-white surfaces. The heading, the
    second line, the inset box, the rows, the buttons and the footer stay
-   readable, and no colour is the dark-mode value. B26 checks the same card on a
+   readable, and no colour is the dark-mode value. B28 checks the same card on a
    first start with `--theme light`.
 
 6. Drag the right edge of the card until it is narrower than 420.
@@ -748,7 +752,106 @@ where no server listens: `ssh` fails to connect at once, and the panel stays.
    Result: The chip still says `opened by Codex`. The mark came back with the
    saved panel.
 
-### 5.23 B23 — The scripted agent draws and answers its own cards
+### 5.23 B23 — Keep a key for a rented machine
+
+No SSH server is necessary for this task. The fixture keeps its private home at
+`<state>/data/home`, so its Horizon home is `<state>/data/home/.horizon`.
+
+1. In client A, call `block_panel` with
+   `{"operation":"machine_key","name":"build-1"}`.
+
+   Result: The answer has `status: machine_key`, `name: build-1` and
+   `created: true`. `public_key` is one line that starts with `ssh-ed25519 ` and
+   ends with `horizon-machine-build-1`. The answer holds no line that starts
+   with `-----BEGIN`.
+
+2. Call `block_panel` with `{"operation":"machine_key","name":"build-1"}` again.
+
+   Result: The answer has `created: false` and the same `public_key`.
+
+3. Call `block_panel` with `{"operation":"machine_keys"}`.
+
+   Result: `keys` holds one entry for `build-1`, with `name`, `public_key` and
+   `created_at_millis`.
+
+4. Examine the files of the key:
+
+   ```sh
+   find <state>/data/home/.horizon/machine-keys -maxdepth 2 -printf '%M %p\n'
+   ```
+
+   Result: The directory under `machine-keys` is `drwx------`, because it holds
+   the private half. `build-1` is `-rw-------`. `build-1.pub` holds the
+   `public_key` of step 1.
+
+5. In client A, call `block_panel` with `{"operation":"machine_key","name":"../id_ed25519"}`,
+   with `{"operation":"machine_key","name":"Build"}`, and with a name of 41
+   characters.
+
+   Result: Each call answers `status: failed` with `code: invalid_key_name`, and
+   the message names the rule. No file appears outside the key directory.
+
+6. Call `block_panel` with
+   `{"operation":"delete_machine_key","name":"build-1"}`, then with
+   `{"operation":"machine_keys"}`, then with
+   `{"operation":"delete_machine_key","name":"build-1"}` again.
+
+   Result: The first answer has `status: deleted_machine_key` and `name: build-1`.
+   The list is empty and the key files are gone. The last answer is
+   `code: key_unavailable`.
+
+### 5.24 B24 — Connect with a machine key
+
+1. In client A, call `block_panel` with
+   `{"operation":"machine_key","name":"build-2"}`.
+
+   Result: The answer has `created: true` and one `public_key`.
+
+2. Call `block_panel` with:
+
+   ```json
+   {"operation":"open_terminal","key":"build-2","ssh":{"host":"127.0.0.1","port":2222},
+    "remote_command":"tmux new -A -s build"}
+   ```
+
+   Result: The answer has `status: opened` and a `panel_id`. The live view shows
+   a new SSH panel on port 2222 beside the panel of Agent A.
+
+3. Read the command line of the `ssh` child of the fixture Horizon process:
+
+   ```sh
+   ps -o pid=,args= -C ssh
+   ```
+
+   Result: The line holds `-i <state>/data/home/.horizon/machine-keys/<id>/build-2`,
+   `-o IdentitiesOnly=yes`, `-o IdentityAgent=none`,
+   `-o UserKnownHostsFile=<state>/data/home/.horizon/machine-keys/<id>/build-2.known_hosts`,
+   `-o StrictHostKeyChecking=accept-new`, `-t`, `127.0.0.1`, and
+   `tmux new -A -s build` last. It holds no other `-i`, no `-J` and no `-L`. No
+   server answers on the port, so `build-2.known_hosts` is not there yet: the
+   file appears at the first contact with a host.
+
+4. In client A, call `block_panel` with
+   `{"operation":"open_terminal","key":"build-9","ssh":{"host":"127.0.0.1","port":2223}}`.
+
+   Result: The answer is `code: key_unavailable`. No panel is opened.
+
+5. In client B, call `block_panel` with the request of step 2.
+
+   Result: The answer has `status: opened`. Every agent panel of the workspace
+   uses the keys of that workspace.
+
+6. Call `block_panel` with
+   `{"operation":"delete_machine_key","name":"build-2"}`, then close the fixture
+   Horizon normally and start it again with `--reuse-state --resume-session`, as
+   in B22.
+
+   Result: The two terminals come back with the mark of their agent. The `ssh`
+   line of each still holds the `-i` path of `build-2`, and the terminal shows
+   the warning of `ssh` that the identity file is not accessible. The panel
+   starts, because Horizon does not stop a restore for a missing key.
+
+### 5.25 B25 — The scripted agent draws and answers its own cards
 
 The tasks from here use the scripted card agent of this repository instead of a
 client with the identity of a probe panel. The agent panel draws the cards of its
@@ -777,7 +880,7 @@ Device panel.
    `--session-id <id>` in front of the arguments of the panel and `--plugin-dir
    <path>` after them, and the script receives them as `"$@"`. Only the wrapper of
    `Scripted machine` names an SSH host. The name `smoke.invalid` is a reserved
-   name that no resolver answers, so the Connect task of B24 needs no SSH server
+   name that no resolver answers, so the Connect task of B26 needs no SSH server
    and reaches no machine. The other two panels have no host to open.
 
    Result: The file exists.
@@ -867,9 +970,9 @@ Device panel.
     browser: click cancel rev <revision> ...` and then `card-agent: every card is
     closed; exit`. The agent panel stays in the workspace with that output.
 
-### 5.24 B24 — The Connect button of the scripted agent opens a terminal
+### 5.26 B26 — The Connect button of the scripted agent opens a terminal
 
-1. Press `Connect` on the machine card of B23.
+1. Press `Connect` on the machine card of B25.
 
    Result: The card keeps its other components, and a text says `A terminal
    opened beside this panel at HH:MM:SS.`. The terminal of `Scripted machine`
@@ -888,7 +991,7 @@ Device panel.
    Result: The focus stays on the card that you pressed. The new terminal did not
    take the keyboard from it.
 
-### 5.25 B25 — Another agent cannot change the cards of the scripted agent
+### 5.27 B27 — Another agent cannot change the cards of the scripted agent
 
 1. Read the terminal of `Intruder`. It ran its check when the fixture started, so
    its output stays in the scrollback.
@@ -912,7 +1015,7 @@ Device panel.
    The cards of the scripted agents were still in the live view after the check,
    with the documents that their own agents drew.
 
-### 5.26 B26 — The light theme draws the same cards on light surfaces
+### 5.28 B28 — The light theme draws the same cards on light surfaces
 
 The theme of the fixture is part of the configuration, and the first start of a
 state path imports it. A later run in the same private home keeps the theme of
@@ -941,7 +1044,7 @@ its settings store, so this task needs a new state path.
 
    Result: The card says `No SSH host is set in CARD_AGENT_SSH_HOST, so no
    terminal was opened.`, and no terminal panel appears. This panel list gives
-   the machine panel a host in the run of B23 and no host in this run.
+   the machine panel a host in the run of B25 and no host in this run.
 
 4. Close the fixture Horizon normally. Then start the fixture again on the same
    state with the dark theme:
@@ -1038,16 +1141,26 @@ Horizon, in a workspace of its own, with an agent panel that can call
   the person can type in the panel, a panel that the person opened holds no such
   chip, and the person can close the panel.
 - B22: The mark returns with the terminal after a restart.
-- B23: The scripted agent draws the card of its scenario beside its own panel,
+- B23: `machine_key` makes one key pair and answers the public line only, a
+  second call returns the same public key with `created: false`, `machine_keys`
+  lists the key, the directory is `0700` and the private key `0600`, a name that
+  breaks the rule is `invalid_key_name`, and `delete_machine_key` removes the
+  key pair and answers `key_unavailable` for a key that is gone.
+- B24: A terminal with `key` runs `ssh` with the `-i` path of that key, the four
+  options of the key, `-t` for a remote command and the command last; the key of
+  the workspace serves every agent panel of the workspace; an unknown key is
+  `key_unavailable` and opens no panel; and a restored panel whose key was
+  deleted still starts and shows the warning of `ssh`.
+- B25: The scripted agent draws the card of its scenario beside its own panel,
   answers a click with one fixed change, and closes the card at the button that
   closes. Its terminal names each step, and no line of it looks like a working
   agent. A narrow card keeps its heading and moves its badge under the second
   line.
-- B24: The Connect button opens one SSH terminal beside the agent panel with the
+- B26: The Connect button opens one SSH terminal beside the agent panel with the
   chip of that agent, and the card says when it opened.
-- B25: Another agent reads the cards of the scripted agent and is refused every
+- B27: Another agent reads the cards of the scripted agent and is refused every
   change, and the document of the card does not change.
-- B26: A first start with `--theme light` draws the workspace and the cards on
+- B28: A first start with `--theme light` draws the workspace and the cards on
   light surfaces, a panel without an SSH host refuses the Connect button on the
   card, and a later run in the same private home keeps the light theme even with
   `--theme dark`.
