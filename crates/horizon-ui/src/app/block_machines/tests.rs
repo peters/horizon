@@ -232,6 +232,32 @@ fn a_machine_that_breaks_a_rule_is_refused_before_any_file_work() {
 }
 
 #[test]
+fn a_forget_from_the_sidebar_removes_the_row_and_keeps_the_key() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+    answered(
+        &mut app,
+        &ctx,
+        &root,
+        set("build-1", "203.0.113.10", Some("build-1"), None),
+    );
+
+    app.forget_machine("build-1", &ctx);
+    app.settle_browser_host_io();
+    assert!(app.machine_list.records().is_empty(), "the row is gone");
+    assert!(
+        MachineKeys::from_home(app.session_store.home())
+            .key_directory()
+            .join("build-1")
+            .is_file(),
+        "a forget removes the record only: delete_machine_key removes the key"
+    );
+    let reloaded = Machines::load(MachineRegistry::from_home(app.session_store.home())).expect("the list");
+    assert!(reloaded.records().is_empty(), "the file no longer holds the record");
+}
+
+#[test]
 fn a_machine_record_carries_no_command_line_of_its_own() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);

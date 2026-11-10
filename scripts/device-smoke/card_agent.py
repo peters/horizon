@@ -11,6 +11,10 @@ newline-delimited JSON-RPC 2.0 over the child's stdin/stdout, creates cards with
 the host answers with the click of whichever card the person pressed. An older
 host that refuses a wait without a card gets one wait per card instead.
 
+`--scenario machines` writes no card: it registers one machine, or two with
+CARD_AGENT_SSH_HOST_2, with `machine_key` and `machine_set`, prints each record
+and the list that `machines` answers, and stays open until its stdin closes.
+
 The Connect button of the machine card opens a terminal panel for the person
 with `open_terminal`; the SSH host comes from `CARD_AGENT_SSH_HOST` and the
 one-line command from `CARD_AGENT_SSH_COMMAND`. `--scenario intruder` creates
@@ -62,6 +66,13 @@ MAX_CLICK_TIMEOUT_MILLIS = 3_600_000
 # run there after login (SKILL.md, "Connect an SSH terminal").
 SSH_HOST_ENV = 'CARD_AGENT_SSH_HOST'
 SSH_COMMAND_ENV = 'CARD_AGENT_SSH_COMMAND'
+# The `machines` scenario: a second host for a second record, and the user, port
+# and provider line that its records carry.
+SECOND_SSH_HOST_ENV = 'CARD_AGENT_SSH_HOST_2'
+SSH_USER_ENV = 'CARD_AGENT_SSH_USER'
+SSH_PORT_ENV = 'CARD_AGENT_SSH_PORT'
+MACHINE_PROVIDER = 'Loopback, test'
+MACHINE_NAMES = ('build-1', 'build-2')
 TERMINAL_TITLE = 'build-1 session'
 # The intruder check: wait for a card of another agent to appear in the
 # workspace, then read it and try to change it.
@@ -700,9 +711,14 @@ SCENARIOS = {
 SCENARIO_ORDER = ('machine', 'choose', 'browser')
 
 
+def machine_names(second_host: str) -> tuple[str, ...]:
+    """The records that the `machines` scenario writes, in creation order."""
+    return MACHINE_NAMES if second_host.strip() else MACHINE_NAMES[:1]
+
+
 def scenario_keys(scenario: str) -> tuple[str, ...]:
     """The cards one `--scenario` name creates, in creation order."""
-    if scenario in ('intruder',):
+    if scenario in ('intruder', 'machines'):
         return ()
     if scenario == 'all+tall':
         return SCENARIO_ORDER + ('tall',)
@@ -1040,6 +1056,8 @@ class CardAgent:
     def run(self, scenario: str) -> int:
         if scenario == 'intruder':
             return self.run_intruder()
+        if scenario == 'machines':
+            return self.run_machines()
         for key in scenario_keys(scenario):
             self.create(SCENARIOS[key]())
         model = 'rich' if self.rich else 'plain'
@@ -1101,6 +1119,43 @@ class CardAgent:
         self.idle_until_eof()
         return 0
 
+    # -- the machine list ------------------------------------------------
+
+    def run_machines(self) -> int:
+        """Register one or two machines of this Horizon and print their records."""
+        host = os.environ.get(SSH_HOST_ENV, '').strip()
+        if not host:
+            raise Fatal(f'the machines scenario needs a second host, or {SSH_HOST_ENV}')
+        second_host = os.environ.get(SECOND_SSH_HOST_ENV, '').strip()
+        user = os.environ.get(SSH_USER_ENV, '').strip()
+        port = os.environ.get(SSH_PORT_ENV, '').strip()
+        for index, name in enumerate(machine_names(second_host)):
+            target = host if index == 0 else second_host
+            key = self.client.call_tool('block_panel', {'operation': 'machine_key', 'name': name})
+            self.expect(key, 'machine_key', f'machine_key {name}')
+            log(f'machines: key {name} created={key.get("created")} '
+                f'public line {key.get("public_key")}')
+            route = {'host': target}
+            if user:
+                route['user'] = user
+            if port:
+                route['port'] = int(port)
+            answer = self.client.call_tool('block_panel', {
+                'operation': 'machine_set', 'name': name, 'ssh': route, 'key': name,
+                'session': name, 'provider': MACHINE_PROVIDER})
+            self.expect(answer, 'machine_set', f'machine_set {name}')
+            log(f'machines: record {answer.get("name")} created={answer.get("created")} '
+                f'at {target} with key {name} and session {name}')
+        listed = self.client.call_tool('block_panel', {'operation': 'machines'})
+        self.expect(listed, 'machines', 'machines')
+        records = [record for record in listed.get('machines') or [] if isinstance(record, dict)]
+        for record in records:
+            log(f'machines: list holds {record.get("name")} at {record.get("host")} '
+                f'open={record.get("terminal_open")} provider={record.get("provider")}')
+        log(f'machines: {len(records)} record(s) registered; the section shows them now')
+        self.idle_until_eof()
+        return 0
+
     def idle_until_eof(self) -> None:
         """Keep the panel open with nothing to do until its stdin closes."""
         while True:
@@ -1130,12 +1185,15 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         help='Command line of the Horizon MCP server, such as "<horizon> --browser-mcp". '
              f'Defaults to the {MCP_COMMAND_ENV} environment variable.')
     parser.add_argument(
-        '--scenario', choices=('machine', 'choose', 'browser', 'tall', 'all', 'all+tall', 'intruder'),
+        '--scenario',
+        choices=('machine', 'choose', 'browser', 'tall', 'all', 'all+tall', 'intruder', 'machines'),
         default='all',
         help='Which cards to create and drive; default all three. all+tall adds the tall '
              'card, whose body scrolls; tall alone creates only that card. intruder creates '
              'no card: it reads the cards of the other agents and tries to change one, '
-             'then stays open until stdin closes.')
+             'then stays open until stdin closes. machines creates no card: it registers one '
+             'or two machines of this Horizon from CARD_AGENT_SSH_HOST and '
+             'CARD_AGENT_SSH_HOST_2, prints the records, then stays open until stdin closes.')
     parser.add_argument(
         '--listen', choices=('continuous', 'once'), default='continuous',
         help='continuous: keep one next_click wait on every card the agent owns. once: '

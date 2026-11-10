@@ -1,4 +1,5 @@
 mod list;
+pub(in crate::app) mod machines;
 mod menus;
 mod new_workspace;
 mod panel_rows;
@@ -47,7 +48,7 @@ struct SidebarPanelEntry {
     working: bool,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct SidebarActions {
     create_workspace: bool,
     fit_active_workspace: bool,
@@ -59,6 +60,10 @@ struct SidebarActions {
     reattach_workspace: Option<WorkspaceId>,
     close_panel: Option<PanelId>,
     close_all_in_workspace: Option<WorkspaceId>,
+    /// A click on the row of this machine: focus its terminal, or open one.
+    connect_machine: Option<String>,
+    /// A confirmed "Forget this machine" on the row of this machine.
+    forget_machine: Option<String>,
     remove_empty_workspace: Option<WorkspaceId>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
@@ -102,6 +107,7 @@ impl HorizonApp {
         let sidebar_width = effective_sidebar_width(viewport.width());
         let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
         self.refresh_sidebar_rows(std::time::Instant::now());
+        self.refresh_machine_rows();
         let workspace_data = self.sidebar_workspace_data();
         let mut actions = SidebarActions::default();
 
@@ -210,6 +216,7 @@ impl HorizonApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
 
                 self.render_sidebar_workspaces(ui, workspace_data, actions, &mut drag_state);
+                self.render_sidebar_machines(ui, actions);
             });
 
         if drag_state.drop_requested {
@@ -520,6 +527,12 @@ impl HorizonApp {
             }
             drop.dragged_workspace_id
         });
+        if let Some(name) = actions.forget_machine.clone() {
+            self.forget_machine(&name, ctx);
+        }
+        if let Some(name) = actions.connect_machine.clone() {
+            self.connect_machine(&name, ctx);
+        }
         if let Some(panel_id) = actions.focus_panel {
             self.board.focus(panel_id);
         }

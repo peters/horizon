@@ -39,6 +39,7 @@ mod file_drop;
 mod file_drop_highlight;
 mod frame_stats;
 mod lifecycle;
+mod machine_click;
 mod machine_open;
 mod minimap;
 mod navigation_input;
@@ -256,6 +257,15 @@ pub struct HorizonApp {
     /// on the coordination worker. The list belongs to the person, so it
     /// outlives a session and a workspace.
     pub(in crate::app) machine_list: horizon_core::Machines,
+    /// Why the last machine action opened nothing, as the sidebar says it, and
+    /// when the line goes away again.
+    pub(in crate::app) machine_notice: Option<String>,
+    pub(in crate::app) machine_notice_until: Option<Instant>,
+    /// The rows of the sidebar's machine section, read when the list or a
+    /// terminal of a machine changes.
+    machine_rows: sidebar::machines::MachineRows,
+    /// A machine that the person asked to forget, waiting for the confirm line.
+    pub(in crate::app) forget_machine: Option<String>,
     /// Counts the writes of the machine list, so a read asked for before a write
     /// never replaces it.
     machine_epoch: u64,

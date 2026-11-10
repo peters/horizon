@@ -354,6 +354,8 @@ class FakeServer:
     FAKE_MCP_MODE=closed: the person closes the card at once, so the wait on
     every card and the wait on that card answer panel_unavailable.
     FAKE_MCP_MODE=notool: tools/list does not hold block_panel.
+    FAKE_MCP_MODE=machines: `machine_key`, `machine_set` and `machines` answer
+    as a host of this version does, so the `machines` scenario can be read.
 
     A wait without `panel_id` answers the oldest waiting click of the cards the
     agent owns, oldest first, as Horizon does (SKILL.md, "Read a click").
@@ -364,6 +366,7 @@ class FakeServer:
         self.mode = mode
         self.panels: dict[str, dict] = {}
         self.order: list[str] = []
+        self.machines: list[dict] = []
         self.created = 0
         self.events = 0
         # `intruder-empty` answers an empty list first, as a workspace whose
@@ -413,6 +416,33 @@ class FakeServer:
                     'message': 'ssh.host is not a host that Horizon may reach'}
         return {'status': 'opened', 'panel_id': 't1'}
 
+    def machine_answer(self, operation: str, arguments: dict) -> dict:
+        """The answers of the machine operations of this version of the host."""
+        name = arguments.get('name')
+        if operation == 'machine_key':
+            return {'status': 'machine_key', 'name': name,
+                    'public_key': f'ssh-ed25519 AAAA horizon-machine-{name}',
+                    'private_key_path': f'/home/person/.horizon/machine-keys/{name}',
+                    'known_hosts_path': f'/home/person/.horizon/machine-keys/{name}.known_hosts',
+                    'created': True}
+        if operation == 'machine_set':
+            self.machines.append({'name': name, 'host': arguments['ssh']['host'],
+                                  'user': arguments['ssh'].get('user'),
+                                  'port': arguments['ssh'].get('port'),
+                                  'key': arguments.get('key'),
+                                  'session': arguments.get('session'),
+                                  'provider': arguments.get('provider'),
+                                  'added_at_millis': 1762000000000,
+                                  'terminal_open': False})
+            return {'status': 'machine_set', 'name': name, 'created': True}
+        if operation == 'machine_delete':
+            self.machines = [record for record in self.machines if record['name'] != name]
+            return {'status': 'machine_deleted', 'name': name}
+        if self.mode != 'machines':
+            return {'status': 'failed', 'code': 'machine_unavailable',
+                    'message': 'this host keeps no machine list'}
+        return {'status': 'machines', 'machines': [dict(record) for record in self.machines]}
+
     def any_click(self) -> dict:
         """The host's order for a wait without a card: oldest click first."""
         if self.mode in INTRUDER_MODE_LIST:
@@ -450,6 +480,8 @@ class FakeServer:
             return self.card_list()
         if operation == 'open_terminal':
             return self.open_terminal(arguments)
+        if operation in ('machine_key', 'machine_set', 'machine_delete', 'machines'):
+            return self.machine_answer(operation, arguments)
         if operation == 'create':
             self.created += 1
             panel_id = f'p{self.created}'
@@ -1085,6 +1117,48 @@ class CardAgentTest(unittest.TestCase):
         args, extra = module.parse_args(['--scenario', 'intruder', '--mcp-command', 'true'])
         self.assertEqual((args.scenario, extra), ('intruder', []))
 
+    def test_the_machines_scenario_registers_one_or_two_records(self):
+        run = AgentRun(self, 'machines', ('--scenario', 'machines'),
+                       env={SSH_HOST_ENV: '127.0.0.1', 'CARD_AGENT_SSH_HOST_2': '127.0.0.2',
+                            'CARD_AGENT_SSH_USER': 'root', 'CARD_AGENT_SSH_PORT': '2222'})
+        run.wait_for(lambda entries: any(
+            call['arguments'].get('operation') == 'machines' for call in calls(entries)))
+        run.proc.stdin.close()
+        code, stdout, stderr = run.finish()
+        self.assertEqual(code, 0, f'exit {code}\nstdout:\n{stdout}\nstderr:\n{stderr}')
+        operations = [call['arguments'] for call in calls(run.requests())]
+        self.assertEqual([arguments['operation'] for arguments in operations],
+                         ['machine_key', 'machine_set', 'machine_key', 'machine_set', 'machines'],
+                         'one key and one record per machine, then the list')
+        first = operations[1]
+        self.assertEqual(first['name'], 'build-1')
+        self.assertEqual(first['ssh'], {'host': '127.0.0.1', 'user': 'root', 'port': 2222})
+        self.assertEqual((first['key'], first['session'], first['provider']),
+                         ('build-1', 'build-1', 'Loopback, test'))
+        second = operations[3]
+        self.assertEqual((second['name'], second['ssh']['host']), ('build-2', '127.0.0.2'))
+        self.assertIn('machines: record build-1 created=True at 127.0.0.1', stdout)
+        self.assertIn('machines: list holds build-1 at 127.0.0.1 open=False', stdout)
+        self.assertIn('machines: 2 record(s) registered', stdout)
+        self.assert_status_scrape_safe(stdout)
+
+    def test_the_machines_scenario_registers_one_record_without_a_second_host(self):
+        run = AgentRun(self, 'machines', ('--scenario', 'machines'),
+                       env={SSH_HOST_ENV: '127.0.0.1'})
+        run.wait_for(lambda entries: any(
+            call['arguments'].get('operation') == 'machines' for call in calls(entries)))
+        run.proc.stdin.close()
+        code, stdout, stderr = run.finish()
+        self.assertEqual(code, 0, f'exit {code}\nstdout:\n{stdout}\nstderr:\n{stderr}')
+        operations = [call['arguments'] for call in calls(run.requests())]
+        self.assertEqual([arguments['operation'] for arguments in operations],
+                         ['machine_key', 'machine_set', 'machines'],
+                         'one record without a second host')
+        self.assertNotIn('user', operations[1]['ssh'])
+        self.assertNotIn('port', operations[1]['ssh'])
+        self.assertIn('machines: 1 record(s) registered', stdout)
+        self.assert_status_scrape_safe(stdout)
+
     def test_the_any_card_wait_reads_its_outcomes(self):
         module = load_agent()
         agent = module.CardAgent(None, 'continuous', 60.0)
@@ -1151,6 +1225,11 @@ class CardAgentTest(unittest.TestCase):
         self.assertEqual(module.scenario_keys('tall'), ('tall',))
         self.assertNotIn('tall', module.scenario_keys('all'))
         self.assertEqual(module.SCENARIOS['tall']().title, module.TALL_TITLE)
+        self.assertEqual(module.scenario_keys('machines'), (),
+                         'the machines scenario creates no card')
+        self.assertNotIn('machines', module.SCENARIOS)
+        self.assertEqual(module.machine_names('127.0.0.2'), ('build-1', 'build-2'))
+        self.assertEqual(module.machine_names('  '), ('build-1',))
         # The two names that the Connect button reads, and the answer code reader.
         self.assertEqual((module.SSH_HOST_ENV, module.SSH_COMMAND_ENV),
                          (SSH_HOST_ENV, SSH_COMMAND_ENV))

@@ -49,7 +49,10 @@ impl HorizonApp {
                 self.machine_list = machines;
             }
             Ok(Ok(_)) => {}
-            Ok(Err(error)) => tracing::warn!(%error, "could not load the machine list"),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "could not load the machine list");
+                self.set_machine_notice(error.to_string());
+            }
             Err(std::sync::mpsc::TryRecvError::Empty) => self.machine_load_rx = Some(rx),
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 tracing::warn!("the machine list read ended before it answered");
@@ -164,6 +167,38 @@ impl HorizonApp {
         };
         self.write_block_answer(BlockAnswer::new(root, request.clone(), outcome));
         ctx.request_repaint();
+    }
+
+    /// Forgets one machine from its sidebar menu: the record goes, its key stays,
+    /// and a terminal that is already open keeps its own saved connection.
+    pub(in crate::app) fn forget_machine(&mut self, name: &str, ctx: &Context) {
+        let registry = self.machine_registry();
+        let forgetting = name.to_owned();
+        let notice_name = forgetting.clone();
+        let writing = ctx.clone();
+        self.browser_create_host.io.then(
+            move || {
+                let machines = Machines::load(registry)?;
+                let next = machines.without_record(&forgetting);
+                if next.records().len() == machines.records().len() {
+                    return Err(MachineError::Unavailable {
+                        reason: format!("This Horizon has no machine {forgetting} anymore"),
+                    });
+                }
+                next.save()?;
+                Ok(next)
+            },
+            move |app, forgotten| match forgotten {
+                Some(Ok(next)) => {
+                    app.machine_list = next;
+                    app.machine_written();
+                    tracing::info!(machine = %notice_name, "forgot a machine");
+                }
+                Some(Err(error)) => app.set_machine_notice(format!("{notice_name}: {error}")),
+                None => {}
+            },
+        );
+        writing.request_repaint();
     }
 
     /// The machines of this Horizon as `machines` reports them.

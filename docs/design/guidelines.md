@@ -717,6 +717,22 @@ the rules from the modules beside it.
   `blend(PANEL_BG_ALT, accent, 0.20)` with radius 8. The close button shows
   only on the hovered or focused row; otherwise a working agent shows a
   `PALETTE_GREEN` dot in its place.
+- The Machines section sits below the last workspace row, inside the same
+  scroll area, and only while this Horizon keeps a machine. Its header is the
+  sidebar group header: sentence case, Inter 13 at weight 620 in `FG_SOFT`,
+  18 px from the left edge. A row is 38 high with no vertical gap, an 8 px
+  inset for the hover card (radius 10, `alpha(PANEL_BG_ALT, 170)`), and the
+  pointing hand cursor. The state dot is 9 px in diameter at 8 px from the
+  card's left edge: hollow `FG_DIM` when no terminal of the machine is open,
+  hollow `FG_SOFT` while one connects, filled `PALETTE_GREEN` when it is
+  connected, and filled `PALETTE_RED` when it is disconnected. The name is
+  Inter 13 at weight 500 `FG` on the first line; the provider line that the
+  agent reported is Inter 11 `FG_SOFT` blended 0.14 toward `BG_ELEVATED` on the
+  second line, cut with an ellipsis. A name that is cut shows the whole name in
+  its hover text. A refused record shows one line 11 in `PALETTE_RED` under the
+  rows for ten seconds. The row menu holds `Focus` (or `Connect` when no
+  terminal is open) and `Forget this machine`, whose confirm line is the
+  menu's own text.
 - Panel titlebar and sidebar "Move to Workspace" menus focus a search field
   once on open. Names filter case-insensitively; a bounded scroll list keeps
   other menu actions reachable as the workspace count grows. Rows use 12 pt

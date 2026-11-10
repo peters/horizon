@@ -5,6 +5,7 @@ use horizon_core::{PanelId, WorkspaceLayout};
 use crate::theme;
 
 use super::super::HorizonApp;
+use super::machines::MachineRow;
 use super::{SidebarActions, WorkspaceSidebarEntry};
 
 impl HorizonApp {
@@ -96,6 +97,84 @@ impl HorizonApp {
                 ui.close();
             }
         });
+        if shown.is_some() {
+            response
+                .ctx
+                .memory_mut(|memory| memory.areas_mut().set_sublayer(response.layer_id, popup_layer));
+        }
+    }
+
+    /// The menu of one machine row: Connect, and Forget behind a confirm line.
+    pub(super) fn show_machine_context_menu(
+        &mut self,
+        response: &egui::Response,
+        row: &MachineRow,
+        actions: &mut SidebarActions,
+    ) {
+        // A tooltip layer, as the workspace and panel menus use: the row lives in
+        // the sidebar's clipped rectangle, so a menu drawn in the row's own layer
+        // is cut to a slice of its width.
+        let popup = egui::Popup::context_menu(response)
+            .kind(egui::PopupKind::Tooltip)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
+        let confirming = self.forget_machine.as_deref() == Some(row.name.as_str());
+        let mut open_confirm = false;
+        let shown = popup.show(|ui| {
+            ui.set_min_width(180.0);
+            let connect = if row.panel.is_some() { "Focus" } else { "Connect" };
+            if ui
+                .add(Button::new(egui::RichText::new(connect).size(12.0).color(theme::FG_SOFT())).frame(false))
+                .clicked()
+            {
+                if row.panel.is_some() {
+                    actions.focus_panel = row.panel;
+                    actions.pan_to_panel = row.panel;
+                } else {
+                    actions.connect_machine = Some(row.name.clone());
+                }
+                ui.close();
+            }
+            ui.separator();
+            if confirming {
+                ui.label(
+                    egui::RichText::new(format!("Forget {}? Its key stays.", row.name))
+                        .size(11.0)
+                        .color(theme::FG_DIM()),
+                );
+                if ui
+                    .add(Button::new(egui::RichText::new("Forget").size(12.0).color(theme::PALETTE_RED())).frame(false))
+                    .clicked()
+                {
+                    actions.forget_machine = Some(row.name.clone());
+                    self.forget_machine = None;
+                    ui.close();
+                }
+                if ui
+                    .add(Button::new(egui::RichText::new("Cancel").size(12.0).color(theme::FG_SOFT())).frame(false))
+                    .clicked()
+                {
+                    self.forget_machine = None;
+                    ui.close();
+                }
+            } else if ui
+                .add(
+                    Button::new(
+                        egui::RichText::new("Forget this machine")
+                            .size(12.0)
+                            .color(theme::FG_SOFT()),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text("Removes the row. The machine key stays until you delete it.")
+                .clicked()
+            {
+                open_confirm = true;
+            }
+        });
+        if open_confirm {
+            self.forget_machine = Some(row.name.clone());
+        }
         if shown.is_some() {
             response
                 .ctx
