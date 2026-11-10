@@ -1,5 +1,6 @@
 //! Headless Chrome lifecycle: binary discovery, spawn, ws-url capture, kill.
 
+pub mod attach;
 mod control;
 #[cfg(target_os = "linux")]
 mod locale;

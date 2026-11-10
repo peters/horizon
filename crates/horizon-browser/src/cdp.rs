@@ -396,7 +396,7 @@ impl CdpMsg {
     }
 }
 
-fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
+pub(crate) fn host_port_from_ws_url(ws_url: &str) -> Result<String> {
     let rest = ws_url
         .strip_prefix("ws://")
         .ok_or_else(|| CdpError::InvalidUrl(format!("{ws_url} (only ws:// is supported)")))?;

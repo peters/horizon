@@ -81,6 +81,7 @@ pub use network::{
     DEFAULT_NETWORK_MAX_PAYLOAD_BYTES, MAX_NETWORK_FILE_BYTES, MAX_NETWORK_PAYLOAD_BYTES, MAX_NETWORK_URL_PATTERNS,
 };
 pub use page_scroll::{NestedScrollbar, VerticalScrollbarOverlay};
+pub use process::attach::{AttachError, DevtoolsEndpoint};
 pub use profile::{MAX_PROFILE_NAME_CHARS, valid_profile_name};
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserAttachedFile, BrowserBounds, BrowserControlFailure,
