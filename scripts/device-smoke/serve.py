@@ -165,11 +165,15 @@ def extra_column(placed):
 
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
-                         browser_host=None, browser_host_profile=None):
-    """Disposable Horizon config. System access and a browser host stay off unless requested."""
+                         browser_host=None, browser_host_profile=None, theme='dark'):
+    """Disposable Horizon config. System access and a browser host stay off unless requested.
+
+    The theme is part of the config, so the first start at a state path imports it. A
+    later run in the same private home keeps the theme that its settings store holds.
+    """
     fixture = {
         'version': 11, 'window': {'width': 1480, 'height': 900},
-        'appearance': {'theme': 'dark'},
+        'appearance': {'theme': theme},
         'workspaces': [{'name': 'Disposable VNC debug', 'cwd': cwd,
             'terminals': [
                 {'name': 'Live render heartbeat', 'command': '/usr/bin/python3',
@@ -301,6 +305,11 @@ def main():
         '--browser-host-profile',
         help='Profile of that browser host whose pages the fixture opens; needs --browser-host')
     parser.add_argument(
+        '--theme', choices=('auto', 'dark', 'light'), default='dark',
+        help='Set appearance.theme in the fixture config, default dark. The first start at a '
+             'state path imports the value; a run with --reuse-state keeps the theme that the '
+             'stored settings of that private home hold')
+    parser.add_argument(
         '--panels',
         type=Path,
         help='JSON list of extra workspace panels the fixture opens at start, such as an '
@@ -422,7 +431,7 @@ def main():
         extra_panels = load_panels(args.panels) if args.panels else None
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
-            args.browser_host, args.browser_host_profile)
+            args.browser_host, args.browser_host_profile, args.theme)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))

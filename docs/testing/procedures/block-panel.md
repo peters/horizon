@@ -22,9 +22,16 @@ of an agent, and that Horizon wakes an idle agent for a click. The last task
 checks the drawn look of the card in both themes, its fitted height, the
 scrolling of a card that is shorter than its content, the frame that a card fits
 for its own notices, the selected row of a card without its agent, and the press
-of a button at a low canvas zoom. The last tasks check that an agent can open an
+of a button at a low canvas zoom. The next tasks check that an agent can open an
 SSH terminal panel for the person: the checked route, each refusal, the keyboard
 focus, the mark of the agent that opened it, and the mark after a restart.
+
+The tasks B01 to B22 send their requests from a small MCP client that carries the
+identity of an agent panel, so one person reads each answer of the host. The
+tasks B23 to B26 use the scripted card agent instead: an agent panel that draws
+its own cards, answers the clicks of the person and opens a terminal, without an
+AI model. Section 6 repeats the four interactions that a real agent must pass,
+with Claude Code and with a Codex panel.
 
 ## 2. Applicability
 
@@ -34,6 +41,10 @@ focus, the mark of the agent that opened it, and the mark after a restart.
 - The click tasks send pointer presses to the fixture display with `xdotool`,
   scoped to the display and the process of the fixture. A pointer press on a card
   gives the keyboard focus to that card, because the card is a panel.
+- The tasks B23 to B26 need the scripted card agent of the candidate's
+  repository, `scripts/device-smoke/card_agent.py`, and Python 3. The script is
+  deterministic: each click of the person makes one fixed change to its card, so
+  a second run gives the same result.
 
 ## 3. Equipment and preconditions
 
@@ -46,8 +57,12 @@ focus, the mark of the agent that opened it, and the mark after a restart.
 - A stdio MCP client that can start `horizon --browser-mcp` and send JSON-RPC
   messages. A CLI that speaks MCP is sufficient.
 - The candidate `horizon` binary, `<candidate>`.
-- An empty evidence folder `<state>` for the fixture state and an empty work
-  folder `<work>` for the files of this procedure.
+- The scripted card agent, `<repo>/scripts/device-smoke/card_agent.py`, of the
+  repository that built the candidate, with Python 3 and its standard library.
+- An empty evidence folder `<state>` for the fixture state of the protocol tasks,
+  an empty evidence folder `<state-agent>` for the scripted agent, an empty
+  evidence folder `<state-light>` for the light theme, and an empty work folder
+  `<work>` for the files of this procedure.
 
 ## 4. Setup
 
@@ -512,14 +527,18 @@ every step on the fixture display that the native VNC Device panel shows.
 
    Result: The same card is drawn on paper-white surfaces. The heading, the
    second line, the inset box, the rows, the buttons and the footer stay
-   readable, and no colour is the dark-mode value.
+   readable, and no colour is the dark-mode value. B26 checks the same card on a
+   first start with `--theme light`.
 
 6. Drag the right edge of the card until it is narrower than 420.
 
-   Result: The heading, the second line, a long label and a long value truncate
-   with an ellipsis, body text wraps, and nothing overlaps or leaves the card.
-   The buttons stay inside the card and the destructive button keeps the right
-   edge.
+   Result: The heading keeps at least 60 per cent of its row and stays whole
+   while it can. Where the badge would leave it less than that, the badge takes a
+   row of its own under the second line and starts at the left edge of the
+   heading. A heading that is still too long for its room, a long label and a
+   long value truncate with an ellipsis, body text wraps, and nothing overlaps or
+   leaves the card. The buttons stay inside the card and the destructive button
+   keeps the right edge.
 
 7. Drag the bottom edge of the card up until the card is shorter than its
    content.
@@ -530,7 +549,10 @@ every step on the fixture display that the native VNC Device panel shows.
 8. Call `update` with a long document, then with a short one.
 
    Result: The card grows and shrinks to the height of its content. The footer
-   clock changes, and the card does not resize again after it has settled.
+   clock changes, and the card does not resize again after it has settled. The
+   smallest card is 140 points high and keeps the titlebar, one line of its body
+   and its footer: a card that holds one heading and one button row ends right
+   after that content, with no empty band above the footer.
 
 9. Zoom the canvas out to 50 percent. In client A, call `block_panel` with
    `{"operation":"next_click","panel_id":"<card>","timeout_millis":120000}` and
@@ -726,7 +748,251 @@ where no server listens: `ssh` fails to connect at once, and the panel stays.
    Result: The chip still says `opened by Codex`. The mark came back with the
    saved panel.
 
-## 6. Pass criteria
+### 5.23 B23 — The scripted agent draws and answers its own cards
+
+The tasks from here use the scripted card agent of this repository instead of a
+client with the identity of a probe panel. The agent panel draws the cards of its
+scenario, reads the clicks of the person and answers them. Press the buttons on
+the fixture desktop as in B09 step 3, or through the Interact toggle of the
+Device panel.
+
+1. Write this panel list to `<work>/agent-panels.json`. It gives the fixture
+   three scripted agent panels, each with one scenario:
+
+   ```json
+   [
+     {"name": "Scripted machine", "kind": "claude", "command": "/bin/sh",
+      "args": ["-c", "CARD_AGENT_SSH_HOST=smoke.invalid exec /usr/bin/python3 -u <repo>/scripts/device-smoke/card_agent.py \\\n  --mcp-command \"<candidate> --browser-mcp\" --scenario machine \"$@\"", "card-agent"],
+      "cwd": "<work>", "position": [1250, 60], "size": [330, 400]},
+     {"name": "Scripted browser", "kind": "claude", "command": "/bin/sh",
+      "args": ["-c", "exec /usr/bin/python3 -u <repo>/scripts/device-smoke/card_agent.py \\\n  --mcp-command \"<candidate> --browser-mcp\" --scenario browser \"$@\"", "card-agent"],
+      "cwd": "<work>", "position": [40, 620], "size": [330, 400]},
+     {"name": "Intruder", "kind": "claude", "command": "/bin/sh",
+      "args": ["-c", "exec /usr/bin/python3 -u <repo>/scripts/device-smoke/card_agent.py \\\n  --mcp-command \"<candidate> --browser-mcp\" --scenario intruder \"$@\"", "card-agent"],
+      "cwd": "<work>", "position": [1250, 620], "size": [330, 300]}
+   ]
+   ```
+
+   The `/bin/sh -c` wrapper is necessary. Horizon starts an agent panel with
+   `--session-id <id>` in front of the arguments of the panel and `--plugin-dir
+   <path>` after them, and the script receives them as `"$@"`. Only the wrapper of
+   `Scripted machine` names an SSH host. The name `smoke.invalid` is a reserved
+   name that no resolver answers, so the Connect task of B24 needs no SSH server
+   and reaches no machine. The other two panels have no host to open.
+
+   Result: The file exists.
+
+2. Start the fixture on a new private state with a wide desktop:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --state <state-agent> --screen 2400x1400 \
+     --panels <work>/agent-panels.json --saved-session
+   ```
+
+   Result: The fixture prints one JSON line with `display`, `vnc_address` and
+   `pids`. The workspace holds the two terminals of the fixture, the three agent
+   panels and two cards.
+
+3. From your agent panel, call `device_panel` with
+   `{"operation":"create","endpoint":"<vnc_address>"}` and inspect it.
+
+   Result: The live view shows the machine card at the right edge of `Scripted
+   machine` with level top edges, and the browser card at the right edge of
+   `Scripted browser`. No card covers another panel.
+
+4. Read the terminal of `Scripted machine`.
+
+   Result: It holds these lines, in this order:
+
+   ```
+   card-agent: machine: created card <card> rev 1 (Machine · build-1)
+   card-agent: documents use the rich model of the card document
+   card-agent: listening continuous on every card with a 60 s wait
+   ```
+
+   No line holds a spinner glyph or one of the working words that Horizon reads
+   as a working agent.
+
+5. Read the machine card in the live view.
+
+   Result: The heading is `build-1` with the second line `Hetzner · Helsinki` and
+   the `Running` badge at the right of the heading row. The inset box holds four
+   pairs, and the address and the session are in a monospace face. The button row
+   is `Connect`, `Stop` and `Delete`, with `Delete` at the right edge in red. The
+   footer says `Card drawn by the agent Claude` on the left and `updated HH:MM` on
+   the right.
+
+6. Press `Stop` on the machine card.
+
+   Result: The badge says `Stopped` in the warn tone, `Start` takes the place of
+   `Stop`, and a text says that the machine is stopped. The terminal of `Scripted
+   machine` gains one line:
+
+   ```
+   card-agent: machine: click stop rev <revision> stale false selected []
+   ```
+
+   The card keeps its place, and the clock of the footer changes.
+
+7. Press `Start`.
+
+   Result: The card returns to the running form of step 5, and the terminal gains
+   the line `card-agent: machine: click start rev <revision> stale false
+   selected []`.
+
+8. Press `Delete` on the machine card.
+
+   Result: The card leaves the live view. The terminal gains its `click delete`
+   line, and then `card-agent: machine: closed card <card>`.
+
+9. Press the row `Chromium in Docker` on the browser card, then press `Set it
+   up`.
+
+   Result: The row takes the selected look, and the terminal of `Scripted
+   browser` gains `card-agent: browser: row chromium-docker selected; the button
+   below decides`. The card says `You picked Chromium in Docker. I am setting it
+   up.`, the progress bar says `Step 3 of 4`, and the terminal gains `card-agent:
+   browser: setup with Chromium in Docker`.
+
+10. Drag the right edge of the browser card until it is narrower than 360.
+
+    Result: The heading `home-mac` stays whole, and the badge `Needs your choice`
+    takes a row of its own under the second line, starting at the left edge of the
+    heading.
+
+11. Press `Cancel` on the browser card.
+
+    Result: The card closes. The terminal of `Scripted browser` gains `card-agent:
+    browser: click cancel rev <revision> ...` and then `card-agent: every card is
+    closed; exit`. The agent panel stays in the workspace with that output.
+
+### 5.24 B24 — The Connect button of the scripted agent opens a terminal
+
+1. Press `Connect` on the machine card of B23.
+
+   Result: The card keeps its other components, and a text says `A terminal
+   opened beside this panel at HH:MM:SS.`. The terminal of `Scripted machine`
+   gains the line `card-agent: machine: connect: opened terminal <terminal> on
+   smoke.invalid at HH:MM:SS (build-1 session)`.
+
+2. Examine the live view.
+
+   Result: A new SSH panel named `build-1 session` stands beside the `Scripted
+   machine` panel: at its right edge with level top edges, or below it with level
+   left edges when the place beside is taken. Its titlebar holds the chip `opened
+   by Claude`. The panel says that `ssh` could not resolve the host name.
+
+3. Examine the keyboard focus in the live view.
+
+   Result: The focus stays on the card that you pressed. The new terminal did not
+   take the keyboard from it.
+
+### 5.25 B25 — Another agent cannot change the cards of the scripted agent
+
+1. Read the terminal of `Intruder`. It ran its check when the fixture started, so
+   its output stays in the scrollback.
+
+   Result: It ends with `card-agent: intruder check done` and holds these lines:
+
+   ```
+   card-agent: intruder: list answered <n> card(s), <m> of them of another agent
+   card-agent: intruder: card <card> (<title>) is owned by another agent
+   card-agent: intruder: card <card> inspect answered inspected
+   card-agent: intruder: card <card> update answered not_owner
+   card-agent: intruder: card <card> close answered not_owner
+   card-agent: intruder: the wait on every card answered no_cards
+   card-agent: intruder check done
+   ```
+
+   When the card of the other agent was not there at its first look, the
+   intruder prints `card-agent: intruder: list answered 0 card(s) and none is
+   foreign; look again in 5 s (<n> of 12)` first, and looks again.
+
+   The cards of the scripted agents were still in the live view after the check,
+   with the documents that their own agents drew.
+
+### 5.26 B26 — The light theme draws the same cards on light surfaces
+
+The theme of the fixture is part of the configuration, and the first start of a
+state path imports it. A later run in the same private home keeps the theme of
+its settings store, so this task needs a new state path.
+
+1. Start the fixture on a new state, with the light theme and the same panel
+   list:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --state <state-light> --screen 2400x1400 --theme light \
+     --panels <work>/agent-panels.json --saved-session
+   ```
+
+   Result: The fixture prints one JSON line with `display`, `vnc_address` and
+   `pids`.
+
+2. From your agent panel, call `device_panel` with
+   `{"operation":"create","endpoint":"<vnc_address>"}` and inspect it.
+
+   Result: The workspace and the cards are drawn on paper-white surfaces. The
+   heading, the second line, the badges, the inset box, the rows, the buttons and
+   the footer stay readable, and no colour is a dark-mode value.
+
+3. Press `Connect` on the machine card.
+
+   Result: The card says `No SSH host is set in CARD_AGENT_SSH_HOST, so no
+   terminal was opened.`, and no terminal panel appears. This panel list gives
+   the machine panel a host in the run of B23 and no host in this run.
+
+4. Close the fixture Horizon normally. Then start the fixture again on the same
+   state with the dark theme:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --state <state-light> --screen 2400x1400 --theme dark \
+     --panels <work>/agent-panels.json --reuse-state --resume-session
+   ```
+
+   Result: The candidate starts on the board that the earlier run saved. The
+   cards and the workspace stay light, because the settings store of
+   `<state-light>` holds the theme that its first start imported.
+
+## 6. With a real agent
+
+These steps check the same behaviour with a real AI agent. Do them in your own
+Horizon, in a workspace of its own, with an agent panel that can call
+`block_panel`. They need no fixture state.
+
+1. Ask the Claude Code panel to draw a card with one heading and two buttons,
+   `Stop` and `Delete`.
+
+   Result: A card appears in the workspace of that panel, with the heading and
+   both buttons. Its footer names the agent, and its titlebar chip says that the
+   agent listens while it waits for a click.
+
+2. Press `Stop`.
+
+   Result: The agent reads the click and changes the card, as the request of the
+   person says. The card keeps its place, and the clock of the footer changes.
+
+3. Press `Delete`.
+
+   Result: The agent closes the card, and the card leaves the workspace.
+
+4. Ask the panel to draw a card again, and leave the agent idle, with no waiting
+   `next_click`. Press a button of that card while the agent panel does not hold
+   the keyboard focus.
+
+   Result: One line arrives in the terminal of the agent panel:
+
+   ```
+   A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.
+   ```
+
+5. Do steps 1 to 4 with a Codex panel.
+
+   Result: The same result, and the footer and the chip name the Codex agent.
+
+## 7. Pass criteria
 
 - B01: The card appears in the workspace of the calling agent, at revision 1,
   and takes no keyboard focus. It stands beside the agent panel with level top
@@ -772,31 +1038,47 @@ where no server listens: `ssh` fails to connect at once, and the panel stays.
   the person can type in the panel, a panel that the person opened holds no such
   chip, and the person can close the panel.
 - B22: The mark returns with the terminal after a restart.
+- B23: The scripted agent draws the card of its scenario beside its own panel,
+  answers a click with one fixed change, and closes the card at the button that
+  closes. Its terminal names each step, and no line of it looks like a working
+  agent. A narrow card keeps its heading and moves its badge under the second
+  line.
+- B24: The Connect button opens one SSH terminal beside the agent panel with the
+  chip of that agent, and the card says when it opened.
+- B25: Another agent reads the cards of the scripted agent and is refused every
+  change, and the document of the card does not change.
+- B26: A first start with `--theme light` draws the workspace and the cards on
+  light surfaces, a panel without an SSH host refuses the Connect button on the
+  card, and a later run in the same private home keeps the light theme even with
+  `--theme dark`.
 
-## 7. Cleanup
+## 8. Cleanup
 
 1. Stop client A and client B.
 
    Result: Both MCP processes stop.
 
-2. Close the Device panel with
-   `device_panel` `{"operation":"close","panel_id":"<id>"}`.
+2. Close each Device panel that this procedure opened with `device_panel`
+   `{"operation":"close","panel_id":"<id>"}`.
 
-   Result: The panel leaves your workspace.
+   Result: The panels leave your workspace. This closes the viewer only, not the
+   fixture.
 
-3. Close the fixture Horizon normally.
+3. Close the fixture Horizon of the protocol tasks, then the fixture of
+   `<state-agent>`, then the fixture of `<state-light>`.
 
-   Result: The fixture stops its processes and the private display.
+   Result: Each fixture stops its processes and the private display.
 
-> **CAUTION:** DELETE ONLY `<state>` AND `<work>` THAT YOU MADE FOR THIS
-> PROCEDURE. Do not delete your own home folder or a folder that another test
-> uses.
+> **CAUTION:** DELETE ONLY `<state>`, `<state-agent>`, `<state-light>` AND
+> `<work>` THAT YOU MADE FOR THIS PROCEDURE. Do not delete your own home folder
+> or a folder that another test uses. A reused private home holds the sessions
+> and records of the earlier run.
 
-4. Delete `<state>` and `<work>`.
+4. Delete `<state>`, `<state-agent>`, `<state-light>` and `<work>`.
 
    Result: No private state of this procedure remains.
 
-## 8. Record of results
+## 9. Record of results
 
 If the run must be kept, write a report in `docs/testing/reports/` with
 [the report template](../reports/TEMPLATE.md). If not, put the results in the

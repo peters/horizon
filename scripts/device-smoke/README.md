@@ -162,6 +162,49 @@ panel needs a string `name`, a `kind` from the panel kinds, string `command`,
 `cwd` and `args` items, two numbers for `position` and `size`, and a `resume`
 value Horizon reads. Any other value stops the fixture with an error.
 
+### A scripted card agent
+
+A procedure that needs an agent which draws cards, answers the clicks of the
+person and quits needs no AI model. `scripts/device-smoke/card_agent.py` is that
+agent: it starts `<candidate> --browser-mcp` as its child, draws the cards of one
+scenario and answers the next click of the person. Its own tests run with the
+other tests of this fixture.
+
+Write this list to a file and give it with `--panels`, so the fixture starts an
+agent panel that runs the script:
+
+```json
+[
+  {"name": "Scripted card agent", "kind": "claude", "command": "/bin/sh",
+   "args": ["-c", "exec /usr/bin/python3 -u /<repo>/scripts/device-smoke/card_agent.py \\\n  --mcp-command \"<candidate> --browser-mcp\" --scenario all+tall \"$@\"",
+            "card-agent"],
+   "cwd": "<work>", "position": [40, 620], "size": [330, 440]}
+]
+```
+
+The wrapper is necessary. Horizon starts an agent panel with its own arguments
+around the arguments of the panel: `--session-id <id>` in front of them and
+`--plugin-dir <path>` after them. The script ignores every argument that it does
+not know, but `python3` refuses `--session-id`. `/bin/sh -c` reads the script
+from its first argument and gives every argument of Horizon to the script as
+`"$@"`, and `exec` hands the terminal to the script itself. Put a variable that
+one panel needs, such as `CARD_AGENT_SSH_HOST`, in front of `exec` in the same
+wrapper.
+
+`--scenario` selects the cards: `machine`, `choose`, `browser`, `tall`, `all`
+(the first three), `all+tall` (all four) and `intruder`, which draws no card and
+tries to change the cards of another agent. `--listen continuous` keeps one wait
+on every card; `--listen once` reads the wake line first. `--click-timeout` sets
+the seconds of one wait. The Connect button of the machine card opens an SSH
+terminal for the host in `CARD_AGENT_SSH_HOST` and the one line in
+`CARD_AGENT_SSH_COMMAND`.
+
+To see the same board again after a restart, start the fixture with
+`--saved-session --reuse-state`, and start it again with `--reuse-state
+--resume-session`, as [the restart recipe](#restart-the-candidate-in-the-same-state)
+describes. The restored agent panel starts the script again, which draws a second
+set of cards beside the panel; the cards of the earlier run stay on the board.
+
 `--ssh-config FILE` and `--ssh-identity FILE` give the app in the fixture an
 SSH configuration and an identity, so a feature that names a host over SSH can
 reach it. Give the two flags together, or give neither one:
