@@ -59,7 +59,7 @@ fn a_card_takes_the_height_of_the_content_that_the_pass_measured() {
 fn a_card_stays_between_the_card_limits() {
     let (_short, ctx, mut short, short_id) = app_with_card(5.0);
     short.fit_block_cards(&ctx);
-    assert!((height(&short, short_id) - 220.0).abs() < f32::EPSILON, "the floor");
+    assert!((height(&short, short_id) - 140.0).abs() < f32::EPSILON, "the floor");
 
     let (_tall, ctx, mut tall, tall_id) = app_with_card(5_000.0);
     tall.fit_block_cards(&ctx);

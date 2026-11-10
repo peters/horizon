@@ -1,5 +1,5 @@
 //! The heading of a card: one strong line, an optional second line and an
-//! optional badge on the same row, right aligned.
+//! optional badge that shares the heading row or takes one of its own.
 
 use egui::{FontId, Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
 use horizon_browser_control::block::Badge;
@@ -7,8 +7,42 @@ use horizon_browser_control::block::Badge;
 use crate::theme;
 
 use super::badge;
-use super::metrics::{BADGE_HEIGHT, HEADING_BADGE_GAP, HEADING_FONT, HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP};
+use super::metrics::{
+    BADGE_HEIGHT, HEADING_BADGE_GAP, HEADING_BADGE_ROW_GAP, HEADING_FONT, HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP,
+};
 use super::text;
+
+/// The least share of the row that the heading text keeps beside a badge.
+const HEADING_MIN_SHARE: f32 = 0.6;
+
+/// Where the badge of a heading is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BadgeRow {
+    /// At the right end of the heading row.
+    SameRow,
+    /// On a row of its own, under the second line, left aligned.
+    OwnRow,
+}
+
+/// Which row the badge of a heading takes, from the room the row has and the
+/// width the heading and the badge ask for.
+///
+/// The heading names the card, so it keeps at least [`HEADING_MIN_SHARE`] of the
+/// row. A badge that would take more than the rest gives up the row and stands
+/// under the second line instead, so a narrow card cuts neither of them.
+pub(super) fn badge_row(row_width: f32, heading_width: f32, badge_width: f32) -> BadgeRow {
+    let both_fit = heading_width + HEADING_BADGE_GAP + badge_width <= row_width;
+    if both_fit || text_room(row_width, badge_width) >= HEADING_MIN_SHARE * row_width {
+        BadgeRow::SameRow
+    } else {
+        BadgeRow::OwnRow
+    }
+}
+
+/// The room the heading text keeps while a badge of `badge_width` shares its row.
+fn text_room(row_width: f32, badge_width: f32) -> f32 {
+    (row_width - badge_width - HEADING_BADGE_GAP).max(0.0)
+}
 
 /// Draw the heading of component `index` and return the height it took.
 pub(super) fn show(
@@ -21,22 +55,21 @@ pub(super) fn show(
 ) -> f32 {
     let width = ui.available_width();
     let pill = badge.map(|badge| badge::heading_pill(ui, badge, agent_present));
-    let pill_width = pill.map_or(0.0, |(width, _, _)| width);
-    let text_width = (width
-        - if pill.is_some() {
-            pill_width + HEADING_BADGE_GAP
-        } else {
-            0.0
-        })
-    .max(0.0);
+    let pill_width = pill.map_or(0.0, |(width, _, _)| width).min(width).max(0.0);
+    let font = FontId::proportional(HEADING_FONT);
+    let heading_width = text::line(ui.painter(), text, &font, theme::FG(), f32::INFINITY)
+        .size()
+        .x;
+    let row = match pill {
+        Some(_) => badge_row(width, heading_width, pill_width),
+        None => BadgeRow::SameRow,
+    };
+    let text_width = match (row, pill.is_some()) {
+        (BadgeRow::SameRow, true) => text_room(width, pill_width),
+        _ => width,
+    };
 
-    let title = text::line(
-        ui.painter(),
-        text,
-        &FontId::proportional(HEADING_FONT),
-        theme::FG(),
-        text_width,
-    );
+    let title = text::line(ui.painter(), text, &font, theme::FG(), text_width);
     let title_height = title.size().y;
     let subtitle_galley = subtitle.map(|subtitle| {
         text::line(
@@ -48,12 +81,17 @@ pub(super) fn show(
         )
     });
     let subtitle_height = subtitle_galley.as_ref().map_or(0.0, |galley| galley.size().y);
-    let mut height = title_height;
-    if subtitle.is_some() {
-        height += HEADING_SUBTITLE_GAP + subtitle_height;
-    }
+    let subtitle_span = if subtitle.is_some() {
+        HEADING_SUBTITLE_GAP + subtitle_height
+    } else {
+        0.0
+    };
+    let mut height = title_height + subtitle_span;
     if pill.is_some() {
-        height = height.max(BADGE_HEIGHT);
+        height = match row {
+            BadgeRow::SameRow => height.max(BADGE_HEIGHT),
+            BadgeRow::OwnRow => height + HEADING_BADGE_ROW_GAP + BADGE_HEIGHT,
+        };
     }
 
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
@@ -67,10 +105,15 @@ pub(super) fn show(
         label_node(ui, index, rect, top, subtitle);
     }
     if let (Some(badge), Some((pill_width, tone, prefix))) = (badge, pill) {
-        let pill_rect = Rect::from_min_size(
-            Pos2::new(rect.max.x - pill_width, rect.min.y),
-            egui::vec2(pill_width, BADGE_HEIGHT),
-        );
+        let left = match row {
+            BadgeRow::SameRow => rect.max.x - pill_width,
+            BadgeRow::OwnRow => rect.min.x,
+        };
+        let top = match row {
+            BadgeRow::SameRow => rect.min.y,
+            BadgeRow::OwnRow => rect.min.y + title_height + subtitle_span + HEADING_BADGE_ROW_GAP,
+        };
+        let pill_rect = Rect::from_min_size(Pos2::new(left, top), egui::vec2(pill_width, BADGE_HEIGHT));
         badge::paint(painter, pill_rect, &badge.text, prefix, tone);
         badge::node(
             ui,

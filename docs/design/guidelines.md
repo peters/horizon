@@ -668,15 +668,20 @@ the rules from the modules beside it.
   in the colour and a second line 12 `FG_SOFT` at line height 1.45. A card
   without its agent shows one at the top of the body in `warn`; a card that
   refused a click shows one in `info`.
+- A heading keeps at least 60 per cent of its row. A badge that would leave it
+  less than that gives up the row and stands on its own row under the second
+  line, left aligned, so a narrow card cuts neither the name nor the badge.
 - A new card opens 420 wide and, once the body has measured its content, as
-  tall as that content needs, between 220 and 900. A card that the person
+  tall as that content needs, between 140 and 900. A card that the person
   resized by hand keeps that size, and a card shorter than its content scrolls
   its body above a footer that stays at the bottom. The status frames are part
   of what the content needs: the card fits again when one appears or goes, such
   as the frame of an agent that left and the frame of a refused click.
 - A new card stands beside its agent panel with the top edges level, or below it
-  with the left edges level when the place beside is taken. It covers no panel
-  of its workspace in either place.
+  with the left edges level when the place beside is taken. When both places are
+  taken it continues the same shape: below the column of the agent panel with
+  the left edges level, or beside its row with the top edges level. It covers no
+  panel of its workspace in any of these places.
 
 ### Panels and workspaces
 

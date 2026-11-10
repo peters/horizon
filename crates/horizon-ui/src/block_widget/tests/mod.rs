@@ -91,6 +91,28 @@ impl CardFrames {
         update.nodes
     }
 
+    /// One pass in a card `width` wide, as the shapes it painted and the
+    /// accessibility tree of that pass.
+    pub(super) fn pass_in(
+        &self,
+        width: f32,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        owner: Owner,
+    ) -> (
+        Vec<egui::epaint::ClippedShape>,
+        Vec<(accesskit::NodeId, accesskit::Node)>,
+    ) {
+        let mut input = card_input();
+        input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 900.0)));
+        let output = self.run(document, card, owner, input);
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("the card body builds an accessibility tree");
+        (output.shapes, update.nodes)
+    }
+
     fn run(
         &self,
         document: &BlockDocument,

@@ -7,6 +7,7 @@ use horizon_core::{CardRuntime, PanelKind};
 
 use super::{CardFrames, Owner, bounds_of, every_component};
 use crate::block_widget::chip::{CardChip, ChipState};
+use crate::block_widget::heading::{BadgeRow, badge_row};
 use crate::block_widget::{buttons, default_card_size, fitted_card_height, footer, primary_button};
 
 /// A card of one `buttons` component with the tones in `items`.
@@ -139,7 +140,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     let empty = BlockDocument { components: Vec::new() };
     assert_eq!(
         default_card_size(&empty),
-        [420.0, 220.0],
+        [420.0, 140.0],
         "an empty card keeps the floor"
     );
 
@@ -156,7 +157,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     };
     let [width, height] = default_card_size(&small);
     assert!((width - 420.0).abs() < f32::EPSILON);
-    assert!(height > 220.0 && height < 900.0, "{height} fits the content");
+    assert!(height > 140.0 && height < 900.0, "{height} fits the content");
 
     let huge = BlockDocument {
         components: (0..16)
@@ -184,7 +185,7 @@ fn the_card_size_of_a_document_does_not_depend_on_its_owner() {
     let first = default_card_size(&document);
     let second = default_card_size(&document);
     assert_eq!(first, second);
-    assert!(first[1] >= 220.0 && first[1] <= 900.0, "{first:?}");
+    assert!(first[1] >= 140.0 && first[1] <= 900.0, "{first:?}");
 }
 
 #[test]
@@ -196,19 +197,36 @@ fn the_card_height_follows_the_measured_content_within_the_limits() {
     };
 
     assert!(
-        (height(0.0, false, 500.0) - 220.0).abs() < f32::EPSILON,
+        (height(0.0, false, 500.0) - 140.0).abs() < f32::EPSILON,
         "an empty body keeps the floor"
     );
     assert!(
-        (height(600.0, false, 220.0) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        (height(600.0, false, 140.0) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
         "the content, its padding and the frame decide the height"
     );
     assert!(
-        (height(5_000.0, false, 220.0) - 900.0).abs() < f32::EPSILON,
+        (height(5_000.0, false, 140.0) - 900.0).abs() < f32::EPSILON,
         "a long body stops at the ceiling"
     );
     assert!(
         (height(600.0, true, 320.0) - 320.0).abs() < f32::EPSILON,
         "a card that the person resized keeps that size"
     );
+}
+
+#[test]
+fn a_badge_leaves_the_heading_row_when_the_heading_would_lose_its_share() {
+    // The card of the live run at 280 wide: a row of 248, the name "home-mac"
+    // and the badge "Last seen: Needs your choice". The badge would leave the
+    // name 69 points, so it takes a row of its own.
+    assert_eq!(badge_row(248.0, 78.0, 167.0), BadgeRow::OwnRow);
+    // A short badge keeps the heading row on the same narrow card.
+    assert_eq!(badge_row(248.0, 78.0, 60.0), BadgeRow::SameRow);
+    // At the card width the two fit whole and share the row.
+    assert_eq!(badge_row(388.0, 78.0, 167.0), BadgeRow::SameRow);
+    // A name that fills most of the row keeps its room, and a badge that is too
+    // long for the rest still shares the row while the name keeps 60 per cent.
+    assert_eq!(badge_row(388.0, 300.0, 167.0), BadgeRow::OwnRow);
+    assert_eq!(badge_row(388.0, 300.0, 143.0), BadgeRow::SameRow);
+    assert_eq!(badge_row(388.0, 300.0, 144.0), BadgeRow::OwnRow);
 }

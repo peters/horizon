@@ -102,7 +102,7 @@ are written by Horizon and no document field can set them:
   drawn neutral, and every control of a card without its agent is drawn
   disabled.
 - **The panel size and title** of a new card come from the host: 420 wide and
-  as tall as the host measured its content needs, between 220 and 900 points,
+  as tall as the host measured its content needs, between 140 and 900 points,
   and a title that the host trims to one line. A card that the person resized by
   hand keeps that size, and a card that is shorter than its content scrolls its
   body above a footer that stays at the bottom.

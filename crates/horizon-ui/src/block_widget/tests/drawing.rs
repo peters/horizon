@@ -5,6 +5,7 @@ use egui::epaint::Shape;
 use horizon_browser_control::block::{BlockDocument, Button, Component, Selection, Tone};
 use horizon_core::{CardFrames as HostFrames, CardRuntime};
 
+use crate::block_widget::metrics::BODY_PAD_SIDE;
 use crate::theme;
 
 use super::{CardFrames, Owner, card_nodes, card_nodes_in, disabled_state, every_component, one_button};
@@ -235,4 +236,90 @@ fn a_button_without_a_tone_still_draws() {
     };
     let nodes = card_nodes(&document, Owner::Listening);
     assert!(nodes.iter().any(|(text, _)| text == "Later"), "{nodes:?}");
+}
+
+/// The pass of a card `width` wide that holds one heading with a badge, drawn
+/// while the owner of the card is away, so the badge carries its prefix.
+fn narrow_heading(
+    width: f32,
+    subtitle: Option<&str>,
+    badge: &str,
+) -> (Vec<egui::epaint::ClippedShape>, Vec<(String, egui::accesskit::Rect)>) {
+    let document = BlockDocument {
+        components: vec![Component::Heading {
+            text: "home-mac".to_string(),
+            subtitle: subtitle.map(str::to_owned),
+            badge: Some(horizon_browser_control::block::Badge {
+                text: badge.to_string(),
+                tone: Tone::Warn,
+            }),
+        }],
+    };
+    let (output, nodes) = CardFrames::new().pass_in(width, &document, &mut CardRuntime::default(), Owner::Gone);
+    let spoken = nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let text = node.label().or_else(|| node.value())?;
+            Some((text.to_owned(), node.bounds()?))
+        })
+        .collect();
+    (output, spoken)
+}
+
+/// Where the pass put the text `text`, or `None` when it drew no such text.
+fn spoken_at(spoken: &[(String, egui::accesskit::Rect)], text: &str) -> Option<egui::accesskit::Rect> {
+    spoken
+        .iter()
+        .find_map(|(label, bounds)| (label == text).then_some(*bounds))
+}
+
+/// Whether the pass elided the heading text instead of drawing all of it.
+fn heading_is_elided(output: &[egui::epaint::ClippedShape]) -> bool {
+    output
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) if shape.galley.text() == "home-mac" => Some(shape.galley.elided),
+            _ => None,
+        })
+        .expect("the card drew its heading")
+}
+
+#[test]
+fn a_narrow_card_draws_the_whole_heading_and_moves_its_badge_under_the_line() {
+    let (output, spoken) = narrow_heading(280.0, Some("Hetzner · Helsinki"), "Needs your choice");
+
+    assert!(
+        !heading_is_elided(&output),
+        "the heading keeps its text on a narrow card: {spoken:?}"
+    );
+    let badge = spoken_at(&spoken, "Last seen: Needs your choice").expect("the badge is drawn with its prefix");
+    let subtitle = spoken_at(&spoken, "Hetzner · Helsinki").expect("the second line is drawn");
+
+    assert!(
+        badge.y0 >= subtitle.y1,
+        "the badge takes a row of its own under the second line: {badge:?} against {subtitle:?}"
+    );
+    assert!(
+        (badge.x0 - f64::from(BODY_PAD_SIDE)).abs() < 0.5,
+        "the badge starts at the left edge of the heading: {badge:?}"
+    );
+}
+
+#[test]
+fn a_wide_card_keeps_the_badge_on_the_heading_row() {
+    let (output, spoken) = narrow_heading(420.0, Some("Hetzner · Helsinki"), "Needs your choice");
+
+    assert!(!heading_is_elided(&output), "the heading keeps its text: {spoken:?}");
+    let badge = spoken_at(&spoken, "Last seen: Needs your choice").expect("the badge is drawn with its prefix");
+    let subtitle = spoken_at(&spoken, "Hetzner · Helsinki").expect("the second line is drawn");
+
+    assert!(
+        badge.y0 < subtitle.y0,
+        "the badge shares the heading row: {badge:?} against {subtitle:?}"
+    );
+    let row_right = 420.0 - f64::from(BODY_PAD_SIDE);
+    assert!(
+        (badge.x1 - row_right).abs() < 0.5,
+        "the badge ends at the right edge of the heading row: {badge:?}"
+    );
 }

@@ -3,7 +3,7 @@ use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 
 use super::super::arrangement::rects_overlap;
 use super::super::*;
-use super::editor_panel_options;
+use super::{editor_panel_options, shell_panel_options};
 
 #[test]
 fn arranging_workspace_records_selected_layout() {
@@ -570,6 +570,11 @@ fn off_grid_workspace(board: &mut Board) -> (WorkspaceId, PanelId) {
     (workspace, agent)
 }
 
+/// A terminal panel, as `open_terminal` places one: the default panel size.
+fn terminal_panel_options() -> PanelOptions {
+    shell_panel_options()
+}
+
 /// A card panel, as the block request path creates one.
 fn card_panel_options(size: [f32; 2]) -> PanelOptions {
     PanelOptions {
@@ -722,7 +727,7 @@ fn a_card_below_its_agent_panel_aligns_its_left_edge() {
 }
 
 #[test]
-fn a_card_that_fits_beside_neither_and_below_its_agent_takes_a_free_tile() {
+fn a_card_that_fits_in_neither_place_beside_its_agent_continues_its_column() {
     let mut board = Board::new();
     let workspace = board.create_workspace_at("crowded", [0.0, 0.0]);
     let agent = board
@@ -766,9 +771,61 @@ fn a_card_that_fits_beside_neither_and_below_its_agent_takes_a_free_tile() {
         (agent[2] + TILE_GAP, agent[1]),
         "the place beside the agent is taken: {card:?}"
     );
-    assert_ne!(
-        (card[0], card[1]),
-        (agent[0], agent[3] + TILE_GAP),
-        "the place below the agent is taken: {card:?}"
+    assert_eq!(
+        card[0], agent[0],
+        "the card continues the column of the agent: {card:?} against {agent:?}"
     );
+    assert_eq!(
+        card[1],
+        520.0 + 500.0 + TILE_GAP,
+        "the card stands directly below the panel that took the place under the agent"
+    );
+}
+
+#[test]
+fn two_terminals_opened_by_an_agent_keep_its_column_below_two_cards() {
+    let mut board = Board::new();
+    let (workspace, agent) = off_grid_workspace(&mut board);
+
+    // The two cards of the agent take the place beside its panel.
+    let mut card = agent;
+    for _ in 0..2 {
+        card = board
+            .create_panel_beside(card_panel_options([420.0, 300.0]), workspace, card)
+            .expect("the card spawns");
+    }
+
+    // The SSH terminals the agent opens for the person belong to the agent
+    // panel, so both places beside it are taken by the cards.
+    let mut terminals = Vec::new();
+    for _ in 0..2 {
+        terminals.push(
+            board
+                .create_panel_beside(terminal_panel_options(), workspace, agent)
+                .expect("the terminal spawns"),
+        );
+    }
+
+    let agent = panel_bounds(&board, agent);
+    let first = panel_bounds(&board, terminals[0]);
+    let second = panel_bounds(&board, terminals[1]);
+    assert_eq!(
+        first[0], agent[0],
+        "the first terminal keeps the left edge of the agent panel: {first:?} against {agent:?}"
+    );
+    assert_eq!(
+        second[0], agent[0],
+        "the second terminal keeps the left edge of the agent panel: {second:?} against {agent:?}"
+    );
+    assert_eq!(
+        first[1],
+        agent[3] + TILE_GAP,
+        "the first terminal stands directly below the agent panel"
+    );
+    assert_eq!(
+        second[1],
+        first[3] + TILE_GAP,
+        "the second terminal stands directly below the first"
+    );
+    assert_eq!(overlapping_panels(&board, workspace), Vec::new(), "no panel is covered");
 }

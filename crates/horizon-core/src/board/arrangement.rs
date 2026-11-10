@@ -424,9 +424,11 @@ impl Board {
     /// `beside` is the rectangle of the panel the new one belongs to, such as
     /// the agent panel of a card. The new panel then stands right beside that
     /// panel, with the top edges aligned, or right below it, with the left edges
-    /// aligned, so the pair reads as one group. A panel that fits in neither
-    /// place takes the nearest free tile instead; without a `beside` panel the
-    /// first free tile in reading order wins.
+    /// aligned, so the pair reads as one group. When both places are taken it
+    /// continues the same group: below the column of the anchor with the left
+    /// edges level, or beside its row with the top edges level. A panel that
+    /// fits in none of these places takes the nearest free tile instead;
+    /// without a `beside` panel the first free tile in reading order wins.
     fn free_tile_position(&self, workspace: &Workspace, size: [f32; 2], beside: Option<[f32; 4]>) -> [f32; 2] {
         let origin = workspace.position;
         let occupied: Vec<[f32; 4]> = workspace
@@ -443,6 +445,7 @@ impl Board {
         };
         if let Some(position) = anchored_positions(beside)
             .into_iter()
+            .chain(group_positions(beside, &occupied))
             .find(|position| covers_no_panel(*position, size, &occupied))
         {
             return position;
@@ -556,6 +559,26 @@ fn panel_rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] {
 /// the left edges aligned.
 fn anchored_positions(anchor: [f32; 4]) -> [[f32; 2]; 2] {
     [[anchor[2] + TILE_GAP, anchor[1]], [anchor[0], anchor[3] + TILE_GAP]]
+}
+
+/// The two further places of the group that `anchor` stands in, in the same
+/// order as [`anchored_positions`]: below every panel of the anchor's column
+/// with the left edges level, then beside every panel of its row with the top
+/// edges level.
+///
+/// These keep a new panel in the column or the row of its anchor, which is what
+/// makes two terminals that an agent opens for the person line up with its
+/// panel after its cards took both places right beside it.
+fn group_positions(anchor: [f32; 4], occupied: &[[f32; 4]]) -> [[f32; 2]; 2] {
+    let column_bottom = occupied
+        .iter()
+        .filter(|panel| panel[0] < anchor[2] && anchor[0] < panel[2])
+        .fold(anchor[3], |bottom, panel| bottom.max(panel[3]));
+    let row_right = occupied
+        .iter()
+        .filter(|panel| panel[1] < anchor[3] && anchor[1] < panel[3])
+        .fold(anchor[2], |right, panel| right.max(panel[2]));
+    [[anchor[0], column_bottom + TILE_GAP], [row_right + TILE_GAP, anchor[1]]]
 }
 
 /// Whether a panel at `position` with `size` covers no panel of `occupied`.

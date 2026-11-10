@@ -9,15 +9,20 @@ use egui::{Pos2, Rect, Vec2};
 use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, Tone};
 use horizon_core::{CardRuntime, PanelId};
 
-use super::Owner;
+use super::{Owner, one_button};
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
-use crate::block_widget::metrics::FOOTER_HEIGHT;
-use crate::block_widget::{CardView, show};
+use crate::block_widget::metrics::{CARD_MIN_HEIGHT, FOOTER_HEIGHT};
+use crate::block_widget::{CARD_HEIGHT_LIMITS, CardView, fitted_card_height, show};
 use crate::test_egui::DiscardTextures;
 
 /// A card panel of the smallest card size, at a known place on the screen.
 fn smallest_card() -> Rect {
-    Rect::from_min_size(Pos2::new(40.0, 60.0), Vec2::new(420.0, 220.0))
+    Rect::from_min_size(Pos2::new(40.0, 60.0), Vec2::new(420.0, CARD_MIN_HEIGHT))
+}
+
+/// The same card panel, `height` tall.
+fn card_panel(height: f32) -> Rect {
+    Rect::from_min_size(smallest_card().min, Vec2::new(420.0, height))
 }
 
 /// The body of a panel, as a card panel draws it: inside the titlebar and the
@@ -75,10 +80,10 @@ fn drawn_text(output: &egui::FullOutput, text: &str) -> (Pos2, Rect) {
         .unwrap_or_else(|| panic!("the card drew {text}"))
 }
 
-/// Draws `document` into the smallest card and returns the pass and the body
-/// height that the card recorded.
-fn draw_smallest_card(document: &BlockDocument, card: &mut CardRuntime) -> (egui::FullOutput, f32) {
-    let body = card_body(smallest_card());
+/// Draws `document` into `panel` and returns the pass and the body height that
+/// the card recorded.
+fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (egui::FullOutput, f32) {
+    let body = card_body(panel);
     let ctx = egui::Context::default();
     let output = ctx
         .run_ui(
@@ -117,7 +122,7 @@ fn a_tall_document_scrolls_in_the_body_and_never_reaches_the_footer() {
     let document = tall_document();
     let mut card = CardRuntime::default();
 
-    let (output, content_height) = draw_smallest_card(&document, &mut card);
+    let (output, content_height) = draw_card(smallest_card(), &document, &mut card);
 
     let body = card_body(smallest_card());
     let footer_top = body.max.y - FOOTER_HEIGHT;
@@ -140,22 +145,40 @@ fn a_tall_document_scrolls_in_the_body_and_never_reaches_the_footer() {
 }
 
 #[test]
-fn a_short_document_fits_above_the_footer_without_scrolling() {
-    let document = BlockDocument {
-        components: vec![Component::Buttons {
-            items: vec![button("stop", "Stop", Tone::Neutral)],
+fn a_short_document_gets_a_card_that_ends_right_after_its_content() {
+    // One heading and one button row: the card that the live run opened at 220
+    // points left an empty band above the footer.
+    let mut components = BlockDocument {
+        components: vec![Component::Heading {
+            text: "home-mac".to_string(),
+            subtitle: None,
+            badge: None,
         }],
     };
+    components.components.extend(one_button().components);
     let mut card = CardRuntime::default();
 
-    let (output, content_height) = draw_smallest_card(&document, &mut card);
+    let (_, content_height) = draw_card(smallest_card(), &components, &mut card);
+    let height = fitted_card_height(content_height, false, CARD_MIN_HEIGHT, CARD_HEIGHT_LIMITS);
 
-    let body = card_body(smallest_card());
     assert!(
-        content_height < body.height() - FOOTER_HEIGHT,
-        "a short card needs no scroll area: {content_height}"
+        height > CARD_MIN_HEIGHT,
+        "the content decides the height above the floor: {height}"
     );
-    let (label_top, _) = drawn_text(&output, "Stop");
+    assert!(
+        height < 220.0,
+        "a small card no longer keeps an empty band above its footer: {height}"
+    );
+
+    let panel = card_panel(height);
+    let (output, measured) = draw_card(panel, &components, &mut card);
+    let body = card_body(panel);
+    assert!(
+        measured <= body.height() - FOOTER_HEIGHT + 0.5,
+        "the fitted card holds its content without a scroll area: {measured} against {}",
+        body.height() - FOOTER_HEIGHT
+    );
+    let (label_top, _) = drawn_text(&output, "Connect");
     assert!(
         label_top.y < body.max.y - FOOTER_HEIGHT,
         "the button sits above the footer"

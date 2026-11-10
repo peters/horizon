@@ -28,6 +28,9 @@ pub(super) const HEADING_SUBTITLE_FONT: f32 = 12.5;
 pub(super) const HEADING_SUBTITLE_GAP: f32 = 4.0;
 /// Space between the heading text and a badge on the same row.
 pub(super) const HEADING_BADGE_GAP: f32 = 12.0;
+/// Space between the second line of a heading and a badge that takes a row of
+/// its own under it.
+pub(super) const HEADING_BADGE_ROW_GAP: f32 = 8.0;
 
 /// Height of a badge.
 pub(super) const BADGE_HEIGHT: f32 = 24.0;
@@ -156,6 +159,10 @@ pub(super) fn count(value: usize) -> f32 {
 /// Width of a new card.
 pub(super) const CARD_WIDTH: f32 = 420.0;
 /// Smallest height of a card that fits its content.
-pub(super) const CARD_MIN_HEIGHT: f32 = 220.0;
+///
+/// It keeps the titlebar, one line of the body and the footer on screen, so a
+/// card with a single line of content ends right after that content instead of
+/// leaving an empty band above its footer.
+pub(super) const CARD_MIN_HEIGHT: f32 = 140.0;
 /// Largest height of a card that fits its content.
 pub(super) const CARD_MAX_HEIGHT: f32 = 900.0;
