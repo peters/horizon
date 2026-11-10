@@ -296,14 +296,16 @@ fn an_entry_of_the_local_server_is_rewritten_for_a_named_host_and_keeps_its_leas
         profile: Some("mail".to_string()),
     };
     let mut remote = bind_browser_skill(home.path(), std::ffi::OsStr::new("host"), Some(&browser_host))
-        .expect("the entry that Horizon wrote is updated for the named host");
+        .expect("the entry of a named host is the entry of the local server");
     assert_eq!(remote.len(), 1, "the update takes the skill lease");
     release_skill_roots(&mut remote);
     let text = fs::read_to_string(&path).expect("registered");
     assert_eq!(
         args_of(&text),
-        ["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]
+        ["--browser-mcp"],
+        "the tools of an agent drive the panels of this Horizon, on whatever machine they run"
     );
+    assert!(!text.contains("--remote"), "the entry names no host: {text}");
     let document = parse(&text).expect("valid TOML");
     assert_eq!(
         document["mcp_servers"]["horizon-browser"]["tool_timeout_sec"].as_integer(),
@@ -321,12 +323,9 @@ fn an_entry_of_the_local_server_is_rewritten_for_a_named_host_and_keeps_its_leas
     );
 
     assert!(
-        register(home.path(), None).expect("the entry goes back to the local server"),
-        "removing the host updates the entry of the host"
+        !register(home.path(), None).expect("a start without a host writes the same entry"),
+        "the entry of a named host is already the entry of the local server"
     );
-    let text = fs::read_to_string(&path).expect("registered");
-    assert_eq!(args_of(&text), ["--browser-mcp"]);
-    assert!(!text.contains("--remote"), "the entry of the host is gone: {text}");
 }
 
 #[test]

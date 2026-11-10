@@ -646,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn the_local_mcp_entry_is_unchanged_and_a_named_host_runs_the_bridge() {
+    fn the_mcp_entry_of_an_agent_serves_the_panels_of_this_horizon() {
         let local = claude_mcp_config(Path::new("/opt/horizon"), None).expect("local entry");
         assert_eq!(
             local,
@@ -662,34 +662,23 @@ mod tests {
             "without a named host the entry is the local server, byte for byte"
         );
 
+        let parsed: serde_json::Value = serde_json::from_str(&local).expect("JSON entry");
+        assert_eq!(
+            parsed["horizon-browser"]["timeout"],
+            serde_json::json!(3_660_000),
+            "the entry keeps the handoff timeout"
+        );
+
         let browser_host = horizon_core::BrowserHostConfig {
             ssh_target: Some("browser-vm".to_string()),
             profile: Some("mail".to_string()),
         };
-        let remote = claude_mcp_config(Path::new("/opt/horizon"), Some(&browser_host)).expect("remote entry");
-        let parsed: serde_json::Value = serde_json::from_str(&remote).expect("JSON entry");
-        assert_eq!(parsed["horizon-browser"]["command"], serde_json::json!("/opt/horizon"));
+        let named = claude_mcp_config(Path::new("/opt/horizon"), Some(&browser_host)).expect("named entry");
+        let parsed: serde_json::Value = serde_json::from_str(&named).expect("JSON entry");
         assert_eq!(
             parsed["horizon-browser"]["args"],
-            serde_json::json!(["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"]),
-            "the same executable runs the bridge to the named host"
-        );
-        assert_eq!(
-            parsed["horizon-browser"]["timeout"],
-            serde_json::json!(3_660_000),
-            "the bridge keeps the handoff timeout of the local entry"
-        );
-
-        let target_only = horizon_core::BrowserHostConfig {
-            ssh_target: Some("browser-vm".to_string()),
-            profile: None,
-        };
-        let remote = claude_mcp_config(Path::new("/opt/horizon"), Some(&target_only)).expect("entry");
-        let parsed: serde_json::Value = serde_json::from_str(&remote).expect("JSON entry");
-        assert_eq!(
-            parsed["horizon-browser"]["args"],
-            serde_json::json!(["--browser-mcp", "--remote", "browser-vm"]),
-            "an absent profile adds no argument"
+            serde_json::json!(["--browser-mcp"]),
+            "a panel of that host is the ordinary browser panel, so the agent serves the panels of this Horizon"
         );
 
         let empty = horizon_core::BrowserHostConfig::default();
