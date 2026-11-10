@@ -3,8 +3,9 @@ name: horizon-machines
 description: >-
   Rent, connect, stop and delete a cloud machine for the person from a Horizon card, with the
   provider CLI in your own shell. Use it when the person asks for a machine, a cloud, a worker, a
-  GPU box, to rent, stop or delete one, or to see what is rented. The card uses block_panel
-  (horizon-block) and Connect uses open_terminal with a Horizon machine key.
+  GPU box, to rent, stop or delete one, or for "what is rented", "show my machines" and "overview".
+  The card uses block_panel (horizon-block) and Connect uses open_terminal with a Horizon machine
+  key.
 ---
 
 # Horizon machines
@@ -22,10 +23,15 @@ contract, and `open_terminal` gives the shell.
 - Connect is `open_terminal` with a machine key that Horizon makes and keeps.
 - The same key lets you run your own `ssh` for the commands that prepare the
   machine, with the one form in step 5.
+- Every machine that is rented appears in one overview card, with one row for
+  each machine. The overview rents nothing.
 
 ## The flow
 
 Do the steps in this order. Stop and tell the person when a step fails.
+
+A request for "what is rented", "show my machines" or "overview" is the
+overview card after step 1. Show it and stop; it rents nothing.
 
 ### 1. Find the CLIs
 
@@ -39,6 +45,56 @@ Run one read-only command per provider. Run no create command yet.
 
 A missing CLI and a CLI without a login are both `warn` rows, with the provider's
 own words in the subtitle. Tell the person which command to run, and wait.
+
+### After step 1: the overview card
+
+"What is rented", "show my machines" and "overview" mean one overview card, not
+one card per machine. It is a list of every machine that the providers hold, in
+the spirit of a machine list in a sidebar. It rents nothing and deletes nothing.
+
+- The heading is `Machines`. The subtitle says how many machines you found at
+  how many providers, for example `3 machines at 2 providers`. Add a badge only
+  when something needs the person, for example a provider whose CLI is not
+  signed in: `{"text": "1 provider skipped", "tone": "warn"}`.
+- Make one `list` with `selection: single`: one row per machine that the
+  find-again command of a signed-in provider returns for the tag
+  `horizon-managed=true`. The row id is `<provider>.<machine name>`, for
+  example `hetzner.build-1`. The title is the machine name. The subtitle is the
+  provider, the region and the state, for example `Hetzner, hel1, running`. Use
+  tone `warn` for a machine that is stopped but still costs, and tone `danger`
+  for a machine that a command reports as an error state. Mark the first row
+  `selected: true`.
+- Show at most 32 rows, the limit of one `list`. When more machines exist, show
+  the 31 newest and a last row with the id `more` and the title `and 3 more`.
+  That row is no machine: it is never the `selected: true` row, and you answer a
+  click on it with a `text` line that says how many machines the overview leaves
+  out, and do nothing else.
+- Add the buttons `Connect` with tone `primary`, `Open card`, `Refresh` and
+  `Close`. `Delete` is not on the overview: it stays on the machine card with
+  its confirm step.
+- Add one `text` line for each provider that step 1 skipped, with the reason in
+  the provider's own words, for example `GCP skipped: gcloud is not signed in.`.
+- End with a `text` line that says when you read the state, for example
+  `Read at 2026-11-10 20:04 UTC. Press Refresh to read it again.`, and then the
+  buttons.
+- The overview is your reading at the time, not Horizon state. A press on
+  `Refresh` runs the find-again command of every signed-in provider again and
+  updates the card. Run the same read after each rent, stop, start and delete
+  that you do, and update the card.
+- Call `machine_keys` with the overview. A machine without a key of its name in
+  this workspace gets `, no key here` added to its subtitle. `Connect` on that
+  row answers with a `text` line that says that no key of this machine is in
+  this workspace, and opens no terminal.
+- A press carries the selected row in `selected`. `Connect` opens the terminal
+  of step 8 with the key of that machine. `Open card` opens the machine card of
+  step 6 for that machine, or shows the card when it still exists, and leaves
+  the overview open. `Close` closes the overview.
+- When no provider holds a machine, show the empty overview: the subtitle
+  `Nothing is rented`, one `text` line that says that every signed-in provider
+  answered with an empty list, and the buttons `Rent a machine` with tone
+  `primary` and `Close`.
+
+The exact documents are under [Card documents](#card-documents).
 
 ### 2. Choose the provider on a card
 
@@ -93,6 +149,11 @@ ssh agent of the person cannot exhaust `MaxAuthTries`. `BatchMode=yes` fails at
 once instead of asking for a password, and `ConnectTimeout=10` keeps a dead
 address from hanging.
 
+`-i` takes the path as it is, and the path holds no percent sign in a normal
+home. If the path holds a `%`, give the key as
+`-o IdentityFile=<path with every % written twice>` instead of `-i`, and write
+the `%` twice in `<known_hosts_path>` too.
+
 1. Wait until SSH answers: run the form with `true` as `<command>` every 10
    seconds, for at most 3 minutes. Update the card between the tries, and never
    show `Connect` before a try answers.
@@ -102,9 +163,10 @@ address from hanging.
    machine and never install more than this.
 4. Prove it: `command -v tmux` answers a path after the install.
 
-A machine that does not answer within 3 minutes is a `warn` row with the exit
-code of the last try, and `Delete` stays the only offer. Do not rent a second
-machine for the same card.
+When no try answers within 3 minutes, the card must not stay on `Starting`. Show
+the heading with a `warn` badge `No SSH yet`, one `text` component with the last
+error line that ssh printed, and the buttons `Try again` with tone `primary` and
+`Delete` with tone `danger`. Do not rent a second machine for the same card.
 
 ### 6. Show the machine card
 
@@ -162,16 +224,49 @@ Delete needs a confirm step on the card before anything is deleted.
 2. A press on `Keep` returns to the machine card, and nothing is deleted.
 3. A press on `Delete it` runs the provider delete in the order of the reference.
 4. Prove that nothing tagged with this name is left, with the find-again command.
-5. Call `delete_machine_key` with the machine name.
+5. Call `delete_machine_key` with the machine name; an answer of
+   `key_unavailable` means that the key is already gone.
 6. Update the card to a `Deleted` badge with one `Close` button, or close it.
+   Tell the person in the `text` component that the terminal that Connect opened
+   now shows ssh's timeout, and that they can close it.
 
 A leftover resource means the delete did not finish. Show the provider's own
 words on the card and keep `Delete it`, so the person can try again.
 
 ## Card documents
 
-These are the values of `document` for `create` and `update`: the
-choose-provider card, the machine card and the confirm card.
+These are the values of `document` for `create` and `update`: the overview card,
+the empty overview, the choose-provider card, the machine card, the confirm card
+and the deleted card.
+
+The overview: three machines at two providers, and GCP skipped in step 1.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Machines", "subtitle": "3 machines at 2 providers",
+   "badge": {"text": "1 provider skipped", "tone": "warn"}},
+  {"type": "list", "selection": "single", "rows": [
+    {"id": "hetzner.build-1", "title": "build-1", "subtitle": "Hetzner, hel1, running", "selected": true},
+    {"id": "hetzner.build-2", "title": "build-2", "subtitle": "Hetzner, hel1, stopped, still billed, no key here", "tone": "warn"},
+    {"id": "runpod.gpu-1", "title": "gpu-1", "subtitle": "RunPod, EU-RO-1, running"}]},
+  {"type": "text", "text": "GCP skipped: gcloud is not signed in."},
+  {"type": "text", "text": "Read at 2026-11-10 20:04 UTC. Press Refresh to read it again."},
+  {"type": "buttons", "items": [
+    {"id": "connect", "label": "Connect", "tone": "primary"},
+    {"id": "open_card", "label": "Open card"}, {"id": "refresh", "label": "Refresh"},
+    {"id": "close", "label": "Close"}]}]}
+```
+
+The empty overview: no provider holds a machine.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Machines", "subtitle": "Nothing is rented"},
+  {"type": "text", "text": "Every signed-in provider answered with an empty list for the tag horizon-managed=true."},
+  {"type": "text", "text": "Read at 2026-11-10 20:11 UTC."},
+  {"type": "buttons", "items": [
+    {"id": "rent", "label": "Rent a machine", "tone": "primary"}, {"id": "close", "label": "Close"}]}]}
+```
 
 Choose the provider:
 
@@ -220,8 +315,14 @@ The person pressed `Delete`. Ask before you delete:
     {"id": "delete_now", "label": "Delete it", "tone": "danger"}, {"id": "keep", "label": "Keep"}]}]}
 ```
 
-After the delete and the key removal, update the card to one `badge` with the
-text `Deleted` and tone `ok`, and one `buttons` with a `close` item.
+After the delete and the key removal, update the card to this document:
+
+```json
+{"components": [
+  {"type": "badge", "text": "Deleted", "tone": "ok"},
+  {"type": "text", "text": "The machine and its key are gone. The terminal that Connect opened now shows ssh's timeout; close it."},
+  {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}]}
+```
 
 ## Rules
 
@@ -237,27 +338,32 @@ text `Deleted` and tone `ok`, and one `buttons` with a `close` item.
   `horizon-card=<name>`. Tag disks and network objects too.
 - Touch no resource without both tags and this machine name. Other machines in
   the account are not yours.
-- One card per machine. An agent holds at most eight cards in one workspace.
+- One card per machine that you act on. An agent holds at most eight cards in one
+  workspace; the overview makes that limit rarely matter, because the person
+  reads every machine in one card.
 - When a command fails, put the provider's own words in a `text` component and
   keep the buttons that still make sense. Do not translate an error into a guess,
   and do not retry a quota or capacity error in a loop.
-- "What is rented" means the find-again command of every provider that step 1
-  proves, and one card per machine that it finds: tag in heading, provider and
-  region in subtitle, state in badge.
+- "What is rented", "show my machines" and "overview" mean the one overview card:
+  one row per machine that the find-again commands return, one `text` line per
+  provider that was skipped, no delete, and a `Refresh` press for a new read.
+  Run that read again after every rent, stop, start and delete that you do.
 - A new session adopts a machine through its tag and `machine_keys`. With a key
-  of that name, connect as in step 8; without it, say that the key is gone and
-  offer `Delete` only.
+  of that name, connect as in step 8; without it, say on the overview and on the
+  machine card that the key is gone, and offer `Delete` only.
 
 ## Providers
 
 | Provider | CLI | SSH user | sudo | Stop and start | Firewall | tmux on the default image | Reference |
 |---|---|---|---|---|---|---|---|
-| Hetzner | `hcloud` | `root` | not needed | yes | yes, one per machine | no | [hetzner](references/hetzner.md) |
+| Hetzner | `hcloud` | `root` | not needed | yes | yes, one per machine | yes, `/usr/bin/tmux` | [hetzner](references/hetzner.md) |
 | Azure | `az` | `azureuser` | yes | yes, with `deallocate` | yes, a security group | no | [azure](references/azure.md) |
 | GCP | `gcloud` | the metadata user, for example `hz` | yes | yes | yes, one VPC rule | no | [gcp](references/gcp.md) |
 | RunPod | `runpodctl` | `root` | not needed | yes, and it keeps billing | no, one public port | yes, its start command installs it | [runpod](references/runpod.md) |
 | AWS | `aws` | `ubuntu` | yes | yes | yes, a security group | no | [aws](references/aws.md) |
 
-No rent test measured tmux on any default image, so you check it in step 5 and
-install it when it is missing; the RunPod start command installs it itself.
-`references/aws.md` marks every create and delete `UNVERIFIED`.
+A real run measured tmux on the Hetzner default Ubuntu 24.04 image, and
+`/usr/bin/tmux` answered at once, so no install step is needed there. The other
+providers were not measured in a rent run: keep the check of step 5 and install
+tmux only when the check answers nothing. The RunPod start command installs it
+itself. `references/aws.md` marks every create and delete `UNVERIFIED`.

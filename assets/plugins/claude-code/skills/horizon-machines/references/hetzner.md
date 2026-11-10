@@ -90,17 +90,14 @@ ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
 
 Retry it every 10 seconds, at most 3 minutes, and update the card between the
 tries. `IdentitiesOnly` and `IdentityAgent=none` are required: 18 of 18 attempts
-failed without them here, because the ssh agent offered its whole key list.
+failed without them here, because the ssh agent offered its whole key list. Give
+the key as `-o IdentityFile=<path with every % written twice>` instead of `-i`
+only when the path holds a `%`, and write that `%` twice in
+`<known_hosts_path>` too.
 
-The image ships no tmux. Run the same form with `command -v tmux`; an empty answer
-means the package is missing, and then install it with the same form again:
-
-```sh
-ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
-    -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
-    -o BatchMode=yes -o ConnectTimeout=10 root@<.public_net.ipv4.ip> \
-    'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux'
-```
+The image ships tmux at `/usr/bin/tmux`, so it answers at once. Run the same form
+with `command -v tmux` and expect `/usr/bin/tmux`; no install step is needed at
+Hetzner.
 
 Only now show the machine card with `Connect`:
 
@@ -152,8 +149,8 @@ hcloud all list -l horizon-managed=true -o json
 hcloud all list -l horizon-managed=true --paid -o json    # only what costs money
 ```
 
-Both are accepted by 1.69.0. Each item carries its `horizon-card` label. One card
-per machine found.
+Both are accepted by 1.69.0. Each item carries its `horizon-card` label. One row
+per machine found, in the overview card.
 
 ## 8. Traps
 
