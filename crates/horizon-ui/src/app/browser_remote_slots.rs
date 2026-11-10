@@ -351,6 +351,22 @@ mod tests {
         );
     }
 
+    /// A slot freed a moment ago can read as held while another thread's
+    /// forked child still holds the inherited descriptor, so wait for the
+    /// release that the lease contract promises instead of reading it once.
+    fn acquire_released_slot(root: &std::path::Path, quota: &str) -> SlotLease {
+        (0..100)
+            .find_map(|_| match remote_slots::acquire_slot(root, quota, 1) {
+                Ok(lease) => Some(lease),
+                Err(SlotError::Busy { .. }) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    None
+                }
+                Err(error) => panic!("unexpected slot failure: {error:?}"),
+            })
+            .expect("the dropped lease frees its slot within the fork-inheritance window")
+    }
+
     /// A lease that the coordination worker has not applied yet counts against
     /// its provider, also while a tick advances the create that waits for it:
     /// `finish_pending_browser_creates` takes `pending` out before it advances
@@ -572,9 +588,6 @@ mod tests {
             "a lease nobody recorded holds no allocation"
         );
         assert!(app.browser_create_host.pending.is_empty());
-        assert!(
-            remote_slots::acquire_slot(&root, &quota, 1).is_ok(),
-            "dropping the lease frees its slot for the next allocation"
-        );
+        let _released = acquire_released_slot(&root, &quota);
     }
 }
