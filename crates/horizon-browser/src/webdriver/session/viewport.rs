@@ -365,6 +365,7 @@ pub(in crate::webdriver::session) mod tests {
         // capability admission is intentionally not part of this fixture.
         let request = fixture_remote_request(classic);
         let config = BrowserSessionConfig {
+            attach: None,
             browser: BrowserConfig {
                 backend: BackendKind::FirefoxBidi,
                 ..BrowserConfig::default()

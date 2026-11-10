@@ -248,6 +248,7 @@ impl ProfileHost {
         };
         let session = start_shared_session(
             BrowserSessionConfig {
+                attach: None,
                 browser: browser_config(&self.root, name, profile, self.headed),
                 panel_local_id: id.clone(),
                 initial_url: request.url.clone(),

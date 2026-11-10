@@ -393,6 +393,30 @@ impl ProcessLifecycle for PageLifecycle {
 pub(super) enum DriverProcess {
     Exclusive(ChromeProcess),
     Shared(Arc<PageLifecycle>),
+    Attached(AttachedBrowser),
+}
+
+/// A browser that another process owns: this session drives it over a CDP link
+/// and holds nothing of the browser itself, so there is no child to wait for, no
+/// profile folder to remove and no window to close. Its page target is the whole
+/// of what this session may close, and the browser stays up for the next one.
+pub(super) struct AttachedBrowser {
+    target: Mutex<Option<String>>,
+}
+
+impl AttachedBrowser {
+    pub(super) fn new() -> Self {
+        Self {
+            target: Mutex::new(None),
+        }
+    }
+
+    fn target(&self) -> Option<String> {
+        self.target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl DriverProcess {
@@ -400,9 +424,16 @@ impl DriverProcess {
         matches!(self, Self::Shared(_))
     }
 
+    /// Whether this session drives a browser that it did not start. Such a
+    /// session never adopts a page of a sibling, and never stops the browser.
+    pub(super) fn is_attached(&self) -> bool {
+        matches!(self, Self::Attached(_))
+    }
+
     pub(super) fn child_status(&mut self) -> Option<std::process::ExitStatus> {
         match self {
             Self::Exclusive(process) => process.child_status(),
+            Self::Attached(_) => None,
             Self::Shared(page) => page
                 .state
                 .lock()
@@ -416,6 +447,7 @@ impl DriverProcess {
     pub(super) fn registered_target(&self) -> Option<String> {
         match self {
             Self::Exclusive(_) => None,
+            Self::Attached(browser) => browser.target(),
             Self::Shared(page) => page
                 .target
                 .lock()
@@ -426,20 +458,35 @@ impl DriverProcess {
     }
 
     pub(super) fn register_target(&self, target: &str) {
-        if let Self::Shared(page) = self {
-            let mut targets = page.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !targets.iter().any(|registered| registered == target) {
-                targets.push(target.to_string());
+        match self {
+            Self::Exclusive(_) => {}
+            Self::Attached(browser) => {
+                *browser.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(target.to_string());
+            }
+            Self::Shared(page) => {
+                let mut targets = page.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !targets.iter().any(|registered| registered == target) {
+                    targets.push(target.to_string());
+                }
             }
         }
     }
 
     pub(super) fn forget_closed_target(&self, target: &str) {
-        if let Self::Shared(page) = self {
-            page.target
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .retain(|registered| registered != target);
+        match self {
+            Self::Exclusive(_) => {}
+            Self::Attached(browser) => {
+                let mut ours = browser.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if ours.as_deref() == Some(target) {
+                    *ours = None;
+                }
+            }
+            Self::Shared(page) => {
+                page.target
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .retain(|registered| registered != target);
+            }
         }
     }
 
@@ -448,6 +495,19 @@ impl DriverProcess {
             Self::Exclusive(process) => {
                 let _ = link.call_and_drain(Duration::from_secs(1), "Browser.close", &serde_json::json!({}), None);
                 let _ = process.kill();
+            }
+            Self::Attached(browser) => {
+                let mut ours = browser.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if ours.as_deref() != Some(target) {
+                    return;
+                }
+                let _ = link.call_and_drain(
+                    Duration::from_secs(1),
+                    "Target.closeTarget",
+                    &serde_json::json!({ "targetId": target }),
+                    None,
+                );
+                *ours = None;
             }
             Self::Shared(page) => {
                 page.release(Some((link, target)));
@@ -458,6 +518,7 @@ impl DriverProcess {
     pub(super) fn kill(&mut self) -> bool {
         match self {
             Self::Exclusive(process) => process.kill(),
+            Self::Attached(_) => true,
             Self::Shared(page) => page.release(None),
         }
     }

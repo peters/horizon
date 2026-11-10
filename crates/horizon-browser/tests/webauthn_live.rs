@@ -84,6 +84,7 @@ fn run_engine(backend: BackendKind) {
     let frame_slot = Arc::new(FrameSlot::new());
     let session = LiveSession(Some(
         start_session(BrowserSessionConfig {
+            attach: None,
             browser: BrowserConfig {
                 backend,
                 profile_root: Some(profiles.clone()),

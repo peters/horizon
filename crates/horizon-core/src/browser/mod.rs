@@ -380,6 +380,7 @@ impl BrowserPanelState {
         let capture_directory = self.capture_directory(&home);
         self.frame_slot.file_chooser().register_consumer();
         let session_config = session::BrowserSessionConfig {
+            attach: None,
             browser,
             panel_local_id: self.panel_local_id.clone(),
             // A navigation typed while the driver was absent takes precedence

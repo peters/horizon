@@ -153,11 +153,7 @@ impl DriverState {
             backend: crate::BackendKind::ChromiumCdp,
             capabilities,
             bidi: false,
-            automation_disclosure: self
-                .config
-                .browser
-                .automation_disclosure
-                .ready_status(crate::BackendKind::ChromiumCdp),
+            automation_disclosure: self.disclosure_status(),
         }
     }
 
@@ -573,6 +569,7 @@ mod tests {
             for attempts in [3, 7] {
                 let mut state = super::DriverState::new(
                     &crate::BrowserSessionConfig {
+                        attach: None,
                         browser: crate::BrowserConfig::default(),
                         panel_local_id: "capture-test".into(),
                         initial_url: None,

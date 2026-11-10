@@ -83,6 +83,18 @@ pub(crate) fn established_disclosure_status(
 }
 
 impl AutomationDisclosurePolicy {
+    /// Status of a session that drives a browser another process started. The
+    /// launch switch that suppresses the automation flag is not this engine's to
+    /// set on that browser, so the minimization claim does not hold even when
+    /// this session rewrites the script-visible metadata afterwards.
+    #[must_use]
+    pub(crate) const fn borrowed_browser_status(self) -> AutomationDisclosureStatus {
+        match self {
+            Self::BrowserDefault => AutomationDisclosureStatus::BrowserDefault,
+            Self::MinimizeCommonSignals => AutomationDisclosureStatus::UnsupportedByBackend,
+        }
+    }
+
     pub(crate) const fn ready_status(self, backend: crate::BackendKind) -> AutomationDisclosureStatus {
         match (self, backend) {
             (Self::BrowserDefault, _) => AutomationDisclosureStatus::BrowserDefault,

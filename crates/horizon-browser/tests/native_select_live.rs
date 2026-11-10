@@ -41,6 +41,7 @@ fn run_native_select_live(backend: BackendKind) {
     let temp = tempfile::tempdir().expect("temp");
     let frame_slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
+        attach: None,
         browser: BrowserConfig {
             backend,
             profile_root: Some(temp.path().join("profiles")),

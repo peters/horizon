@@ -20,6 +20,7 @@ struct SetupOutcome {
 #[test]
 fn reattach_exhaustion_ends_the_driver_but_recoverable_attempts_do_not() {
     let config = BrowserSessionConfig {
+        attach: None,
         browser: BrowserConfig::default(),
         panel_local_id: "reattach-cleanup".into(),
         initial_url: None,
@@ -118,6 +119,7 @@ fn run_setup_with_browser(
     });
     let slot = Arc::new(FrameSlot::default());
     let config = BrowserSessionConfig {
+        attach: None,
         browser,
         panel_local_id: "native-window-test".to_string(),
         initial_url: Some("https://fixture.invalid/".to_string()),

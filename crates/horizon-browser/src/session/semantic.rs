@@ -344,6 +344,9 @@ impl DriverState {
         target: &crate::BrowserTarget,
         paths: &[std::path::PathBuf],
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        if let Some(refusal) = self.local_file_refusal() {
+            return Err(refusal);
+        }
         let selector = self.semantic.resolve(target)?;
         let expected = local_file_facts(paths)?;
         let object_id = self.file_input_object_id(link, event_tx, frame_slot, &selector)?;

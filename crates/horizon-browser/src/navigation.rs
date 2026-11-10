@@ -534,6 +534,7 @@ mod egress_tests {
 
     fn session() -> crate::session::BrowserSessionConfig {
         crate::session::BrowserSessionConfig {
+            attach: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "panel".into(),
             initial_url: None,

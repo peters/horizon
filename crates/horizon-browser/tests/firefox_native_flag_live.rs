@@ -33,6 +33,7 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
     let profiles = tempfile::tempdir().expect("profile root");
     let frame_slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
+        attach: None,
         browser: BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             profile_root: Some(profiles.path().to_path_buf()),

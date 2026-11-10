@@ -57,6 +57,9 @@ impl DriverState {
         y: f64,
         paths: &[PathBuf],
     ) -> Result<(), BrowserControlFailure> {
+        if let Some(refusal) = self.local_file_refusal() {
+            return Err(refusal);
+        }
         validate_drop(x, y, paths)?;
         let files = crate::file_chooser::wire_paths(paths)?;
         let generation = self.semantic.generation();

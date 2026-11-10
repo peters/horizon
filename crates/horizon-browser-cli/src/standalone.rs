@@ -410,6 +410,7 @@ fn start_backend(
     };
     let coordination = Arc::new(ManifestCoordination::default());
     let session = start_session(BrowserSessionConfig {
+        attach: None,
         browser,
         panel_local_id: panel_id.clone(),
         initial_url: None,

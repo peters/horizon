@@ -147,6 +147,11 @@ pub struct BrowserSessionConfig {
     /// When set, the session runs at a remote grid through the classic
     /// `WebDriver` path instead of a local browser process.
     pub remote: Option<crate::RemoteSessionRequest>,
+    /// When set, this session drives a browser that another process started,
+    /// and it owns nothing of that browser: it launches none, prepares and
+    /// removes no profile folder, sets no download behavior, closes only the
+    /// page it created and never the browser.
+    pub attach: Option<crate::DevtoolsEndpoint>,
 }
 
 /// The panel-side handle to a running driver.
@@ -625,6 +630,31 @@ struct DriverState {
 }
 
 impl DriverState {
+    /// Why this session cannot take a file of this computer: the browser that it
+    /// drives runs on another machine, where a path of this computer names no
+    /// file.
+    pub(super) fn local_file_refusal(&self) -> Option<BrowserControlFailure> {
+        self.config.attach.as_ref().map(|_| {
+            BrowserControlFailure::new(
+                "remote_file_upload_unsupported",
+                "This panel drives a browser of another machine, which cannot read a file of this computer",
+            )
+        })
+    }
+
+    /// The disclosure claim of this exact session. A browser that another
+    /// process started keeps its own automation switch, so this engine claims
+    /// no minimization of it, whatever it establishes over the link.
+    fn disclosure_status(&self) -> crate::AutomationDisclosureStatus {
+        if self.config.attach.is_some() {
+            return self.config.browser.automation_disclosure.borrowed_browser_status();
+        }
+        self.config
+            .browser
+            .automation_disclosure
+            .ready_status(self.config.browser.backend)
+    }
+
     fn new(
         config: &BrowserSessionConfig,
         browser_ws: &str,

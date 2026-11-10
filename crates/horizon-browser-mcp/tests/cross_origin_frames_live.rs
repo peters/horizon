@@ -591,6 +591,7 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
     let coordination = Arc::new(ManifestCoordination::default());
     let slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
+        attach: None,
         browser: BrowserConfig {
             backend,
             headless: backend != BackendKind::SafariWebDriver,
@@ -901,6 +902,7 @@ fn run_chat(backend: BackendKind, root: &Path) {
     let profiles = tempfile::Builder::new().prefix("chat-profiles-").tempdir().unwrap();
     let slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
+        attach: None,
         browser: BrowserConfig {
             backend,
             headless: true,

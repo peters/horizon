@@ -375,6 +375,7 @@ mod tests {
     fn fixture(url: &str) -> (DriverState, BrowserEventSender, Arc<FrameSlot>) {
         let slot = Arc::new(FrameSlot::default());
         let config = BrowserSessionConfig {
+            attach: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "frame-protocol".into(),
             initial_url: None,

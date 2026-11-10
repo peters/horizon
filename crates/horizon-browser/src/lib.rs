@@ -55,6 +55,7 @@ pub use coordination::{
     BrowserCoordination, CoordinationOwnership, CoordinationSignals, CoordinationState, HandoffRequest,
 };
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
+pub use downloads::ATTACHED_DOWNLOADS_GAP;
 pub use egress::{Egress, EgressError};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};

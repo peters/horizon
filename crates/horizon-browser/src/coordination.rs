@@ -210,6 +210,7 @@ mod tests {
     #[test]
     fn failed_stale_state_cleanup_aborts_coordination_startup() {
         let config = crate::BrowserSessionConfig {
+            attach: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "panel".into(),
             initial_url: None,

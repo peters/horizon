@@ -28,6 +28,7 @@ fn chromium_press_dispatches_trusted_key_events_to_the_page_session() {
     });
     let slot = Arc::new(FrameSlot::new());
     let config = BrowserSessionConfig {
+        attach: None,
         browser: BrowserConfig::default(),
         panel_local_id: "press-test".into(),
         initial_url: None,

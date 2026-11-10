@@ -306,6 +306,9 @@ impl DriverState {
         target: &Target,
         paths: &[std::path::PathBuf],
     ) -> Result<(), BrowserControlFailure> {
+        if let Some(refusal) = self.local_file_refusal() {
+            return Err(refusal);
+        }
         let files = wire_paths(paths)?;
         let expected = local_file_facts(paths)?;
         let value = self.file_input_value_in_session(

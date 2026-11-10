@@ -15,6 +15,12 @@ use horizon_browser_protocol::{
     BrowserDownload, BrowserDownloadList, BrowserDownloadState, MAX_BROWSER_DOWNLOADS, download_file_name,
 };
 
+/// What a session states about the downloads of a browser that another process
+/// owns: that browser saves them on the machine that runs it, so this panel
+/// cannot report one of them, and an empty list proves nothing.
+pub const ATTACHED_DOWNLOADS_GAP: &str =
+    "this panel drives a browser of another machine, which saves its downloads there, so this panel reports none";
+
 /// Create the panel's download folder as a private directory, the way a
 /// browser profile is created: only this user may read what a page saved.
 pub(crate) fn prepare_directory(directory: &Path) -> std::io::Result<()> {
