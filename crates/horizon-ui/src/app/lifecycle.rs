@@ -74,6 +74,7 @@ impl HorizonApp {
         self.forward_terminal_clipboard_writes(ctx);
         let browser_create_activity = self.poll_browser_create_requests(ctx);
         let device_activity = self.poll_device_panel_requests(ctx);
+        let block_activity = self.poll_block_panel_requests(ctx);
 
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog(ctx);
@@ -82,7 +83,7 @@ impl HorizonApp {
         self.poll_git_watchers();
         self.poll_config_reload();
 
-        had_panel_output || browser_create_activity || device_activity
+        had_panel_output || browser_create_activity || device_activity || block_activity
     }
 
     /// Drain terminal and browser events, promoting persistence-relevant

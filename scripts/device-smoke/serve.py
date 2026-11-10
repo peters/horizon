@@ -225,12 +225,16 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
     return fixture
 
 
-def application_command(app, config, saved_session):
+def application_command(app, config, saved_session, resume_session=False):
     """The command line of the candidate in the fixture.
 
     A saved session keeps its session file in the private home of the fixture. The
-    default stays ephemeral, which writes no session file.
+    default stays ephemeral, which writes no session file. A resumed session starts
+    with no session argument, so the candidate loads the board that an earlier run
+    of the same private home saved.
     """
+    if resume_session:
+        return [str(app), '--config', str(config)]
     session = '--new-session' if saved_session else '--ephemeral'
     return [str(app), '--config', str(config), session]
 
@@ -282,6 +286,10 @@ def main():
         '--saved-session', action='store_true',
         help='Keep the session of the fixture in its private home')
     parser.add_argument(
+        '--resume-session', action='store_true',
+        help='Start with no session argument, so the candidate resumes the board that an earlier '
+             'run left in the private home. Use with --reuse-state and without --saved-session')
+    parser.add_argument(
         '--presets',
         type=Path,
         help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
@@ -314,6 +322,8 @@ def main():
         parser.error(str(problem))
     if args.browser_host_profile and not args.browser_host:
         parser.error('--browser-host-profile needs --browser-host')
+    if args.resume_session and args.saved_session:
+        parser.error('--resume-session starts the saved board; do not give --saved-session as well')
     try:
         width, height = (int(part) for part in args.screen.lower().split('x', 1))
     except ValueError:
@@ -415,7 +425,7 @@ def main():
             args.browser_host, args.browser_host_profile)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
-        application_process = spawn('horizon', application_command(app, config, args.saved_session))
+        application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))
         vnc_log = log_path('vnc').open('wb')
         vnc = spawn_with_log('vnc', ['x11vnc', '-norc', '-no6', '-display', env['DISPLAY'],
                                     '-localhost', '-autoport', '40000', '-viewonly', '-forever',
@@ -431,7 +441,7 @@ def main():
         manifest = {'display': env['DISPLAY'], 'viewer_url': url,
                     'vnc_address': f'127.0.0.1:{vnc_port}', 'app': str(app),
                     'pids': [p.pid for p in children], 'fixture': 'horizon-debug',
-                    'session': 'saved' if args.saved_session else 'ephemeral',
+                    'session': 'resumed' if args.resume_session else ('saved' if args.saved_session else 'ephemeral'),
                     'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))

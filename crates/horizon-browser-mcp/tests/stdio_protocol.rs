@@ -207,6 +207,30 @@ fn assert_device_panel_contract(tools: &Value) {
     }
 }
 
+fn assert_block_panel_contract(tools: &Value) {
+    let card = listed_tool(tools, "block_panel").to_string();
+    for operation in ["create", "update", "list", "inspect", "visibility", "close"] {
+        assert!(card.contains(operation), "missing card operation {operation}");
+    }
+    for document_field in ["components", "heading", "buttons", "selection"] {
+        assert!(card.contains(document_field), "missing document field {document_field}");
+    }
+    let description = listed_tool(tools, "block_panel")["description"]
+        .as_str()
+        .expect("description")
+        .to_owned();
+    for stated in [
+        "do nothing",
+        "not_owner",
+        "too_many_cards",
+        "agent_present",
+        "host_timeout",
+    ] {
+        assert!(description.contains(stated), "the description omits {stated}");
+    }
+    assert!(!card.contains("next_click"), "no click operation is offered yet");
+}
+
 fn assert_provider_tools_contract(tools: &Value) {
     let usage = listed_tool(tools, "browser_provider_usage");
     assert!(usage["inputSchema"]["properties"].get("provider").is_some());
@@ -274,11 +298,12 @@ fn assert_download_fetch_contract(tools: &Value) {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(27));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
     assert_download_fetch_contract(tools);
     assert_output_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
+    assert_block_panel_contract(tools);
     assert_provider_tools_contract(tools);
     assert_orientation_contract(tools);
     assert_screenshot_contract(tools);

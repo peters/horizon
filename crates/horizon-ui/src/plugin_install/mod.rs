@@ -14,8 +14,9 @@ mod owned_skills;
 mod user_skills;
 mod work_hooks;
 use user_skills::{
-    HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL,
-    SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL,
+    RETIRED_OFFLOAD_SKILL, SkillOwnershipCheck, SkillRootLease, bind_prepared_skill_root, bind_skill_roots,
+    release_skill_roots, remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -45,6 +46,13 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
             "/assets/plugins/claude-code/skills/horizon-device/SKILL.md"
         )),
     },
+    EmbeddedFile {
+        relative_path: "skills/horizon-block/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-block/SKILL.md"
+        )),
+    },
 ];
 
 const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
@@ -62,6 +70,30 @@ const DEVICE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
         "/assets/plugins/codex/skills/horizon-device/SKILL.md"
     )),
 }];
+
+const BLOCK_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-block/SKILL.md"
+    )),
+}];
+
+fn validate_block_skill(dir: &Path) -> io::Result<()> {
+    owned_skills::validate_files(dir, BLOCK_SKILL_FILES)
+}
+
+fn install_block_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    let staging = tempfile::Builder::new().prefix(".horizon-block-").tempdir_in(parent)?;
+    sync_plugin_files(staging.path(), BLOCK_SKILL_FILES)?;
+    std::fs::rename(staging.path(), dir)
+}
 
 fn validate_device_skill(dir: &Path) -> io::Result<()> {
     owned_skills::validate_files(dir, DEVICE_SKILL_FILES)
@@ -151,23 +183,50 @@ impl AgentPluginHostLease {
         Ok(())
     }
 
-    fn bind_grok_device_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+    fn bind_grok_skill(
+        &mut self,
+        grok_root: &Path,
+        browser_bound: bool,
+        skill: &str,
+        validate: SkillOwnershipCheck,
+        install: fn(&Path) -> io::Result<()>,
+    ) {
         let Some(host_id) = self.host_dir.file_name() else {
             return;
         };
-        let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
-        match bind_prepared_skill_root(host_id, device_dir.clone(), validate_device_skill, || {
+        let skill_dir = grok_root.join("skills").join(skill);
+        match bind_prepared_skill_root(host_id, skill_dir.clone(), validate, || {
             if browser_bound {
-                validate_device_skill(&device_dir)?;
-                install_device_skill(&device_dir)?;
+                validate(&skill_dir)?;
+                install(&skill_dir)?;
             }
             Ok(())
         }) {
-            Ok(device_lease) => self.skill_roots.push(device_lease),
+            Ok(lease) => self.skill_roots.push(lease),
             Err(error) => {
-                tracing::warn!(path = %device_dir.display(), %error, "Grok device skill unavailable; preserving existing content");
+                tracing::warn!(path = %skill_dir.display(), %error, skill, "Grok skill unavailable; preserving existing content");
             }
         }
+    }
+
+    fn bind_grok_device_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        self.bind_grok_skill(
+            grok_root,
+            browser_bound,
+            HORIZON_DEVICE_SKILL,
+            validate_device_skill,
+            install_device_skill,
+        );
+    }
+
+    fn bind_grok_block_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        self.bind_grok_skill(
+            grok_root,
+            browser_bound,
+            HORIZON_BLOCK_SKILL,
+            validate_block_skill,
+            install_block_skill,
+        );
     }
 
     fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
@@ -244,10 +303,12 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
             Ok(roots) => {
                 lease.skill_roots.extend(roots);
                 lease.bind_grok_device_skill(&root, true);
+                lease.bind_grok_block_skill(&root, true);
             }
             Err(error) => {
                 tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
                 lease.bind_grok_device_skill(&root, false);
+                lease.bind_grok_block_skill(&root, false);
             }
         }
     }
@@ -408,10 +469,15 @@ fn install_agent_plugins_impl(
         &horizon_home.codex_integrations_dir().join(HORIZON_DEVICE_SKILL),
         DEVICE_SKILL_FILES,
     )?;
+    updated_files += sync_plugin_files(
+        &horizon_home.codex_integrations_dir().join(HORIZON_BLOCK_SKILL),
+        BLOCK_SKILL_FILES,
+    )?;
 
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
         let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
         let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        let block_dir = grok_root.join("skills").join(HORIZON_BLOCK_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             match grok_mcp::register(&grok_root) {
                 Ok(changed) => {
@@ -419,6 +485,9 @@ fn install_agent_plugins_impl(
                     updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
                     if skill_dir_is_leased(lease, &device_dir) {
                         updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
+                    }
+                    if skill_dir_is_leased(lease, &block_dir) {
+                        updated_files += sync_plugin_files(&block_dir, BLOCK_SKILL_FILES)?;
                     }
                 }
                 Err(error) => {
@@ -430,11 +499,15 @@ fn install_agent_plugins_impl(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
         let device_dir = codex_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        let block_dir = codex_root.join("skills").join(HORIZON_BLOCK_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &device_dir) {
             updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &block_dir) {
+            updated_files += sync_plugin_files(&block_dir, BLOCK_SKILL_FILES)?;
         }
     }
     Ok(updated_files)
@@ -449,6 +522,7 @@ fn user_skill_lease_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) ->
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_DEVICE_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_BLOCK_SKILL));
     }
     dirs
 }
@@ -562,11 +636,12 @@ mod tests {
     use horizon_core::HorizonHome;
 
     use super::{
-        AgentMcpEntry, AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES,
-        EmbeddedFile, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS,
-        abandoned_user_skill_dirs, agent_plugin_host_lock_path, claude_mcp_config, install_agent_plugins_impl,
-        open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills,
-        sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
+        AgentMcpEntry, AgentPluginHostLease, BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES,
+        DEVICE_SKILL_FILES, EmbeddedFile, HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL,
+        RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs, agent_plugin_host_lock_path,
+        claude_mcp_config, install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts,
+        sync_file_if_changed, sync_leased_user_skills, sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir,
+        user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
@@ -711,6 +786,15 @@ mod tests {
         );
         assert!(DEVICE_SKILL_FILES[0].content.contains("device_panel"));
         assert!(DEVICE_SKILL_FILES[0].content.contains("native VNC"));
+        assert!(BLOCK_SKILL_FILES[0].content.contains("block_panel"));
+        assert!(
+            !BROWSER_SKILL_FILES[0].content.contains("block_panel"),
+            "browser skill must not own the card tool"
+        );
+        assert!(
+            !DEVICE_SKILL_FILES[0].content.contains("block_panel"),
+            "device skill must not own the card tool"
+        );
     }
 
     fn assert_skill_absent(path: &Path, reason: &str) {
@@ -758,6 +842,14 @@ mod tests {
             &user_home.join(".grok/skills/horizon-device/SKILL.md"),
             DEVICE_SKILL_FILES[0].content,
         );
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-block/SKILL.md"),
+            BLOCK_SKILL_FILES[0].content,
+        );
+        assert_installed_skill(
+            &user_home.join(".grok/skills/horizon-block/SKILL.md"),
+            BLOCK_SKILL_FILES[0].content,
+        );
         assert_skill_absent(
             &user_home.join(".agents/skills/horizon-browser/SKILL.md"),
             "browser MCP skill must not broadcast through ~/.agents/skills",
@@ -788,6 +880,14 @@ mod tests {
                 .join(HORIZON_DEVICE_SKILL)
                 .join("SKILL.md"),
             DEVICE_SKILL_FILES[0].content,
+        );
+        assert_claude_plugin_skill(&claude_plugin_dir, "skills/horizon-block/SKILL.md");
+        assert_installed_skill(
+            &horizon_home
+                .codex_integrations_dir()
+                .join(HORIZON_BLOCK_SKILL)
+                .join("SKILL.md"),
+            BLOCK_SKILL_FILES[0].content,
         );
         assert_browser_and_device_skill_split();
         let mcp_config = std::fs::read_to_string(claude_plugin_dir.join(".mcp.json"))

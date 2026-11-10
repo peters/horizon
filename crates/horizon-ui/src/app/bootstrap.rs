@@ -122,6 +122,7 @@ impl HorizonApp {
             workspace_colors: Vec::new(),
             panel_render_caches: PanelRenderCaches::default(),
             device_claim: super::device_requests::claim::DeviceClaimState::default(),
+            block_claim: super::block_requests::BlockClaimState::default(),
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),

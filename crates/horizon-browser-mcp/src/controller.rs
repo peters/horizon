@@ -16,6 +16,7 @@ use thiserror::Error;
 use crate::model::{BrowserPanel, ProtocolKind};
 
 mod admission;
+mod block;
 mod device;
 mod handoff;
 mod host_answer;

@@ -84,6 +84,17 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "block_panel",
+        description = "Draw a card in the calling agent's current Horizon workspace. A card is a small surface of plain text that the agent composes: a heading, body text, label and value rows, a badge, a progress bar, a divider, selectable rows and buttons. Horizon draws it beside the person's terminals. In this version its buttons and rows do nothing: no click reaches an agent, so use a card to show state, never to ask for a decision. Operations: create(title?,document), update(panel_id,document), list, inspect(panel_id), visibility(panel_id,visible), close(panel_id). The document is {\"components\":[...]} with at most 64 components in draw order, and the whole document is at most 32 KiB. Each component carries plain text only: no images, links, tables or inputs, and no field that Horizon fetches or opens. An invalid document is refused as invalid_document or document_too_large, and the message names the offending path, such as components[2].items[0].id. Create draws the card in the caller's workspace without taking keyboard focus and returns panel_id and revision 1; the panel is visible until someone hides it. Update replaces the whole document and returns the next revision; the revision rises with every new document, so a card and the person's screen are described by the latest revision. Only the agent that created a card may update, hide, show or close it: another agent of the same workspace gets not_owner, and Horizon refuses a ninth card of one agent in one workspace with too_many_cards. list and inspect work for every agent of the workspace: a card of another workspace is panel_unavailable, and a panel that is not a card is not_block_panel. inspect returns the document, its revision, whether the card is visible, whether an agent panel of its owner is still in the workspace (agent_present; false means the person keeps the last document with no agent behind it), and owned_by_caller. Every operation is scoped to the agent panel that Horizon launched and to its workspace: a caller without that panel gets caller_unavailable, and a request of another host gets wrong_host. Text on a card is the agent's claim, not verified Horizon state, and the card can look like a Horizon dialog; never show a credential, token or private key on one. A request expires if the host does not apply it in 10 seconds, and the call answers host_timeout after 15 seconds. Requires a supporting Horizon host."
+    )]
+    async fn block_panel(
+        &self,
+        Parameters(operation): Parameters<horizon_browser_control::manifest::block::Operation>,
+    ) -> Result<Json<horizon_browser_control::manifest::block::Outcome>, String> {
+        self.controller.block_panel(operation).await.map(Json)
+    }
+
+    #[tool(
         name = "browser_screenshot",
         description = "Capture the latest decoded viewport pixels of a ready browser panel in the calling agent's Horizon workspace. Returns a private PNG path and its original dimensions; this is a retained frame, not a fresh navigation or a full-page screenshot. Optional copy_to_clipboard (default false) also requests an image copy on the Horizon host clipboard; clipboard_requested reports dispatch, not OS acknowledgement. Requires a live Horizon host, not a standalone browser. Acquires or renews the caller's browser claim and rechecks it at host dispatch and result delivery. Refuses another live owner, active human steering and pending handoff. Does not change focus, viewport, visibility or canvas. Keep sensitive screenshots private. The latest eight exports per panel survive until panel close or host exit."
     )]
@@ -797,6 +808,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "block_panel",
                 "browser_act",
                 "browser_audit",
                 "browser_close",

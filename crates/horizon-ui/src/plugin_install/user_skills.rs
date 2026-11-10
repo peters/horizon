@@ -10,6 +10,7 @@ use std::fs::{OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub(super) const HORIZON_BLOCK_SKILL: &str = "horizon-block";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
 // Recognized only for migration cleanup; never installed by this version.
@@ -22,7 +23,7 @@ pub(super) const RETIRED_MCP_SKILLS: &[&str] =
     &["horizon-app-testing", "horizon-cast", "horizon-cloud", "horizon-speech"];
 const LEASES_DIR: &str = ".horizon-leases";
 
-type SkillOwnershipCheck = fn(&Path) -> io::Result<()>;
+pub(super) type SkillOwnershipCheck = fn(&Path) -> io::Result<()>;
 
 pub(super) struct SkillRootLease {
     cleanup_guard: Option<SkillOwnershipCheck>,
@@ -252,6 +253,7 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
         return;
     };
     if name != RETIRED_NOTIFY_SKILL
+        && name != HORIZON_BLOCK_SKILL
         && name != HORIZON_BROWSER_SKILL
         && name != HORIZON_DEVICE_SKILL
         && name != RETIRED_OFFLOAD_SKILL

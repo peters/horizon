@@ -11,6 +11,7 @@ SOURCES = {
 }
 TOOL = re.compile(r'#\[tool\(\s*name\s*=\s*"([^"]+)"')
 OPERATIONS = [
+    ('crates/horizon-browser-control/src/manifest/block.rs', 'Operation', 'horizon-block', set(), 'block_panel'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'Operation', 'horizon-device', {'BrowserScreenshot'}, 'device_panel'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set(), 'device_panel video'),
     ('crates/horizon-browser-mcp/src/model.rs', 'ActKind', 'horizon-browser', set(), 'browser_act'),
@@ -114,6 +115,8 @@ def check():
             skill = SOURCES[relative]
             if name == 'device_panel':
                 skill = 'horizon-device'
+            if name == 'block_panel':
+                skill = 'horizon-block'
             if name not in documents.get(skill, ''):
                 errors.append(f'{relative}: {name} missing from {skill}')
             count += 1

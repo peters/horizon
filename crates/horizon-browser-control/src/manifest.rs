@@ -39,6 +39,7 @@ use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 mod agent;
 mod audit;
+pub mod block;
 mod capture;
 mod close;
 mod create;

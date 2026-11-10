@@ -64,6 +64,8 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    drop a file, answer a passkey request, save a download or judge a semantic
    action. Boundaries: `browser-webauthn`, `browser-semantic-actions`,
    `browser-downloads`.
+3. **Agent-drawn UI** — an agent draws text of its own making inside the
+   person's workspace. Boundaries: `block-panel`.
 
 ## Checks
 

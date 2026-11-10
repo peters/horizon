@@ -906,7 +906,8 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(27));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
+    assert!(tools.to_string().contains("block_panel"));
     assert!(tools.to_string().contains("browser_downloads"));
     assert!(tools.to_string().contains("browser_zoom"));
     assert!(tools.to_string().contains("browser_network_watch"));

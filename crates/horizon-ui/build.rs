@@ -19,8 +19,10 @@ const ASSETS: &[&str] = &[
     "icons/logo.svg",
     "plugins/claude-code/.claude-plugin/plugin.json",
     "plugins/claude-code/skills/horizon-browser/SKILL.md",
+    "plugins/claude-code/skills/horizon-block/SKILL.md",
     "plugins/claude-code/skills/horizon-device/SKILL.md",
     "plugins/codex/skills/horizon-browser/SKILL.md",
+    "plugins/codex/skills/horizon-block/SKILL.md",
     "plugins/codex/skills/horizon-device/SKILL.md",
 ];
 

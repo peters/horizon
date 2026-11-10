@@ -147,6 +147,11 @@ Horizon itself starts with its own defaults when a configuration does not load,
 and an unchecked file would then show an empty board instead of the presets of
 the test.
 
+`--resume-session` starts the candidate with no session argument, so it loads the
+board that an earlier run saved in the private home. Give it with `--reuse-state`
+and without `--saved-session`; it is how a procedure quits the candidate and starts
+it again on the same board. The fixture refuses the combination that names both.
+
 `--panels FILE` opens extra workspace panels at start from a JSON list of
 terminal entries, so a procedure that needs an agent panel, a scripted client or
 another command keeps the same viewer and needs no click. An entry without a

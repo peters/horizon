@@ -1,5 +1,6 @@
 mod actions;
 mod answer_retries;
+mod block_requests;
 mod bootstrap;
 mod browser_cleanup;
 mod browser_close_requests;
@@ -188,6 +189,7 @@ impl DetachedWorkspaceViewportState {
 #[derive(Default)]
 pub struct PanelRenderCaches {
     device_request_poll: Option<Instant>,
+    block_request_poll: Option<Instant>,
     pending_device_reveal: Option<device_requests::PendingDeviceReveal>,
     awaiting_device_reveals: Vec<device_reveal_wait::AwaitingDeviceReveal>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
@@ -231,6 +233,10 @@ pub struct HorizonApp {
     /// those, but the answers to the old board's requests must still be
     /// written, and an answer that is in flight must not lose its count.
     pub(in crate::app) device_claim: device_requests::claim::DeviceClaimState,
+    /// The card requests a claim took, and the answers the host owes for them.
+    /// It lives here, not in the render caches, for the same reason as
+    /// `device_claim`: a session switch resets those.
+    pub(in crate::app) block_claim: block_requests::BlockClaimState,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,

@@ -85,7 +85,7 @@ impl DeviceClaimState {
 
 impl HorizonApp {
     /// Claims this host's waiting Device requests on the coordination worker,
-    /// at most every [`super::DEVICE_REQUEST_POLL`]. One claim runs at a time,
+    /// at most every [`super::HOST_REQUEST_POLL`]. One claim runs at a time,
     /// so a slow disk never queues one per tick; a claim that starts after a
     /// session switch replaced the board takes nothing, and a later frame or
     /// pump wake applies what it took.
@@ -95,7 +95,7 @@ impl HorizonApp {
             || self
                 .panel_render_caches
                 .device_request_poll
-                .is_some_and(|last| now.duration_since(last) < super::DEVICE_REQUEST_POLL)
+                .is_some_and(|last| now.duration_since(last) < super::HOST_REQUEST_POLL)
         {
             return;
         }

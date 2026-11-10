@@ -652,6 +652,48 @@ seconds. On `host_timeout`, list before retrying a mutation because it may have
 completed without a delivered result. Hosts predating this API return that
 bounded timeout and require a normal application upgrade to gain the capability.
 
+## Agent cards
+
+`block_panel` draws a card of plain text in the caller's Horizon workspace. A
+card holds a flat list of components in draw order: `heading`, `text`, `kv`,
+`badge`, `progress`, `divider`, `list` and `buttons`. Its buttons and list rows
+are drawn and inert in this version: no click reaches an agent, and no operation
+waits for one.
+
+```json
+{"operation":"create","title":"cloud-1","document":{"components":[
+  {"type":"heading","text":"cloud-1"},
+  {"type":"badge","text":"running","tone":"ok"}]}}
+{"operation":"update","panel_id":"<returned id>","document":{"components":[{"type":"text","text":"Hour 4 of 24."}]}}
+{"operation":"list"}
+{"operation":"inspect","panel_id":"<returned id>"}
+{"operation":"visibility","panel_id":"<returned id>","visible":false}
+{"operation":"close","panel_id":"<returned id>"}
+```
+
+The document is at most 32 KiB and 64 components, with 24 `kv` rows, 32 `list`
+rows, 8 buttons and 512 characters in one text per component. An id is
+`[a-z0-9_.-]{1,64}` and is unique in the document. No field is a URL, a path or
+a command, and Horizon fetches nothing and runs nothing for a card. An invalid
+document is refused as `invalid_document` or `document_too_large`, and the
+message names the offending place, such as `components[2].items[0].id`.
+
+Create draws in the caller's workspace without taking keyboard focus and returns
+`panel_id` and `revision` 1. Update replaces the whole document and returns the
+next revision. Only the agent that created a card may update, hide, show or
+close it; another agent of the same workspace gets `not_owner`, and one agent
+owns at most eight cards in one workspace (`too_many_cards`). `list` and
+`inspect` work for every agent of the workspace, and a card of another workspace
+is `panel_unavailable`. `inspect` reports `visible`, `agent_present` (whether an
+agent panel of the owner is still in the workspace) and `owned_by_caller`.
+
+Every operation needs the identity that Horizon injects into an agent panel;
+a caller without it gets `caller_unavailable`. A request expires before dispatch
+after 10 seconds, and the MCP wait is bounded to 15 seconds (`host_timeout`).
+Hosts without this API return that bounded timeout until they are upgraded. A
+card and its document are saved with the panel, so a restart brings the card
+back; restore does not reconnect an owner that is gone.
+
 ## Remote device orientation
 
 `browser_create` accepts optional `orientation: "portrait" | "landscape"`

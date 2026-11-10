@@ -25,6 +25,11 @@ class ApplicationCommandTest(unittest.TestCase):
         self.assertEqual(command, ['/opt/horizon', '--config', '/run/horizon.yaml', '--new-session'])
         self.assertNotIn('--ephemeral', command, '--saved-session keeps the session')
 
+    def test_a_resumed_session_names_no_session_argument(self):
+        command = serve.application_command(APP, CONFIG, saved_session=False, resume_session=True)
+
+        self.assertEqual(command, ['/opt/horizon', '--config', '/run/horizon.yaml'])
+
 
 if __name__ == '__main__':
     unittest.main()

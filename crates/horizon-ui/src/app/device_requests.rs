@@ -35,9 +35,10 @@ impl PendingDeviceReveal {
 }
 
 /// How often Horizon asks the coordination worker for this host's waiting
-/// requests. A claim on a queue that stays empty costs one reader of that
-/// queue per tick, so both the frame and the request pump keep this cadence.
-const DEVICE_REQUEST_POLL: Duration = Duration::from_millis(250);
+/// requests, Device panel and card alike. A claim on a queue that stays empty
+/// costs one reader of that queue per tick, so both the frame and the request
+/// pump keep this cadence.
+pub(in crate::app) const HOST_REQUEST_POLL: Duration = Duration::from_millis(250);
 
 impl HorizonApp {
     /// The frame poll. See [`Self::drain_device_panel_requests`].

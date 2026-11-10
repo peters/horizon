@@ -1,4 +1,5 @@
-//! Claim Device panel requests without waiting for a presented frame.
+//! Claim host requests, Device panel and card alike, without waiting for a
+//! presented frame.
 //!
 //! On Wayland, `request_redraw` produces `RedrawRequested` only after the
 //! compositor's frame callback. A surface that is not being presented never
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use eframe::UserEvent;
 use egui::{Context, ViewportId};
-use horizon_core::browser::manifest::{self, device};
+use horizon_core::browser::manifest::{self, block, device};
 use winit::event_loop::EventLoopProxy;
 
 use super::HorizonApp;
@@ -96,7 +97,10 @@ impl DeviceRequestBridge {
         };
         let changed = installed
             .app
-            .drain_device_panel_requests(&installed.ctx, self.root_override.as_deref());
+            .drain_device_panel_requests(&installed.ctx, self.root_override.as_deref())
+            | installed
+                .app
+                .drain_block_panel_requests(&installed.ctx, self.root_override.as_deref());
         if changed || self.persist_pending.load(Ordering::Relaxed) {
             installed.app.save_runtime_after_device_request();
             self.persist_pending
@@ -122,7 +126,7 @@ impl DeviceRequestBridge {
     /// claim took is not applied or an answer is not written, so neither waits
     /// for input the unpresented host never gets.
     fn sync_claim_pending(&self, app: &HorizonApp) {
-        let claimed = app.device_claims_outstanding();
+        let claimed = app.device_claims_outstanding() || app.block_claims_outstanding();
         if self.claim_pending.swap(claimed, Ordering::Relaxed) != claimed {
             self.wake_watcher();
         }
@@ -157,7 +161,7 @@ impl DeviceRequestBridge {
         let claim_pending = Arc::clone(&self.claim_pending);
         let root_override = self.root_override.clone();
         match thread::Builder::new()
-            .name("horizon-device-requests".to_owned())
+            .name("horizon-host-requests".to_owned())
             .spawn(move || {
                 watch_device_requests(
                     &stop,
@@ -257,10 +261,10 @@ fn watch_device_requests(
         // A held reveal or claimed work wakes at the pending-request cadence,
         // so neither waits for the persistence backoff.
         let files_pending = reveals
-            || match device_requests_pending(root_override) {
+            || match host_requests_pending(root_override) {
                 Ok(pending) => pending,
                 Err(error) => {
-                    tracing::warn!(%error, "could not check Device panel requests");
+                    tracing::warn!(%error, "could not check host requests");
                     if !persist_pending.load(Ordering::Relaxed) && !claims {
                         thread::park_timeout(Duration::from_secs(1));
                         continue;
@@ -299,12 +303,15 @@ fn next_pump_wait(pending: bool, persist_pending: bool, persist_wait: Duration) 
     }
 }
 
-fn device_requests_pending(root: Option<&Path>) -> std::io::Result<bool> {
+/// Whether this host has a Device panel or card request waiting. Both queues
+/// wake the same pump, so a card is created while the window is not presented.
+fn host_requests_pending(root: Option<&Path>) -> std::io::Result<bool> {
     let host = manifest::host_instance();
-    match root {
-        Some(root) => device::has_pending_at(root, host),
-        None => device::has_pending(host),
-    }
+    let (device_pending, block_pending) = match root {
+        Some(root) => (device::has_pending_at(root, host), block::has_pending_at(root, host)),
+        None => (device::has_pending(host), block::has_pending(host)),
+    };
+    Ok(device_pending? || block_pending?)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -402,6 +409,6 @@ mod tests {
             b"not a directory",
         )
         .expect("broken queue");
-        assert!(device_requests_pending(Some(root.path())).is_err());
+        assert!(host_requests_pending(Some(root.path())).is_err());
     }
 }

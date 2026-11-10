@@ -5,10 +5,11 @@
 //! fetches or opens. The agent sends the components; the host adds the
 //! revision it assigns and the identity of the owning agent.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The card an agent asks Horizon to draw.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlockDocument {
     /// Components in draw order.
@@ -16,7 +17,7 @@ pub struct BlockDocument {
 }
 
 /// One element of a document. The `type` field selects the variant.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Component {
     /// A card title: one short line.
@@ -69,7 +70,7 @@ pub enum Component {
 ///
 /// A tone never states Horizon's own status: the card is the agent's view,
 /// not the host's.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Tone {
     /// No emphasis.
@@ -88,7 +89,7 @@ pub enum Tone {
 }
 
 /// How many rows of a list a person may select.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Selection {
     /// Rows are shown but cannot be selected.
@@ -98,7 +99,7 @@ pub enum Selection {
 }
 
 /// One label and value pair.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct KvRow {
     /// Left column.
@@ -108,7 +109,7 @@ pub struct KvRow {
 }
 
 /// One selectable row.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListRow {
     /// Stable id the agent receives back when the person selects the row.
@@ -121,7 +122,7 @@ pub struct ListRow {
 }
 
 /// One button.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Button {
     /// Stable id the agent receives back when the person presses the button.
