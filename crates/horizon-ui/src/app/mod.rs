@@ -2,6 +2,7 @@ mod actions;
 mod answer_retries;
 mod block_clicks;
 mod block_requests;
+mod block_terminals;
 mod bootstrap;
 mod browser_cleanup;
 mod browser_close_requests;
@@ -245,6 +246,9 @@ pub struct HorizonApp {
     /// The `next_click` waits this host holds open, and the last wake line to
     /// each agent panel. It lives here for the same reason as `block_claim`.
     pub(in crate::app) block_clicks: block_clicks::BlockClickState,
+    /// The SSH terminals each agent panel opened for the person in this run,
+    /// bounded per agent. It lives here for the same reason as `block_claim`.
+    pub(in crate::app) agent_terminals: block_terminals::AgentTerminals,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,

@@ -326,6 +326,7 @@ impl RuntimeState {
                                         .and(panel.launch_command.clone())
                                 }),
                             block: panel.block().cloned(),
+                            opened_by: panel.opened_by().map(str::to_string),
                         }
                     })
                     .collect();

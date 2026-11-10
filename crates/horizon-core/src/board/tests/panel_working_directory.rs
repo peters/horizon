@@ -28,6 +28,7 @@ fn shell_panel_state(local_id: &str, cwd: Option<&std::path::Path>) -> PanelStat
         browser_profile: None,
         browser_url: None,
         block: None,
+        opened_by: None,
     }
 }
 

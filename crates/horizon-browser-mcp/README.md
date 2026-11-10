@@ -671,6 +671,7 @@ button or on a selectable row reach the agent that owns the card.
 {"operation":"next_click","panel_id":"<returned id>","timeout_millis":300000}
 {"operation":"visibility","panel_id":"<returned id>","visible":false}
 {"operation":"close","panel_id":"<returned id>"}
+{"operation":"open_terminal","ssh":{"host":"lab-1","user":"deploy"},"remote_command":"tmux new -A -s build"}
 ```
 
 The document is at most 32 KiB and 64 components, with 24 `kv` rows, 32 `list`
@@ -737,6 +738,45 @@ keyboard focus, at most once per streak of clicks and at most every 30 seconds
 per agent panel. It never carries text from the card, so a card cannot write into
 a terminal. An agent that ignores the line never reads the click; `listening` and
 `pending_clicks` in `list` and `inspect` say whether a click waits.
+
+## Connect an SSH terminal
+
+`open_terminal` opens an SSH terminal panel for the person in the caller's
+workspace, beside the calling agent panel, and does not take keyboard focus. It
+answers `{"status":"opened","panel_id":"<returned id>"}`. The agent passes one
+route and one optional command:
+
+```json
+{"operation":"open_terminal","ssh":{"host":"lab-1","user":"deploy","port":2222},
+ "remote_command":"tmux new -A -s build","title":"lab-1 build"}
+```
+
+Horizon builds the `ssh` command line itself: the host, the port and the
+command, and `-t` when `remote_command` is present, so a program such as
+`tmux new -A -s build` gets a terminal. The route holds `host`, optional `user`
+and optional `port`, and nothing else. An agent passes no ssh option, no
+identity file, no extra argument and no environment.
+
+`host` and `user` are normalised like the route of a Device viewer: letters,
+digits, `.`, `_` and `-`, plus `:` in `host` for IPv6, and no leading `-`, no
+whitespace and no control character. `port` is 1 to 65535. A violation is
+`invalid_ssh_route`, and the message names the field. `remote_command` is one
+line of letters, digits, spaces and `. _ : / , = @ + -`, at most 512 characters,
+without a leading `-`: a quote, `;`, `&`, `|`, `$`, a backtick, `<`, `>`, `(`,
+`)`, a backslash, a newline or any other control character is
+`invalid_remote_command`. `title` is one line of at most 80 characters and
+defaults to `user@host`.
+
+One agent panel opens at most eight terminals in one Horizon run
+(`too_many_terminals`); closing a terminal does not free its place. A terminal
+that Horizon cannot open is `terminal_unavailable`. The titlebar of a panel
+opened this way carries the mark `opened by <agent>`, which is saved with the
+panel and comes back after a restart.
+
+The panel is an ordinary SSH terminal afterwards: the person types in it and
+closes it. No operation of `block_panel` reads it, writes to it or closes it.
+The agent chooses the host and the command, the host-key prompt and the login are
+the person's, and tell the person on a card what the terminal is for.
 
 Every operation needs the identity that Horizon injects into an agent panel;
 a caller without it gets `caller_unavailable`. A request expires before dispatch

@@ -152,6 +152,18 @@ impl HorizonApp {
                 Some(self.change_card(panel_id, *visible, actor, &request.actor, ctx))
             }
             Operation::Close { panel_id } => Some(self.close_card(panel_id, actor, &request.actor, ctx)),
+            Operation::OpenTerminal {
+                ssh,
+                remote_command,
+                title,
+            } => Some(self.open_terminal(
+                ssh,
+                remote_command.as_deref(),
+                title.as_deref(),
+                actor,
+                &request.actor,
+                ctx,
+            )),
         }
     }
 

@@ -140,6 +140,22 @@ boundary pages went away with their features.
     them; a browser that refused the folder, or a Firefox older than its download
     events, saves without reporting; a panel that shares a browser profile shares
     that profile's folder; a canceled download can leave a partial file.
+- [`agent-terminal-open`](trust-boundaries/agent-terminal-open.md)
+  - Untrusted: the host, the user, the port, the remote command and the title
+    that an agent sends to `open_terminal`.
+  - Guarantees: the route is an object with three fields and refuses every other
+    field, so no identity file, proxy or ssh option arrives; a host and a user
+    pass the same label check as a Device viewer route, a port is 1 to 65535, and
+    a remote command is one trimmed line of 512 characters from a fixed set with
+    no leading `-`; the same check runs in the MCP server and again in the UI;
+    Horizon builds the argv itself with `-t` for a remote command and the command
+    last, and the mark in the titlebar is Horizon's own text, saved with the
+    panel; one agent panel opens at most eight terminals in one run.
+  - Does not guarantee: the agent chooses the host and the command, so the
+    command runs with the account the person logs in as; the host key question
+    and the login wait for the person in that terminal; the text the person types
+    there leaves this computer; and the panel is an ordinary SSH terminal
+    afterwards that no operation of `block_panel` reads or changes.
 
 ## Follow-up work
 

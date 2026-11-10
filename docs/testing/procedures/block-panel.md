@@ -22,7 +22,9 @@ of an agent, and that Horizon wakes an idle agent for a click. The last task
 checks the drawn look of the card in both themes, its fitted height, the
 scrolling of a card that is shorter than its content, the frame that a card fits
 for its own notices, the selected row of a card without its agent, and the press
-of a button at a low canvas zoom.
+of a button at a low canvas zoom. The last tasks check that an agent can open an
+SSH terminal panel for the person: the checked route, each refusal, the keyboard
+focus, the mark of the agent that opened it, and the mark after a restart.
 
 ## 2. Applicability
 
@@ -615,6 +617,115 @@ every step on the fixture display that the native VNC Device panel shows.
    Result: The first update drops the selection of the row that is gone, and the
    second update selects `size.cx32` again, so `selected` is `["size.cx32"]`.
 
+### 5.19 B19 — Open an SSH terminal for the person
+
+No SSH server is necessary for this task. Use a loopback address with a port
+where no server listens: `ssh` fails to connect at once, and the panel stays.
+
+1. Put the keyboard focus in the terminal of Agent A. Then, in client A, call
+   `block_panel` with:
+
+   ```json
+   {"operation":"open_terminal","ssh":{"host":"127.0.0.1","port":2222},
+    "remote_command":"tmux new -A -s build"}
+   ```
+
+   Result: The answer has `status: opened` and `panel_id` `<terminal>`. The live
+   view shows a new SSH panel named `127.0.0.1` beside the panel of Agent A. The
+   panel says that `ssh` could not connect, and the answer is not a refusal.
+
+2. Examine the keyboard focus on the fixture desktop.
+
+   Result: The cursor is still in the terminal of Agent A. The new panel did not
+   take the keyboard.
+
+3. Find the `ssh` child of the fixture Horizon process, and read its command
+   line:
+
+   ```sh
+   ps -o pid=,args= -C ssh
+   ```
+
+   Result: The line whose parent is the fixture Horizon PID holds `-p 2222`,
+   `-t`, `127.0.0.1` and `tmux new -A -s build` as its last argument. The line
+   holds no other `-o` option than the two keepalive options and no `-i`, `-J`
+   or `-L`.
+
+4. In client A, call `block_panel` with
+   `{"operation":"open_terminal","ssh":{"host":"127.0.0.1","user":"deploy"},"title":"build box"}`.
+
+   Result: The answer has `status: opened`. The new panel is named `build box`.
+   Its `ssh` line holds no `-t`, because the request has no remote command.
+
+5. In client A, call `block_panel` with `{"operation":"list"}`.
+
+   Result: The list holds only cards. The two terminals are not in it.
+
+### 5.20 B20 — Refuse a route or a command that is not plain
+
+1. In client A, call `block_panel` with each of these requests:
+
+   ```json
+   {"operation":"open_terminal","ssh":{"host":"-oProxyCommand=id"}}
+   {"operation":"open_terminal","ssh":{"host":"lab 1"}}
+   {"operation":"open_terminal","ssh":{"host":"127.0.0.1","user":"-L2222"}}
+   {"operation":"open_terminal","ssh":{"host":"127.0.0.1","port":0}}
+   {"operation":"open_terminal","ssh":{"host":"127.0.0.1","remote_command":"tmux new; id"}}
+   {"operation":"open_terminal","ssh":{"host":"127.0.0.1"},"remote_command":"-oProxyCommand=id"}
+   {"operation":"open_terminal","ssh":{"host":"127.0.0.1"},"remote_command":"echo $HOME"}
+   ```
+
+   Result: Each of the first four answers `status: failed` with
+   `code: invalid_ssh_route`, and the message names `ssh.host`, `ssh.user` or
+   `ssh.port`. Each of the last three answers `code: invalid_remote_command`,
+   and the message names `remote_command`.
+
+2. Examine the live view.
+
+   Result: The workspace holds the two terminals of B19 and no other panel. A
+   refused request opens no panel.
+
+3. In client A, call `block_panel` with
+   `{"operation":"open_terminal","ssh":{"host":"127.0.0.1","identity_file":"/home/peters/.ssh/id_ed25519"}}`.
+
+   Result: The call fails before Horizon reads it: the `ssh` object has no such
+   field.
+
+### 5.21 B21 — The mark of the agent that opened the terminal
+
+1. Examine the titlebar of the first terminal of B19 in the live view.
+
+   Result: A chip at the right of the title says `opened by Codex`, because the
+   fixture gives Agent A the kind `codex`.
+
+2. Put the keyboard focus in the terminal, type `echo hi` and press Enter.
+
+   Result: The text reaches the terminal. The chip stays.
+
+3. Open a terminal of the person from the sidebar picker.
+
+   Result: Its titlebar holds no such chip.
+
+4. Close the terminal that holds the mark from its titlebar.
+
+   Result: The panel leaves the workspace. No answer of `block_panel` names it
+   again.
+
+### 5.22 B22 — See the marked terminal again after a restart
+
+1. Close the fixture Horizon normally, then start it again on the same state
+   with `--reuse-state --resume-session`, as in B07.
+
+2. From your agent panel, call `device_panel` with
+   `{"operation":"create","endpoint":"<new vnc_address>"}` and inspect it.
+
+   Result: The live view shows the workspace with the remaining terminal in it.
+
+3. Examine the titlebar of that terminal.
+
+   Result: The chip still says `opened by Codex`. The mark came back with the
+   saved panel.
+
 ## 6. Pass criteria
 
 - B01: The card appears in the workspace of the calling agent, at revision 1,
@@ -652,6 +763,15 @@ every step on the fixture display that the native VNC Device panel shows.
 - B18: A row that the document marks as selected draws as selected, travels with
   the next click until the person selects another row, and comes back after an
   update that keeps its row.
+- B19: A checked route opens an SSH panel beside the caller, without keyboard
+  focus, and its `ssh` line holds `-t` and the remote command only when the
+  request holds a command. The terminal is not a card.
+- B20: Each route and command that is not plain is refused with its typed code
+  and a message that names the field, and no panel is opened.
+- B21: The titlebar of an opened terminal says `opened by` and the agent name,
+  the person can type in the panel, a panel that the person opened holds no such
+  chip, and the person can close the panel.
+- B22: The mark returns with the terminal after a restart.
 
 ## 7. Cleanup
 

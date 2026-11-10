@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use horizon_browser_control::block::parse_document;
 use horizon_browser_control::manifest::block::{self, Operation, Outcome};
+use horizon_browser_control::manifest::block_terminal;
 
 use super::BrowserController;
 
@@ -24,6 +25,9 @@ impl BrowserController {
             ));
         }
         if let Some(refusal) = refused_document(&operation) {
+            return Ok(refusal);
+        }
+        if let Some(refusal) = refused_terminal(&operation) {
             return Ok(refusal);
         }
         // A `next_click` holds its request open for the wait it asks for, so
@@ -62,7 +66,8 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::Inspect { .. }
         | Operation::NextClick { .. }
         | Operation::Visibility { .. }
-        | Operation::Close { .. } => {
+        | Operation::Close { .. }
+        | Operation::OpenTerminal { .. } => {
             return None;
         }
     };
@@ -70,4 +75,19 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
     parse_document(&encoded)
         .err()
         .map(|error| Outcome::failed(error.code(), &error.to_string()))
+}
+
+/// The route and the remote command of an `open_terminal`, checked before the
+/// queue holds them: the answer names the field at once and no request file is
+/// written for a route that Horizon would refuse.
+fn refused_terminal(operation: &Operation) -> Option<Outcome> {
+    let Operation::OpenTerminal {
+        ssh, remote_command, ..
+    } = operation
+    else {
+        return None;
+    };
+    block_terminal::check(ssh, remote_command.as_deref())
+        .err()
+        .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }

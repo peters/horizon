@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub use config_parser::{DiscoveredSshHost, discover_ssh_hosts};
 pub use connection_status::SshConnectionStatus;
 
+use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SshConnection {
@@ -19,6 +21,28 @@ pub struct SshConnection {
 }
 
 impl SshConnection {
+    /// The connection of a terminal that an agent asked Horizon to open with
+    /// the `open_terminal` operation of `block_panel`.
+    /// Only the three checked route fields are used, and `-t` is added when a
+    /// remote command needs a terminal. An agent supplies no option, no
+    /// identity file, no proxy and no environment, so this is the whole input
+    /// of the command line below.
+    #[must_use]
+    pub fn for_agent_terminal(terminal: &CheckedTerminal) -> Self {
+        Self {
+            host: terminal.host.clone(),
+            port: terminal.port,
+            user: terminal.user.clone(),
+            remote_command: terminal.remote_command.clone(),
+            extra_args: if terminal.needs_tty() {
+                vec!["-t".to_string()]
+            } else {
+                Vec::new()
+            },
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub fn is_valid(&self) -> bool {
         !self.host.trim().is_empty()
@@ -129,6 +153,64 @@ fn expand_tilde(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::SshConnection;
+    use horizon_browser_control::manifest::block_terminal::{self, TerminalRoute};
+
+    fn agent_terminal(host: &str, user: Option<&str>, port: Option<i64>, command: Option<&str>) -> Vec<String> {
+        let route = TerminalRoute {
+            host: host.into(),
+            user: user.map(str::to_string),
+            port,
+        };
+        let checked = block_terminal::check(&route, command).expect("the route and command are accepted");
+        SshConnection::for_agent_terminal(&checked).to_command_args()
+    }
+
+    #[test]
+    fn an_agent_terminal_runs_exactly_the_route_and_its_command() {
+        assert_eq!(
+            agent_terminal("lab-1", None, None, None),
+            vec![
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "lab-1".to_string(),
+            ]
+        );
+        assert_eq!(
+            agent_terminal("lab-1", Some("deploy"), Some(2222), None),
+            vec![
+                "-p".to_string(),
+                "2222".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=15".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=1".to_string(),
+                "deploy@lab-1".to_string(),
+            ],
+            "the target is one argument, so no field can split into another"
+        );
+        let args = agent_terminal("lab-1", Some("deploy"), Some(2222), Some("tmux new -A -s build"));
+        assert!(
+            args.iter().any(|argument| argument == "-t"),
+            "a remote command needs a terminal: {args:?}"
+        );
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("tmux new -A -s build"),
+            "the command is the last argument and stays one argument: {args:?}"
+        );
+        assert_eq!(
+            args.iter().position(|argument| argument == "-t"),
+            Some(args.len() - 3),
+            "-t is an option of this connection, before the target: {args:?}"
+        );
+        assert_eq!(
+            args.iter().filter(|argument| argument.starts_with("-o")).count(),
+            2,
+            "an agent adds no ssh option: {args:?}"
+        );
+    }
 
     #[test]
     fn display_label_prefers_user_when_available() {

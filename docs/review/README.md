@@ -65,7 +65,8 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    action. Boundaries: `browser-webauthn`, `browser-semantic-actions`,
    `browser-downloads`.
 3. **Agent-drawn UI** — an agent draws text of its own making inside the
-   person's workspace. Boundaries: `block-panel`.
+   person's workspace, and it asks Horizon to open a terminal for the person.
+   Boundaries: `block-panel`, `agent-terminal-open`.
 
 ## Checks
 

@@ -115,15 +115,23 @@ fn the_updated_label_is_formatted_once_per_document() {
 fn the_chip_names_the_agent_and_says_when_it_listens() {
     let listening = CardChip::for_panel(PanelKind::Claude, true, true);
     assert_eq!(listening.state, ChipState::Listening);
-    assert_eq!(listening.spoken(), (" listens", "Claude"));
+    assert_eq!(listening.spoken(), ("", " listens", "Claude"));
 
     let present = CardChip::for_panel(PanelKind::Claude, false, true);
     assert_eq!(present.state, ChipState::Present);
-    assert_eq!(present.spoken(), ("", "Claude"));
+    assert_eq!(present.spoken(), ("", "", "Claude"));
 
     let gone = CardChip::for_panel(PanelKind::Claude, false, false);
     assert_eq!(gone.state, ChipState::Gone);
-    assert_eq!(gone.spoken(), ("", "No agent"), "a gone owner is not named");
+    assert_eq!(gone.spoken(), ("", "", "No agent"), "a gone owner is not named");
+
+    let opened = CardChip::opened_by("Claude");
+    assert_eq!(opened.state, ChipState::OpenedBy);
+    assert_eq!(
+        opened.spoken(),
+        ("opened by ", "", "Claude"),
+        "a person reads the mark as words, not as a raw field"
+    );
 }
 
 #[test]

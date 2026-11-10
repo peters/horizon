@@ -16,7 +16,7 @@ agent panel that Horizon launched and to its workspace. A caller without that
 panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
-`next_click`, `visibility` and `close`.
+`next_click`, `visibility`, `close` and `open_terminal`.
 
 ## Create a card
 
@@ -101,6 +101,47 @@ need from `inspect` before you close it.
 ```json
 {"operation": "close", "panel_id": "<panel_id>"}
 ```
+
+## Connect an SSH terminal
+
+`open_terminal` opens an SSH terminal panel for the person. The panel goes in the
+calling workspace, beside your agent panel, and it does not take keyboard focus.
+Use it when the person needs a shell on a machine that you set up.
+
+```json
+{"operation": "open_terminal",
+ "ssh": {"host": "lab-1", "user": "deploy", "port": 2222},
+ "remote_command": "tmux new -A -s build", "title": "lab-1 build"}
+```
+
+The answer is `opened` with the `panel_id` of the terminal.
+
+Give the person a session that survives a disconnect: pass a remote command that
+attaches or creates a terminal multiplexer session. Horizon adds `-t`, so the
+program gets a terminal:
+
+```
+ssh lab-1 -t tmux new -A -s build
+```
+
+- `ssh.host` (required) and `ssh.user` take letters, digits, `.`, `_` and `-`,
+  and `:` in the host for an IPv6 address. A label cannot start with `-` and
+  holds no space and no control character.
+- `ssh.port` is 1 to 65535. Omit it to use the SSH configuration of the person.
+- `remote_command` is one line of letters, digits, spaces and the characters
+  `.`, `_`, `:`, `/`, `,`, `=`, `@`, `+` and `-`, at most 512 characters. It
+  cannot start with `-`. Do not use a quote, `;`, `&`, `|`, `$`, a backtick,
+  `<`, `>`, `(`, `)`, a backslash or a line break.
+- `title` is one line of at most 80 characters. It defaults to `user@host`.
+
+You can pass no other field. Horizon builds the `ssh` command line itself, so
+you cannot add an ssh option, an identity file, an argument or an environment.
+
+Tell the person on a card what the terminal is for, and what to do in it. The
+titlebar of the panel carries the mark `opened by <agent>`, so the person knows
+that you opened it. The panel is an ordinary SSH terminal after that: the person
+types in it and closes it. You cannot read it, write to it or close it with this
+tool.
 
 ## The document
 
@@ -252,6 +293,14 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - `too_many_cards`: the agent owns eight cards in this workspace. Close one.
 - `no_cards`: an agent without a card in this workspace asked `next_click`
   without `panel_id`. Call `create` first.
+- `invalid_ssh_route`: the host, the user or the port of `open_terminal` breaks a
+  rule. The message names the field.
+- `invalid_remote_command`: the remote command breaks a rule. The message names
+  the field.
+- `too_many_terminals`: the agent panel opened eight terminals in this Horizon
+  run. Closing a terminal does not free its place; ask the person to open the
+  next one.
+- `terminal_unavailable`: Horizon could not open the terminal panel.
 - `request_expired`: Horizon did not apply the request in 10 seconds, or in the
   10 seconds and the wait that a `next_click` asks for. Call `list` before you
   retry, because the change may have completed.
@@ -273,3 +322,6 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - A card is not saved as a file; its document lives in the panel and comes back
   after a restart of Horizon.
 - Only the agent that created a card can change it.
+- A terminal that you open with `open_terminal` is not a card. It has no
+  document, no click and no `next_click`, and this tool cannot change it after
+  it is open.

@@ -124,6 +124,7 @@ impl HorizonApp {
             device_claim: super::device_requests::claim::DeviceClaimState::default(),
             block_claim: super::block_requests::BlockClaimState::default(),
             block_clicks: super::block_clicks::BlockClickState::default(),
+            agent_terminals: super::block_terminals::AgentTerminals::default(),
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),

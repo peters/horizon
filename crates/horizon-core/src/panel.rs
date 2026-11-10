@@ -189,6 +189,9 @@ pub struct PanelOptions {
     /// A command line the terminal's program runs under, such as a systemd scope
     /// that holds every process the program starts; empty for none.
     pub launch_wrapper: Vec<String>,
+    /// The agent that opened this panel for the person, as Horizon names that
+    /// agent; `None` for a panel the person made.
+    pub opened_by: Option<String>,
 }
 
 impl Default for PanelOptions {
@@ -224,6 +227,7 @@ impl Default for PanelOptions {
             restore_as_disconnected_snapshot: false,
             is_restore: false,
             launch_wrapper: Vec::new(),
+            opened_by: None,
         }
     }
 }
@@ -278,6 +282,10 @@ pub struct Panel {
     pub launch_cwd: Option<PathBuf>,
     /// Structured SSH connection metadata, when this is an SSH panel.
     pub ssh_connection: Option<SshConnection>,
+    /// The agent that opened this panel for the person through
+    /// `open_terminal`, as Horizon names that agent. The titlebar marks such a
+    /// panel so a person can tell it from one they opened themselves.
+    pub(crate) opened_by: Option<String>,
     /// UI-facing SSH connection status for panels that remain visible after exit.
     pub ssh_status: Option<SshConnectionStatus>,
 }
@@ -316,6 +324,13 @@ impl Panel {
     #[must_use]
     pub fn ssh_status(&self) -> Option<SshConnectionStatus> {
         self.ssh_status
+    }
+
+    /// The agent that opened this panel for the person, as Horizon names it, or
+    /// `None` for a panel the person made.
+    #[must_use]
+    pub fn opened_by(&self) -> Option<&str> {
+        self.opened_by.as_deref()
     }
 
     #[must_use]
@@ -452,6 +467,7 @@ impl Panel {
             launch_args: Vec::new(),
             launch_cwd: None,
             ssh_connection: None,
+            opened_by: None,
             ssh_status: None,
         }
     }
@@ -848,6 +864,7 @@ mod tests {
             launch_args: Vec::new(),
             launch_cwd: None,
             ssh_connection: None,
+            opened_by: None,
             ssh_status: None,
         }
     }

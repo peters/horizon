@@ -4,7 +4,8 @@
 //! document, `update` with a new one, and `list`, `inspect`, `visibility` and
 //! `close` around it. A person's clicks on the card reach its owner through
 //! `next_click`, a request the host keeps open until a click arrives or the
-//! wait ends. A request travels the path of a Device panel request: a
+//! wait ends. `open_terminal` asks for an SSH terminal instead of a card, which
+//! the host opens for the person beside the calling agent panel. A request travels the path of a Device panel request: a
 //! bounded file under `runtime/block-panel-requests`, claimed by this host's
 //! UI on the coordination worker, applied on the UI thread, and answered with
 //! one result file that only the asking actor and its host consume.
@@ -23,7 +24,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentIdentity, ManifestLock, now_millis,
+    AgentIdentity, ManifestLock,
+    block_terminal::TerminalRoute,
+    now_millis,
     request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json},
 };
 use crate::{
@@ -33,6 +36,9 @@ use crate::{
 
 /// Most cards one agent may own in one workspace at a time.
 pub const MAX_CARDS_PER_OWNER: usize = 8;
+/// Most SSH terminals one agent panel may open through `open_terminal` in one
+/// Horizon run. Closing a terminal does not free the allowance of the run.
+pub const MAX_TERMINALS_PER_OWNER: usize = 8;
 /// Largest serialized request accepted. A document is smaller than this, so a
 /// queue of them stays bounded whatever a caller sends.
 const MAX_REQUEST_BYTES: usize = 96 * 1024;
@@ -88,6 +94,22 @@ pub enum Operation {
     Visibility { panel_id: String, visible: bool },
     /// Close a card the caller owns. The document is dropped with it.
     Close { panel_id: String },
+    /// Open an SSH terminal panel beside the caller, in the caller's workspace,
+    /// without taking keyboard focus. Horizon builds the `ssh` command line
+    /// from the route and adds `-t` for a remote command; the agent passes no
+    /// other field, so it can add no ssh option and no argument.
+    OpenTerminal {
+        /// The SSH host to reach: host, user and port only.
+        ssh: TerminalRoute,
+        /// One line to run on the host after login, such as
+        /// `tmux new -A -s build`. Letters, digits, spaces and `. _ : / , = @ + -`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_command: Option<String>,
+        /// One line, at most 80 characters; the host trims it. Defaults to
+        /// `user@host`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
 }
 
 /// Public card input. Model providers refuse a tool whose input schema has
@@ -164,6 +186,10 @@ pub enum Outcome {
         visible: bool,
     },
     Closed {
+        panel_id: String,
+    },
+    /// An SSH terminal panel that the caller now has in its workspace.
+    Opened {
         panel_id: String,
     },
     Failed {
@@ -462,6 +488,40 @@ mod tests {
             schema.to_string().contains("next_click"),
             "the operations are described"
         );
+        assert!(
+            schema.to_string().contains("open_terminal"),
+            "the terminal operation is described"
+        );
+    }
+
+    #[test]
+    fn open_terminal_needs_one_route_and_answers_one_panel_id() {
+        let sent = serde_json::json!({
+            "operation": "open_terminal",
+            "ssh": {"host": "lab-1"}
+        });
+        let Operation::OpenTerminal {
+            ssh,
+            remote_command,
+            title,
+        } = serde_json::from_value::<BlockPanelInput>(sent)
+            .expect("public input")
+            .into_operation()
+        else {
+            panic!("open_terminal did not parse as OpenTerminal");
+        };
+        assert_eq!(ssh.host, "lab-1");
+        assert_eq!(ssh.user, None);
+        assert_eq!(ssh.port, None);
+        assert_eq!(remote_command, None);
+        assert_eq!(title, None);
+
+        let opened = serde_json::to_value(Outcome::Opened {
+            panel_id: "panel".into(),
+        })
+        .expect("serialize");
+        assert_eq!(opened["status"], serde_json::json!("opened"));
+        assert_eq!(opened["panel_id"], serde_json::json!("panel"));
     }
 
     #[test]
@@ -488,6 +548,14 @@ mod tests {
                 "visibility",
             ),
             (serde_json::json!({"operation": "close", "panel_id": "p"}), "close"),
+            (
+                serde_json::json!({
+                    "operation": "open_terminal",
+                    "ssh": {"host": "lab-1", "user": "deploy", "port": 2222},
+                    "remote_command": "tmux new -A -s build"
+                }),
+                "open_terminal",
+            ),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
             let name = match parsed {
@@ -498,6 +566,7 @@ mod tests {
                 Operation::NextClick { .. } => "next_click",
                 Operation::Visibility { .. } => "visibility",
                 Operation::Close { .. } => "close",
+                Operation::OpenTerminal { .. } => "open_terminal",
             };
             assert_eq!(name, expected);
         }
@@ -515,6 +584,15 @@ mod tests {
         }
         let unknown_operation = serde_json::json!({"operation": "wait_for_click", "panel_id": "p"});
         assert!(serde_json::from_value::<Operation>(unknown_operation).is_err());
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "open_terminal",
+                "ssh": {"host": "lab-1"},
+                "command": "tmux new"
+            }))
+            .is_err(),
+            "open_terminal takes no free-form command, option or argument"
+        );
         let any_card = serde_json::from_value::<Operation>(serde_json::json!({"operation": "next_click"}))
             .expect("a wait without a card parses");
         assert_eq!(

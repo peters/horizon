@@ -125,6 +125,7 @@ impl StaticPanelSeed {
             launch_args: Vec::new(),
             launch_cwd,
             ssh_connection: None,
+            opened_by: None,
             ssh_status: None,
         }
     }

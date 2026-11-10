@@ -141,6 +141,11 @@ pub struct PanelState {
     /// assigned and the agent that owns it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block: Option<crate::BlockPanelState>,
+    /// The agent that opened this panel for the person in its workspace, as
+    /// Horizon names that agent, so the titlebar can mark it after a restart.
+    /// Only `open_terminal` sets it; a panel the person made keeps `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_by: Option<String>,
 }
 
 impl PanelState {
@@ -236,6 +241,7 @@ impl PanelState {
             browser_profile: None,
             browser_url: None,
             block: None,
+            opened_by: None,
         }
     }
 
@@ -305,6 +311,7 @@ impl PanelState {
             is_restore: true,
             launch_wrapper: Vec::new(),
             block: self.block.clone(),
+            opened_by: self.opened_by.clone(),
         }
     }
 }
@@ -333,6 +340,7 @@ impl Default for PanelState {
             browser_profile: None,
             browser_url: None,
             block: None,
+            opened_by: None,
         }
     }
 }

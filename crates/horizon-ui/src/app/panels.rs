@@ -19,6 +19,7 @@ pub(super) use super::panel_chrome::{
 use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut_conflicts};
 use super::view::canvas_scene_transform;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RenameEditAction};
+use crate::block_widget::CardChip;
 
 mod resize;
 
@@ -654,6 +655,9 @@ impl HorizonApp {
                     panel.map(|p| p.display_title())
                 };
                 let session_id = panel.and_then(|p| p.session_id());
+                // The mark of a terminal that an agent opened for the person.
+                // A card keeps its own state chip instead.
+                let opened_by = panel.and_then(Panel::opened_by);
 
                 let chrome = PanelChrome {
                     panel_id,
@@ -670,7 +674,9 @@ impl HorizonApp {
                     workspace_accent: snapshot.workspace_accent,
                     ssh_status: snapshot.ssh_status,
                     session_id,
-                    card: self.card_titlebar_chip(panel_id),
+                    card: self
+                        .card_titlebar_chip(panel_id)
+                        .or_else(|| opened_by.map(CardChip::opened_by)),
                 };
                 paint_panel_chrome(ui, chrome);
 
