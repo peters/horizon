@@ -387,6 +387,9 @@ impl HorizonApp {
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
+        // The pass that drew a card measured its content; the height that fits
+        // it follows before the board is saved.
+        self.fit_block_cards(ctx);
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
         self.render_remote_hosts_overlay(ctx);

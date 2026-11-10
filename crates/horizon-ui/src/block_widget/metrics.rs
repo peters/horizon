@@ -155,7 +155,7 @@ pub(super) fn count(value: usize) -> f32 {
 
 /// Width of a new card.
 pub(super) const CARD_WIDTH: f32 = 420.0;
-/// Smallest height of a new card.
+/// Smallest height of a card that fits its content.
 pub(super) const CARD_MIN_HEIGHT: f32 = 220.0;
-/// Largest height of a new card.
-pub(super) const CARD_MAX_HEIGHT: f32 = 720.0;
+/// Largest height of a card that fits its content.
+pub(super) const CARD_MAX_HEIGHT: f32 = 900.0;

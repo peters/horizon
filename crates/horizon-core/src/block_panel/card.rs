@@ -13,7 +13,8 @@ use super::clicks::{ClickQueue, PendingClick};
 use super::clock::updated_label;
 
 /// A card's runtime state: the clicks it holds for its agent, the row each
-/// list has selected, and whether a wake line already went out.
+/// list has selected, the height its body measured, and whether a wake line
+/// already went out.
 #[derive(Clone, Debug, Default)]
 pub struct CardRuntime {
     clicks: ClickQueue,
@@ -25,6 +26,12 @@ pub struct CardRuntime {
     /// instead of formatting a clock time, so a card never builds the text it
     /// draws again.
     updated: Option<(u64, i64, String)>,
+    /// The height the body content needed in the last pass, when one ran.
+    measured_content_height: Option<f32>,
+    /// The document revision whose measured height the host already applied.
+    fitted_revision: Option<u64>,
+    /// The person resized this card by hand, so its size outranks its content.
+    hand_resized: bool,
 }
 
 impl CardRuntime {
@@ -65,6 +72,44 @@ impl CardRuntime {
             self.updated = Some((revision, updated_at_millis, updated_label(updated_at_millis)));
         }
         self.updated.as_ref().map_or("", |(_, _, label)| label.as_str())
+    }
+
+    /// Records the height the body of this card needed in the pass that drew
+    /// it. A frame learns it only after the body laid its content out.
+    pub fn observe_content_height(&mut self, height: f32) {
+        self.measured_content_height = Some(height);
+    }
+
+    /// The content height of the last pass, when one drew this card.
+    #[must_use]
+    pub fn measured_content_height(&self) -> Option<f32> {
+        self.measured_content_height
+    }
+
+    /// Whether the host must still give this card the height its content of
+    /// `revision` needs. One fit per revision: a second pass over the same
+    /// document never resizes the card again, so no frame loop starts.
+    #[must_use]
+    pub fn needs_content_fit(&self, revision: u64) -> bool {
+        !self.hand_resized && self.measured_content_height.is_some() && self.fitted_revision != Some(revision)
+    }
+
+    /// Records that the host gave the card the height its content of
+    /// `revision` needs.
+    pub fn mark_content_fit(&mut self, revision: u64) {
+        self.fitted_revision = Some(revision);
+    }
+
+    /// Whether the person resized this card by hand.
+    #[must_use]
+    pub fn hand_resized(&self) -> bool {
+        self.hand_resized
+    }
+
+    /// Records that the person resized this card by hand: from then on the
+    /// card keeps the size that person chose, whatever its document needs.
+    pub fn mark_hand_resized(&mut self) {
+        self.hand_resized = true;
     }
 
     /// The row selected in component `component`.
@@ -242,6 +287,27 @@ mod tests {
         runtime.retain_selection(&document(&["size.cx22"]));
         assert_eq!(runtime.selected(1), None, "a removed row clears the selection");
         assert!(runtime.selected_ids(&document(&["size.cx22"])).is_empty());
+    }
+
+    #[test]
+    fn a_card_fits_its_content_once_per_revision_until_a_person_resizes_it() {
+        let mut runtime = CardRuntime::default();
+        assert!(!runtime.needs_content_fit(1), "no pass measured the content yet");
+
+        runtime.observe_content_height(415.0);
+        assert_eq!(runtime.measured_content_height(), Some(415.0));
+        assert!(runtime.needs_content_fit(1), "the first pass asks for one fit");
+
+        runtime.mark_content_fit(1);
+        assert!(!runtime.needs_content_fit(1), "the same revision never fits twice");
+        assert!(runtime.needs_content_fit(2), "a new document fits again");
+
+        runtime.mark_hand_resized();
+        assert!(runtime.hand_resized());
+        assert!(
+            !runtime.needs_content_fit(3),
+            "a card that the person resized by hand keeps its size"
+        );
     }
 
     #[test]

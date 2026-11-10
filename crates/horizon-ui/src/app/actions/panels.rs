@@ -38,14 +38,17 @@ impl HorizonApp {
         Ok(id)
     }
 
+    /// Creates a panel that an agent asked for in its own workspace.
+    ///
+    /// The panel takes a free place, never on top of another panel, nearest to
+    /// `beside`: the agent panel itself, or the agent's previous card.
     pub(in crate::app) fn create_agent_child_panel(
         &mut self,
         options: PanelOptions,
         workspace: WorkspaceId,
-        actor: PanelId,
+        beside: PanelId,
     ) -> horizon_core::Result<PanelId> {
-        let _ = actor;
-        self.board.create_panel(options, workspace)
+        self.board.create_panel_beside(options, workspace, beside)
     }
 
     /// Reveal a panel the same way a sidebar panel-row click does: detached

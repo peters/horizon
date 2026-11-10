@@ -26,6 +26,7 @@ mod canvas;
 mod canvas_drag;
 mod canvas_gesture;
 mod canvas_scroll;
+mod card_fit;
 mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;

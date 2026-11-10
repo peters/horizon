@@ -7,7 +7,7 @@ use horizon_core::{CardRuntime, PanelKind};
 
 use super::{CardFrames, Owner, bounds_of, every_component};
 use crate::block_widget::chip::{CardChip, ChipState};
-use crate::block_widget::{buttons, default_card_size, footer, primary_button};
+use crate::block_widget::{buttons, default_card_size, fitted_card_height, footer, primary_button};
 
 /// A card of one `buttons` component with the tones in `items`.
 fn buttons(items: Vec<Button>) -> BlockDocument {
@@ -148,7 +148,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     };
     let [width, height] = default_card_size(&small);
     assert!((width - 420.0).abs() < f32::EPSILON);
-    assert!(height > 220.0 && height < 720.0, "{height} fits the content");
+    assert!(height > 220.0 && height < 900.0, "{height} fits the content");
 
     let huge = BlockDocument {
         components: (0..16)
@@ -165,7 +165,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     };
     let [_, height] = default_card_size(&huge);
     assert!(
-        (height - 720.0).abs() < f32::EPSILON,
+        (height - 900.0).abs() < f32::EPSILON,
         "a long card stops at the ceiling"
     );
 }
@@ -176,5 +176,31 @@ fn the_card_size_of_a_document_does_not_depend_on_its_owner() {
     let first = default_card_size(&document);
     let second = default_card_size(&document);
     assert_eq!(first, second);
-    assert!(first[1] >= 220.0 && first[1] <= 720.0, "{first:?}");
+    assert!(first[1] >= 220.0 && first[1] <= 900.0, "{first:?}");
+}
+
+#[test]
+fn the_card_height_follows_the_measured_content_within_the_limits() {
+    use crate::block_widget::{CARD_CHROME_HEIGHT, CARD_HEIGHT_LIMITS};
+
+    let height = |content: f32, hand_resized: bool, current: f32| {
+        fitted_card_height(content, hand_resized, current, CARD_HEIGHT_LIMITS)
+    };
+
+    assert!(
+        (height(0.0, false, 500.0) - 220.0).abs() < f32::EPSILON,
+        "an empty body keeps the floor"
+    );
+    assert!(
+        (height(600.0, false, 220.0) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        "the content, its padding and the frame decide the height"
+    );
+    assert!(
+        (height(5_000.0, false, 220.0) - 900.0).abs() < f32::EPSILON,
+        "a long body stops at the ceiling"
+    );
+    assert!(
+        (height(600.0, true, 320.0) - 320.0).abs() < f32::EPSILON,
+        "a card that the person resized keeps that size"
+    );
 }

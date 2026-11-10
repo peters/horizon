@@ -86,6 +86,25 @@ impl Board {
         self.create_panel_with(opts, workspace, Panel::spawn)
     }
 
+    /// Create a panel inside a workspace that takes a free place beside the
+    /// panel `beside`, such as the agent panel that a card belongs to.
+    ///
+    /// The placement of [`Self::create_panel`] applies: the panel never covers
+    /// another panel of the workspace. `beside` only decides which free place
+    /// is taken when the workspace is not arranged by a preset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying panel cannot be spawned.
+    pub fn create_panel_beside(
+        &mut self,
+        opts: PanelOptions,
+        workspace: WorkspaceId,
+        beside: PanelId,
+    ) -> Result<PanelId> {
+        self.create_panel_with_layout(opts, workspace, Some(beside), Panel::spawn)
+    }
+
     pub(super) fn create_failed_restore_panel(
         &mut self,
         opts: PanelOptions,
@@ -103,13 +122,14 @@ impl Board {
         workspace: WorkspaceId,
         spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
     ) -> Result<PanelId> {
-        self.create_panel_with_layout(opts, workspace, spawn_panel)
+        self.create_panel_with_layout(opts, workspace, None, spawn_panel)
     }
 
     fn create_panel_with_layout(
         &mut self,
         mut opts: PanelOptions,
         workspace: WorkspaceId,
+        beside: Option<PanelId>,
         spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
     ) -> Result<PanelId> {
         let id = PanelId(self.next_panel_id);
@@ -130,8 +150,13 @@ impl Board {
             opts.cwd.clone_from(&ws.cwd);
         }
 
-        let layout_position = opts.position.unwrap_or_else(|| self.default_panel_position(workspace));
         let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
+        let layout_position = opts.position.unwrap_or_else(|| {
+            let beside = beside
+                .filter(|id| self.panel(*id).is_some_and(|panel| panel.workspace_id == workspace))
+                .and_then(|id| self.panel_bounds(id));
+            self.default_panel_position(workspace, layout_size, beside)
+        });
         let visible = opts.visible;
         let mut panel = spawn_panel(id, workspace, opts)?;
         panel.visible = visible;
@@ -343,7 +368,10 @@ impl Board {
         if let Some(layout) = target_layout {
             self.apply_workspace_layout(workspace_id, layout);
         } else {
-            let new_position = self.default_panel_position(workspace_id);
+            let size = self
+                .panel(panel_id)
+                .map_or(DEFAULT_PANEL_SIZE, |panel| panel.layout.size);
+            let new_position = self.default_panel_position(workspace_id, size, None);
             if let Some(panel) = self.panel_mut(panel_id) {
                 panel.move_to(new_position);
             }

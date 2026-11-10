@@ -1,6 +1,7 @@
 use crate::layout::{TILE_GAP, WS_INNER_PAD};
-use crate::panel::DEFAULT_PANEL_SIZE;
+use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 
+use super::super::arrangement::rects_overlap;
 use super::super::*;
 use super::editor_panel_options;
 
@@ -543,4 +544,110 @@ fn hidden_panels_leave_layout_and_focus_and_showing_focuses_them() {
     board.focus(second);
     assert!(board.panel(second).expect("second panel").visible);
     assert_eq!(board.focused, Some(second));
+}
+
+/// Two terminals and an agent panel, placed where a config, a saved session or
+/// a person's drag puts them: not on the default tile grid.
+fn off_grid_workspace(board: &mut Board) -> (WorkspaceId, PanelId) {
+    let workspace = board.create_workspace_at("off the grid", [0.0, 0.0]);
+    for (position, size) in [
+        ([40.0, 60.0], [550.0, 420.0]),
+        ([630.0, 60.0], [550.0, 420.0]),
+        ([1220.0, 60.0], [330.0, 440.0]),
+    ] {
+        board
+            .create_panel(
+                PanelOptions {
+                    position: Some(position),
+                    size: Some(size),
+                    ..editor_panel_options()
+                },
+                workspace,
+            )
+            .expect("a placed panel spawns");
+    }
+    let agent = board.workspace(workspace).expect("workspace").panels[2];
+    (workspace, agent)
+}
+
+/// A card panel, as the block request path creates one.
+fn card_panel_options(size: [f32; 2]) -> PanelOptions {
+    PanelOptions {
+        kind: PanelKind::Block,
+        size: Some(size),
+        ..PanelOptions::default()
+    }
+}
+
+/// Every pair of panels of a workspace whose rectangles overlap.
+fn overlapping_panels(board: &Board, workspace: WorkspaceId) -> Vec<(PanelId, PanelId)> {
+    let panels: Vec<(PanelId, [f32; 4])> = board
+        .workspace(workspace)
+        .expect("workspace")
+        .panels
+        .iter()
+        .filter_map(|id| board.panel(*id))
+        .map(|panel| {
+            let (position, size) = (panel.layout.position, panel.layout.size);
+            (
+                panel.id,
+                [position[0], position[1], position[0] + size[0], position[1] + size[1]],
+            )
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for (index, (left_id, left)) in panels.iter().enumerate() {
+        for (right_id, right) in &panels[index + 1..] {
+            if rects_overlap(*left, *right) {
+                pairs.push((*left_id, *right_id));
+            }
+        }
+    }
+    pairs
+}
+
+#[test]
+fn a_new_panel_takes_a_free_place_beside_off_grid_panels() {
+    let mut board = Board::new();
+    let (workspace, _agent) = off_grid_workspace(&mut board);
+
+    board
+        .create_panel(card_panel_options([420.0, 300.0]), workspace)
+        .expect("the new panel spawns");
+
+    assert_eq!(
+        overlapping_panels(&board, workspace),
+        Vec::new(),
+        "a panel that is placed by a config keeps its room"
+    );
+}
+
+#[test]
+fn three_cards_created_in_a_row_cover_no_panel() {
+    let mut board = Board::new();
+    let (workspace, agent) = off_grid_workspace(&mut board);
+
+    let mut cards = Vec::new();
+    for _ in 0..3 {
+        let beside = cards.last().copied().unwrap_or(agent);
+        let card = board
+            .create_panel_beside(card_panel_options([420.0, 500.0]), workspace, beside)
+            .expect("the card spawns");
+        cards.push(card);
+    }
+
+    assert_eq!(
+        overlapping_panels(&board, workspace),
+        Vec::new(),
+        "no card covers a panel"
+    );
+    let agent = board.panel(agent).expect("agent panel");
+    let first = board.panel(cards[0]).expect("first card");
+    assert!(
+        first.layout.position[0] >= agent.layout.position[0] + agent.layout.size[0]
+            || first.layout.position[1] >= agent.layout.position[1] + agent.layout.size[1],
+        "the first card takes a free place beside the agent panel: {:?} against {:?}",
+        first.layout.position,
+        agent.layout.position
+    );
 }

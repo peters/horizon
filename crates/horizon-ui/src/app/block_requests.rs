@@ -243,7 +243,8 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
+        let beside = self.new_card_beside(actor, owner);
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, beside) else {
             return Outcome::failed("panel_unavailable", "Horizon could not create a card in this workspace");
         };
         // Creating a card must not steal keyboard input from the caller.
@@ -360,6 +361,15 @@ impl HorizonApp {
         Outcome::Closed {
             panel_id: panel_id.to_owned(),
         }
+    }
+
+    /// The panel a new card of `owner` takes a free place beside: the card that
+    /// agent created last in this workspace, or the agent panel itself.
+    fn new_card_beside(&self, actor: ActorPanel, owner: &str) -> PanelId {
+        self.workspace_cards(actor.workspace_id)
+            .iter()
+            .rfind(|panel| card_owner(panel) == Some(owner))
+            .map_or(actor.panel_id, |panel| panel.id)
     }
 
     /// The cards of one workspace, in board order.

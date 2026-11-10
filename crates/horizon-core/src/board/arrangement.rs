@@ -246,9 +246,14 @@ impl Board {
         [right_edge, 40.0]
     }
 
-    pub(super) fn default_panel_position(&self, workspace: WorkspaceId) -> [f32; 2] {
+    pub(super) fn default_panel_position(
+        &self,
+        workspace: WorkspaceId,
+        size: [f32; 2],
+        beside: Option<[f32; 4]>,
+    ) -> [f32; 2] {
         if let Some(ws) = self.workspace(workspace) {
-            return self.first_free_tile_position(ws);
+            return self.free_tile_position(ws, size, beside);
         }
         tiled_panel_position([0.0, 0.0], 0)
     }
@@ -401,25 +406,47 @@ impl Board {
         }
     }
 
-    fn first_free_tile_position(&self, workspace: &Workspace) -> [f32; 2] {
-        let occupied: Vec<[f32; 2]> = workspace
+    /// The rectangle `[min_x, min_y, max_x, max_y]` that a panel covers.
+    pub(super) fn panel_bounds(&self, id: PanelId) -> Option<[f32; 4]> {
+        let panel = self.panel(id)?;
+        Some(panel_rect(panel.layout.position, panel.layout.size))
+    }
+
+    /// The tile a new panel of `size` fits in without covering another panel
+    /// of the workspace.
+    ///
+    /// A tile is free only when the whole rectangle of the new panel overlaps
+    /// no panel of the workspace. Comparing tile positions alone would report
+    /// a free tile for a panel that a config, a saved session, a preset or a
+    /// person's drag placed somewhere else than the default grid, and the new
+    /// panel would cover it.
+    ///
+    /// `beside` is the rectangle of the panel the new one belongs to, such as
+    /// the agent panel of a card. The nearest free tile to it is taken when
+    /// one is given; without one the first free tile in reading order wins.
+    fn free_tile_position(&self, workspace: &Workspace, size: [f32; 2], beside: Option<[f32; 4]>) -> [f32; 2] {
+        let origin = workspace.position;
+        let occupied: Vec<[f32; 4]> = workspace
             .panels
             .iter()
             .filter_map(|id| self.panel(*id))
-            .filter(|panel| panel.visible)
-            .map(|p| p.layout.position)
+            .map(|panel| panel_rect(panel.layout.position, panel.layout.size))
             .collect();
-
-        let origin = workspace.position;
-        let search_limit = occupied.len();
-        for index in 0..=search_limit {
-            let candidate = tiled_panel_position(origin, index);
-            if !position_occupied(&occupied, candidate) {
-                return candidate;
-            }
-        }
-
-        tiled_panel_position(origin, search_limit)
+        let tiles = free_tiles(origin, size, &occupied);
+        let Some(beside) = beside else {
+            return tiles
+                .first()
+                .copied()
+                .unwrap_or([origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]);
+        };
+        tiles
+            .iter()
+            .copied()
+            .min_by(|left, right| {
+                center_distance(beside, panel_rect(*left, size))
+                    .total_cmp(&center_distance(beside, panel_rect(*right, size)))
+            })
+            .unwrap_or([origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD])
     }
 
     /// Returns the visual frame rect `[min_x, min_y, max_x, max_y]` for a
@@ -506,10 +533,53 @@ fn grid_panel_size_from_content(content: [f32; 2], cols: usize, rows: usize) -> 
     [w, h]
 }
 
-fn position_occupied(positions: &[[f32; 2]], candidate: [f32; 2]) -> bool {
-    positions
-        .iter()
-        .any(|pos| (pos[0] - candidate[0]).abs() < 1.0 && (pos[1] - candidate[1]).abs() < 1.0)
+/// Most tile rows one placement walks, so an extreme coordinate cannot make
+/// the walk long.
+const MAX_TILE_ROWS: usize = 64;
+/// Most tile columns one placement walks, for the same reason.
+const MAX_TILE_COLUMNS: usize = 16;
+
+/// The rectangle of a panel at `position` with `size`.
+fn panel_rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] {
+    [position[0], position[1], position[0] + size[0], position[1] + size[1]]
+}
+
+/// The free tiles that fit a panel of `size`, in reading order.
+///
+/// The walk covers the tiles near the panels and ends with a place below every
+/// panel, which is free whatever the tiles above hold. It is bounded: a
+/// workspace holds few panels, so a coordinate that a saved board or a drag
+/// left at the edge of the f32 range cannot make the walk long.
+fn free_tiles(origin: [f32; 2], size: [f32; 2], occupied: &[[f32; 4]]) -> Vec<[f32; 2]> {
+    let column_width = DEFAULT_PANEL_SIZE[0] + TILE_GAP;
+    let row_height = DEFAULT_PANEL_SIZE[1] + TILE_GAP;
+    let rows = occupied.len().saturating_add(1).min(MAX_TILE_ROWS);
+    let columns = occupied.len().saturating_add(1).min(MAX_TILE_COLUMNS);
+    let last_bottom = occupied.iter().fold(origin[1], |bottom, rect| bottom.max(rect[3]));
+
+    let mut tiles = Vec::new();
+    for row in 0..=rows {
+        for column in 0..=columns {
+            let position = [
+                origin[0] + WS_INNER_PAD + usize_to_f32(column) * column_width,
+                origin[1] + WS_INNER_PAD + usize_to_f32(row) * row_height,
+            ];
+            let candidate = panel_rect(position, size);
+            if !occupied.iter().any(|panel| rects_overlap(candidate, *panel)) {
+                tiles.push(position);
+            }
+        }
+    }
+    let first_row = origin[1] + WS_INNER_PAD;
+    tiles.push([origin[0] + WS_INNER_PAD, (last_bottom + TILE_GAP).max(first_row)]);
+    tiles
+}
+
+/// Squared distance between the centers of two rectangles.
+fn center_distance(left: [f32; 4], right: [f32; 4]) -> f32 {
+    let dx = f32::midpoint(left[0], left[2]) - f32::midpoint(right[0], right[2]);
+    let dy = f32::midpoint(left[1], left[3]) - f32::midpoint(right[1], right[3]);
+    dx.mul_add(dx, dy * dy)
 }
 
 #[derive(Clone, Copy)]

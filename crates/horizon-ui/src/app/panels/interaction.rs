@@ -272,6 +272,18 @@ impl HorizonApp {
         if !self.canvas_pan_input_claimed && outcome.resize_delta != Vec2::ZERO {
             let new_size = clamp_panel_size(snapshot.canvas_size + outcome.resize_delta);
             self.resize_panel_in_environment(panel_id, [new_size.x, new_size.y], workspace_collision_ids);
+            // A card keeps the size its person chose, whatever its content needs.
+            if self
+                .board
+                .panel(panel_id)
+                .is_some_and(|panel| panel.kind == PanelKind::Block)
+            {
+                self.panel_render_caches
+                    .card_runtime
+                    .entry(panel_id)
+                    .or_default()
+                    .mark_hand_resized();
+            }
             self.mark_runtime_dirty();
         }
         if outcome.commit_terminal_resize {

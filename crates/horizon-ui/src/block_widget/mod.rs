@@ -26,7 +26,10 @@ mod text;
 mod tones;
 
 pub(crate) use chip::CardChip;
-pub(crate) use size::default_card_size;
+/// The frame around the body, which only the tests judge on its own.
+#[cfg(test)]
+pub(crate) use size::CARD_CHROME_HEIGHT;
+pub(crate) use size::{CARD_HEIGHT_LIMITS, default_card_size, fitted_card_height};
 
 use egui::{Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2};
 use horizon_browser_control::block::{BlockDocument, Component, Tone};
@@ -69,6 +72,11 @@ pub(crate) struct CardView<'a> {
 }
 
 /// Draw `view` in document order, above the footer of the card.
+///
+/// The footer keeps the bottom of the card: the body scrolls above it when the
+/// content needs more room than the card has, and no part of the body reaches
+/// under it. The body records the height its content needed, which the host
+/// uses to give the card the height that fits.
 pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
     let enabled = view.agent_present && view.interactive;
     let full = ui.max_rect();
@@ -77,13 +85,14 @@ pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
     let footer_rect = Rect::from_min_max(Pos2::new(full.min.x, footer_top), full.max);
 
     ui.scope_builder(UiBuilder::new().max_rect(content), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(content));
         show_content(ui, panel, &mut view, enabled);
     });
     footer::show(ui, footer_rect, &mut view);
 }
 
 fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: bool) {
-    egui::ScrollArea::vertical()
+    let output = egui::ScrollArea::vertical()
         .id_salt(("block_card", panel.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -96,6 +105,9 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
                 })
                 .show(ui, |ui| show_body(ui, view, enabled));
         });
+    // The content size is what the body really needed, independent of the
+    // room the card gave it: the host fits the card to it once per document.
+    view.card.observe_content_height(output.content_size.y);
 }
 
 fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {

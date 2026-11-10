@@ -1,11 +1,11 @@
-//! The size a new card opens at.
+//! The height a card takes: the size a new card opens at, and the height its
+//! content needs once the body measured it.
 //!
 //! A card is as wide as the approved mockup and as tall as its content needs,
-//! between a floor and a ceiling. The estimate uses the same metrics as the
-//! widget, so a card that fits here is also drawn without a scrollbar. It is an
-//! estimate, not a measurement: measuring the real text would need a font atlas
-//! on the thread that creates the panel, and a card that is a little too tall is
-//! better than one that is cut off.
+//! between a floor and a ceiling. The estimate below sizes a card that has not
+//! been drawn yet, because the text can only be measured with a font atlas on
+//! the thread that draws a frame. The measurement of the first pass is the
+//! truth: the host gives the card the height that fits, once per document.
 
 use horizon_browser_control::block::{BlockDocument, Component};
 
@@ -22,8 +22,39 @@ const TEXT_CHARS_PER_LINE: usize = 58;
 /// Height of one line of the proportional face, as a multiple of its size.
 const LINE_FACTOR: f32 = 1.35;
 
-/// The size a new card of `document` opens at: [`CARD_WIDTH`] wide and as tall
-/// as its content needs, between [`CARD_MIN_HEIGHT`] and [`CARD_MAX_HEIGHT`].
+/// The height a card takes between the panel edge and the body content: the
+/// titlebar, the panel padding above and below the body, and the footer.
+pub(crate) const CARD_CHROME_HEIGHT: f32 = PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING + FOOTER_HEIGHT;
+
+/// The bounds of a card height that fits its content.
+pub(crate) const CARD_HEIGHT_LIMITS: [f32; 2] = [CARD_MIN_HEIGHT, CARD_MAX_HEIGHT];
+
+/// The height a card panel takes for the content height that its last pass
+/// measured, between `limits`.
+///
+/// The person outranks the content: a card that was resized by hand keeps
+/// `current_height`, so a later document never undoes that size. Otherwise the
+/// content decides, and a card that is still too short for it scrolls its body
+/// above a footer that stays put.
+pub(crate) fn fitted_card_height(
+    measured_content_height: f32,
+    hand_resized: bool,
+    current_height: f32,
+    limits: [f32; 2],
+) -> f32 {
+    if hand_resized {
+        return current_height;
+    }
+    (measured_content_height + CARD_CHROME_HEIGHT)
+        .max(0.0)
+        .clamp(limits[0], limits[1])
+}
+
+/// The size a new card of `document` opens at: [`CARD_WIDTH`] wide and the
+/// height its content is estimated to need, between the card limits.
+///
+/// The estimate is provisional: the first pass measures the real content and
+/// [`fitted_card_height`] takes over from it.
 pub(crate) fn default_card_size(document: &BlockDocument) -> [f32; 2] {
     let body = document
         .components
@@ -31,9 +62,8 @@ pub(crate) fn default_card_size(document: &BlockDocument) -> [f32; 2] {
         .enumerate()
         .map(|(index, component)| component_height(component) + if index == 0 { 0.0 } else { COMPONENT_GAP })
         .sum::<f32>();
-    let chrome = PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING + FOOTER_HEIGHT;
     let padding = f32::from(BODY_PAD_TOP) + f32::from(BODY_PAD_BOTTOM);
-    let height = (chrome + padding + body).clamp(CARD_MIN_HEIGHT, CARD_MAX_HEIGHT);
+    let height = (CARD_CHROME_HEIGHT + padding + body).clamp(CARD_MIN_HEIGHT, CARD_MAX_HEIGHT);
     [CARD_WIDTH, height]
 }
 

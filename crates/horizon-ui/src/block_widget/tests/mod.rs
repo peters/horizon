@@ -7,6 +7,7 @@
 
 mod clicks;
 mod drawing;
+mod fit;
 mod rules;
 
 use egui::{Pos2, Rect, Vec2, accesskit};
