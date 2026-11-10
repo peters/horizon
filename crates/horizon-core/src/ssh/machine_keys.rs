@@ -4,7 +4,9 @@
 //! time, and asks Horizon to open a terminal with that key. The pair belongs to
 //! Horizon, in its home, so a rented machine never holds the person's own key
 //! and the login does not fail because an agent offers more keys than the
-//! server's `MaxAuthTries` allows.
+//! server's `MaxAuthTries` allows. The keys belong to the Horizon home and not
+//! to a workspace, because the machines belong to the person and not to one
+//! session: every agent panel of this Horizon may use a key by name.
 //!
 //! Every call here reads or writes files and starts `ssh-keygen`, so it runs on
 //! a coordination worker thread and never on the UI thread. The private half
@@ -23,10 +25,9 @@ use std::{
 };
 
 use horizon_browser_control::manifest::block_keys;
-use horizon_browser_control::paths::safe_local_id;
 use serde::{Deserialize, Serialize};
 
-/// The mode of the directory that holds one workspace's keys.
+/// The mode of the directory that holds the keys of this Horizon home.
 const DIRECTORY_MODE: u32 = 0o700;
 
 /// The mode of a private key. OpenSSH refuses a key that another user can read.
@@ -85,7 +86,7 @@ impl MachineKeyRef {
     }
 }
 
-/// One key pair of a workspace, as an operation reports it.
+/// One key pair of this Horizon home, as an operation reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MachineKey {
     pub name: String,
@@ -108,9 +109,9 @@ pub enum MachineKeyError {
     /// The name is not one key label.
     #[error("{message}")]
     InvalidName { message: String },
-    /// The workspace already holds the most keys that it may hold.
+    /// This Horizon home already holds the most keys that it may hold.
     #[error(
-        "This workspace already holds the maximum of {limit} machine keys. Delete one with the delete_machine_key operation before you ask for another"
+        "This Horizon home already holds the maximum of {limit} machine keys. Delete one with the delete_machine_key operation before you ask for another"
     )]
     TooMany { limit: usize },
     /// The key pair is not there, or Horizon could not make or delete it.
@@ -138,7 +139,11 @@ impl From<block_keys::KeyRefusal> for MachineKeyError {
     }
 }
 
-/// The machine keys of one Horizon home, in `machine-keys/<workspace>/<name>`.
+/// The machine keys of one Horizon home, in `machine-keys/<name>`.
+///
+/// The keys belong to the Horizon home and not to a workspace: every agent
+/// panel of this Horizon may connect with any of them by name, and a key is
+/// found again after a restart without a session or a workspace.
 #[derive(Clone, Debug)]
 pub struct MachineKeys {
     root: PathBuf,
@@ -157,35 +162,31 @@ impl MachineKeys {
         Self { root }
     }
 
-    /// The directory of one workspace's keys. The workspace is its saved local
-    /// id, so the same workspace finds its keys after a restart.
+    /// The directory of this home's keys. It holds no `%` of its own: ssh reads
+    /// `%` in a key path and in a known-hosts path as the start of a token, and
+    /// an agent passes the path of its key to its own ssh as it is.
     #[must_use]
-    pub fn workspace_directory(&self, workspace: &str) -> PathBuf {
-        // The directory name holds no '%': ssh reads '%' in a key path and in a
-        // known-hosts path as the start of a token, and an agent passes the path
-        // of its key to its own ssh as it is.
-        let encoded = safe_local_id(workspace);
-        self.root.join(format!("w{}", encoded.trim_start_matches('%')))
+    pub fn key_directory(&self) -> PathBuf {
+        self.root.clone()
     }
 
-    /// The connection of a panel that uses the key `name` of `workspace`.
+    /// The connection of a panel that uses the key `name`.
     #[must_use]
-    pub fn binding(&self, workspace: &str, name: &str) -> MachineKeyRef {
+    pub fn binding(&self, name: &str) -> MachineKeyRef {
         MachineKeyRef {
-            directory: self.workspace_directory(workspace).display().to_string(),
+            directory: self.key_directory().display().to_string(),
             name: name.to_owned(),
         }
     }
 
-    /// The key pair of `name` in `workspace`, made now when it is not there.
+    /// The key pair of `name`, made now when it is not there.
     ///
     /// # Errors
-    /// Refuses a name that breaks the rule, a workspace that already holds
-    /// `limit` keys, a pair with only one half, and a missing or failing
-    /// `ssh-keygen`.
-    pub fn ensure(&self, workspace: &str, name: &str, limit: usize) -> Result<MachineKey, MachineKeyError> {
+    /// Refuses a name that breaks the rule, a home that already holds `limit`
+    /// keys, a pair with only one half, and a missing or failing `ssh-keygen`.
+    pub fn ensure(&self, name: &str, limit: usize) -> Result<MachineKey, MachineKeyError> {
         let name = block_keys::check_name(name)?;
-        let binding = self.binding(workspace, name);
+        let binding = self.binding(name);
         let (private, public) = (binding.private_key(), binding.public_key());
         match (private.is_file(), public.is_file()) {
             (true, true) => return read_key(&binding, &public, false),
@@ -196,22 +197,22 @@ impl MachineKeys {
                 )));
             }
         }
-        if self.list(workspace)?.len() >= limit {
+        if self.list()?.len() >= limit {
             return Err(MachineKeyError::TooMany { limit });
         }
-        private_directory(&self.workspace_directory(workspace))?;
+        private_directory(&self.key_directory())?;
         make_key_pair(&private, &public, name)?;
         fs::set_permissions(&private, fs::Permissions::from_mode(PRIVATE_KEY_MODE))
             .map_err(|error| not_usable(format!("Horizon could not make the key {name} private: {error}")))?;
         read_key(&binding, &public, true)
     }
 
-    /// Every key pair of `workspace`, by name.
+    /// Every key pair of this home, by name.
     ///
     /// # Errors
-    /// Returns why the directory of the workspace cannot be read.
-    pub fn list(&self, workspace: &str) -> Result<Vec<MachineKey>, MachineKeyError> {
-        let directory = self.workspace_directory(workspace);
+    /// Returns why the key directory cannot be read.
+    pub fn list(&self) -> Result<Vec<MachineKey>, MachineKeyError> {
+        let directory = self.key_directory();
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -229,7 +230,7 @@ impl MachineKeys {
             if block_keys::check_name(name).is_err() {
                 continue;
             }
-            let binding = self.binding(workspace, name);
+            let binding = self.binding(name);
             if !binding.private_key().is_file() {
                 continue;
             }
@@ -241,38 +242,38 @@ impl MachineKeys {
         Ok(keys)
     }
 
-    /// The connection of the existing key `name` of `workspace`, for a panel
-    /// that connects with it.
+    /// The connection of the existing key `name`, for a panel that connects
+    /// with it.
     ///
     /// # Errors
-    /// Refuses a name that breaks the rule, and a key that this workspace does
-    /// not hold.
-    pub fn require(&self, workspace: &str, name: &str) -> Result<MachineKeyRef, MachineKeyError> {
+    /// Refuses a name that breaks the rule, and a key that this Horizon home
+    /// does not hold.
+    pub fn require(&self, name: &str) -> Result<MachineKeyRef, MachineKeyError> {
         let name = block_keys::check_name(name)?;
-        let binding = self.binding(workspace, name);
+        let binding = self.binding(name);
         if !binding.private_key().is_file() {
             return Err(not_usable(format!(
-                "This workspace has no machine key {name}; ask for it with the machine_key operation first"
+                "This Horizon home has no machine key {name}; ask for it with the machine_key operation first"
             )));
         }
         Ok(binding)
     }
 
-    /// Delete the key pair of `name` in `workspace`, with its known-hosts file.
+    /// Delete the key pair of `name`, with its known-hosts file.
     ///
     /// # Errors
     /// Refuses a name that breaks the rule, a key that is not there, and a file
     /// that Horizon cannot remove.
-    pub fn delete(&self, workspace: &str, name: &str) -> Result<(), MachineKeyError> {
+    pub fn delete(&self, name: &str) -> Result<(), MachineKeyError> {
         let name = block_keys::check_name(name)?;
-        let directory = self.workspace_directory(workspace);
+        let directory = self.key_directory();
         let paths = [
             directory.join(name),
             directory.join(format!("{name}.pub")),
             directory.join(format!("{name}.known_hosts")),
         ];
         if !paths.iter().any(|path| path.is_file()) {
-            return Err(not_usable(format!("This workspace has no machine key {name}")));
+            return Err(not_usable(format!("This Horizon home has no machine key {name}")));
         }
         for path in &paths {
             match fs::remove_file(path) {

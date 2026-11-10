@@ -148,7 +148,7 @@ tool.
 
 A machine that you rent must not hold the person's own key, and the person's ssh
 agent must not offer a long list of keys to it. Horizon keeps one key pair per
-machine name in the workspace, and a terminal that names the key connects with
+machine name in its own home, and a terminal that names the key connects with
 that key alone.
 
 Ask for a key, put its public line on the machine at rent time, then open the
@@ -165,8 +165,8 @@ The answer:
 ```json
 {"status": "machine_key", "name": "build-1",
  "public_key": "ssh-ed25519 AAAA... horizon-machine-build-1",
- "private_key_path": "<Horizon home>/machine-keys/<workspace>/build-1",
- "known_hosts_path": "<Horizon home>/machine-keys/<workspace>/build-1.known_hosts",
+ "private_key_path": "<Horizon home>/machine-keys/build-1",
+ "known_hosts_path": "<Horizon home>/machine-keys/build-1.known_hosts",
  "created": true}
 ```
 
@@ -196,8 +196,8 @@ The answer:
 
 - `name` is 1 to 40 characters of `a-z`, `0-9` and `-`, and cannot start or end
   with `-`. A name that breaks the rule is `invalid_key_name`.
-- One workspace holds at most 32 keys. The 33rd name is `too_many_keys`; delete
-  a key that you no longer need.
+- One Horizon home holds at most 64 keys. The 65th name is `too_many_keys`;
+  delete a key that you no longer need.
 - Horizon makes an ed25519 pair with no passphrase, under its own home. The
   answer holds the public line and the absolute paths `private_key_path` and
   `known_hosts_path`; it never holds the text of the private key. `created` is
@@ -207,9 +207,9 @@ The answer:
   that key, and `StrictHostKeyChecking=accept-new` to the command line that it
   builds. The machine sees that one key, and the ssh agent of the person is not
   offered.
-- Every agent panel of the workspace can use the workspace's keys, so an agent
-  that starts later reaches a machine that you rented. An agent of another
-  workspace gets `key_unavailable`.
+- The keys belong to the Horizon home and not to a workspace, so every agent
+  panel of this Horizon can use any of them by name: an agent that starts later,
+  in any workspace, reaches a machine that you rented.
 - `machine_keys` answers `keys`, each with `name`, `public_key`,
   `private_key_path`, `known_hosts_path` and `created_at_millis`.
 - `delete_machine_key` removes the pair and its known-hosts file, and answers
@@ -413,11 +413,11 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
   next one.
 - `terminal_unavailable`: Horizon could not open the terminal panel.
 - `invalid_key_name`: the key name breaks a rule. The message names it.
-- `too_many_keys`: the workspace holds the 32 keys that it may hold. Delete one
+- `too_many_keys`: this Horizon holds the 64 keys that it may hold. Delete one
   with `delete_machine_key`.
-- `key_unavailable`: the workspace has no key of that name, the pair is
-  incomplete, `ssh-keygen` is missing or failed, or another workspace holds the
-  key.
+- `key_unavailable`: this Horizon home has no key of that name, the pair is
+  incomplete, `ssh-keygen` is missing or failed, or Horizon could not read or
+  delete it.
 - `request_expired`: Horizon did not apply the request in 10 seconds, or in the
   10 seconds and the wait that a `next_click` asks for. Call `list` before you
   retry, because the change may have completed.

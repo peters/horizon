@@ -4,7 +4,9 @@
 //! Horizon to connect with the private half. The key pair is Horizon's, in the
 //! Horizon home, so the person's own keys and ssh agent never reach a machine
 //! that an agent rented, and the login does not fail because an agent offers
-//! more keys than the server allows.
+//! more keys than the server allows. The keys belong to the Horizon home and
+//! not to a workspace: the machines are the person's, so every agent panel of
+//! this Horizon may use any of them by name.
 //!
 //! An agent names a key and nothing else: it passes no path, no passphrase, no
 //! ssh option and no key material. This module holds the name rule and the
@@ -14,13 +16,13 @@
 /// The longest key name accepted, in characters.
 pub const MAX_KEY_NAME_CHARS: usize = 40;
 
-/// Most key pairs one workspace may hold at a time.
-pub const MAX_MACHINE_KEYS_PER_WORKSPACE: usize = 32;
+/// Most key pairs one Horizon home may hold at a time.
+pub const MAX_MACHINE_KEYS: usize = 64;
 
 /// Refusal code of a name that is not one key label.
 pub const INVALID_KEY_NAME: &str = "invalid_key_name";
 
-/// Refusal code of a workspace that already holds the most keys.
+/// Refusal code of a Horizon home that already holds the most keys.
 pub const TOO_MANY_KEYS: &str = "too_many_keys";
 
 /// Refusal code of a key that is not there, or that Horizon could not make.
@@ -144,6 +146,6 @@ mod tests {
         assert_eq!(INVALID_KEY_NAME, "invalid_key_name");
         assert_eq!(TOO_MANY_KEYS, "too_many_keys");
         assert_eq!(KEY_UNAVAILABLE, "key_unavailable");
-        assert_eq!(MAX_MACHINE_KEYS_PER_WORKSPACE, 32);
+        assert_eq!(MAX_MACHINE_KEYS, 64);
     }
 }

@@ -777,12 +777,11 @@ No SSH server is necessary for this task. The fixture keeps its private home at
 4. Examine the files of the key:
 
    ```sh
-   find <state>/data/home/.horizon/machine-keys -maxdepth 2 -printf '%M %p\n'
+   find <state>/data/home/.horizon/machine-keys -maxdepth 1 -printf '%M %p\n'
    ```
 
-   Result: The directory under `machine-keys` is `drwx------`, because it holds
-   the private half. `build-1` is `-rw-------`. `build-1.pub` holds the
-   `public_key` of step 1.
+   Result: `machine-keys` is `drwx------`, because it holds the private half.
+   `build-1` is `-rw-------`. `build-1.pub` holds the `public_key` of step 1.
 
 5. In client A, call `block_panel` with `{"operation":"machine_key","name":"../id_ed25519"}`,
    with `{"operation":"machine_key","name":"Build"}`, and with a name of 41
@@ -823,9 +822,9 @@ No SSH server is necessary for this task. The fixture keeps its private home at
    ps -o pid=,args= -C ssh
    ```
 
-   Result: The line holds `-i <state>/data/home/.horizon/machine-keys/<id>/build-2`,
+   Result: The line holds `-i <state>/data/home/.horizon/machine-keys/build-2`,
    `-o IdentitiesOnly=yes`, `-o IdentityAgent=none`,
-   `-o UserKnownHostsFile=<state>/data/home/.horizon/machine-keys/<id>/build-2.known_hosts`,
+   `-o UserKnownHostsFile=<state>/data/home/.horizon/machine-keys/build-2.known_hosts`,
    `-o StrictHostKeyChecking=accept-new`, `-t`, `127.0.0.1`, and
    `tmux new -A -s build` last. It holds no other `-i`, no `-J` and no `-L`. No
    server answers on the port, so `build-2.known_hosts` is not there yet: the

@@ -178,7 +178,7 @@ Do this task before the first rent.
 10. Select the row of `build-2` and press `Connect`.
 
     Result: A text line on the card says that no key of this machine is in this
-    workspace. No terminal opens.
+    Horizon. No terminal opens.
 
 11. Press `Open card` on the row of `build-2`, then delete that machine with
     the confirm and delete steps of M3.

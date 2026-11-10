@@ -197,7 +197,6 @@ impl HorizonApp {
                                 title: title.as_deref(),
                                 key,
                             },
-                            actor,
                             request,
                             root,
                             ctx,
@@ -207,15 +206,15 @@ impl HorizonApp {
                 }
             }
             Operation::MachineKey { name } => {
-                self.answer_machine_key(name, actor, request, root, ctx);
+                self.answer_machine_key(name, request, root, ctx);
                 None
             }
             Operation::MachineKeys => {
-                self.answer_machine_keys(actor, request, root, ctx);
+                self.answer_machine_keys(request, root, ctx);
                 None
             }
             Operation::DeleteMachineKey { name } => {
-                self.answer_deleted_machine_key(name, actor, request, root, ctx);
+                self.answer_deleted_machine_key(name, request, root, ctx);
                 None
             }
         }

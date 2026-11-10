@@ -2,11 +2,12 @@
 //! rents, and the terminal that connects with one.
 //!
 //! A key is files under the Horizon home and `ssh-keygen` is a process, so no
-//! frame makes, reads or deletes one: the frame resolves the caller and its
-//! workspace on the board, the coordination worker does the file work and the
-//! process, and the answer is written when that work is done. The private half
-//! stays in the Horizon home: an answer names the two files, and the text of the
-//! private key reaches no answer, log line or card.
+//! frame makes, reads or deletes one: the frame resolves the caller on the
+//! board, the coordination worker does the file work and the process, and the
+//! answer is written when that work is done. The keys belong to the Horizon
+//! home, so every agent panel of this Horizon may use one by name. The private
+//! half stays in the Horizon home: an answer names the two files, and the text
+//! of the private key reaches no answer, log line or card.
 
 use std::path::Path;
 
@@ -18,7 +19,6 @@ use horizon_core::{MachineKeyError, MachineKeys};
 
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
-use super::browser_requests::ActorPanel;
 
 impl HorizonApp {
     /// The key pairs of this Horizon home.
@@ -26,57 +26,19 @@ impl HorizonApp {
         MachineKeys::from_home(self.session_store.home())
     }
 
-    /// The identity of the caller's workspace in the key directories: its saved
-    /// local id, so every agent panel of the workspace finds the same keys and
-    /// another workspace finds none of them.
-    fn workspace_key(&self, actor: ActorPanel) -> Option<String> {
-        self.board
-            .workspace(actor.workspace_id)
-            .map(|workspace| workspace.local_id.clone())
-    }
-
-    /// The identity of the caller's workspace, or the answer of a request whose
-    /// workspace left the board. The key names of a workspace that is gone
-    /// answer nothing else, so an agent never reaches the keys of another one.
-    fn caller_workspace(
-        &mut self,
-        actor: ActorPanel,
-        request: &block::Request,
-        root: Option<&Path>,
-        ctx: &Context,
-    ) -> Option<String> {
-        let workspace = self.workspace_key(actor);
-        if workspace.is_none() {
-            self.answer_key_now(
-                root,
-                request,
-                ctx,
-                block::Outcome::failed(
-                    "caller_unavailable",
-                    "The calling agent's workspace is no longer in this host",
-                ),
-            );
-        }
-        workspace
-    }
-
-    /// Answers `machine_key`: makes the pair when this workspace has no key of
-    /// that name, and answers the public line either way.
+    /// Answers `machine_key`: makes the pair when this Horizon home has no key
+    /// of that name, and answers the public line either way.
     pub(super) fn answer_machine_key(
         &mut self,
         name: &str,
-        actor: ActorPanel,
         request: &block::Request,
         root: Option<&Path>,
         ctx: &Context,
     ) {
-        let Some(workspace) = self.caller_workspace(actor, request, root, ctx) else {
-            return;
-        };
         let keys = self.machine_keys();
         let name = name.to_owned();
         self.queue_key_answer(root, request, ctx, move || {
-            match keys.ensure(&workspace, &name, block_keys::MAX_MACHINE_KEYS_PER_WORKSPACE) {
+            match keys.ensure(&name, block_keys::MAX_MACHINE_KEYS) {
                 Ok(key) => block::Outcome::MachineKey {
                     name: key.name,
                     public_key: key.public_key,
@@ -89,19 +51,10 @@ impl HorizonApp {
         });
     }
 
-    /// Answers `machine_keys`: the pairs of the caller's workspace.
-    pub(super) fn answer_machine_keys(
-        &mut self,
-        actor: ActorPanel,
-        request: &block::Request,
-        root: Option<&Path>,
-        ctx: &Context,
-    ) {
-        let Some(workspace) = self.caller_workspace(actor, request, root, ctx) else {
-            return;
-        };
+    /// Answers `machine_keys`: the pairs of this Horizon home.
+    pub(super) fn answer_machine_keys(&mut self, request: &block::Request, root: Option<&Path>, ctx: &Context) {
         let keys = self.machine_keys();
-        self.queue_key_answer(root, request, ctx, move || match keys.list(&workspace) {
+        self.queue_key_answer(root, request, ctx, move || match keys.list() {
             Ok(keys) => block::Outcome::MachineKeys {
                 keys: keys
                     .into_iter()
@@ -122,17 +75,13 @@ impl HorizonApp {
     pub(super) fn answer_deleted_machine_key(
         &mut self,
         name: &str,
-        actor: ActorPanel,
         request: &block::Request,
         root: Option<&Path>,
         ctx: &Context,
     ) {
-        let Some(workspace) = self.caller_workspace(actor, request, root, ctx) else {
-            return;
-        };
         let keys = self.machine_keys();
         let name = name.to_owned();
-        self.queue_key_answer(root, request, ctx, move || match keys.delete(&workspace, &name) {
+        self.queue_key_answer(root, request, ctx, move || match keys.delete(&name) {
             Ok(()) => block::Outcome::DeletedMachineKey { name },
             Err(error) => refused(&error),
         });
@@ -144,14 +93,10 @@ impl HorizonApp {
     pub(super) fn answer_key_terminal(
         &mut self,
         asked: &KeyTerminal<'_>,
-        actor: ActorPanel,
         request: &block::Request,
         root: Option<&Path>,
         ctx: &Context,
     ) {
-        let Some(workspace) = self.caller_workspace(actor, request, root, ctx) else {
-            return;
-        };
         let keys = self.machine_keys();
         let (terminal, title) = (asked.terminal.clone(), asked.title.map(str::to_owned));
         let name = asked.key.to_owned();
@@ -159,7 +104,7 @@ impl HorizonApp {
         let opening = ctx.clone();
         self.block_claim.key_job_started();
         self.browser_create_host.io.then(
-            move || keys.require(&workspace, &name),
+            move || keys.require(&name),
             move |app, required| {
                 app.block_claim.key_job_finished();
                 let outcome = match app.request_caller(&request) {
@@ -197,22 +142,9 @@ impl HorizonApp {
             writing.request_repaint();
         });
     }
-
-    /// Writes one answer that the frame already knows, such as a refusal that
-    /// needs no file work. The write itself stays on the coordination worker.
-    fn answer_key_now(
-        &mut self,
-        root: Option<&Path>,
-        request: &block::Request,
-        ctx: &Context,
-        outcome: block::Outcome,
-    ) {
-        self.write_block_answer(BlockAnswer::new(root, request.clone(), outcome));
-        ctx.request_repaint();
-    }
 }
 
-/// One `open_terminal` that names a machine key of the caller's workspace.
+/// One `open_terminal` that names a machine key of this Horizon home.
 pub(super) struct KeyTerminal<'a> {
     /// The route and the command, checked by the caller.
     pub terminal: &'a CheckedTerminal,

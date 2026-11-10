@@ -94,15 +94,17 @@ an optional `key` with the same rule. `machine_keys` takes no input.
   `invalid_key_name`, and the message names the rule.
 - **The check runs twice.** The MCP server refuses a bad name before the
   request reaches the queue, and the UI checks the name again when it uses it.
-- **A name belongs to one workspace.** The directory is named after the saved
-  local id of the calling agent's workspace, so an agent of another workspace
-  cannot list, use or delete a key, and gets `key_unavailable` instead.
+- **A name belongs to the Horizon home.** The keys are the person's and not a
+  workspace's, in `machine-keys/<name>`, so every agent panel of this Horizon
+  may list, use and delete any of them by name. A workspace boundary is
+  therefore not a key boundary: an agent that a person runs in another
+  workspace of the same Horizon reaches the same machines.
 
 ### Guarantees for machine keys
 
 - **Fixed argv.** With `key`, Horizon adds exactly `-i <private key path>`,
   `-o IdentitiesOnly=yes`, `-o IdentityAgent=none`,
-  `-o UserKnownHostsFile=<machine-keys dir>/<workspace>/<name>.known_hosts` and
+  `-o UserKnownHostsFile=<machine-keys dir>/<name>.known_hosts` and
   `-o StrictHostKeyChecking=accept-new` to the command line that it builds. The
   key options come before the destination and a remote command stays last. The
   agent never passes a path, a passphrase, a key file or an ssh option.

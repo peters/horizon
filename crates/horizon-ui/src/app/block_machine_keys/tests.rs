@@ -67,21 +67,15 @@ fn open_terminal(key: Option<&str>) -> block::Operation {
     }
 }
 
-/// The key directory of the first workspace, as the store resolves it.
-fn workspace_directory(app: &HorizonApp, panel: usize) -> PathBuf {
-    let workspace = app
-        .board
-        .workspace(app.board.panels[panel].workspace_id)
-        .expect("the workspace")
-        .local_id
-        .clone();
-    MachineKeys::from_home(app.session_store.home()).workspace_directory(&workspace)
+/// The key directory of this Horizon home, as the store resolves it.
+fn key_directory(app: &HorizonApp) -> PathBuf {
+    MachineKeys::from_home(app.session_store.home()).key_directory()
 }
 
 /// Writes a key pair of `name` where the store looks for it, so a test of the
 /// terminal needs no `ssh-keygen`.
-fn plant_key(app: &HorizonApp, panel: usize, name: &str) -> MachineKeyRef {
-    let directory = workspace_directory(app, panel);
+fn plant_key(app: &HorizonApp, name: &str) -> MachineKeyRef {
+    let directory = key_directory(app);
     fs::create_dir_all(&directory).expect("the key directory");
     fs::write(directory.join(name), "-----BEGIN OPENSSH PRIVATE KEY-----\n").expect("the private key");
     fs::write(
@@ -160,7 +154,7 @@ fn expected_args(key: &MachineKeyRef) -> Vec<String> {
 fn a_terminal_with_a_machine_key_connects_with_that_key_and_carries_its_name() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);
-    let key = plant_key(&app, 0, "build-1");
+    let key = plant_key(&app, "build-1");
 
     let panel_id = opened(answered(&mut app, &ctx, &root, open_terminal(Some("build-1"))));
     let panel = app
@@ -183,7 +177,7 @@ fn a_terminal_with_a_machine_key_connects_with_that_key_and_carries_its_name() {
 }
 
 #[test]
-fn a_key_that_the_workspace_lacks_is_refused_without_a_panel() {
+fn a_key_that_this_home_lacks_is_refused_without_a_panel() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);
     let before = app.board.panels.len();
@@ -198,23 +192,25 @@ fn a_key_that_the_workspace_lacks_is_refused_without_a_panel() {
 }
 
 #[test]
-fn the_key_of_another_workspace_is_not_offered() {
+fn a_key_of_one_workspace_is_offered_to_an_agent_panel_of_another() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);
-    // The key belongs to the second workspace; the first workspace asks for it.
-    plant_key(&app, 1, "build-1");
+    // The pair is in the Horizon home; the first workspace's agent asks for it.
+    plant_key(&app, "build-1");
     let before = app.board.panels.len();
 
+    let panel_id = opened(answered(&mut app, &ctx, &root, open_terminal(Some("build-1"))));
     assert_eq!(
-        code(&answered(&mut app, &ctx, &root, open_terminal(Some("build-1")))),
-        "key_unavailable"
+        app.board.panels.len(),
+        before + 1,
+        "the keys belong to the person's Horizon home, not to one workspace"
     );
-    assert_eq!(app.board.panels.len(), before);
+    assert!(app.board.panel_id_by_local_id(&panel_id).is_some());
 
     let listed = answered(&mut app, &ctx, &root, block::Operation::MachineKeys);
     assert!(
-        matches!(&listed, Outcome::MachineKeys { keys } if keys.is_empty()),
-        "the first workspace sees none of the keys of the second: {listed:?}"
+        matches!(&listed, Outcome::MachineKeys { keys } if keys.len() == 1 && keys[0].name == "build-1"),
+        "every agent panel of this Horizon lists the pair: {listed:?}"
     );
 }
 
@@ -249,7 +245,7 @@ fn the_key_operations_make_list_and_delete_one_key() {
         public_key.contains("horizon-machine-build-1"),
         "the public key names the machine: {public_key}"
     );
-    let directory = workspace_directory(&app, 0);
+    let directory = key_directory(&app);
     assert_eq!(
         Path::new(&private_key_path),
         directory.join("build-1"),
@@ -273,8 +269,8 @@ fn the_key_operations_make_list_and_delete_one_key() {
     assert_eq!(keys[0].known_hosts_path, known_hosts_path);
     assert!(keys[0].created_at_millis > 0);
 
-    // The terminal of the same workspace connects with the pair that the worker
-    // made, without a second key file.
+    // The terminal connects with the pair that the worker made, without a
+    // second key file.
     let terminal = answered(&mut app, &ctx, &root, open_terminal(Some("build-1")));
     assert!(matches!(terminal, Outcome::Opened { .. }), "{terminal:?}");
 
@@ -303,7 +299,7 @@ fn the_key_operations_make_list_and_delete_one_key() {
 fn a_restored_panel_builds_the_command_line_of_its_key() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);
-    let key = plant_key(&app, 0, "build-1");
+    let key = plant_key(&app, "build-1");
     let panel_id = opened(answered(&mut app, &ctx, &root, open_terminal(Some("build-1"))));
     let live = app
         .board
@@ -396,12 +392,7 @@ fn a_key_name_that_breaks_the_rule_is_refused_before_any_file_work() {
     assert_eq!(code(&refused), "invalid_key_name");
     assert!(
         !MachineKeys::from_home(app.session_store.home())
-            .workspace_directory(
-                &app.board
-                    .workspace(app.board.panels[0].workspace_id)
-                    .expect("the workspace")
-                    .local_id
-            )
+            .key_directory()
             .exists(),
         "a refused name writes no key"
     );
@@ -469,7 +460,7 @@ fn no_key_answer_or_error_holds_the_text_of_the_private_key() {
         open_terminal(Some("build-1")),
     )));
     // An incomplete pair answers a message of its own.
-    let directory = workspace_directory(&app, 0);
+    let directory = key_directory(&app);
     fs::remove_file(directory.join("build-1.pub")).expect("the public half");
     answers.push(serialized(&answered(
         &mut app,
