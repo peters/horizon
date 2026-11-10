@@ -31,7 +31,7 @@ fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
     (left[0] - right[0]).abs() <= f32::EPSILON && (left[1] - right[1]).abs() <= f32::EPSILON
 }
 
-fn panel_restore_options(
+pub(crate) fn panel_restore_options(
     panel_state: &PanelState,
     transcript_root: Option<&Path>,
     browser_config: &crate::browser::BrowserConfig,

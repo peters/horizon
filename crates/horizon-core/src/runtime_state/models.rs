@@ -24,6 +24,11 @@ pub struct WorkspaceState {
     pub name: String,
     pub cwd: Option<String>,
     pub position: Option<[f32; 2]>,
+    /// Where the new terminals of this workspace run. A workspace on this
+    /// computer writes no field, so every saved workspace without one loads
+    /// there.
+    #[serde(default, skip_serializing_if = "crate::place::WorkspacePlace::is_local")]
+    pub place: crate::place::WorkspacePlace,
     pub template: Option<WorkspaceTemplateRef>,
     #[serde(
         default,
@@ -90,6 +95,7 @@ impl WorkspaceState {
             name: workspace.name.clone(),
             cwd: workspace_cwd,
             position: Some(resolved_position),
+            place: crate::place::WorkspacePlace::default(),
             template: Some(WorkspaceTemplateRef {
                 workspace_index,
                 workspace_name: workspace.name.clone(),
@@ -151,6 +157,11 @@ pub struct PanelState {
     /// machine row focuses it instead of opening a second one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// The tmux session that this terminal holds on the machine of its
+    /// workspace's place, so a restart attaches to the same session and a close
+    /// ends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_session: Option<String>,
 }
 
 impl PanelState {
@@ -248,6 +259,7 @@ impl PanelState {
             block: None,
             opened_by: None,
             machine: None,
+            machine_session: None,
         }
     }
 
@@ -319,6 +331,7 @@ impl PanelState {
             block: self.block.clone(),
             opened_by: self.opened_by.clone(),
             machine: self.machine.clone(),
+            machine_session: self.machine_session.clone(),
         }
     }
 }
@@ -349,6 +362,7 @@ impl Default for PanelState {
             block: None,
             opened_by: None,
             machine: None,
+            machine_session: None,
         }
     }
 }

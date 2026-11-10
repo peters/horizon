@@ -452,6 +452,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
         active_workspace_local_id: Some("empty".to_string()),
         workspaces: vec![
             WorkspaceState {
+                place: crate::place::WorkspacePlace::default(),
                 local_id: "empty".to_string(),
                 name: "empty".to_string(),
                 cwd: None,
@@ -461,6 +462,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 panels: Vec::new(),
             },
             WorkspaceState {
+                place: crate::place::WorkspacePlace::default(),
                 local_id: "filled".to_string(),
                 name: "filled".to_string(),
                 cwd: None,
@@ -468,6 +470,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 template: None,
                 layout: None,
                 panels: vec![PanelState {
+                    machine_session: None,
                     local_id: "panel".to_string(),
                     name: "notes".to_string(),
                     name_is_custom: None,
@@ -510,6 +513,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
 fn restored_workspace_layout_is_preserved_after_panel_recreation() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: crate::place::WorkspacePlace::default(),
             local_id: "grid".to_string(),
             name: "grid".to_string(),
             cwd: None,
@@ -518,6 +522,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
             layout: Some(WorkspaceLayout::Grid),
             panels: vec![
                 PanelState {
+                    machine_session: None,
                     local_id: "panel-a".to_string(),
                     name: "a".to_string(),
                     name_is_custom: None,
@@ -543,6 +548,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                     machine: None,
                 },
                 PanelState {
+                    machine_session: None,
                     local_id: "panel-b".to_string(),
                     name: "b".to_string(),
                     name_is_custom: None,
@@ -584,6 +590,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
     std::fs::write(transcript_root.path().join("ssh-panel.bin"), b"restored ssh prompt\r\n").expect("write transcript");
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: crate::place::WorkspacePlace::default(),
             local_id: "remote".to_string(),
             name: "Remote".to_string(),
             cwd: None,
@@ -591,6 +598,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
             template: None,
             layout: None,
             panels: vec![PanelState {
+                machine_session: None,
                 local_id: "ssh-panel".to_string(),
                 name: "prod".to_string(),
                 name_is_custom: None,
@@ -644,6 +652,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
         active_workspace_local_id: Some("workspace".to_string()),
         focused_panel_local_id: Some("broken-codex".to_string()),
         workspaces: vec![WorkspaceState {
+            place: crate::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "Workspace".to_string(),
             cwd: None,
@@ -652,6 +661,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
             layout: Some(WorkspaceLayout::Grid),
             panels: vec![
                 PanelState {
+                    machine_session: None,
                     local_id: "notes".to_string(),
                     name: "Notes".to_string(),
                     name_is_custom: None,
@@ -672,11 +682,10 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                     device_identity: None,
                     browser_profile: None,
                     browser_url: None,
-                    block: None,
-                    opened_by: None,
-                    machine: None,
+                    ..PanelState::default()
                 },
                 PanelState {
+                    machine_session: None,
                     local_id: "broken-codex".to_string(),
                     name: "Broken Codex".to_string(),
                     name_is_custom: None,

@@ -197,6 +197,10 @@ pub struct PanelOptions {
     /// focuses this panel instead of opening a second one, and the saved panel
     /// attaches to the same tmux session after a restart.
     pub machine: Option<String>,
+    /// The tmux session that this panel runs on its machine, when the panel is a
+    /// terminal of a workspace on a machine. Closing the panel ends it; a
+    /// restart of Horizon attaches to it again.
+    pub machine_session: Option<String>,
 }
 
 impl Default for PanelOptions {
@@ -234,6 +238,7 @@ impl Default for PanelOptions {
             launch_wrapper: Vec::new(),
             opened_by: None,
             machine: None,
+            machine_session: None,
         }
     }
 }
@@ -294,6 +299,9 @@ pub struct Panel {
     pub(crate) opened_by: Option<String>,
     /// The machine of Horizon's machine list that this terminal connects to.
     pub(crate) machine: Option<String>,
+    /// The tmux session that this terminal runs on its machine, when it is a
+    /// terminal of a workspace that is placed on one.
+    pub(crate) machine_session: Option<String>,
     /// UI-facing SSH connection status for panels that remain visible after exit.
     pub ssh_status: Option<SshConnectionStatus>,
 }
@@ -345,6 +353,23 @@ impl Panel {
     #[must_use]
     pub fn machine(&self) -> Option<&str> {
         self.machine.as_deref()
+    }
+
+    /// The tmux session that this terminal holds on its machine, when the
+    /// workspace that holds it is placed on one.
+    #[must_use]
+    pub fn machine_session(&self) -> Option<&str> {
+        self.machine_session.as_deref()
+    }
+
+    /// The best-effort end of this panel's tmux session: the panel's own ssh
+    /// command line with the kill in place of its session command. `None` for
+    /// every panel that holds no session of a machine.
+    #[must_use]
+    pub fn session_kill(&self) -> Option<crate::place::SessionKill> {
+        let session = self.machine_session.as_deref()?;
+        let connection = self.ssh_connection.as_ref()?;
+        Some(crate::place::SessionKill::over(connection, session))
     }
 
     #[must_use]
@@ -483,6 +508,7 @@ impl Panel {
             ssh_connection: None,
             opened_by: None,
             machine: None,
+            machine_session: None,
             ssh_status: None,
         }
     }
@@ -881,6 +907,7 @@ mod tests {
             ssh_connection: None,
             opened_by: None,
             machine: None,
+            machine_session: None,
             ssh_status: None,
         }
     }

@@ -6,6 +6,7 @@ use super::super::Board;
 
 fn shell_panel_state(local_id: &str, cwd: Option<&std::path::Path>) -> PanelState {
     PanelState {
+        machine_session: None,
         local_id: local_id.to_string(),
         name: "Shell".to_string(),
         name_is_custom: None,
@@ -75,6 +76,7 @@ fn a_restored_panel_says_why_it_cannot_use_its_saved_directory() {
     let missing = state.path().join("renamed-away");
     let runtime = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: crate::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "Moved".to_string(),
             cwd: Some(missing.display().to_string()),

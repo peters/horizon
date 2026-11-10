@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::board::WorkspaceLayout;
 use crate::panel::PanelId;
+use crate::place::WorkspacePlace;
 use crate::runtime_state::{WorkspaceTemplateRef, new_local_id};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -20,6 +21,10 @@ pub struct Workspace {
     pub position: [f32; 2],
     /// Default working directory for new terminals in this workspace.
     pub cwd: Option<PathBuf>,
+    /// Where the new terminals of this workspace run: this computer, or a
+    /// machine of Horizon's machine list. Changing it leaves the panels that are
+    /// already open where they are.
+    pub place: WorkspacePlace,
     pub template: Option<WorkspaceTemplateRef>,
     pub layout: Option<WorkspaceLayout>,
 }
@@ -48,6 +53,7 @@ impl Workspace {
             collapsed: false,
             position: [0.0, 0.0],
             cwd: None,
+            place: WorkspacePlace::default(),
             template: None,
             layout: Some(WorkspaceLayout::default()),
         }
@@ -56,6 +62,12 @@ impl Workspace {
     #[must_use]
     pub fn accent(&self) -> (u8, u8, u8) {
         WORKSPACE_COLORS[self.color_idx % WORKSPACE_COLORS.len()]
+    }
+
+    /// The machine of this workspace's place, or `None` on this computer.
+    #[must_use]
+    pub fn machine(&self) -> Option<&str> {
+        self.place.machine()
     }
 
     pub fn add_panel(&mut self, panel_id: PanelId) {

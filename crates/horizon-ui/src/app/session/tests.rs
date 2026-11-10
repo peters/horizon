@@ -61,6 +61,7 @@ fn exiting_command() -> (String, Vec<String>) {
 fn runtime_state_needs_bootstrap_for_unbound_last_agent_panel() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: horizon_core::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "alpha".to_string(),
             cwd: None,
@@ -85,6 +86,7 @@ fn runtime_state_needs_bootstrap_for_unbound_last_agent_panel() {
 fn runtime_state_needs_bootstrap_for_unbound_last_opencode_panel() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: horizon_core::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "alpha".to_string(),
             cwd: None,
@@ -109,6 +111,7 @@ fn runtime_state_needs_bootstrap_for_unbound_last_opencode_panel() {
 fn runtime_state_needs_bootstrap_for_unbound_last_pi_panel() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: horizon_core::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "alpha".to_string(),
             cwd: None,
@@ -133,6 +136,7 @@ fn runtime_state_needs_bootstrap_for_unbound_last_pi_panel() {
 fn runtime_state_needs_bootstrap_for_a_persisted_codex_binding() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: horizon_core::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "alpha".to_string(),
             cwd: None,
@@ -682,6 +686,7 @@ fn automatic_repair_is_saved_before_the_board_opens() {
 fn runtime_state_skips_bootstrap_for_agents_without_exact_session_catalogs() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: horizon_core::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "alpha".to_string(),
             cwd: None,

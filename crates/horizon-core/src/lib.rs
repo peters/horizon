@@ -21,6 +21,7 @@ mod local_store;
 pub mod machines;
 mod opencode_paths;
 mod panel;
+pub mod place;
 pub mod remote_browser_credential;
 mod remote_hosts;
 mod retired_panel_kinds;
@@ -72,6 +73,10 @@ pub use machines::{
 pub use panel::{
     DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
     browser_actor,
+};
+pub use place::{
+    PlaceError, PlaceWorkspace, SESSION_KILL_TIMEOUT, SessionKill, WorkspacePlace, kill_command, moves_to_the_machine,
+    place_command, session_command, session_prefix,
 };
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,

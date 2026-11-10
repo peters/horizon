@@ -38,6 +38,7 @@ struct TerminalPanelBuildArgs {
     ssh_connection: Option<SshConnection>,
     opened_by: Option<String>,
     machine: Option<String>,
+    machine_session: Option<String>,
 }
 
 /// What a placeholder panel says instead of running its process.
@@ -131,6 +132,7 @@ pub(in crate::panel) fn placeholder_panel(
             ssh_connection: saved_ssh_connection,
             opened_by: None,
             machine: None,
+            machine_session: None,
         },
         terminal,
         ssh_status,
@@ -191,20 +193,18 @@ pub(super) fn spawn_terminal(
         launch_wrapper,
         opened_by,
         machine,
+        machine_session,
         ..
     } = opts;
 
-    let saved_command = command.clone();
-    let saved_args = args.clone();
-    let saved_cwd = cwd.clone();
-    let saved_ssh_connection = ssh_connection.clone();
+    let (saved_command, saved_args) = (command.clone(), args.clone());
+    let (saved_cwd, saved_ssh_connection) = (cwd.clone(), ssh_connection.clone());
     let ResolvedTerminalLaunch {
         session_binding,
         program,
         mut launch_args,
     } = resolved_launch;
-    let has_custom_name = name_is_custom.unwrap_or_else(|| name.is_some());
-    let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
+    let (has_custom_name, title) = panel_title(name, name_is_custom, id, saved_ssh_connection.as_ref());
     let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
     let mut env = agent_env(kind, &local_id, saved_command.is_none());
     let work_plan = crate::agent_work::WorkLaunch {
@@ -235,6 +235,7 @@ pub(super) fn spawn_terminal(
         ssh_connection: saved_ssh_connection,
         opened_by,
         machine,
+        machine_session,
     };
     if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh && had_persisted_transcript_state {
         return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
@@ -425,6 +426,7 @@ fn build_terminal_panel(
         ssh_connection,
         opened_by,
         machine,
+        machine_session,
     } = panel_args;
     Panel {
         id,
@@ -456,8 +458,22 @@ fn build_terminal_panel(
         ssh_connection,
         opened_by,
         machine,
+        machine_session,
         ssh_status,
     }
+}
+
+/// The title of a new terminal, and whether the person chose it.
+fn panel_title(
+    name: Option<String>,
+    name_is_custom: Option<bool>,
+    id: PanelId,
+    ssh_connection: Option<&SshConnection>,
+) -> (bool, String) {
+    (
+        name_is_custom.unwrap_or_else(|| name.is_some()),
+        name.unwrap_or_else(|| default_terminal_title(id, ssh_connection)),
+    )
 }
 
 fn default_terminal_title(id: PanelId, ssh_connection: Option<&SshConnection>) -> String {

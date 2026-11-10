@@ -328,6 +328,7 @@ impl RuntimeState {
                             block: panel.block().cloned(),
                             opened_by: panel.opened_by().map(str::to_string),
                             machine: panel.machine().map(str::to_string),
+                            machine_session: panel.machine_session().map(str::to_string),
                         }
                     })
                     .collect();
@@ -337,6 +338,7 @@ impl RuntimeState {
                     name: workspace.name.clone(),
                     cwd: workspace.cwd.as_ref().map(|path| path.display().to_string()),
                     position: Some(workspace.position),
+                    place: workspace.place.clone(),
                     template: workspace.template.clone(),
                     layout: workspace.layout,
                     panels,

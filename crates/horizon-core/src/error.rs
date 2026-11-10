@@ -26,6 +26,11 @@ pub enum Error {
     #[error("Git error: {0}")]
     Git(String),
 
+    /// A new panel of a workspace's place cannot be made: its machine is gone
+    /// from the machine list, or its record no longer passes its rule.
+    #[error("{0}")]
+    Place(#[from] crate::place::PlaceError),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

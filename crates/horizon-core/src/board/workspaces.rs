@@ -634,12 +634,48 @@ impl Board {
         true
     }
 
+    /// The tmux sessions that the panels of `workspace` hold on their machine,
+    /// in panel order: the numbers that its next terminal must not take.
+    #[must_use]
+    pub fn workspace_sessions(&self, workspace_id: WorkspaceId) -> Vec<String> {
+        self.workspace(workspace_id)
+            .map(|workspace| {
+                workspace
+                    .panels
+                    .iter()
+                    .filter_map(|panel_id| self.panel(*panel_id))
+                    .filter_map(|panel| panel.machine_session().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Put a workspace on this computer, or on a machine of the machine list.
+    /// The panels that are already open stay where they are; the new terminals
+    /// of the workspace follow the new place. Returns whether it changed.
+    pub fn set_workspace_place(&mut self, id: WorkspaceId, place: crate::place::WorkspacePlace) -> bool {
+        let Some(workspace) = self.workspace_mut(id) else {
+            return false;
+        };
+        if workspace.place == place {
+            return false;
+        }
+        tracing::info!(
+            workspace = %workspace.name,
+            machine = place.machine().unwrap_or("this computer"),
+            "put a workspace in a new place"
+        );
+        workspace.place = place;
+        true
+    }
+
     pub(super) fn create_workspace_record(&mut self, workspace_state: &WorkspaceState) -> WorkspaceId {
         let id = self.create_workspace(&workspace_state.name);
         if let Some(workspace) = self.workspace_mut(id) {
             workspace.local_id.clone_from(&workspace_state.local_id);
             workspace.position = workspace_state.position.unwrap_or(workspace.position);
             workspace.cwd = workspace_state.cwd.as_deref().map(Config::expand_tilde);
+            workspace.place.clone_from(&workspace_state.place);
             workspace.template.clone_from(&workspace_state.template);
             workspace.layout = workspace_state.layout;
         }

@@ -148,6 +148,7 @@ fn provider_catalog_presence_includes_bound_and_fresh_panels() {
 fn bootstrap_assigns_distinct_sessions_per_group() {
     let mut state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: crate::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "termgalore".to_string(),
             cwd: stored_cwd("/repo"),
@@ -266,6 +267,7 @@ fn bootstrap_assigns_scoped_groups_before_cwd_less_groups() {
 fn bootstrap_never_assigns_sessions_open_in_other_processes() {
     let mut state = RuntimeState {
         workspaces: vec![WorkspaceState {
+            place: crate::place::WorkspacePlace::default(),
             local_id: "workspace".to_string(),
             name: "termgalore".to_string(),
             cwd: stored_cwd("/repo"),
