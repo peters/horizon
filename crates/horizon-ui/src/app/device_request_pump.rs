@@ -28,6 +28,9 @@ pub(crate) const DEVICE_QUEUE_WAKE_PASS: u64 = u64::MAX;
 
 const IDLE_WAIT: Duration = Duration::from_millis(100);
 const PENDING_WAIT: Duration = Duration::from_millis(50);
+/// A `next_click` that waits needs the pump only for its deadline, so a card
+/// click wait costs a wake a second, not a frame rate.
+const CLICK_WAIT_WAIT: Duration = Duration::from_secs(1);
 const PERSIST_WAIT_MIN: Duration = Duration::from_millis(200);
 const PERSIST_WAIT_MAX: Duration = Duration::from_secs(5);
 
@@ -52,6 +55,9 @@ pub(crate) struct DeviceRequestBridge {
     /// that never presents has no frame to apply them, so the watcher keeps
     /// waking at the pending-request cadence until it is clear.
     claim_pending: Arc<AtomicBool>,
+    /// Set while a `next_click` waits on a card. Its deadline must pass also
+    /// when the host presents nothing, which has no frame to notice.
+    click_wait_pending: Arc<AtomicBool>,
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -77,6 +83,7 @@ impl DeviceRequestBridge {
             persist_pending: Arc::new(AtomicBool::new(false)),
             reveals_pending: Arc::new(AtomicBool::new(false)),
             claim_pending: Arc::new(AtomicBool::new(false)),
+            click_wait_pending: Arc::new(AtomicBool::new(false)),
             watcher: Mutex::new(None),
         }
     }
@@ -109,6 +116,7 @@ impl DeviceRequestBridge {
         installed.app.settle_device_reveals_without_frame();
         self.sync_held_reveals(&installed.app);
         self.sync_claim_pending(&installed.app);
+        self.sync_click_wait_pending(&installed.app);
         changed
     }
 
@@ -128,6 +136,15 @@ impl DeviceRequestBridge {
     fn sync_claim_pending(&self, app: &HorizonApp) {
         let claimed = app.device_claims_outstanding() || app.block_claims_outstanding();
         if self.claim_pending.swap(claimed, Ordering::Relaxed) != claimed {
+            self.wake_watcher();
+        }
+    }
+
+    /// A click wait settles on frames, or on these wakes when the host runs
+    /// none, so its deadline passes without a presented window.
+    fn sync_click_wait_pending(&self, app: &HorizonApp) {
+        let waiting = app.block_waiters_outstanding();
+        if self.click_wait_pending.swap(waiting, Ordering::Relaxed) != waiting {
             self.wake_watcher();
         }
     }
@@ -159,6 +176,7 @@ impl DeviceRequestBridge {
         let persist_pending = Arc::clone(&self.persist_pending);
         let reveals_pending = Arc::clone(&self.reveals_pending);
         let claim_pending = Arc::clone(&self.claim_pending);
+        let click_wait_pending = Arc::clone(&self.click_wait_pending);
         let root_override = self.root_override.clone();
         match thread::Builder::new()
             .name("horizon-host-requests".to_owned())
@@ -168,6 +186,7 @@ impl DeviceRequestBridge {
                     &persist_pending,
                     &reveals_pending,
                     &claim_pending,
+                    &click_wait_pending,
                     root_override.as_deref(),
                     &proxy,
                 );
@@ -206,6 +225,7 @@ impl eframe::App for BridgeApp {
             eframe::App::ui(&mut installed.app, ui, frame);
             self.bridge.sync_held_reveals(&installed.app);
             self.bridge.sync_claim_pending(&installed.app);
+            self.bridge.sync_click_wait_pending(&installed.app);
         }
     }
 
@@ -251,6 +271,7 @@ fn watch_device_requests(
     persist_pending: &AtomicBool,
     reveals_pending: &AtomicBool,
     claim_pending: &AtomicBool,
+    click_wait_pending: &AtomicBool,
     root_override: Option<&Path>,
     proxy: &EventLoopProxy<UserEvent>,
 ) {
@@ -274,7 +295,8 @@ fn watch_device_requests(
             };
         let pending = files_pending || claims;
         let persist = persist_pending.load(Ordering::Relaxed);
-        if (pending || persist)
+        let click_wait = click_wait_pending.load(Ordering::Relaxed);
+        if (pending || persist || click_wait)
             && proxy
                 .send_event(UserEvent::RequestRepaint {
                     viewport_id: ViewportId::ROOT,
@@ -285,16 +307,23 @@ fn watch_device_requests(
         {
             return;
         }
-        let (wait, next_persist_wait) = next_pump_wait(pending, persist, persist_wait);
+        let (wait, next_persist_wait) = next_pump_wait(pending, persist, click_wait, persist_wait);
         persist_wait = next_persist_wait;
         thread::park_timeout(wait);
     }
 }
 
 /// How long to sleep, and the backoff to use after a persistence-only wake.
-fn next_pump_wait(pending: bool, persist_pending: bool, persist_wait: Duration) -> (Duration, Duration) {
+fn next_pump_wait(
+    pending: bool,
+    persist_pending: bool,
+    click_wait: bool,
+    persist_wait: Duration,
+) -> (Duration, Duration) {
     if pending {
         (PENDING_WAIT, PERSIST_WAIT_MIN)
+    } else if click_wait {
+        (CLICK_WAIT_WAIT, PERSIST_WAIT_MIN)
     } else if persist_pending {
         let wait = persist_wait.clamp(PERSIST_WAIT_MIN, PERSIST_WAIT_MAX);
         (wait, wait.saturating_mul(2).min(PERSIST_WAIT_MAX))
@@ -340,16 +369,30 @@ mod tests {
 
     #[test]
     fn persistence_retries_back_off_until_a_request_file_resets_them() {
-        let (first, next) = next_pump_wait(false, true, PERSIST_WAIT_MIN);
+        let (first, next) = next_pump_wait(false, true, false, PERSIST_WAIT_MIN);
         assert_eq!(first, PERSIST_WAIT_MIN);
         assert_eq!(next, Duration::from_millis(400));
-        let (second, capped) = next_pump_wait(false, true, PERSIST_WAIT_MAX);
+        let (second, capped) = next_pump_wait(false, true, false, PERSIST_WAIT_MAX);
         assert_eq!((second, capped), (PERSIST_WAIT_MAX, PERSIST_WAIT_MAX));
-        let (with_file, reset) = next_pump_wait(true, true, PERSIST_WAIT_MAX);
+        let (with_file, reset) = next_pump_wait(true, true, false, PERSIST_WAIT_MAX);
         assert_eq!((with_file, reset), (PENDING_WAIT, PERSIST_WAIT_MIN));
         assert_eq!(
-            next_pump_wait(false, false, Duration::from_secs(3)),
+            next_pump_wait(false, false, false, Duration::from_secs(3)),
             (IDLE_WAIT, PERSIST_WAIT_MIN)
+        );
+    }
+
+    #[test]
+    fn a_click_wait_wakes_the_pump_a_second_while_it_waits() {
+        assert_eq!(
+            next_pump_wait(false, false, true, Duration::from_secs(3)),
+            (CLICK_WAIT_WAIT, PERSIST_WAIT_MIN),
+            "a click wait costs a wake a second, not a frame rate"
+        );
+        assert_eq!(
+            next_pump_wait(true, true, true, PERSIST_WAIT_MAX),
+            (PENDING_WAIT, PERSIST_WAIT_MIN),
+            "a waiting request still wakes the pump at the request cadence"
         );
     }
 

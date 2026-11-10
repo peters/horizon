@@ -1,6 +1,6 @@
 ---
 name: horizon-block
-description: Draw a card of plain text in the calling agent's Horizon workspace with the block_panel MCP tool, and inspect, update, hide or close it. Cards show state; their buttons and rows do nothing in this version. Browser pages use horizon-browser and native desktops use horizon-device.
+description: Draw a card of plain text in the calling agent's Horizon workspace with the block_panel MCP tool, and inspect, update, hide or close it. A person's click on a button or a selectable row reaches the agent that owns the card through next_click. Browser pages use horizon-browser and native desktops use horizon-device.
 ---
 
 # Horizon cards
@@ -16,7 +16,7 @@ agent panel that Horizon launched and to its workspace. A caller without that
 panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
-`visibility` and `close`.
+`next_click`, `visibility` and `close`.
 
 ## Create a card
 
@@ -56,16 +56,19 @@ Another agent of the same workspace gets `not_owner`.
 ## List and inspect cards
 
 `list` answers every card of the calling workspace, with `panel_id`, `title`,
-`revision` and `owned_by_caller`.
+`revision`, `owned_by_caller`, `pending_clicks` and `listening`.
 
 ```json
 {"operation": "list"}
 ```
 
 `inspect` answers one card with its document, its revision, `visible`,
-`agent_present` and `owned_by_caller`. `agent_present` is false when no agent
-panel of the owner is in the workspace any more: the person then keeps the last
-document with no agent behind it.
+`agent_present`, `owned_by_caller`, `pending_clicks` and `listening`.
+`agent_present` is false when no agent panel of the owner is in the workspace
+any more: the person then keeps the last document with no agent behind it, and
+the buttons and rows of the card are disabled. `pending_clicks` counts the
+clicks that wait, and `listening` is true while a `next_click` of the owner
+waits on that card.
 
 ```json
 {"operation": "inspect", "panel_id": "<panel_id>"}
@@ -123,11 +126,74 @@ A card is plain text that Horizon draws. It is not verified Horizon state: the
 person reads the agent's claim. Do not show a credential, a token or a private
 key on a card.
 
-## Buttons and rows do nothing
+## Read a click
 
-Buttons and list rows are drawn, and they are inert. No click reaches an agent
-in this version, and no operation waits for one. Never put a decision on a card
-and wait for it. Ask the person in the terminal instead.
+A person can press a button, and select a row in a list that has
+`selection: single`. A selection is Horizon's own state: it is not saved, and a
+new document drops a selection whose row is gone. A press on a selectable row
+changes the selection and is also a click.
+
+`next_click` waits for the next click on a card that the caller owns. It answers
+as soon as a click waits, or with `timed_out` when its wait ends.
+
+```json
+{"operation": "next_click", "panel_id": "<panel_id>", "timeout_millis": 300000}
+```
+
+The wait is 1000 to 3600000 milliseconds; the default is 300000. A click names
+the button or row that the person hit and the document revision that they saw:
+
+```json
+{"status": "clicked", "click": {
+  "event_id": 4, "panel_id": "<panel_id>", "component_id": "continue",
+  "revision": 7, "selected": ["size.cx32"],
+  "at_millis": 1700000000000, "stale": false}}
+```
+
+- `component_id` is the button id or list row id that the person hit.
+- `revision` is the document revision that the person saw, not the current one.
+- `selected` holds the row ids that were selected at that moment, in document
+  order. This is how a button such as Continue tells the agent which option the
+  person chose.
+- `event_id` counts the clicks of one card from 1. Two clicks on the same
+  component have different ids.
+- `stale` is true when the document changed after the person pressed. Confirm
+  the intent before you act on a stale click.
+
+A click reaches an agent at most once. Keep a listen loop:
+
+1. Create or update the card with the choice that the person must make.
+2. Call `next_click`.
+3. Act on the click, and send the result with `update`.
+4. Call `next_click` again.
+5. On `timed_out`, call `next_click` again while the card matters, or stop and
+   tell the person in the terminal.
+
+Only one `next_click` waits per card: a second one answers the older wait with
+`timed_out` first. Closing the card answers a waiting `next_click` with
+`panel_unavailable`. A wait of another agent answers `not_owner`.
+
+A click that no `next_click` waits for is kept for five minutes, at most 32 per
+card. A click on a full queue is dropped and the card says that too many clicks
+wait; an older click is never dropped for a newer one.
+
+## The wake line
+
+When a click waits and no `next_click` listens, Horizon types one fixed line
+into the owner's agent terminal:
+
+```
+A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.
+```
+
+The line never carries text from the card, so a card cannot write into a
+terminal. It arrives only when the owner's agent panel is idle and holds no
+keyboard focus, at most once per streak of clicks and at most every 30 seconds
+per agent panel. Do not wait for it when you are already in `next_click`: while
+it listens, the click is delivered at once and no line is typed.
+
+An agent that ignores the line never reads the click. `listening` and
+`pending_clicks` in `list` and `inspect` say whether a click waits.
 
 ## Errors
 
@@ -149,15 +215,21 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - `document_too_large`: the serialized document is above 32 KiB. Send less
   text, or more than one card.
 - `too_many_cards`: the agent owns eight cards in this workspace. Close one.
-- `request_expired`: Horizon did not apply the request in 10 seconds. Call
-  `list` before you retry, because the change may have completed.
-- `host_timeout`: Horizon did not answer within 15 seconds. Call `list` before
-  you retry a mutation; older Horizon hosts do not support cards.
+- `request_expired`: Horizon did not apply the request in 10 seconds, or in the
+  10 seconds and the wait that a `next_click` asks for. Call `list` before you
+  retry, because the change may have completed.
+- `host_timeout`: Horizon did not answer within 15 seconds, or within the wait
+  of a `next_click` plus 5 seconds. Call `list` before you retry a mutation;
+  older Horizon hosts do not support cards.
 
 ## Limits of this version
 
-- No click or selection reaches an agent.
-- A card has no input, no image, no table and no link.
+- A card holds buttons and selectable rows. It has no text input, no image, no
+  table and no link.
+- The selection of a row is Horizon state, not a click of its own: it reaches
+  the agent with the next click.
+- A click reaches an agent at most once. There is no replay, and the queue of a
+  card is not saved.
 - A card is not saved as a file; its document lives in the panel and comes back
   after a restart of Horizon.
 - Only the agent that created a card can change it.

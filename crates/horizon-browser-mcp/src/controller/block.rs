@@ -5,10 +5,9 @@ use horizon_browser_control::manifest::block::{self, Operation, Outcome};
 
 use super::BrowserController;
 
-/// How long the host has to apply a card request before its deadline passes.
-const HOST_TIMEOUT: Duration = Duration::from_secs(10);
-/// The bound a caller waits, including the start of the coordination worker.
-const CALLER_TIMEOUT: Duration = Duration::from_secs(15);
+/// The bound a caller waits beyond the wait the operation itself asks for, as
+/// the start of the coordination worker and the answer write are included.
+const CALLER_HEADROOM: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 impl BrowserController {
@@ -27,16 +26,26 @@ impl BrowserController {
         if let Some(refusal) = refused_document(&operation) {
             return Ok(refusal);
         }
+        // A `next_click` holds its request open for the wait it asks for, so
+        // both the request deadline and the caller's bound grow with it.
+        let wait = operation
+            .wait_timeout_millis()
+            .map_or(Duration::ZERO, Duration::from_millis);
+        let caller_timeout = block::HOST_APPLY_TIMEOUT + wait + CALLER_HEADROOM;
         let started = Instant::now();
-        let request = block::enqueue(self.identity(), operation, HOST_TIMEOUT).map_err(|error| error.to_string())?;
+        let request_timeout = block::request_timeout(&operation);
+        let request = block::enqueue(self.identity(), operation, request_timeout).map_err(|error| error.to_string())?;
         loop {
             if let Some(result) = block::take_result(&request).map_err(|error| error.to_string())? {
                 return Ok(result);
             }
-            if started.elapsed() >= CALLER_TIMEOUT {
+            if started.elapsed() >= caller_timeout {
                 return Ok(Outcome::failed(
                     "host_timeout",
-                    "The Horizon host did not answer within 15 seconds. List the cards before retrying a mutation; it may have completed. Older hosts do not support block_panel.",
+                    &format!(
+                        "The Horizon host did not answer within {} seconds. List the cards before retrying a mutation; it may have completed. Older hosts do not support block_panel.",
+                        caller_timeout.as_secs()
+                    ),
                 ));
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -49,7 +58,11 @@ impl BrowserController {
 fn refused_document(operation: &Operation) -> Option<Outcome> {
     let document = match operation {
         Operation::Create { document, .. } | Operation::Update { document, .. } => document,
-        Operation::List | Operation::Inspect { .. } | Operation::Visibility { .. } | Operation::Close { .. } => {
+        Operation::List
+        | Operation::Inspect { .. }
+        | Operation::NextClick { .. }
+        | Operation::Visibility { .. }
+        | Operation::Close { .. } => {
             return None;
         }
     };

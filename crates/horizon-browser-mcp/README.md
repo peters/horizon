@@ -558,6 +558,7 @@ standalone device CLI/MCP with an explicitly configured isolated target for inpu
 {"operation":"create","endpoint":"127.0.0.1:5900","ssh":{"host":"lab","user":"deploy","port":2222}}
 {"operation":"list"}
 {"operation":"inspect","panel_id":"<returned id>"}
+{"operation":"next_click","panel_id":"<returned id>","timeout_millis":300000}
 {"operation":"visibility","panel_id":"<returned id>","visible":false}
 {"operation":"reconnect","panel_id":"<returned id>"}
 {"operation":"close","panel_id":"<returned id>"}
@@ -656,9 +657,8 @@ bounded timeout and require a normal application upgrade to gain the capability.
 
 `block_panel` draws a card of plain text in the caller's Horizon workspace. A
 card holds a flat list of components in draw order: `heading`, `text`, `kv`,
-`badge`, `progress`, `divider`, `list` and `buttons`. Its buttons and list rows
-are drawn and inert in this version: no click reaches an agent, and no operation
-waits for one.
+`badge`, `progress`, `divider`, `list` and `buttons`. The person's presses on a
+button or on a selectable row reach the agent that owns the card.
 
 ```json
 {"operation":"create","title":"cloud-1","document":{"components":[
@@ -667,6 +667,7 @@ waits for one.
 {"operation":"update","panel_id":"<returned id>","document":{"components":[{"type":"text","text":"Hour 4 of 24."}]}}
 {"operation":"list"}
 {"operation":"inspect","panel_id":"<returned id>"}
+{"operation":"next_click","panel_id":"<returned id>","timeout_millis":300000}
 {"operation":"visibility","panel_id":"<returned id>","visible":false}
 {"operation":"close","panel_id":"<returned id>"}
 ```
@@ -687,12 +688,54 @@ owns at most eight cards in one workspace (`too_many_cards`). `list` and
 is `panel_unavailable`. `inspect` reports `visible`, `agent_present` (whether an
 agent panel of the owner is still in the workspace) and `owned_by_caller`.
 
+## Clicks
+
+`next_click` answers the oldest click that waits, or `{timed_out: true}` when
+`timeout_millis` passes. The wait is 1 000-3 600 000 ms, 300 000 ms when it is
+omitted. A click names the component the person hit and the document revision
+they saw:
+
+```json
+{"status":"clicked","click":{
+  "event_id":4,"panel_id":"<card id>","component_id":"continue","revision":7,
+  "selected":["size.cx32"],"at_millis":1700000000000,"stale":false}}
+```
+
+`selected` holds the row ids the person had selected, in document order, so a
+`continue` button tells the agent which option was chosen. A press on a row of a
+`selection: single` list changes the selection and is also a click. `stale` is
+true when the document changed after the person pressed; confirm the intent
+before acting on a stale click. A click reaches an agent at most once, so keep
+the loop: call `next_click`, act, `update` the card, call `next_click` again, and
+call it again after `timed_out` while the card matters.
+
+Without a waiting `next_click`, a click is kept for 5 minutes, at most 32 per
+card in insertion order. A click on a full queue is dropped, an older click is
+never dropped for a newer one, and the card says that too many clicks wait until
+the queue drains. One `next_click` waits per card and owner: a second one answers
+the older wait with `timed_out` first. Closing the card answers a waiting
+`next_click` with `panel_unavailable`.
+
+When a click waits and no `next_click` listens, Horizon types one fixed line into
+the owner's agent terminal:
+
+```
+A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.
+```
+
+That line arrives only when the owner's agent panel is idle and holds no
+keyboard focus, at most once per streak of clicks and at most every 30 seconds
+per agent panel. It never carries text from the card, so a card cannot write into
+a terminal. An agent that ignores the line never reads the click; `listening` and
+`pending_clicks` in `list` and `inspect` say whether a click waits.
+
 Every operation needs the identity that Horizon injects into an agent panel;
 a caller without it gets `caller_unavailable`. A request expires before dispatch
-after 10 seconds, and the MCP wait is bounded to 15 seconds (`host_timeout`).
-Hosts without this API return that bounded timeout until they are upgraded. A
-card and its document are saved with the panel, so a restart brings the card
-back; restore does not reconnect an owner that is gone.
+after 10 seconds plus any `next_click` wait, and the MCP wait is bounded to 15
+seconds plus that wait (`host_timeout`). Hosts without this API return that
+bounded timeout until they are upgraded. A card and its document are saved with
+the panel, so a restart brings the card back; restore does not reconnect an owner
+that is gone, and the card then says that its agent is not here.
 
 ## Remote device orientation
 

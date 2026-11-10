@@ -1,11 +1,12 @@
 ---
-applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
 
 An agent composes a document and Horizon draws it as a card in the workspace of
-that agent. The document is untrusted text. The design is in
+that agent. The document is untrusted text, and a click of the person travels
+back to that agent. The design is in
 [`crates/horizon-browser-control/src/block.rs`](../../../crates/horizon-browser-control/src/block.rs)
 and the module comments of the files above.
 
@@ -50,6 +51,32 @@ variables that Horizon injects into that panel.
   `not_owner`. One agent owns at most eight cards in one workspace.
 - `list` and `inspect` are read-only and workspace-scoped. A card of another
   workspace is invisible.
+- `next_click` requires the exact owner too. Another agent of the workspace gets
+  `not_owner`, and a card that leaves the board answers `panel_unavailable`.
+
+## Horizon writes into an agent terminal
+
+A person's click must reach an agent that is idle and out of its tool loop, so
+Horizon types one line into the terminal of the panel that owns the card.
+
+- The line is the constant
+  [`WAKE_LINE`](../../../crates/horizon-core/src/block_panel/wake.rs). It never
+  carries text from a card, a panel title, a row or a button: a card cannot put
+  its own text into a terminal. A test holds the constant to a literal and
+  refuses a placeholder.
+- The line goes out only while all of these hold: an agent panel of the owner is
+  in the card's workspace; its status is `Idle`; it does not hold keyboard focus,
+  so the person may be typing there without a collision; no click wait of the
+  owner is open; no line went out for this streak of clicks yet; and the last
+  line to that agent panel is at least 30 seconds old.
+- The decision is the pure function
+  [`wake_verdict`](../../../crates/horizon-core/src/block_panel/wake.rs), tested
+  for every condition. A held line is tried again on a later frame while the
+  click still waits; no timer thread and no repaint loop is added.
+- The write uses the encoder of a person's paste and then Enter, so the agent
+  TUI receives one complete line. It runs on the UI thread and touches no file.
+- Horizon writes to no other panel, and a card panel has no terminal to write
+  to.
 
 ## Does not guarantee
 
@@ -66,9 +93,16 @@ variables that Horizon injects into that panel.
   `inspect` let every agent panel of the workspace read the full document of
   every card of that workspace. An agent must not write a credential, a token or
   a private key into a document.
-- **The card's buttons and rows do nothing in this version.** No click or
-  selection is delivered to an agent, and no operation waits for one. A card is
-  not a prompt, and an agent that waits for a click waits forever.
+- **A click can be lost.** A click reaches an agent at most once, and the queue
+  of a card lives in the Horizon process: a restart drops it. A click older than
+  five minutes is dropped, a click on a full queue of 32 is dropped, and a click
+  whose `next_click` ends at its deadline is answered with `timed_out`, not with
+  the click. A card stage that is clicked after its document changed reports
+  `stale`, and Horizon does not decide whether the older intent still holds.
+- **The wake line can be ignored.** Horizon proves that the line was written to
+  the terminal of an idle agent panel, not that the agent read it or acts on it.
+  An agent that ignores the line never reads the click, and the person sees only
+  the card and the clicks that wait.
 - **The request queue is private, not authenticated per message.** A request is a
   `0600` file under the runtime root, bounded to 32 waiting requests and to 96 KiB
   each, pruned like the Device queue. Another process of the same user can write

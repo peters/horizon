@@ -209,26 +209,53 @@ fn assert_device_panel_contract(tools: &Value) {
 
 fn assert_block_panel_contract(tools: &Value) {
     let card = listed_tool(tools, "block_panel").to_string();
-    for operation in ["create", "update", "list", "inspect", "visibility", "close"] {
+    for operation in [
+        "create",
+        "update",
+        "list",
+        "inspect",
+        "next_click",
+        "visibility",
+        "close",
+    ] {
         assert!(card.contains(operation), "missing card operation {operation}");
     }
     for document_field in ["components", "heading", "buttons", "selection"] {
         assert!(card.contains(document_field), "missing document field {document_field}");
+    }
+    for click_field in [
+        "event_id",
+        "component_id",
+        "revision",
+        "selected",
+        "at_millis",
+        "stale",
+        "timed_out",
+        "pending_clicks",
+        "listening",
+    ] {
+        assert!(card.contains(click_field), "missing click field {click_field}");
     }
     let description = listed_tool(tools, "block_panel")["description"]
         .as_str()
         .expect("description")
         .to_owned();
     for stated in [
-        "do nothing",
         "not_owner",
         "too_many_cards",
         "agent_present",
         "host_timeout",
+        "at most once",
+        "Its agent is not here",
+        "A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.",
     ] {
         assert!(description.contains(stated), "the description omits {stated}");
     }
-    assert!(!card.contains("next_click"), "no click operation is offered yet");
+    let next_click = listed_tool(tools, "block_panel")["inputSchema"].to_string();
+    assert!(
+        next_click.contains("timeout_millis"),
+        "next_click takes its own wait: {next_click}"
+    );
 }
 
 fn assert_provider_tools_contract(tools: &Value) {

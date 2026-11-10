@@ -43,7 +43,10 @@ pub use agents::{
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
-pub use block_panel::BlockPanelState;
+pub use block_panel::{
+    BlockPanelState, CLICK_RETENTION_MILLIS, CardRuntime, ClickQueue, MAX_PENDING_CLICKS, PendingClick, WAKE_LINE,
+    WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
+};
 pub use board::{
     Board, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide,
     WorkspaceLayout,

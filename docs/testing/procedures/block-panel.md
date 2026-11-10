@@ -16,19 +16,23 @@ This procedure makes sure that an agent can draw a card in its own Horizon
 workspace with the `block_panel` tool, change it, read it, hide it, show it and
 close it. It also makes sure that another agent cannot change the card, that an
 invalid document is refused, and that the card comes back after a restart of
-Horizon.
+Horizon. It then makes sure that a click of the person reaches the agent that
+owns the card, with its selection and its time, and that Horizon wakes an idle
+agent for a click.
 
 ## 2. Applicability
 
 - Candidate: a frozen debug build of one exact commit, `<candidate-commit>`.
 - Platforms: Linux. Watch the candidate live through a native VNC Device panel
   in your own Horizon workspace, as `AGENTS.md` requires.
-- This procedure does not test clicks on a card. Buttons and list rows are inert
-  in this version, and no operation delivers a click.
+- The click tasks send pointer presses to the fixture display with `xdotool`,
+  scoped to the display and the process of the fixture. A pointer press on a card
+  gives the keyboard focus to that card, because the card is a panel.
 
 ## 3. Equipment and preconditions
 
-- A Linux computer with Xvfb, openbox, x11vnc, Python 3 and dbus. The
+- A Linux computer with Xvfb, openbox, x11vnc, xdotool, ImageMagick, Python 3
+  and dbus. The
   [local device smoke fixture](../../../scripts/device-smoke/README.md) uses
   these programs.
 - Your own Horizon, with an agent panel that can call `device_panel` and
@@ -245,6 +249,167 @@ Horizon.
 
    Result: The answer has `status: failed` and `code: panel_unavailable`.
 
+### 5.9 B09 — Read a click with next_click
+
+1. In client A, call `block_panel` with:
+
+   ```json
+   {"operation":"update","panel_id":"<card>","document":{"components":[
+     {"type":"list","selection":"single","rows":[
+       {"id":"size.cx22","title":"CX22 - 2 vCPU"},
+       {"id":"size.cx32","title":"CX32 - 4 vCPU"}]},
+     {"type":"buttons","items":[{"id":"continue","label":"Continue","tone":"primary"}]}]}}
+   ```
+
+   Result: The answer has `status: updated` and `revision` 3. The card shows two
+   rows and one button.
+
+2. In client A, call `block_panel` with
+   `{"operation":"next_click","panel_id":"<card>","timeout_millis":120000}`, and
+   keep the call open.
+
+   Result: The call does not answer yet.
+
+3. Find the screen position of the `Continue` button on `<display>`. Take the
+   picture and read the position:
+
+   ```sh
+   DISPLAY=<display> import -window root <work>/card.png
+   ```
+
+   Then press the button on the fixture display only:
+
+   ```sh
+   DISPLAY=<display> xdotool mousemove <x> <y> click 1
+   ```
+
+   Result: The call of step 2 answers `status: clicked`. `click.component_id` is
+   `continue`, `click.revision` is 3, `click.selected` is empty and
+   `click.stale` is false.
+
+4. In client A, call `block_panel` with `{"operation":"list"}`.
+
+   Result: `pending_clicks` is 0 and `listening` is false: the click was
+   delivered once.
+
+### 5.10 B10 — A selected row travels with the click
+
+1. Press the row `CX32 - 4 vCPU` on the fixture display, as in B09 step 3.
+
+   Result: The row is marked as selected in the live view. The press is also a
+   click, so it waits for the agent.
+
+2. In client A, call `block_panel` with
+   `{"operation":"next_click","panel_id":"<card>","timeout_millis":120000}`.
+
+   Result: The answer is `clicked` with `component_id` `size.cx32` and
+   `selected` `["size.cx32"]`.
+
+3. Press `Continue`, then call `next_click` again.
+
+   Result: The answer has `component_id` `continue` and `selected`
+   `["size.cx32"]`: the button reports which option the person chose.
+
+4. In client A, update the card with a document that has only the row
+   `size.cx22`, and then update it with the document of B09 step 1. Press
+   `Continue` and call `next_click`.
+
+   Result: `selected` is empty, because the update dropped the selection of the
+   row that is gone.
+
+### 5.11 B11 — The wait ends with timed_out
+
+1. In client A, call `block_panel` with
+   `{"operation":"next_click","panel_id":"<card>","timeout_millis":2000}` and do
+   not press the card.
+
+   Result: The call answers about two seconds later with `status: timed_out` and
+   `timed_out` true. No click is lost.
+
+2. Call `next_click` again with the same wait, then press `Continue` after five
+   seconds.
+
+   Result: The click waits on the card. The next `next_click` answers it at once.
+
+### 5.12 B12 — The wake line reaches an idle agent
+
+1. In client A, call `block_panel` with `{"operation":"list"}` and check that
+   `listening` is false and `pending_clicks` is 0. Do not call `next_click`.
+
+2. Press `Continue` on the fixture display.
+
+   Result: The terminal of agent panel A shows one new line within a second:
+
+   ```
+   A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.
+   ```
+
+   The card shows no other text, and the line holds no text from the card.
+
+3. In client A, call `block_panel` with `{"operation":"list"}`.
+
+   Result: `pending_clicks` is 1 and `listening` is false.
+
+4. In client A, call `block_panel` with
+   `{"operation":"next_click","panel_id":"<card>","timeout_millis":120000}`.
+
+   Result: The answer is `clicked`: the line and the click agree.
+
+### 5.13 B13 — No wake line while the agent panel has focus
+
+1. Press `Continue` on the card again within 30 seconds of the line of B12.
+
+   Result: No new line appears in the terminal of agent panel A. The card keeps
+   the click, and `list` reports `pending_clicks` 1.
+
+2. Press in the terminal of agent panel A, so that it holds the keyboard focus.
+   Wait 35 seconds without another press.
+
+   Result: No wake line appears, because agent panel A holds the keyboard focus.
+   `next_click` still answers the waiting click at once.
+
+3. Press `Continue` again, then press on the empty canvas of the workspace, so
+   that no agent panel holds the focus.
+
+   Result: The terminal of agent panel A shows the wake line within a second.
+
+### 5.14 B14 — A card whose agent is gone
+
+1. Close agent panel A in the live view, with its close button.
+
+   Result: The card shows one line, `Its agent is not here.`, and its button and
+   rows are drawn disabled.
+
+2. Press `Continue` on the card.
+
+   Result: Nothing is recorded. In client B, `block_panel` with
+   `{"operation":"list"}` reports `pending_clicks` 0, and `inspect` reports
+   `agent_present` false.
+
+3. Start the fixture again on the same state with `--reuse-state
+   --resume-session`, as in B07 step 2, and read the new identity of agent panel
+   A from `<work>/identity-a.json`.
+
+   Result: The card keeps its document and it is live again, because its owner
+   is back.
+
+### 5.15 B15 — A full queue of clicks
+
+1. Press `Continue` on the fixture display 33 times:
+
+   ```sh
+   DISPLAY=<display> xdotool mousemove <x> <y> click --repeat 33 --delay 150 1
+   ```
+
+   Result: The card shows `Too many clicks are waiting.` and `list` reports
+   `pending_clicks` 32.
+
+2. In client A, call `next_click` 32 times and read each answer.
+
+   Result: The 32 oldest clicks come back in the order of the presses, each with
+   a higher `event_id`, and the oldest is never lost. After the last answer the
+   card no longer shows the line and `pending_clicks` is 0.
+
 ## 6. Pass criteria
 
 - B01: The card appears in the workspace of the calling agent, at revision 1,
@@ -257,6 +422,18 @@ Horizon.
 - B06: Another agent reads the card and cannot change, hide or close it.
 - B07: The card returns after a restart with the same document and revision.
 - B08: A closed card leaves the list and is unavailable.
+- B09: A press on a button reaches the owning agent once, with the revision the
+  person saw.
+- B10: A click reports the selected row ids, and a removed row clears the
+  selection.
+- B11: A wait ends with `timed_out` at its bound, and a later click still waits.
+- B12: A click without a waiting `next_click` types one fixed line into the
+  owner's terminal.
+- B13: No wake line goes out while the owner's agent panel holds the keyboard
+  focus, and the line follows the focus away.
+- B14: Without its agent the card says so, takes no click, and comes back with
+  its owner.
+- B15: A full queue drops the newest click and keeps the older ones in order.
 
 ## 7. Cleanup
 

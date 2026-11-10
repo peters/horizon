@@ -149,6 +149,10 @@ struct PanelBodyContext<'a> {
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
     device_ui_state: Option<&'a mut crate::device_widget::DeviceUiState>,
+    /// The clicks and row selection of a card panel.
+    card_runtime: Option<&'a mut horizon_core::CardRuntime>,
+    /// An agent panel of the card's owner is in its workspace.
+    card_agent_present: bool,
     browser_shortcuts: Option<&'a AppShortcuts>,
     browser_shortcut_bindings: &'a [ShortcutBinding],
     browser_frame_has_pointer_button: bool,
@@ -178,11 +182,22 @@ fn show_panel_body_contents(
             false
         }
         PanelKind::Block => {
-            let Some(block) = panel.block() else {
+            let (Some(block), Some(card)) = (panel.block(), body_context.card_runtime) else {
                 ui.centered_and_justified(|ui| ui.label("Card state unavailable"));
                 return false;
             };
-            crate::block_widget::show(ui, panel.id, &block.document);
+            crate::block_widget::show(
+                ui,
+                panel.id,
+                crate::block_widget::CardView {
+                    document: &block.document,
+                    card,
+                    revision: block.revision,
+                    agent_present: body_context.card_agent_present,
+                    interactive,
+                    now_millis: horizon_browser_control::manifest::now_millis(),
+                },
+            );
             false
         }
         PanelKind::Browser => {
@@ -347,6 +362,7 @@ impl HorizonApp {
                         let mut reconnect_requested = false;
                         let claim_editor_focus = true;
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
+                        let card_agent_present = self.card_agent_present(panel_id);
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -365,6 +381,8 @@ impl HorizonApp {
                             };
                             let device_state = (panel.kind == PanelKind::Device)
                                 .then(|| self.panel_render_caches.device_ui_state.entry(panel_id).or_default());
+                            let card_runtime = (panel.kind == PanelKind::Block)
+                                .then(|| self.panel_render_caches.card_runtime.entry(panel_id).or_default());
                             show_panel_body_contents(
                                 ui,
                                 panel,
@@ -383,6 +401,8 @@ impl HorizonApp {
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
                                     device_ui_state: device_state,
+                                    card_runtime,
+                                    card_agent_present,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings: &all_shortcut_bindings,
                                     browser_frame_has_pointer_button: frame_has_pointer_button,
@@ -662,11 +682,13 @@ impl HorizonApp {
                     |ui| {
                         let mut reconnect_requested = false;
                         let claim_editor_focus = snapshot.is_focused;
+                        let card_agent_present = self.card_agent_present(panel_id);
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
                         let browser_ui_state = &mut self.panel_render_caches.browser_ui_state;
                         let device_ui_state = &mut self.panel_render_caches.device_ui_state;
+                        let card_runtimes = &mut self.panel_render_caches.card_runtime;
                         let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -686,6 +708,8 @@ impl HorizonApp {
                             };
                             let device_state =
                                 (panel.kind == PanelKind::Device).then(|| device_ui_state.entry(panel_id).or_default());
+                            let card_runtime =
+                                (panel.kind == PanelKind::Block).then(|| card_runtimes.entry(panel_id).or_default());
                             if show_panel_body_contents(
                                 ui,
                                 panel,
@@ -704,6 +728,8 @@ impl HorizonApp {
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
                                     device_ui_state: device_state,
+                                    card_runtime,
+                                    card_agent_present,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings,
                                     browser_frame_has_pointer_button: scope.frame_has_pointer_button,

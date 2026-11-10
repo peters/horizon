@@ -15,7 +15,7 @@ use horizon_core::browser::manifest::{
     self,
     block::{self, CardSummary, Operation, Outcome, Request},
 };
-use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
+use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use super::HorizonApp;
 use super::answer_retries::{RefusedAnswer, RefusedAnswers};
@@ -100,66 +100,101 @@ impl HorizonApp {
         changed
     }
 
-    /// Applies each request a claim took, in claim order, and answers it.
+    /// Applies each request a claim took, in claim order, and answers it. A
+    /// `next_click` that waits for a click is applied here too: the host keeps
+    /// it and answers it when a click arrives or its deadline passes.
     fn drain_claimed_block_requests(&mut self, ctx: &Context) -> bool {
         // The outcome of a claim arrives on the coordination worker. A frame
         // that also drains the Device requests has drained this queue already.
         self.apply_browser_host_io();
+        // Click waits settle before a request applies: a click that waits reaches
+        // the wait it was made for, and the counts a request reports are fresh.
+        let settled = self.settle_block_clicks();
         let claimed = std::mem::take(&mut self.block_claim.claimed);
         let changed = !claimed.is_empty();
         for request in claimed {
-            let outcome = self.apply_block_request_at(&request.request, ctx);
-            self.write_block_answer(BlockAnswer::new(request.root.as_deref(), request.request, outcome));
+            let outcome = self.apply_block_request_at(&request.request, request.root.as_deref(), ctx);
+            if let Some(outcome) = outcome {
+                self.write_block_answer(BlockAnswer::new(request.root.as_deref(), request.request, outcome));
+            }
         }
-        changed | self.retry_block_answers()
+        changed | self.retry_block_answers() | settled
     }
 
     /// Applies a request against the process runtime root, as a claim's apply
     /// does. Tests use it to judge one operation without a queue.
     #[cfg(test)]
-    fn apply_block_request(&mut self, request: &Request, ctx: &Context) -> Outcome {
-        self.apply_block_request_at(request, ctx)
+    pub(super) fn apply_block_request(&mut self, request: &Request, ctx: &Context) -> Outcome {
+        self.apply_block_request_at(request, None, ctx)
+            .expect("the request answers at once")
     }
 
-    /// Applies one request.
-    fn apply_block_request_at(&mut self, request: &Request, ctx: &Context) -> Outcome {
-        if request.host_instance != manifest::host_instance() {
-            return Outcome::failed("wrong_host", "Request belongs to another Horizon host");
-        }
-        if request.deadline_at_millis <= manifest::now_millis() {
-            return request_expired();
-        }
-        let Some(actor) = actor_panel(&self.board, &request.actor) else {
-            return Outcome::failed(
-                "caller_unavailable",
-                "The calling agent panel is no longer in this host",
-            );
+    /// Applies one request and returns its answer, or `None` for a `next_click`
+    /// the host now holds open.
+    fn apply_block_request_at(&mut self, request: &Request, root: Option<&Path>, ctx: &Context) -> Option<Outcome> {
+        let actor = match self.request_caller(request) {
+            Ok(actor) => actor,
+            Err(refusal) => return Some(refusal),
         };
         match &request.operation {
             Operation::Create { title, document } => {
-                self.create_card(title.as_deref(), document, actor, &request.actor, ctx)
+                Some(self.create_card(title.as_deref(), document, actor, &request.actor, ctx))
             }
             Operation::Update { panel_id, document } => {
-                self.update_card(panel_id, document, actor, &request.actor, ctx)
+                Some(self.update_card(panel_id, document, actor, &request.actor, ctx))
             }
-            Operation::List => Outcome::Panels {
-                panels: self
-                    .workspace_cards(actor.workspace_id)
-                    .into_iter()
-                    .map(|panel| CardSummary {
-                        panel_id: panel.local_id.clone(),
-                        title: panel.block().map_or_else(String::new, |block| block.title.clone()),
-                        revision: panel.block().map_or(0, |block| block.revision),
-                        owned_by_caller: card_owner(panel) == Some(request.actor.as_str()),
-                    })
-                    .collect(),
-            },
-            Operation::Inspect { panel_id } => self.inspect_card(panel_id, actor, &request.actor),
+            Operation::List => Some(Outcome::Panels {
+                panels: self.workspace_card_summaries(actor.workspace_id, &request.actor),
+            }),
+            Operation::Inspect { panel_id } => Some(self.inspect_card(panel_id, actor, &request.actor)),
+            Operation::NextClick { panel_id, .. } => self.begin_click_wait(root, request, panel_id),
             Operation::Visibility { panel_id, visible } => {
-                self.change_card(panel_id, *visible, actor, &request.actor, ctx)
+                Some(self.change_card(panel_id, *visible, actor, &request.actor, ctx))
             }
-            Operation::Close { panel_id } => self.close_card(panel_id, actor, &request.actor, ctx),
+            Operation::Close { panel_id } => Some(self.close_card(panel_id, actor, &request.actor, ctx)),
         }
+    }
+
+    /// The checks every request passes before Horizon applies it: the host it
+    /// belongs to, its deadline, and the calling agent panel.
+    pub(super) fn request_caller(&self, request: &Request) -> Result<ActorPanel, Outcome> {
+        if request.host_instance != manifest::host_instance() {
+            return Err(Outcome::failed("wrong_host", "Request belongs to another Horizon host"));
+        }
+        if request.deadline_at_millis <= manifest::now_millis() {
+            return Err(request_expired());
+        }
+        actor_panel(&self.board, &request.actor).ok_or_else(|| {
+            Outcome::failed(
+                "caller_unavailable",
+                "The calling agent panel is no longer in this host",
+            )
+        })
+    }
+
+    /// The cards of one workspace as `list` reports them.
+    fn workspace_card_summaries(&mut self, workspace: WorkspaceId, caller: &str) -> Vec<CardSummary> {
+        let cards: Vec<PanelId> = self.workspace_cards(workspace).iter().map(|panel| panel.id).collect();
+        cards
+            .into_iter()
+            .filter_map(|id| self.card_summary(id, caller))
+            .collect()
+    }
+
+    /// One card as `list` reports it.
+    fn card_summary(&mut self, id: PanelId, caller: &str) -> Option<CardSummary> {
+        let panel = self.board.panel(id)?;
+        let block = panel.block()?;
+        let (panel_id, title, revision) = (panel.local_id.clone(), block.title.clone(), block.revision);
+        let owned_by_caller = block.owner_actor.as_deref() == Some(caller);
+        Some(CardSummary {
+            panel_id,
+            title,
+            revision,
+            owned_by_caller,
+            pending_clicks: self.card_pending_clicks(id),
+            listening: self.block_listening(id),
+        })
     }
 
     fn create_card(
@@ -243,6 +278,10 @@ impl HorizonApp {
             return Outcome::failed("not_block_panel", "Target is not a card");
         };
         let revision = state.replace_document(document);
+        // The person keeps a selection only while its row is still drawn.
+        if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id) {
+            card.retain_selection(&state.document);
+        }
         self.mark_runtime_dirty();
         ctx.request_repaint();
         Outcome::Updated {
@@ -251,7 +290,7 @@ impl HorizonApp {
         }
     }
 
-    fn inspect_card(&self, panel_id: &str, actor: ActorPanel, owner: &str) -> Outcome {
+    fn inspect_card(&mut self, panel_id: &str, actor: ActorPanel, owner: &str) -> Outcome {
         let panel = match self.card_panel(panel_id, actor.workspace_id) {
             Ok(panel) => panel,
             Err(refusal) => return refusal,
@@ -259,21 +298,23 @@ impl HorizonApp {
         let Some(state) = panel.block() else {
             return Outcome::failed("not_block_panel", "Target is not a card");
         };
-        let agent_present = state.owner_actor.as_deref().is_some_and(|owner_actor| {
-            self.board.panels.iter().any(|panel| {
-                panel.workspace_id == actor.workspace_id
-                    && panel.kind.is_agent()
-                    && browser_actor(&panel.local_id) == owner_actor
-            })
-        });
+        let id = panel.id;
+        let title = state.title.clone();
+        let revision = state.revision;
+        let document = state.document.clone();
+        let visible = panel.visible;
+        let owned_by_caller = state.owner_actor.as_deref() == Some(owner);
+        let agent_present = self.card_owner_panel(panel).is_some();
         Outcome::Inspected {
             panel_id: panel_id.to_owned(),
-            title: state.title.clone(),
-            revision: state.revision,
-            document: state.document.clone(),
-            visible: panel.visible,
+            title,
+            revision,
+            document,
+            visible,
             agent_present,
-            owned_by_caller: state.owner_actor.as_deref() == Some(owner),
+            owned_by_caller,
+            pending_clicks: self.card_pending_clicks(id),
+            listening: self.block_listening(id),
         }
     }
 
@@ -344,7 +385,7 @@ impl HorizonApp {
 
     /// The panel of a card that this caller owns; every other agent of the
     /// workspace reads it and changes nothing.
-    fn owned_card(&self, panel_id: &str, actor: ActorPanel, owner: &str) -> Result<PanelId, Outcome> {
+    pub(super) fn owned_card(&self, panel_id: &str, actor: ActorPanel, owner: &str) -> Result<PanelId, Outcome> {
         let panel = self.card_panel(panel_id, actor.workspace_id)?;
         if card_owner(panel) != Some(owner) {
             return Err(Outcome::failed(

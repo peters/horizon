@@ -1,7 +1,19 @@
 //! What a card panel holds: one document and the host state around it.
+//!
+//! [`BlockPanelState`] is the saved part: the document, its revision and the
+//! owning agent. [`CardRuntime`] is what the person does with it between
+//! frames: clicks that wait for the agent and the row a list has selected.
 
 use horizon_browser_control::block::BlockDocument;
 use serde::{Deserialize, Serialize};
+
+mod card;
+mod clicks;
+mod wake;
+
+pub use card::CardRuntime;
+pub use clicks::{CLICK_RETENTION_MILLIS, ClickQueue, MAX_PENDING_CLICKS, PendingClick};
+pub use wake::{WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict};
 
 /// One card: the document that the host draws, the revision it assigned and
 /// the agent that owns it. Saved with the panel, so a restart brings it back.

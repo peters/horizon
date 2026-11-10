@@ -1,0 +1,240 @@
+//! What a card remembers between frames: the person's clicks and the row it
+//! has selected.
+//!
+//! None of this is saved. A click and a selection belong to the moment the
+//! person sees, so they live in the Horizon process; the document, its
+//! revision and the owner are what a restart keeps.
+
+use std::collections::BTreeMap;
+
+use horizon_browser_control::block::{BlockDocument, Component, Selection};
+
+use super::clicks::{ClickQueue, PendingClick};
+
+/// A card's runtime state: the clicks it holds for its agent, the row each
+/// list has selected, and whether a wake line already went out.
+#[derive(Clone, Debug, Default)]
+pub struct CardRuntime {
+    clicks: ClickQueue,
+    /// The selected row of a list, by its component index in the document.
+    selection: BTreeMap<usize, String>,
+    /// A wake line already went to the owner for this streak of clicks.
+    wake_sent: bool,
+}
+
+impl CardRuntime {
+    /// Records a press on `component_id` against the revision the person saw.
+    /// Returns whether the card queued it; a full queue keeps the older
+    /// clicks.
+    pub fn press(&mut self, component_id: &str, revision: u64, document: &BlockDocument, now_millis: i64) -> bool {
+        let selected = self.selected_ids(document);
+        self.clicks.push(component_id, revision, selected, now_millis)
+    }
+
+    /// Selects `row_id` in the list of component `component`. Returns whether
+    /// the component is a list this card lets the person select.
+    pub fn select(&mut self, component: usize, row_id: &str, document: &BlockDocument) -> bool {
+        let Some(Component::List {
+            selection: Selection::Single,
+            rows,
+        }) = document.components.get(component)
+        else {
+            return false;
+        };
+        if !rows.iter().any(|row| row.id == row_id) {
+            return false;
+        }
+        self.selection.insert(component, row_id.to_owned());
+        true
+    }
+
+    /// The row selected in component `component`.
+    #[must_use]
+    pub fn selected(&self, component: usize) -> Option<&str> {
+        self.selection.get(&component).map(String::as_str)
+    }
+
+    /// The selected row ids in draw order: what a click reports as `selected`.
+    #[must_use]
+    pub fn selected_ids(&self, document: &BlockDocument) -> Vec<String> {
+        document
+            .components
+            .iter()
+            .enumerate()
+            .filter_map(|(index, component)| {
+                let Component::List {
+                    selection: Selection::Single,
+                    rows,
+                } = component
+                else {
+                    return None;
+                };
+                let selected = self.selection.get(&index)?;
+                rows.iter().any(|row| row.id == *selected).then(|| selected.clone())
+            })
+            .collect()
+    }
+
+    /// Drops the selections of rows that a new document no longer holds.
+    pub fn retain_selection(&mut self, document: &BlockDocument) {
+        self.selection.retain(|index, selected| {
+            let Some(Component::List {
+                selection: Selection::Single,
+                rows,
+            }) = document.components.get(*index)
+            else {
+                return false;
+            };
+            rows.iter().any(|row| row.id == *selected)
+        });
+    }
+
+    /// The oldest click that still waits, removed: a click reaches an agent at
+    /// most once.
+    pub fn take_click(&mut self, now_millis: i64) -> Option<PendingClick> {
+        self.clicks.take(now_millis)
+    }
+
+    /// How many clicks wait for the agent, after dropping the ones that aged
+    /// out.
+    pub fn pending_clicks(&mut self, now_millis: i64) -> usize {
+        self.clicks.pending(now_millis)
+    }
+
+    /// How many clicks wait for the agent, as last pruned.
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        self.clicks.len()
+    }
+
+    /// Whether a click was refused while the queue stayed full, so the card
+    /// says that too many clicks wait.
+    pub fn refused_notice(&mut self, now_millis: i64) -> bool {
+        self.clicks.refused_notice(now_millis)
+    }
+
+    /// Whether a wake line already went out for this streak of clicks.
+    #[must_use]
+    pub fn wake_sent(&self) -> bool {
+        self.wake_sent
+    }
+
+    pub fn mark_wake_sent(&mut self) {
+        self.wake_sent = true;
+    }
+
+    /// Starts a new streak: a waiter existed, so the owner is listening again
+    /// for the next click.
+    pub fn reset_wake_streak(&mut self) {
+        self.wake_sent = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_browser_control::block::{Button, Component, ListRow, Selection, Tone};
+
+    use super::CardRuntime;
+
+    fn rows(ids: &[&str]) -> Vec<ListRow> {
+        ids.iter()
+            .map(|id| ListRow {
+                id: (*id).to_owned(),
+                title: (*id).to_owned(),
+                subtitle: None,
+            })
+            .collect()
+    }
+
+    fn document(row_ids: &[&str]) -> horizon_browser_control::block::BlockDocument {
+        horizon_browser_control::block::BlockDocument {
+            components: vec![
+                Component::Heading {
+                    text: "cloud-1".to_owned(),
+                },
+                Component::List {
+                    selection: Selection::Single,
+                    rows: rows(row_ids),
+                },
+                Component::Buttons {
+                    items: vec![Button {
+                        id: "continue".to_owned(),
+                        label: "Continue".to_owned(),
+                        tone: Tone::Primary,
+                    }],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_pressed_button_reports_the_selected_rows_in_document_order() {
+        let card = document(&["size.cx22", "size.cx32"]);
+        let mut runtime = CardRuntime::default();
+        assert!(runtime.select(1, "size.cx32", &card));
+        assert!(runtime.press("continue", 4, &card, 1_000), "a press is queued");
+
+        let click = runtime.take_click(1_000).expect("click");
+        assert_eq!(click.component_id, "continue");
+        assert_eq!(click.revision, 4);
+        assert_eq!(click.selected, vec!["size.cx32".to_owned()]);
+        assert_eq!(runtime.selected_ids(&card), vec!["size.cx32".to_owned()]);
+    }
+
+    #[test]
+    fn only_a_single_selection_list_takes_a_selection() {
+        let mut card = document(&["a"]);
+        card.components.push(Component::List {
+            selection: Selection::None,
+            rows: rows(&["b"]),
+        });
+        let mut runtime = CardRuntime::default();
+
+        assert!(runtime.select(1, "a", &card));
+        assert!(
+            !runtime.select(1, "missing", &card),
+            "a row that is not there is not selected"
+        );
+        assert_eq!(runtime.selected(1), Some("a"));
+        assert!(
+            !runtime.select(2, "b", &card),
+            "a list the person cannot select takes nothing"
+        );
+        assert!(!runtime.select(0, "a", &card), "a heading is not a list");
+        assert_eq!(runtime.selected_ids(&card), vec!["a".to_owned()]);
+    }
+
+    #[test]
+    fn an_update_that_removes_the_selected_row_clears_the_selection() {
+        let mut runtime = CardRuntime::default();
+        let before = document(&["size.cx22", "size.cx32"]);
+        assert!(runtime.select(1, "size.cx32", &before));
+
+        runtime.retain_selection(&document(&["size.cx22", "size.cx32"]));
+        assert_eq!(
+            runtime.selected(1),
+            Some("size.cx32"),
+            "a row that stays keeps its selection"
+        );
+
+        runtime.retain_selection(&document(&["size.cx22"]));
+        assert_eq!(runtime.selected(1), None, "a removed row clears the selection");
+        assert!(runtime.selected_ids(&document(&["size.cx22"])).is_empty());
+    }
+
+    #[test]
+    fn a_wake_streak_survives_clicks_and_restarts_when_a_waiter_exists() {
+        let card = document(&["size.cx22"]);
+        let mut runtime = CardRuntime::default();
+        assert!(!runtime.wake_sent());
+        runtime.mark_wake_sent();
+        assert!(runtime.wake_sent());
+        assert!(runtime.press("continue", 1, &card, 1_000));
+        assert!(
+            runtime.wake_sent(),
+            "a second click of the same streak does not wake again"
+        );
+        runtime.reset_wake_streak();
+        assert!(!runtime.wake_sent());
+    }
+}

@@ -1,5 +1,6 @@
 mod actions;
 mod answer_retries;
+mod block_clicks;
 mod block_requests;
 mod bootstrap;
 mod browser_cleanup;
@@ -195,6 +196,9 @@ pub struct PanelRenderCaches {
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
+    /// The clicks and the row selection of each card. A card that has nothing
+    /// to settle drops out of the map again.
+    pub(crate) card_runtime: HashMap<PanelId, horizon_core::CardRuntime>,
     pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
 }
 
@@ -237,6 +241,9 @@ pub struct HorizonApp {
     /// It lives here, not in the render caches, for the same reason as
     /// `device_claim`: a session switch resets those.
     pub(in crate::app) block_claim: block_requests::BlockClaimState,
+    /// The `next_click` waits this host holds open, and the last wake line to
+    /// each agent panel. It lives here for the same reason as `block_claim`.
+    pub(in crate::app) block_clicks: block_clicks::BlockClickState,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,

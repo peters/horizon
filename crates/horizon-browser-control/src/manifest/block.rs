@@ -2,7 +2,9 @@
 //!
 //! An agent asks Horizon to draw a card in its own workspace: `create` with a
 //! document, `update` with a new one, and `list`, `inspect`, `visibility` and
-//! `close` around it. A request travels the path of a Device panel request: a
+//! `close` around it. A person's clicks on the card reach its owner through
+//! `next_click`, a request the host keeps open until a click arrives or the
+//! wait ends. A request travels the path of a Device panel request: a
 //! bounded file under `runtime/block-panel-requests`, claimed by this host's
 //! UI on the coordination worker, applied on the UI thread, and answered with
 //! one result file that only the asking actor and its host consume.
@@ -25,7 +27,7 @@ use super::{
     request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json},
 };
 use crate::{
-    block::BlockDocument,
+    block::{BlockDocument, ClickEvent},
     paths::{BrowserRuntimePaths, safe_local_id},
 };
 
@@ -34,6 +36,16 @@ pub const MAX_CARDS_PER_OWNER: usize = 8;
 /// Largest serialized request accepted. A document is smaller than this, so a
 /// queue of them stays bounded whatever a caller sends.
 const MAX_REQUEST_BYTES: usize = 96 * 1024;
+/// How long the host has to apply a card request, on top of a wait the request
+/// asks for. Every other operation has this window alone.
+pub const HOST_APPLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// The wait `next_click` asks for when the caller names none.
+pub const DEFAULT_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 300_000;
+/// The longest wait a `next_click` may ask for. It stays below the 3 660 000 ms
+/// tool timeout that Horizon injects into its MCP clients.
+pub const MAX_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 3_600_000;
+/// The shortest wait a `next_click` may ask for.
+pub const MIN_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 1_000;
 
 /// Card commands. The document belongs to the agent; the panel id, revision
 /// and ownership belong to the host.
@@ -61,6 +73,14 @@ pub enum Operation {
     List,
     /// One card of the calling agent's workspace, with its document.
     Inspect { panel_id: String },
+    /// Wait for the next click on a card the caller owns. Answers the oldest
+    /// waiting click at once, or `timed_out` when `timeout_millis` passes.
+    NextClick {
+        panel_id: String,
+        /// How long to wait, 1 000-3 600 000 ms; 300 000 when omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_millis: Option<u64>,
+    },
     /// Show or hide a card the caller owns.
     Visibility { panel_id: String, visible: bool },
     /// Close a card the caller owns. The document is dropped with it.
@@ -76,6 +96,11 @@ pub struct CardSummary {
     pub revision: u64,
     /// Whether the calling agent created this card.
     pub owned_by_caller: bool,
+    /// Clicks that wait for the owner.
+    pub pending_clicks: usize,
+    /// Whether a `next_click` of the owner waits on this card, so a click
+    /// reaches it at once.
+    pub listening: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
@@ -102,6 +127,18 @@ pub enum Outcome {
         /// Whether an agent panel of the owner is still in this workspace.
         agent_present: bool,
         owned_by_caller: bool,
+        /// Clicks that wait for the owner.
+        pending_clicks: usize,
+        /// Whether a `next_click` of the owner waits on this card.
+        listening: bool,
+    },
+    /// One click the person made on the card.
+    Clicked {
+        click: ClickEvent,
+    },
+    /// No click arrived before the wait ended.
+    TimedOut {
+        timed_out: bool,
     },
     Visibility {
         panel_id: String,
@@ -124,6 +161,31 @@ impl Outcome {
             message: message.into(),
         }
     }
+}
+
+impl Operation {
+    /// The bounded wait a `next_click` asks for, if this operation waits.
+    #[must_use]
+    pub fn wait_timeout_millis(&self) -> Option<u64> {
+        match self {
+            Self::NextClick { timeout_millis, .. } => Some(
+                timeout_millis
+                    .unwrap_or(DEFAULT_NEXT_CLICK_TIMEOUT_MILLIS)
+                    .clamp(MIN_NEXT_CLICK_TIMEOUT_MILLIS, MAX_NEXT_CLICK_TIMEOUT_MILLIS),
+            ),
+            _ => None,
+        }
+    }
+}
+
+/// How long a request of this operation stays valid for the host: the wait it
+/// asks for and the window to apply it.
+#[must_use]
+pub fn request_timeout(operation: &Operation) -> Duration {
+    let wait = operation
+        .wait_timeout_millis()
+        .map_or(Duration::ZERO, Duration::from_millis);
+    HOST_APPLY_TIMEOUT + wait
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -362,6 +424,10 @@ mod tests {
             ),
             (serde_json::json!({"operation": "inspect", "panel_id": "p"}), "inspect"),
             (
+                serde_json::json!({"operation": "next_click", "panel_id": "p"}),
+                "next_click",
+            ),
+            (
                 serde_json::json!({"operation": "visibility", "panel_id": "p", "visible": false}),
                 "visibility",
             ),
@@ -373,6 +439,7 @@ mod tests {
                 Operation::Update { .. } => "update",
                 Operation::List => "list",
                 Operation::Inspect { .. } => "inspect",
+                Operation::NextClick { .. } => "next_click",
                 Operation::Visibility { .. } => "visibility",
                 Operation::Close { .. } => "close",
             };
@@ -390,8 +457,71 @@ mod tests {
                 "{unknown_field} must be refused"
             );
         }
-        let unknown_operation = serde_json::json!({"operation": "next_click", "panel_id": "p"});
+        let unknown_operation = serde_json::json!({"operation": "wait_for_click", "panel_id": "p"});
         assert!(serde_json::from_value::<Operation>(unknown_operation).is_err());
+    }
+
+    #[test]
+    fn a_next_click_wait_is_bounded_and_widens_only_its_own_request_window() {
+        let wait = |timeout_millis| Operation::NextClick {
+            panel_id: "card".into(),
+            timeout_millis,
+        };
+        assert_eq!(
+            wait(None).wait_timeout_millis(),
+            Some(DEFAULT_NEXT_CLICK_TIMEOUT_MILLIS)
+        );
+        assert_eq!(wait(Some(60_000)).wait_timeout_millis(), Some(60_000));
+        assert_eq!(
+            wait(Some(MAX_NEXT_CLICK_TIMEOUT_MILLIS + 1)).wait_timeout_millis(),
+            Some(MAX_NEXT_CLICK_TIMEOUT_MILLIS)
+        );
+        assert_eq!(wait(Some(0)).wait_timeout_millis(), Some(MIN_NEXT_CLICK_TIMEOUT_MILLIS));
+        assert_eq!(Operation::List.wait_timeout_millis(), None);
+
+        assert_eq!(request_timeout(&Operation::List), HOST_APPLY_TIMEOUT);
+        assert_eq!(
+            request_timeout(&wait(Some(60_000))),
+            HOST_APPLY_TIMEOUT + Duration::from_secs(60)
+        );
+        assert!(
+            DEFAULT_NEXT_CLICK_TIMEOUT_MILLIS + u64::try_from(HOST_APPLY_TIMEOUT.as_millis()).unwrap_or(u64::MAX)
+                < 3_660_000,
+            "a default wait fits the injected MCP client timeout"
+        );
+    }
+
+    #[test]
+    fn a_click_event_round_trips_with_every_field_the_agent_reads() {
+        let click = ClickEvent {
+            event_id: 4,
+            panel_id: "card".into(),
+            component_id: "continue".into(),
+            revision: 2,
+            selected: vec!["size.cx32".into()],
+            at_millis: 1_700_000_000_000,
+            stale: true,
+        };
+        let encoded = serde_json::to_value(&click).expect("serialize");
+        for field in [
+            "event_id",
+            "panel_id",
+            "component_id",
+            "revision",
+            "selected",
+            "at_millis",
+            "stale",
+        ] {
+            assert!(encoded.get(field).is_some(), "the click omits {field}");
+        }
+        assert_eq!(serde_json::from_value::<ClickEvent>(encoded).expect("parse"), click);
+
+        let answered = serde_json::to_value(Outcome::Clicked { click }).expect("serialize");
+        assert_eq!(answered["status"], serde_json::json!("clicked"));
+        assert!(answered.get("click").is_some());
+        let timed_out = serde_json::to_value(Outcome::TimedOut { timed_out: true }).expect("serialize");
+        assert_eq!(timed_out["status"], serde_json::json!("timed_out"));
+        assert_eq!(timed_out["timed_out"], serde_json::json!(true));
     }
 
     #[test]

@@ -1,12 +1,15 @@
 //! The body of a card panel: a block document drawn in plain egui.
 //!
 //! A card shows its components in document order and draws nothing else: no
-//! chrome of its own, no inputs, no repaint requests. The person cannot press
-//! a button or select a row in this version, so a button is drawn disabled.
+//! chrome of its own and no repaint loop of its own. A button and a selectable
+//! row are live while the agent that owns the card is in the workspace: a press
+//! changes the row selection, records a click for that agent and asks for the
+//! one repaint that settles it. Without the agent, everything is drawn disabled
+//! and the card says so.
 
 use egui::{Color32, RichText, Ui};
-use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, ListRow, Tone};
-use horizon_core::PanelId;
+use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
+use horizon_core::{CardRuntime, PanelId};
 
 use crate::theme;
 
@@ -16,14 +19,43 @@ const KV_ROW_GAP: f32 = 4.0;
 const ROW_GAP: f32 = 2.0;
 /// What a card with no components says.
 pub(crate) const EMPTY_CARD: &str = "This card is empty.";
+/// What a card says while no agent panel of its owner is in the workspace.
+pub(crate) const AGENT_ABSENT: &str = "Its agent is not here.";
+/// What a card says while a click did not fit its queue.
+pub(crate) const CLICKS_REFUSED: &str = "Too many clicks are waiting.";
 
-/// Draw `document` in document order.
-pub(crate) fn show(ui: &mut Ui, panel: PanelId, document: &BlockDocument) {
+/// One card as the person sees it this frame.
+pub(crate) struct CardView<'a> {
+    /// The document to draw.
+    pub(crate) document: &'a BlockDocument,
+    /// The clicks and the row selection of this card.
+    pub(crate) card: &'a mut CardRuntime,
+    /// The revision the person sees, which a click reports back.
+    pub(crate) revision: u64,
+    /// An agent panel of the owner is in the card's workspace.
+    pub(crate) agent_present: bool,
+    /// No host dialog covers the card, so a press counts.
+    pub(crate) interactive: bool,
+    /// Wall-clock time of this frame, in milliseconds.
+    pub(crate) now_millis: i64,
+}
+
+/// Draw `view` in document order.
+pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
+    let enabled = view.agent_present && view.interactive;
+    let refused = view.card.refused_notice(view.now_millis);
     egui::ScrollArea::vertical()
         .id_salt(("block_card", panel.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.add_space(CARD_GAP);
+            if !view.agent_present {
+                ui.label(RichText::new(AGENT_ABSENT).color(theme::FG_DIM()));
+            }
+            if refused {
+                ui.label(RichText::new(CLICKS_REFUSED).color(theme::FG_DIM()));
+            }
+            let document = view.document;
             if document.components.is_empty() {
                 ui.label(RichText::new(EMPTY_CARD).color(theme::FG_DIM()));
                 return;
@@ -32,12 +64,12 @@ pub(crate) fn show(ui: &mut Ui, panel: PanelId, document: &BlockDocument) {
                 if index > 0 {
                     ui.add_space(CARD_GAP);
                 }
-                show_component(ui, index, component);
+                show_component(ui, index, component, &mut view, enabled);
             }
         });
 }
 
-fn show_component(ui: &mut Ui, index: usize, component: &Component) {
+fn show_component(ui: &mut Ui, index: usize, component: &Component, view: &mut CardView<'_>, enabled: bool) {
     match component {
         Component::Heading { text } => {
             ui.label(RichText::new(text).heading().color(theme::FG()));
@@ -59,8 +91,8 @@ fn show_component(ui: &mut Ui, index: usize, component: &Component) {
         Component::Divider => {
             ui.separator();
         }
-        Component::List { rows, .. } => show_rows(ui, rows),
-        Component::Buttons { items } => show_buttons(ui, items),
+        Component::List { selection, rows } => show_rows(ui, index, *selection, rows, view, enabled),
+        Component::Buttons { items } => show_buttons(ui, items, view, enabled),
     }
 }
 
@@ -77,25 +109,59 @@ fn show_kv(ui: &mut Ui, index: usize, rows: &[KvRow]) {
         });
 }
 
-fn show_rows(ui: &mut Ui, rows: &[ListRow]) {
-    for (index, row) in rows.iter().enumerate() {
-        if index > 0 {
+fn show_rows(
+    ui: &mut Ui,
+    index: usize,
+    selection: Selection,
+    rows: &[ListRow],
+    view: &mut CardView<'_>,
+    enabled: bool,
+) {
+    let selectable = selection == Selection::Single && enabled;
+    for (row_index, row) in rows.iter().enumerate() {
+        if row_index > 0 {
             ui.add_space(ROW_GAP);
         }
-        ui.label(RichText::new(&row.title).color(theme::FG()));
+        if selectable {
+            let selected = view.card.selected(index) == Some(row.id.as_str());
+            if ui
+                .selectable_label(selected, RichText::new(&row.title).color(theme::FG()))
+                .clicked()
+            {
+                press_row(ui, index, row, view);
+            }
+        } else {
+            ui.label(RichText::new(&row.title).color(theme::FG()));
+        }
         if let Some(subtitle) = &row.subtitle {
             ui.label(RichText::new(subtitle).small().color(theme::FG_DIM()));
         }
     }
 }
 
-fn show_buttons(ui: &mut Ui, items: &[Button]) {
+/// Selects the row the person pressed and records the click that goes with it.
+fn press_row(ui: &mut Ui, index: usize, row: &ListRow, view: &mut CardView<'_>) {
+    let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
+    if view.card.select(index, &row.id, document) {
+        view.card.press(&row.id, revision, document, now_millis);
+        ui.ctx().request_repaint();
+    }
+}
+
+fn show_buttons(ui: &mut Ui, items: &[Button], view: &mut CardView<'_>, enabled: bool) {
     ui.horizontal_wrapped(|ui| {
         for button in items {
-            ui.add_enabled(
-                false,
-                egui::Button::new(RichText::new(&button.label).color(tone_color(button.tone))),
-            );
+            let pressed = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(RichText::new(&button.label).color(tone_color(button.tone))),
+                )
+                .clicked();
+            if pressed {
+                let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
+                view.card.press(&button.id, revision, document, now_millis);
+                ui.ctx().request_repaint();
+            }
         }
     });
 }

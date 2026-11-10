@@ -13,9 +13,11 @@
 //! document that arrives from outside Horizon: it checks the size, the shape
 //! and every rule of [`validate_document`] before the UI can draw anything.
 
+mod events;
 mod model;
 mod validate;
 
+pub use events::ClickEvent;
 pub use model::{BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
 pub use validate::{BlockDocumentError, parse_document, validate_document};
 
