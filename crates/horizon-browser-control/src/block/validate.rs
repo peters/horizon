@@ -175,7 +175,16 @@ fn validate_component<'a>(
 ) -> Result<(), BlockDocumentError> {
     let at = format!("components[{index}]");
     match component {
-        Component::Heading { text } => filled_line(&field(&at, "text"), text),
+        Component::Heading { text, subtitle, badge } => {
+            filled_line(&field(&at, "text"), text)?;
+            if let Some(subtitle) = subtitle {
+                line(&field(&at, "subtitle"), subtitle)?;
+            }
+            if let Some(badge) = badge {
+                line(&field(&format!("{at}.badge"), "text"), &badge.text)?;
+            }
+            Ok(())
+        }
         Component::Text { text } => body_text(&field(&at, "text"), text),
         Component::Kv { rows } => {
             check_count(&field(&at, "rows"), rows.len(), BlockDocument::MAX_KV_ROWS)?;
@@ -185,8 +194,11 @@ fn validate_component<'a>(
             Ok(())
         }
         Component::Badge { text, .. } => line(&field(&at, "text"), text),
-        Component::Progress { label, percent } => {
+        Component::Progress { label, percent, detail } => {
             filled_line(&field(&at, "label"), label)?;
+            if let Some(detail) = detail {
+                line(&field(&at, "detail"), detail)?;
+            }
             if *percent > BlockDocument::MAX_PERCENT {
                 return Err(BlockDocumentError::PercentOutOfRange {
                     path: field(&at, "percent"),

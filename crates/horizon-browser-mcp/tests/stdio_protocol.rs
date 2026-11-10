@@ -247,6 +247,7 @@ fn assert_block_panel_contract(tools: &Value) {
         "host_timeout",
         "at most once",
         "Its agent is not here",
+        "Last seen: ",
         "A button was pressed on your Horizon card. Call the block_panel tool with operation next_click to read it.",
     ] {
         assert!(description.contains(stated), "the description omits {stated}");

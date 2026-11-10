@@ -91,8 +91,8 @@ use super::theme;
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
 const SIDEBAR_WIDTH: f32 = 210.0;
-const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
-const PANEL_PADDING: f32 = 8.0;
+pub(crate) const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
+pub(crate) const PANEL_PADDING: f32 = 8.0;
 const PANEL_MIN_SIZE: [f32; 2] = [320.0, 220.0];
 const WS_BG_PAD: f32 = 16.0;
 const WS_TITLE_HEIGHT: f32 = 38.0;

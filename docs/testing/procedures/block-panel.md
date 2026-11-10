@@ -18,7 +18,8 @@ close it. It also makes sure that another agent cannot change the card, that an
 invalid document is refused, and that the card comes back after a restart of
 Horizon. It then makes sure that a click of the person reaches the agent that
 owns the card, with its selection and its time, and that Horizon wakes an idle
-agent for a click.
+agent for a click. The last task checks the drawn look of the card in both
+themes.
 
 ## 2. Applicability
 
@@ -377,8 +378,12 @@ agent for a click.
 
 1. Close agent panel A in the live view, with its close button.
 
-   Result: The card shows one line, `Its agent is not here.`, and its button and
-   rows are drawn disabled.
+   Result: A yellow status frame appears at the top of the card body. Its strong
+   line is `Its agent is not here` and its second line is `Start an agent in this
+   workspace to use the buttons.`. The titlebar chip says `No agent` with a
+   hollow dot, every badge is drawn neutral with the prefix `Last seen: `, and
+   the buttons and rows are drawn disabled. The footer says `Card drawn by an
+   agent`.
 
 2. Press `Continue` on the card.
 
@@ -401,14 +406,89 @@ agent for a click.
    DISPLAY=<display> xdotool mousemove <x> <y> click --repeat 33 --delay 150 1
    ```
 
-   Result: The card shows `Too many clicks are waiting.` and `list` reports
-   `pending_clicks` 32.
+   Result: A blue status frame appears above the components. Its strong line is
+   `Too many clicks are waiting` and its second line is `The agent has not read
+   the clicks yet. Press again after it has.`. `list` reports `pending_clicks`
+   32.
 
 2. In client A, call `next_click` 32 times and read each answer.
 
    Result: The 32 oldest clicks come back in the order of the presses, each with
    a higher `event_id`, and the oldest is never lost. After the last answer the
-   card no longer shows the line and `pending_clicks` is 0.
+   card no longer shows the frame and `pending_clicks` is 0.
+
+### 5.16 B16 — The drawn look of a card
+
+This task checks the sizes, the order and the colours of the designed card. Do
+every step on the fixture display that the native VNC Device panel shows.
+
+1. Create a card whose document holds every component:
+
+   ```json
+   {"operation": "create", "title": "build-1",
+    "document": {"components": [
+      {"type": "heading", "text": "build-1", "subtitle": "Hetzner · Helsinki",
+       "badge": {"text": "Running", "tone": "ok"}},
+      {"type": "badge", "text": "needs your choice", "tone": "info"},
+      {"type": "kv", "rows": [
+        {"label": "Address", "value": "203.0.113.10", "mono": true},
+        {"label": "Up for", "value": "2 h 14 min"}]},
+      {"type": "text", "text": "Billed from 14:02 UTC."},
+      {"type": "progress", "label": "Step 1 of 3", "percent": 33, "detail": "Provider"},
+      {"type": "divider"},
+      {"type": "list", "selection": "single", "rows": [
+        {"id": "size.cx22", "title": "CX22 - 2 vCPU", "subtitle": "0.42 EUR/h"},
+        {"id": "gcloud", "title": "Google Cloud",
+         "subtitle": "gcloud is not installed", "tone": "warn"}]},
+      {"type": "buttons", "items": [
+        {"id": "connect", "label": "Connect", "tone": "primary"},
+        {"id": "stop", "label": "Stop"},
+        {"id": "delete", "label": "Delete", "tone": "danger"}]}]}}
+   ```
+
+   Result: The card is 420 wide. The heading is 18 strong with a 12.5 second
+   line, and the `Running` badge sits on the heading row at the right, in green
+   with a dot. The label and value box is an inset surface with one 34-high pair
+   per row, a thin line between the rows and the address in a monospace face.
+   The progress bar shows a label on the left and `Provider` on the right. The
+   `Google Cloud` second line is yellow. `Connect` is the solid accent button,
+   `Stop` is a raised neutral button and `Delete` sits at the right edge in red.
+   The footer shows `Card drawn by the agent <name>` on the left and
+   `updated HH:MM` on the right, and the clock time is the local time of the
+   create.
+
+2. Select `Google Cloud` with one click.
+
+   Result: The row takes a 2 px accent outline, an accent-tinted fill and a
+   filled radio mark. The other row keeps its raised fill and hollow mark.
+
+3. Read the titlebar chip while client A calls `next_click` with a wait of 60000
+   milliseconds.
+
+   Result: The chip says `<name> listens` with a filled green dot. When the wait
+   ends with `timed_out` and no new wait is open, the chip says `<name>` with a
+   hollow dot. Step 1 of B14 gives the third state, `No agent`.
+
+4. Update the card with one text component, then read the footer.
+
+   Result: The footer clock still shows `HH:MM` and not a relative time. Leave
+   the card idle for one minute: the time does not change and the card does not
+   redraw.
+
+5. Set the application theme to light in Settings.
+
+   Result: The same card is drawn on paper-white surfaces. The heading, the
+   second line, the inset box, the rows, the buttons and the footer stay
+   readable, and no colour is the dark-mode value.
+
+6. Drag the right edge of the card until it is narrower than 420.
+
+   Result: The heading, the second line, a long label and a long value truncate
+   with an ellipsis, body text wraps, and nothing overlaps or leaves the card.
+   The buttons stay inside the card and the destructive button keeps the right
+   edge.
+
+7. Set the theme back to dark.
 
 ## 6. Pass criteria
 
@@ -434,6 +514,9 @@ agent for a click.
 - B14: Without its agent the card says so, takes no click, and comes back with
   its owner.
 - B15: A full queue drops the newest click and keeps the older ones in order.
+- B16: Every component, the chip and the footer are drawn as the design
+  describes, in both themes, and a narrow card truncates or wraps without
+  overlap.
 
 ## 7. Cleanup
 

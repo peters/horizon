@@ -7,6 +7,7 @@ use super::RenameEditAction;
 use super::util::{format_compact_count, short_session_id, usize_to_f32};
 
 use crate::badge;
+use crate::block_widget::{CardChip, chip};
 use crate::text::single_line_label_job;
 
 #[derive(Clone, Copy)]
@@ -27,6 +28,9 @@ pub(super) struct PanelChrome<'a> {
     /// Current agent session id; when `Some` a short-id badge is painted in
     /// the titlebar so the panel can be matched against rebind/resume lists.
     pub session_id: Option<&'a str>,
+    /// The state chip of a card, painted right of the title and left of the
+    /// close control.
+    pub card: Option<CardChip<'a>>,
 }
 
 impl PanelChrome<'_> {
@@ -178,6 +182,13 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    let chip = chrome.card.and_then(|card| {
+        let width = chip::width(ui, &card);
+        let rect = card_chip_rect(&chrome, width);
+        let fits = rect.min.x >= title_start_x(&chrome) + CHIP_MIN_TITLE_SPACE;
+        (width > 0.0 && fits).then_some((card, rect))
+    });
+
     if let Some(title) = chrome.title {
         if let Some(color) = chrome.workspace_accent {
             painter.circle_filled(
@@ -187,7 +198,10 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             );
         }
         let title_x = title_start_x(&chrome);
-        let title_right = title_right_boundary(&chrome);
+        let title_right = match chip {
+            Some((_, rect)) => title_right_boundary(&chrome).min(rect.min.x - chip::TITLE_GAP),
+            None => title_right_boundary(&chrome),
+        };
         let max_width = (title_right - title_x).max(0.0);
         paint_truncated_title(
             &painter,
@@ -197,6 +211,10 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             max_width,
             chrome.focused,
         );
+    }
+
+    if let Some((card, rect)) = chip {
+        card.paint(&painter, rect);
     }
 
     if let Some(session_id) = chrome.session_id
@@ -248,6 +266,20 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
     paint_close_control(&painter, chrome.close_rect, chrome.close_hovered);
+}
+
+/// Space the title keeps from the card chip, so the chip hides before it
+/// covers the title.
+const CHIP_MIN_TITLE_SPACE: f32 = 24.0;
+
+/// Where the chip of a card sits: against the badge cluster, left of the close
+/// control.
+fn card_chip_rect(chrome: &PanelChrome<'_>, width: f32) -> Rect {
+    let right = badges_left_boundary(chrome);
+    Rect::from_min_size(
+        Pos2::new(right - width, chrome.titlebar_rect.center().y - chip::height() * 0.5),
+        Vec2::new(width, chip::height()),
+    )
 }
 
 fn paint_close_control(painter: &egui::Painter, close_rect: Rect, close_hovered: bool) {
@@ -662,6 +694,7 @@ mod tests {
             workspace_accent: Some(Color32::from_rgb(137, 180, 250)),
             ssh_status: None,
             session_id: None,
+            card: None,
         }
     }
 

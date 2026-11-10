@@ -13,7 +13,11 @@ use std::time::Instant;
 use horizon_browser_control::block::ClickEvent;
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
-use horizon_core::{AgentStatus, Panel, PanelId, WAKE_LINE, WakeContext, WakeVerdict, browser_actor, wake_verdict};
+use horizon_core::{
+    AgentStatus, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict, browser_actor, wake_verdict,
+};
+
+use crate::block_widget::CardChip;
 
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
@@ -57,6 +61,26 @@ impl HorizonApp {
                     && browser_actor(&candidate.local_id) == owner
             })
             .map(|candidate| candidate.id)
+    }
+
+    /// Display name of the agent that owns a card, while its panel is in the
+    /// card's workspace.
+    pub(in crate::app) fn card_owner_name(&self, panel_id: PanelId) -> Option<&'static str> {
+        let panel = self.board.panel(panel_id)?;
+        let owner = self.card_owner_panel(panel)?;
+        Some(self.board.panel(owner)?.kind.display_name())
+    }
+
+    /// The state chip a card shows in its titlebar: who owns it and whether
+    /// that agent waits for a click right now.
+    pub(in crate::app) fn card_titlebar_chip(&self, panel_id: PanelId) -> Option<CardChip<'static>> {
+        let panel = self.board.panel(panel_id)?;
+        panel.block()?;
+        let listening = self.block_listening(panel_id);
+        Some(match self.card_owner_panel(panel) {
+            Some(owner) => CardChip::for_panel(self.board.panel(owner)?.kind, listening, true),
+            None => CardChip::for_panel(PanelKind::Block, false, false),
+        })
     }
 
     /// Whether an agent panel of a card's owner is in its workspace, so its

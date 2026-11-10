@@ -18,7 +18,7 @@ mod model;
 mod validate;
 
 pub use events::ClickEvent;
-pub use model::{BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
+pub use model::{Badge, BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
 pub use validate::{BlockDocumentError, parse_document, validate_document};
 
 #[cfg(test)]

@@ -20,10 +20,17 @@ pub struct BlockDocument {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Component {
-    /// A card title: one short line.
+    /// A card title: one short line, an optional second line and an optional
+    /// badge drawn on the same row as the title, right aligned.
     Heading {
         /// Title text.
         text: String,
+        /// Optional second line under the title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subtitle: Option<String>,
+        /// Optional badge on the title row, right aligned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        badge: Option<Badge>,
     },
     /// Body text. The only text that may hold line breaks.
     Text {
@@ -49,6 +56,9 @@ pub enum Component {
         label: String,
         /// Filled percentage, from 0 to 100.
         percent: u8,
+        /// Optional text on the label row, right aligned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /// A horizontal rule.
     Divider,
@@ -98,6 +108,18 @@ pub enum Selection {
     Single,
 }
 
+/// A short status pill beside a heading, or on a row of its own as a
+/// [`Component::Badge`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Badge {
+    /// Badge text.
+    pub text: String,
+    /// Visual weight; neutral when omitted.
+    #[serde(default)]
+    pub tone: Tone,
+}
+
 /// One label and value pair.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +128,9 @@ pub struct KvRow {
     pub label: String,
     /// Right column.
     pub value: String,
+    /// Draw the value in the monospace family; false when omitted.
+    #[serde(default)]
+    pub mono: bool,
 }
 
 /// One selectable row.
@@ -119,6 +144,9 @@ pub struct ListRow {
     /// Optional second line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
+    /// Colour of the second line; neutral when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<Tone>,
 }
 
 /// One button.

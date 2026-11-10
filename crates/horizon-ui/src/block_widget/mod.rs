@@ -6,23 +6,46 @@
 //! changes the row selection, records a click for that agent and asks for the
 //! one repaint that settles it. Without the agent, everything is drawn disabled
 //! and the card says so.
+//!
+//! Horizon owns the parts a document cannot reach: the state chip in the
+//! titlebar, the footer with the owner and the time of the last change, and the
+//! status frames that explain a dead card or a full click queue.
 
-use egui::{Color32, RichText, Ui};
-use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
+mod badge;
+mod buttons;
+pub(crate) mod chip;
+mod footer;
+mod heading;
+mod kv;
+mod list;
+mod metrics;
+mod progress;
+mod size;
+mod status;
+mod text;
+mod tones;
+
+pub(crate) use chip::CardChip;
+pub(crate) use size::default_card_size;
+
+use egui::{Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2};
+use horizon_browser_control::block::{BlockDocument, Component, Tone};
 use horizon_core::{CardRuntime, PanelId};
 
 use crate::theme;
 
-const CARD_GAP: f32 = 8.0;
-const KV_COLUMN_GAP: f32 = 16.0;
-const KV_ROW_GAP: f32 = 4.0;
-const ROW_GAP: f32 = 2.0;
+use metrics::{BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, TEXT_FONT, TEXT_LINE_HEIGHT};
+
 /// What a card with no components says.
 pub(crate) const EMPTY_CARD: &str = "This card is empty.";
-/// What a card says while no agent panel of its owner is in the workspace.
-pub(crate) const AGENT_ABSENT: &str = "Its agent is not here.";
-/// What a card says while a click did not fit its queue.
-pub(crate) const CLICKS_REFUSED: &str = "Too many clicks are waiting.";
+/// The strong line of the frame that explains a card whose agent left.
+pub(crate) const AGENT_GONE_TITLE: &str = "Its agent is not here";
+/// The second line of that frame.
+pub(crate) const AGENT_GONE_LINE: &str = "Start an agent in this workspace to use the buttons.";
+/// The strong line of the frame that explains a refused click.
+pub(crate) const CLICKS_REFUSED_TITLE: &str = "Too many clicks are waiting";
+/// The second line of that frame.
+pub(crate) const CLICKS_REFUSED_LINE: &str = "The agent has not read the clicks yet. Press again after it has.";
 
 /// One card as the person sees it this frame.
 pub(crate) struct CardView<'a> {
@@ -38,143 +61,139 @@ pub(crate) struct CardView<'a> {
     pub(crate) interactive: bool,
     /// Wall-clock time of this frame, in milliseconds.
     pub(crate) now_millis: i64,
+    /// Display name of the agent that owns the card, while it is in the
+    /// workspace.
+    pub(crate) owner_name: Option<&'a str>,
+    /// Wall-clock time of the last create or update, in milliseconds.
+    pub(crate) updated_at_millis: i64,
 }
 
-/// Draw `view` in document order.
+/// Draw `view` in document order, above the footer of the card.
 pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
     let enabled = view.agent_present && view.interactive;
-    let refused = view.card.refused_notice(view.now_millis);
+    let full = ui.max_rect();
+    let footer_top = (full.max.y - metrics::FOOTER_HEIGHT).max(full.min.y);
+    let content = Rect::from_min_max(full.min, Pos2::new(full.max.x, footer_top));
+    let footer_rect = Rect::from_min_max(Pos2::new(full.min.x, footer_top), full.max);
+
+    ui.scope_builder(UiBuilder::new().max_rect(content), |ui| {
+        show_content(ui, panel, &mut view, enabled);
+    });
+    footer::show(ui, footer_rect, &mut view);
+}
+
+fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: bool) {
     egui::ScrollArea::vertical()
         .id_salt(("block_card", panel.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.add_space(CARD_GAP);
-            if !view.agent_present {
-                ui.label(RichText::new(AGENT_ABSENT).color(theme::FG_DIM()));
-            }
-            if refused {
-                ui.label(RichText::new(CLICKS_REFUSED).color(theme::FG_DIM()));
-            }
-            let document = view.document;
-            if document.components.is_empty() {
-                ui.label(RichText::new(EMPTY_CARD).color(theme::FG_DIM()));
-                return;
-            }
-            for (index, component) in document.components.iter().enumerate() {
-                if index > 0 {
-                    ui.add_space(CARD_GAP);
-                }
-                show_component(ui, index, component, &mut view, enabled);
-            }
+            Frame::NONE
+                .inner_margin(Margin {
+                    left: BODY_PAD_SIDE,
+                    right: BODY_PAD_SIDE,
+                    top: BODY_PAD_TOP,
+                    bottom: BODY_PAD_BOTTOM,
+                })
+                .show(ui, |ui| show_body(ui, view, enabled));
         });
 }
 
-fn show_component(ui: &mut Ui, index: usize, component: &Component, view: &mut CardView<'_>, enabled: bool) {
-    match component {
-        Component::Heading { text } => {
-            ui.label(RichText::new(text).heading().color(theme::FG()));
+fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
+    let refused = view.card.refused_notice(view.now_millis);
+    let primary = primary_button(view.document);
+    let mut first = true;
+    if !view.agent_present {
+        status::show(ui, "agent_gone", Tone::Warn, AGENT_GONE_TITLE, AGENT_GONE_LINE);
+        first = false;
+    }
+    if refused {
+        if !first {
+            ui.add_space(COMPONENT_GAP);
         }
-        Component::Text { text } => {
-            ui.add(egui::Label::new(RichText::new(text).color(theme::FG_SOFT())).wrap());
+        status::show(
+            ui,
+            "clicks_refused",
+            Tone::Info,
+            CLICKS_REFUSED_TITLE,
+            CLICKS_REFUSED_LINE,
+        );
+        first = false;
+    }
+    let document = view.document;
+    if document.components.is_empty() {
+        if !first {
+            ui.add_space(COMPONENT_GAP);
         }
-        Component::Kv { rows } => show_kv(ui, index, rows),
-        Component::Badge { text, tone } => {
-            ui.label(RichText::new(text).small().color(tone_color(*tone)));
+        ui.label(RichText::new(EMPTY_CARD).size(TEXT_FONT).color(theme::FG_SOFT()));
+        return;
+    }
+    for (index, component) in document.components.iter().enumerate() {
+        if !first {
+            ui.add_space(COMPONENT_GAP);
         }
-        Component::Progress { label, percent } => {
-            ui.add(
-                egui::ProgressBar::new(f32::from(*percent) / 100.0)
-                    .fill(theme::ACCENT())
-                    .text(label.as_str()),
-            );
-        }
-        Component::Divider => {
-            ui.separator();
-        }
-        Component::List { selection, rows } => show_rows(ui, index, *selection, rows, view, enabled),
-        Component::Buttons { items } => show_buttons(ui, items, view, enabled),
+        first = false;
+        show_component(ui, index, component, view, enabled, primary);
     }
 }
 
-fn show_kv(ui: &mut Ui, index: usize, rows: &[KvRow]) {
-    egui::Grid::new(("block_card_kv", index))
-        .num_columns(2)
-        .spacing([KV_COLUMN_GAP, KV_ROW_GAP])
-        .show(ui, |ui| {
-            for row in rows {
-                ui.label(RichText::new(&row.label).color(theme::FG_DIM()));
-                ui.label(RichText::new(&row.value).color(theme::FG()));
-                ui.end_row();
-            }
-        });
-}
-
-fn show_rows(
+fn show_component(
     ui: &mut Ui,
     index: usize,
-    selection: Selection,
-    rows: &[ListRow],
+    component: &Component,
     view: &mut CardView<'_>,
     enabled: bool,
+    primary: Option<(usize, usize)>,
 ) {
-    let selectable = selection == Selection::Single && enabled;
-    for (row_index, row) in rows.iter().enumerate() {
-        if row_index > 0 {
-            ui.add_space(ROW_GAP);
+    match component {
+        Component::Heading { text, subtitle, badge } => {
+            heading::show(ui, index, text, subtitle.as_deref(), badge.as_ref(), view.agent_present);
         }
-        if selectable {
-            let selected = view.card.selected(index) == Some(row.id.as_str());
-            if ui
-                .selectable_label(selected, RichText::new(&row.title).color(theme::FG()))
-                .clicked()
-            {
-                press_row(ui, index, row, view);
-            }
-        } else {
-            ui.label(RichText::new(&row.title).color(theme::FG()));
-        }
-        if let Some(subtitle) = &row.subtitle {
-            ui.label(RichText::new(subtitle).small().color(theme::FG_DIM()));
-        }
-    }
-}
-
-/// Selects the row the person pressed and records the click that goes with it.
-fn press_row(ui: &mut Ui, index: usize, row: &ListRow, view: &mut CardView<'_>) {
-    let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
-    if view.card.select(index, &row.id, document) {
-        view.card.press(&row.id, revision, document, now_millis);
-        ui.ctx().request_repaint();
-    }
-}
-
-fn show_buttons(ui: &mut Ui, items: &[Button], view: &mut CardView<'_>, enabled: bool) {
-    ui.horizontal_wrapped(|ui| {
-        for button in items {
-            let pressed = ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new(RichText::new(&button.label).color(tone_color(button.tone))),
+        Component::Text { text } => {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(text)
+                        .size(TEXT_FONT)
+                        .line_height(Some(TEXT_FONT * TEXT_LINE_HEIGHT))
+                        .color(theme::FG_SOFT()),
                 )
-                .clicked();
-            if pressed {
-                let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
-                view.card.press(&button.id, revision, document, now_millis);
-                ui.ctx().request_repaint();
-            }
+                .wrap(),
+            );
         }
-    });
+        Component::Kv { rows } => kv::show(ui, index, rows),
+        Component::Badge { text, tone } => badge::show(ui, index, text, *tone, view.agent_present),
+        Component::Progress { label, percent, detail } => {
+            progress::show(ui, index, label, *percent, detail.as_deref());
+        }
+        Component::Divider => show_divider(ui),
+        Component::List { selection, rows } => list::show(ui, index, *selection, rows, view, enabled),
+        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled),
+    }
 }
 
-fn tone_color(tone: Tone) -> Color32 {
-    match tone {
-        Tone::Neutral => theme::FG_SOFT(),
-        Tone::Info => theme::PALETTE_CYAN(),
-        Tone::Ok => theme::PALETTE_GREEN(),
-        Tone::Warn => theme::PALETTE_YELLOW(),
-        Tone::Danger => theme::PALETTE_RED(),
-        Tone::Primary => theme::ACCENT(),
-    }
+fn show_divider(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        rect.center().y,
+        Stroke::new(1.0, theme::BORDER_SUBTLE()),
+    );
+}
+
+/// The position of the first `primary` button of a card, as
+/// `(component, item)`. Only that one is drawn as the primary action; a later
+/// one is drawn neutral so two buttons never both claim to be the next step.
+pub(super) fn primary_button(document: &BlockDocument) -> Option<(usize, usize)> {
+    document
+        .components
+        .iter()
+        .enumerate()
+        .find_map(|(index, component)| match component {
+            Component::Buttons { items } => items
+                .iter()
+                .position(|item| item.tone == Tone::Primary)
+                .map(|item| (index, item)),
+            _ => None,
+        })
 }
 
 #[cfg(test)]

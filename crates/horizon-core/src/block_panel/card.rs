@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use horizon_browser_control::block::{BlockDocument, Component, Selection};
 
 use super::clicks::{ClickQueue, PendingClick};
+use super::clock::updated_label;
 
 /// A card's runtime state: the clicks it holds for its agent, the row each
 /// list has selected, and whether a wake line already went out.
@@ -20,6 +21,10 @@ pub struct CardRuntime {
     selection: BTreeMap<usize, String>,
     /// A wake line already went to the owner for this streak of clicks.
     wake_sent: bool,
+    /// The footer label of the revision it was formatted for. A frame reuses it
+    /// instead of formatting a clock time, so a card never builds the text it
+    /// draws again.
+    updated: Option<(u64, i64, String)>,
 }
 
 impl CardRuntime {
@@ -46,6 +51,20 @@ impl CardRuntime {
         }
         self.selection.insert(component, row_id.to_owned());
         true
+    }
+
+    /// The footer label, `updated HH:MM`, of the document at `revision` whose
+    /// last change was `updated_at_millis`. The clock time is formatted when the
+    /// revision or the time changes, never per frame.
+    pub fn updated_label(&mut self, revision: u64, updated_at_millis: i64) -> &str {
+        let stale = self
+            .updated
+            .as_ref()
+            .is_none_or(|(at_revision, at_millis, _)| *at_revision != revision || *at_millis != updated_at_millis);
+        if stale {
+            self.updated = Some((revision, updated_at_millis, updated_label(updated_at_millis)));
+        }
+        self.updated.as_ref().map_or("", |(_, _, label)| label.as_str())
     }
 
     /// The row selected in component `component`.
@@ -142,6 +161,7 @@ mod tests {
                 id: (*id).to_owned(),
                 title: (*id).to_owned(),
                 subtitle: None,
+                tone: None,
             })
             .collect()
     }
@@ -151,6 +171,8 @@ mod tests {
             components: vec![
                 Component::Heading {
                     text: "cloud-1".to_owned(),
+                    subtitle: None,
+                    badge: None,
                 },
                 Component::List {
                     selection: Selection::Single,

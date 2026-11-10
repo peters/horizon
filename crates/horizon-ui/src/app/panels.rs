@@ -153,6 +153,8 @@ struct PanelBodyContext<'a> {
     card_runtime: Option<&'a mut horizon_core::CardRuntime>,
     /// An agent panel of the card's owner is in its workspace.
     card_agent_present: bool,
+    /// Display name of the agent that owns the card, while it is present.
+    card_owner_name: Option<&'a str>,
     browser_shortcuts: Option<&'a AppShortcuts>,
     browser_shortcut_bindings: &'a [ShortcutBinding],
     browser_frame_has_pointer_button: bool,
@@ -196,6 +198,8 @@ fn show_panel_body_contents(
                     agent_present: body_context.card_agent_present,
                     interactive,
                     now_millis: horizon_browser_control::manifest::now_millis(),
+                    owner_name: body_context.card_owner_name,
+                    updated_at_millis: block.updated_at_millis,
                 },
             );
             false
@@ -363,6 +367,7 @@ impl HorizonApp {
                         let claim_editor_focus = true;
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         let card_agent_present = self.card_agent_present(panel_id);
+                        let card_owner_name = self.card_owner_name(panel_id);
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -403,6 +408,7 @@ impl HorizonApp {
                                     device_ui_state: device_state,
                                     card_runtime,
                                     card_agent_present,
+                                    card_owner_name,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings: &all_shortcut_bindings,
                                     browser_frame_has_pointer_button: frame_has_pointer_button,
@@ -656,6 +662,7 @@ impl HorizonApp {
                     workspace_accent: snapshot.workspace_accent,
                     ssh_status: snapshot.ssh_status,
                     session_id,
+                    card: self.card_titlebar_chip(panel_id),
                 };
                 paint_panel_chrome(ui, chrome);
 
@@ -683,6 +690,7 @@ impl HorizonApp {
                         let mut reconnect_requested = false;
                         let claim_editor_focus = snapshot.is_focused;
                         let card_agent_present = self.card_agent_present(panel_id);
+                        let card_owner_name = self.card_owner_name(panel_id);
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
@@ -730,6 +738,7 @@ impl HorizonApp {
                                     device_ui_state: device_state,
                                     card_runtime,
                                     card_agent_present,
+                                    card_owner_name,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings,
                                     browser_frame_has_pointer_button: scope.frame_has_pointer_button,

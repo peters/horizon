@@ -414,12 +414,16 @@ fn a_saved_card_panel_comes_back_with_its_document_revision_and_owner() {
     let first = BlockDocument {
         components: vec![Component::Heading {
             text: "Cloud one".to_string(),
+            subtitle: None,
+            badge: None,
         }],
     };
     let second = BlockDocument {
         components: vec![
             Component::Heading {
                 text: "Cloud two".to_string(),
+                subtitle: None,
+                badge: None,
             },
             Component::Badge {
                 text: "running".to_string(),

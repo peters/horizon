@@ -25,13 +25,21 @@ The card is drawn in the caller's workspace. It does not take keyboard focus.
 ```json
 {"operation": "create", "title": "cloud-1",
  "document": {"components": [
-   {"type": "heading", "text": "cloud-1"},
+   {"type": "heading", "text": "cloud-1", "subtitle": "Hetzner · Helsinki",
+    "badge": {"text": "Running", "tone": "ok"}},
    {"type": "badge", "text": "running", "tone": "ok"},
    {"type": "kv", "rows": [
-     {"label": "Address", "value": "203.0.113.10"},
+     {"label": "Address", "value": "203.0.113.10", "mono": true},
      {"label": "Price", "value": "0.42 EUR/h"}]},
    {"type": "text", "text": "Billed from 14:02 UTC."},
-   {"type": "progress", "label": "Hour 3 of 24", "percent": 12}]}}
+   {"type": "progress", "label": "Hour 3 of 24", "percent": 12, "detail": "Saving"},
+   {"type": "list", "selection": "single", "rows": [
+     {"id": "size.cx22", "title": "CX22 - 2 vCPU", "subtitle": "4 GB memory"},
+     {"id": "size.cx32", "title": "CX32 - 4 vCPU",
+      "subtitle": "gcloud is not installed", "tone": "warn"}]},
+   {"type": "buttons", "items": [
+     {"id": "connect", "label": "Connect", "tone": "primary"},
+     {"id": "delete", "label": "Delete", "tone": "danger"}]}]}}
 ```
 
 Keep the returned `panel_id`. The answer is `created` with `panel_id` and
@@ -98,14 +106,17 @@ need from `inspect` before you close it.
 
 A document holds components in draw order, and only these components:
 
-- `heading`: `text`. One line.
+- `heading`: `text`, optional `subtitle` and optional `badge` with `text` and
+  optional `tone`. The badge is drawn on the title row, on the right.
 - `text`: `text`. Body text; the only text that may hold line breaks.
-- `kv`: `rows` with `label` and `value`.
-- `badge`: `text` and optional `tone`.
-- `progress`: `label` and `percent`.
+- `kv`: `rows` with `label`, `value` and optional `mono`. A `mono` value is
+  drawn in the monospace family: use it for an address, a command or a hash.
+- `badge`: `text` and optional `tone`. A badge on a row of its own.
+- `progress`: `label`, `percent` and optional `detail`, drawn on the right of
+  the label row.
 - `divider`: no fields.
-- `list`: `selection` (`none` or `single`) and `rows` with `id`, `title` and
-  optional `subtitle`.
+- `list`: `selection` (`none` or `single`) and `rows` with `id`, `title`,
+  optional `subtitle` and optional `tone` for the colour of the subtitle.
 - `buttons`: `items` with `id`, `label` and optional `tone`.
 
 The limits are:
@@ -114,10 +125,16 @@ The limits are:
 - 64 components.
 - 24 rows in one `kv` and 32 rows in one `list`.
 - 8 buttons in one `buttons`.
-- 512 characters in one text.
+- 512 characters in one text, including `subtitle`, the `badge` text and
+  `detail`.
 - Ids from `[a-z0-9_.-]`, at most 64 characters, unique in the whole document.
 - A `tone` from `neutral`, `info`, `ok`, `warn`, `danger` or `primary`.
 - A `percent` from 0 to 100.
+
+Only the first `primary` button of a card is drawn as the primary action; a
+later one is drawn as a neutral button. A button with tone `danger` is drawn at
+the right edge of its row. Horizon draws every badge in the neutral tone when
+the owner of the card is gone, with the prefix `Last seen: `.
 
 An unknown field, component or field value is refused. There are no inputs,
 images, tables or links, and no field that Horizon fetches or opens.

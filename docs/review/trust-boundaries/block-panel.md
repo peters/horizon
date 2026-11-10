@@ -15,9 +15,9 @@ and the module comments of the files above.
 `block_panel` takes a document from the agent, and the card draws it beside the
 person's terminals.
 
-- The document is untrusted text. The host reads it as data and draws it with
-  plain `egui` labels, buttons and bars. No text is parsed as markup, a format
-  string, a path or a command.
+- The document is untrusted text. The host reads it as data and paints it as
+  plain text, fills and outlines. No text is parsed as markup, a format string, a
+  path or a command, and no field selects a size, a colour or a position.
 - The host checks the document before any UI sees it, in the MCP server and again
   in the UI: at most 32 KiB, at most 64 components, at most 24 `kv` rows, 32
   `list` rows and 8 buttons, and at most 512 characters in one text. A text keeps
@@ -78,6 +78,31 @@ Horizon types one line into the terminal of the panel that owns the card.
 - Horizon writes to no other panel, and a card panel has no terminal to write
   to.
 
+## Horizon owns the frame and the reading of a document
+
+A document reaches the body only. The parts that a person must be able to trust
+are written by Horizon and no document field can set them:
+
+- **The state chip** in the titlebar names the agent that owns the card and
+  whether it waits for a click right now. The state comes from the host's click
+  waits and from the agent panel in the workspace, never from the document.
+- **The footer** names the owner as the host resolved it and shows the local
+  clock time of the last create or update that the host applied. The time is the
+  host's own stamp, so a card cannot claim to be older or newer.
+- **The status frames** say that the agent is gone and that a click queue is
+  full. Their text is a constant of the host, so an agent cannot dress its own
+  words up as a host message. While the owner is gone every badge is drawn in the
+  neutral tone with the prefix `Last seen: `, which is also the host's text.
+- **The layout and the colours** are Horizon's: padding, row heights, tones and
+  which button is the primary one follow fixed rules. A later `primary` button is
+  drawn neutral, and every control of a card without its agent is drawn
+  disabled.
+- **The panel size and title** of a new card come from the host: 420 wide and as
+  tall as its content needs, and a title that the host trims to one line.
+
+A document may still choose its own words, its own ids, its tones and its order
+of components. None of those carry host state.
+
 ## Does not guarantee
 
 - **The text can lie.** Horizon checks the shape and the bounds of the document,
@@ -87,8 +112,9 @@ Horizon types one line into the terminal of the panel that owns the card.
   An agent can write text that looks like a Horizon dialog, a banner or a system
   message, and can choose a panel title that looks like a real one. Its tone
   colours come from the same palette as other UI, so a tone is not a Horizon
-  status. The card has no badge, border or icon that proves it is agent
-  authored, and a person must not treat a card as host truth.
+  status. The footer and the state chip say that an agent drew the card, but no
+  mark proves that the words inside it are host state, and a person must not
+  treat a card as host truth.
 - **The document is not private between agents of one workspace.** `list` and
   `inspect` let every agent panel of the workspace read the full document of
   every card of that workspace. An agent must not write a credential, a token or

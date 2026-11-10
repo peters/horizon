@@ -603,6 +603,71 @@ outline).
 - **Section card** (settings): `PANEL_BG`, 1 px `BORDER_SUBTLE`, radius 10,
   margin 16, followed by 12 of space; heading above it 13 strong `FG_SOFT`.
 
+### Card panel
+
+A card panel shows a document that an agent composed. Horizon owns the frame
+around it: the state chip, the footer and the status frames. The document owns
+the body. Sizes come from `crates/horizon-ui/src/block_widget/metrics.rs` and
+the rules from the modules beside it.
+
+- Body: 18 of space above the first component, 16 on both sides, 14 below the
+  last one, and 16 between two components. The body scrolls; the footer does
+  not.
+- Heading: title 18 strong `FG`; optional second line 12.5 `FG_SOFT`, 4 below
+  the title; optional badge on the title row, right aligned, 12 to its left.
+  Both truncate with an ellipsis.
+- Badge: 24 high, radius 8, padding 10 on both sides, text 11.5 in the tone
+  colour, 6 px dot at 6 from the text. A state tone (`ok` `PALETTE_GREEN`,
+  `warn` `PALETTE_YELLOW`, `danger` `PALETTE_RED`, `info` `PALETTE_CYAN`,
+  `primary` `ACCENT`) fills with `alpha(colour, 28)`, outlines with
+  `alpha(colour, 90)` and carries a filled dot. The neutral tone is a raised
+  pill: `PANEL_BG_ALT` fill, `BORDER_SUBTLE` outline, `FG_SOFT` text and no dot.
+- Label and value box (`kv`): `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, radius
+  10, 12 of horizontal inset. Each pair is 34 high: label 12.5 `FG_SOFT` on the
+  left, value 12.5 `FG` on the right, or monospace 12 when the agent marks the
+  value `mono`. A 0.5 px `alpha(BORDER_SUBTLE, 179)` line separates two pairs.
+  A value takes at most 65% of the row and the label the rest; both truncate.
+- Body text: 12.5 `FG_SOFT`, line height 1.5 x the size, wrapped.
+- List: rows radius 8, 6 apart. A row is 10 above and below its text, 12 of
+  horizontal inset, and a 14 px radio mark 12 left of the text. Unselected:
+  `PANEL_BG_ALT` fill, 1 px `BORDER_SUBTLE`, hollow mark in `BORDER_STRONG`.
+  Selected: 2 px `ACCENT` outline, `blend(BG_ELEVATED, ACCENT, 0.18)` fill and a
+  filled `ACCENT` mark with a `BG` centre. Hover on a live row:
+  `blend(PANEL_BG_ALT, ACCENT, 0.10)`. Title 13 `FG`, second line 11.5 in
+  `FG_SOFT` or in the tone colour of that row.
+- Progress: label row 11.5 `FG_SOFT`, label on the left and the detail on the
+  right, then 6, then a bar 4 high, radius 2, track `PANEL_BG_ALT`, fill
+  `ACCENT` at the percentage of the width.
+- Buttons: 36 high, radius 10, 8 apart, in document order from the left. A
+  `danger` button keeps the right edge of its row; when the row is too narrow
+  the destructive buttons move to a right-aligned row of their own, and the
+  ordinary ones wrap. Primary: solid `ACCENT` with `BG` text and 16 of
+  horizontal padding (14 for every other button); only the first primary button
+  of a card is drawn primary and a later one is drawn neutral. Danger: `PALETTE_RED` text,
+  `alpha(PALETTE_RED, 23)` fill and `alpha(PALETTE_RED, 90)` outline. Every
+  other button: `PANEL_BG_ALT` fill, 1 px `BORDER_SUBTLE`, `FG` text. Disabled:
+  `PANEL_BG_ALT` fill, `BORDER_SUBTLE` outline and `FG_DIM` text whatever the
+  tone.
+- Divider: 1 px `BORDER_SUBTLE`, full width.
+- State chip (titlebar, left of the close control): 20 high, radius 8,
+  `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, 8 of horizontal inset, text 10.5
+  monospace `FG_SOFT`, a 6 px dot 6 left of the text. `<agent> listens` with a
+  filled `PALETTE_GREEN` dot while a click wait is open; `<agent>` with a hollow
+  `FG_SOFT` dot while the agent is in the workspace but not waiting; `No agent`
+  with a hollow dot when the owner is gone. The chip hides rather than cover
+  the title.
+- Footer: 30 high, 1 px `BORDER_SUBTLE` top border, 11 `FG_SOFT` (not
+  `FG_DIM`, which does not reach 4.5:1 on a panel), 16 of horizontal inset. Left
+  `Card drawn by the agent <name>`, or `Card drawn by an agent` when the owner
+  is gone; right `updated HH:MM` in local time from the last create or update.
+- Status frame: radius 8, 10 above and below, 12 on both sides,
+  `alpha(colour, 23)` fill, 1 px `alpha(colour, 90)` outline, strong line 12.5
+  in the colour and a second line 12 `FG_SOFT` at line height 1.45. A card
+  without its agent shows one at the top of the body in `warn`; a card that
+  refused a click shows one in `info`.
+- A new card opens 420 wide and as tall as its content needs, between 220 and
+  720.
+
 ### Panels and workspaces
 
 - Terminal panel: body `PANEL_BG` blended with its accent by 0.06 when

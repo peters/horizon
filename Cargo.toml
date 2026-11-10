@@ -89,7 +89,7 @@ security-framework = "3.7.0"
 same-file = "1.0"
 mime_guess = "2.0"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
-time = { version = "0.3.55", features = ["formatting", "parsing"] }
+time = { version = "0.3.55", features = ["formatting", "local-offset", "parsing"] }
 rmcp = { version = "3.5.0", default-features = false, features = ["macros", "server", "transport-io"] }
 schemars = "1.2.2"
 alacritty_terminal = "0.26.0"

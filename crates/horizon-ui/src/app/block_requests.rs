@@ -224,6 +224,7 @@ impl HorizonApp {
             );
         }
         let title = title.map(BlockPanelState::normalize_title);
+        let size = crate::block_widget::default_card_size(&document);
         let state = BlockPanelState {
             title: title
                 .clone()
@@ -231,12 +232,14 @@ impl HorizonApp {
             document,
             revision: 1,
             owner_actor: Some(owner.to_owned()),
+            updated_at_millis: manifest::now_millis(),
         };
         let revision = state.revision;
         let options = PanelOptions {
             kind: PanelKind::Block,
             block: Some(state),
             name: title,
+            size: Some(size),
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
@@ -278,6 +281,7 @@ impl HorizonApp {
             return Outcome::failed("not_block_panel", "Target is not a card");
         };
         let revision = state.replace_document(document);
+        state.updated_at_millis = manifest::now_millis();
         // The person keeps a selection only while its row is still drawn.
         if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id) {
             card.retain_selection(&state.document);

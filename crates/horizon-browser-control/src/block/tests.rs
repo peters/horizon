@@ -1,25 +1,27 @@
 use serde_json::json;
 
 use super::{
-    BlockDocument, BlockDocumentError, Button, Component, KvRow, ListRow, Selection, Tone, parse_document,
+    Badge, BlockDocument, BlockDocumentError, Button, Component, KvRow, ListRow, Selection, Tone, parse_document,
     validate_document,
 };
 
 /// The example an agent sends for a machine it holds.
 const EXAMPLE: &str = r#"{
   "components": [
-    {"type": "heading", "text": "cloud-1"},
+    {"type": "heading", "text": "cloud-1", "subtitle": "Hetzner · Helsinki",
+     "badge": {"text": "Running", "tone": "ok"}},
     {"type": "badge", "text": "running", "tone": "ok"},
     {"type": "kv", "rows": [
       {"label": "State", "value": "running"},
-      {"label": "Address", "value": "203.0.113.10"},
+      {"label": "Address", "value": "203.0.113.10", "mono": true},
       {"label": "Region", "value": "eu-west"}]},
     {"type": "text", "text": "Started from the agent's workspace.\nThe build has 4 steps."},
-    {"type": "progress", "label": "Hour 3 of 24", "percent": 12},
+    {"type": "progress", "label": "Hour 3 of 24", "percent": 12, "detail": "Saving"},
     {"type": "divider"},
     {"type": "list", "selection": "single", "rows": [
       {"id": "size.cx22", "title": "CX22 - 2 vCPU", "subtitle": "4 GB memory"},
-      {"id": "size.cx32", "title": "CX32 - 4 vCPU"}]},
+      {"id": "size.cx32", "title": "CX32 - 4 vCPU",
+       "subtitle": "gcloud is not installed", "tone": "warn"}]},
     {"type": "buttons", "items": [
       {"id": "connect", "label": "Connect", "tone": "primary"},
       {"id": "stop", "label": "Stop", "tone": "warn"},
@@ -92,7 +94,12 @@ fn full_example_round_trips() {
     assert_eq!(
         document.components[0],
         Component::Heading {
-            text: "cloud-1".to_owned()
+            text: "cloud-1".to_owned(),
+            subtitle: Some("Hetzner · Helsinki".to_owned()),
+            badge: Some(Badge {
+                text: "Running".to_owned(),
+                tone: Tone::Ok
+            })
         }
     );
     assert_eq!(
@@ -113,6 +120,8 @@ fn a_hand_built_document_with_every_component_validates() {
         components: vec![
             Component::Heading {
                 text: "cloud-1".to_owned(),
+                subtitle: Some("Hetzner · Helsinki".to_owned()),
+                badge: None,
             },
             Component::Text {
                 text: "one\ntwo".to_owned(),
@@ -121,6 +130,7 @@ fn a_hand_built_document_with_every_component_validates() {
                 rows: vec![KvRow {
                     label: "State".to_owned(),
                     value: "running".to_owned(),
+                    mono: true,
                 }],
             },
             Component::Badge {
@@ -130,6 +140,7 @@ fn a_hand_built_document_with_every_component_validates() {
             Component::Progress {
                 label: "Hour 3 of 24".to_owned(),
                 percent: 12,
+                detail: Some("Saving".to_owned()),
             },
             Component::Divider,
             Component::List {
@@ -138,6 +149,7 @@ fn a_hand_built_document_with_every_component_validates() {
                     id: "size.cx22".to_owned(),
                     title: "CX22 - 2 vCPU".to_owned(),
                     subtitle: None,
+                    tone: Some(Tone::Warn),
                 }],
             },
             Component::Buttons {
@@ -273,6 +285,135 @@ fn a_single_line_text_above_the_limit_names_its_field() {
             actual: 513,
             limit: 512
         }
+    );
+}
+
+#[test]
+fn a_document_without_the_optional_fields_keeps_its_defaults() {
+    let plain = json!({
+        "components": [
+            {"type": "heading", "text": "cloud-1"},
+            {"type": "kv", "rows": [{"label": "State", "value": "running"}]},
+            {"type": "progress", "label": "Hour 3 of 24", "percent": 12},
+            {"type": "list", "selection": "none", "rows": [{"id": "row.1", "title": "Row"}]}
+        ]
+    })
+    .to_string();
+    let document = parse_document(&plain).expect("the optional fields may be absent");
+
+    let Component::Heading { subtitle, badge, .. } = &document.components[0] else {
+        panic!("a heading");
+    };
+    assert_eq!((subtitle, badge), (&None, &None));
+    let Component::Kv { rows } = &document.components[1] else {
+        panic!("a kv");
+    };
+    assert!(!rows[0].mono, "a value is proportional unless it says otherwise");
+    let Component::Progress { detail, .. } = &document.components[2] else {
+        panic!("a progress");
+    };
+    assert_eq!(detail, &None);
+    let Component::List { rows, .. } = &document.components[3] else {
+        panic!("a list");
+    };
+    assert_eq!(rows[0].tone, None, "a subtitle is neutral unless it says otherwise");
+}
+
+#[test]
+fn the_optional_texts_hold_512_characters() {
+    let longest = "b".repeat(BlockDocument::MAX_TEXT_CHARS);
+    for at_limit in [
+        json!({"type": "heading", "text": "a", "subtitle": longest}),
+        json!({"type": "heading", "text": "a", "badge": {"text": longest}}),
+        json!({"type": "progress", "label": "a", "percent": 1, "detail": longest}),
+    ] {
+        assert!(
+            parse_document(&document_of(&[at_limit.to_string()])).is_ok(),
+            "512 characters are accepted: {at_limit}"
+        );
+    }
+}
+
+#[test]
+fn an_optional_text_above_the_limit_names_its_field() {
+    let long = "b".repeat(BlockDocument::MAX_TEXT_CHARS + 1);
+    for (component, path) in [
+        (
+            json!({"type": "heading", "text": "a", "subtitle": long}),
+            "components[0].subtitle",
+        ),
+        (
+            json!({"type": "heading", "text": "a", "badge": {"text": long}}),
+            "components[0].badge.text",
+        ),
+        (
+            json!({"type": "progress", "label": "a", "percent": 1, "detail": long}),
+            "components[0].detail",
+        ),
+    ] {
+        let error = parse_document(&document_of(&[component.to_string()])).expect_err("513 characters are rejected");
+        assert_eq!(
+            error,
+            BlockDocumentError::TextTooLong {
+                path: path.to_owned(),
+                actual: BlockDocument::MAX_TEXT_CHARS + 1,
+                limit: BlockDocument::MAX_TEXT_CHARS
+            }
+        );
+    }
+}
+
+#[test]
+fn an_optional_text_rejects_a_control_character_with_its_place() {
+    for (component, path, code_point) in [
+        (
+            json!({"type": "heading", "text": "a", "subtitle": "b\tc"}),
+            "components[0].subtitle",
+            9,
+        ),
+        (
+            json!({"type": "heading", "text": "a", "badge": {"text": "b\nc"}}),
+            "components[0].badge.text",
+            10,
+        ),
+        (
+            json!({"type": "progress", "label": "a", "percent": 1, "detail": "b\u{7}c"}),
+            "components[0].detail",
+            7,
+        ),
+    ] {
+        let error =
+            parse_document(&document_of(&[component.to_string()])).expect_err("a control character is rejected");
+        assert_eq!(
+            error,
+            BlockDocumentError::ControlCharacter {
+                path: path.to_owned(),
+                code_point
+            },
+            "{path} names the place that broke the rule"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_tone_or_a_non_boolean_mono_is_rejected() {
+    let tone = json!({"type": "list", "selection": "none", "rows": [
+        {"id": "row.1", "title": "Row", "tone": "loud"}
+    ]})
+    .to_string();
+    assert_eq!(
+        parse_document(&document_of(&[tone]))
+            .expect_err("loud is not a tone")
+            .code(),
+        "invalid_document"
+    );
+
+    let mono = json!({"type": "kv", "rows": [{"label": "State", "value": "running", "mono": "yes"}]}).to_string();
+    assert_eq!(
+        parse_document(&document_of(&[mono]))
+            .expect_err("mono is a boolean")
+            .code(),
+        "invalid_document"
     );
 }
 

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod card;
 mod clicks;
+mod clock;
 mod wake;
 
 pub use card::CardRuntime;
@@ -29,6 +30,10 @@ pub struct BlockPanelState {
     /// The stable `horizon:<local_id>` of the owning agent panel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_actor: Option<String>,
+    /// Wall-clock time of the last create or update, in milliseconds after the
+    /// epoch: zero for a card that records none.
+    #[serde(default)]
+    pub updated_at_millis: i64,
 }
 
 impl BlockPanelState {
@@ -45,6 +50,7 @@ impl BlockPanelState {
             document,
             revision: 1,
             owner_actor: None,
+            updated_at_millis: 0,
         }
     }
 
@@ -97,7 +103,11 @@ mod tests {
 
     fn document(text: &str) -> BlockDocument {
         BlockDocument {
-            components: vec![Component::Heading { text: text.to_string() }],
+            components: vec![Component::Heading {
+                text: text.to_string(),
+                subtitle: None,
+                badge: None,
+            }],
         }
     }
 
@@ -109,6 +119,26 @@ mod tests {
         assert_eq!(state.revision, 1);
         assert_eq!(state.owner_actor, None);
         assert_eq!(state.document, document("Cloud"));
+    }
+
+    #[test]
+    fn a_card_keeps_the_time_of_its_last_change_across_save_and_load() {
+        let mut state = BlockPanelState::new(document("one"));
+        assert_eq!(
+            state.updated_at_millis, 0,
+            "a new card records no time until the host stamps it"
+        );
+
+        state.updated_at_millis = 1_790_883_960_000;
+        let saved = serde_json::to_string(&state).expect("the state saves");
+        let loaded: BlockPanelState = serde_json::from_str(&saved).expect("the state loads");
+        assert_eq!(loaded.updated_at_millis, 1_790_883_960_000);
+        assert_eq!(loaded, state);
+
+        let older = r#"{"title":"Card","document":{"components":[]},"revision":2}"#;
+        let loaded: BlockPanelState = serde_json::from_str(older).expect("a card saved before the footer loads");
+        assert_eq!(loaded.updated_at_millis, 0);
+        assert_eq!(loaded.revision, 2);
     }
 
     #[test]
