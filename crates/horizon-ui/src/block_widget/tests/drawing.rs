@@ -1,12 +1,30 @@
 //! Every component draws, in both themes and in all three owner states.
 
+use egui::Color32;
+use egui::epaint::Shape;
 use horizon_browser_control::block::{BlockDocument, Button, Component, Selection, Tone};
-use horizon_core::CardRuntime;
+use horizon_core::{CardFrames as HostFrames, CardRuntime};
 
 use crate::theme;
 
 use super::{CardFrames, Owner, card_nodes, card_nodes_in, disabled_state, every_component, one_button};
 use crate::block_widget::{AGENT_GONE_LINE, AGENT_GONE_TITLE, CLICKS_REFUSED_LINE, CLICKS_REFUSED_TITLE, EMPTY_CARD};
+
+/// Whether the pass painted a rectangle outline of `width` in `color`.
+fn painted_outline(output: &egui::FullOutput, width: f32, color: Color32) -> bool {
+    output.shapes.iter().any(|clipped| match &clipped.shape {
+        Shape::Rect(rect) => (rect.stroke.width - width).abs() < 0.01 && rect.stroke.color == color,
+        _ => false,
+    })
+}
+
+/// Whether the pass painted a filled circle in `color`.
+fn painted_dot(output: &egui::FullOutput, color: Color32) -> bool {
+    output.shapes.iter().any(|clipped| match &clipped.shape {
+        Shape::Circle(circle) => circle.fill == color && circle.fill.a() > 0,
+        _ => false,
+    })
+}
 
 #[test]
 fn every_component_draws_its_text() {
@@ -120,6 +138,66 @@ fn a_refused_click_draws_the_info_frame() {
 
     assert!(nodes.iter().any(|(text, _)| text == CLICKS_REFUSED_TITLE), "{nodes:?}");
     assert!(nodes.iter().any(|(text, _)| text == CLICKS_REFUSED_LINE), "{nodes:?}");
+}
+
+#[test]
+fn a_gone_owner_keeps_the_selected_row_in_a_dimmed_form() {
+    let mut document = every_component();
+    let Some(Component::List { rows, .. }) = document.components.get_mut(6) else {
+        panic!("the fixture holds a list");
+    };
+    rows[1].selected = true;
+    let mut card = CardRuntime::default();
+    let frames = CardFrames::new();
+
+    let live = frames.paint(&document, &mut card, Owner::Listening);
+    assert_eq!(card.selected(6), Some("gcloud"), "the document selects a row");
+    assert!(
+        painted_outline(&live, 2.0, theme::ACCENT()),
+        "a live selected row keeps the accent outline"
+    );
+    assert!(
+        painted_dot(&live, theme::ACCENT()),
+        "a live selected row keeps the filled accent mark"
+    );
+
+    // The owner leaves: the choice stays on screen, dimmed instead of live.
+    let dimmed = theme::alpha(theme::ACCENT(), 120);
+    let gone = frames.paint(&document, &mut card, Owner::Gone);
+
+    assert_eq!(card.selected(6), Some("gcloud"), "the choice outlives the owner");
+    assert_eq!(
+        card.frames(),
+        HostFrames {
+            agent_gone: true,
+            clicks_refused: false,
+        },
+        "the pass tells the host which frames the body needs room for"
+    );
+    assert!(
+        painted_outline(&gone, 2.0, dimmed),
+        "a disabled selected row keeps a dimmed outline"
+    );
+    assert!(
+        painted_dot(&gone, dimmed),
+        "a disabled selected row keeps a dimmed radio mark"
+    );
+    assert!(
+        !painted_outline(&gone, 2.0, theme::ACCENT()),
+        "no row claims the live accent while the agent is away"
+    );
+
+    let nodes = frames.pass(&document, &mut card, Owner::Gone, Vec::new());
+    let row = nodes
+        .iter()
+        .find(|(_, node)| node.label() == Some("Google Cloud"))
+        .expect("the row is drawn");
+    assert_eq!(
+        row.1.toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "the row reports its selection to a screen reader"
+    );
+    assert!(row.1.is_disabled(), "the row takes no press without its agent");
 }
 
 #[test]

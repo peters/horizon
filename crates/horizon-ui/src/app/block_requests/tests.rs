@@ -494,3 +494,72 @@ fn a_queued_card_request_is_claimed_applied_and_answered() {
     assert!(app.board.panel_id_by_local_id(&panel_id).is_some());
     assert!(!app.block_claims_outstanding(), "no claimed request is left unanswered");
 }
+
+/// A board of two terminals and an agent panel, where a config, a saved session
+/// or a person's drag puts them: not on the default tile grid.
+fn off_grid_app() -> (tempfile::TempDir, Context, HorizonApp) {
+    fn panel(local_id: &str, position: [f32; 2], size: [f32; 2], kind: PanelKind) -> horizon_core::PanelState {
+        horizon_core::PanelState {
+            local_id: local_id.to_string(),
+            name: local_id.to_string(),
+            kind,
+            position: Some(position),
+            size: Some(size),
+            ..horizon_core::PanelState::default()
+        }
+    }
+    let workspace = horizon_core::WorkspaceState {
+        local_id: "board".to_string(),
+        name: "board".to_string(),
+        position: Some([0.0, 0.0]),
+        panels: vec![
+            panel("left", [40.0, 60.0], [550.0, 420.0], PanelKind::Editor),
+            panel("right", [630.0, 60.0], [550.0, 420.0], PanelKind::Editor),
+            panel("agent", [1220.0, 60.0], [330.0, 440.0], PanelKind::Claude),
+        ],
+        ..horizon_core::WorkspaceState::default()
+    };
+    let runtime = RuntimeState {
+        workspaces: vec![workspace],
+        ..RuntimeState::default()
+    };
+    let (temp, ctx, app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime),
+    });
+    (temp, ctx, app)
+}
+
+#[test]
+fn a_card_starts_level_with_the_top_edge_of_its_agent_panel() {
+    let (_temp, ctx, mut app) = off_grid_app();
+    let agent = app.board.panels[2].id;
+
+    let (panel_id, _) = created(app.apply_block_request(
+        &request_from(
+            &app,
+            2,
+            Operation::Create {
+                title: Some("cloud-1".into()),
+                document: document("cloud-1"),
+            },
+        ),
+        &ctx,
+    ));
+
+    let card = app
+        .board
+        .panel(app.board.panel_id_by_local_id(&panel_id).expect("card"))
+        .expect("card");
+    let agent = app.board.panel(agent).expect("agent");
+    assert_eq!(
+        card.layout.position[1], agent.layout.position[1],
+        "the card top is level with the agent panel: {:?} against {:?}",
+        card.layout.position, agent.layout.position
+    );
+    assert!(
+        card.layout.position[0] >= agent.layout.position[0] + agent.layout.size[0],
+        "the card stands beside the agent panel and covers no part of it: {:?} against {:?}",
+        card.layout.position,
+        agent.layout.position
+    );
+}

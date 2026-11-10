@@ -631,8 +631,16 @@ impl HorizonApp {
                 }
 
                 // Update the grip layer before raw body events use topmost-layer routing.
-                let resize_response =
-                    resize::show_resize_control(ui, rects.panel, self.canvas_view.zoom, panel_id, interactive);
+                // A card keeps the grip below its footer strip, so the strip keeps
+                // every press at every canvas zoom.
+                let resize_response = resize::show_resize_control(
+                    ui,
+                    rects.panel,
+                    self.canvas_view.zoom,
+                    panel_id,
+                    interactive,
+                    (snapshot.kind == PanelKind::Block).then_some(crate::block_widget::CARD_FOOT_SPAN),
+                );
 
                 // Compute display_title and the session badge from the board on
                 // demand, avoiding a per-panel String clone in PanelSnapshot.

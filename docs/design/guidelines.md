@@ -457,7 +457,7 @@ Fixed metrics:
 | Sidebar width | 210 default, 168 minimum |
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
-| Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. A terminal scrollbar stops above this square, so the foot of its track stays reachable. A panel too short for both keeps a 24 point track and gives the gap up. |
+| Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. A terminal scrollbar stops above this square, so the foot of its track stays reachable. A panel too short for both keeps a 24 point track and gives the gap up. On a card panel the hit target stops above the footer: its height is the on-screen height of the footer and the panel padding under it, at most 32 and at least 10 screen points, so a button of the card never loses its press to a resize grab. |
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Menu search field | 32 high, radius 8, text inset 28 left and 10 right |
@@ -632,7 +632,10 @@ the rules from the modules beside it.
   horizontal inset, and a 14 px radio mark 12 left of the text. Unselected:
   `PANEL_BG_ALT` fill, 1 px `BORDER_SUBTLE`, hollow mark in `BORDER_STRONG`.
   Selected: 2 px `ACCENT` outline, `blend(BG_ELEVATED, ACCENT, 0.18)` fill and a
-  filled `ACCENT` mark with a `BG` centre. Hover on a live row:
+  filled `ACCENT` mark with a `BG` centre. A selected row of a card without its
+  agent keeps that look in a dimmed form: 2 px `alpha(ACCENT, 120)` outline,
+  `blend(BG_ELEVATED, ACCENT, 0.09)` fill and the same mark in
+  `alpha(ACCENT, 120)`. Hover on a live row:
   `blend(PANEL_BG_ALT, ACCENT, 0.10)`. Title 13 `FG`, second line 11.5 in
   `FG_SOFT` or in the tone colour of that row.
 - Progress: label row 11.5 `FG_SOFT`, label on the left and the detail on the
@@ -668,7 +671,12 @@ the rules from the modules beside it.
 - A new card opens 420 wide and, once the body has measured its content, as
   tall as that content needs, between 220 and 900. A card that the person
   resized by hand keeps that size, and a card shorter than its content scrolls
-  its body above a footer that stays at the bottom.
+  its body above a footer that stays at the bottom. The status frames are part
+  of what the content needs: the card fits again when one appears or goes, such
+  as the frame of an agent that left and the frame of a refused click.
+- A new card stands beside its agent panel with the top edges level, or below it
+  with the left edges level when the place beside is taken. It covers no panel
+  of its workspace in either place.
 
 ### Panels and workspaces
 

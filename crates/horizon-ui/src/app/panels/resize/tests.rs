@@ -19,6 +19,18 @@ fn frame(ctx: &Context, zoom: f32, interactive: bool, events: Vec<Event>) -> Fra
 }
 
 fn frame_with_transform(ctx: &Context, transform: TSTransform, interactive: bool, events: Vec<Event>) -> FrameResult {
+    frame_with_foot(ctx, transform, interactive, events, None)
+}
+
+/// One pass over a panel whose grip may stop above a strip at the foot of the
+/// panel, as the footer of a card does.
+fn frame_with_foot(
+    ctx: &Context,
+    transform: TSTransform,
+    interactive: bool,
+    events: Vec<Event>,
+    foot_span: Option<f32>,
+) -> FrameResult {
     let mut result = FrameResult::default();
     let output = ctx
         .run_ui(
@@ -32,7 +44,7 @@ fn frame_with_transform(ctx: &Context, transform: TSTransform, interactive: bool
                     ctx.set_transform_layer(ui.layer_id(), transform);
                     let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
                     let body = ui.interact(panel.shrink(4.0), ui.scope_id().with("body"), Sense::click_and_drag());
-                    let resize = show_resize_control(ui, panel, transform.scaling, PanelId(1), interactive);
+                    let resize = show_resize_control(ui, panel, transform.scaling, PanelId(1), interactive, foot_span);
                     let pointer_events = ui.input(|input| input.events.clone());
                     result.raw_body_presses = pointer_events
                         .iter()
@@ -99,6 +111,92 @@ fn pointer_outside_grip_keeps_body_interaction() {
 }
 
 #[test]
+fn a_card_grip_stops_at_the_footer_strip_at_each_zoom() {
+    let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(420.0, 500.0));
+    let foot = crate::block_widget::CARD_FOOT_SPAN;
+    let foot_top = |zoom: f32| (panel.max.y - foot) * zoom;
+
+    for zoom in [1.0, 0.73, 0.5] {
+        let rect = handle_rect(panel, zoom, Some(foot));
+        let screen_height = rect.height() * zoom;
+
+        assert_eq!(rect.max, panel.max, "the target keeps the corner at zoom {zoom}");
+        assert!(
+            screen_height <= foot * zoom + 0.01,
+            "the target stops at the footer strip at zoom {zoom}: {screen_height} against {}",
+            foot * zoom
+        );
+        assert!(
+            rect.min.y * zoom + 0.01 >= foot_top(zoom),
+            "no part of the target reaches above the footer at zoom {zoom}: {} against {}",
+            rect.min.y * zoom,
+            foot_top(zoom)
+        );
+        assert!(
+            screen_height >= FOOT_GRIP_MIN_SCREEN_HEIGHT - 0.01,
+            "the target stays usable at zoom {zoom}: {screen_height}"
+        );
+        assert!(
+            (rect.width() * zoom - 32.0).abs() < 0.01,
+            "the target keeps the width of a grip at zoom {zoom}"
+        );
+    }
+
+    let full = handle_rect(panel, 1.0, Some(foot));
+    assert!((full.height() - 32.0).abs() < 0.01, "a card at 100 % keeps the square");
+    let narrow = handle_rect(panel, 0.73, Some(foot));
+    assert!(
+        (narrow.height() * 0.73 - foot * 0.73).abs() < 0.01,
+        "below full zoom the strip decides the height"
+    );
+    let square = handle_rect(panel, 0.5, None);
+    assert!(
+        (square.height() * 0.5 - 32.0).abs() < 0.01,
+        "the grip of every other panel keeps its square"
+    );
+}
+
+#[test]
+fn a_button_above_the_footer_keeps_its_press_at_half_zoom() {
+    let ctx = Context::default();
+    let transform = TSTransform::from_scaling(0.5);
+    // The panel that `frame_with_foot` draws.
+    let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
+    let foot = crate::block_widget::CARD_FOOT_SPAN;
+    frame_with_foot(&ctx, transform, true, vec![], Some(foot));
+    frame_with_foot(&ctx, transform, true, vec![], Some(foot));
+
+    // The centre of the danger button of a card: right aligned, one button
+    // height above the footer strip.
+    let button_centre = transform * Pos2::new(panel.max.x - 6.0, panel.max.y - foot - 20.0);
+    let hover = frame_with_foot(
+        &ctx,
+        transform,
+        true,
+        vec![Event::PointerMoved(button_centre)],
+        Some(foot),
+    );
+    assert_ne!(
+        hover.cursor,
+        CursorIcon::ResizeNwSe,
+        "the grip leaves the button row alone at 50 % zoom"
+    );
+    let press = frame_with_foot(&ctx, transform, true, vec![button(button_centre, true)], Some(foot));
+    assert_eq!(
+        press.raw_body_presses, 1,
+        "the press reaches the panel body at 50 % zoom"
+    );
+    let drag = frame_with_foot(
+        &ctx,
+        transform,
+        true,
+        vec![Event::PointerMoved(button_centre + Vec2::new(10.0, 5.0))],
+        Some(foot),
+    );
+    assert!(!drag.resize_dragged, "a press in the button row never resizes");
+}
+
+#[test]
 fn disabled_grip_does_not_claim_body_input_or_resize_cursor() {
     let ctx = Context::default();
     frame(&ctx, 1.0, false, vec![]);
@@ -116,7 +214,7 @@ fn disabled_grip_does_not_claim_body_input_or_resize_cursor() {
 fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
     let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
     for zoom in [horizon_core::MIN_CANVAS_ZOOM, 0.25, 0.5, 1.0, 2.0] {
-        let rect = handle_rect(panel, zoom);
+        let rect = handle_rect(panel, zoom, None);
         let (centers, radius) = grip_dots(rect, zoom);
         assert!(radius > 0.0, "zoom {zoom}");
         let screen_span = rect.width() * zoom;
@@ -143,7 +241,7 @@ fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
             }
         }
     }
-    let rect = handle_rect(panel, 1.0);
+    let rect = handle_rect(panel, 1.0, None);
     let (centers, radius) = grip_dots(rect, 1.0);
     assert!((centers[0] - (rect.min + Vec2::new(26.0, 16.0))).length() < 0.01);
     assert!((centers[3] - (rect.min + Vec2::new(16.0, 26.0))).length() < 0.01);
@@ -154,7 +252,7 @@ fn grip_dots_stay_inside_the_hit_target_at_each_zoom() {
 #[test]
 fn grip_dots_shrink_together_when_the_corner_cannot_hold_them() {
     let panel = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(400.0, PANEL_TITLEBAR_HEIGHT + 10.0));
-    let rect = handle_rect(panel, 1.0);
+    let rect = handle_rect(panel, 1.0, None);
     assert!((rect.width() - 10.0).abs() < 0.01);
     let (centers, radius) = grip_dots(rect, 1.0);
     assert!(radius < GRIP_DOT_RADIUS);
@@ -177,7 +275,7 @@ fn grip_dots_shrink_together_when_the_corner_cannot_hold_them() {
 #[test]
 fn grip_stays_within_tiny_panel_at_minimum_zoom() {
     let panel = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(400.0, 320.0));
-    let rect = handle_rect(panel, horizon_core::MIN_CANVAS_ZOOM);
+    let rect = handle_rect(panel, horizon_core::MIN_CANVAS_ZOOM, None);
     assert!(panel.contains_rect(rect));
     assert_eq!(rect.max, panel.max);
     assert!(rect.min.y >= panel.min.y + PANEL_TITLEBAR_HEIGHT);
@@ -223,7 +321,7 @@ fn the_terminal_scrollbar_stays_clear_of_the_grip_at_each_zoom() {
         let clearance = scrollbar_bottom_clearance(panel, zoom);
         let scrollbar_hit =
             crate::terminal_widget::scrollbar_hit_rect(available, clearance).translate(terminal_origin.to_vec2());
-        let grip = handle_rect(panel, zoom);
+        let grip = handle_rect(panel, zoom, None);
         assert!(
             !scrollbar_hit.intersects(grip),
             "zoom {zoom}: scrollbar hit {scrollbar_hit:?} meets grip {grip:?}"

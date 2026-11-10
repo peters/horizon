@@ -19,8 +19,10 @@ invalid document is refused, and that the card comes back after a restart of
 Horizon. It then makes sure that a click of the person reaches the agent that
 owns the card, with its selection and its time, that one wait covers every card
 of an agent, and that Horizon wakes an idle agent for a click. The last task
-checks the drawn look of the card in both themes, its fitted height, and the
-scrolling of a card that is shorter than its content.
+checks the drawn look of the card in both themes, its fitted height, the
+scrolling of a card that is shorter than its content, the frame that a card fits
+for its own notices, the selected row of a card without its agent, and the press
+of a button at a low canvas zoom.
 
 ## 2. Applicability
 
@@ -125,7 +127,8 @@ scrolling of a card that is shorter than its content.
    `revision: 1`. The live view shows a new panel named `cloud-1` with the
    heading, the badge and the address. The card fits its content: the footer
    sits below the address, and no part of the body is cut off. The card takes a
-   free place beside Agent A and covers no terminal and no other card.
+   free place beside Agent A: its top edge is level with the top edge of the
+   agent panel, and it covers no terminal and no other card.
 
 2. Examine the fixture desktop.
 
@@ -397,14 +400,19 @@ scrolling of a card that is shorter than its content.
 
 ### 5.14 B14 — A card whose agent is gone
 
-1. Close agent panel A in the live view, with its close button.
+1. Press a row of the card, then close agent panel A in the live view with its
+   close button.
 
    Result: A yellow status frame appears at the top of the card body. Its strong
    line is `Its agent is not here` and its second line is `Start an agent in this
    workspace to use the buttons.`. The titlebar chip says `No agent` with a
    hollow dot, every badge is drawn neutral with the prefix `Last seen: `, and
    the buttons and rows are drawn disabled. The footer says `Card drawn by an
-   agent`.
+   agent`. The card takes the height of its document and the frame, so the
+   button row and the footer are in view. The row that you pressed keeps the
+   selected look in a dimmed form: the 2 px outline and the filled radio mark
+   are dimmed, and the fill keeps a weak accent tint. The other rows keep their
+   raised fill and their hollow mark.
 
 2. Press `Continue` on the card.
 
@@ -417,7 +425,9 @@ scrolling of a card that is shorter than its content.
    A from `<work>/identity-a.json`.
 
    Result: The card keeps its document and it is live again, because its owner
-   is back.
+   is back. The card drops the room of the frame and takes the height of its
+   document only, and the row keeps the selection that the person made before
+   step 1.
 
 ### 5.15 B15 — A full queue of clicks
 
@@ -520,7 +530,20 @@ every step on the fixture display that the native VNC Device panel shows.
    Result: The card grows and shrinks to the height of its content. The footer
    clock changes, and the card does not resize again after it has settled.
 
-9. Set the theme back to dark.
+9. Zoom the canvas out to 50 percent. In client A, call `block_panel` with
+   `{"operation":"next_click","panel_id":"<card>","timeout_millis":120000}` and
+   keep the call open. Then press `Delete` at the right edge of the card.
+
+   Result: The resize handle of the card stays in the lower right corner, and
+   its hit area stops above the footer strip, so no part of it covers the button
+   row. The card does not resize, and the call answers `clicked` with
+   `component_id` `delete`.
+
+10. Press the handle in the lower right corner of the card and drag it, then zoom
+    the canvas back to 100 percent and set the theme back to dark.
+
+   Result: The handle takes the drag below the button row, and the card keeps
+   the size that you dragged.
 
 ### 5.17 B17 — One wait covers every card of an agent
 
@@ -595,7 +618,8 @@ every step on the fixture display that the native VNC Device panel shows.
 ## 6. Pass criteria
 
 - B01: The card appears in the workspace of the calling agent, at revision 1,
-  and takes no keyboard focus.
+  and takes no keyboard focus. It stands beside the agent panel with level top
+  edges.
 - B02 and B03: Each new document raises the revision, and list and inspect
   report the card.
 - B04: A hidden card keeps its document and revision, and a shown card returns.
@@ -613,14 +637,16 @@ every step on the fixture display that the native VNC Device panel shows.
   owner's terminal.
 - B13: No wake line goes out while the owner's agent panel holds the keyboard
   focus, and the line follows the focus away.
-- B14: Without its agent the card says so, takes no click, and comes back with
-  its owner.
+- B14: Without its agent the card says so, takes no click, shows its selected
+  row in a dimmed form, fits its height to the frame, and comes back with its
+  owner.
 - B15: A full queue drops the newest click and keeps the older ones in order.
 - B16: Every component, the chip and the footer are drawn as the design
   describes, in both themes, and a narrow card truncates or wraps without
   overlap. The card is as tall as its content needs, a card that is shorter than
   its content scrolls above a fixed footer, and no part of the body is drawn
-  under the footer.
+  under the footer. At 50 percent zoom every button of the card still takes its
+  press, because the resize handle of a card stops above its footer strip.
 - B17: One wait without `panel_id` covers every card of its agent, answers the
   oldest click of those cards, and a caller without a card gets `no_cards`.
 - B18: A row that the document marks as selected draws as selected, travels with

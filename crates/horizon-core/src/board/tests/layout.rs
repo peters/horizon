@@ -651,3 +651,124 @@ fn three_cards_created_in_a_row_cover_no_panel() {
         agent.layout.position
     );
 }
+
+/// The rectangle `[min_x, min_y, max_x, max_y]` of a panel.
+fn panel_bounds(board: &Board, id: PanelId) -> [f32; 4] {
+    let panel = board.panel(id).expect("panel");
+    let [x, y] = panel.layout.position;
+    let [width, height] = panel.layout.size;
+    [x, y, x + width, y + height]
+}
+
+#[test]
+fn a_card_beside_its_agent_panel_aligns_its_top_edge() {
+    let mut board = Board::new();
+    let (workspace, agent) = off_grid_workspace(&mut board);
+
+    let card = board
+        .create_panel_beside(card_panel_options([420.0, 500.0]), workspace, agent)
+        .expect("the card spawns");
+
+    let agent = panel_bounds(&board, agent);
+    let card = panel_bounds(&board, card);
+    assert_eq!(card[1], agent[1], "the top edges are level: {card:?} against {agent:?}");
+    assert_eq!(
+        card[0],
+        agent[2] + TILE_GAP,
+        "the card starts at the right edge of the agent"
+    );
+    assert_eq!(overlapping_panels(&board, workspace), Vec::new(), "no panel is covered");
+}
+
+#[test]
+fn a_card_below_its_agent_panel_aligns_its_left_edge() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace_at("below", [0.0, 0.0]);
+    let agent = board
+        .create_panel(
+            PanelOptions {
+                position: Some([1220.0, 60.0]),
+                size: Some([330.0, 440.0]),
+                ..editor_panel_options()
+            },
+            workspace,
+        )
+        .expect("the agent panel spawns");
+    // A panel where a card would stand beside the agent, off the tile grid, so
+    // the next card goes below.
+    board
+        .create_panel(
+            PanelOptions {
+                position: Some([1570.0, 60.0]),
+                size: Some([420.0, 400.0]),
+                ..editor_panel_options()
+            },
+            workspace,
+        )
+        .expect("the neighbouring panel spawns");
+
+    let card = board
+        .create_panel_beside(card_panel_options([420.0, 500.0]), workspace, agent)
+        .expect("the card spawns");
+
+    let agent = panel_bounds(&board, agent);
+    let card = panel_bounds(&board, card);
+    assert_eq!(
+        card[0], agent[0],
+        "the left edges are level: {card:?} against {agent:?}"
+    );
+    assert_eq!(card[1], agent[3] + TILE_GAP, "the card starts below the agent");
+    assert_eq!(overlapping_panels(&board, workspace), Vec::new(), "no panel is covered");
+}
+
+#[test]
+fn a_card_that_fits_beside_neither_and_below_its_agent_takes_a_free_tile() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace_at("crowded", [0.0, 0.0]);
+    let agent = board
+        .create_panel(
+            PanelOptions {
+                position: Some([1220.0, 60.0]),
+                size: Some([330.0, 440.0]),
+                ..editor_panel_options()
+            },
+            workspace,
+        )
+        .expect("the agent panel spawns");
+    // A panel beside the agent and one below it take both places a card that
+    // belongs to the agent would take.
+    for (position, size) in [([1570.0, 60.0], [420.0, 400.0]), ([1220.0, 520.0], [420.0, 500.0])] {
+        board
+            .create_panel(
+                PanelOptions {
+                    position: Some(position),
+                    size: Some(size),
+                    ..editor_panel_options()
+                },
+                workspace,
+            )
+            .expect("the neighbouring panel spawns");
+    }
+
+    let card = board
+        .create_panel_beside(card_panel_options([420.0, 500.0]), workspace, agent)
+        .expect("the card spawns");
+
+    assert_eq!(
+        overlapping_panels(&board, workspace),
+        Vec::new(),
+        "a crowded workspace still gives the card a free place"
+    );
+    let agent = panel_bounds(&board, agent);
+    let card = panel_bounds(&board, card);
+    assert_ne!(
+        (card[0], card[1]),
+        (agent[2] + TILE_GAP, agent[1]),
+        "the place beside the agent is taken: {card:?}"
+    );
+    assert_ne!(
+        (card[0], card[1]),
+        (agent[0], agent[3] + TILE_GAP),
+        "the place below the agent is taken: {card:?}"
+    );
+}

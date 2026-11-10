@@ -1,7 +1,8 @@
-//! A card takes the height its content needs, once per document.
+//! A card takes the height its content needs, once per document and per set of
+//! Horizon-owned frames.
 
 use horizon_browser_control::block::BlockDocument;
-use horizon_core::{BlockPanelState, Panel, PanelKind, PanelOptions, RuntimeState, StartupDecision};
+use horizon_core::{BlockPanelState, CardFrames, Panel, PanelKind, PanelOptions, RuntimeState, StartupDecision};
 
 use super::*;
 use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
@@ -127,6 +128,61 @@ fn a_card_that_the_person_resized_keeps_its_size() {
     assert!(
         (height(&app, id) - 220.0).abs() < f32::EPSILON,
         "a later document does not undo the person's size: {}",
+        height(&app, id)
+    );
+}
+
+#[test]
+fn a_card_fits_again_when_a_frame_of_the_host_appears_or_goes() {
+    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    app.fit_block_cards(&ctx);
+    let fitted = height(&app, id);
+
+    // The owner leaves: Horizon puts its frame at the top of the body, so the
+    // body needs those points on top of the document.
+    let card = app.panel_render_caches.card_runtime.entry(id).or_default();
+    card.observe_frames(CardFrames {
+        agent_gone: true,
+        clicks_refused: false,
+    });
+    card.observe_content_height(700.0);
+    app.fit_block_cards(&ctx);
+
+    assert!(
+        (height(&app, id) - (700.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        "the card grows for the frame of a gone agent: {} was {fitted}",
+        height(&app, id)
+    );
+
+    // The owner comes back: the frame is gone, so the card takes the height of
+    // its document again.
+    let card = app.panel_render_caches.card_runtime.entry(id).or_default();
+    card.observe_frames(CardFrames::default());
+    card.observe_content_height(600.0);
+    app.fit_block_cards(&ctx);
+
+    assert!(
+        (height(&app, id) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        "the card drops the room of the frame when the agent is back: {}",
+        height(&app, id)
+    );
+}
+
+#[test]
+fn a_card_that_the_person_resized_keeps_its_size_when_a_frame_appears() {
+    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let card = app.panel_render_caches.card_runtime.entry(id).or_default();
+    card.mark_hand_resized();
+    card.observe_frames(CardFrames {
+        agent_gone: true,
+        clicks_refused: false,
+    });
+
+    app.fit_block_cards(&ctx);
+
+    assert!(
+        (height(&app, id) - 220.0).abs() < f32::EPSILON,
+        "the person's size outranks the frame: {}",
         height(&app, id)
     );
 }

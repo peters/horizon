@@ -90,8 +90,10 @@ impl Board {
     /// panel `beside`, such as the agent panel that a card belongs to.
     ///
     /// The placement of [`Self::create_panel`] applies: the panel never covers
-    /// another panel of the workspace. `beside` only decides which free place
-    /// is taken when the workspace is not arranged by a preset.
+    /// another panel of the workspace. `beside` decides where the new panel
+    /// stands: right beside that panel with the top edges aligned, or right
+    /// below it with the left edges aligned, when the workspace is not arranged
+    /// by a preset.
     ///
     /// # Errors
     ///

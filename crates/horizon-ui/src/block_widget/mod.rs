@@ -29,11 +29,11 @@ pub(crate) use chip::CardChip;
 /// The frame around the body, which only the tests judge on its own.
 #[cfg(test)]
 pub(crate) use size::CARD_CHROME_HEIGHT;
-pub(crate) use size::{CARD_HEIGHT_LIMITS, default_card_size, fitted_card_height};
+pub(crate) use size::{CARD_FOOT_SPAN, CARD_HEIGHT_LIMITS, default_card_size, fitted_card_height};
 
 use egui::{Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2};
 use horizon_browser_control::block::{BlockDocument, Component, Tone};
-use horizon_core::{CardRuntime, PanelId};
+use horizon_core::{CardFrames, CardRuntime, PanelId};
 
 use crate::theme;
 
@@ -115,6 +115,13 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
 
 fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
     let refused = view.card.refused_notice(view.now_millis);
+    // The frames above the body are Horizon's, not the document's, and they take
+    // room too: the host fits the card when this set changes, not only when the
+    // document does.
+    view.card.observe_frames(CardFrames {
+        agent_gone: !view.agent_present,
+        clicks_refused: refused,
+    });
     let primary = primary_button(view.document);
     let mut first = true;
     if !view.agent_present {

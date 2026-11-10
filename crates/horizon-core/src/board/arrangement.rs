@@ -422,8 +422,11 @@ impl Board {
     /// panel would cover it.
     ///
     /// `beside` is the rectangle of the panel the new one belongs to, such as
-    /// the agent panel of a card. The nearest free tile to it is taken when
-    /// one is given; without one the first free tile in reading order wins.
+    /// the agent panel of a card. The new panel then stands right beside that
+    /// panel, with the top edges aligned, or right below it, with the left edges
+    /// aligned, so the pair reads as one group. A panel that fits in neither
+    /// place takes the nearest free tile instead; without a `beside` panel the
+    /// first free tile in reading order wins.
     fn free_tile_position(&self, workspace: &Workspace, size: [f32; 2], beside: Option<[f32; 4]>) -> [f32; 2] {
         let origin = workspace.position;
         let occupied: Vec<[f32; 4]> = workspace
@@ -432,16 +435,20 @@ impl Board {
             .filter_map(|id| self.panel(*id))
             .map(|panel| panel_rect(panel.layout.position, panel.layout.size))
             .collect();
-        let tiles = free_tiles(origin, size, &occupied);
         let Some(beside) = beside else {
-            return tiles
+            return free_tiles(origin, size, &occupied)
                 .first()
                 .copied()
                 .unwrap_or([origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD]);
         };
-        tiles
-            .iter()
-            .copied()
+        if let Some(position) = anchored_positions(beside)
+            .into_iter()
+            .find(|position| covers_no_panel(*position, size, &occupied))
+        {
+            return position;
+        }
+        free_tiles(origin, size, &occupied)
+            .into_iter()
             .min_by(|left, right| {
                 center_distance(beside, panel_rect(*left, size))
                     .total_cmp(&center_distance(beside, panel_rect(*right, size)))
@@ -542,6 +549,19 @@ const MAX_TILE_COLUMNS: usize = 16;
 /// The rectangle of a panel at `position` with `size`.
 fn panel_rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] {
     [position[0], position[1], position[0] + size[0], position[1] + size[1]]
+}
+
+/// The two places a panel that belongs to the panel `anchor` takes, in order:
+/// at the right edge of `anchor` with the top edges aligned, then below it with
+/// the left edges aligned.
+fn anchored_positions(anchor: [f32; 4]) -> [[f32; 2]; 2] {
+    [[anchor[2] + TILE_GAP, anchor[1]], [anchor[0], anchor[3] + TILE_GAP]]
+}
+
+/// Whether a panel at `position` with `size` covers no panel of `occupied`.
+fn covers_no_panel(position: [f32; 2], size: [f32; 2], occupied: &[[f32; 4]]) -> bool {
+    let candidate = panel_rect(position, size);
+    !occupied.iter().any(|panel| rects_overlap(candidate, *panel))
 }
 
 /// The free tiles that fit a panel of `size`, in reading order.

@@ -12,7 +12,7 @@ mod clicks;
 mod clock;
 mod wake;
 
-pub use card::CardRuntime;
+pub use card::{CardFrames, CardRuntime};
 pub use clicks::{CLICK_RETENTION_MILLIS, ClickQueue, MAX_PENDING_CLICKS, PendingClick};
 pub use wake::{WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict};
 

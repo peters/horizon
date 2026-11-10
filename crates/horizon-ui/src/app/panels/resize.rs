@@ -6,6 +6,9 @@ use super::CanvasClippedArea;
 use crate::theme;
 
 const HANDLE_SCREEN_SIZE: f32 = 32.0;
+/// Smallest screen height of the grip of a card, so the corner of a fully
+/// zoomed-out card still grabs.
+const FOOT_GRIP_MIN_SCREEN_HEIGHT: f32 = 10.0;
 /// Canvas gap between the scrollbar's hit target and the corner hit square, so
 /// their shared edge never belongs to both.
 const SCROLLBAR_GRIP_GAP: f32 = 1.0;
@@ -30,9 +33,29 @@ pub(super) fn drag_delta(response: &Response) -> Vec2 {
     }
 }
 
-fn handle_rect(panel: Rect, zoom: f32) -> Rect {
-    let span = grip_canvas_span(panel, zoom);
-    Rect::from_min_size(panel.max - Vec2::splat(span), Vec2::splat(span))
+/// The square of the grip's hit target on `panel`.
+///
+/// `foot_span` is the height of a strip at the foot of the panel that holds
+/// controls the person must be able to press, as the footer of a card does. The
+/// target stops above that strip, so a press on a control of the strip is never
+/// taken as a resize grab; `None` gives the square of every other panel.
+fn handle_rect(panel: Rect, zoom: f32, foot_span: Option<f32>) -> Rect {
+    let width = grip_canvas_span(panel, zoom);
+    let height = match foot_span {
+        None => width,
+        Some(foot_span) => foot_grip_canvas_height(foot_span, zoom).min(width),
+    };
+    Rect::from_min_size(
+        Pos2::new(panel.max.x - width, panel.max.y - height),
+        Vec2::new(width, height),
+    )
+}
+
+/// The canvas height of the grip of a card whose footer strip is `foot_span`
+/// canvas points high: the on-screen strip, between the smallest usable target
+/// and the default square.
+fn foot_grip_canvas_height(foot_span: f32, zoom: f32) -> f32 {
+    (foot_span * zoom).clamp(FOOT_GRIP_MIN_SCREEN_HEIGHT, HANDLE_SCREEN_SIZE) / zoom
 }
 
 /// The grip's hit square in canvas points: [`HANDLE_SCREEN_SIZE`] screen points,
@@ -56,8 +79,9 @@ pub(super) fn show_resize_control(
     zoom: f32,
     panel_id: PanelId,
     interactive: bool,
+    foot_span: Option<f32>,
 ) -> Response {
-    let rect = handle_rect(panel, zoom);
+    let rect = handle_rect(panel, zoom, foot_span);
     let parent = ui.layer_id();
     let layer = LayerId::new(parent.order, Id::unique(("panel_resize_layer", panel_id.0)));
     let ctx = ui.ctx();

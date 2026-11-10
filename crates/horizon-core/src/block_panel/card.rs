@@ -12,6 +12,19 @@ use horizon_browser_control::block::{BlockDocument, Component, Selection};
 use super::clicks::{ClickQueue, PendingClick};
 use super::clock::updated_label;
 
+/// The frames that Horizon adds above the body of a card, outside the document
+/// its agent wrote.
+///
+/// Each frame takes room that the content of a card needs, so a change of this
+/// set changes the height the card fits, exactly like a new document does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CardFrames {
+    /// The card says that its agent is not in the workspace.
+    pub agent_gone: bool,
+    /// The card says that a click was refused while the queue stayed full.
+    pub clicks_refused: bool,
+}
+
 /// A card's runtime state: the clicks it holds for its agent, the row each
 /// list has selected, the height its body measured, and whether a wake line
 /// already went out.
@@ -31,8 +44,11 @@ pub struct CardRuntime {
     updated: Option<(u64, i64, String)>,
     /// The height the body content needed in the last pass, when one ran.
     measured_content_height: Option<f32>,
-    /// The document revision whose measured height the host already applied.
-    fitted_revision: Option<u64>,
+    /// The frames the last pass drew above the body.
+    frames: CardFrames,
+    /// The document revision and frames whose measured height the host already
+    /// applied.
+    fitted: Option<(u64, CardFrames)>,
     /// The person resized this card by hand, so its size outranks its content.
     hand_resized: bool,
 }
@@ -84,6 +100,17 @@ impl CardRuntime {
         self.measured_content_height = Some(height);
     }
 
+    /// Records the frames that the pass drew above the body of this card.
+    pub fn observe_frames(&mut self, frames: CardFrames) {
+        self.frames = frames;
+    }
+
+    /// The frames that the last pass drew above the body, as last drawn.
+    #[must_use]
+    pub fn frames(&self) -> CardFrames {
+        self.frames
+    }
+
     /// The content height of the last pass, when one drew this card.
     #[must_use]
     pub fn measured_content_height(&self) -> Option<f32> {
@@ -91,17 +118,18 @@ impl CardRuntime {
     }
 
     /// Whether the host must still give this card the height its content of
-    /// `revision` needs. One fit per revision: a second pass over the same
-    /// document never resizes the card again, so no frame loop starts.
+    /// `revision` needs, with the frames of the last pass above it. One fit per
+    /// document and set of frames: a second pass that draws the same ones never
+    /// resizes the card again, so no frame loop starts.
     #[must_use]
     pub fn needs_content_fit(&self, revision: u64) -> bool {
-        !self.hand_resized && self.measured_content_height.is_some() && self.fitted_revision != Some(revision)
+        !self.hand_resized && self.measured_content_height.is_some() && self.fitted != Some((revision, self.frames))
     }
 
-    /// Records that the host gave the card the height its content of
-    /// `revision` needs.
+    /// Records that the host gave the card the height its content and its
+    /// frames of `revision` need.
     pub fn mark_content_fit(&mut self, revision: u64) {
-        self.fitted_revision = Some(revision);
+        self.fitted = Some((revision, self.frames));
     }
 
     /// Whether the person resized this card by hand.
@@ -246,7 +274,7 @@ impl CardRuntime {
 mod tests {
     use horizon_browser_control::block::{Button, Component, ListRow, Selection, Tone};
 
-    use super::CardRuntime;
+    use super::{CardFrames, CardRuntime};
 
     fn rows(ids: &[&str]) -> Vec<ListRow> {
         ids.iter()
@@ -355,6 +383,51 @@ mod tests {
         assert!(runtime.hand_resized());
         assert!(
             !runtime.needs_content_fit(3),
+            "a card that the person resized by hand keeps its size"
+        );
+    }
+
+    #[test]
+    fn a_frame_of_the_host_fits_the_card_again_and_only_once() {
+        let mut runtime = CardRuntime::default();
+        runtime.observe_content_height(415.0);
+        runtime.mark_content_fit(1);
+        assert_eq!(runtime.frames(), CardFrames::default(), "a live card draws no frame");
+        assert!(!runtime.needs_content_fit(1), "a settled card stays put");
+
+        let gone = CardFrames {
+            agent_gone: true,
+            clicks_refused: false,
+        };
+        runtime.observe_frames(gone);
+        assert!(
+            runtime.needs_content_fit(1),
+            "the frame of a gone agent needs room, so the card fits again"
+        );
+        runtime.mark_content_fit(1);
+        assert!(
+            !runtime.needs_content_fit(1),
+            "the same document and the same frames never fit twice"
+        );
+
+        runtime.observe_frames(CardFrames {
+            agent_gone: true,
+            clicks_refused: true,
+        });
+        assert!(
+            runtime.needs_content_fit(1),
+            "a full queue adds a second frame, so the card fits again"
+        );
+        runtime.mark_content_fit(1);
+        runtime.observe_frames(gone);
+        assert!(
+            runtime.needs_content_fit(1),
+            "the agent back removes its frame, so the card shrinks again"
+        );
+
+        runtime.mark_hand_resized();
+        assert!(
+            !runtime.needs_content_fit(1),
             "a card that the person resized by hand keeps its size"
         );
     }

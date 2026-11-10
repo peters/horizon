@@ -2,11 +2,16 @@
 //!
 //! The body measures its content in the pass that draws it, because only that
 //! pass has the font atlas. After the pass, the host gives the card the height
-//! the measurement asks for, once per document revision: the card opens and
-//! changes at the size of its content, a card that the person resized by hand
-//! keeps the person's size, and a card shorter than its content scrolls its
-//! body above a footer that stays put. One repaint settles a new height, so no
-//! frame loop starts.
+//! the measurement asks for, once per document revision and set of
+//! Horizon-owned frames: the card opens and changes at the size of its content,
+//! a card that the person resized by hand keeps the person's size, and a card
+//! shorter than its content scrolls its body above a footer that stays put. One
+//! repaint settles a new height, so no frame loop starts.
+//!
+//! The frames that Horizon adds above the body, the one that explains a card
+//! whose agent left and the one that reports a refused click, take room like a
+//! component does. A card therefore fits again when that set changes, not only
+//! when its document changes.
 //!
 //! A workspace that the person arranged with a preset owns the size of every
 //! panel in it, so a card there keeps the preset's size.
@@ -20,11 +25,11 @@ use crate::block_widget::{CARD_HEIGHT_LIMITS, fitted_card_height};
 
 impl HorizonApp {
     /// Gives every card panel the height that its content of the current
-    /// revision needs, and marks the revision as fitted.
+    /// revision and frames needs, and marks that pair as fitted.
     ///
-    /// Runs after the pass that measured the content. A card whose document
-    /// did not change since its last fit is left alone, so a person's resize
-    /// and a settled card never fight the measurement.
+    /// Runs after the pass that measured the content. A card whose document and
+    /// frames did not change since its last fit is left alone, so a person's
+    /// resize and a settled card never fight the measurement.
     pub(super) fn fit_block_cards(&mut self, ctx: &Context) {
         let cards: Vec<PanelId> = self
             .board

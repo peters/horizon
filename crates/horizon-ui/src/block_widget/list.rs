@@ -1,6 +1,8 @@
 //! A list of rows a person can select.
 
-use egui::{CornerRadius, CursorIcon, FontId, Pos2, Rect, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
+use egui::{
+    Color32, CornerRadius, CursorIcon, FontId, Pos2, Rect, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo,
+};
 use horizon_browser_control::block::{ListRow, Selection};
 
 use crate::theme;
@@ -14,6 +16,12 @@ use super::{CardView, text, tones};
 
 /// How much of the accent a selected row blends into its fill.
 const SELECTED_TINT: f32 = 0.18;
+/// How much of the accent a selected row of a disabled card keeps: enough to
+/// read the choice, too little to claim a live control.
+const DISABLED_SELECTED_TINT: f32 = 0.09;
+/// How much of the accent an outline or a mark of a disabled selected row
+/// keeps.
+const DISABLED_ACCENT_ALPHA: u8 = 120;
 /// How much of the accent a hovered row blends into its fill.
 const HOVER_TINT: f32 = 0.10;
 
@@ -31,8 +39,33 @@ pub(super) fn show(
         if row_index > 0 {
             ui.add_space(LIST_ROW_GAP);
         }
-        show_row(ui, index, row_index, row, selection, selectable, view);
+        // A card without its agent takes no press, but the row the person sees
+        // as selected keeps that look: the card still shows the choice it
+        // holds.
+        let selected = selection == Selection::Single && view.card.selected(index) == Some(row.id.as_str());
+        show_row(
+            ui,
+            index,
+            row_index,
+            row,
+            selection,
+            RowState {
+                selectable,
+                selected,
+                enabled,
+            },
+            view,
+        );
     }
+}
+
+/// How one row of a list is drawn: whether it takes a press, whether it carries
+/// the selection of its list, and whether the card that holds it is live.
+#[derive(Clone, Copy)]
+struct RowState {
+    selectable: bool,
+    selected: bool,
+    enabled: bool,
 }
 
 fn show_row(
@@ -41,11 +74,15 @@ fn show_row(
     row_index: usize,
     row: &ListRow,
     selection: Selection,
-    selectable: bool,
+    state: RowState,
     view: &mut CardView<'_>,
 ) {
+    let RowState {
+        selectable,
+        selected,
+        enabled,
+    } = state;
     let width = ui.available_width();
-    let selected = selectable && view.card.selected(index) == Some(row.id.as_str());
     // A selected row keeps its outer size and its text position: the wider
     // outline takes the space of the padding that the row gives up.
     let text_x = LIST_ROW_OUTLINE + LIST_ROW_PAD_SIDE + LIST_MARK_SIZE + LIST_MARK_GAP;
@@ -84,8 +121,8 @@ fn show_row(
 
     let (fill, outline_stroke) = if selected {
         (
-            theme::blend(theme::BG_ELEVATED(), theme::ACCENT(), SELECTED_TINT),
-            Stroke::new(LIST_ROW_OUTLINE_SELECTED, theme::ACCENT()),
+            theme::blend(theme::BG_ELEVATED(), theme::ACCENT(), selected_tint(enabled)),
+            Stroke::new(LIST_ROW_OUTLINE_SELECTED, selected_accent(enabled)),
         )
     } else if hovered {
         (
@@ -104,7 +141,7 @@ fn show_row(
     painter.rect_filled(rect, radius, fill);
     painter.rect_stroke(rect, radius, outline_stroke, StrokeKind::Inside);
 
-    paint_mark(painter, rect, selected);
+    paint_mark(painter, rect, selected, selected_accent(enabled));
     let text_left = rect.min.x + text_x;
     let text_height = title_height
         + if subtitle.is_some() {
@@ -128,16 +165,30 @@ fn show_row(
     }
 }
 
+/// The accent a selected row of a live card is drawn in.
+fn selected_accent(enabled: bool) -> Color32 {
+    if enabled {
+        theme::ACCENT()
+    } else {
+        theme::alpha(theme::ACCENT(), DISABLED_ACCENT_ALPHA)
+    }
+}
+
+/// How much of the accent the fill of a selected row carries.
+fn selected_tint(enabled: bool) -> f32 {
+    if enabled { SELECTED_TINT } else { DISABLED_SELECTED_TINT }
+}
+
 /// The radio mark of a row: a filled accent ring when selected, an empty ring
 /// otherwise.
-fn paint_mark(painter: &egui::Painter, rect: Rect, selected: bool) {
+fn paint_mark(painter: &egui::Painter, rect: Rect, selected: bool, accent: Color32) {
     let center = Pos2::new(
         rect.min.x + LIST_ROW_OUTLINE + LIST_ROW_PAD_SIDE + LIST_MARK_SIZE * 0.5,
         rect.center().y,
     );
     let radius = LIST_MARK_SIZE * 0.5;
     if selected {
-        painter.circle_filled(center, radius, theme::ACCENT());
+        painter.circle_filled(center, radius, accent);
         painter.circle_filled(center, radius - LIST_MARK_RING_SELECTED, theme::BG());
     } else {
         painter.circle_stroke(

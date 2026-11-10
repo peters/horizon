@@ -29,6 +29,14 @@ pub(crate) const CARD_CHROME_HEIGHT: f32 = PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_P
 /// The bounds of a card height that fits its content.
 pub(crate) const CARD_HEIGHT_LIMITS: [f32; 2] = [CARD_MIN_HEIGHT, CARD_MAX_HEIGHT];
 
+/// The height from the bottom edge of a card to the top of its footer strip:
+/// the panel padding below the body and the strip itself.
+///
+/// The footer is the part of a card that holds no control, so the corner grip
+/// of the panel stops above this line and every button keeps its press at every
+/// canvas zoom.
+pub(crate) const CARD_FOOT_SPAN: f32 = PANEL_PADDING + FOOTER_HEIGHT;
+
 /// The height a card panel takes for the content height that its last pass
 /// measured, between `limits`.
 ///

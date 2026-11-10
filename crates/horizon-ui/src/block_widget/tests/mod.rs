@@ -68,6 +68,11 @@ impl CardFrames {
         Self { ctx }
     }
 
+    /// One pass, as the shapes it painted.
+    pub(super) fn paint(&self, document: &BlockDocument, card: &mut CardRuntime, owner: Owner) -> egui::FullOutput {
+        self.run(document, card, owner, card_input())
+    }
+
     /// One pass, as an accessibility tree, with the events of that pass.
     pub(super) fn pass(
         &self,
@@ -78,8 +83,22 @@ impl CardFrames {
     ) -> Vec<(accesskit::NodeId, accesskit::Node)> {
         let mut input = card_input();
         input.events = events;
-        let output = self
-            .ctx
+        let output = self.run(document, card, owner, input);
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("the card body builds an accessibility tree");
+        update.nodes
+    }
+
+    fn run(
+        &self,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        owner: Owner,
+        input: egui::RawInput,
+    ) -> egui::FullOutput {
+        self.ctx
             .run_ui(input, |ui| {
                 show(
                     ui,
@@ -96,12 +115,7 @@ impl CardFrames {
                     },
                 );
             })
-            .discard_textures();
-        let update = output
-            .platform_output
-            .accesskit_update
-            .expect("the card body builds an accessibility tree");
-        update.nodes
+            .discard_textures()
     }
 
     /// A press and a release on the center of the widget labelled `label`.
