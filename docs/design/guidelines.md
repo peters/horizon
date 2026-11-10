@@ -665,8 +665,10 @@ the rules from the modules beside it.
   in the colour and a second line 12 `FG_SOFT` at line height 1.45. A card
   without its agent shows one at the top of the body in `warn`; a card that
   refused a click shows one in `info`.
-- A new card opens 420 wide and as tall as its content needs, between 220 and
-  720.
+- A new card opens 420 wide and, once the body has measured its content, as
+  tall as that content needs, between 220 and 900. A card that the person
+  resized by hand keeps that size, and a card shorter than its content scrolls
+  its body above a footer that stays at the bottom.
 
 ### Panels and workspaces
 
