@@ -1,5 +1,3 @@
-#[cfg(feature = "cloud-workspaces")]
-mod cloud;
 mod ssh;
 
 use std::fs;
@@ -11,9 +9,6 @@ use std::thread;
 use std::time::Duration;
 
 use horizon_core::SshConnection;
-
-#[cfg(feature = "cloud-workspaces")]
-pub(super) use cloud::start_cloud_upload;
 
 const SSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SSH_PROBE_CONNECT_TIMEOUT_SECS: u16 = 5;
@@ -83,8 +78,6 @@ pub(super) struct UploadOutcome {
     pub completed_bytes: u64,
     pub total_bytes: u64,
     pub detail: String,
-    /// Where each uploaded file is on a cloud worker, in drop order; empty for other uploads.
-    pub remote_paths: Vec<String>,
 }
 
 pub(super) enum UploadMessage {
@@ -128,20 +121,6 @@ pub(super) struct UploadWorkerHandle {
 impl UploadWorkerHandle {
     pub fn cancel(&self) {
         let _ = self.control_tx.send(UploadControl::Cancel);
-    }
-
-    /// A handle whose messages a test sends.
-    #[cfg(all(test, unix))]
-    pub fn for_test() -> (Self, Sender<UploadMessage>) {
-        let (progress_tx, progress_rx) = mpsc::channel();
-        let (control_tx, _) = mpsc::channel();
-        (
-            Self {
-                progress_rx,
-                control_tx,
-            },
-            progress_tx,
-        )
     }
 }
 
@@ -304,7 +283,6 @@ fn run_upload_worker(
                     completed_bytes,
                     total_bytes,
                     detail: format!("Cancelled after {completed_files} of {total_files} files"),
-                    remote_paths: Vec::new(),
                 })));
                 return;
             }
@@ -324,7 +302,6 @@ fn run_upload_worker(
         completed_bytes,
         total_bytes,
         detail: format!("Uploaded {completed_files} file(s)"),
-        remote_paths: Vec::new(),
     })));
 }
 

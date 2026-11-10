@@ -88,7 +88,8 @@ It tests the release guard, toolbar, startup and saved state.
 
 4. Resize the candidate window to its minimum width.
 
-   Result: **+ New cloud** (or **+ Cloud**) and **Menu** remain in the toolbar. **Menu** opens Quick Nav, Sessions, Remote Hosts and Settings.
+   Result: **Menu** remains in the toolbar. **Menu** opens Quick Nav, Sessions,
+   Remote Hosts and Settings.
 
 5. Restore the original window size.
 

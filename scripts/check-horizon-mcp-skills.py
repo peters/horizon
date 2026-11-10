@@ -8,25 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
     'crates/horizon-browser-mcp/src/server.rs': 'horizon-browser',
     'crates/horizon-device/src/cli/mcp.rs': 'horizon-device',
-    'crates/horizon-app-host/src/mcp/mod.rs': 'horizon-app-testing',
-    'crates/horizon-cloud-worker/src/companion_tools/mcp.rs': 'horizon-cloud',
-    'crates/horizon-cloud-worker/src/local_network/mcp.rs': 'horizon-cloud',
 }
 TOOL = re.compile(r'#\[tool\(\s*name\s*=\s*"([^"]+)"')
 OPERATIONS = [
-    ('crates/horizon-browser-control/src/manifest/image_destination.rs', 'Action', 'horizon-cloud', set(), 'cloud_image_destination'),
-    ('crates/horizon-browser-control/src/manifest/cast.rs', 'CastOperation', 'horizon-cast', set(), 'cast'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'Operation', 'horizon-device', {'BrowserScreenshot'}, 'device_panel'),
     ('crates/horizon-browser-control/src/manifest/device.rs', 'VideoAction', 'horizon-device', set(), 'device_panel video'),
-    ('crates/horizon-browser-control/src/manifest/cloud_list.rs', 'CloudListOperation', 'horizon-cloud', {'Stop'}, 'cloud_list'),
-    ('crates/horizon-browser-control/src/manifest/tailnet_credential.rs', 'CredentialOperation', 'horizon-cloud', set(), 'tailnet_api_credential'),
     ('crates/horizon-browser-mcp/src/model.rs', 'ActKind', 'horizon-browser', set(), 'browser_act'),
     ('crates/horizon-browser-mcp/src/model/network.rs', 'NetworkOperation', 'horizon-browser', set(), 'browser_network'),
     ('crates/horizon-browser-mcp/src/model/video.rs', 'VideoOperation', 'horizon-browser', set(), 'browser_video'),
     ('crates/horizon-browser-mcp/src/model/http_auth.rs', 'HttpAuthOperation', 'horizon-browser', set(), 'browser_http_auth'),
     ('crates/horizon-browser-mcp/src/model/recovery.rs', 'RecoveryOperation', 'horizon-browser', set(), 'browser_remote_allocations'),
-    ('crates/horizon-app-host/src/mcp/model.rs', 'VideoOperation', 'horizon-app-testing', set(), 'app_video'),
-    ('crates/horizon-app-testing/src/recipe.rs', 'Action', 'horizon-app-testing', set(), 'native recipe'),
     ('crates/horizon-device/src/model.rs', 'Action', 'horizon-device', set(), 'device_act'),
 ]
 
@@ -62,7 +53,7 @@ def check():
     codex = ROOT / 'assets/plugins/codex/skills'
     claude = ROOT / 'assets/plugins/claude-code/skills'
     build = (ROOT / 'crates/horizon-ui/build.rs').read_text()
-    installed = (ROOT / 'crates/horizon-ui/src/plugin_install/mod.rs').read_text() + (ROOT / 'crates/horizon-ui/src/plugin_install/mcp_skills.rs').read_text()
+    installed = (ROOT / 'crates/horizon-ui/src/plugin_install/mod.rs').read_text()
     documents = {}
     primary_skills = {p.name for p in codex.iterdir() if p.is_dir()}
     other_skills = {p.name for p in claude.iterdir() if p.is_dir()}
@@ -121,40 +112,13 @@ def check():
             continue
         for name in names:
             skill = SOURCES[relative]
-            if name == 'cast':
-                skill = 'horizon-cast'
-            elif name == 'device_panel':
+            if name == 'device_panel':
                 skill = 'horizon-device'
-            elif name.startswith('cloud_') or name == 'tailnet_api_credential':
-                skill = 'horizon-cloud'
             if name not in documents.get(skill, ''):
                 errors.append(f'{relative}: {name} missing from {skill}')
             count += 1
     for source in SOURCES.keys() - discovered_sources:
         errors.append(f'{source}: coverage route no longer names an MCP server')
-    for term in ('Device name', 'MagicDNS', 'horizon-tailnet-contract=4', 'Connect again'):
-        if term not in documents.get('horizon-cloud', ''):
-            errors.append(f'horizon-cloud: tailnet device identity guidance missing {term}')
-    for term in ('tag:horizon-worker', 'tagOwners', 'Self.Tags',
-                 'once at each resume', 'no continuous tag monitoring',
-                 'quick-start pin'):
-        if term not in documents.get('horizon-cloud', ''):
-            errors.append(f'horizon-cloud: tagged enrollment guidance missing {term}')
-    for term in ('horizon-cloud-tailnet-api', 'personal_token', 'OAuth client',
-                 'enrollment auth key', 'Stored presence'):
-        if term not in documents.get('horizon-cloud', ''):
-            errors.append(f'horizon-cloud: API credential policy missing {term}')
-    for term in ('Settings > Tailnets', 'Personal API token', 'OAuth client',
-                 'tailnet_api_credentials', 'cloud_deploy tailnets', 'pending', 'unavailable'):
-        if term not in documents.get('horizon-cloud', ''):
-            errors.append(f'horizon-cloud: API credential status parity missing {term}')
-    for term in ('set_personal_token', 'set_oauth', 'masked', 'Saved values never', 'Save API credential'):
-        if term not in documents.get('horizon-cloud', ''):
-            errors.append(f'horizon-cloud: native API entry policy missing {term}')
-    cast_document = documents.get('horizon-cast', '')
-    for name in enum_variants((ROOT / 'crates/horizon-browser-control/src/manifest/cast.rs').read_text(), 'CastSource'):
-        if f'`kind: {snake_case(name)}`' not in cast_document:
-            errors.append(f'CastSource.{name}: source kind missing from horizon-cast')
     for source, enum, skill, excluded, api in OPERATIONS:
         declarations = re.findall(r'`' + re.escape(api) + r'` operations are ([^.]+)\.', documents[skill])
         if len(declarations) != 1:

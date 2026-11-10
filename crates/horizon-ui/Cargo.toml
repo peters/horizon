@@ -9,17 +9,7 @@ description.workspace = true
 repository.workspace = true
 
 [features]
-default = ["cloud-workspaces"]
-cloud-workspaces = ["horizon-core/cloud-workspaces"]
-cloud-panel-mock = ["cloud-workspaces"]
 trace-profiling = ["horizon-core/trace-profiling", "profiling/profile-with-tracing"]
-# Opt-in speech input (mic button + push-to-talk hotkey). CPU-only inference
-# by default; add one of the GPU variants below to compile a GPU backend in.
-# Backend selection at runtime stays automatic with CPU fallback either way.
-speech = ["dep:transcribe-cpp", "dep:cpal"]
-cast-nvenc = ["horizon-cast/nvenc"]
-speech-cuda = ["speech", "transcribe-cpp/cuda"]
-speech-vulkan = ["speech", "transcribe-cpp/vulkan"]
 
 [[bin]]
 name = "horizon"
@@ -29,7 +19,6 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-horizon-app-host.workspace = true
 horizon-browser.workspace = true
 horizon-vnc.workspace = true
 bytemuck.workspace = true
@@ -49,9 +38,6 @@ tracing-subscriber.workspace = true
 profiling.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-tar.workspace = true
-git2.workspace = true
 libc.workspace = true
 toml_edit.workspace = true
 tempfile.workspace = true
@@ -60,8 +46,6 @@ alacritty_terminal.workspace = true
 egui_commonmark.workspace = true
 arboard.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "process", "sync"] }
-transcribe-cpp = { workspace = true, optional = true }
-cpal = { workspace = true, optional = true }
 
 [dev-dependencies]
 horizon-browser = { workspace = true, features = ["test-support"] }
@@ -77,5 +61,4 @@ wl-clipboard-rs.workspace = true
 smithay-clipboard = "0.7.3"
 horizon-wayland.workspace = true
 
-horizon-cast.workspace = true
 zeroize.workspace = true

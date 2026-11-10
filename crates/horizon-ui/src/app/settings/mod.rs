@@ -1,19 +1,10 @@
 mod bar;
-#[cfg(feature = "cloud-workspaces")]
-pub(in crate::app) mod browser_vm;
 mod general;
 mod presets;
 mod remote_browsers;
-#[cfg(target_os = "linux")]
-mod remote_devices;
 mod remote_recovery;
 mod remote_usage;
 mod shortcuts;
-mod speech;
-#[cfg(test)]
-pub(in crate::app) use speech::ClipboardCapture;
-pub(in crate::app) use speech::PendingCapture;
-pub(in crate::app) use speech::SpeechModelInfoCache;
 #[cfg(test)]
 mod tests;
 mod yaml_editor;
@@ -39,12 +30,7 @@ enum SettingsTab {
     Shortcuts,
     Presets,
     RemoteBrowsers,
-    #[cfg(feature = "cloud-workspaces")]
-    BrowserVm,
-    RemoteDevices,
     Yaml,
-    #[cfg(feature = "cloud-workspaces")]
-    Tailnets,
 }
 
 impl SettingsTab {
@@ -54,12 +40,7 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
             Self::RemoteBrowsers => "Remote browsers",
-            #[cfg(feature = "cloud-workspaces")]
-            Self::BrowserVm => "Browser VM",
-            Self::RemoteDevices => "Remote Devices",
             Self::Yaml => "YAML",
-            #[cfg(feature = "cloud-workspaces")]
-            Self::Tailnets => "Tailnets",
         }
     }
 
@@ -68,12 +49,7 @@ impl SettingsTab {
         Self::Shortcuts,
         Self::Presets,
         Self::RemoteBrowsers,
-        #[cfg(feature = "cloud-workspaces")]
-        Self::BrowserVm,
-        Self::RemoteDevices,
         Self::Yaml,
-        #[cfg(feature = "cloud-workspaces")]
-        Self::Tailnets,
     ];
 }
 
@@ -95,20 +71,9 @@ pub(super) struct SettingsEditor {
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
-    #[cfg(feature = "cloud-workspaces")]
-    pub(in crate::app) browser_vm: browser_vm::Panel,
-    #[cfg(feature = "cloud-workspaces")]
-    tailnets: super::tailnets::State,
-    #[cfg(target_os = "linux")]
-    remote_devices: remote_devices::RemoteDevicesPanel,
 }
 
 impl SettingsEditor {
-    #[cfg(feature = "cloud-workspaces")]
-    pub(in crate::app) fn tailnet_status_state(&mut self) -> &mut super::tailnets::State {
-        &mut self.tailnets
-    }
-
     /// Adopt config text that was just written to disk by another path, so
     /// the YAML buffer, the saved baseline and the GUI tabs' parsed snapshot
     /// all describe the file again.
@@ -139,16 +104,10 @@ impl HorizonApp {
         if self.settings.is_some() {
             self.close_settings();
         } else {
-            #[cfg(target_os = "linux")]
-            self.casting.refresh_pairings();
             // The store is the only settings source: the editor shows the settings
             // of this run, never a YAML copy that the person exported or edited.
             let content = self.template_config_yaml();
             let editing_config = Config::from_yaml(&content).ok();
-            #[cfg(feature = "cloud-workspaces")]
-            let mut tailnets = super::tailnets::State::default();
-            #[cfg(feature = "cloud-workspaces")]
-            self.cloud_prototype.reopen_tailnets(&mut tailnets);
             self.settings = Some(SettingsEditor {
                 original: content.clone(),
                 buffer: content,
@@ -158,12 +117,6 @@ impl HorizonApp {
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
-                #[cfg(feature = "cloud-workspaces")]
-                browser_vm: browser_vm::Panel::default(),
-                #[cfg(feature = "cloud-workspaces")]
-                tailnets,
-                #[cfg(target_os = "linux")]
-                remote_devices: remote_devices::RemoteDevicesPanel::default(),
             });
         }
     }
@@ -209,9 +162,6 @@ impl HorizonApp {
             return;
         };
         let (status_text, status_color) = settings_status(&editor.status);
-        #[cfg(feature = "cloud-workspaces")]
-        let configuration = editor.active_tab != SettingsTab::Tailnets || has_changes;
-        #[cfg(not(feature = "cloud-workspaces"))]
         let configuration = true;
         let config_path = self.config_path.display().to_string();
         let panel_state = PanelState {
@@ -223,78 +173,16 @@ impl HorizonApp {
             configuration,
         };
 
-        #[cfg(target_os = "linux")]
-        if let Some(editor) = self.settings.as_mut() {
-            editor.remote_devices.loading = self.casting.pairing_loading();
-            editor.remote_devices.store_error = self.casting.pairing_error().map(str::to_owned);
-            editor.remote_devices.devices = self
-                .casting
-                .paired_devices()
-                .iter()
-                .map(|device| remote_devices::Device {
-                    id: device.id.clone(),
-                    name: device.name.clone(),
-                    available: self.casting.receiver_available(&device.id),
-                    busy: self.casting.receiver_busy(&device.id),
-                })
-                .collect();
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        self.refresh_browser_vm_settings(ui.ctx());
         if let Some(editor) = self.settings.as_mut() {
             let action = render_settings_panel(
                 ui,
                 panel_state,
                 editor,
-                &mut self.speech_model_info_cache,
                 &mut self.remote_browser_credentials,
                 &mut self.browser_create_host.remote_allocations,
-                #[cfg(feature = "cloud-workspaces")]
-                &mut self.browser_create_host.provider_usage.tailnet_credentials,
             );
             // A press in the bar is applied after the panel drew it.
             self.apply_settings_action(action);
-        }
-        #[cfg(target_os = "linux")]
-        self.apply_remote_device_action(ui.ctx());
-        #[cfg(feature = "cloud-workspaces")]
-        self.apply_browser_vm_settings(ui.ctx());
-    }
-
-    #[cfg(target_os = "linux")]
-    fn apply_remote_device_action(&mut self, ctx: &egui::Context) {
-        let action = self
-            .settings
-            .as_mut()
-            .and_then(|editor| editor.remote_devices.action.take());
-        let Some(action) = action else {
-            return;
-        };
-        let error = match action {
-            remote_devices::Action::Refresh => {
-                self.casting.refresh_pairings();
-                if let Some(workspace) = self.board.active_workspace {
-                    self.cast_operation(
-                        workspace,
-                        &horizon_core::browser::manifest::cast::CastOperation::Discover,
-                        ctx,
-                    )
-                    .error
-                } else {
-                    None
-                }
-            }
-            remote_devices::Action::Forget(receiver_id) => {
-                self.cast_operation(
-                    self.board.active_workspace.unwrap_or(horizon_core::WorkspaceId(0)),
-                    &horizon_core::browser::manifest::cast::CastOperation::Forget { receiver_id },
-                    ctx,
-                )
-                .error
-            }
-        };
-        if let Some(editor) = self.settings.as_mut() {
-            editor.remote_devices.error = error;
         }
     }
 
@@ -304,12 +192,10 @@ impl HorizonApp {
     }
 
     fn close_settings(&mut self) {
-        if let Some(editor) = self.settings.take() {
-            #[cfg(feature = "cloud-workspaces")]
-            self.cloud_prototype.reload_tailnets(editor.tailnets);
-            if let Ok(config) = Config::from_yaml(&editor.original) {
-                self.apply_live_preview(&config);
-            }
+        if let Some(editor) = self.settings.take()
+            && let Ok(config) = Config::from_yaml(&editor.original)
+        {
+            self.apply_live_preview(&config);
         }
     }
 
@@ -433,40 +319,7 @@ impl HorizonApp {
         }
     }
 
-    /// Whether the settings General tab — which hosts the speech hotkey
-    /// binders (flat editor and per-profile rows alike) — is currently open.
-    /// Used to auto-disarm a stale capture.
-    pub(super) fn settings_speech_tab_open(&self) -> bool {
-        self.settings.as_ref().is_some_and(|editor| {
-            editor.active_tab == SettingsTab::General
-                && editor
-                    .editing_config
-                    .as_ref()
-                    .is_some_and(|config| config.features.speech.enabled)
-        })
-    }
-
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
-        // Speech applies live: rebuild the subsystem whenever its config
-        // changed (drops any in-flight recording, which is acceptable for a
-        // settings change). Covers both settings saves and file reloads.
-        if self.template_config.features.speech != config.features.speech {
-            // Retire the old system BEFORE constructing the replacement: an
-            // assignment's RHS runs first, and `from_config` can start
-            // loading immediately (preloaded profiles), so the old workers
-            // must already be registered as retiring or a preloader sails
-            // past the retirement guard and loads beside a still-resident
-            // model.
-            self.speech = None;
-            self.reset_speech_global_hotkeys();
-            self.speech = super::speech::SpeechSystem::from_config(&config.features.speech);
-            // Held bindings persist until their release is consumed (kitty
-            // release safety); only stop-attribution is reset.
-            self.speech_engaged_profile = None;
-            self.speech_escape_cancelled = false;
-            tracing::info!("speech configuration changed; speech system rebuilt");
-            self.sync_speech_global_hotkeys();
-        }
         if self.template_config.browser.remote != config.browser.remote {
             self.remote_browser_credentials
                 .load_environment_bindings(&config.browser.remote);
@@ -513,10 +366,8 @@ fn render_settings_panel(
     ui: &mut egui::Ui,
     panel_state: PanelState<'_>,
     editor: &mut SettingsEditor,
-    model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
-    #[cfg(feature = "cloud-workspaces")] requests: &mut super::tailnets::requests::Requests,
 ) -> SettingsAction {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -558,25 +409,10 @@ fn render_settings_panel(
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
             match editor.active_tab {
-                #[cfg(feature = "cloud-workspaces")]
-                SettingsTab::Tailnets => {
-                    egui::ScrollArea::vertical()
-                        .max_height(available.y)
-                        .show(ui, |ui| editor.tailnets.settings(ui, requests));
-                }
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, panel_state.config_path, &mut editor.buffer, available);
                 }
-                SettingsTab::RemoteDevices => {
-                    #[cfg(target_os = "linux")]
-                    egui::ScrollArea::vertical()
-                        .max_height(available.y)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| editor.remote_devices.render(ui));
-                    #[cfg(not(target_os = "linux"))]
-                    dim_label(ui, "Apple TV casting is currently available on Linux.");
-                }
-                tab => render_gui_tab(ui, tab, editor, model_info_cache, credentials, allocations, available),
+                tab => render_gui_tab(ui, tab, editor, credentials, allocations, available),
             }
             action
         })
@@ -587,7 +423,6 @@ fn render_gui_tab(
     ui: &mut egui::Ui,
     tab: SettingsTab,
     editor: &mut SettingsEditor,
-    model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
     available: Vec2,
@@ -598,8 +433,6 @@ fn render_gui_tab(
         portable_profile,
         provider_usage,
         buffer,
-        #[cfg(feature = "cloud-workspaces")]
-        browser_vm,
         ..
     } = editor;
     let Some(config) = editing_config else {
@@ -616,7 +449,7 @@ fn render_gui_tab(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let changed = match tab {
-                SettingsTab::General => general::render(ui, config, model_info_cache),
+                SettingsTab::General => general::render(ui, config),
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 SettingsTab::RemoteBrowsers => {
@@ -630,12 +463,8 @@ fn render_gui_tab(
                         provider_usage,
                     )
                 }
-                #[cfg(feature = "cloud-workspaces")]
-                SettingsTab::BrowserVm => browser_vm::render(ui, config, browser_vm),
                 // Yaml is handled before this function is called.
-                SettingsTab::Yaml | SettingsTab::RemoteDevices => return,
-                #[cfg(feature = "cloud-workspaces")]
-                SettingsTab::Tailnets => return,
+                SettingsTab::Yaml => return,
             };
             if changed && let Ok(yaml) = config.to_yaml() {
                 *buffer = yaml;

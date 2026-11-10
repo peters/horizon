@@ -134,7 +134,7 @@ confirms input delivery, not application success. On stale geometry take another
 screenshot. On indeterminate input observe before deciding whether another
 action is appropriate; never replay blindly. The native Device panel is
 read-only for agents: a person may turn its Interact toggle on in the UI, but
-no tool operation can. A cloud desktop viewer offers no Interact, because the
+no tool operation can. A viewer of a remote desktop offers no Interact, because the
 worker's VNC server ignores input by design; agents on the worker use the device
 tools instead.
 
@@ -236,7 +236,7 @@ state can be absent. Report that instead of claiming the recording shows motion,
 and do not present a `poor` recording as motion evidence.
 The file path is on the Horizon host. Copy it before panel close or four subsequent
 recordings. Browser pages use `browser_video`; native provider sessions use
-`app_video` through `horizon-app-testing`.
+a video through `device_panel` operation video.
 
 On older hosts without viewer video, use a recorder explicitly scoped to the
 owned isolated display. If recording is unavailable or stalls, report that lane;

@@ -153,9 +153,9 @@ fn restarted_allocation_probes_only_its_bound_session_and_persists_release() {
     let restored = RemoteAllocation::restore_journal(&path, &request).unwrap();
     assert_eq!(restored.reference(), request.recovery.reference());
     assert_eq!(restored.status(), RemoteRecoveryStatus::Unresolved);
-    restored.record_admission("restarted-host", "original-owner", "cloud");
-    assert!(!restored.reconcile_for("restarted-host", "other-owner", "cloud", false));
-    assert!(restored.reconcile_for("restarted-host", "original-owner", "cloud", true));
+    restored.record_admission("restarted-host", "original-owner", "synthetic");
+    assert!(!restored.reconcile_for("restarted-host", "other-owner", "synthetic", false));
+    assert!(restored.reconcile_for("restarted-host", "original-owner", "synthetic", true));
     let deadline = Instant::now() + Duration::from_secs(3);
     while restored.status() == RemoteRecoveryStatus::Reconciling {
         assert!(Instant::now() < deadline);

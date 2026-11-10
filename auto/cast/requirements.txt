@@ -1,2 +1,0 @@
-# Development-only independent receiver; no production Rust dependencies.
-pyatv==0.18.0

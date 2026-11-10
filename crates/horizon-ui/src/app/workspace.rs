@@ -1,8 +1,6 @@
 mod paint;
 mod render;
 mod toolbar;
-#[cfg(feature = "cloud-workspaces")]
-pub(super) use toolbar::workspace_layout_buttons;
 
 use std::collections::HashMap;
 
@@ -39,9 +37,6 @@ struct WorkspaceVisual {
     panel_count: usize,
     layout: Option<WorkspaceLayout>,
     capabilities: WorkspaceLayoutCapabilities,
-    /// The cast button shows as on: a cast of this workspace runs or its picker is open.
-    #[cfg(target_os = "linux")]
-    casting: bool,
 }
 
 struct WorkspaceInteraction {
@@ -60,8 +55,6 @@ enum WorkspaceAction {
     ArrangeLayout(WorkspaceLayout),
     CloseAllPanels,
     Detach,
-    #[cfg(target_os = "linux")]
-    Cast,
 }
 
 const WORKSPACE_LAYOUT_BUTTON_HEIGHT: f32 = 24.0;
@@ -140,13 +133,7 @@ impl HorizonApp {
     ) {
         let canvas_transform = super::view::canvas_scene_transform(canvas_rect, self.canvas_view);
         let canvas_clip_rect = canvas_transform.inverse() * canvas_rect;
-        let visuals = self.workspace_visuals(
-            ctx,
-            canvas_rect,
-            workspace_bounds,
-            overlay_zones,
-            visible_detached_workspace,
-        );
+        let visuals = self.workspace_visuals(canvas_rect, workspace_bounds, overlay_zones, visible_detached_workspace);
         let workspace_collision_ids = self.workspace_collision_scope(visible_detached_workspace);
 
         self.workspace_screen_rects.clear();
@@ -224,11 +211,6 @@ impl HorizonApp {
                 Some(WorkspaceAction::Detach) => {
                     focus_workspace = Some(workspace.id);
                     self.detach_workspace(workspace.id);
-                }
-                #[cfg(target_os = "linux")]
-                Some(WorkspaceAction::Cast) => {
-                    focus_workspace = Some(workspace.id);
-                    self.toggle_workspace_cast_picker(workspace.id, ctx);
                 }
                 Some(WorkspaceAction::CloseAllPanels) => {
                     focus_workspace = Some(workspace.id);
@@ -316,40 +298,9 @@ impl HorizonApp {
         }
     }
 
-    /// The frame of `workspace` while it holds the New cloud form: the form, with the strip its
-    /// name badge stands in above it. The form is drawn in the main window, so this frame belongs
-    /// to that window; a detached window draws the workspace at its board place instead. The form takes its size from the window and is drawn in the
-    /// window, while a frame of a fixed size on the board cannot hold it at every window size and
-    /// zoom, so the frame follows the form.
-    #[cfg(feature = "cloud-workspaces")]
-    pub(in crate::app) fn cloud_form_frame(
-        &self,
-        ctx: &Context,
-        workspace: WorkspaceId,
-        visible_detached_workspace: Option<WorkspaceId>,
-    ) -> Option<Rect> {
-        if visible_detached_workspace.is_some() || !self.cloud_prototype.holds_cloud_form(workspace) {
-            return None;
-        }
-        self.cloud_form_frame_rect(ctx)
-    }
-
-    /// A build without clouds has no New cloud form, so every empty workspace keeps the frame of
-    /// an empty workspace.
-    #[cfg(not(feature = "cloud-workspaces"))]
-    fn cloud_form_frame(
-        &self,
-        _ctx: &Context,
-        _workspace: WorkspaceId,
-        _visible_detached_workspace: Option<WorkspaceId>,
-    ) -> Option<Rect> {
-        None
-    }
-
     #[profiling::function]
     fn workspace_visuals(
         &self,
-        ctx: &Context,
         canvas_rect: Rect,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
         overlay_zones: &OverlayExclusion,
@@ -376,18 +327,10 @@ impl HorizonApp {
                         )
                         .intersect(canvas_rect);
                         (canvas_rect_local, screen_rect, false)
-                    } else if let Some(form) = self.cloud_form_frame(ctx, workspace.id, visible_detached_workspace) {
-                        // The form is drawn in the window, not on the canvas, so the frame of the
-                        // workspace that holds it follows the form instead of the other way round.
-                        let canvas_rect_local = Rect::from_min_max(
-                            self.screen_to_canvas(canvas_rect, form.min),
-                            self.screen_to_canvas(canvas_rect, form.max),
-                        );
-                        (canvas_rect_local, form.intersect(canvas_rect), true)
                     } else {
                         let canvas_rect_local = Rect::from_min_size(
                             Pos2::new(workspace.position[0], workspace.position[1]),
-                            self.empty_workspace_size(workspace.id),
+                            Self::empty_workspace_size(),
                         );
                         let screen_rect = Rect::from_min_size(
                             self.canvas_to_screen(canvas_rect, canvas_rect_local.min),
@@ -431,8 +374,6 @@ impl HorizonApp {
                     panel_count: workspace.panels.len(),
                     layout: workspace.layout,
                     capabilities: self.workspace_layout_capabilities(workspace.id),
-                    #[cfg(target_os = "linux")]
-                    casting: self.workspace_cast_highlighted(workspace.id),
                 })
             })
             .collect()
@@ -515,8 +456,6 @@ mod tests {
                 can_detach: true,
                 can_remove_empty: false,
             },
-            #[cfg(target_os = "linux")]
-            casting: false,
         }
     }
 
@@ -528,14 +467,6 @@ mod tests {
     #[test]
     fn layout_toolbar_stays_visible_for_single_panel_workspaces() {
         assert!(should_show_workspace_layout_toolbar(&workspace_visual(1)));
-    }
-
-    #[test]
-    fn layout_toolbar_shows_for_a_workspace_of_only_clouds() {
-        // Cloud cards give a workspace bounds without any panel.
-        let mut clouds_only = workspace_visual(0);
-        clouds_only.is_empty = false;
-        assert!(should_show_workspace_layout_toolbar(&clouds_only));
     }
 
     #[test]

@@ -20,7 +20,7 @@ releases each session on close, at the end of stdin and after a kill.
 
 - Candidate: a build of `horizon-browser` that has the `--config` option.
 - Platforms: Linux and macOS. The permission checks of the files apply only to Unix.
-- This procedure does not test: local browsers, the Horizon desktop host, or the cloud worker.
+- This procedure does not test: local browsers or the Horizon desktop host.
 
 ## 3. Safety
 

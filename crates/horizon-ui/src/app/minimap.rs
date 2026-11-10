@@ -51,12 +51,6 @@ impl HorizonApp {
         ctx: &Context,
         workspace_bounds: &HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
     ) {
-        // The New cloud form owns the board's HUD while it is drawn: no overlay may take a click
-        // aimed at its footer.
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.new_cloud_surface() {
-            return;
-        }
         render_scoped_minimap(
             self,
             ctx,
@@ -164,7 +158,7 @@ fn paint_minimap_workspaces(
             workspace.id,
             workspace.position,
             workspace_bounds,
-            app.empty_workspace_size(workspace.id),
+            HorizonApp::empty_workspace_size(),
         );
 
         let (fill_alpha, stroke_alpha) = workspace_style_alpha(is_active, is_hovered);
@@ -240,7 +234,7 @@ fn workspace_content_bounds(
         if !scope_includes_workspace(app, scope, workspace.id) {
             continue;
         }
-        let empty = app.empty_workspace_size(workspace.id);
+        let empty = HorizonApp::empty_workspace_size();
         let (workspace_min, workspace_max) =
             workspace_minimap_bounds(workspace.id, workspace_bounds).unwrap_or_else(|| {
                 let pos = workspace.position;

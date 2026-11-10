@@ -20,11 +20,8 @@ a local Device panel to its desktop, and that no input reaches the desktop while
 
 - Candidate: a frozen debug build of one exact commit, `<candidate-commit>`.
 - Platforms: Linux with Xvfb.
-- This procedure does not test:
-  - The view-only cloud desktop viewer on a real worker, which offers no
-    **Interact** and shows the reason. That test needs a paid cloud worker, so
-    test E05 of the [cloud panels procedure](cloud-panels/e-panels.md) does it.
-  - Agent input through the device CLI and MCP tools.
+- This procedure does not test agent input through the device CLI and MCP
+  tools.
 
 ## 3. Safety
 

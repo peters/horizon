@@ -1,5 +1,3 @@
-#[cfg(feature = "cloud-workspaces")]
-mod cloud;
 mod destination_picker;
 mod render;
 mod worker;
@@ -18,9 +16,6 @@ use self::worker::{
     UploadWorkerHandle, build_local_upload_files, spawn_preparation, start_upload,
 };
 use super::HorizonApp;
-
-#[cfg(feature = "cloud-workspaces")]
-pub(super) use cloud::{CloudDrop, CloudDropTarget};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UploadTransportChoice {
@@ -58,9 +53,6 @@ pub(super) struct SshUploadFlow {
     upload_handle: Option<UploadWorkerHandle>,
     upload_snapshot: Option<UploadSnapshot>,
     upload_started_at: Option<Instant>,
-    /// Set for a drop on a cloud panel, which uploads to its worker session.
-    #[cfg(feature = "cloud-workspaces")]
-    cloud: Option<cloud::CloudUpload>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,8 +91,6 @@ impl SshUploadFlow {
             upload_handle: None,
             upload_snapshot: None,
             upload_started_at: None,
-            #[cfg(feature = "cloud-workspaces")]
-            cloud: None,
         }
     }
 
@@ -126,8 +116,6 @@ impl SshUploadFlow {
             upload_handle: None,
             upload_snapshot: None,
             upload_started_at: None,
-            #[cfg(feature = "cloud-workspaces")]
-            cloud: None,
         }
     }
 }
@@ -139,31 +127,6 @@ impl HorizonApp {
         dropped: &[egui::DroppedFileHandle],
         viewport_id: ViewportId,
     ) -> bool {
-        if self
-            .board
-            .panel(panel_id)
-            .is_some_and(|panel| panel.remote_workspace().is_some())
-        {
-            tracing::warn!(
-                panel_id = panel_id.0,
-                "remote development has been removed; file upload is disabled for this retired view"
-            );
-            return true;
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        if self.maybe_start_cloud_file_drop(panel_id, dropped, viewport_id) {
-            return true;
-        }
-        if let Some(panel) = self.board.panel(panel_id).filter(|panel| panel.cloud_wait().is_some()) {
-            // A cloud member that does not run its session: its process is on a worker,
-            // so a local path would name a file that the session cannot read.
-            self.ssh_upload_flow = Some(SshUploadFlow::failed(
-                viewport_id,
-                panel.display_title().into_owned(),
-                "This panel is not attached to its cloud session, so Horizon cannot send files to it. Drop the files again when the panel shows its session.".into(),
-            ));
-            return true;
-        }
         let Some((panel_kind, host_label, connection)) = self.board.panel(panel_id).map(|panel| {
             (
                 panel.kind,
@@ -216,8 +179,6 @@ impl HorizonApp {
 
     pub(super) fn poll_ssh_upload_flow(&mut self) {
         let mut remembered_destination = None;
-        #[cfg(feature = "cloud-workspaces")]
-        let mut cloud_delivery = None;
 
         if let Some(flow) = self.ssh_upload_flow.as_mut() {
             if let Some(rx) = flow.preparation_rx.take() {
@@ -253,10 +214,6 @@ impl HorizonApp {
                 if let Some(result) = finished_result {
                     flow.upload_started_at = None;
                     match result {
-                        #[cfg(feature = "cloud-workspaces")]
-                        Ok(outcome) if !outcome.cancelled && flow.cloud.is_some() => {
-                            cloud_delivery = Some(outcome);
-                        }
                         Ok(outcome) => {
                             if !outcome.cancelled && matches!(flow.transport_choice, UploadTransportChoice::Ssh) {
                                 remembered_destination =
@@ -276,10 +233,6 @@ impl HorizonApp {
 
         if let Some((key, path)) = remembered_destination {
             self.ssh_upload_destinations.insert(key, path);
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        if let Some(outcome) = cloud_delivery {
-            self.finish_cloud_upload(outcome);
         }
     }
 
@@ -309,17 +262,12 @@ impl HorizonApp {
                 && let Some(handle) = &flow.upload_handle
             {
                 handle.cancel();
-                #[cfg(feature = "cloud-workspaces")]
-                flow.note_cloud_cancel();
             }
             if actions.contains(&UploadUiAction::BackToReady) {
                 flow.mode = UploadMode::Ready;
                 flow.upload_snapshot = None;
                 flow.upload_handle = None;
                 flow.upload_started_at = None;
-                // A cloud drop has no destination to choose: it tries the same session again.
-                #[cfg(feature = "cloud-workspaces")]
-                flow.start_cloud_upload();
             }
             if actions.contains(&UploadUiAction::StartUpload) {
                 start_flow_upload(flow);
@@ -541,75 +489,6 @@ mod tests {
     use crate::app::ssh_upload::worker::LocalUploadFile;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
-
-    #[test]
-    fn remote_file_drops_do_not_probe_saved_ssh_metadata_in_owner_or_copied_sessions() {
-        use crate::app::test_support::{dropped_file, test_app};
-        use horizon_core::{
-            Board, CanvasViewState, PanelKind, PanelOptions, RemoteWorkspaceReference, RuntimeState, SshConnection,
-            WindowConfig,
-        };
-
-        let (directory, mut app) = test_app();
-        let source = app
-            .session_store
-            .create_session_from_runtime(RuntimeState::default())
-            .expect("source");
-        let workspace = app.board.create_workspace("Remote reference");
-        let marker = directory.path().join("unexpected-proxy-command");
-        let connection = SshConnection {
-            host: "unverified.example.invalid".into(),
-            extra_args: vec![
-                "-o".into(),
-                format!("ProxyCommand=printf unexpected > '{}'", marker.display()),
-            ],
-            ..SshConnection::default()
-        };
-        app.board
-            .create_panel(
-                PanelOptions {
-                    kind: PanelKind::Ssh,
-                    local_id: Some("remote-panel".into()),
-                    remote_workspace: Some(
-                        RemoteWorkspaceReference::new(source.session_id.clone(), "remote-environment".into())
-                            .expect("reference"),
-                    ),
-                    ssh_connection: Some(connection.clone()),
-                    ..PanelOptions::default()
-                },
-                workspace,
-            )
-            .expect("deferred view");
-        let state = RuntimeState::from_board(&app.board, WindowConfig::default(), CanvasViewState::default());
-        app.session_store
-            .save_runtime_state(&source.session_id, &state)
-            .expect("save source");
-        let source = app
-            .session_store
-            .resume_session(&source.session_id)
-            .expect("resume source");
-        let copy = app
-            .session_store
-            .duplicate_session(&source.session_id)
-            .expect("copy client");
-        assert_ne!(source.session_id, copy.session_id);
-        let upload = directory.path().join("synthetic-upload.txt");
-        std::fs::write(&upload, b"synthetic upload").expect("upload fixture");
-        for session in [source, copy] {
-            app.activate_persistent_session(&session);
-            app.board = Board::from_runtime_state(&session.runtime_state).expect("restore view");
-            let panel = &app.board.panels[0];
-            assert_eq!(panel.ssh_connection.as_ref(), Some(&connection));
-            let panel_id = panel.id;
-            assert!(app.maybe_start_ssh_file_drop(panel_id, &[dropped_file(upload.clone())], egui::ViewportId::ROOT));
-            assert!(
-                app.ssh_upload_flow.is_none(),
-                "no preparation worker or transport may be constructed"
-            );
-            assert!(app.board.restart_panel(panel_id).is_err());
-            assert!(!marker.exists());
-        }
-    }
 
     #[test]
     fn upload_modal_blocks_gestures_only_in_its_target_viewport() {

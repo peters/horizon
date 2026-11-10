@@ -119,16 +119,6 @@ fn a_save_outside_the_queue_replaces_the_queued_board() {
     assert_eq!(read.active_workspace_local_id.as_deref(), Some("direct"));
 }
 
-#[test]
-fn a_save_outside_the_queue_is_refused_while_park_records_of_the_session_are_written() {
-    let (_temp, store) = store();
-    store.writer.lock().writing_parks = Some("session".into());
-    assert!(store.save_runtime_state("session", &board("direct")).is_err());
-    assert!(store.save_runtime_state("other", &board("direct")).is_ok());
-    store.writer.lock().writing_parks = None;
-    assert!(store.save_runtime_state("session", &board("direct")).is_ok());
-}
-
 #[cfg(unix)]
 #[test]
 fn a_reserved_session_does_not_wake_the_worker_for_its_retry() {
@@ -156,11 +146,8 @@ fn a_reserved_session_does_not_wake_the_worker_for_its_retry() {
 #[cfg(unix)]
 fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() {
     let (_temp, store) = store();
-    let direct = store.writer.supersede("session", &board("direct")).unwrap();
-    assert!(
-        store.writer.supersede("session", &board("again")).is_err(),
-        "one direct save at a time"
-    );
+    let direct = store.writer.supersede("session").unwrap();
+    assert!(store.writer.supersede("session").is_err(), "one direct save at a time");
     assert!(
         store.writer.reserve("session").is_err(),
         "a delete waits for the direct save"
@@ -177,71 +164,4 @@ fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() 
         Ok(())
     );
     assert_eq!(on_disk(&store).as_deref(), Some("queued"));
-}
-
-#[cfg(all(unix, feature = "cloud-workspaces"))]
-fn park(parked: bool, line: Option<&str>) -> Park {
-    Park {
-        local_id: "panel".into(),
-        parked,
-        status: line.map(|line| crate::cloud_runtime::session_status::SessionStatus {
-            id: "agent".into(),
-            activity: crate::cloud_runtime::session_status::SessionActivity::Idle,
-            quiet_for: None,
-            lines: vec![line.into()],
-        }),
-    }
-}
-
-#[test]
-#[cfg(all(unix, feature = "cloud-workspaces"))]
-fn park_records_of_a_session_that_cannot_be_saved_do_not_pile_up() {
-    let (_temp, store) = store();
-    store.save_runtime_state("broken", &board("old")).unwrap();
-    let runtime = store.home().session_runtime_path("broken");
-    std::fs::remove_file(&runtime).unwrap();
-    std::fs::create_dir(&runtime).unwrap();
-    let broken = store.queue_runtime_state("broken", board("never"));
-    assert!(matches!(
-        store.wait_runtime_state_durable("broken", broken, Duration::from_secs(30)),
-        Err(Some(_))
-    ));
-    // The failed board stays queued, so its park records wait behind it.
-    store
-        .writer
-        .queue_parks(&store, "broken", vec![park(true, Some("first"))]);
-    for _ in 0..50 {
-        store.writer.queue_parks(&store, "broken", vec![park(false, None)]);
-    }
-    let state = store.writer.lock();
-    let parks = &state.parks["broken"];
-    assert_eq!(parks.len(), 1, "one record per panel waits");
-    assert!(!parks[0].parked, "the newest park state waits");
-    assert_eq!(
-        parks[0].status.as_ref().and_then(|status| status.last_line()),
-        Some("first"),
-        "a record without a status keeps the queued status"
-    );
-    drop(state);
-    let mut with_panel = board("again");
-    with_panel.workspaces.push(crate::WorkspaceState {
-        panels: vec![crate::PanelState {
-            local_id: "panel".into(),
-            ..crate::PanelState::default()
-        }],
-        ..crate::WorkspaceState::default()
-    });
-    let _ = store.queue_runtime_state("broken", with_panel);
-    assert!(
-        store.writer.lock().parks.contains_key("broken"),
-        "the panel is on the newer board"
-    );
-    let _ = store.queue_runtime_state("broken", board("without the panel"));
-    assert!(
-        !store.writer.lock().parks.contains_key("broken"),
-        "a record of a panel that left the board is dropped, so it cannot add the panel back"
-    );
-    while store.writer.reserve("broken").map(|direct| direct.forget()).is_err() {
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }

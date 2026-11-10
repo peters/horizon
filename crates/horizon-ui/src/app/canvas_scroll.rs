@@ -14,9 +14,6 @@ pub(super) enum ScrollTarget {
     /// A board panel, which hands its gesture on to the canvas once it
     /// reaches its scroll extent.
     Panel(PanelId),
-    /// A canvas-drawn surface with no known scroll extent, such as a cloud
-    /// runtime card. It keeps every gesture it starts.
-    Surface(u32),
 }
 
 /// One wheel event, carrying what the terminal needs to apply it.
@@ -79,7 +76,7 @@ impl ScrollGesture {
         self.canvas_owned = Some(target == ScrollTarget::Canvas);
         self.owner = match target {
             ScrollTarget::Canvas => None,
-            ScrollTarget::Panel(_) | ScrollTarget::Surface(_) => Some(target),
+            ScrollTarget::Panel(_) => Some(target),
         };
         std::mem::take(&mut self.pan_backlog)
     }
@@ -163,9 +160,6 @@ impl ScrollGesture {
                 }
                 TouchPhase::End | TouchPhase::Cancel | TouchPhase::Move => {}
             }
-            if self.displaced_surface(target) {
-                routing.claimed_wheels.push(index);
-            }
             // Scroll chaining: a gesture latched to a panel moves to the canvas
             // once *that* panel is at its scroll extent, and stays there for
             // the rest of the gesture. The owner decides, so a pointer that
@@ -207,22 +201,13 @@ impl ScrollGesture {
         // egui scroll areas use smoothed motion rather than the raw events
         // removed below. Keep a displaced owner's easing away from the new
         // hover target, including idle frames with no wheel events to remove.
-        routing.owns_smooth_scroll = canvas_owned
-            || self.rejected_contact
-            || self.displaced_surface(target)
-            || self.owner.is_some_and(|owner| target != owner);
+        routing.owns_smooth_scroll =
+            canvas_owned || self.rejected_contact || self.owner.is_some_and(|owner| target != owner);
         if canvas_owned {
             routing.pan += self.ease_backlog(input.stable_dt);
         }
         routing.pans_canvas = has_canvas_motion || routing.pan != Vec2::ZERO;
         routing
-    }
-
-    fn displaced_surface(&self, target: ScrollTarget) -> bool {
-        self.canvas_owned == Some(false)
-            && self
-                .owner
-                .is_some_and(|owner| matches!(owner, ScrollTarget::Surface(_)) && target != owner)
     }
 }
 

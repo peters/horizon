@@ -16,20 +16,11 @@ use thiserror::Error;
 use crate::model::{BrowserPanel, ProtocolKind};
 
 mod admission;
-pub(crate) mod agent_session;
-pub(crate) mod browser_vm;
-pub(crate) mod cloud_create;
-pub(crate) mod cloud_delete;
-pub(crate) mod cloud_list;
-pub(crate) mod companion;
 mod device;
-pub(crate) mod exec;
 mod handoff;
 mod host_answer;
-mod image_destination;
 pub(crate) mod provider_usage;
 mod recovery;
-mod tailnet_credential;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);

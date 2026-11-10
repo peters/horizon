@@ -154,8 +154,8 @@ Give each result the task ID. A report uses the ID to give a result.
      --test cli -- --ignored --test-threads=1
    ```
 
-   Result: All tests pass. The multi-chunk test types 20 synthetic keys of 106
-   characters. Its receiver reads each key 600 ms late with the current keymap.
+   Result: All tests pass. The multi-chunk test types 20 synthetic texts of 106
+   characters. Its receiver reads each text 600 ms late with the current keymap.
    The test also types text without letters with Caps Lock on. With Caps
    Lock on, text with a letter gets `unsupported` and no key. With a held
    Shift key, text gets `unsupported` and no key.
@@ -187,70 +187,55 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: The window shows no new character.
 
-### 6.3 T03 — Type a key into a Horizon text field
+### 6.3 T03 — Type a long name into a Horizon text field
 
-> **CAUTION:** TYPE ONLY THE SYNTHETIC KEY FROM THIS PROCEDURE. A real key goes
-> into the saved key file and into the screenshots of this run.
+> **CAUTION:** TYPE ONLY THE SYNTHETIC NAME FROM THIS PROCEDURE. A real name goes
+> into the saved session file and into the screenshots of this run.
 
-1. Make a synthetic key of 106 characters from `[A-Za-z0-9_-]`.
+1. Make a synthetic name of 106 characters from `[A-Za-z0-9_-]`.
 
    ```sh
-   python3 -c "import secrets, string; a = string.ascii_letters + string.digits + '_-'; print(''.join(secrets.choice(a) for _ in range(106)), end='')" > <evidence>/key-01.txt
+   python3 -c "import secrets, string; a = string.ascii_letters + string.digits + '_-'; print(''.join(secrets.choice(a) for _ in range(106)), end='')" > <evidence>/name-01.txt
    ```
 
-   Result: `key-01.txt` contains 106 characters and no line feed.
+   Result: `name-01.txt` contains 106 characters and no line feed.
 
-2. Click **Menu** in the toolbar of the candidate.
+2. Double-click the title of the first panel.
 
-   Result: The Menu opens.
+   Result: An inline text field opens with the current title of the panel.
 
-3. Click **Cloud settings**.
-
-   Result: The dialog opens. The RunPod card shows an empty key field, or a
-   saved key with **Replace**.
-
-4. If the RunPod card shows **Replace**, click **Replace**.
-
-   Result: An empty key field opens.
-
-5. Click the RunPod key field.
+3. Click the inline text field.
 
    Result: The field has the text cursor.
 
-6. Send the key as three `type` actions of 40, 40 and 26 characters. Do not
+4. Send the name as three `type` actions of 40, 40 and 26 characters. Do not
    wait between the actions.
 
    ```sh
    for range in 1-40 41-80 81-106; do
-     cut -c "$range" <evidence>/key-01.txt | tr -d '\n' | send_type
+     cut -c "$range" <evidence>/name-01.txt | tr -d '\n' | send_type
    done
    ```
 
    Result: Each action gives `"ok":true` and the state `dispatched`.
 
-7. Click **Save settings**.
+5. Press Enter.
 
-   Result: The dialog closes. `settings.json` in the private home changes.
+   Result: The text field closes and the title of the panel shows the new name.
 
-8. Find the saved key file. Use the `runpod_key_file` value in
-   `<state>/data/home/.horizon/cloud/settings.json`. Replace the real home path
-   with `<state>/data/home`.
-
-   Result: You have the path of the saved key file in the private home.
-
-9. Compare the saved key file with `key-01.txt`.
+6. Wait 2 seconds. Compare the saved title with `name-01.txt`.
 
    ```sh
-   cmp <saved key file> <evidence>/key-01.txt
+   grep -c "$(cat <evidence>/name-01.txt)" <home>/.horizon/sessions/*/runtime.yaml
    ```
 
-   Result: `cmp` shows no difference. Record the result as `match` or `loss`.
+   Result: The count is at least 1. Record the result as `match` or `loss`.
 
 ### 6.4 T04 — Repeated runs in the Horizon text field
 
-> **CAUTION:** TYPE ONLY SYNTHETIC KEYS. Make a new synthetic key for each run.
+> **CAUTION:** TYPE ONLY SYNTHETIC NAMES. Make a new synthetic name for each run.
 
-1. Do steps 1 to 9 of T03 20 times. Make a new key file for each run.
+1. Do steps 1 to 6 of T03 20 times. Make a new name file for each run.
 
    Result: Each run has a result line, `match` or `loss`.
 
@@ -404,9 +389,9 @@ Give each result the task ID. A report uses the ID to give a result.
 
    Result: Only the processes of this run stop.
 
-4. Delete the synthetic key files in `<evidence>`.
+4. Delete the synthetic name files in `<evidence>`.
 
-   Result: No key file of this run remains.
+   Result: No name file of this run remains.
 
 ## 9. Record of results
 

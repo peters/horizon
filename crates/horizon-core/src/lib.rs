@@ -4,11 +4,6 @@ pub mod agent_work;
 mod agents;
 mod board;
 pub mod browser;
-pub mod cloud_list;
-#[cfg(feature = "cloud-workspaces")]
-pub mod cloud_panel;
-#[cfg(feature = "cloud-workspaces")]
-pub mod cloud_runtime;
 mod config;
 mod config_migration;
 pub mod config_store;
@@ -31,10 +26,6 @@ mod runtime_state;
 pub mod search;
 mod session_store;
 mod shortcuts;
-pub mod speech_config;
-pub use speech_config::validate_speech_hotkey;
-pub mod setup_board;
-pub mod speech_model;
 mod ssh;
 mod terminal;
 mod transcript;
@@ -43,10 +34,11 @@ mod usage_stats;
 mod util;
 mod view;
 mod workspace;
+pub mod workspace_list;
 
 pub use agents::{
-    AgentDefinition, AgentIntegrationKind, AgentPromptMode, AgentResumeMode, AgentSessionValidationMode, AgentStatus,
-    agent_definition, all_agent_kinds, is_agent_working_line,
+    AgentDefinition, AgentIntegrationKind, AgentResumeMode, AgentSessionValidationMode, AgentStatus, agent_definition,
+    all_agent_kinds, is_agent_working_line,
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
@@ -56,8 +48,8 @@ pub use board::{
 };
 pub use config::{
     AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, FeaturesConfig, OverlaysConfig, PresetConfig,
-    RemoteHostsConfig, ShortcutsConfig, SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask,
-    TerminalConfig, WindowConfig, WorkspaceConfig, browser_host, browser_mcp_args, configure_browser_host,
+    RemoteHostsConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig, browser_host, browser_mcp_args,
+    configure_browser_host,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
@@ -68,8 +60,8 @@ pub use git_watcher::GitWatcher;
 pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use panel::{
-    CloudWait, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions,
-    PanelResume, ParkedScreen, browser_actor,
+    DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
+    browser_actor,
 };
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
@@ -79,17 +71,14 @@ pub use runtime_state::{
     AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning,
     AgentSessionDeletionFailure, AgentSessionDeletionRecovery, AgentSessionDeletionReport,
     AgentSessionDeletionReservation, AgentSessionKey, AgentSessionRecord, BrowserProfileState, DetachedWorkspaceState,
-    PanelState, PanelTemplateRef, RemoteWorkspaceReference, RuntimeState, WorkspaceState, WorkspaceTemplateRef,
-    live_claude_session_ids, new_local_id, reserve_saved_session_deletions, saved_session_deletion_pending,
+    PanelState, PanelTemplateRef, RuntimeState, WorkspaceState, WorkspaceTemplateRef, live_claude_session_ids,
+    new_local_id, reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
-#[cfg(feature = "cloud-workspaces")]
-pub use session_store::{CloudPanelStatus, ParkedPanel};
 pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,
 };
-pub use setup_board::SetupBoard;
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{DiscoveredSshHost, SshConnection, SshConnectionStatus, discover_ssh_hosts};
 pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};

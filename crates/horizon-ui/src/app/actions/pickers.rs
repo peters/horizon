@@ -59,13 +59,6 @@ impl HorizonApp {
                     Err(error) => tracing::error!("failed to create panel: {error}"),
                 }
             }
-            #[cfg(feature = "cloud-workspaces")]
-            DirPickerPurpose::CloudRepository => {
-                if let Some(path) = path {
-                    self.set_cloud_repository(path);
-                }
-                return;
-            }
         }
         self.mark_runtime_dirty();
     }
@@ -94,24 +87,6 @@ impl HorizonApp {
             .find(|(_, rect)| rect.contains(screen_pos))
             .map(|(id, _)| *id);
         let target = (hit_workspace, [canvas_pos.x, canvas_pos.y]);
-        #[cfg(feature = "cloud-workspaces")]
-        let target = self
-            .fullscreen_cloud_target()
-            .or_else(|| {
-                self.cloud_prototype.groups.0.iter().find_map(|group| {
-                    let (min, max) = group.bounds();
-                    (!group.collapsed && egui::Rect::from_min_max(min.into(), max.into()).contains(canvas_pos))
-                        .then(|| self.board.workspace_id_by_local_id(&group.workspace))
-                        .flatten()
-                        .map(|workspace| (workspace, [canvas_pos.x, canvas_pos.y]))
-                })
-            })
-            .map_or(target, |(workspace, position)| (Some(workspace), position));
-        #[cfg(feature = "cloud-workspaces")]
-        if !self.preset_target_accepts_cloud_panels(target.0, target.1) {
-            self.pending_preset_pick = None;
-            return;
-        }
         self.pending_preset_pick = Some((target.0, target.1, std::time::Instant::now()));
     }
 
@@ -119,11 +94,6 @@ impl HorizonApp {
         let Some((target_workspace, canvas_pos, opened_at)) = self.pending_preset_pick else {
             return;
         };
-        #[cfg(feature = "cloud-workspaces")]
-        if !self.preset_target_accepts_cloud_panels(target_workspace, canvas_pos) {
-            self.pending_preset_pick = None;
-            return;
-        }
 
         let popup_id = Id::unique("canvas_preset_picker");
         let canvas_rect = self.canvas_rect(ctx);
@@ -156,27 +126,10 @@ impl HorizonApp {
         target_workspace: Option<WorkspaceId>,
         canvas_pos: [f32; 2],
     ) -> (Rect, Option<PresetPickerAction>) {
-        #[cfg(feature = "cloud-workspaces")]
-        let cloud = target_workspace
-            .and_then(|workspace| {
-                self.cloud_prototype
-                    .groups
-                    .at_position(&self.board, workspace, canvas_pos)
-            })
-            .map(|index| &self.cloud_prototype.groups.0[index]);
         let heading = preset_picker_heading(target_workspace);
-        #[cfg(feature = "cloud-workspaces")]
-        let heading = if cloud.is_some() { "Add panel" } else { heading };
         let unavailable_reason = |kind| {
-            #[cfg(feature = "cloud-workspaces")]
-            {
-                cloud.and_then(|group| group.unavailable_panel_reason(kind))
-            }
-            #[cfg(not(feature = "cloud-workspaces"))]
-            {
-                let _ = kind;
-                None
-            }
+            let _ = kind;
+            None
         };
         let mut selected_action = None;
         let area_response = egui::Area::new(popup_id)
@@ -194,44 +147,6 @@ impl HorizonApp {
                         ui.set_max_width(320.0);
                         ui.label(egui::RichText::new(heading).size(11.0).color(theme::FG_DIM()).strong());
                         ui.add_space(4.0);
-                        // A new workspace runs in the cloud unless the person picks a preset
-                        // for This PC.
-                        #[cfg(feature = "cloud-workspaces")]
-                        if target_workspace.is_none() {
-                            for choice in super::super::sidebar::NewWorkspace::CLOUDS {
-                                if ui
-                                    .add_enabled(
-                                        self.cloud_launch_ready(),
-                                        egui::Button::new(choice.label()).frame(false),
-                                    )
-                                    .on_hover_text(choice.detail())
-                                    .clicked()
-                                {
-                                    selected_action =
-                                        Some(PresetPickerAction::NewCloudWorkspace { canvas_pos, choice });
-                                }
-                            }
-                            ui.separator();
-                            ui.label(
-                                egui::RichText::new("This PC")
-                                    .size(11.0)
-                                    .color(theme::FG_DIM())
-                                    .strong(),
-                            );
-                        }
-                        #[cfg(feature = "cloud-workspaces")]
-                        if let Some(workspace_id) = target_workspace
-                            && cloud.is_none()
-                        {
-                            if ui
-                                .add_enabled(self.cloud_launch_ready(), egui::Button::new("Cloud").frame(false))
-                                .clicked()
-                            {
-                                selected_action = Some(PresetPickerAction::CreateCloud { workspace_id });
-                            }
-                            ui.separator();
-                        }
-
                         let action = egui::ScrollArea::vertical()
                             .max_height((ctx.content_rect().height() - 120.0).max(100.0))
                             .show(ui, |ui| {
@@ -255,12 +170,6 @@ impl HorizonApp {
 
     fn apply_preset_picker_action(&mut self, ctx: &Context, action: PresetPickerAction) {
         match action {
-            #[cfg(feature = "cloud-workspaces")]
-            PresetPickerAction::CreateCloud { workspace_id } => self.open_cloud_for_workspace(ctx, workspace_id),
-            #[cfg(feature = "cloud-workspaces")]
-            PresetPickerAction::NewCloudWorkspace { canvas_pos, choice } => {
-                self.create_new_workspace(ctx, choice, Some(canvas_pos));
-            }
             PresetPickerAction::CreatePanel {
                 workspace_id,
                 preset,
@@ -344,69 +253,5 @@ mod tests {
         assert_eq!(app.canvas_view, before);
         app.pending_preset_pick = None;
         assert!(app.preset_picker_rect(&ctx).is_none());
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    #[test]
-    fn picker_renders_cloud_actions_only_outside_existing_clouds() {
-        let (_temp, mut app) = test_app();
-        app.presets = vec![horizon_core::PresetConfig {
-            name: "Shell".into(),
-            alias: None,
-            kind: horizon_core::PanelKind::Shell,
-            command: None,
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::Fresh,
-            ssh_connection: None,
-        }];
-        let workspace = app.board.create_workspace("Fixture");
-        let local_id = app.board.workspace(workspace).unwrap().local_id.clone();
-        app.cloud_prototype
-            .groups
-            .0
-            .push(horizon_core::cloud_panel::CloudGroup::new(
-                101,
-                "Local cloud".into(),
-                local_id,
-                "/synthetic".into(),
-                [0.0, 0.0],
-            ));
-        for (target, position, heading, offers_cloud) in [
-            (Some(workspace), [100.0, 100.0], "Add panel", false),
-            (Some(workspace), [4000.0, 100.0], "New Terminal", true),
-            (None, [4000.0, 100.0], "New Workspace", true),
-        ] {
-            let ctx = Context::default();
-            let mut labels = Vec::new();
-            for _ in 0..2 {
-                let output = ctx
-                    .run_ui(crate::app::test_support::raw_input([900.0, 700.0], None), |ui| {
-                        app.show_preset_picker_popup(
-                            ui.ctx(),
-                            Id::unique("policy-picker"),
-                            Pos2::new(100.0, 100.0),
-                            target,
-                            position,
-                        );
-                    })
-                    .discard_textures();
-                labels = output
-                    .shapes
-                    .iter()
-                    .filter_map(|shape| match &shape.shape {
-                        egui::epaint::Shape::Text(text) => Some(text.galley.job.text.as_str()),
-                        _ => None,
-                    })
-                    .map(str::to_owned)
-                    .collect();
-            }
-            assert!(labels.iter().any(|label| label == heading), "{labels:?}");
-            assert_eq!(labels.iter().any(|label| label == "Cloud"), offers_cloud);
-            assert!(labels.iter().any(|label| label == "Shell"));
-            // A new workspace offers the cloud first, then This PC with its presets.
-            let new_workspace = target.is_none();
-            assert_eq!(labels.iter().any(|label| label == "Cloud GPU"), new_workspace);
-            assert_eq!(labels.iter().any(|label| label == "This PC"), new_workspace);
-        }
     }
 }

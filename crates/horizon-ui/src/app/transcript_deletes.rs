@@ -174,29 +174,6 @@ mod tests {
         })
     }
 
-    /// A restore waits for the coordination worker before it replaces the board.
-    /// A delete that is still queued then must not remove the transcript of a
-    /// panel that the restored board carries again.
-    #[cfg(feature = "cloud-workspaces")]
-    #[test]
-    fn a_cloud_restore_marks_the_panels_it_carries_before_the_wait_runs_the_queued_delete() {
-        let (temp, mut app) = test_app();
-        let root = temp.path().join("transcripts");
-        let (transcript, history) = transcript_files(&root, "restored");
-        let releasing = hold_the_worker_until(&mut app);
-        app.delete_closed_transcript("restored", transcript.clone());
-
-        app.restore_cloud_prototype_board(&restored_board("restored"))
-            .expect("restored board");
-        releasing.join().expect("the release thread ends");
-
-        app.settle_browser_host_io();
-        assert!(
-            history.exists() && transcript.session_path().exists(),
-            "a panel that a restored board carries again keeps its transcript"
-        );
-    }
-
     /// The same for a session switch, which waits for the worker before it
     /// restores the next session.
     #[test]

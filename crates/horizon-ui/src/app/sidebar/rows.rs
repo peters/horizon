@@ -1,8 +1,7 @@
-//! The workspace rows of the sidebar's cloud list: a tile in the workspace color
-//! with its initials and a status badge, the name and one status line, or only
-//! the tile and the name for a compact parked row.
+//! The workspace rows of the sidebar's workspace list: a tile in the workspace
+//! color with its initials and a status badge, the name and one status line.
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
-use horizon_core::cloud_list::{Dot, Group};
+use horizon_core::workspace_list::Dot;
 
 use crate::theme;
 
@@ -11,30 +10,14 @@ use super::{SidebarWorkspaceInsert, WorkspaceSidebarEntry};
 
 /// The height of a row with a status line.
 pub(super) const ROW_HEIGHT: f32 = 50.0;
-/// The height of a compact parked row.
-pub(super) const COMPACT_ROW_HEIGHT: f32 = 38.0;
 /// The horizontal inset of a row's card inside the sidebar.
 pub(super) const ROW_INSET: f32 = 8.0;
 /// The left edge of the tile inside a row's card.
 pub(super) const TILE_INSET: f32 = 8.0;
 /// The side of the tile of a row with a status line.
 pub(super) const TILE_SIDE: f32 = 30.0;
-const COMPACT_TILE_SIDE: f32 = 26.0;
 const DOT_RADIUS: f32 = 4.0;
 const CARD_RADIUS: u8 = 12;
-
-/// Whether the row of `workspace` is compact: a parked row shows no status line.
-pub(super) fn is_compact(workspace: &WorkspaceSidebarEntry) -> bool {
-    workspace.row.group == Group::Parked
-}
-
-pub(super) fn row_height(workspace: &WorkspaceSidebarEntry) -> f32 {
-    if is_compact(workspace) {
-        COMPACT_ROW_HEIGHT
-    } else {
-        ROW_HEIGHT
-    }
-}
 
 /// The card of a row: the row without the sidebar inset.
 pub(super) fn card(row: Rect) -> Rect {
@@ -46,36 +29,21 @@ pub(super) fn dot_meaning(dot: Dot) -> &'static str {
     match dot {
         Dot::Working => "An agent is working",
         Dot::Idle => "Idle",
-        Dot::Busy => "Horizon is working on this cloud",
-        Dot::Attention => "Waiting for you",
-        Dot::Failed => "Failed",
-        Dot::Parked { working: true } => "Parked · an agent is working on the worker",
-        Dot::Parked { working: false } => "Parked · no local terminal",
-        Dot::Stopped => "Worker stopped",
     }
 }
 
 /// Whether the tile shows a badge: an idle row shows none, so activity stands out.
 const fn has_badge(dot: Dot) -> bool {
-    !matches!(dot, Dot::Idle)
+    matches!(dot, Dot::Working)
 }
 
 pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, dot: Dot) {
     let filled = |color: Color32| {
         painter.circle_filled(center, DOT_RADIUS, color);
     };
-    let ring = |color: Color32| {
-        painter.circle_stroke(center, DOT_RADIUS - 0.5, Stroke::new(1.5_f32, color));
-    };
     match dot {
         Dot::Working => filled(theme::PALETTE_GREEN()),
         Dot::Idle => filled(theme::FG_DIM()),
-        Dot::Busy => filled(theme::ACCENT()),
-        Dot::Attention => filled(theme::PALETTE_YELLOW()),
-        Dot::Failed => filled(theme::PALETTE_RED()),
-        Dot::Parked { working: true } => ring(theme::PALETTE_GREEN()),
-        Dot::Parked { working: false } => ring(theme::FG_DIM()),
-        Dot::Stopped => ring(theme::BORDER_STRONG()),
     }
 }
 
@@ -127,8 +95,8 @@ pub(super) fn paint_workspace_row_bg(
     row_surface(fill)
 }
 
-/// Paints the tile, the name with its badges and, unless the row is compact, the
-/// status line. The tile tells its status to a pointer and a screen reader.
+/// Paints the tile, the name with its badges and the status line. The tile tells
+/// its status to a pointer and a screen reader.
 pub(super) fn paint_workspace_row_contents(
     ui: &egui::Ui,
     row: Rect,
@@ -137,23 +105,18 @@ pub(super) fn paint_workspace_row_contents(
     surface: Color32,
 ) -> egui::Response {
     let card = card(row);
-    let compact = is_compact(workspace);
-    let line = (!compact && !workspace.row.line.is_empty()).then(|| text::fold_whitespace(&workspace.row.line));
+    let line = (!workspace.row.line.is_empty()).then(|| text::fold_whitespace(&workspace.row.line));
     let first_line_y = if line.is_some() {
         card.min.y + 17.0
     } else {
         card.center().y
     };
 
-    let tile = paint_tile(ui, card, workspace, compact, surface);
+    let tile = paint_tile(ui, card, workspace, surface);
     let text_left = tile.max.x + 10.0;
     let (name_right, badge_shows) = paint_badges(ui, card, workspace, accordion, text_left, first_line_y);
     let meaning = dot_meaning(workspace.row.dot);
-    let mut spoken = if compact && !workspace.row.line.is_empty() {
-        format!("{meaning}\n{}", workspace.row.line)
-    } else {
-        meaning.to_owned()
-    };
+    let mut spoken = meaning.to_owned();
     // A narrow sidebar leaves out the badge, so the tile tells it.
     if workspace.detached && !badge_shows {
         spoken.push_str("\nIn a new window");
@@ -204,10 +167,10 @@ fn hover_text(ui: &egui::Ui, rect: Rect, id: (&str, u64), text: &str) {
 
 /// Paints the tile with its initials and status badge; `surface` is the color
 /// around the tile, which the badge's ring uses to cut the badge out.
-fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, compact: bool, surface: Color32) -> Rect {
+fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, surface: Color32) -> Rect {
     let painter = ui.painter();
     let accent = workspace.color;
-    let side = if compact { COMPACT_TILE_SIDE } else { TILE_SIDE };
+    let side = TILE_SIDE;
     let tile = Rect::from_min_size(
         pos2(card.min.x + TILE_INSET, card.center().y - side / 2.0),
         Vec2::splat(side),
@@ -219,14 +182,7 @@ fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, comp
     );
     painter.rect_filled(tile, 9, fill);
     let letters_color = theme::ensure_terminal_text_contrast(theme::blend(accent, theme::FG(), 0.35), fill);
-    let letters = text::line(
-        ui,
-        &text::initials(&workspace.name),
-        if compact { 11.0 } else { 12.0 },
-        BOLD,
-        letters_color,
-        side,
-    );
+    let letters = text::line(ui, &text::initials(&workspace.name), 12.0, BOLD, letters_color, side);
     painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
 
     if has_badge(workspace.row.dot) {

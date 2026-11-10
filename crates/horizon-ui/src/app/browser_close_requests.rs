@@ -343,9 +343,9 @@ impl HorizonApp {
 /// close open because the exact session's check has not answered yet; the
 /// check runs at the provider, so the frame never waits for it.
 fn settled_close(pending: &PendingBrowserClose, past_deadline: bool) -> Option<Result<(), CloseReleaseFailure>> {
-    // A panel without a teardown signal (a cloud browser panel, or a browser
-    // panel with no session signal) has no driver left to wait for and no
-    // provider session of its own.
+    // A panel without a teardown signal, such as a browser panel with no
+    // session signal, has no driver left to wait for and no provider session of
+    // its own.
     let Some(teardown) = pending.teardown.as_ref() else {
         return Some(Ok(()));
     };

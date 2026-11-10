@@ -101,6 +101,6 @@ On headless Linux: `Xvfb :99 -screen 0 1600x1000x24`, launch with
 
 - Steps 1–3 executed headless (lavapipe software Vulkan through wgpu 30):
   launch, hover, and resize screenshots all correct; app stayed alive.
-- Steps 4–14 covered by the automated suite (474 tests, speech tier included)
+- Steps 4–14 covered by the automated suite (474 tests)
   where testable headlessly; interactive lanes (6, 9, 11) remain for a
   desktop-session pass if requested.

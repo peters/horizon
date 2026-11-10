@@ -125,11 +125,6 @@ fn displaced_panel_wheels_do_not_reach_another_panels_scroll_area() {
 }
 
 #[test]
-fn displaced_surface_wheels_do_not_reach_a_panels_scroll_area() {
-    assert_displaced_wheels_stay_with_owner(ScrollTarget::Surface(901));
-}
-
-#[test]
 fn modified_boundaries_discard_displaced_backlog_but_keep_fresh_panel_motion() {
     for phase in [TouchPhase::Start, TouchPhase::End, TouchPhase::Cancel] {
         for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {

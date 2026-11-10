@@ -512,7 +512,7 @@ mod tests {
         pump_until(&mut app, |app| app.browser_create_host.pending.is_empty());
         app.settle_browser_host_io();
         assert_eq!(app.board.panels.len(), panels, "an unopened store opens no panel");
-        open.send(()).expect("the parked opener ends with the test");
+        open.send(()).expect("the waiting opener ends with the test");
     }
 
     #[test]
@@ -572,7 +572,7 @@ mod tests {
         app.begin_remote_create(request, actor, Instant::now());
         assert_eq!(app.browser_create_host.pending.len(), 1);
 
-        // A session switch or a cloud prototype restore replaces the board.
+        // A session switch replaces the board.
         app.browser_create_host.io.replace_board();
         app.finish_pending_browser_creates();
         assert!(

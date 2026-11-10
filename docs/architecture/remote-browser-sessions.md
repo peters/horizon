@@ -29,9 +29,8 @@ Three responsibilities stay in three places:
 
 The existing loopback WebDriver transport in `crates/horizon-browser/src/webdriver/http.rs`
 keeps its loopback-only rule. The remote transport is a second, separate
-implementation built on the workspace's existing `ureq` with rustls, configured
-like the Azure and RunPod transports: HTTPS only, no redirects, bounded response
-size, global timeout, Horizon user agent.
+implementation built on the workspace's existing `ureq` with rustls: HTTPS
+only, no redirects, bounded response size, global timeout, Horizon user agent.
 
 ## Configuration contract
 
@@ -264,7 +263,7 @@ session. `browser_close` releases it. `browser_provider_usage` samples the
 configured providers and `browser_remote_allocations` lists and reconciles the
 holds of the host. The host starts no local browser: a create without a target
 fails with `target_required`. Requests that need a Horizon host, such as the
-cloud tools and the device viewer, fail with an `_unavailable` code.
+device viewer, fail with an `_unavailable` code.
 
 Lifecycle:
 

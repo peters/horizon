@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use crate::agents::AgentStatus;
 use crate::editor::PanelContent;
 use crate::error::Result;
-use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, RemoteWorkspaceReference, new_local_id};
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 use crate::transcript::PanelTranscript;
 use crate::workspace::WorkspaceId;
 
 use super::super::{
-    CloudWait, DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout,
-    PanelOptions, PanelResume,
+    DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions,
+    PanelResume,
 };
 use super::{
     ResolvedTerminalLaunch, agent_env, current_unix_millis, default_shell, kitty_keyboard_for_kind,
@@ -22,7 +22,6 @@ use super::{
 struct TerminalPanelBuildArgs {
     id: PanelId,
     local_id: String,
-    remote_workspace: Option<RemoteWorkspaceReference>,
     title: String,
     kind: PanelKind,
     resume: PanelResume,
@@ -46,8 +45,6 @@ pub(in crate::panel) enum Placeholder<'a> {
     RestoreFailure(&'a str),
     /// The panel cannot start its process in its working directory.
     WorkingDirectory { path: &'a str, reason: &'a str },
-    /// The cloud of the panel does not run it now.
-    Cloud(CloudWait),
 }
 
 impl<'a> Placeholder<'a> {
@@ -82,19 +79,6 @@ pub(in crate::panel) fn placeholder_panel(
         remote_target: opts.remote_target.clone(),
         host: opts.browser_host.clone(),
     });
-    if opts.remote_workspace.is_some() {
-        RemoteWorkspaceReference::validate_client_panel(
-            &local_id,
-            opts.kind,
-            &opts.resume,
-            opts.session_binding.as_ref(),
-        )?;
-    }
-    let remote_replay = opts.remote_workspace.as_ref().map(|_| {
-        let (_, mut replay, _) = prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);
-        replay.extend_from_slice(b"\r\nRemote development has been removed.\r\nThis saved transcript is retained without starting its task locally.\r\nLocal Restart is disabled for this retired remote view.\r\n");
-        replay
-    });
     let PanelOptions {
         name,
         name_is_custom,
@@ -111,18 +95,14 @@ pub(in crate::panel) fn placeholder_panel(
         size,
         session_binding,
         template,
-        remote_workspace,
         ..
     } = opts;
 
     let saved_ssh_connection = ssh_connection.clone();
     let has_custom_name = name_is_custom.unwrap_or_else(|| name.is_some());
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
-    let terminal = if let Some(replay) = remote_replay {
-        spawn_remote_snapshot_terminal(id, rows, cols, replay)?
-    } else {
-        spawn_restore_failure_snapshot_terminal(id, kind, rows, cols, placeholder_replay_bytes(&title, placeholder))?
-    };
+    let terminal =
+        spawn_restore_failure_snapshot_terminal(id, kind, rows, cols, placeholder_replay_bytes(&title, placeholder))?;
     let ssh_status = if kind == PanelKind::Ssh {
         Some(SshConnectionStatus::Disconnected)
     } else {
@@ -133,7 +113,6 @@ pub(in crate::panel) fn placeholder_panel(
         TerminalPanelBuildArgs {
             id,
             local_id,
-            remote_workspace,
             title,
             kind,
             resume,
@@ -234,7 +213,6 @@ pub(super) fn spawn_terminal(
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
-        remote_workspace: None,
         title,
         kind,
         resume,
@@ -288,19 +266,6 @@ fn resolve_spawn_launch(
     opts: &PanelOptions,
     transcript: Option<&PanelTranscript>,
 ) -> ResolvedTerminalLaunch {
-    #[cfg(feature = "cloud-workspaces")]
-    if opts.cloud_connection.is_some() {
-        let program = opts.command.clone().unwrap_or_else(|| "ssh".into());
-        let (program, launch_args) = transcript.map_or_else(
-            || (program.clone(), opts.args.clone()),
-            |transcript| transcript.wrap_launch_command(program.clone(), opts.args.clone()),
-        );
-        return ResolvedTerminalLaunch {
-            session_binding: None,
-            program,
-            launch_args,
-        };
-    }
     resolve_terminal_launch(
         id,
         opts.kind,
@@ -314,24 +279,6 @@ fn resolve_spawn_launch(
         transcript,
         opts.is_restore,
     )
-}
-
-fn spawn_remote_snapshot_terminal(id: PanelId, rows: u16, cols: u16, replay_bytes: Vec<u8>) -> Result<Terminal> {
-    let (program, args) = ("/bin/sh", vec!["-c".into(), "exit".into()]);
-    Terminal::spawn_snapshot(TerminalSpawnOptions {
-        program: program.into(),
-        args,
-        cwd: None,
-        rows,
-        cols,
-        cell_width: DEFAULT_CELL_WIDTH,
-        cell_height: DEFAULT_CELL_HEIGHT,
-        scrollback_limit: scrollback_limit_for_kind(PanelKind::Ssh),
-        window_id: id.0,
-        replay_bytes,
-        env: HashMap::new(),
-        kitty_keyboard: false,
-    })
 }
 
 fn spawn_restore_failure_snapshot_terminal(
@@ -377,14 +324,6 @@ pub(in crate::panel) fn placeholder_terminal(
     )
 }
 
-/// The rows that a placeholder for `placeholder` shows, as text.
-pub(in crate::panel) fn placeholder_lines(title: &str, placeholder: Placeholder<'_>) -> Vec<String> {
-    String::from_utf8_lossy(&placeholder_replay_bytes(title, placeholder))
-        .split("\r\n")
-        .map(str::to_owned)
-        .collect()
-}
-
 fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8> {
     match placeholder {
         Placeholder::RestoreFailure(error_message) => format!(
@@ -408,41 +347,6 @@ fn placeholder_replay_bytes(title: &str, placeholder: Placeholder<'_>) -> Vec<u8
             title = title,
             path = path,
             reason = reason
-        ),
-        Placeholder::Cloud(CloudWait::Reconnecting) => format!(
-            concat!(
-                "Horizon is reconnecting the cloud of this panel.\r\n\r\n",
-                "Panel: {title}\r\n",
-                "Remote processes continue independently.\r\n\r\n",
-                "The panel comes back when the cloud is ready.\r\n"
-            ),
-            title = title
-        ),
-        Placeholder::Cloud(CloudWait::Stopped) => format!(
-            concat!(
-                "The cloud of this panel is stopped.\r\n\r\n",
-                "Panel: {title}\r\n\r\n",
-                "Choose Resume worker on the cloud card to restore this panel.\r\n"
-            ),
-            title = title
-        ),
-        Placeholder::Cloud(CloudWait::Parked) => format!(
-            concat!(
-                "This panel is parked.\r\n\r\n",
-                "Panel: {title}\r\n",
-                "Its agent continues on the worker.\r\n\r\n",
-                "The panel attaches again when it comes into view.\r\n"
-            ),
-            title = title
-        ),
-        Placeholder::Cloud(CloudWait::Unsupported) => format!(
-            concat!(
-                "Cloud support is disabled in this Horizon build.\r\n\r\n",
-                "Panel: {title}\r\n",
-                "Remote processes continue independently.\r\n\r\n",
-                "Open this session in a Horizon build with cloud support to restore this panel.\r\n"
-            ),
-            title = title
         ),
     }
     .into_bytes()
@@ -497,7 +401,6 @@ fn build_terminal_panel(
     let TerminalPanelBuildArgs {
         id,
         local_id,
-        remote_workspace,
         title,
         kind,
         resume,
@@ -516,7 +419,6 @@ fn build_terminal_panel(
     Panel {
         id,
         local_id,
-        remote_workspace,
         title,
         kind,
         resume,
@@ -528,10 +430,8 @@ fn build_terminal_panel(
         visible: true,
         workspace_id,
         content: PanelContent::Terminal(terminal),
-        transient: false,
         disconnected_browser_profile: None,
         disconnected_device_identity: None,
-        cloud_wait: None,
         session_binding,
         template,
         launched_at_millis: current_unix_millis(),

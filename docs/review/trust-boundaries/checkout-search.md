@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/cloud_runtime/repository/source.rs,crates/horizon-core/src/dir_search.rs,crates/horizon-core/src/dir_search/**,crates/horizon-ui/src/app/cloud_panel/production/creation/source.rs,crates/horizon-ui/src/app/cloud_panel/production/creation/source/**"
+applyTo: "crates/horizon-core/src/dir_search.rs,crates/horizon-core/src/dir_search/**"
 ---
 
 # Checkout search boundary
@@ -12,5 +12,5 @@ Read `docs/architecture/checkout-search.md` for the guarantees and limits.
 - Keep the visit, depth, checkout and file-size bounds, and apply each bound to the bytes
   actually read, not only to a size checked before the read.
 - On macOS, never open anything inside a guarded home folder, also through a link.
-- Flag UI-thread file system work in the finder and the source field that is not bounded.
+- Flag UI-thread file system work in the folder picker that is not bounded.
 - Update the boundary document in the same change when a guarantee or limit changes.

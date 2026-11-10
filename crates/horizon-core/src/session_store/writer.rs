@@ -53,35 +53,14 @@ struct State {
     running: bool,
     /// The last failed save of each session, until a save of that session succeeds.
     failed: BTreeMap<String, Failure>,
-    /// Park records of cloud panels by session, in order. A board write removes the records
-    /// of panels it does not have, so they are written once no board of the session waits.
-    parks: BTreeMap<String, Vec<Park>>,
-    /// The session whose park records the worker writes now.
-    writing_parks: Option<String>,
     /// Sessions that a save outside the queue writes now; the worker leaves them alone.
     direct: BTreeSet<String>,
     index: IndexQueue,
 }
 
-/// The status of a cloud panel; a Horizon without clouds has none.
-#[cfg(feature = "cloud-workspaces")]
-type Status = crate::cloud_runtime::session_status::SessionStatus;
-#[cfg(not(feature = "cloud-workspaces"))]
-type Status = std::convert::Infallible;
-
-/// The park state of a cloud panel, as `ParkedPanel` without its borrows. Only a Horizon
-/// with clouds queues it.
-#[cfg_attr(not(feature = "cloud-workspaces"), allow(dead_code))]
-pub(super) struct Park {
-    pub(super) local_id: String,
-    pub(super) parked: bool,
-    pub(super) status: Option<Status>,
-}
-
 enum Job {
     Index(IndexChange),
     Board(String, Box<Queued>),
-    Parks(String, Vec<Park>),
 }
 
 struct Failure {
@@ -93,22 +72,6 @@ struct Failure {
 }
 
 impl State {
-    /// Keeps the queued park records of `session_id` whose panel is on `board`, because a
-    /// write of `board` removes the records of the other panels before they are written.
-    fn keep_parks_on(&mut self, session_id: &str, board: &RuntimeState) {
-        let Some(parks) = self.parks.get_mut(session_id) else {
-            return;
-        };
-        let on_board: BTreeSet<&str> = (board.workspaces.iter())
-            .flat_map(|workspace| &workspace.panels)
-            .map(|panel| panel.local_id.as_str())
-            .collect();
-        parks.retain(|park| on_board.contains(park.local_id.as_str()));
-        if parks.is_empty() {
-            self.parks.remove(session_id);
-        }
-    }
-
     /// How long until a failed board is tried again. A reserved session is left out: the
     /// worker cannot take it, and the end of its reservation wakes the worker.
     fn next_retry(&self, now: Instant) -> Duration {
@@ -121,14 +84,7 @@ impl State {
     }
 
     fn pending(&self) -> bool {
-        self.writing.is_some()
-            || self.writing_parks.is_some()
-            || self.index.pending()
-            || self.queued.values().any(|queued| queued.retry.is_none())
-            || self
-                .parks
-                .keys()
-                .any(|session_id| !self.queued.contains_key(session_id))
+        self.writing.is_some() || self.index.pending() || self.queued.values().any(|queued| queued.retry.is_none())
     }
 }
 
@@ -157,7 +113,6 @@ impl Writer {
         let mut state = self.lock();
         state.next += 1;
         let generation = state.next;
-        state.keep_parks_on(session_id, &board);
         // A newer board is tried at once, even in a session whose save failed.
         state.queued.insert(
             session_id.to_owned(),
@@ -184,30 +139,6 @@ impl Writer {
             let (writer, store) = (self.clone(), store.clone());
             std::thread::spawn(move || writer.run(&store));
         }
-    }
-
-    /// Queues park records of cloud panels of `session_id`; the worker writes them after
-    /// the boards of the session that wait. A newer record of a panel replaces a queued one,
-    /// which keeps its status if the newer one has none, so that the queue of a session that
-    /// cannot be saved does not grow. A record that cannot be written is dropped.
-    #[cfg_attr(not(feature = "cloud-workspaces"), allow(dead_code))]
-    pub(super) fn queue_parks(&self, store: &SessionStore, session_id: &str, parks: Vec<Park>) {
-        let mut state = self.lock();
-        let queued = state.parks.entry(session_id.to_owned()).or_default();
-        for park in parks {
-            match queued.iter_mut().find(|queued| queued.local_id == park.local_id) {
-                Some(queued) => {
-                    queued.parked = park.parked;
-                    if park.status.is_some() {
-                        queued.status = park.status;
-                    }
-                }
-                None => queued.push(park),
-            }
-        }
-        self.start(&mut state, store);
-        drop(state);
-        self.shared.changed.notify_all();
     }
 
     /// Queues `change` of the session index; a worker of `store` writes it in queue order.
@@ -303,7 +234,7 @@ impl Writer {
         let mut state = self.lock();
         loop {
             if !state.pending() {
-                return state.queued.is_empty() && state.parks.is_empty() && state.index.is_empty();
+                return state.queued.is_empty() && state.index.is_empty();
             }
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                 return false;
@@ -319,9 +250,8 @@ impl Writer {
 
     /// Reserves `session_id` for a save or a delete outside the queue: the worker leaves
     /// the session alone until the returned [`Direct`] is dropped. It is refused while the
-    /// writer writes a board or park records of the session, or another reservation holds
-    /// it, so that the caller never waits for the disk and an older write never lands after
-    /// the caller's.
+    /// writer writes a board of the session, or another reservation holds it, so that the
+    /// caller never waits for the disk and an older write never lands after the caller's.
     pub(super) fn reserve(&self, session_id: &str) -> StoreResult<Direct<'_>> {
         let mut state = self.lock();
         Self::reserve_locked(&mut state, session_id)?;
@@ -331,9 +261,9 @@ impl Writer {
         })
     }
 
-    /// As [`Self::reserve`] for `board`, saved outside the queue, which replaces the queued
-    /// board of `session_id`. A wait for the dropped board ends with a reason.
-    pub(super) fn supersede(&self, session_id: &str, board: &RuntimeState) -> StoreResult<Direct<'_>> {
+    /// As [`Self::reserve`] for a save outside the queue, which replaces the queued board of
+    /// `session_id`. A wait for the dropped board ends with a reason.
+    pub(super) fn supersede(&self, session_id: &str) -> StoreResult<Direct<'_>> {
         let mut state = self.lock();
         Self::reserve_locked(&mut state, session_id)?;
         Self::drop_queued(
@@ -341,7 +271,6 @@ impl Writer {
             session_id,
             "a later save that does not wait for the disk replaced it",
         );
-        state.keep_parks_on(session_id, board);
         drop(state);
         self.shared.changed.notify_all();
         Ok(Direct {
@@ -351,9 +280,7 @@ impl Writer {
     }
 
     fn reserve_locked(state: &mut State, session_id: &str) -> StoreResult<()> {
-        if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id)
-            || state.writing_parks.as_deref() == Some(session_id)
-            || state.direct.contains(session_id)
+        if state.writing.as_ref().is_some_and(|(writing, _)| writing == session_id) || state.direct.contains(session_id)
         {
             return Err(Error::State(format!(
                 "Horizon is still saving session {session_id}; try again in a moment"
@@ -389,10 +316,6 @@ impl Writer {
                     continue;
                 }
                 Some(Job::Board(session_id, queued)) => (session_id, *queued),
-                Some(Job::Parks(session_id, parks)) => {
-                    self.write_parks(store, &session_id, &parks);
-                    continue;
-                }
             };
             // Index changes queued before this board are written with it, so it never overtakes them.
             let ahead = self.lock().index.ahead_of(queued.generation);
@@ -431,29 +354,8 @@ impl Writer {
         }
     }
 
-    fn write_parks(&self, store: &SessionStore, session_id: &str, parks: &[Park]) {
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            let panels: Vec<super::ParkedPanel<'_>> = (parks.iter())
-                .map(|park| super::ParkedPanel {
-                    local_id: &park.local_id,
-                    parked: park.parked,
-                    status: park.status.as_ref(),
-                })
-                .collect();
-            if let Err(error) = store.record_cloud_panels(session_id, &panels) {
-                tracing::warn!(%session_id, %error, "could not record the park state of a cloud");
-            }
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        let _ = (store, session_id, parks);
-        self.lock().writing_parks = None;
-        self.shared.changed.notify_all();
-    }
-
     /// Takes the index change or board that is due and was queued first, so every session is
-    /// written in turn, else the park records of a session that has no board waiting; `None`
-    /// ends an idle worker.
+    /// written in turn; `None` ends an idle worker.
     fn next_job(&self) -> Option<Job> {
         let mut state = self.lock();
         loop {
@@ -475,15 +377,6 @@ impl Writer {
                 state.writing = Some((session_id.clone(), queued.clone()));
                 return Some(Job::Board(session_id, Box::new(queued)));
             }
-            let parked = (state.parks.keys())
-                .find(|session_id| !state.queued.contains_key(*session_id) && !state.direct.contains(*session_id))
-                .cloned();
-            if let Some(session_id) = parked
-                && let Some(parks) = state.parks.remove(&session_id)
-            {
-                state.writing_parks = Some(session_id.clone());
-                return Some(Job::Parks(session_id, parks));
-            }
             let wait = state.next_retry(now);
             let (next, timeout) = self
                 .shared
@@ -491,7 +384,7 @@ impl Writer {
                 .wait_timeout(state, wait)
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
-            if timeout.timed_out() && state.queued.is_empty() && state.parks.is_empty() && state.index.is_empty() {
+            if timeout.timed_out() && state.queued.is_empty() && state.index.is_empty() {
                 state.running = false;
                 return None;
             }
@@ -507,11 +400,10 @@ pub(super) struct Direct<'a> {
 }
 
 impl Direct<'_> {
-    /// Drops the queued board and park records of the session, which is deleted, so that
-    /// nothing writes it again.
+    /// Drops the queued board of the session, which is deleted, so that nothing writes it
+    /// again.
     pub(super) fn forget(&self) {
         let mut state = self.writer.lock();
-        state.parks.remove(&self.session_id);
         Writer::drop_queued(&mut state, &self.session_id, "the session was deleted");
         drop(state);
         self.writer.shared.changed.notify_all();
@@ -546,10 +438,9 @@ impl Drop for PanicGuard<'_> {
             };
             state.failed.insert(session_id, failure);
         }
-        state.writing_parks = None;
         state.index.abandon_writing();
         state.running = false;
-        if !state.queued.is_empty() || !state.parks.is_empty() || !state.index.is_empty() {
+        if !state.queued.is_empty() || !state.index.is_empty() {
             self.writer.start(&mut state, self.store);
         }
         drop(state);

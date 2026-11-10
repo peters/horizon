@@ -22,9 +22,8 @@ says so in its question before it removes that session.
 - Candidate: each candidate that changes the Sessions dialog, its backdrop or
   `SessionStore::delete_session`.
 - Platforms: Linux, with the fixture.
-- This procedure does not test: the switch between sessions, the browser
-  profile cleanup of a board that the candidate can read, and the cloud cards
-  of a session.
+- This procedure does not test the switch between sessions or the browser
+  profile cleanup of a board that the candidate can read.
 
 ## 3. Safety
 

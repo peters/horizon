@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{ClipboardTarget, CloudWait, GitWatcher, PanelId, PanelKind, WorkspaceId};
+use horizon_core::{ClipboardTarget, GitWatcher, PanelId, PanelKind, WorkspaceId};
 
 use super::super::input;
 use crate::primary_selection::PrimarySelectionPaste;
@@ -24,8 +24,6 @@ impl HorizonApp {
 
         // Keep the viewport alive while we flush state and stop PTY-backed panels.
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        #[cfg(feature = "cloud-workspaces")]
-        self.save_cloud_prototype();
         self.begin_shutdown();
     }
 
@@ -66,11 +64,7 @@ impl HorizonApp {
         } else {
             self.sync_panel_focus_from_pointer_press(ctx);
         }
-        // Releases and asynchronous speech work must continue through dialogs.
-        self.handle_speech_input(ctx);
         if !input_blocked {
-            #[cfg(feature = "cloud-workspaces")]
-            self.handle_cloud_fullscreen_exit(ctx);
             self.handle_fullscreen_toggle(ctx);
             self.handle_shortcuts(ctx);
             self.handle_root_file_drop(ctx);
@@ -78,7 +72,7 @@ impl HorizonApp {
         }
         let had_panel_output = self.drain_panel_output();
         self.forward_terminal_clipboard_writes(ctx);
-        let browser_create_activity = self.poll_browser_create_requests(ctx) | self.poll_cloud_offers(ctx);
+        let browser_create_activity = self.poll_browser_create_requests(ctx);
         let device_activity = self.poll_device_panel_requests(ctx);
 
         self.animate_pan(ctx);
@@ -89,17 +83,6 @@ impl HorizonApp {
         self.poll_config_reload();
 
         had_panel_output || browser_create_activity || device_activity
-    }
-
-    pub(super) fn cloud_creation_open(&self) -> bool {
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            self.cloud_prototype.creation_open()
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        {
-            false
-        }
     }
 
     /// Drain terminal and browser events, promoting persistence-relevant
@@ -160,21 +143,11 @@ impl HorizonApp {
         }
     }
 
-    /// Writes a middle-click paste to its terminal. A parked cloud member takes no
-    /// input: the paste brings it into use, so it attaches at once, and is not sent.
-    /// Sent later, it could reach a program whose terminal modes are not set yet.
+    /// Writes a middle-click paste to its terminal.
     pub(super) fn deliver_primary_paste(&mut self, paste: &PrimarySelectionPaste) {
         let Some(panel) = self.board.panel_mut(paste.panel_id) else {
             return;
         };
-        match panel.cloud_wait() {
-            None => {}
-            Some(CloudWait::Parked) => {
-                self.board.focus(paste.panel_id);
-                return;
-            }
-            Some(_) => return,
-        }
         let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
             return;
         };
@@ -263,9 +236,6 @@ impl HorizonApp {
     }
 
     pub(super) fn queue_panel_restart(&mut self, panel_id: PanelId) {
-        if self.cancel_speech_target(panel_id) {
-            tracing::info!(panel_id = panel_id.0, "active dictation cancelled before panel restart");
-        }
         if !self.panels_to_restart.contains(&panel_id) {
             self.panels_to_restart.push(panel_id);
         }
@@ -304,12 +274,6 @@ impl HorizonApp {
         // A card that a saved record brings back holds its empty workspace, so it comes before
         // the cleanup that would take the workspace away. A worker thread reads the records, so
         // the cleanup waits the frames of that read instead of the frame waiting for the file.
-        #[cfg(feature = "cloud-workspaces")]
-        let records_wait = {
-            self.restore_cloud_drafts(ctx);
-            self.cloud_drafts_hold_workspaces() && !self.board.workspaces.is_empty()
-        };
-        #[cfg(not(feature = "cloud-workspaces"))]
         let records_wait = false;
         let count_before = self.board.workspaces.len();
         if !records_wait {
@@ -350,19 +314,11 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn apply_pending_workspace_changes(&mut self) {
         for panel_id in std::mem::take(&mut self.workspace_creates) {
-            #[cfg(feature = "cloud-workspaces")]
-            if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
-                continue;
-            }
             let name = format!("Workspace {}", self.board.workspaces.len() + 1);
             let workspace_id = self.board.create_workspace(&name);
             self.assign_panel_workspace_and_mark_dirty(panel_id, workspace_id);
         }
         for (panel_id, workspace_id) in std::mem::take(&mut self.workspace_assignments) {
-            #[cfg(feature = "cloud-workspaces")]
-            if self.cloud_prototype.groups.contains_panel(&self.board, panel_id) {
-                continue;
-            }
             self.assign_panel_workspace_and_mark_dirty(panel_id, workspace_id);
         }
     }
@@ -378,8 +334,6 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
         self.process_pending_detached_reattach(ui.ctx());
-        #[cfg(feature = "cloud-workspaces")]
-        self.prepare_cloud_prototype(ui.ctx());
         self.apply_pending_root_device_reveal(ui.ctx());
 
         if self.fullscreen_panel.is_some() {
@@ -389,8 +343,6 @@ impl HorizonApp {
             // viewport that is not shown during a pass, so they must keep
             // rendering while a panel is fullscreen in the root window.
             self.render_detached_viewports(ui);
-            #[cfg(feature = "cloud-workspaces")]
-            self.render_cloud_dialogs(ui.ctx());
             return;
         }
 
@@ -400,18 +352,7 @@ impl HorizonApp {
             self.render_settings(ui);
         }
 
-        #[cfg(feature = "cloud-workspaces")]
-        if self.render_fullscreen_cloud(ui) {
-            reset_canvas_scroll(ui.ctx());
-            self.render_detached_viewports(ui);
-            self.render_cloud_dialogs(ui.ctx());
-            return;
-        }
         let mut workspace_bounds = self.board.workspace_bounds_map();
-        #[cfg(feature = "cloud-workspaces")]
-        self.cloud_prototype
-            .groups
-            .extend_workspace_bounds(&self.board, &mut workspace_bounds);
         let workspace_bounds = &mut workspace_bounds;
         if !root_interaction_suppressed && !self.host_dialog_open() {
             self.handle_canvas_pan(ui);
@@ -425,26 +366,14 @@ impl HorizonApp {
         let overlay_zones = self.overlay_exclusion_zones(ui);
         self.render_workspace_backgrounds(ui, workspace_bounds, &overlay_zones);
         self.render_browser_connector_lines(ui.ctx(), self.canvas_rect(ui.ctx()), None);
-        #[cfg(feature = "cloud-workspaces")]
-        self.render_cloud_frames(ui.ctx());
         self.render_empty_state_card(ui);
         if !self.host_dialog_open() {
             self.handle_canvas_double_click(ui);
         }
-        // A header action just ran (Expand shows a closing cloud's members again): none of them
-        // may render over the disposal, not even for one frame.
-        #[cfg(feature = "cloud-workspaces")]
-        self.hide_closing_cloud_panels();
         self.render_panels(ui);
-        #[cfg(feature = "cloud-workspaces")]
-        self.render_cloud_resize_handles(ui.ctx());
-        #[cfg(feature = "cloud-workspaces")]
-        self.render_cloud_ownership(ui.ctx());
         self.render_file_drop_highlight(ui);
         self.render_preset_picker(ui);
         self.render_minimap(ui, workspace_bounds);
-        #[cfg(feature = "cloud-workspaces")]
-        self.render_cloud_controls(ui.ctx());
         self.render_canvas_hud(ui);
         self.render_detached_viewports(ui);
     }
@@ -457,7 +386,6 @@ impl HorizonApp {
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
-        self.cancel_unattended_recording();
         self.render_dir_picker(ctx);
         self.render_command_palette(ctx);
         self.render_remote_hosts_overlay(ctx);
@@ -523,20 +451,13 @@ mod startup_organization_tests;
 
 #[cfg(test)]
 mod tests {
-    use crate::test_egui::DiscardTextures;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    #[cfg(feature = "speech")]
-    use std::time::Duration;
 
     use egui::Context;
-    #[cfg(feature = "speech")]
-    use horizon_core::PanelId;
 
-    #[cfg(feature = "speech")]
-    use crate::app::HeldSpeechBinding;
     use crate::app::test_support::test_app;
 
     #[test]
@@ -553,210 +474,6 @@ mod tests {
         app.finalize_frame(&ctx, false, 0, 0);
 
         assert!(repaint_requests.load(Ordering::Relaxed) > 0);
-    }
-
-    #[cfg(feature = "speech")]
-    #[test]
-    fn empty_board_keeps_polling_preloads_and_publishes_success_in_the_drain_frame() {
-        let ctx = Context::default();
-        let (_temp, mut app) = test_app();
-        let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
-        app.speech = Some(speech);
-        app.theme_applied = true;
-        // Viewport settling has its own wall-clock tests. Keep this test scoped
-        // to the speech preload deadline instead of coupling it to that timer.
-        app.root_viewport_stabilizer = None;
-        assert!(app.board.panels.is_empty());
-
-        let mut frame = eframe::Frame::_new_kittest();
-        // Warm the context once; a context's first pass requests an immediate
-        // repaint for its own initialization, which masks later deadlines.
-        // Honor immediate follow-up passes like an integration backend until
-        // the app exposes its next delayed deadline.
-        let mut repaint_delay = Duration::ZERO;
-        for _ in 0..32 {
-            let output = ctx
-                .run_ui(egui::RawInput::default(), |ui| {
-                    eframe::App::ui(&mut app, ui, &mut frame);
-                })
-                .discard_textures();
-            repaint_delay = output
-                .viewport_output
-                .get(&egui::ViewportId::ROOT)
-                .expect("root viewport output")
-                .repaint_delay;
-            if !repaint_delay.is_zero() {
-                break;
-            }
-        }
-
-        assert!(
-            app.speech
-                .as_ref()
-                .is_some_and(super::super::speech::SpeechSystem::has_pending_preloads)
-        );
-        assert!(!repaint_delay.is_zero());
-        assert!(repaint_delay <= crate::app::speech::SPEECH_POLL_INTERVAL);
-
-        channels.complete_preload("Metal");
-        let _ = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                eframe::App::ui(&mut app, ui, &mut frame);
-            })
-            .discard_textures();
-
-        assert!(
-            !app.speech
-                .as_ref()
-                .is_some_and(super::super::speech::SpeechSystem::has_pending_preloads)
-        );
-        assert_eq!(
-            ctx.data(|data| data.get_temp::<String>(egui::Id::unique("speech_active_backend"))),
-            Some("Metal".to_string())
-        );
-    }
-
-    #[cfg(feature = "speech")]
-    #[test]
-    fn startup_chooser_drains_and_renders_preload_failure() {
-        use horizon_core::{StartupChooser, StartupPromptReason};
-
-        let ctx = Context::default();
-        let (_temp, mut app) = test_app();
-        app.startup_chooser = Some(crate::app::StartupChooserState::new(StartupChooser {
-            reason: StartupPromptReason::LiveConflict,
-            config_path: "/tmp/horizon-config.yaml".to_string(),
-            sessions: Vec::new(),
-        }));
-        let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
-        app.speech = Some(speech);
-        channels.fail_preload("model not found");
-
-        let mut frame = eframe::Frame::_new_kittest();
-        let _ = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                eframe::App::ui(&mut app, ui, &mut frame);
-            })
-            .discard_textures();
-
-        assert!(app.startup_chooser.is_some());
-        assert!(app.speech_notice.as_ref().is_some_and(|notice| {
-            notice.error && notice.message.contains("profile 1") && notice.message.contains("model not found")
-        }));
-        assert!(
-            !app.speech
-                .as_ref()
-                .is_some_and(super::super::speech::SpeechSystem::has_pending_preloads)
-        );
-    }
-
-    #[cfg(feature = "speech")]
-    #[test]
-    fn startup_loading_view_drains_and_renders_preload_failure() {
-        let ctx = Context::default();
-        let (_temp, mut app) = test_app();
-        let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
-        app.startup_receiver = Some(bootstrap_rx);
-        let (speech, channels) = crate::app::speech::SpeechSystem::with_test_preload();
-        app.speech = Some(speech);
-        channels.fail_preload("invalid model");
-
-        let mut frame = eframe::Frame::_new_kittest();
-        let _ = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                eframe::App::ui(&mut app, ui, &mut frame);
-            })
-            .discard_textures();
-
-        assert!(app.startup_receiver.is_some());
-        assert!(app.speech_notice.as_ref().is_some_and(|notice| {
-            notice.error && notice.message.contains("profile 1") && notice.message.contains("invalid model")
-        }));
-        assert!(
-            !app.speech
-                .as_ref()
-                .is_some_and(super::super::speech::SpeechSystem::has_pending_preloads)
-        );
-        drop(bootstrap_tx);
-    }
-
-    #[test]
-    fn long_speech_notice_stays_within_a_narrow_viewport() {
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(880.0, 632.0));
-        let ctx = Context::default();
-        let (_temp, mut app) = test_app();
-        app.show_speech_notice(
-            "Speech input error: preloading the `Default` speech model failed: \
-             failed to load a model from a deliberately long temporary path because the file was not found",
-            true,
-        );
-        let _ = ctx
-            .run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    ..egui::RawInput::default()
-                },
-                |ui| app.render_speech_notice(ui),
-            )
-            .discard_textures();
-        let output = ctx
-            .run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    ..egui::RawInput::default()
-                },
-                |ui| app.render_speech_notice(ui),
-            )
-            .discard_textures();
-        let bounds = output
-            .shapes
-            .iter()
-            .map(|shape| shape.shape.visual_bounding_rect())
-            .filter(|bounds| bounds.is_finite() && bounds.is_positive())
-            .reduce(egui::Rect::union)
-            .expect("speech notice should paint");
-
-        assert!(screen.expand(1.0).contains_rect(bounds), "notice bounds {bounds:?}");
-    }
-
-    #[cfg(feature = "speech")]
-    #[test]
-    fn panel_restart_cancels_only_targeted_speech_and_retains_held_binding() {
-        let (_temp, mut app) = test_app();
-        let target = PanelId(7);
-        let other = PanelId(8);
-        let chord = horizon_core::ShortcutBinding::parse("F1").expect("valid test shortcut");
-        let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
-        speech.start(crate::app::speech::SpeechSink::Panel(target), 0);
-        assert!(channels.capture_start_requested());
-        app.speech = Some(speech);
-        app.speech_engaged_profile = Some(0);
-        app.speech_held_bindings.push(HeldSpeechBinding::new(chord));
-
-        app.queue_panel_restart(other);
-
-        assert_eq!(
-            app.speech
-                .as_ref()
-                .and_then(super::super::speech::SpeechSystem::active_target),
-            Some(target)
-        );
-        assert_eq!(app.speech_engaged_profile, Some(0));
-
-        app.queue_panel_restart(target);
-        app.queue_panel_restart(target);
-
-        assert!(
-            app.speech
-                .as_ref()
-                .and_then(super::super::speech::SpeechSystem::active_target)
-                .is_none()
-        );
-        assert!(app.speech_engaged_profile.is_none());
-        assert_eq!(app.panels_to_restart, vec![other, target]);
-        assert_eq!(app.speech_held_bindings.len(), 1);
-        assert_eq!(app.speech_held_bindings[0].binding, chord);
-        assert!(app.speech_held_bindings[0].release_deadline.is_none());
     }
 }
 

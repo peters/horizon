@@ -22,8 +22,6 @@ pub enum DirPickerPurpose {
         preset: PresetConfig,
         canvas_pos: Option<[f32; 2]>,
     },
-    #[cfg(feature = "cloud-workspaces")]
-    CloudRepository,
 }
 
 pub struct DirPicker {
@@ -82,7 +80,7 @@ impl DirPicker {
                 hint_text: "Type a path or search...",
                 status_text: None,
                 empty_state,
-                footer_action_label: self.footer_action_label(),
+                footer_action_label: Some(Self::footer_action_label()),
             },
             &self.results,
             |ui, width, index, path, is_selected| render_result_row(ui, width, index, path.as_path(), is_selected),
@@ -104,18 +102,12 @@ impl DirPicker {
     fn heading(&self) -> &'static str {
         match &self.selected_purpose {
             Some(DirPickerPurpose::NewWorkspace { .. }) => "Select workspace directory",
-            #[cfg(feature = "cloud-workspaces")]
-            Some(DirPickerPurpose::CloudRepository) => "Select repository directory",
             Some(DirPickerPurpose::AddPanel { .. }) | None => "Select terminal directory",
         }
     }
 
-    fn footer_action_label(&self) -> Option<&'static str> {
-        match &self.selected_purpose {
-            #[cfg(feature = "cloud-workspaces")]
-            Some(DirPickerPurpose::CloudRepository) => None,
-            _ => Some("Skip (use default)"),
-        }
+    const fn footer_action_label() -> &'static str {
+        "Skip (use default)"
     }
 
     fn update_search(&mut self) {

@@ -15,7 +15,7 @@ owner: peters
 This procedure tests a quick drag on a panel titlebar. The drag starts with no
 pause after the press. The window system can then send the press and the
 motion after it before Horizon paints a new frame. The panel must move, and
-in an arranged cloud the panels must change places.
+in a Rows workspace the panels must change places.
 
 ## 2. Applicability
 
@@ -92,7 +92,7 @@ stall gives one batch on your fixture.
 
    Result: The panel moves each time. A drag is never lost.
 
-### 6.3 ROWS: Arranged cloud
+### 6.3 ROWS: Rows layout
 
 1. Select Rows for a workspace with two panels.
 

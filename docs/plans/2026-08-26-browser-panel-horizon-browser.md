@@ -114,7 +114,7 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 ### Consequences
 
 - Horizon owns protocol compatibility, browser discovery, and backend regression testing.
-- The crate can be tested without egui, sessions, speech, or board state.
+- The crate can be tested without egui, sessions, or board state.
 - Protocol-specific capabilities remain visible to callers.
 - Firefox rendering cannot be declared equivalent to Chromium until a real frame-delivery path passes latency and CPU gates.
 - The existing PRs are source material, not commits to merge or cherry-pick wholesale.
@@ -150,7 +150,7 @@ The engine also has value outside Horizon's board model. Keeping it inside `hori
 - Access to a user's normal Safari history, AutoFill data, cookies, or profile; Safari automation remains isolated by design.
 - Hardware video decode, WebRTC tab capture, or custom wgpu texture import.
 - Moving Horizon persistence, configuration, agent manifests, or egui code into `horizon-browser`.
-- Carrying unrelated terminal, speech, or dependency cleanup in browser engine PRs.
+- Carrying unrelated terminal or dependency cleanup in browser engine PRs.
 - Publishing `horizon-browser`, creating a registry token, or cutting a crate
   release in this implementation task.
 - A second browser-control CLI or a documented direct-manifest agent API.
@@ -539,7 +539,7 @@ Use GitHub's exact PR heads as the reference. The shared checkout currently has 
 | #302 `8ee11557` | 9 files, +2,022/−10 | CDP loopback transport, child ownership, frame slot, unit-test cases | Three large engine modules in `horizon-core` |
 | #303 `15333c16` | 19 files, +5,786/−9 | Driver state machine, command/event drain, input semantics, profile and handoff cases | 900-line `mod.rs`, 938-line session, 979-line input, Horizon-specific manifest inside the engine |
 | #304 `e022854f` | 23 files, +1,154/−95 | Panel kind, committed-state persistence, bounded board shutdown tests | Engine and product-domain changes in one PR |
-| #305 `1c4c69e1` | 28 files, +3,410/−199 | Change-driven UI rendering, one-scan input path, pointer ownership, IME, detach, performance measurements | Browser UI, lifecycle, README, research, and speech in one PR |
+| #305 `1c4c69e1` | 28 files, +3,410/−199 | Change-driven UI rendering, one-scan input path, pointer ownership, IME, detach, performance measurements | Browser UI, lifecycle, README and research in one PR |
 | #306 `042feb1f` | 5 files, +309/−50 | Browser URL-submit fixes as focused tests | PTY detach/reattach hardening in the browser delivery train; split it independently if still needed |
 | #307 `cbe84dd2` | 6 files, +148/−46 | Owner-chip width, handoff layout, forced-shutdown test, `#[must_use]` notification fix | Convergence commit and unrelated lock/dependency drift |
 
@@ -596,7 +596,7 @@ Before opening each PR, measure source/test file count and non-generated changed
 15. `feat/browser-panel-lifecycle`
     - Retry, session switching, app exit, profile-lock release, and exact-process cleanup.
 
-Keep speech/dictation integration and unrelated PTY detach hardening as separate follow-ups after the browser panel is stable.
+Keep unrelated PTY detach hardening as a separate follow-up after the browser panel is stable.
 
 ### Track D — Firefox BiDi
 
@@ -660,10 +660,10 @@ Run the complete repository matrix on the exact commit in every implementation P
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
 RUSTFLAGS="-D warnings" cargo test --workspace
-RUSTFLAGS="-D warnings" cargo test --workspace --features speech
-cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
-cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
+RUSTFLAGS="-D warnings" cargo test --workspace
+cargo clippy --all-targets --features trace-profiling -- -D warnings
+cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
 ```
 
 Add crate-focused contract tests to shorten iteration, but never substitute them for the full pre-push matrix.

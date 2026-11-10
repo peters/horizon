@@ -1,24 +1,10 @@
-//! Lightweight platform cursor query, desktop text injection, and global hotkeys.
+//! Lightweight platform cursor query.
 //!
 //! Cursor position returns global (screen-space) coordinates without requiring
 //! special permissions.  On macOS this deliberately avoids the Accessibility
 //! subsystem — only Core Graphics is used.
 
 #![forbid(unsafe_code)]
-
-mod accessibility;
-mod hotkey;
-mod inject;
-mod os_focus;
-
-pub use accessibility::{
-    accessibility_permission_granted, capture_focused_accessible_target, insert_text_into_focused_accessible,
-    insert_text_into_focused_accessible_for_window, release_focused_accessible_target,
-    request_accessibility_permission,
-};
-pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
-pub use inject::InjectError;
-pub use os_focus::{current_input_focus_window, current_process_has_os_focus, current_process_has_os_focus_fresh};
 
 /// Query the current global cursor position in screen (root-window)
 /// coordinates.  Returns `None` when the platform backend is

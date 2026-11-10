@@ -18,7 +18,7 @@ The focused fixture failed with the old implementation and passed with the corre
 The native smoke used the frozen executable above.
 The runtime patch hash covers the lifecycle implementation and its new unit fixture.
 
-The Linux speech shard stopped after the Tab focus test exceeded its time limit.
+The Linux shard stopped after the Tab focus test exceeded its time limit.
 [CI run 37811802758](https://github.com/peters/horizon/actions/runs/37811802758) captured thread stacks with argument and entry values disabled.
 The test thread reached the end of the test and destroyed its terminal harness.
 Its stack showed this sequence:

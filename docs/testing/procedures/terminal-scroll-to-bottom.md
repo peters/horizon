@@ -20,8 +20,8 @@ grip keeps its own area.
 
 - Candidate: a Horizon build that contains the scrollbar clearance change.
 - Platforms: Linux, with the local device fixture.
-- This procedure does not test: the wheel over the terminal body, the canvas
-  scroll chain, or the cloud corner grip.
+- This procedure does not test: the wheel over the terminal body or the canvas
+  scroll chain.
 
 ## 3. Safety
 

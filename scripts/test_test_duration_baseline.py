@@ -59,12 +59,12 @@ class ParseStreamTests(unittest.TestCase):
         # last suite to start is not the suite of the next test, so neither the
         # crate nor the kind of a test comes from it.
         results, unattributed = baseline.parse_stream(stream(
-            suite_event("horizon-cloud-worker", "horizon_cloud_worker"),
+            suite_event("horizon-browser-cli", "horizon_browser_cli"),
             suite_event("horizon-ui", "horizon", kind="bin"),
             test_event("horizon-ui::horizon$app::press_frame::moves", 1.0),
-            test_event("horizon-cloud-worker::horizon_cloud_worker$bootstrap::init", 2.0),
+            test_event("horizon-browser-cli::horizon_browser_cli$bootstrap::init", 2.0),
         ))
-        self.assertEqual([r.crate for r in results], ["horizon-ui", "horizon-cloud-worker"])
+        self.assertEqual([r.crate for r in results], ["horizon-ui", "horizon-browser-cli"])
         self.assertEqual([r.kind for r in results], ["bin", "lib"])
         self.assertEqual([r.short_name for r in results],
                          ["app::press_frame::moves", "bootstrap::init"])

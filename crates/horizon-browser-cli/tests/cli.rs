@@ -906,19 +906,9 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(43));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(27));
     assert!(tools.to_string().contains("browser_downloads"));
-    assert!(tools.to_string().contains("cloud_create"));
-    assert!(tools.to_string().contains("cloud_delete"));
-    assert!(tools.to_string().contains("cloud_exec"));
-    assert!(tools.to_string().contains("cloud_agent_message"));
-    assert!(tools.to_string().contains("cloud_agent_read"));
-    assert!(tools.to_string().contains("tailnet_api_credential"));
     assert!(tools.to_string().contains("browser_zoom"));
-    assert!(tools.to_string().contains("cloud_image_destination"));
-    assert!(tools.to_string().contains("cloud_companion_ensure_ready"));
-    assert!(tools.to_string().contains("cloud_companion_uncheck"));
-    assert!(tools.to_string().contains("cloud_list"));
     assert!(tools.to_string().contains("browser_network_watch"));
     assert!(tools.to_string().contains("browser_http_auth"));
     assert!(tools.to_string().contains("browser_resize"));

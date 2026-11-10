@@ -31,25 +31,6 @@ GIT_ENV = {
 }
 
 
-def paths_in_push_trigger(text):
-    """The `on.push.paths` entries of a workflow, read without a YAML parser."""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip() != "paths:":
-            continue
-        indent = len(line) - len(line.lstrip())
-        found = []
-        for entry in lines[index + 1:]:
-            if not entry.strip() or entry.strip().startswith("#"):
-                continue
-            if len(entry) - len(entry.lstrip()) <= indent:
-                break
-            if entry.strip().startswith("- "):
-                found.append(entry.strip()[2:].strip().strip("'\""))
-        return found
-    return []
-
-
 class DetectionTests(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp(prefix="detect-ci-inputs-"))
@@ -88,11 +69,9 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return dict(line.split("=", 1) for line in result.stdout.split())
 
-    def assert_gates(self, outputs, *, release, macos="false", rust="true", speech="true",
-                     packaging="false", vnc="false"):
+    def assert_gates(self, outputs, *, release, macos="false", rust="true", vnc="false"):
         self.assertEqual(outputs, {"release_inputs": release,
                                    "macos_release_inputs": macos, "rust_inputs": rust,
-                                   "speech_inputs": speech, "packaging_inputs": packaging,
                                    "vnc_pin": vnc})
 
     def test_a_new_decoder_rev_qualifies_the_pinned_decoder(self):
@@ -111,8 +90,8 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                # ci.yml is a release input; both paths also feed the browser image step.
-                self.assert_gates(self.detect(), vnc="true", packaging="true",
+                # ci.yml is a release input; this script is not.
+                self.assert_gates(self.detect(), vnc="true",
                                   release="true" if path.endswith("ci.yml") else "false")
 
     def test_a_manifest_the_detector_cannot_read_qualifies_the_decoder(self):
@@ -129,7 +108,7 @@ class DetectionTests(unittest.TestCase):
         self.assert_gates(self.detect(base=pinned), release="true", vnc="false")
 
     def test_documentation_only_change_gates_the_release_builds_off(self):
-        self.commit("docs/architecture/maintainability.md", "README.md")
+        self.commit("docs/plan.md", "README.md")
         self.assert_gates(self.detect(), release="false")
 
     def test_source_and_manifest_changes_gate_the_release_matrix(self):
@@ -150,54 +129,13 @@ class DetectionTests(unittest.TestCase):
                 self.commit(path)
                 self.assert_gates(self.detect(), release="false")
 
-    def test_packaging_changes_build_the_browser_vm_image(self):
-        for paths in [["packaging/browser-vm/Dockerfile"],
-                      ["packaging/browser-vm/entrypoint.sh", "docs/casting.md"],
-                      ["crates/horizon-browser-cli/src/main.rs"],
-                      ["crates/horizon-browser/src/host.rs", "Cargo.lock"],
-                      [".github/workflows/browser-vm-image.yml"],
-                      [".github/workflows/ci.yml"],
-                      ["scripts/detect-ci-build-inputs.sh"]]:
-            with self.subTest(paths=paths):
-                self.setUp()
-                self.commit(*paths)
-                self.assertEqual(self.detect(event="pull_request")["packaging_inputs"], "true")
-
-    def test_other_paths_leave_the_browser_vm_image_alone(self):
-        for paths in [["crates/horizon-ui/src/app/mod.rs"],
-                      ["packaging/linux/horizon.desktop"],
-                      ["docs/testing/procedures/browser-vm-image.md"],
-                      [".github/workflows/release.yml"]]:
-            with self.subTest(paths=paths):
-                self.setUp()
-                self.commit(*paths)
-                self.assertEqual(self.detect(event="pull_request")["packaging_inputs"], "false")
-
-    def test_the_image_gate_covers_every_publish_workflow_path(self):
-        text = (ROOT / ".github" / "workflows" / "browser-vm-image.yml").read_text()
-        patterns = paths_in_push_trigger(text)
-        self.assertTrue(patterns, "the publish workflow names no path")
-        for pattern in patterns:
-            with self.subTest(pattern=pattern):
-                self.setUp()
-                self.commit(pattern.replace("/**", "/sample"))
-                self.assertEqual(self.detect(event="pull_request")["packaging_inputs"], "true")
-
-    def test_a_push_builds_the_image_only_for_a_packaging_input(self):
-        self.commit("docs/casting.md")
-        self.assertEqual(self.detect(event="push")["packaging_inputs"], "false")
-        self.commit("packaging/browser-vm/Dockerfile")
-        self.assertEqual(self.detect(event="push")["packaging_inputs"], "true")
-        self.assertEqual(self.detect(event="workflow_dispatch")["packaging_inputs"], "true")
-
     def test_workflow_and_asset_changes_gate_the_release_matrix(self):
-        for path, packaging in [(".github/workflows/ci.yml", "true"),
-                                (".github/workflows/release.yml", "false"),
-                                ("assets/icons/icon-512.png", "false")]:
+        for path in [".github/workflows/ci.yml", ".github/workflows/release.yml",
+                     "assets/icons/icon-512.png"]:
             with self.subTest(path=path):
                 self.setUp()
                 self.commit(path)
-                self.assert_gates(self.detect(), release="true", packaging=packaging,
+                self.assert_gates(self.detect(), release="true",
                                   vnc="true" if path.endswith("ci.yml") else "false")
 
     def test_artifact_build_definition_builds_macos_at_once(self):
@@ -232,12 +170,12 @@ class DetectionTests(unittest.TestCase):
         for base in ["", ZERO_SHA, "0" * 38, "deadbeef" * 5, "refs/heads/missing"]:
             with self.subTest(base=base):
                 self.assert_gates(self.detect(base=base), release="true", macos="true",
-                                  packaging="true", vnc="true")
+                                  vnc="true")
 
     def test_workflow_dispatch_builds_everything_from_a_resolvable_base(self):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="workflow_dispatch"), release="true",
-                          macos="true", packaging="true", vnc="true")
+                          macos="true", vnc="true")
 
     def test_pull_request_outside_rust_skips_the_rust_jobs(self):
         for paths in [["docs/plan.md"], ["README.md", "AGENTS.md"],
@@ -253,10 +191,9 @@ class DetectionTests(unittest.TestCase):
     def test_pull_request_with_any_other_path_runs_the_rust_jobs(self):
         for paths in [["crates/horizon-ui/src/lib.rs"], ["crates/horizon-ui/README.md"],
                       ["Cargo.lock"], [".github/workflows/ci.yml"],
-                      ["scripts/ci-cargo-test-shard.sh"], ["examples/cloud.yml"],
-                      ["skills/horizon-browser/SKILL.md"], [".horizon/version"],
-                      ["docs/architecture/remote-device-testing.schema.json"],
-                      ["docs/features/native-smoke.md"], ["docs/plan.md", "crates/x/src/lib.rs"],
+                      ["scripts/ci-cargo-test-shard.sh"], [".cargo/config.toml"],
+                      ["skills/horizon-browser/SKILL.md"],
+                      ["docs/plan.md", "crates/x/src/lib.rs"],
                       ["assets/fonts/regular.ttf"], ["rust-toolchain.toml"]]:
             with self.subTest(paths=paths):
                 self.setUp()
@@ -290,85 +227,7 @@ class DetectionTests(unittest.TestCase):
         self.commit("docs/plan.md")
         self.assert_gates(self.detect(event="push"), release="false", rust="true")
         self.assert_gates(self.detect(event="pull_request", base=ZERO_SHA),
-                          release="true", macos="true", rust="true", packaging="true", vnc="true")
-
-    def write(self, path, text):
-        target = self.repo / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
-        self.git("add", "-A")
-        self.git("commit", "-m", f"write {path}")
-        return self.git("rev-parse", "HEAD")
-
-    def speech_inputs(self, base=None):
-        return self.detect(event="pull_request", base=base)["speech_inputs"]
-
-    def test_pull_request_speech_paths_run_the_speech_tests(self):
-        for paths in [["crates/horizon-ui/src/app/speech/mod.rs"],
-                      ["crates/horizon-ui/src/app/panels/mod.rs"],
-                      ["crates/horizon-ui/README.md"],
-                      ["crates/horizon-core/src/speech_config.rs"],
-                      ["crates/horizon-core/src/dictation.rs"],
-                      ["crates/horizon-x/src/transcribe/mod.rs"],
-                      ["crates/horizon-ui/build.rs"], ["Cargo.toml"], ["Cargo.lock"],
-                      ["crates/horizon-cloud/Cargo.toml"], ["rust-toolchain.toml"],
-                      [".cargo/config.toml"], [".github/workflows/ci.yml"],
-                      ["scripts/ci-cargo-test-shard.sh"],
-                      ["scripts/install-ci-ubuntu-dependencies.sh"],
-                      ["docs/plan.md", "crates/horizon-ui/src/app/speech/capture.rs"]]:
-            with self.subTest(paths=paths):
-                self.setUp()
-                self.commit(*paths)
-                self.assertEqual(self.speech_inputs(), "true")
-
-    def test_pull_request_without_speech_inputs_skips_the_speech_tests(self):
-        for paths in [["crates/horizon-core/src/board.rs"],
-                      ["crates/horizon-core/src/transcript.rs"],
-                      ["crates/horizon-cloud/src/lib.rs", "docs/speech.md"],
-                      ["assets/plugins/codex/skills/horizon-speech/SKILL.md"],
-                      ["scripts/install-ci-video-build-tools.sh"], ["docs/plan.md"]]:
-            with self.subTest(paths=paths):
-                self.setUp()
-                self.commit(*paths)
-                self.assertEqual(self.speech_inputs(), "false")
-
-    def test_a_file_that_names_the_speech_feature_runs_the_speech_tests(self):
-        path = "crates/horizon-core/src/panel.rs"
-        for before, after in [
-            ('#[cfg(feature = "speech")]\nfn a() {}\n', '#[cfg(feature = "speech")]\nfn b() {}\n'),
-            ("fn a() {}\n", '#[cfg(all(test, feature="speech"))]\nfn a() {}\n'),
-            ('#[cfg_attr(not(feature = "speech"), allow(dead_code))]\nfn a() {}\n', "fn a() {}\n"),
-            ('const GPU: bool = cfg!(feature = "speech-cuda");\n', "const GPU: bool = true;\n"),
-            ('let cuda = env::var_os("CARGO_FEATURE_SPEECH_CUDA");\n', "let cuda = None;\n"),
-        ]:
-            with self.subTest(before=before, after=after):
-                self.setUp()
-                self.base = self.write(path, before)
-                self.write(path, after)
-                self.assertEqual(self.speech_inputs(), "true")
-
-    def test_a_speech_file_elsewhere_does_not_mark_other_paths(self):
-        self.base = self.write("crates/horizon-core/src/panel.rs",
-                               '#[cfg(feature = "speech")]\nfn a() {}\n')
-        self.write("crates/horizon-core/src/board.rs", "// speech is opt-in\nfn c() {}\n")
-        self.assertEqual(self.speech_inputs(), "false")
-
-    def test_unusual_paths_that_name_the_speech_feature_run_the_speech_tests(self):
-        for path in ['crates/horizon-core/src/we"ird].rs', "crates/horizon-core/src/$(x)\u00e9.rs",
-                     "crates/horizon-core/src/back\\slash [x]*.rs", "crates/horizon-core/src/s p.rs"]:
-            with self.subTest(path=path):
-                self.setUp()
-                self.base = self.write(path, '#[cfg(feature = "speech")]\nfn a() {}\n')
-                self.write(path, "fn a() {}\n")
-                self.assertEqual(self.speech_inputs(), "true")
-                self.write("crates/horizon-core/src/other [x]*.rs", "fn o() {}\n")
-                self.assertEqual(self.speech_inputs(base="HEAD~1"), "false")
-
-    def test_pushes_dispatches_and_unknown_bases_run_the_speech_tests(self):
-        self.commit("crates/horizon-core/src/board.rs")
-        self.assertEqual(self.detect(event="push")["speech_inputs"], "true")
-        self.assertEqual(self.detect(event="workflow_dispatch")["speech_inputs"], "true")
-        self.assertEqual(self.speech_inputs(base=ZERO_SHA), "true")
+                          release="true", macos="true", rust="true", vnc="true")
 
     def test_wrong_argument_count_fails_without_output(self):
         for arguments in [[], ["push"], ["push", "HEAD"], ["push", "HEAD", "HEAD", "extra"]]:
@@ -398,8 +257,7 @@ class WorkflowGateTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         jobs = jobs_of(workflow)
         self.assertIn("rust_inputs: ${{ steps.changes.outputs.rust_inputs }}", jobs["changes"])
-        self.assertIn("packaging_inputs: ${{ steps.changes.outputs.packaging_inputs }}",
-                      jobs["changes"])
+        self.assertIn("vnc_pin: ${{ steps.changes.outputs.vnc_pin }}", jobs["changes"])
         self.assertIn("detect-ci-build-inputs.sh", jobs["changes"])
         for name in RUST_JOBS:
             with self.subTest(job=name):
@@ -411,48 +269,13 @@ class WorkflowGateTests(unittest.TestCase):
                 )
         self.assertNotIn("needs.repo-checks.outputs", workflow)
 
-    def test_the_image_lane_builds_only_when_packaging_changes(self):
-        jobs = jobs_of(WORKFLOW.read_text())
-        self.assertIn("    needs: changes\n", jobs["browser-vm-image"])
-        self.assertIn(
-            "    if: ${{ !cancelled() && needs.changes.outputs.packaging_inputs == 'true' }}\n",
-            jobs["browser-vm-image"],
+    def test_only_the_kept_lanes_remain(self):
+        jobs = jobs_of(WORKFLOW.read_text().split("\njobs:\n", 1)[1])
+        self.assertEqual(
+            set(jobs),
+            {"repo-checks", "changes", "browser-engine", "device",
+             "browser-harness-tests", "clippy", "rust-test", "rust-artifacts"},
         )
-        self.assertIn("docker build", jobs["browser-vm-image"])
-        self.assertIn("packaging/browser-vm/Dockerfile", jobs["browser-vm-image"])
-        # Build only: the publish workflow owns the digest on main.
-        self.assertNotIn("docker push", jobs["browser-vm-image"])
-
-    def test_only_the_linux_speech_leg_skips_and_only_on_a_pull_request(self):
-        jobs = jobs_of(WORKFLOW.read_text())
-        self.assertIn("speech_inputs: ${{ steps.changes.outputs.speech_inputs }}",
-                      jobs["changes"])
-        self.assertIn(
-            "      HORIZON_CI_SKIP_SPEECH: ${{ github.event_name == 'pull_request' && "
-            "matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && "
-            "needs.changes.outputs.speech_inputs == 'false' }}\n",
-            jobs["rust-test"],
-        )
-        # The saver leg keeps its cache key and main-only save.
-        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}",
-                      jobs["rust-test"])
-
-    def test_every_step_of_the_linux_speech_leg_checks_the_skip_flag(self):
-        steps = jobs_of(WORKFLOW.read_text())["rust-test"].split("\n    steps:\n", 1)[1]
-        steps = re.split(r"(?m)^      - ", steps)[1:]
-        self.assertGreater(len(steps), 5)
-        for step in steps:
-            with self.subTest(step=step.splitlines()[0]):
-                condition = re.search(r"(?m)^(?:        )?if: (.*)$", step)
-                condition = condition.group(1) if condition else ""
-                if ("startsWith(matrix.os, 'macos-')" in condition
-                        or "matrix.shard == 'libs'" in condition
-                        or "matrix.shard == 'libs-extra'" in condition):
-                    continue
-                if "Skip the speech tests" in step:
-                    self.assertEqual(condition, "env.HORIZON_CI_SKIP_SPEECH == 'true'")
-                    continue
-                self.assertIn("env.HORIZON_CI_SKIP_SPEECH != 'true'", condition)
 
     def test_ci_builds_macos_only_for_artifact_build_inputs_or_a_dispatch(self):
         job = jobs_of(WORKFLOW.read_text())["rust-artifacts"]

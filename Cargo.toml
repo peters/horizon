@@ -1,18 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/horizon-app-testing",
-    "crates/horizon-app-provider",
-    "crates/horizon-app-runtime",
-    "crates/horizon-app-process",
-    "crates/horizon-app-host",
 
-    "crates/horizon-cast",
-    "crates/horizon-chromecast",
-    "crates/horizon-media",
-    "crates/horizon-cloud-worker",
-    "crates/horizon-cloud-protocol",
-    "crates/horizon-cloud",
     "crates/horizon-device",
     "crates/horizon-device-vnc",
     "crates/horizon-browser",
@@ -51,26 +40,7 @@ struct_excessive_bools = "allow"
 assert_is_empty = "allow"
 
 [workspace.dependencies]
-horizon-app-testing = { path = "crates/horizon-app-testing", version = "0.2.7" }
-horizon-app-provider = { path = "crates/horizon-app-provider", version = "0.2.7" }
-horizon-app-runtime = { path = "crates/horizon-app-runtime", version = "0.2.7" }
-horizon-app-process = { path = "crates/horizon-app-process", version = "0.2.7" }
-horizon-app-host = { path = "crates/horizon-app-host", version = "0.2.7" }
-quick-xml = "0.42.0"
-# Binary property lists and SRP group arithmetic for modern casting.
-plist = "1.10.1"
-mdns-sd = "0.21.4"
-horizon-cast = { path = "crates/horizon-cast" }
-horizon-media = { path = "crates/horizon-media" }
-# Cast v2 receivers present self-signed TLS certificates on port 8009.
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
-rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
-crypto-bigint = { version = "0.7.5", default-features = false, features = ["zeroize"] }
 ring = "0.17.14"
-# AES-128 block cipher for Cast Streaming frame encryption (counter mode on top).
-aes = "0.9.3"
-ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
-horizon-cloud-protocol = { path = "crates/horizon-cloud-protocol", version = "0.2.7" }
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
 vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "773ec2351241c80bbab88ffedae73f1972e0a4c1" }
 # The live VNC session behind the native Device viewer, usable by any UI.
@@ -99,7 +69,6 @@ png = "0.18.1"
 # x86_64 video builds require NASM; encoding runs on a dedicated thread.
 rav1e = { version = "0.8.1", default-features = false, features = ["asm", "threading"] }
 base64 = "0.23.1"
-flate2 = "1.1.10"
 # Selenium remote file transfer uses a one-file ZIP envelope.
 zip = { version = "9.0.0", default-features = false }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -107,7 +76,6 @@ profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.151"
-semver = "1.0.28"
 # Preserve user-owned Grok settings and detect MCP table collisions before registration.
 toml_edit = "0.25.15"
 url = "2.5.8"
@@ -148,10 +116,6 @@ wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
 # Wayland socket.
 wayland-server = "0.31.14"
 tempfile = "3.27.0"
-# Cloud source material archives, streamed from verified LFS objects.
-tar = "0.4.46"
-# Unicode categories for git-lfs pattern validation, matching the worker's Python check.
-unicode-general-category = "1.1.0"
 # Browser manifests need replace-existing semantics without exposing a gap to
 # lock-free readers.
 atomicwrites = "0.4.4"
@@ -159,33 +123,11 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 libc = "0.2.189"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
-# Interface addresses and netmasks on Linux, macOS and Windows without unsafe
-# code in Horizon crates; Local Network Bridge derives its scope from them.
-if-addrs = "0.15.0"
-# DNS wire format for Local Network Bridge's one-shot mDNS/DNS-SD queries; a
-# parser and builder only, with no daemon or responder.
-simple-dns = "0.13.0"
-# Selects the bridged interface for Local Network Bridge's multicast queries.
-socket2 = "0.6.5"
 git2 = { version = "0.21", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
-atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio", "zbus"] }
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
-axuielement = { version = "0.10.0", default-features = false, features = ["async"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "libc"] }
-global-hotkey = "0.9.0"
-# Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
-# -sys crate vendors the whole C++ tree, so cargo builds it from source —
-# needs only CMake + a C++ compiler, no git submodules.
-transcribe-cpp = "0.4.0"
-# The `pulseaudio` feature (Linux-only effect) adds cpal's PulseAudio host, which
-# `default_host()` prefers over raw ALSA when a PulseAudio/PipeWire (pipewire-pulse)
-# server socket exists. Capture then shares the microphone with every other app
-# (Discord, calls, ...) instead of failing with a busy raw-ALSA device; without a
-# sound server it falls back to raw ALSA exactly as before.
-cpal = { version = "0.18.2", features = ["pulseaudio"] }
 
 [profile.release]
 # Thin LTO: fat LTO's whole-program codegen dominated release builds
@@ -206,12 +148,6 @@ strip = true
 # from 109 s to 168 s for that 9.5 minute saving. See
 # docs/testing/reports/2026-10-24-test-suite-durations.md.
 opt-level = 1
-
-[profile.test.package.curve25519-dalek]
-opt-level = 3
-
-[profile.test.package.ed25519-dalek]
-opt-level = 3
 
 [profile.test.package.ring]
 opt-level = 3

@@ -106,23 +106,11 @@ pub fn show(
         ui.label(RichText::new(note).size(10.5).color(theme::FG_SOFT()));
     }
 
-    if let Some((sent, total)) = browser.cloud_upload_progress() {
-        // The total is zero until the transfer thread read the file sizes.
-        let text = match sent.saturating_mul(100).checked_div(total) {
-            Some(percent) => format!("Uploading files to the cloud browser… {percent}%"),
-            None => "Uploading files to the cloud browser…".to_owned(),
-        };
-        ui.label(RichText::new(text).size(10.5).color(theme::FG_SOFT()));
-    }
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
         && !browser.frame_slot.file_chooser().supported()
     {
-        let message = if browser.accepts_cloud_drops() {
-            "Upload selection is unavailable in this cloud browser. Drop the files on the page instead."
-        } else if browser.is_cloud() && browser.remote_target().is_some() {
+        let message = if browser.remote_target().is_some() {
             "A remote device of a provider cannot take files from this computer."
-        } else if browser.is_cloud() {
-            "This cloud browser cannot take files from this computer. Rebuild the cloud with a newer image."
         } else {
             "Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support."
         };

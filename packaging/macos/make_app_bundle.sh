@@ -15,9 +15,6 @@ Options:
   --install                 Copy the built bundle into the applications directory.
   --applications-dir <dir>  Destination for --install (default: \$APPLICATIONS_DIR or /Applications).
   --version <version>       Set version of Horizon build.
-  --speech                  Bundle a speech-enabled build: adds the microphone
-                            usage description the OS requires to prompt for
-                            microphone access. Omit for plain builds.
   -h                        Show this help message and exit.
 EOF
 }
@@ -25,7 +22,6 @@ EOF
 INSTALL=0
 APPLICATIONS_DIR="${APPLICATIONS_DIR:-/Applications}"
 VERSION=""
-SPEECH=0
 
 resolve_path() {
   local path="$1"
@@ -55,7 +51,6 @@ read_binary_minimum_macos_version() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install) INSTALL=1; shift ;;
-    --speech) SPEECH=1; shift ;;
     --applications-dir)
       [[ $# -gt 1 ]] || { printf 'Error: --applications-dir requires an argument\n' >&2; exit 1; }
       APPLICATIONS_DIR="$2"; shift 2 ;;
@@ -103,15 +98,6 @@ if [[ -n "$VERSION" ]]; then
 "
 fi
 
-# Only a speech-enabled bundle may declare microphone use: a plain build
-# has no capture code, and an unused usage string misrepresents the app.
-SPEECH_FIELDS=""
-if [[ "$SPEECH" -eq 1 ]]; then
-  SPEECH_FIELDS="  <key>NSMicrophoneUsageDescription</key>
-  <string>Horizon uses the microphone for push-to-talk speech input into terminal panels and focused fields in other apps.</string>
-"
-fi
-
 cat > "$LOCAL_APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -136,7 +122,7 @@ ${VERSION_FIELDS}  <key>CFBundleExecutable</key>
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
-${SPEECH_FIELDS}</dict>
+</dict>
 </plist>
 PLIST
 

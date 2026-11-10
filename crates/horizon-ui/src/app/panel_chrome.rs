@@ -4,7 +4,6 @@ use horizon_core::{AgentStatus, PanelId, PanelKind, SshConnectionStatus, agent_d
 use crate::theme;
 
 use super::RenameEditAction;
-use super::speech::MicState;
 use super::util::{format_compact_count, short_session_id, usize_to_f32};
 
 use crate::badge;
@@ -28,26 +27,12 @@ pub(super) struct PanelChrome<'a> {
     /// Current agent session id; when `Some` a short-id badge is painted in
     /// the titlebar so the panel can be matched against rebind/resume lists.
     pub session_id: Option<&'a str>,
-    /// Speech mic control; `None` when speech input is not enabled.
-    pub mic: Option<MicControl>,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct MicControl {
-    pub rect: Rect,
-    pub hovered: bool,
-    pub state: MicState,
 }
 
 impl PanelChrome<'_> {
     /// Leftmost titlebar control: badges and the title stop left of this.
-    fn controls_anchor(&self) -> Rect {
-        if cfg!(target_os = "linux") {
-            // Reserve the casting control beside the microphone.
-            self.close_rect.translate(egui::vec2(-52.0, 0.0))
-        } else {
-            self.mic.map_or(self.close_rect, |mic| mic.rect)
-        }
+    const fn controls_anchor(&self) -> Rect {
+        self.close_rect
     }
 }
 
@@ -115,7 +100,6 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         PanelKind::Editor => ("MD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::GitChanges => ("GC", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
         PanelKind::Usage => ("US", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
-        PanelKind::SetupBoard => ("SB", panel_kind_label_color(theme::ACCENT(), focused)),
         PanelKind::Browser => ("WEB", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
         PanelKind::Device => ("VNC", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
         PanelKind::Codex
@@ -252,9 +236,6 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
-    if let Some(mic) = chrome.mic {
-        paint_mic_control(ui, &painter, mic);
-    }
     if chrome.agent_status == AgentStatus::Working {
         paint_working_indicator(
             ui,
@@ -266,70 +247,6 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
     paint_close_control(&painter, chrome.close_rect, chrome.close_hovered);
-}
-
-/// Painter-drawn microphone glyph: capsule body, U-shaped cradle, and stem.
-/// Pulses red while recording and amber while a transcription is in flight.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "pulse alpha math stays within [0, 255]"
-)]
-fn paint_mic_control(ui: &egui::Ui, painter: &egui::Painter, mic: MicControl) {
-    // Cradle polyline offsets (radius 4.5, 22.5° steps) — precomputed so the
-    // hot chrome path allocates nothing per frame.
-    const CRADLE_OFFSETS: [Vec2; 9] = [
-        Vec2::new(4.5, 0.0),
-        Vec2::new(4.157, 1.722),
-        Vec2::new(3.182, 3.182),
-        Vec2::new(1.722, 4.157),
-        Vec2::new(0.0, 4.5),
-        Vec2::new(-1.722, 4.157),
-        Vec2::new(-3.182, 3.182),
-        Vec2::new(-4.157, 1.722),
-        Vec2::new(-4.5, 0.0),
-    ];
-    let center = mic.rect.center();
-    let time = ui.input(|input| input.time);
-    let pulse = (0.5 + 0.5 * (time * 5.0).sin() as f32).clamp(0.0, 1.0);
-
-    let color = match mic.state {
-        MicState::Idle => {
-            if mic.hovered {
-                theme::FG()
-            } else {
-                theme::alpha(theme::FG_DIM(), 140)
-            }
-        }
-        MicState::Recording => {
-            let base = Color32::from_rgb(232, 72, 72);
-            painter.circle_stroke(
-                center,
-                9.0 + pulse * 2.0,
-                Stroke::new(1.2_f32, theme::alpha(base, 90 + (pulse * 120.0) as u8)),
-            );
-            base
-        }
-        MicState::Busy => theme::alpha(theme::PALETTE_YELLOW(), 140 + (pulse * 100.0) as u8),
-    };
-
-    // Body capsule.
-    painter.rect_filled(
-        Rect::from_center_size(center + Vec2::new(0.0, -2.5), Vec2::new(5.0, 8.0)),
-        CornerRadius::same(3),
-        color,
-    );
-    // Cradle: semicircle under the body.
-    let cradle_center = center + Vec2::new(0.0, 0.5);
-    let cradle_stroke = Stroke::new(1.3_f32, color);
-    for pair in CRADLE_OFFSETS.windows(2) {
-        painter.line_segment([cradle_center + pair[0], cradle_center + pair[1]], cradle_stroke);
-    }
-    // Stem.
-    painter.line_segment(
-        [center + Vec2::new(0.0, 5.0), center + Vec2::new(0.0, 7.0)],
-        Stroke::new(1.3_f32, color),
-    );
 }
 
 fn paint_close_control(painter: &egui::Painter, close_rect: Rect, close_hovered: bool) {
@@ -659,8 +576,8 @@ pub(super) fn panel_title_content_rect(chrome: &PanelChrome<'_>) -> Rect {
     let titlebar = chrome.titlebar_rect;
     let left = title_start_x(chrome);
     // Same right-side boundary as the painted title: the badge cluster (history
-    // meter, SSH, mic) narrowed to the session badge's left edge
-    // when the badge is painted.
+    // meter, SSH) narrowed to the session badge's left edge when the badge is
+    // painted.
     let mut right = badges_left_boundary(chrome);
     if let Some(badge) = session_badge_rect(chrome) {
         right = badge.min.x;
@@ -744,7 +661,6 @@ mod tests {
             workspace_accent: Some(Color32::from_rgb(137, 180, 250)),
             ssh_status: None,
             session_id: None,
-            mic: None,
         }
     }
 

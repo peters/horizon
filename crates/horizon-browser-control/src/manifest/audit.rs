@@ -190,17 +190,11 @@ fn append_at(path: &Path, entry: &BrowserAuditEntry) -> std::io::Result<()> {
 
 /// Appends one JSON line to a private journal that keeps the browser audit's private
 /// permissions, lock, segment bound and one-step rotation.
-pub(super) fn append_record_at<T: Serialize>(path: &Path, record: &T) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let _lock = ManifestLock::acquire(path)?;
-    let mut file = open_private_append(path)?;
-    let encoded = encode_record(record)?;
-    write_entry(&mut file, path, &encoded, MAX_AUDIT_SEGMENT_BYTES)
-}
-
-fn append_at_with_limit(path: &Path, entry: &BrowserAuditEntry, max_segment_bytes: u64) -> std::io::Result<()> {
+pub(super) fn append_at_with_limit(
+    path: &Path,
+    entry: &BrowserAuditEntry,
+    max_segment_bytes: u64,
+) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

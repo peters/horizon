@@ -131,7 +131,7 @@ fn paint_control(ui: &Ui, rect: Rect, response: &Response, interactive: bool, zo
     }
 }
 
-/// The corner grip of panels and clouds: dots that brighten to the accent over a soft
+/// The corner grip of the panels: dots that brighten to the accent over a soft
 /// backing while the grip is hovered or dragged.
 pub(in crate::app) fn paint_grip(ui: &Ui, rect: Rect, active: bool, zoom: f32) {
     let (centers, radius) = grip_dots(rect, zoom);

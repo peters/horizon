@@ -14,15 +14,14 @@ owner: peters
 
 This procedure makes sure that a person can remove a workspace that holds
 nothing from the menu of its sidebar row, that the menu is fully visible, and
-that a workspace with a panel, a cloud or a remote workspace cannot be removed
-this way.
+that a workspace with a panel or a remote workspace cannot be removed this
+way.
 
 ## 2. Applicability
 
 - Candidate: a build whose workspace row menu offers **Remove Empty Workspace**.
 - Platforms: Linux and macOS.
-- This procedure does not test: what **New cloud** leaves behind, and the
-  arrangement entries of the same menu.
+- This procedure does not test the arrangement entries of the same menu.
 
 ## 3. Safety
 
@@ -34,7 +33,6 @@ this way.
 
 - One Horizon window, at least 1000 by 700 pixels, with one workspace that holds
   at least one terminal panel.
-- No cloud is needed.
 
 ## 5. Setup
 
@@ -73,7 +71,7 @@ this way.
 1. Right-click the row of the workspace that holds a terminal panel.
 
    Result: **Remove Empty Workspace** is dimmed, and a hover text says that the
-   workspace holds a panel, a cloud or a remote workspace, or is the last one.
+   workspace holds a panel or a remote workspace, or is the last one.
 
 2. Right-click the only row of a board with one workspace.
 
@@ -84,8 +82,8 @@ this way.
 
 - The row menu is fully visible outside the sidebar.
 - **Remove Empty Workspace** removes an empty workspace and nothing else.
-- The board keeps one workspace, and a workspace with a panel, a cloud or a
-  remote workspace cannot be removed this way.
+- The board keeps one workspace, and a workspace with a panel or a remote
+  workspace cannot be removed this way.
 - The removed workspace stays removed after a restart.
 
 ## 8. Cleanup

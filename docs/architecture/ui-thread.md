@@ -10,7 +10,7 @@ Horizon draws its window with eframe and egui 0.36 (see `Cargo.lock`). The
 facts below come from the source of that version.
 
 - One thread runs the window. `main` calls `run_native_with_keyboard_observer`
-  ([`native_app.rs`](../../crates/horizon-ui/src/native_app.rs)), and the
+  ([`native_window.rs`](../../crates/horizon-ui/src/native_window.rs)), and the
   winit event loop runs on that thread. This guide calls it the UI thread.
 - eframe calls `App::ui` on the UI thread in each pass of a frame. A frame
   is one call of `Context::run_ui`. It usually has one pass. When code calls
@@ -61,12 +61,10 @@ time, or uses a lot of CPU.
 ### Incidents
 
 On 2026-10-10, a writeback stall on the full machine froze the Horizon window
-for seconds at a time, during the stop and resume of a Hetzner cloud. On
-2026-10-11, the same stall froze the window for 5 to 10 s when a new RunPod
-cloud started. That day, one `fsync` took 0.2 to 2.8 s. In the two
-incidents, the UI thread called `fsync` for the preparation of a cloud
-deployment and the save of cloud panel sessions.
-[#1436](https://github.com/peters/horizon/pull/1436) moved them to worker
+for seconds at a time. On 2026-10-11, the same stall froze the window for 5 to
+10 s. That day, one `fsync` took 0.2 to 2.8 s. In the two incidents, the UI
+thread called `fsync` on its own frame.
+[#1436](https://github.com/peters/horizon/pull/1436) moved the calls to worker
 threads.
 
 The coordination files of browser MCP requests are the same type of work. The
@@ -77,8 +75,7 @@ ordered worker thread, and
 [#1489](https://github.com/peters/horizon/pull/1489) moved the stamps, audits
 and results to the same worker thread. This guide also covers the request and
 result half of the same work: the recovery claims and answers, the provider
-usage, catalog, cloud offer and cloud request results, and the manifest owner
-read of each remote panel.
+usage and catalog results, and the manifest owner read of each remote panel.
 
 ## Patterns
 
@@ -102,36 +99,33 @@ Use these patterns. Each pattern names code that uses it.
 
 Examples:
 
-- [Image destination sign-in](../../crates/horizon-ui/src/app/cloud_panel/production/creation/publishing/state.rs) starts the platform URL handler on a worker thread. A separate receiver reports its result and requests a repaint. Its error does not replace the metadata error. A scope change discards its pending result.
-- `prepare` and `Pending::next` in
-  [`preparation/job.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/preparation/job.rs),
-  and `poll_cloud_preparations` in
-  [`preparation.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/preparation.rs).
-- The repository check of a new cloud in
-  [`creation_job.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/creation_job.rs).
-  `poll_cloud_creation` also asks for a frame after 100 ms while it waits.
+- The saved-conversation deletion in
+  [`session_deletion.rs`](../../crates/horizon-ui/src/app/panels/session_deletion.rs)
+  starts one named thread. The thread holds a clone of the context and calls
+  `request_repaint` after each progress report.
+- `spawn_remote_host_catalog_refresh` in
+  [`remote_hosts.rs`](../../crates/horizon-ui/src/app/remote_hosts.rs) reads the
+  host catalog on a thread and keeps the `Receiver` on the app state. Each frame
+  reads it with `try_recv`.
+- `spawn_startup_bootstrap` in
+  [`session.rs`](../../crates/horizon-ui/src/app/session.rs) validates the saved
+  agent sessions on a thread and sends one outcome.
 
 ### State of the work on the app
 
 The UI must know what runs, so that it does not start the same work two
 times and does not apply an old result.
 
-- Keep a busy value on the app. `prepare_production_deployment` returns early
-  while a preparation or a provider check runs for the same cloud. The card
-  shows **Preparing** and offers no action.
-- Give each request a generation number. Increase it when the person makes a
-  new choice, or when the board or session changes. Drop a result whose
-  generation is not the current one. Examples: `choose` and `report` in
-  [`cards/docker.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/cards/docker.rs),
-  and `drain_capture_events` in
-  [`speech/engine.rs`](../../crates/horizon-ui/src/app/speech/engine.rs).
-- Record which session or board started the work. `poll_cloud_creation`
-  cancels the work when the active session is not the session that started it.
-- A fence tells a worker thread to wait for earlier work on its own thread. The
-  preparation of a deployment takes the fence of a running session save
-  (`fence` in
-  [`session_record.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/session_record.rs))
-  and waits for it on the worker thread, not on the UI thread.
+- Keep a busy value on the app. `remote_hosts_refresh_in_flight` in
+  [`remote_hosts.rs`](../../crates/horizon-ui/src/app/remote_hosts.rs) refuses a
+  second refresh of the host catalog while one runs.
+- Count the boards that were replaced. `HostIo` in
+  [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)
+  counts them in `replaced` and `retired`. The frame that applies an outcome of
+  a board that no longer stands drops the outcome.
+- Record which session or board started the work. A job that must not write for
+  a replaced board takes the board fence when the UI sends it, and it checks the
+  fence before it writes.
 
 ### One ordered worker thread
 
@@ -198,8 +192,8 @@ because the write of a result removes the request file.
   [`browser_provider_usage.rs`](../../crates/horizon-ui/src/app/browser_provider_usage.rs)
   and `answer_recovery` in
   [`browser_recovery.rs`](../../crates/horizon-ui/src/app/browser_recovery.rs)
-  write the answer of a usage, catalog, cloud offer, cloud or recovery request
-  with one worker write. The write that follows finds no request file and writes
+  write the answer of a usage, catalog or recovery request with one worker
+  write. The write that follows finds no request file and writes
   nothing.
 - `RefusedAnswers` in
   [`answer_retries.rs`](../../crates/horizon-ui/src/app/answer_retries.rs)
@@ -207,17 +201,6 @@ because the write of a result removes the request file.
   answer runs at a time, so a disk that stays busy queues no retry per frame. An
   answer whose deadline passed is dropped with a warning: the agent has its own
   timeout for that request.
-- The agent request polls of the cloud cards (`poll_cloud_create_requests`,
-  `poll_cloud_delete_requests`, `poll_cloud_companion_requests` and
-  `answer_cloud_list_requests`) run on the UI thread and only build the answer
-  there. Each one hands the answer to `publish_host_usage_result`, with
-  `answer_result` in `create_agent.rs`, `delete_agent.rs` and
-  `companions/agent.rs`.
-- A cloud command (`exec.rs`) runs on its own thread, which answers the queue
-  there. No UI path of it reaches the queue.
-- The cloud offer poll answers each request once. Its deadline bounds the wait
-  for the prices. The poll takes no lock of its own.
-
 The browser request pumps send their file and slot work to these two threads.
 A create that names a remote target reads its OS-store values on the workbench
 thread (`request_value` in
@@ -235,7 +218,7 @@ frame reads it and no other job waits for it.
 
 If the UI can send a job on each frame, put a limit on the queue.
 `TransferWorker::submit` in
-[`native_app/transfer.rs`](../../crates/horizon-ui/src/native_app/transfer.rs)
+[`native_window/transfer.rs`](../../crates/horizon-ui/src/native_window/transfer.rs)
 refuses a job when four jobs wait. It also refuses a job from an earlier
 generation. Its four threads do not keep the jobs in order.
 
@@ -258,9 +241,10 @@ its id is still in that set.
 ### Cancellation
 
 Give long work a cancellation token, and cancel it when its result has no
-use. The repository check of a new cloud keeps a
-`horizon_cloud::Cancellation` in `CancelOnDrop`. When the pending creation is
-dropped, the work stops at its next check.
+use. An SSH upload in
+[`ssh_upload/worker.rs`](../../crates/horizon-ui/src/app/ssh_upload/worker.rs)
+keeps a control channel from the UI to its thread. `cancel` sends
+`UploadControl::Cancel`, and the thread stops at its next check.
 
 ### A bounded wait at exit
 
@@ -275,14 +259,12 @@ not durable.
   exit, it queues the last session save. The session writer thread makes it
   durable, and the frames of the exit check for it. The window shows
   **Closing Horizon…**. The exit waits up to `MAX_SHUTDOWN_WAIT` (10 s)
-  for the panels, for each cloud session save (`cloud_sessions_recorded`), for
-  the session writer and for a save of a parked cloud draft's record
-  (`draft_store::Store`).
+  for the panels and for the session writer.
   If the browsers did not stop in that time, it stops them by force, which
   can take 3 s more. Then it waits up to 2 s (`EXIT_FLUSH`) for the jobs of
   the browser coordination worker thread. The window paints during these waits.
-- Before that wait, the exit waits for companion access removals and saved
-  session deletions, with no time limit. The window still paints.
+- Before that wait, the exit waits for saved session deletions, with no time
+  limit. The window still paints.
 - A synchronous wait at exit, for example in `run_exit_cleanup`, must also
   have a time limit. The window cannot paint during that wait.
 
@@ -348,14 +330,14 @@ Write a regression test that stops the fake I/O and measures the UI call.
 The examples below show how to make the I/O wait. They release the I/O only
 after the call, so a new test must also start the release thread of step 2.
 
-- `a_record_that_does_not_answer_never_stalls_the_frame_that_deploys` in
-  [`preparation/tests.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/preparation/tests.rs)
-  uses a named pipe.
+- `the_close_reads_the_panel_manifest_on_the_coordination_worker` in
+  [`browser_close_requests.rs`](../../crates/horizon-ui/src/app/browser_close_requests.rs)
+  uses a named pipe for the manifest, so the read blocks until a writer
+  publishes the ownership.
 - `blocked_persistence_never_blocks_submission_and_stale_completions_are_discarded`
-  in
-  [`native_app/transfer.rs`](../../crates/horizon-ui/src/native_app/transfer.rs)
-  holds the worker thread on a channel. It also makes sure that the UI drops results
-  of an earlier generation.
+  in [`native_window/transfer.rs`](../../crates/horizon-ui/src/native_window/transfer.rs)
+  holds the worker thread on a channel. It also makes sure that the UI drops
+  results of an earlier generation.
 - `a_held_recovery_lock_never_stalls_the_frame_that_claims` in
   [`browser_recovery/tests.rs`](../../crates/horizon-ui/src/app/browser_recovery/tests.rs)
   holds the file lock of a coordination queue from a helper thread that releases
@@ -392,27 +374,13 @@ This work still runs on the UI thread. Do not copy it into new code.
   renames the lease file of a saved session at most every 2 s
   (`refresh_lease` in
   [`lease.rs`](../../crates/horizon-core/src/session_store/lease.rs)).
-- `Choices::set` writes and renames its file on the UI thread. A worker thread
-  makes the file durable
-  ([#1491](https://github.com/peters/horizon/pull/1491)). With **Keep my choice
-  for this repository** selected, a cloud start and **Open on This PC** call it
-  (`keep` in
-  [`new_workspace.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace.rs)).
-  The **Forget** link calls it too
-  ([`new_workspace/choice.rs`](../../crates/horizon-ui/src/app/cloud_panel/production/new_workspace/choice.rs)).
-- Some cloud card paths read the cloud record from disk under a lock that
-  they take with `try_lock`. They do not wait for the lock, but the read
-  itself is file I/O.
-- A session switch and the restore of a cloud prototype board wait on the
+- A session switch and a replacement of the board wait on the
   UI thread for up to 2 s (`EXIT_FLUSH`) until the jobs of the browser
   coordination worker thread end (`finish_browser_host_io_before_replacement` in
   [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)).
   The window does not paint during this wait.
-- Two synchronous waits at exit have no time limit. `on_exit` in
-  [`app/mod.rs`](../../crates/horizon-ui/src/app/mod.rs) waits until the
-  companion access removals are saved. `run_exit_cleanup` joins the worker thread of
-  a saved session deletion. The other synchronous waits in
-  `run_exit_cleanup` have a time limit, for example 10 s for the casting
-  teardown on Linux, 2 s for the browser coordination worker thread and 10 s
-  for the session writer thread. Each
+- One synchronous wait at exit has no time limit. `run_exit_cleanup` joins the
+  worker thread of a saved session deletion. The other synchronous waits in
+  `run_exit_cleanup` have a time limit, for example 2 s for the browser
+  coordination worker thread and 10 s for the session writer thread. Each
   wait has its own limit, so together they can take longer.

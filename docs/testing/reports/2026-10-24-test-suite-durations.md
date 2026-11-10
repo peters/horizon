@@ -87,16 +87,13 @@ answer the request without side effects.
 
 | Crate | Tests | Test time | Share |
 |---|---|---|---|
-| horizon-cloud-worker | 210 | 20.1 min | 37.1% |
 | horizon-ui | 2355 | 11.9 min | 22.0% |
 | horizon-core | 2141 | 10.7 min | 19.8% |
-| horizon-app-host | 121 | 4.3 min | 7.9% |
-| horizon-cloud | 491 | 3.5 min | 6.4% |
 | horizon-browser-cli | 178 | 1.0 min | 1.9% |
 | All other crates | 1625 | 2.7 min | 4.9% |
 
-210 tests of `horizon-cloud-worker` take more time than the 2141 tests of
-`horizon-core`.
+The run included crates that the repository no longer has. Their rows are not
+in this table.
 
 ### 7.2 Test time by target kind
 
@@ -138,23 +135,9 @@ review of every one of them.
 
 ### 7.5 The slowest tests
 
-| Test | Crate | Time |
-|---|---|---|
-| `tailnet::bindings::tests::repeated_saved_network_deletion_does_not_exhaust_api_metadata` | horizon-cloud | 175 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::sessions::publication_boundary_recovery_never_resets_exposed_data_or_restarts_uncertain_builds` | horizon-cloud-worker | 131 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::sessions::writable_sessions_preserve_edits_commits_config_and_siblings_after_restart` | horizon-cloud-worker | 130 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::source_recovers_stream_and_publication_without_resetting_data` | horizon-cloud-worker | 108 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::sessions::changed_ready_staging_and_replaced_child_roots_are_never_acknowledged` | horizon-cloud-worker | 83 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::agent_sessions_survive_restart_without_creating_runtime_and_cancellation_retains_siblings` | horizon-cloud-worker | 80 s |
-| `actor::tests::repeated_provider_admission_retains_bounded_history_and_live_allocations` | horizon-app-host | 73 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::session_publication_recovers_every_manifest_boundary_and_rechecks_source_before_commit` | horizon-cloud-worker | 67 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::session_grants_revision_identity_and_capacity_reject_without_consuming_cancellation` | horizon-cloud-worker | 66 s |
-| `cloud_runtime::bootstrap_initialization::tests::project_reservations::namespaces::source::setup::recovery::project_setup_capacity_reserves_unstarted_plans_and_counts_progress_once` | horizon-core | 64 s |
-| `bootstrap::initialize::tests::membership::namespaces::source::sessions::content_hashing_is_bounded_and_changed_source_before_publication_is_rejected` | horizon-cloud-worker | 48 s |
-| `actor::tests::provider_retention_uses_legacy_completed_records_after_actor_restart` | horizon-app-host | 46 s |
-
-The `--top 40` run of the script names 40 tests. The raw result file names every
-test.
+The slowest tests of this run were in crates that the repository no longer has,
+so this report does not list them. The `--top 40` run of the script names 40
+tests, and the raw result file names every test.
 
 ### 7.6 The spread of three runs
 
@@ -164,10 +147,9 @@ test.
 | This report | 54.1 min | 3.0 min | 35 | 0.7% |
 | Busy machine | 71.5 min | 6.3 min | — | 0.7% |
 
-The ranking of the crates moves between the runs: `horizon-cloud-worker` held
-13.3 percent of the time in the quiet run and 37.1 percent here. A test that
-waits for a socket or a process pays for the time that the scheduler takes to
-give it one, so a busy machine makes those tests slower than a quiet one.
+The ranking of the crates moves between the runs. A test that waits for a
+socket or a process pays for the time that the scheduler takes to give it one,
+so a busy machine makes those tests slower than a quiet one.
 
 The durable parts of the measurement are these:
 

@@ -465,15 +465,7 @@ impl ProfileHost {
     /// Requests that only a Horizon host answers get a refusal, not a wait.
     /// A screenshot gets the newest frame of its page.
     fn host_requests(&mut self) {
-        use horizon_browser_control::manifest::{cast, device, provider_usage, recovery};
-        if let Ok(requests) = cast::claim(&self.host) {
-            for request in requests {
-                let _ = cast::complete(
-                    &request,
-                    cast::CastOutcome::failed("cast_unavailable: requires a Horizon host"),
-                );
-            }
-        }
+        use horizon_browser_control::manifest::{device, provider_usage, recovery};
         if let Ok(requests) = device::claim(&self.host) {
             for request in requests {
                 let outcome = match &request.operation {

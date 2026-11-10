@@ -17,8 +17,8 @@ workflow or document that causes a limit. The "Unknown" section lists the items
 that no test examines.
 
 The latest release, v0.2.7 from 2 August 2026, is older than this code. It
-does not have browser panels, Device panels, clouds, tailnets or casting. The
-tables describe a source build from `main`.
+does not have browser panels or Device panels. The tables describe a source
+build from `main`.
 
 Many functions work on Linux only. If you change the platform support of a
 function, update this document in the same PR.
@@ -64,42 +64,6 @@ starts `/bin/zsh` on macOS and `/bin/bash` on Linux
 (`crates/horizon-core/src/panel/spawn.rs:647-651`). Horizon starts each agent
 through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:616`).
 
-## Clouds
-
-| Function | Linux | macOS |
-|---|---|---|
-| Clouds: deploy, stop, resume, delete | Yes | Yes |
-| Tailnets | Yes | Yes |
-| Local Network Bridge | Yes | Yes |
-| Credential store for tailnet auth keys | Secret Service | Keychain |
-
-## Media and speech
-
-| Function | Linux | macOS |
-|---|---|---|
-| Apple TV casting | Yes | No (note 1) |
-| NVENC hardware encoder for casting | Opt-in (note 2) | No |
-| Chromecast | No (note 3) | No (note 3) |
-| Speech in a release build | No (note 4) | No (note 4) |
-| Speech in a source build, CPU | Yes | Yes |
-| Speech in a source build, GPU | CUDA or Vulkan | Metal. Vulkan not tested |
-| Push-to-talk in Horizon windows | Yes | Yes |
-| Global push-to-talk and text in other applications | X11 only (note 5) | Yes (note 5) |
-
-1. The casting module and the `horizon-cast` crate are Linux-only
-   (`crates/horizon-ui/src/app/mod.rs:20-21`, `crates/horizon-ui/Cargo.toml`).
-   See [casting](casting.md).
-2. Build with the `cast-nvenc` feature. The encoder needs the NVIDIA driver and
-   an FFmpeg with `h264_nvenc`. See [casting](casting.md).
-3. The `horizon-chromecast` crate is a library. The Horizon application does not
-   use it yet.
-4. The release workflow builds with the default features only
-   (`.github/workflows/release.yml:176`). Speech is an opt-in feature. To get
-   speech, build from source with `cargo speech`. See the README.
-5. The global hotkey exists for X11 Linux and macOS only
-   (`crates/horizon-cursor/src/hotkey.rs:136,547`). macOS asks for the
-   Accessibility permission.
-
 ## Install and update
 
 | Function | Linux | macOS |
@@ -115,13 +79,7 @@ through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:616`).
 
 ## Agent skills
 
-Horizon installs the `horizon-browser`, `horizon-device` and `horizon-speech`
-skills on both platforms. The `horizon-device` skill tells agents to drive an
+Horizon installs the `horizon-browser` and `horizon-device` skills on both
+platforms. The `horizon-device` skill tells agents to drive an
 isolated desktop. This part works on Linux with X11 only (note 2 under
 "Panels and the board").
-
-## Unknown
-
-These items have no test and no clear code limit:
-
-- Speech with Vulkan on macOS.

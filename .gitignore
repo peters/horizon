@@ -22,6 +22,3 @@ profiling-output/
 __pycache__/
 *.pyc
 
-# Local casting benchmark runs and Python environment.
-auto/cast/runs/
-auto/cast/.venv/

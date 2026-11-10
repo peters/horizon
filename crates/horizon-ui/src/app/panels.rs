@@ -8,24 +8,19 @@ use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use super::super::git_changes_widget::GitChangesView;
 use super::super::input::TerminalInputEvent;
 use super::super::primary_selection::PrimarySelection;
-use super::super::setup_board_widget::SetupBoardView;
 use super::super::terminal_widget::{
     TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView,
 };
 use super::super::theme;
 use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
-    MicControl, PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
+    PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
 use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut_conflicts};
-use super::speech::MicState;
-use super::util::primary_shortcut_label;
 use super::view::canvas_scene_transform;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RenameEditAction};
 
 mod resize;
-#[cfg(feature = "cloud-workspaces")]
-pub(in crate::app) use resize::paint_grip;
 
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
@@ -37,7 +32,7 @@ use session_rebind::SessionRebindRenderOutcome;
 use session_rebind::open_session_picker;
 #[cfg(test)]
 use session_rebind::render_session_rebind_options;
-pub(super) use session_rebind::{focused_session_picker_panel, session_picker_panel, session_picker_panels};
+pub(super) use session_rebind::{session_picker_panel, session_picker_panels};
 
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {
@@ -59,8 +54,6 @@ struct PanelSnapshot {
     is_focused: bool,
     is_renaming: bool,
     ssh_status: Option<SshConnectionStatus>,
-    /// Browser panels only accept dictation while a driver session is alive.
-    browser_dictation_ready: bool,
 }
 
 #[derive(Default)]
@@ -88,7 +81,6 @@ struct PanelUiOutcome {
     session_rebind_and_restart: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
-    mic_clicked: bool,
 }
 
 impl PanelUiOutcome {
@@ -97,12 +89,6 @@ impl PanelUiOutcome {
             self.focus = PanelFocusRequest::Focus;
         }
     }
-}
-
-struct PanelMicInteraction {
-    response: egui::Response,
-    state: MicState,
-    enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -117,9 +103,6 @@ struct PanelFrame {
     titlebar: Rect,
     body: Rect,
     close: Rect,
-    /// Mic control slot left of the close button; only interactive/painted
-    /// when speech input is enabled.
-    mic: Rect,
 }
 
 impl PanelFrame {
@@ -136,49 +119,13 @@ impl PanelFrame {
             Pos2::new(panel_rect.max.x - 18.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
-        // 26 px from the close button's center: both 16 px rects expand by
-        // 4 px for hit-testing, so the hit targets stay disjoint.
-        let mic = Rect::from_center_size(
-            Pos2::new(panel_rect.max.x - 44.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
-            Vec2::splat(16.0),
-        );
-
         Self {
             panel: panel_rect,
             titlebar,
             body,
             close,
-            mic,
         }
     }
-}
-
-const fn mic_accessibility_label(state: MicState) -> &'static str {
-    match state {
-        MicState::Idle => "Start dictation",
-        MicState::Recording => "Stop dictation; recording",
-        MicState::Busy => "Dictation transcription in progress",
-    }
-}
-
-const fn mic_control_enabled(interactive: bool, speech_active: bool, state: MicState) -> bool {
-    interactive
-        && match state {
-            MicState::Idle => !speech_active,
-            MicState::Recording => true,
-            MicState::Busy => false,
-        }
-}
-
-fn mic_widget_info(state: MicState, enabled: bool) -> egui::WidgetInfo {
-    egui::WidgetInfo::labeled(egui::Role::Button, enabled, mic_accessibility_label(state))
-}
-
-fn mic_control_response(ui: &egui::Ui, rect: Rect, id: Id, enabled: bool, state: MicState) -> egui::Response {
-    let enabled = enabled && ui.is_enabled();
-    let response = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
-    response.widget_info(|| mic_widget_info(state, enabled));
-    response
 }
 
 pub(super) struct PanelRenderScope {
@@ -220,14 +167,10 @@ fn show_panel_body_contents(
     body_context: PanelBodyContext<'_>,
 ) -> bool {
     match panel.kind {
-        PanelKind::Editor => MarkdownEditorView::new(panel, body_context.editor_preview_cache).show(
-            ui,
-            is_focused,
-            body_context.editor_save_shortcut,
-        ),
+        PanelKind::Editor => MarkdownEditorView::new(panel, body_context.editor_preview_cache)
+            .show(ui, body_context.editor_save_shortcut),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
-        PanelKind::SetupBoard => SetupBoardView::new(panel).show(ui, is_focused, interactive),
         PanelKind::Device if panel.device().is_some() => {
             if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {
                 state.show(ui, device, interactive);
@@ -250,9 +193,6 @@ fn show_panel_body_contents(
             )
             .show(ui, body_context.browser_events, is_focused, interactive)
         }
-        _ if panel.parked_screen().is_some() => panel
-            .parked_screen()
-            .is_some_and(|screen| crate::terminal_widget::parked::show(ui, screen, interactive)),
         _ => TerminalView::new(
             panel,
             body_context.terminal_grid_cache,
@@ -309,13 +249,7 @@ impl HorizonApp {
         self.board
             .panels
             .iter()
-            .filter(|panel| {
-                #[cfg(feature = "cloud-workspaces")]
-                if visible_workspace.is_none() && !self.cloud_panel_is_in_view(&panel.local_id) {
-                    return false;
-                }
-                panel.visible
-            })
+            .filter(|panel| panel.visible)
             .filter(|panel| match visible_workspace {
                 Some(workspace_id) => panel.workspace_id == workspace_id,
                 None => !self.workspace_is_detached(panel.workspace_id),
@@ -341,8 +275,7 @@ impl HorizonApp {
             ),
             canvas_rect,
         )?;
-        // A parked member has no terminal, but its last screen and status strip fill the body.
-        let has_body = panel.terminal().is_some() || panel.parked_screen().is_some();
+        let has_body = panel.terminal().is_some();
         let terminal_body_screen_rect = has_body.then_some(()).and_then(|()| {
             let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
             let body_rect = PanelFrame::new(panel_rect).body;
@@ -366,13 +299,7 @@ impl HorizonApp {
         let Some(panel_id) = self.fullscreen_panel else {
             return;
         };
-        if !self.board.panel(panel_id).is_some_and(|panel| {
-            #[cfg(feature = "cloud-workspaces")]
-            if !self.cloud_panel_is_in_view(&panel.local_id) {
-                return false;
-            }
-            panel.visible
-        }) {
+        if !self.board.panel(panel_id).is_some_and(|panel| panel.visible) {
             self.fullscreen_panel = None;
             return;
         }
@@ -398,11 +325,6 @@ impl HorizonApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(theme::PANEL_BG()))
             .show(ui, |ui| {
-                #[cfg(feature = "cloud-workspaces")]
-                if let Some(label) = self.cloud_ownership_label(panel_id) {
-                    ui.label(egui::RichText::new(label).color(theme::PALETTE_CYAN()));
-                    ui.add_space(4.0);
-                }
                 let rect = ui.available_rect_before_wrap();
                 let body_rect = Rect::from_min_max(
                     Pos2::new(rect.min.x + PANEL_PADDING, rect.min.y + PANEL_PADDING),
@@ -415,7 +337,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
-                        let claim_editor_focus = !self.speech_text_surface_active(ui.ctx()).0;
+                        let claim_editor_focus = true;
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -497,13 +419,7 @@ impl HorizonApp {
             self.board
                 .panels
                 .iter()
-                .filter(|panel| {
-                    #[cfg(feature = "cloud-workspaces")]
-                    if !self.cloud_panel_is_in_view(&panel.local_id) {
-                        return false;
-                    }
-                    panel.visible && !self.workspace_is_detached(panel.workspace_id)
-                })
+                .filter(|panel| panel.visible && !self.workspace_is_detached(panel.workspace_id))
                 .enumerate()
                 .map(|(index, panel)| (panel.id, index)),
         );
@@ -606,7 +522,6 @@ impl HorizonApp {
                     is_focused: self.board.focused == Some(panel_id),
                     is_renaming: self.renaming_panel == Some(panel_id),
                     ssh_status: panel.ssh_status(),
-                    browser_dictation_ready: panel.browser().is_none_or(|browser| browser.status.is_alive()),
                 })
             })
     }
@@ -624,9 +539,6 @@ impl HorizonApp {
         let mut outcome = PanelUiOutcome::default();
         let interactive =
             !self.canvas_pan_input_claimed && !scope.host_dialog_open && session_picker_panel(ctx).is_none();
-        #[cfg(feature = "cloud-workspaces")]
-        let browser_canvas_zoom_active = scope.detached || self.cloud_prototype.fullscreen.is_none();
-        #[cfg(not(feature = "cloud-workspaces"))]
         let browser_canvas_zoom_active = true;
         let local_ssh_reconnect_enabled = self.local_ssh_reconnect_shortcut_enabled();
         let browser_shortcuts = (snapshot.kind == PanelKind::Browser).then(|| self.shortcuts.clone());
@@ -674,59 +586,6 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
-                // Terminal panels dictate through their PTY; editor panels
-                // insert at the caret; browser panels dispatch through CDP.
-                let mic_eligible =
-                    self.speech.is_some() && snapshot.kind.accepts_text_input() && snapshot.browser_dictation_ready;
-                let mic_response = mic_eligible.then(|| {
-                    let speech = self.speech.as_ref();
-                    let state = speech.map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id));
-                    let enabled = ui.is_enabled()
-                        && mic_control_enabled(
-                            interactive,
-                            speech.is_some_and(super::speech::SpeechSystem::is_active),
-                            state,
-                        );
-                    let response = mic_control_response(
-                        ui,
-                        rects.mic.expand2(Vec2::splat(4.0)),
-                        ui.make_persistent_id(("panel_mic", panel_id.0)),
-                        enabled,
-                        state,
-                    );
-                    // Built lazily: the summary allocates per profile, so it
-                    // must only run for the hovered mic, not every visible
-                    // panel every frame.
-                    let response = response.on_hover_ui(|ui| {
-                        let tooltip = match state {
-                            MicState::Recording => "Recording into this panel (click to stop)".to_string(),
-                            MicState::Busy => "Transcribing dictation for this panel".to_string(),
-                            MicState::Idle if speech.is_some_and(super::speech::SpeechSystem::is_active) => {
-                                "Dictation is active in another panel".to_string()
-                            }
-                            MicState::Idle => speech.map_or_else(
-                                || "Dictate into this panel (click to start/stop)".to_string(),
-                                |speech| match speech.hotkey_summary(primary_shortcut_label()) {
-                                    Some(summary) => {
-                                        let verb = match speech.hotkey_mode() {
-                                            horizon_core::SpeechHotkeyMode::Hold => "hold",
-                                            horizon_core::SpeechHotkeyMode::Toggle => "press",
-                                        };
-                                        format!("Dictate into this panel (click, or {verb}: {summary})")
-                                    }
-                                    None => "Dictate into this panel (click to start/stop)".to_string(),
-                                },
-                            ),
-                        };
-                        ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
-                        ui.label(tooltip);
-                    });
-                    PanelMicInteraction {
-                        response,
-                        state,
-                        enabled,
-                    }
-                });
                 if interactive && !snapshot.is_renaming {
                     self.show_panel_context_menu(
                         &drag_response,
@@ -769,11 +628,6 @@ impl HorizonApp {
                     workspace_accent: snapshot.workspace_accent,
                     ssh_status: snapshot.ssh_status,
                     session_id,
-                    mic: mic_response.as_ref().map(|mic| MicControl {
-                        rect: rects.mic,
-                        hovered: mic.enabled && (mic.response.hovered() || mic.response.has_focus()),
-                        state: mic.state,
-                    }),
                 };
                 paint_panel_chrome(ui, chrome);
 
@@ -799,7 +653,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
-                        let claim_editor_focus = snapshot.is_focused && !self.speech_text_surface_active(ui.ctx()).0;
+                        let claim_editor_focus = snapshot.is_focused;
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
@@ -867,7 +721,6 @@ impl HorizonApp {
                         snapshot.is_renaming,
                         &drag_response,
                         &close_response,
-                        mic_response.as_ref().map(|mic| &mic.response),
                         &resize_response,
                         &mut outcome,
                     );

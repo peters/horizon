@@ -1,6 +1,6 @@
 //! Native viewer host lifecycle. Standalone device input never enters this path.
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui::Context;
 use horizon_core::{
@@ -26,19 +26,12 @@ fn mcp_route_ssh_args() -> Vec<String> {
 
 pub(super) struct PendingDeviceReveal {
     id: PanelId,
-    restored_fullscreen: Option<WindowRestore>,
-    deadline: Instant,
 }
 
 impl PendingDeviceReveal {
     pub(super) fn targets(&self, id: PanelId) -> bool {
         self.id == id
     }
-}
-
-pub(super) struct WindowRestore {
-    pub fullscreen: bool,
-    pub size: egui::Vec2,
 }
 
 /// How often Horizon asks the coordination worker for this host's waiting
@@ -392,21 +385,6 @@ impl HorizonApp {
         if let Some(workspace) = self.board.workspace_mut(actor.workspace_id) {
             workspace.collapsed = false;
         }
-        #[cfg(feature = "cloud-workspaces")]
-        if let Some(local) = self.board.panel(id).map(|panel| panel.local_id.clone()) {
-            let mut expanded_cloud = false;
-            for group in &mut self.cloud_prototype.groups.0 {
-                if group.panels.contains(&local) {
-                    group.set_collapsed(&mut self.board, false);
-                    expanded_cloud = true;
-                }
-            }
-            if expanded_cloud {
-                // Expanding gave the cloud its slot on the board; keep it.
-                self.cloud_prototype.groups.adopt_slot_geometry(&self.board);
-                self.board.cloud_groups = self.cloud_prototype.groups.clone();
-            }
-        }
         let local = self
             .board
             .workspace(actor.workspace_id)
@@ -420,32 +398,7 @@ impl HorizonApp {
             if self.fullscreen_panel.is_some_and(|current| current != id) {
                 self.fullscreen_panel = None;
             }
-            // Cloud fullscreen refits the entire group on every render pass,
-            // including when this viewer belongs to that group.
-            #[cfg(feature = "cloud-workspaces")]
-            let restored_fullscreen = self.exit_cloud_for_device_reveal(ctx);
-            #[cfg(not(feature = "cloud-workspaces"))]
-            let restored_fullscreen = None;
-            let focused = if restored_fullscreen.is_some() {
-                focused.or(self.board.focused)
-            } else {
-                focused
-            };
-            let pending = match (
-                restored_fullscreen,
-                self.panel_render_caches.pending_device_reveal.take(),
-            ) {
-                (None, Some(mut pending)) => {
-                    pending.id = id;
-                    pending
-                }
-                (restored_fullscreen, _) => PendingDeviceReveal {
-                    id,
-                    restored_fullscreen,
-                    deadline: Instant::now() + Duration::from_secs(2),
-                },
-            };
-            self.panel_render_caches.pending_device_reveal = Some(pending);
+            self.panel_render_caches.pending_device_reveal = Some(PendingDeviceReveal { id });
             focused
         };
         self.board.focused = focused;
@@ -466,22 +419,8 @@ impl HorizonApp {
         }) {
             return;
         }
-        if pending.restored_fullscreen.as_ref().is_some_and(|expected| {
-            ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) != expected.fullscreen
-                || (!expected.fullscreen && (ctx.content_rect().size() - expected.size).abs().max_elem() > 2.0)
-        }) {
-            if Instant::now() < pending.deadline {
-                self.panel_render_caches.pending_device_reveal = Some(pending);
-                ctx.request_repaint_after(Duration::from_millis(16));
-                return;
-            }
-            tracing::warn!(
-                panel_id = pending.id.0,
-                "Device reveal restoration timed out; using current window geometry"
-            );
-        }
-        // Fit after layout and the bounded restoration wait. The window manager
-        // may constrain the restored size, so expiry uses the available canvas.
+        // Fit after layout. The window manager may constrain the size, so the
+        // reveal uses the available canvas.
         let canvas = self.canvas_rect(ctx);
         self.reveal_device_in_rect(pending.id, canvas);
         self.record_applied_device_reveal(pending.id, canvas);
@@ -534,6 +473,7 @@ mod tests {
     use super::*;
     use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
     use horizon_core::{RuntimeState, StartupDecision};
+    use std::time::Instant;
 
     fn app() -> (tempfile::TempDir, Context, HorizonApp) {
         let runtime = RuntimeState {
@@ -1314,57 +1254,5 @@ mod tests {
             );
         }
         assert_eq!(app.board.panels.len(), count, "a refused route creates nothing");
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    #[test]
-    fn reveal_saves_cloud_expansion_immediately_without_erasing_unprepared_groups() {
-        use horizon_core::{CanvasViewState, WindowConfig, cloud_panel::CloudGroup};
-        for belongs in [true, false] {
-            let (_temp, ctx, mut app) = app();
-            let create = request(
-                &app,
-                Operation::Create {
-                    endpoint: "127.0.0.1:5900".into(),
-                    identity: None,
-                    ssh: None,
-                },
-            );
-            let viewer = one(app.apply_device_request(&create, &ctx));
-            let id = app.board.panel_id_by_local_id(&viewer.panel_id).unwrap();
-            let workspace = app.board.panels[0].workspace_id;
-            let local = app.board.workspace(workspace).unwrap().local_id.clone();
-            let mut group = CloudGroup::new(1, "Cloud".into(), local, std::path::PathBuf::new(), [0.0, 0.0]);
-            if belongs {
-                group.panels.push(viewer.panel_id.clone());
-                group.set_collapsed(&mut app.board, true);
-                app.cloud_prototype.groups.0.push(group.clone());
-            }
-            app.board.cloud_groups.0.push(group);
-            let reveal = request(
-                &app,
-                Operation::Reveal {
-                    panel_id: viewer.panel_id,
-                },
-            );
-            assert!(one(app.apply_device_request(&reveal, &ctx)).visible);
-            let saved = RuntimeState::from_board(&app.board, WindowConfig::default(), CanvasViewState::default());
-            assert_eq!(
-                saved.cloud_groups.0.len(),
-                1,
-                "unprepared saved groups must survive unrelated Reveal"
-            );
-            assert!(
-                !saved.cloud_groups.0[0].collapsed,
-                "expansion must persist before another render frame"
-            );
-            if belongs {
-                assert!(
-                    saved.cloud_groups.0[0]
-                        .panels
-                        .contains(&app.board.panel(id).unwrap().local_id)
-                );
-            }
-        }
     }
 }

@@ -5,11 +5,7 @@ mod geometry;
 mod shutdown;
 mod workspaces;
 
-pub(crate) use geometry::panel_visual_rect;
-
 pub use arrangement::WorkspaceAlignment;
-#[cfg(feature = "cloud-workspaces")]
-pub(crate) use arrangement::{Slot, arranged_panel_layout};
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
 pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};
 
@@ -90,7 +86,6 @@ pub enum WorkspaceDockSide {
 pub struct Board {
     pub panels: Vec<Panel>,
     pub workspaces: Vec<Workspace>,
-    pub cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState,
     /// Browser panels already removed from the board whose exact Chrome
     /// process is still retiring. Global shutdown must inherit these signals
     /// instead of losing them in detached cleanup work.
@@ -105,9 +100,6 @@ pub struct Board {
     /// handed out again on Horizon's own authority.
     unreleased_remote_holds: Vec<UnreleasedRemoteHold>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
-    /// Panels kept off screen only while their cloud's disposal is shown. Saved state
-    /// keeps them as they were, so quitting meanwhile never persists them as hidden.
-    hidden_for_disposal: HashSet<PanelId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
     next_panel_id: u64,
@@ -136,12 +128,10 @@ impl Board {
         Self {
             panels: Vec::new(),
             workspaces: Vec::new(),
-            cloud_groups: crate::runtime_state::cloud_groups::CloudGroupsState::default(),
             retired_browser_shutdown_signals: Vec::new(),
             pending_clipboard_writes: Vec::new(),
             unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
-            hidden_for_disposal: HashSet::new(),
             focused: None,
             active_workspace: None,
             next_panel_id: 1,
@@ -186,7 +176,6 @@ impl Board {
         transcript_root: Option<&Path>,
         maximum: usize,
     ) -> Result<Self> {
-        state.validate_remote_references()?;
         let _budget = crate::agent_work::RestoreBudget::new(maximum);
         let mut board = Self::new();
 
@@ -194,17 +183,6 @@ impl Board {
             let ws_id = board.create_workspace_record(workspace_state);
             for panel_state in &workspace_state.panels {
                 let options = panel_restore_options(panel_state, transcript_root, &state.browser);
-                if crate::runtime_state::cloud_groups::managed_member(&state.cloud_groups, &panel_state.local_id) {
-                    let wait = if cfg!(feature = "cloud-workspaces") {
-                        crate::CloudWait::Reconnecting
-                    } else {
-                        crate::CloudWait::Unsupported
-                    };
-                    board.create_panel_with(options, ws_id, |id, workspace, opts| {
-                        Panel::cloud_placeholder(id, workspace, opts, wait)
-                    })?;
-                    continue;
-                }
                 if let Err(error) = board.create_panel(options, ws_id) {
                     board.handle_panel_restore_failure(
                         &workspace_state.name,
@@ -237,14 +215,6 @@ impl Board {
             board.focused = board.panels.iter().find(|panel| panel.visible).map(|panel| panel.id);
         }
 
-        board.cloud_groups = state.cloud_groups.clone();
-        for local_id in crate::runtime_state::cloud_groups::workspace_ids(&state.cloud_groups) {
-            if let Some(workspace) = board.workspace_id_by_local_id(local_id) {
-                board.retained_empty_workspaces.insert(workspace);
-            }
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        board.place_slot_clouds();
         Ok(board)
     }
 
@@ -310,13 +280,6 @@ impl Board {
     ///
     /// Returns an error if the new terminal cannot be spawned.
     pub fn restart_panel(&mut self, id: PanelId) -> Result<()> {
-        if self.panel(id).is_some_and(|panel| {
-            crate::runtime_state::cloud_groups::managed_member(&self.cloud_groups, &panel.local_id)
-        }) {
-            return Err(Error::Config(
-                "Reconnect the cloud to attach to its existing remote session".into(),
-            ));
-        }
         let panel = self
             .panels
             .iter_mut()
@@ -553,36 +516,6 @@ impl Board {
 
     pub fn panel_mut(&mut self, id: PanelId) -> Option<&mut Panel> {
         self.panels.iter_mut().find(|panel| panel.id == id)
-    }
-
-    /// Takes a showing panel off screen for its cloud's disposal, and its focus with it.
-    /// Returns whether it was showing. Saved state is unaffected; see [`Self::end_disposal_hiding`].
-    pub fn hide_for_disposal(&mut self, id: PanelId) -> bool {
-        let Some(panel) = self.panel_mut(id).filter(|panel| panel.visible) else {
-            return false;
-        };
-        panel.visible = false;
-        self.hidden_for_disposal.insert(id);
-        if self.focused == Some(id) {
-            self.focused = None;
-        }
-        true
-    }
-
-    /// Ends [`Self::hide_for_disposal`], showing the panel again when `show`.
-    pub fn end_disposal_hiding(&mut self, id: PanelId, show: bool) {
-        if self.hidden_for_disposal.remove(&id)
-            && show
-            && let Some(panel) = self.panel_mut(id)
-        {
-            panel.visible = true;
-        }
-    }
-
-    /// Whether the panel is off screen only for its cloud's disposal.
-    #[must_use]
-    pub fn is_hidden_for_disposal(&self, id: PanelId) -> bool {
-        self.hidden_for_disposal.contains(&id)
     }
 
     #[must_use]

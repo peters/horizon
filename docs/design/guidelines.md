@@ -191,7 +191,6 @@ resulting hex values below are computed from the token values above.
 | Text selection fill (egui) | `alpha(ACCENT, 54)` with 1 px `ACCENT` stroke | | |
 | Selected tab fill | `blend(PANEL_BG_ALT, ACCENT, 0.20)` | `#273252` | `#CCCEE1` |
 | Selected tab outline | `blend(BORDER_SUBTLE, ACCENT, 0.5)` | `#4960A1` | `#8B95CE` |
-| Selected worker card fill | `blend(PANEL_BG_ALT, ACCENT, 0.14)` | `#222B45` | `#D7D7E2` |
 | Selected chip fill | `blend(PANEL_BG_ALT, ACCENT, 0.22)` | `#283557` | `#C8CBE0` |
 | Chip hover fill | `blend(PANEL_BG_ALT, FG, 0.06)` | `#222733` | `#E3E0D9` |
 | Primary button fill (toolbar) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | `#2E3C63` | `#BDC2E0` |
@@ -274,7 +273,7 @@ What this means:
 | Pair | Dark | Light |
 |---|---|---|
 | `FG` on primary button fill (`blend .28`) | 8.88 | 9.51 |
-| `BG` on solid `ACCENT` (dialog "Start" button label, checkbox mark) | 6.65 | 5.33 |
+| `BG` on solid `ACCENT` (dialog confirm button label, checkbox mark) | 6.65 | 5.33 |
 | `FG` on solid `ACCENT` (do not use) | 2.45 `*` | 2.75 `*` |
 | `FG` on danger button fill | 9.38 | 9.88 |
 | `FG` on selected tab fill (`blend .20`) | 10.37 | 10.72 |
@@ -282,7 +281,6 @@ What this means:
 | `FG` on selected list row (`blend .28`) | 8.88 | 9.51 |
 | `FG_SOFT` on selected list row (`blend .28`) | 5.47 | 4.05 `*` |
 | `FG` on active search toggle (`blend .35`) | 7.79 | 8.55 |
-| `FG` / `FG_SOFT` / `FG_DIM` on selected worker card | 11.51 / 7.08 / 3.38 `*` | 11.69 / 4.98 / 2.59 `*` |
 | `FG_SOFT` on hovered widget fill (`blend .16`) | 6.80 | 4.83 |
 | `ACCENT` text on `+ Add` button fill (`blend .08`) | 5.17 | 4.61 |
 | `FG` / `FG_DIM` on a menu search field (`BG`) | 16.28 / 4.78 | 14.68 / 3.25 `*` |
@@ -383,7 +381,7 @@ egui's normal or `.strong()` (a bolder rendering of the same family).
 | Size | Weight | Where it is used | Color |
 |---|---|---|---|
 | 28 | strong | Startup session screen product name | `FG` |
-| 26 | strong | Dialog and page titles ("New cloud", cloud name), loading-screen product name | `FG` |
+| 26 | strong | Dialog and page titles ("Sessions", the saved session label), loading-screen product name | `FG` |
 | 20-23 | strong | Summary and detail titles inside a dialog or device details | `FG` |
 | 18 | strong | Window and panel titles ("Settings", "Sessions"), large stat values | `FG` |
 | 16 | strong or normal | Section titles inside a dialog, sub-section labels | `FG` / `FG_SOFT` |
@@ -463,12 +461,10 @@ Fixed metrics:
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Menu search field | 32 high, radius 8, text inset 28 left and 10 right |
-| Dialog buttons | creation dialog: at least 120 x 40; accounts dialog: the primary ("Save settings", "Save and start" while continuing a first cloud, or "Save and return" for registry edits) 148 x 40, `Cancel` at least 80 x 40 |
 | Overlay text input | 44 high |
 | Command palette | 500 wide, 36 row, 28 section header, at most 12 visible rows |
 | Search dropdown | 600 wide, 36 high toolbar input, 32 row, 24 section header, at most 12 visible rows |
 | Directory picker | 520 wide, 34 row, at most 460 tall |
-| Dialog width | viewport width minus 64, up to 1180 (1480 while a setup agent shows its output); two columns from 800 (summary column 330, gutter 24) |
 
 ### Strokes
 
@@ -502,111 +498,6 @@ There are four levels, from back to front:
    ([Themes](#themes)).
 
 ## Components
-
-### Form dialog and the New cloud surface
-
-The cloud accounts dialog (up to 1060 wide) is a modal dialog. The New cloud form
-is not a modal: it is a surface on the workspace that holds its draft. Both share
-one frame. Small confirmations (such as closing a cloud) and the browser file
-chooser keep egui's default modal frame from the theme instead: window fill
-`PANEL_BG`, 1 px `BORDER_SUBTLE` outline and the popup shadow, without the 24 px
-margin below.
-
-Shared by both forms:
-
-- Frame: fill `BG_ELEVATED`, stroke 1 px `BORDER_STRONG`, corner radius 16,
-  inner margin 24.
-- Heading at 26 strong, then a one-line description in `FG_SOFT`, then 16 of
-  space.
-- Body scrolls; the action bar stays pinned below it.
-- Footer: right-aligned primary and `Cancel`, 40 high, primary radius 10.
-
-Modal dialog (cloud accounts):
-
-- Raise it above the toolbar with `Order::Tooltip`.
-- Escape and a click on the backdrop dismiss it.
-
-New cloud surface:
-
-- An `egui::Area` of `Order::Middle`, so the sidebar and toolbar stay above it and
-  usable. It takes no backdrop, no top layer and no `move_to_top`, so it is never
-  a modal and holds no input that the person did not aim at it.
-- Its rect is the on-screen frame of the draft workspace: `workspace_focus_frame`
-  for the scene rect, then `canvas_scene_transform`. A pan moves the form with its
-  workspace, and a workspace that leaves the canvas parks the draft in it; its card
-  is then the way back. A form that opens on a workspace that is off the canvas
-  brings that workspace into view instead of parking.
-- The workspace that **+ New cloud** makes is large enough to hold the form
-  (`WS_CLOUD_FORM_SIZE`); a workspace the person made keeps its own size.
-- While the form is drawn, the frame of the workspace that holds it is drawn
-  around the form, with the strip of its name badge above it. The form takes its
-  size from the window and the frame is board geometry, so a frame of a fixed
-  size cannot hold it at every window size and zoom. The frame follows the form
-  instead. The frame is drawn earlier in a frame than the form, so it is settled
-  from the same inputs the form uses and never trails the form through a pan;
-  only the size the form's content gives it comes from the last draw, and another
-  size asks for one more frame. Where the form reaches the top of the canvas, the
-  badge strip falls outside the canvas and the name shows in the sidebar only.
-- Size from that rect and the canvas together, so a small workspace never crops a
-  form the window has room for: width `(room.width - 64).clamp(640, 1180)` and
-  body height `(room.height - 270).max(320)`, where `room` is the union of the two
-  rects. The form moves back inside the canvas at an edge, so it never leaves the
-  screen.
-- The width stops where the content stops gaining: every line of the form fits
-  from 1056 on, so a wider form only stretches its fields and moves the summary
-  away from them. A setup agent's output takes half the form, so it gets 1480. The
-  body keeps following the window, because a form with a repository, its profiles,
-  a place and its storage fills every row a tall screen can give it.
-- A canvas that changes, from a window resize or from the sidebar, brings the
-  draft's workspace back to the middle of the canvas with the person's own zoom,
-  so the form stays in front of them instead of against an edge. A pan of their
-  own is kept: only a change of the canvas moves the view. It moves only while
-  that workspace is the one they work in, and it takes focus from nothing, so a
-  panel they type in keeps the keyboard.
-- A click outside it does nothing. Escape closes nothing and loses no choice: it
-  only ends the search of an open folder picker. **Cancel** ends the draft, and the
-  setup view's **Close** parks it.
-- While the form shows, the minimap does not, and the canvas HUD shows only where
-  the form does not cover it, so no overlay takes a click aimed at the form.
-
-Cloud creation form specifics:
-
-- `item_spacing` (10, 8); the heading has a `PANEL_BG_ALT` info chip on the
-  right (radius 8, margin 12 x 6, 13 `FG_SOFT`); the description is 14.
-- 12 of space between the scroll body and the action bar. Keep the dialog height
-  steady as choices change so it does not jump.
-- Footer buttons are at least 120 x 40 with a 14 label; the primary is a solid
-  `ACCENT` fill. A short reason or hint (13 `FG` or 11.5 `FG_DIM`) sits to the
-  left when the primary is disabled.
-- Enter in the first text field submits when the form is valid.
-- While the repository picker is open above it, the form is disabled and the
-  picker owns Escape and the clicks on the board.
-- The setup view's **Close** parks the draft, also while the setup agent works; the
-  form says so and points at **Show agent** for an interrupt.
-- A parked draft shows a card in its workspace: title, repository, one status line,
-  and **Continue** and **Cancel**. It uses the cloud panel frame and the accent
-  stroke of a cloud that is not deployed yet.
-
-Cloud accounts dialog specifics:
-
-- One page, no tabs. Heading 24 strong, a 13 `FG_SOFT` description, then a pinned
-  readiness banner above the scrolling cards. The banner is an `alpha(state, 24)`
-  fill with an `alpha(state, 90)` outline, radius 12: yellow while something is
-  left to do and the first thing is named, green ("Settings complete") when keys are
-  saved, the SSH identity is ready and every image repository has a saved pull-access
-  validation. Provider accounts are still checked when a cloud starts.
-- Cards (provider, agents, container registry, workspace) are `PANEL_BG`, 1 px
-  `BORDER_SUBTLE`, radius 12, margin 16, 16 apart, in two columns from 760 wide and
-  stacked below. A card has a 15 strong title, a 12 `FG_DIM` note and a status at the
-  right: a dot plus a word (`PALETTE_GREEN` saved or verified, `PALETTE_YELLOW` needs
-  something, `FG_DIM` off or optional). Color never stands alone.
-- A saved key is a masked well (`BG`, radius 8) with Replace; a key is never shown
-  back. Fields are 36 high with a 12 `FG_SOFT` label above.
-- A separator sits above the footer. The primary ("Save settings", "Save and start" while continuing a first cloud, or
-  "Save and return" for registry edits) is 148 x 40 with a
-  `blend(PANEL_BG_ALT, ACCENT, 0.35)` fill and the default label; `Cancel` is
-  at least 80 x 40.
-- Dismissal is ignored while a save is running.
 
 ### Overlay card (command palette and pickers)
 
@@ -662,10 +553,7 @@ backdrop dimming:
 | Kind | Fill | Outline | Label | Radius | Where |
 |---|---|---|---|---|---|
 | Primary (emphasized chrome) | `blend(PANEL_BG_ALT, ACCENT, 0.28)` | 1 px `blend(BORDER_STRONG, ACCENT, 0.72)` | `FG` 11.5 | 10 | Toolbar "update available" |
-| Primary (creation dialog) | solid `ACCENT` | none | `BG` 14 strong | 10 | Dialog confirm ("Start cloud"), min 120 x 40 |
-| Primary (accounts dialog) | `blend(PANEL_BG_ALT, ACCENT, 0.35)` (`#334473` dark, `#B0B8DE` light) | egui default | `FG` (default) | 10 | Accounts dialog save ("Save settings" / "Save and start" / "Save and return"), 148 x 40; `FG` contrast 7.79 dark, 8.55 light |
 | Secondary / chrome | `PANEL_BG_ALT` | 1 px `alpha(BORDER_SUBTLE, 210)` | `FG_SOFT` 11 | 10 | Toolbar and sidebar actions, 30 high |
-| Secondary (creation dialog) | egui default widget fill | egui default | 14 | 10 | "Cancel", min 120 x 40 (the accounts dialog's `Cancel` is min 80 x 40 with egui's default radius) |
 | Danger | `blend(PANEL_BG_ALT, PALETTE_RED, 0.22)` | 1 px `blend(BORDER_STRONG, PALETTE_RED, 0.68)` | `FG` 11 | 10 | Destructive actions in chrome |
 | Destructive confirm | `BTN_CLOSE` | default | default | default | Final "Close ..." confirmation |
 | Quiet text button | none (`frame(false)`) | none | `FG_DIM` / `FG_SOFT`, `PALETTE_RED` for destructive | none | Sidebar row actions, "x" close (16, `FG_DIM`) |
@@ -673,7 +561,7 @@ backdrop dimming:
 
 Use one primary per view. Buttons are never wider than their content plus the
 12 x 6 padding unless a `min_size` gives them a consistent rhythm (toolbar 30
-high; creation dialog 120 x 40). Icon-only buttons need a tooltip.
+high). Icon-only buttons need a tooltip.
 
 Remote browser orientation uses two 26 px device-outline buttons immediately
 after the recording controls, with a 6 px radius matching those media controls.
@@ -830,9 +718,8 @@ Focus behavior:
   press is in flight. Focus returns to the launching field when a child picker
   closes.
 - Escape closes the top-most overlay or dialog and is consumed so it does not
-  also reach a panel beneath. The New cloud form has no Escape action: the setup
-  view's **Close** parks its draft, and that draft's card is the way back. Enter in
-  a dialog's title field submits a valid form.
+  also reach a panel beneath. Enter in a dialog's title field submits a valid
+  form.
 - Keep every action reachable with the keyboard as well as the pointer:
   custom-drawn controls such as selectable cards take keyboard focus and
   respond to Enter and Space.

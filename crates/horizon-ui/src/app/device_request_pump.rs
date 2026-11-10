@@ -102,10 +102,6 @@ impl DeviceRequestBridge {
             self.persist_pending
                 .store(installed.app.runtime_is_dirty(), Ordering::Relaxed);
         }
-        #[cfg(target_os = "linux")]
-        installed
-            .app
-            .drain_cast_requests(&installed.ctx, self.root_override.as_deref());
         installed.app.settle_device_reveals_without_frame();
         self.sync_held_reveals(&installed.app);
         self.sync_claim_pending(&installed.app);
@@ -132,7 +128,7 @@ impl DeviceRequestBridge {
         }
     }
 
-    /// Wakes the watcher, which may be parked on a persistence backoff of
+    /// Wakes the watcher, which may be waiting on a persistence backoff of
     /// seconds, so it sees the flag that just changed.
     fn wake_watcher(&self) {
         if let Some(handle) = lock(&self.watcher).as_ref() {
@@ -305,18 +301,9 @@ fn next_pump_wait(pending: bool, persist_pending: bool, persist_wait: Duration) 
 
 fn device_requests_pending(root: Option<&Path>) -> std::io::Result<bool> {
     let host = manifest::host_instance();
-    let device = match root {
+    match root {
         Some(root) => device::has_pending_at(root, host),
         None => device::has_pending(host),
-    };
-    let cast = match root {
-        Some(root) => manifest::cast::has_pending_at(root, host),
-        None => manifest::cast::has_pending(host),
-    };
-    match (device, cast) {
-        (Ok(true), _) | (_, Ok(true)) => Ok(true),
-        (Err(error), _) | (_, Err(error)) => Err(error),
-        _ => Ok(false),
     }
 }
 
@@ -407,26 +394,14 @@ mod tests {
     }
 
     #[test]
-    fn pending_queues_are_independent_of_sibling_storage_failures() {
-        for broken in ["cast-requests", "device-panel-requests"] {
-            let root = tempfile::tempdir().expect("runtime root");
-            std::fs::create_dir_all(root.path().join("runtime")).expect("runtime");
-            std::fs::write(root.path().join("runtime").join(broken), b"not a directory").expect("broken queue");
-            assert!(device_requests_pending(Some(root.path())).is_err());
-            let identity = manifest::AgentIdentity::new("horizon:agent", Some(manifest::host_instance()));
-            if broken == "cast-requests" {
-                device::enqueue_at(root.path(), identity, device::Operation::List, Duration::from_secs(5))
-                    .expect("device request");
-            } else {
-                manifest::cast::enqueue_at(
-                    root.path(),
-                    identity,
-                    manifest::cast::CastOperation::Status,
-                    Duration::from_secs(5),
-                )
-                .expect("cast request");
-            }
-            assert!(device_requests_pending(Some(root.path())).expect("sibling pending"));
-        }
+    fn a_broken_device_queue_is_reported_rather_than_retried_forever() {
+        let root = tempfile::tempdir().expect("runtime root");
+        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime");
+        std::fs::write(
+            root.path().join("runtime").join("device-panel-requests"),
+            b"not a directory",
+        )
+        .expect("broken queue");
+        assert!(device_requests_pending(Some(root.path())).is_err());
     }
 }

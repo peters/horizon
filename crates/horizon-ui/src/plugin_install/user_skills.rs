@@ -12,10 +12,14 @@ use std::path::{Path, PathBuf};
 
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
-pub(super) const HORIZON_SPEECH_SKILL: &str = "horizon-speech";
 // Recognized only for migration cleanup; never installed by this version.
 pub(super) const RETIRED_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
+/// Skills removed from Horizon. Older installs wrote them to the Claude plugin
+/// tree, the private integrations cache and the codex/grok skill roots; each
+/// copy is removed once no older Horizon host that still serves it is running.
+pub(super) const RETIRED_MCP_SKILLS: &[&str] =
+    &["horizon-app-testing", "horizon-cast", "horizon-cloud", "horizon-speech"];
 const LEASES_DIR: &str = ".horizon-leases";
 
 type SkillOwnershipCheck = fn(&Path) -> io::Result<()>;
@@ -108,25 +112,8 @@ fn claim_dir(claimed: &mut Vec<PathBuf>, dir: &Path) -> bool {
     true
 }
 
-pub(super) fn with_skill_root_lock<T>(skill_dir: &Path, operation: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-    let coord_dir =
-        skill_coord_dir(skill_dir).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Skill has no parent"))?;
-    std::fs::create_dir_all(&coord_dir)?;
-    let _lock = lock_coord(&coord_dir)?;
-    operation()
-}
-
 fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &Path, install: bool) {
-    let result = if install && super::mcp_skills::is_mcp_skill(skill_dir) {
-        bind_prepared_skill_root(
-            host_id,
-            skill_dir.to_path_buf(),
-            super::mcp_skills::validate_mcp_skill,
-            || super::mcp_skills::validate_mcp_skill(skill_dir),
-        )
-    } else {
-        acquire_skill_root(host_id, skill_dir.to_path_buf(), install, || Ok(()))
-    };
+    let result = acquire_skill_root(host_id, skill_dir.to_path_buf(), install, || Ok(()));
     match result {
         Ok(lease) => leases.push(lease),
         Err(error) => {
@@ -267,9 +254,8 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
     if name != RETIRED_NOTIFY_SKILL
         && name != HORIZON_BROWSER_SKILL
         && name != HORIZON_DEVICE_SKILL
-        && name != HORIZON_SPEECH_SKILL
         && name != RETIRED_OFFLOAD_SKILL
-        && !super::mcp_skills::is_mcp_skill(path)
+        && !RETIRED_MCP_SKILLS.iter().any(|skill| name == *skill)
     {
         return;
     }

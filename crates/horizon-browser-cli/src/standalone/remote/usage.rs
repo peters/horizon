@@ -1,5 +1,4 @@
-//! Answers to `browser_provider_usage` and `browser_provider_devices`, and the
-//! refusal of the requests that only a Horizon host can answer.
+//! Answers to `browser_provider_usage` and `browser_provider_devices`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,8 +28,6 @@ impl Usage {
             for request in requests {
                 if request.actor != actor {
                     complete(&request.result(Vec::new(), Some("provider_usage_unavailable".into())));
-                } else if let Some(error) = host_only_refusal(&request) {
-                    complete(&request.result(Vec::new(), Some(error.into())));
                 } else if request.catalog.is_some() {
                     self.pending.push(request);
                 } else {
@@ -161,27 +158,6 @@ fn summaries(config: &HostConfig, selected: Option<&str>) -> Vec<ProviderUsageSu
             }
         })
         .collect()
-}
-
-/// The refusal of a request that only a Horizon host answers.
-fn host_only_refusal(request: &UsageRequest) -> Option<&'static str> {
-    if request.cloud_offers.is_some() {
-        Some("cloud_offers_unavailable: requires a Horizon host")
-    } else if request.cloud_companion.is_some() {
-        Some("cloud_companion_unavailable: requires a Horizon host")
-    } else if request.cloud_list.is_some() {
-        Some("cloud_list_unavailable: requires a Horizon agent panel")
-    } else if request.cloud_exec.is_some() {
-        Some("cloud_exec_unavailable: requires a Horizon agent panel")
-    } else if request.cloud_agent_message.is_some() || request.cloud_agent_read.is_some() {
-        Some("cloud_agent_unavailable: requires a Horizon agent panel")
-    } else if request.tailnet_credential.is_some() {
-        Some("tailnet_credential_unavailable: requires the desktop owner")
-    } else if request.image_destination.is_some() {
-        Some("image_destination_unavailable: requires a Horizon agent panel on the person's computer")
-    } else {
-        None
-    }
 }
 
 fn complete(result: &UsageResult) {

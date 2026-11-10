@@ -551,32 +551,6 @@ fn coalesced_opposing_wheels_are_judged_one_event_at_a_time() {
     assert_eq!(gesture.canvas_owned, Some(false));
 }
 
-#[test]
-fn a_surface_without_a_scroll_extent_keeps_its_gesture() {
-    // A canvas-drawn surface such as a cloud runtime card has no panel to ask
-    // about its extent, so a gesture it starts can never chain to the canvas.
-    let mut gesture = ScrollGesture::default();
-    let input = egui::InputState::default().begin_pass(
-        RawInput {
-            time: Some(1.0),
-            events: vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)],
-            ..RawInput::default()
-        },
-        false,
-        1.0,
-        egui::InputOptions::default(),
-    );
-    let routing = gesture.route(
-        &input,
-        &InputOptions::default(),
-        ScrollTarget::Surface(901),
-        true,
-        &mut |_, _| true,
-    );
-    assert!(!routing.pans_canvas);
-    assert!(routing.claimed_wheels.is_empty());
-}
-
 fn pass(time: f64, events: Vec<Event>) -> egui::InputState {
     egui::InputState::default().begin_pass(
         RawInput {

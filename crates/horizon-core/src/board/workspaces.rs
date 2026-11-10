@@ -1,48 +1,14 @@
 use crate::config::Config;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
-use crate::runtime_state::{WorkspaceState, cloud_groups};
+use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
 use super::arrangement::rects_overlap;
 use super::{Board, WorkspaceDockSide, vec2_eq};
 
 impl Board {
-    #[cfg(feature = "cloud-workspaces")]
-    pub fn retain_workspace_when_empty(&mut self, id: WorkspaceId) {
-        if self.workspace(id).is_some() {
-            self.retained_empty_workspaces.insert(id);
-        }
-    }
-
-    /// Stop keeping `id` when empty once no cloud on this board uses it. It
-    /// then behaves like any workspace: it stays while it holds a panel,
-    /// hidden ones included, and is removed by the next
-    /// [`Self::remove_empty_workspaces`] or when its last panel closes. The
-    /// caller keeps the hold for work the board does not track, such as a
-    /// pending cloud creation.
-    ///
-    /// When the released workspace is empty, active and nothing is focused,
-    /// its removal takes the selection with it, so focus moves as when a
-    /// focused last panel closes. Returns whether a hold was released, so the
-    /// caller can schedule the cleanup frame.
-    #[cfg(feature = "cloud-workspaces")]
-    pub fn release_empty_workspace_retention(&mut self, id: WorkspaceId) -> bool {
-        let Some(workspace) = self.workspace(id) else {
-            return false;
-        };
-        if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
-            return false;
-        }
-        let leaves_board = workspace.panels.is_empty() && workspace.remote_workspace.is_none();
-        let released = self.retained_empty_workspaces.remove(&id);
-        if leaves_board && self.active_workspace == Some(id) && self.focused.is_none() {
-            self.focus_most_recent_panel();
-        }
-        released
-    }
-
     /// Focus the most recently created remaining panel and activate its
     /// workspace; used when the focused panel or selected workspace goes away.
     fn focus_most_recent_panel(&mut self) {
@@ -100,12 +66,7 @@ impl Board {
 
     /// Select an ordinary local workspace for preparation that must not inherit a remote environment.
     pub fn ensure_local_workspace(&mut self, fallback_name: &str) -> WorkspaceId {
-        let eligible = |workspace: &&Workspace| {
-            if cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id) {
-                return false;
-            }
-            workspace.remote_workspace.is_none()
-        };
+        let eligible = |_: &&Workspace| true;
         if let Some(workspace) = self
             .active_workspace
             .and_then(|id| self.workspace(id).filter(eligible))
@@ -125,37 +86,6 @@ impl Board {
         self.create_panel_with(opts, workspace, Panel::spawn)
     }
 
-    /// Spawn a cloud member without applying workspace layout or collisions.
-    /// The caller must attach membership and resolve the final cloud geometry
-    /// before publishing the board; temporary free-panel bounds must not move
-    /// neighboring workspaces.
-    ///
-    /// # Errors
-    /// Returns a spawn error without changing the workspace preset or geometry.
-    pub fn create_panel_preserving_workspace_layout(
-        &mut self,
-        opts: PanelOptions,
-        workspace: WorkspaceId,
-    ) -> Result<PanelId> {
-        self.create_panel_with_layout(opts, workspace, false, Panel::spawn)
-    }
-
-    /// Add a parked cloud member: a placeholder that runs nothing and does not
-    /// take the focus. Layout rules are as for
-    /// [`Self::create_panel_preserving_workspace_layout`].
-    ///
-    /// # Errors
-    /// Returns an error if the placeholder terminal cannot be created.
-    pub fn create_parked_cloud_member(&mut self, opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
-        let (focused, active) = (self.focused, self.active_workspace);
-        let id = self.create_panel_with_layout(opts, workspace, false, |id, workspace, opts| {
-            Panel::cloud_placeholder(id, workspace, opts, crate::panel::CloudWait::Parked)
-        })?;
-        self.focused = focused;
-        self.active_workspace = active;
-        Ok(id)
-    }
-
     pub(super) fn create_failed_restore_panel(
         &mut self,
         opts: PanelOptions,
@@ -173,36 +103,22 @@ impl Board {
         workspace: WorkspaceId,
         spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
     ) -> Result<PanelId> {
-        self.create_panel_with_layout(opts, workspace, true, spawn_panel)
+        self.create_panel_with_layout(opts, workspace, spawn_panel)
     }
 
     fn create_panel_with_layout(
         &mut self,
         mut opts: PanelOptions,
         workspace: WorkspaceId,
-        apply_layout: bool,
         spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
     ) -> Result<PanelId> {
-        if let Some(reference) = self
-            .workspace(workspace)
-            .and_then(|workspace| workspace.remote_workspace.as_ref())
-        {
-            if opts
-                .remote_workspace
-                .as_ref()
-                .is_some_and(|panel_reference| panel_reference != reference)
-            {
-                return Err(Error::State("remote panel reference differs from its workspace".into()));
-            }
-            opts.remote_workspace = Some(reference.clone());
-        }
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
         let explicit_position = opts.position.is_some();
-        if apply_layout && explicit_position {
+        if explicit_position {
             self.set_workspace_layout(workspace, None);
         }
-        let workspace_layout = (apply_layout && !explicit_position)
+        let workspace_layout = (!explicit_position)
             .then(|| self.workspace_layout_value(workspace))
             .flatten();
         let previous_frame = self.workspace_frame_rect(workspace);
@@ -234,9 +150,7 @@ impl Board {
         if let Some(layout) = workspace_layout {
             self.apply_workspace_layout(workspace, layout);
         }
-        if apply_layout {
-            self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
-        }
+        self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
 
         Ok(id)
     }
@@ -314,7 +228,6 @@ impl Board {
     /// once it stops observing.
     #[must_use]
     pub fn close_panel_returning_teardown(&mut self, id: PanelId) -> Option<crate::browser::BrowserShutdownSignal> {
-        self.hidden_for_disposal.remove(&id);
         let removed_panel = self
             .panels
             .iter()
@@ -331,19 +244,12 @@ impl Board {
         // Remove workspace if it has no panels left.
         if let Some(ws_id) = ws_id {
             let is_empty = self.workspaces.iter().any(|ws| ws.id == ws_id && ws.panels.is_empty());
-            if is_empty
-                && !self.retained_empty_workspaces.contains(&ws_id)
-                && self
-                    .workspace(ws_id)
-                    .is_none_or(|workspace| workspace.remote_workspace.is_none())
-            {
+            if is_empty && !self.retained_empty_workspaces.contains(&ws_id) {
                 self.workspaces.retain(|ws| ws.id != ws_id);
                 if self.active_workspace == Some(ws_id) {
                     self.active_workspace = self.workspaces.first().map(|ws| ws.id);
                 }
             } else {
-                // A workspace kept without panels can still hold clouds in its preset,
-                // and they move up into the slots the closed panels leave.
                 self.reflow_workspace_layout(ws_id);
             }
         }
@@ -384,35 +290,12 @@ impl Board {
     }
 
     pub fn remove_workspace(&mut self, id: WorkspaceId) {
-        if self
-            .workspace(id)
-            .is_some_and(|workspace| cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
-        {
-            return;
-        }
         // Never remove the last workspace.
         if self.workspaces.len() <= 1 {
             return;
         }
 
-        let Some(target_id) = self
-            .workspaces
-            .iter()
-            .find(|ws| {
-                ws.id != id
-                    && !cloud_groups::contains_workspace(&self.cloud_groups, &ws.local_id)
-                    && self
-                        .panels
-                        .iter()
-                        .filter(|panel| panel.workspace_id == id)
-                        .all(|panel| {
-                            ws.remote_workspace
-                                .as_ref()
-                                .is_none_or(|reference| panel.remote_workspace() == Some(reference))
-                        })
-            })
-            .map(|ws| ws.id)
-        else {
+        let Some(target_id) = self.workspaces.iter().find(|ws| ws.id != id).map(|ws| ws.id) else {
             return;
         };
 
@@ -432,15 +315,6 @@ impl Board {
     /// Move a panel to a different workspace, physically relocating it to
     /// the next free tile position in the target workspace.
     pub fn assign_panel_to_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
-        if self
-            .panel(panel_id)
-            .is_some_and(|panel| cloud_groups::contains_panel(&self.cloud_groups, &panel.local_id))
-            || self
-                .workspace(workspace_id)
-                .is_some_and(|workspace| cloud_groups::contains_workspace(&self.cloud_groups, &workspace.local_id))
-        {
-            return;
-        }
         self.reconcile_panel_workspace(panel_id, workspace_id);
     }
 
@@ -452,14 +326,6 @@ impl Board {
         if source_workspace_id == workspace_id || self.workspace(workspace_id).is_none() {
             return;
         }
-        if let Some(reference) = self
-            .workspace(workspace_id)
-            .and_then(|workspace| workspace.remote_workspace.as_ref())
-            && self.panel(panel_id).and_then(Panel::remote_workspace) != Some(reference)
-        {
-            return;
-        }
-
         let previous_target_frame = self.workspace_frame_rect(workspace_id);
         for ws in &mut self.workspaces {
             ws.remove_panel(panel_id);
@@ -525,11 +391,7 @@ impl Board {
         let empty_ids: Vec<_> = self
             .workspaces
             .iter()
-            .filter(|ws| {
-                ws.panels.is_empty()
-                    && ws.remote_workspace.is_none()
-                    && !self.retained_empty_workspaces.contains(&ws.id)
-            })
+            .filter(|ws| ws.panels.is_empty() && !self.retained_empty_workspaces.contains(&ws.id))
             .map(|ws| ws.id)
             .collect();
         for ws_id in empty_ids {
@@ -714,26 +576,7 @@ impl Board {
             }
         }
 
-        // Collision uses the workspace frame immediately, before the UI
-        // reconciles its cloud snapshot. Move the board's cloud with the
-        // workspace so that frame does not span the cloud's old position.
-        #[cfg(feature = "cloud-workspaces")]
-        self.translate_cloud_groups_with_workspace(id, delta);
-
         positions_changed
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn translate_cloud_groups_with_workspace(&mut self, id: WorkspaceId, delta: [f32; 2]) {
-        let Some(local_id) = self.workspace(id).map(|workspace| workspace.local_id.clone()) else {
-            return;
-        };
-        for group in &mut self.cloud_groups.0 {
-            if group.workspace != local_id {
-                continue;
-            }
-            group.translate_with_workspace(delta);
-        }
     }
 
     /// Translate a workspace and push any colliding workspaces further along
@@ -765,7 +608,6 @@ impl Board {
         let id = self.create_workspace(&workspace_state.name);
         if let Some(workspace) = self.workspace_mut(id) {
             workspace.local_id.clone_from(&workspace_state.local_id);
-            workspace.remote_workspace.clone_from(&workspace_state.remote_workspace);
             workspace.position = workspace_state.position.unwrap_or(workspace.position);
             workspace.cwd = workspace_state.cwd.as_deref().map(Config::expand_tilde);
             workspace.template.clone_from(&workspace_state.template);

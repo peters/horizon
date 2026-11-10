@@ -219,8 +219,8 @@ impl FileChooserHandle {
         state.supported = false;
     }
 
-    /// Shows the pending chooser of a remote browser, such as a cloud worker
-    /// browser, as a request of this panel. Returns the local request ID.
+    /// Shows the pending chooser of a remote browser as a request of this
+    /// panel. Returns the local request ID.
     #[must_use]
     pub fn relay_open(&self, multiple: bool, accept: String, origin: String) -> u64 {
         self.enable();

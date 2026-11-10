@@ -18,7 +18,7 @@ It uses source checks and private temporary directories. It does not start resou
 ## 2. Applicability
 
 Use the final candidate checkout. Python 3 and the Rust build prerequisites must exist.
-These checks do not prove cloud, TV, browser, or paid native device runtime behavior.
+These checks do not prove browser or paid remote device runtime behavior.
 No UI layout or input behavior changes in this feature.
 
 ## 3. Tasks
@@ -30,10 +30,10 @@ No UI layout or input behavior changes in this feature.
    Result: Each shipped tool has a skill route. Operation lists name the exact API.
    Both bundles have the same files. Each reference has a valid link and embedded asset.
 
-2. Examine the six skill entry points under `assets/plugins/codex/skills/`.
+2. Examine the skill entry points under `assets/plugins/codex/skills/`.
 
-   Result: Browser, device, speech, casting, cloud, and native app tasks have clear routes.
-   Standalone servers have explicit setup requirements. Speech uses local diagnostics.
+   Result: Browser and device tasks have clear routes.
+   Standalone servers have explicit setup requirements.
 
 ### 3.2 INSTALL — Examine isolated installation
 
@@ -53,7 +53,7 @@ No UI layout or input behavior changes in this feature.
 
 1. Run the full pre-push matrix in `AGENTS.md` in this checkout.
 
-   Result: Format, maintainability, workspace tests, speech tests, and required
+   Result: Format, maintainability, workspace tests and required
    Clippy tiers pass. Record advisory findings separately.
 
 ### 3.4 LOCAL — Refresh authorized installed copies

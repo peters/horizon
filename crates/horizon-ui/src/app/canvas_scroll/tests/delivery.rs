@@ -238,18 +238,18 @@ fn a_runtime_surface_receives_fresh_motion_before_the_canvas_tail() {
     assert_eq!(
         frame(
             1.016,
-            ScrollTarget::Surface(901),
+            ScrollTarget::Panel(PANEL),
             vec![
                 wheel(Vec2::new(0.0, -7.0), TouchPhase::End),
                 wheel(Vec2::new(0.0, -5.0), TouchPhase::Start),
             ]
         ),
         Vec2::ZERO,
-        "runtime receives its wheel at the original geometry"
+        "the panel receives its wheel at the original geometry"
     );
     assert_eq!(
-        frame(1.032, ScrollTarget::Surface(901), Vec::new()),
+        frame(1.032, ScrollTarget::Panel(PANEL), Vec::new()),
         Vec2::new(0.0, -7.0)
     );
-    assert_eq!(frame(1.048, ScrollTarget::Surface(901), Vec::new()), Vec2::ZERO);
+    assert_eq!(frame(1.048, ScrollTarget::Panel(PANEL), Vec::new()), Vec2::ZERO);
 }

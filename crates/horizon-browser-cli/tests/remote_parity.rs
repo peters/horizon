@@ -350,11 +350,6 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
         "a WebM above 8 MiB stays a path on the host (issue 1967)",
     ),
     ("browser_visibility", Parity::Yes, ""),
-    (
-        "browser_vm",
-        Parity::Partial,
-        "it acts on the serving machine's settings, not the caller's",
-    ),
     ("browser_wait", Parity::Yes, ""),
     (
         "browser_zoom",
@@ -364,29 +359,11 @@ const PARITY_ROWS: &[(&str, Parity, &str)] = &[
 ];
 
 /// The tools of the same manifest that need the Horizon application, not a
-/// browser host: casting to a television, the cloud cards, the native Device
-/// panel, and the tailnet credential. A profile host advertises them today,
+/// browser host: the native Device panel. A profile host advertises them today,
 /// because the bridge relays `tools/list` unchanged, and a call refuses. They
 /// are outside this lane, so the parity table names them here and the epic keeps
 /// the question of a narrower `tools/list` for a later change.
-const APP_ONLY_TOOLS: &[&str] = &[
-    "cast",
-    "cloud_agent_message",
-    "cloud_agent_read",
-    "cloud_companion_ensure_ready",
-    "cloud_companion_operation",
-    "cloud_companion_stop",
-    "cloud_companion_uncheck",
-    "cloud_companions",
-    "cloud_create",
-    "cloud_delete",
-    "cloud_exec",
-    "cloud_image_destination",
-    "cloud_list",
-    "cloud_offers",
-    "device_panel",
-    "tailnet_api_credential",
-];
+const APP_ONLY_TOOLS: &[&str] = &["device_panel"];
 
 fn tool_names(tools: &Value) -> Vec<String> {
     tools

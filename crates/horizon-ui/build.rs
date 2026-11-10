@@ -18,31 +18,14 @@ const ASSETS: &[&str] = &[
     "icons/icon-512.png",
     "icons/logo.svg",
     "plugins/claude-code/.claude-plugin/plugin.json",
-    "plugins/claude-code/skills/horizon-app-testing/SKILL.md",
-    "plugins/claude-code/skills/horizon-app-testing/references/native-apps.md",
     "plugins/claude-code/skills/horizon-browser/SKILL.md",
-    "plugins/claude-code/skills/horizon-cast/SKILL.md",
-    "plugins/claude-code/skills/horizon-cast/references/casting.md",
-    "plugins/claude-code/skills/horizon-cloud/SKILL.md",
-    "plugins/claude-code/skills/horizon-cloud/references/cloud.md",
     "plugins/claude-code/skills/horizon-device/SKILL.md",
-    "plugins/claude-code/skills/horizon-speech/SKILL.md",
-    "plugins/claude-code/skills/horizon-speech/level.py",
-    "plugins/codex/skills/horizon-app-testing/SKILL.md",
-    "plugins/codex/skills/horizon-app-testing/references/native-apps.md",
     "plugins/codex/skills/horizon-browser/SKILL.md",
-    "plugins/codex/skills/horizon-cast/SKILL.md",
-    "plugins/codex/skills/horizon-cast/references/casting.md",
-    "plugins/codex/skills/horizon-cloud/SKILL.md",
-    "plugins/codex/skills/horizon-cloud/references/cloud.md",
     "plugins/codex/skills/horizon-device/SKILL.md",
-    "plugins/codex/skills/horizon-speech/SKILL.md",
-    "plugins/codex/skills/horizon-speech/level.py",
 ];
 
 fn main() -> io::Result<()> {
     emit_macos_swift_runtime_rpath();
-    emit_cuda_runtime_link_workaround();
 
     let manifest_dir = required_path_var("CARGO_MANIFEST_DIR")?;
     font_assets::validate(&manifest_dir)?;
@@ -73,29 +56,6 @@ fn emit_macos_swift_runtime_rpath() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     }
-}
-
-/// Workaround for transcribe-cpp-sys 0.1.3: its `transcribe-link.json`
-/// manifest omits the CUDA runtime libraries for `TRANSCRIBE_CUDA` builds
-/// (`system_libs` carries only stdc++/m/pthread/dl), so every downstream
-/// bin/test target fails to link with undefined `cuda*` symbols. Emit them
-/// here until a -sys release records the CUDA deps in the manifest itself.
-fn emit_cuda_runtime_link_workaround() {
-    if env::var_os("CARGO_FEATURE_SPEECH_CUDA").is_none() {
-        return;
-    }
-    let cuda_root = env::var("CUDA_PATH")
-        .or_else(|_| env::var("CUDA_HOME"))
-        .unwrap_or_else(|_| "/usr/local/cuda".to_string());
-    println!("cargo:rustc-link-search=native={cuda_root}/lib64");
-    // libcuda.so (driver API) resolves from the stubs dir at link time
-    // and from the installed driver at runtime.
-    println!("cargo:rustc-link-search=native={cuda_root}/lib64/stubs");
-    for lib in ["cudart", "cublas", "cublasLt", "cuda"] {
-        println!("cargo:rustc-link-lib=dylib={lib}");
-    }
-    println!("cargo:rerun-if-env-changed=CUDA_PATH");
-    println!("cargo:rerun-if-env-changed=CUDA_HOME");
 }
 
 fn required_path_var(name: &'static str) -> io::Result<PathBuf> {

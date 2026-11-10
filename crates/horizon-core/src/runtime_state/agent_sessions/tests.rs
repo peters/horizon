@@ -149,7 +149,6 @@ fn bootstrap_assigns_distinct_sessions_per_group() {
     let mut state = RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "workspace".to_string(),
-            remote_workspace: None,
             name: "termgalore".to_string(),
             cwd: stored_cwd("/repo"),
             position: None,
@@ -268,7 +267,6 @@ fn bootstrap_never_assigns_sessions_open_in_other_processes() {
     let mut state = RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "workspace".to_string(),
-            remote_workspace: None,
             name: "termgalore".to_string(),
             cwd: stored_cwd("/repo"),
             position: None,

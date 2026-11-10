@@ -177,13 +177,11 @@ impl HorizonApp {
     }
 
     /// Workspaces a remote session can land in: ordinary local ones. A legacy
-    /// remote workspace turns any new panel into a read-only restore-failure
-    /// view, so it is neither listed nor matched by name.
+    /// The workspaces that a new remote panel may join.
     pub(in crate::app) fn destination_workspaces(&self) -> Vec<WorkspaceOption> {
         self.board
             .workspaces
             .iter()
-            .filter(|workspace| workspace.remote_workspace.is_none())
             .map(|workspace| WorkspaceOption {
                 id: workspace.id,
                 name: workspace.name.clone(),

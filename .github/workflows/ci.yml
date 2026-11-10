@@ -27,13 +27,8 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 # Cache policy: every rust-cache step below and in release-artifacts.yml
-# sets `save-if: github.ref == 'refs/heads/main'`. The platform test jobs also
-# require one saver per cache key (`matrix.save_cache`), so each key keeps one
-# entry. A shard keeps its own key when it builds its own graph: `libs` resolves
-# features over `--workspace --exclude horizon-ui` with the opt-in features, so
-# `linux-test-libs` and `macos-test-libs` are saved by that shard itself. The
-# remaining Linux shards share `linux-test`, which the speech shard saves, and
-# the macOS speech shard saves `macos-test-speech`.
+# sets `save-if: github.ref == 'refs/heads/main'`. Each platform test shard has
+# its own cache key and saves it, so one key holds one entry.
 # Cargo resolves features per package selection, so an entry filled by another
 # selection is a full match that still rebuilds: the Linux `libs` shard shared
 # `linux-test` with a saver that builds `--workspace`, and recompiled 74 crates
@@ -80,18 +75,8 @@ jobs:
         run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
       - name: Verify GitHub release orchestration
         run: python3 -B scripts/test_release_github.py -v
-      - name: Verify worker helper license provenance
-        run: |
-          python3 -B .horizon/test_collect_helper_notices.py -v
-          python3 -O -B .horizon/test_collect_helper_notices.py -v
       - name: Isolated desktop session bus
         run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
-      - name: Casting benchmark integrity
-        run: |
-          cast_bench_venv=$(mktemp -d "$RUNNER_TEMP/cast-bench.XXXXXX")
-          python3 -m venv "$cast_bench_venv"
-          "$cast_bench_venv/bin/pip" install --disable-pip-version-check -r auto/cast/requirements.txt
-          "$cast_bench_venv/bin/python" -B -m unittest discover -s auto/cast -p 'test_*.py' -v
       - name: Horizon MCP skill coverage
         run: python3 -B scripts/check-horizon-mcp-skills.py
       - name: Maintainability
@@ -102,8 +87,6 @@ jobs:
         run: python3 scripts/check-browser-client-dependencies.py
       - name: Verify CI change detection
         run: python3 -B scripts/test_detect_ci_build_inputs.py -v
-      - name: Verify the cloud worker test runner
-        run: python3 -B scripts/test_run_cloud_worker_tests.py -v
       - name: Verify the nightly macOS release builds watcher
         run: python3 -B scripts/test_nightly_release_watch.py -v
       - name: Verify the PR readiness check
@@ -120,11 +103,9 @@ jobs:
         run: python3 -B scripts/test_check_test_durations.py -v
       - name: Verify the test duration report
         run: python3 -B scripts/test_publish_test_durations.py -v
-      - name: Verify the setup gate runner
-        run: python3 -B scripts/test_setup_gate.py -v
 
   # One diff answers every gated lane: the release Artifacts builds and, on
-  # pull requests, the Rust build and test jobs and the Linux speech tests.
+  # pull requests, the Rust build and test jobs.
   # It runs on its own small runner so the Rust jobs wait seconds for it, not
   # for every repo check. The classification lives in a script with its own
   # test suite (run in Repo checks) because a silent misclassification skips a
@@ -137,15 +118,13 @@ jobs:
       release_inputs: ${{ steps.changes.outputs.release_inputs }}
       macos_release_inputs: ${{ steps.changes.outputs.macos_release_inputs }}
       rust_inputs: ${{ steps.changes.outputs.rust_inputs }}
-      speech_inputs: ${{ steps.changes.outputs.speech_inputs }}
-      packaging_inputs: ${{ steps.changes.outputs.packaging_inputs }}
       vnc_pin: ${{ steps.changes.outputs.vnc_pin }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: changes
-        name: Detect packaging, release and Rust inputs
+        name: Detect release and Rust inputs
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -156,24 +135,6 @@ jobs:
   # Both feature sets share one runner: each finished in well under a minute,
   # the boundary and geometry checks above them are identical, and a second
   # matrix leg bought a duplicate cache entry for a near-identical graph.
-  # A change under packaging/ builds the image before it merges. The publish
-  # workflow runs on a push to main only, so a broken Dockerfile would otherwise
-  # reach main before any build ran it. The image compiles the browser crates
-  # too, but a change there is covered by the Rust jobs on every run; only the
-  # recipe is a separate input.
-  browser-vm-image:
-    name: Browser VM image build
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.packaging_inputs == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - name: Build the browser VM image
-        run: docker build --file packaging/browser-vm/Dockerfile --tag horizon-browser-vm:ci .
-
   browser-engine:
     name: Browser engine
     needs: changes
@@ -285,8 +246,7 @@ jobs:
     # it: when that job fails, its output is empty and this job still runs.
     if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: ubuntu-latest
-    # Three sequential tiers, with headroom for a cold cache: the first tier
-    # then compiles the vendored speech C++ tree before it can lint.
+    # Three sequential tiers, with headroom for a cold cache.
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
@@ -305,26 +265,18 @@ jobs:
             echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
           fi
       - run: rustup component add clippy
-      # `speech` (CPU) is the widest feature set a plain runner can build:
-      # speech-cuda needs nvcc and speech-vulkan the Vulkan SDK, and their
-      # Rust surface is identical to `speech` (they only toggle native
-      # backends). cpal needs the ALSA headers on Linux.
-      - if: ${{ !env.LOCALCI }}
-        run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - name: Install video assembler
         if: ${{ !env.LOCALCI }}
         run: bash scripts/install-ci-video-build-tools.sh
       - name: Blocking tier
-        run: cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warnings
-      # `--features speech` so the unwrap/expect ban also covers the speech
-      # runtime code.
+        run: cargo clippy --locked --all-targets --features trace-profiling -- -D warnings
       - name: Strict tier
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+        run: cargo clippy --locked --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
       - name: Pedantic tier (advisory)
         if: ${{ !cancelled() }}
         run: |
-          cargo clippy --locked --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic || {
+          cargo clippy --locked --workspace --all-targets -- -D warnings -W clippy::pedantic || {
             echo "::warning::Pedantic lint debt detected (non-blocking advisory tier)."
           }
 
@@ -337,42 +289,16 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.rust_inputs != 'false' }}
     runs-on: ${{ matrix.os }}
     # Headroom for a cold cache. A lock bump, toolchain bump, or eviction
-    # rebuilds the vendored speech C++ tree, and a job that times out skips
-    # the cache save, so the next run starts cold again.
-    # On Linux, ui, libs, libs-extra, and speech run as four jobs. ui,
-    # libs-extra, and speech restore `linux-test`, which the speech shard saves;
-    # a miss on main rebuilds the whole workspace there before the speech
-    # feature. `libs` restores `linux-test-libs` and saves it itself, because its
-    # package selection resolves features that no other shard builds; sharing the
-    # other entry made every hit recompile 74 crates. Each key still includes
-    # this job id.
-    # `libs` runs the one workspace selection with the opt-in features, and
-    # `libs-extra` runs the single-package lanes and the example that need their
-    # own feature resolution. The two ran as one job before this split: cargo
-    # resolves features per selection, so both graphs were paid for in series,
-    # and the workspace selection alone was 656 s of that job's 999 s.
-    # macOS runs libs, libs-extra, and speech as three jobs. One macOS job set
-    # the pull request time, about 20 minutes warm, so the jobs start side by
-    # side. Each macOS cache key has one saver. libs-extra restores the libs entry
-    # and never writes it; libs and speech keep one key each because libs
-    # compiles most of the workspace and speech compiles horizon-ui with the
-    # feature, so one shared entry would make one of them rebuild. GitHub-hosted accounts get about five concurrent macOS
-    # jobs, and three test jobs per run leave room for the nightly release builds
-    # and for another pull request. The speech pass runs the horizon-ui tests, so
-    # macOS skips the plain ui pass; the Linux ui job tests the build without
-    # speech.
+    # rebuilds the dependency graph, and a job that times out skips the cache
+    # save, so the next run starts cold again.
+    # Both operating systems run ui and libs as two jobs: ui tests horizon-ui
+    # with libtest, libs tests the rest of the workspace with nextest and adds
+    # the doctests. Each shard keeps its own cache key, because cargo resolves
+    # features per package selection and a shared entry would leave one of the
+    # two to rebuild what the other saved. GitHub-hosted accounts get about five
+    # concurrent macOS jobs, and two test jobs per run leave room for the
+    # nightly release builds and for another pull request.
     timeout-minutes: ${{ matrix.timeout_minutes || 35 }}
-    # On a pull request that changes no speech input, horizon-ui included
-    # (see Detect changed inputs), the Linux speech job skips its steps
-    # instead of the whole job: a job-level `if` cannot read the matrix, and
-    # a separate job would change the job id in the shared `linux-test` cache
-    # key. Clippy still compiles the speech code on every pull request. A
-    # push never skips, because this job saves the Linux cache on main. Only
-    # an explicit false skips, so a failed detection still runs the tests.
-    # Every step that this leg runs checks the flag; a new one must too
-    # (Verify CI change detection checks this).
-    env:
-      HORIZON_CI_SKIP_SPEECH: ${{ github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && needs.changes.outputs.speech_inputs == 'false' }}
     strategy:
     # A failing OS releases the other runner instead of holding it to the
     # full timeout; the cancelled sibling keeps its logs and a re-run
@@ -390,56 +316,27 @@ jobs:
             name: Linux x64
             cache_key: linux-test-libs
             shard: libs
-            save_cache: true
-          - os: ubuntu-latest
-            name: Linux x64
-            cache_key: linux-test
-            shard: libs-extra
-          - os: ubuntu-latest
-            name: Linux x64
-            cache_key: linux-test
-            shard: speech
-            save_cache: true
           - os: macos-latest
             name: macOS arm64
             cache_key: macos-test-libs
             shard: libs
-            save_cache: true
             # Cold-cache headroom for the workspace build that fills the entry.
             timeout_minutes: 60
           - os: macos-latest
             name: macOS arm64
-            cache_key: macos-test-libs
-            shard: libs-extra
-            # The single-package lanes only. It restores the entry the libs job
-            # saves and never writes it, so one key keeps one saver.
-            timeout_minutes: 45
-          - os: macos-latest
-            name: macOS arm64
-            cache_key: macos-test-speech
-            shard: speech
-            save_cache: true
-            # horizon-ui with the speech feature, plus the Apple cross-build.
+            cache_key: macos-test-ui
+            shard: ui
             timeout_minutes: 45
     steps:
-      - name: Skip the speech tests
-        if: env.HORIZON_CI_SKIP_SPEECH == 'true'
-        shell: bash
-        run: |
-          echo "::notice::No speech inputs changed; the speech tests did not run."
-          echo "Skipped: this pull request changes no speech input (see Detect changed inputs)." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v7
-        if: env.HORIZON_CI_SKIP_SPEECH != 'true'
         with:
           lfs: true
       - id: rust-cache
-        if: env.HORIZON_CI_SKIP_SPEECH != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Report rust-cache status
-        if: env.HORIZON_CI_SKIP_SPEECH != 'true'
         shell: bash
         run: |
           if [ "${{ steps.rust-cache.outputs.cache-hit }}" = "true" ]; then
@@ -456,30 +353,23 @@ jobs:
         if: startsWith(matrix.os, 'macos-')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"
       - name: Install video assembler
-        if: ${{ !env.LOCALCI && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        if: ${{ !env.LOCALCI }}
         shell: bash
         run: bash scripts/install-ci-video-build-tools.sh
-      # Speech links ALSA. The other shards do not build that feature.
-      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
-        run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
-      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs-extra' }}
-        run: bash scripts/install-ci-ubuntu-dependencies.sh tmux
       # The remote browser bridge lane needs an SSH target that answers without a
       # prompt. A runner has no sshd, so this step starts a user-level one on a
       # loopback port and aliases it. HORIZON_BROWSER_REMOTE_REQUIRED makes the
       # parity test fail, not skip, when that transport breaks.
-      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+      - if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}
         run: bash scripts/install-ci-ubuntu-dependencies.sh openssh-server
       - name: Start the loopback SSH transport
-        if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}
         shell: bash
         run: bash scripts/ci-ssh-transport.sh
       - name: Test shard
-        if: env.HORIZON_CI_SKIP_SPEECH != 'true'
         shell: bash
         env:
           HORIZON_CI_SHARD: ${{ matrix.shard }}
-          HORIZON_CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: bash scripts/ci-cargo-test-shard.sh
       # #1796 asks for the duration baseline of every change to main. The shard
       # already keeps nextest's stream, so publishing it is one pass over a file:
@@ -487,72 +377,12 @@ jobs:
       - name: Publish the test durations
         # `!cancelled()` publishes the record of a shard that failed, which is the
         # run whose durations a reader needs most.
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.shard == 'libs' && env.HORIZON_CI_SKIP_SPEECH != 'true' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.shard == 'libs' }}
         shell: bash
         run: |
           python3 -B scripts/publish-test-durations.py \
             --stream "$RUNNER_TEMP/nextest-libs.json" \
             --label "${{ matrix.name }} libs" >> "$GITHUB_STEP_SUMMARY"
-      # horizon-chromecast and horizon-media are standalone libraries that also
-      # target Apple mobile platforms; keep device and simulator builds compiling.
-      - name: Cross-build portable casting crates for Apple mobile targets
-        # Runs even when a test shard failed, so a test failure does not hide
-        # this check.
-        if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'speech' }}
-        shell: bash
-        # This job saves the macOS cache entry. A separate target directory keeps
-        # the iOS builds and their host build scripts out of it.
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/apple-mobile-target
-        run: |
-          # A component download can fail on a network error, so try three times.
-          for attempt in 1 2 3; do
-            rustup target add aarch64-apple-ios aarch64-apple-ios-sim && break
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::rustup target add failed three times"
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
-            cargo build --locked -p horizon-media --all-features --target "$target"
-            cargo build --locked -p horizon-chromecast --target "$target"
-            cargo build --locked -p horizon-chromecast --no-default-features --target "$target"
-          done
-      # The worker image scripts need util-linux flock and bash 4, so the
-      # suite runs on the Linux libs-extra shard only. A skipped test fails the
-      # step: the helper-gated contract tests and the git-lfs hydration tests skip
-      # silently when a prerequisite is gone.
-      # The suite drives the worker and the browser MCP as real processes, and it
-      # looks for `horizon-browser` beside the worker binary. Only a package with
-      # integration tests gets its binary built beside the test binaries, so build
-      # both binaries here instead of relying on the workspace selection that the
-      # libs shard makes.
-      # A local localci run only warns, because some tests need root, which a
-      # runner has through passwordless sudo and a developer computer should not.
-      - name: Cloud worker scripts
-        if: matrix.os == 'ubuntu-latest' && matrix.shard == 'libs-extra'
-        shell: bash
-        run: |
-          cargo build --locked -p horizon-cloud-worker -p horizon-browser-cli
-          # One process per module, four at a time: the suite waits on real
-          # processes, so it takes 58 s instead of 162 s. The script exits 3 when
-          # a module skipped a test, which the check below turns into the same
-          # failure it always was.
-          status=0
-          HORIZON_TEST_CLOUD_WORKER="$PWD/target/debug/horizon-cloud-worker" \
-            bash scripts/run-cloud-worker-tests.sh "$RUNNER_TEMP/cloud-worker-tests.log" 4 || status=$?
-          if [ "$status" -eq 3 ]; then
-            if [ -n "${LOCALCI:-}" ]; then
-              echo "::warning::Cloud worker tests were skipped on this computer; GitHub CI runs them."
-            else
-              echo "::error::Cloud worker tests were skipped; install their prerequisites instead."
-              exit 1
-            fi
-          elif [ "$status" -ne 0 ]; then
-            # A failed module, or the runner's own refusal: either way nothing passed.
-            exit 1
-          fi
 
   # Docs/CI-only pushes to main must not pay for release builds, so this job
   # is gated on the paths that can change the binary, as detected by Detect

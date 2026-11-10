@@ -22,8 +22,6 @@ use index_file::{IndexChange, IndexFile};
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
 
 pub use deletion_notice::SessionDeletionNotice;
-#[cfg(feature = "cloud-workspaces")]
-pub use runtime_index::{CloudPanelStatus, ParkedPanel};
 
 pub use model::{
     ResolvedSession, SessionLease, SessionOpenDisposition, SessionSummary, StartupChooser, StartupDecision,
@@ -307,7 +305,7 @@ impl SessionStore {
     /// The board or metadata cannot be serialized or written, or the session writer
     /// writes this session now.
     pub fn save_runtime_state(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
-        let _direct = self.writer.supersede(session_id, runtime_state)?;
+        let _direct = self.writer.supersede(session_id)?;
         self.write_runtime_state(session_id, runtime_state, atomic_write)?;
         self.writer.queue_index(self, IndexChange::Touch(session_id.to_owned()));
         Ok(())
@@ -616,7 +614,7 @@ pub(crate) fn require_directory_durability() -> std::io::Result<()> {
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "Cloud operations require a Unix host until durable directory updates are supported on this platform",
+            "Durable directory updates are unsupported on this platform",
         ))
     }
 }

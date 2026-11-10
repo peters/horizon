@@ -25,7 +25,7 @@ impl HorizonApp {
             if panel.device().is_none() || self.workspace_is_detached(panel.workspace_id) {
                 continue;
             }
-            let exclusion = self.device_render_exclusion(panel, canvas, HostViewport::Root);
+            let exclusion = self.device_render_exclusion(panel, canvas);
             let observation = self.device_host_canvas(canvas);
             if let Some(state) = self.panel_render_caches.device_ui_state.get_mut(&panel.id) {
                 state.host.record(HostViewport::Root, Some(observation), exclusion);
@@ -86,7 +86,7 @@ impl HorizonApp {
             if panel.workspace_id != workspace || panel.device().is_none() {
                 continue;
             }
-            let exclusion = self.device_render_exclusion(panel, canvas, HostViewport::Detached);
+            let exclusion = self.device_render_exclusion(panel, canvas);
             let observation = self.device_host_canvas(canvas);
             if let Some(state) = self.panel_render_caches.device_ui_state.get_mut(&panel.id) {
                 state.host.record(HostViewport::Detached, Some(observation), exclusion);
@@ -119,15 +119,9 @@ impl HorizonApp {
         }
     }
 
-    fn device_render_exclusion(&self, panel: &Panel, canvas: Rect, viewport: HostViewport) -> Option<HostExclusion> {
+    fn device_render_exclusion(&self, panel: &Panel, canvas: Rect) -> Option<HostExclusion> {
         if !panel.visible {
             return Some(HostExclusion::Hidden);
-        }
-        if viewport == HostViewport::Root {
-            #[cfg(feature = "cloud-workspaces")]
-            if !self.cloud_panel_is_in_view(&panel.local_id) {
-                return Some(HostExclusion::OtherCloudFullscreen);
-            }
         }
         self.panel_screen_geometry(panel, canvas)
             .is_none()

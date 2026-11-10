@@ -1,7 +1,6 @@
 mod agent_sessions;
 mod binding_bootstrap;
 mod claude_live_sessions;
-pub(crate) mod cloud_groups;
 mod models;
 mod session_display;
 mod versioning;
@@ -19,7 +18,6 @@ use crate::layout::workspace_slot_width;
 use crate::panel::PanelKind;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
-use models::valid_local_id;
 
 pub use agent_sessions::{
     AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure,
@@ -46,7 +44,7 @@ fn browser_profile_state(browser: &crate::browser::BrowserPanelState, hidden: bo
 
 pub use models::{
     AgentSessionBinding, AgentSessionKey, BrowserHostState, BrowserProfileState, DetachedWorkspaceState, PanelState,
-    PanelTemplateRef, RemoteWorkspaceReference, WorkspaceState, WorkspaceTemplateRef,
+    PanelTemplateRef, WorkspaceState, WorkspaceTemplateRef,
 };
 
 const RUNTIME_STATE_VERSION: u32 = 3;
@@ -76,7 +74,6 @@ pub struct RuntimeState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached_workspaces: Vec<DetachedWorkspaceState>,
     pub workspaces: Vec<WorkspaceState>,
-    pub cloud_groups: cloud_groups::CloudGroupsState,
     /// Browser config injected by the app before restore. Core-only board
     /// snapshots store a default placeholder because a [`Board`] does not
     /// own the config that created it.
@@ -108,7 +105,6 @@ impl RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces,
-            cloud_groups: cloud_groups::CloudGroupsState::default(),
             browser: config.browser.clone(),
         }
     }
@@ -137,19 +133,17 @@ impl RuntimeState {
     /// version is newer than this binary supports.
     pub fn from_yaml(content: &str) -> Result<Self> {
         let content = crate::retired_panel_kinds::without_retired(content);
-        serde_yaml::from_str::<Self>(content.as_ref())
-            .map_err(|error| Error::State(error.to_string()))?
-            .into_current()
+        let state = serde_yaml::from_str::<Self>(content.as_ref()).map_err(|error| Error::State(error.to_string()))?;
+        Ok(state.into_current())
     }
 
-    /// Validate a decoded snapshot and bring it to the current version, the
-    /// same way for every store that it was read from.
-    pub(crate) fn into_current(mut self) -> Result<Self> {
-        self.validate_remote_references()?;
+    /// Bring a decoded snapshot to the current version, the same way for every
+    /// store that it was read from.
+    pub(crate) fn into_current(mut self) -> Self {
         self.ensure_local_ids();
         self.migrate_canvas_view();
         self.version = RUNTIME_STATE_VERSION;
-        Ok(self)
+        self
     }
 
     /// Serialize this runtime state to YAML.
@@ -158,7 +152,6 @@ impl RuntimeState {
     ///
     /// Returns an error if serialization fails or the state version is unsupported.
     pub fn to_yaml(&self) -> Result<String> {
-        self.validate_remote_references()?;
         serde_yaml::to_string(self).map_err(|error| Error::State(error.to_string()))
     }
 
@@ -181,11 +174,6 @@ impl RuntimeState {
     }
 
     pub fn ensure_local_ids(&mut self) {
-        // Remote-bearing snapshots require complete identities. Never repair away
-        // an invalid binding before the load/save/restore validation boundary.
-        if self.has_remote_references() {
-            return;
-        }
         if self.version == 0 {
             self.version = RUNTIME_STATE_VERSION;
         }
@@ -215,52 +203,6 @@ impl RuntimeState {
                 }
             }
         }
-    }
-
-    fn has_remote_references(&self) -> bool {
-        self.workspaces.iter().any(|workspace| {
-            workspace.remote_workspace.is_some()
-                || workspace.panels.iter().any(|panel| panel.remote_workspace.is_some())
-        })
-    }
-
-    /// Validate client references without provider I/O or ownership adoption.
-    /// # Errors
-    /// Remote-bearing snapshots require version 3, unique stable identities and
-    /// SSH views with no local agent resume or incompatible workspace reference.
-    pub fn validate_remote_references(&self) -> Result<()> {
-        if !self.has_remote_references() {
-            return Ok(());
-        }
-        if self.version != RUNTIME_STATE_VERSION {
-            return Err(Error::State("remote references require runtime state version 3".into()));
-        }
-        let mut workspace_ids = HashSet::new();
-        let mut panel_ids = HashSet::new();
-        for workspace in &self.workspaces {
-            if !valid_local_id(&workspace.local_id) || !workspace_ids.insert(&workspace.local_id) {
-                return Err(Error::State(
-                    "invalid or duplicate remote-view workspace identity".into(),
-                ));
-            }
-            for panel in &workspace.panels {
-                if !valid_local_id(&panel.local_id) || !panel_ids.insert(&panel.local_id) {
-                    return Err(Error::State("invalid or duplicate remote-view panel identity".into()));
-                }
-                if workspace.remote_workspace.is_some() && panel.remote_workspace != workspace.remote_workspace {
-                    return Err(Error::State("remote panel reference differs from its workspace".into()));
-                }
-                if panel.remote_workspace.is_some() {
-                    RemoteWorkspaceReference::validate_client_panel(
-                        &panel.local_id,
-                        panel.kind,
-                        &panel.resume,
-                        panel.session_binding.as_ref(),
-                    )?;
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Give copied browser panels fresh manifest and profile identities.
@@ -328,7 +270,6 @@ impl RuntimeState {
                     .panels
                     .iter()
                     .filter_map(|panel_id| board.panel(*panel_id))
-                    .filter(|panel| !panel.transient)
                     .map(|panel| {
                         let terminal = panel.terminal();
                         let editor = panel.editor();
@@ -336,7 +277,6 @@ impl RuntimeState {
 
                         PanelState {
                             local_id: panel.local_id.clone(),
-                            remote_workspace: panel.remote_workspace().cloned(),
                             name: panel.title.clone(),
                             name_is_custom: Some(panel.name_is_custom()),
                             kind: panel.kind,
@@ -364,15 +304,10 @@ impl RuntimeState {
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
                             browser_profile: browser
-                                .map(|browser| {
-                                    browser_profile_state(
-                                        browser,
-                                        !panel.visible && !board.is_hidden_for_disposal(panel.id),
-                                    )
-                                })
+                                .map(|browser| browser_profile_state(browser, !panel.visible))
                                 .or_else(|| {
                                     panel.disconnected_browser_profile.clone().map(|mut profile| {
-                                        profile.hidden = !panel.visible && !board.is_hidden_for_disposal(panel.id);
+                                        profile.hidden = !panel.visible;
                                         profile
                                     })
                                 }),
@@ -393,7 +328,6 @@ impl RuntimeState {
 
                 WorkspaceState {
                     local_id: workspace.local_id.clone(),
-                    remote_workspace: workspace.remote_workspace.clone(),
                     name: workspace.name.clone(),
                     cwd: workspace.cwd.as_ref().map(|path| path.display().to_string()),
                     position: Some(workspace.position),
@@ -419,7 +353,6 @@ impl RuntimeState {
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,
-            cloud_groups: board.cloud_groups.clone(),
             // Save-path placeholder: the app refreshes this field with the
             // current config before any restore uses it.
             browser: crate::browser::BrowserConfig::default(),
@@ -442,7 +375,6 @@ impl Default for RuntimeState {
             focused_panel_local_id: None,
             detached_workspaces: Vec::new(),
             workspaces: Vec::new(),
-            cloud_groups: cloud_groups::CloudGroupsState::default(),
             browser: crate::browser::BrowserConfig::default(),
         }
     }

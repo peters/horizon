@@ -2,7 +2,7 @@ use egui::{
     Align, Color32, CornerRadius, Key, Layout, Modifiers, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
     UiBuilder, Vec2,
 };
-use horizon_core::{PanelId, Workspace, WorkspaceId};
+use horizon_core::{Workspace, WorkspaceId};
 
 use super::HorizonApp;
 use crate::theme;
@@ -23,27 +23,9 @@ impl HorizonApp {
         &self,
         ui: &mut Ui,
         launcher: &Response,
-        panel_id: PanelId,
         current: WorkspaceId,
     ) -> Option<WorkspaceId> {
-        #[cfg(feature = "cloud-workspaces")]
-        let can_move = !self.cloud_prototype.groups.contains_panel(&self.board, panel_id);
-        #[cfg(not(feature = "cloud-workspaces"))]
-        let can_move = true;
-        let remote = self
-            .board
-            .panel(panel_id)
-            .and_then(horizon_core::Panel::remote_workspace);
-        render_destination_search(ui, launcher, &self.board.workspaces, current, |workspace| {
-            let allowed = can_move
-                && workspace
-                    .remote_workspace
-                    .as_ref()
-                    .is_none_or(|reference| Some(reference) == remote);
-            #[cfg(feature = "cloud-workspaces")]
-            let allowed = allowed && !self.cloud_prototype.groups.contains_workspace(&workspace.local_id);
-            allowed
-        })
+        render_destination_search(ui, launcher, &self.board.workspaces, current)
     }
 }
 
@@ -52,7 +34,6 @@ fn render_destination_search(
     launcher: &Response,
     workspaces: &[Workspace],
     current: WorkspaceId,
-    can_move: impl Fn(&Workspace) -> bool,
 ) -> Option<WorkspaceId> {
     let id = launcher.id.with(("workspace_destination", ui.ctx().viewport_id()));
     let frame = ui.ctx().cumulative_frame_nr();
@@ -91,7 +72,7 @@ fn render_destination_search(
         .collect();
     let eligible: Vec<_> = matches
         .iter()
-        .filter(|workspace| workspace.id != current && can_move(workspace))
+        .filter(|workspace| workspace.id != current)
         .map(|workspace| workspace.id)
         .collect();
     if search.changed() || !state.selected.is_some_and(|selected| eligible.contains(&selected)) {
@@ -113,7 +94,6 @@ fn render_destination_search(
     chosen = render_results(
         ui,
         &matches,
-        &can_move,
         ResultPresentation {
             id,
             current,
@@ -148,12 +128,7 @@ struct ResultPresentation {
     keyboard_moved: bool,
 }
 
-fn render_results(
-    ui: &mut Ui,
-    matches: &[&Workspace],
-    can_move: &impl Fn(&Workspace) -> bool,
-    presentation: ResultPresentation,
-) -> Option<WorkspaceId> {
+fn render_results(ui: &mut Ui, matches: &[&Workspace], presentation: ResultPresentation) -> Option<WorkspaceId> {
     let ResultPresentation {
         id,
         current,
@@ -176,7 +151,7 @@ fn render_results(
         }
         for workspace in matches {
             let is_current = workspace.id == current;
-            let enabled = !is_current && can_move(workspace);
+            let enabled = !is_current;
             let selected = enabled && selected == Some(workspace.id);
             let name = if is_current {
                 format!("{} (current)", workspace.name)

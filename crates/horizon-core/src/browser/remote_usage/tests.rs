@@ -201,7 +201,7 @@ fn memory_snapshot_survives_credential_clear_and_unsupported_providers_do_not_fe
     let mut profile = profile();
     let mut credentials = credentials();
     credentials
-        .set_session_value("cloud", &profile, &CredentialReference::from("key"), b"synthetic-key")
+        .set_session_value("remote", &profile, &CredentialReference::from("key"), b"synthetic-key")
         .expect("credential");
     let prepared = PreparedUsage::new(&profile, &credentials).expect("snapshot");
     credentials.clear_session();
@@ -230,7 +230,7 @@ fn session_credentials_do_not_wait_for_an_unrelated_keychain_lock() {
     let profile = profile();
     let mut credentials = credentials();
     credentials
-        .set_session_value("cloud", &profile, &CredentialReference::from("key"), b"synthetic-key")
+        .set_session_value("remote", &profile, &CredentialReference::from("key"), b"synthetic-key")
         .expect("credential");
     let deadline = Instant::now() + Duration::from_secs(2);
     let keychain = loop {
@@ -327,7 +327,7 @@ fn usage_delegation_rejects_unrelated_and_lookalike_origins() {
             profile.endpoint = endpoint;
             let mut credentials = credentials();
             credentials
-                .set_session_value("cloud", &profile, &CredentialReference::from("key"), b"synthetic-key")
+                .set_session_value("remote", &profile, &CredentialReference::from("key"), b"synthetic-key")
                 .expect("credential");
             assert_eq!(
                 PreparedUsage::new(&profile, &credentials)
@@ -438,7 +438,7 @@ fn duplicate_environment_references_resolve_from_the_original_binding() {
     binding.slot = Some("HORIZON_USAGE_DUPLICATE_TEST".into());
     let mut credentials = credentials();
     credentials.load_environment_bindings(&horizon_browser::remote::RemoteBrowserConfig {
-        providers: [("cloud".into(), profile.clone())].into(),
+        providers: [("remote".into(), profile.clone())].into(),
         ..Default::default()
     });
     let prepared =

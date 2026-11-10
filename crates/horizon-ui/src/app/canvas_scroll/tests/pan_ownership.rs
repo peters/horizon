@@ -1,29 +1,6 @@
 use super::*;
 
 #[test]
-fn a_surface_contact_cannot_deliver_raw_wheels_to_a_panel() {
-    let mut gesture = ScrollGesture::default();
-    let options = InputOptions::default();
-    let _ = gesture.route(
-        &pass(1.0, vec![wheel(Vec2::ZERO, TouchPhase::Start)]),
-        &options,
-        ScrollTarget::Surface(901),
-        true,
-        &mut |_, _| false,
-    );
-    let routing = gesture.route(
-        &pass(1.016, vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]),
-        &options,
-        ScrollTarget::Panel(PANEL),
-        true,
-        &mut |_, _| panic!("a surface never checks panel extent"),
-    );
-    assert_eq!(routing.claimed_wheels, vec![0]);
-    assert!(!routing.pans_canvas);
-    assert!(routing.owns_smooth_scroll);
-}
-
-#[test]
 fn a_pan_contact_started_outside_does_not_rebind_when_it_enters() {
     for end in [TouchPhase::End, TouchPhase::Cancel] {
         let mut gesture = ScrollGesture::default();

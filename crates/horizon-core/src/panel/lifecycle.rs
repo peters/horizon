@@ -12,12 +12,11 @@ use super::spawn::{
 use super::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, Panel, PanelKind};
 
 impl Panel {
-    /// The content a board panel restarts with: the usage dashboard starts empty, and the
-    /// setup board gets its rows from the app on the next frame. `None` for any other panel.
+    /// The content a board panel restarts with: the usage dashboard starts empty.
+    /// `None` for any other panel.
     fn fresh_board_content(&self) -> Option<PanelContent> {
         match &self.content {
             PanelContent::Usage(_) => Some(PanelContent::Usage(UsageDashboard::new())),
-            PanelContent::SetupBoard(_) => Some(PanelContent::SetupBoard(crate::SetupBoard::default())),
             _ => None,
         }
     }
@@ -35,11 +34,6 @@ impl Panel {
     /// also refuses stale authorization, unverifiable saved history or launch
     /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
-        if self.remote_workspace.is_some() {
-            return Err(Error::State(
-                "Remote development has been removed. Restart cannot run this retired task locally.".into(),
-            ));
-        }
         if let PanelContent::GitChanges(_) = &self.content {
             return Ok(());
         }

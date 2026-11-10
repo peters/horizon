@@ -24,19 +24,6 @@ impl HorizonApp {
             .is_some_and(|workspace| self.detached_workspaces.contains_key(&workspace.local_id))
     }
 
-    pub(super) fn focused_detached_workspace_id(&self, ctx: &Context) -> Option<horizon_core::WorkspaceId> {
-        self.detached_workspaces.keys().find_map(|local_id| {
-            let focused = ctx.input_for(detached_viewport_id(local_id), |input| {
-                input.viewport().focused.unwrap_or(false)
-            });
-            focused.then(|| self.board.workspace_id_by_local_id(local_id)).flatten()
-        })
-    }
-
-    pub(super) fn any_detached_viewport_focused(&self, ctx: &Context) -> bool {
-        self.focused_detached_workspace_id(ctx).is_some()
-    }
-
     /// Whether any workspace still lives in the root window. The root
     /// minimap renders only then; the overlay exclusion zone and every
     /// other consumer must share this predicate, or the minimap's corner
@@ -69,12 +56,6 @@ impl HorizonApp {
         let Some(workspace) = self.board.workspace(workspace_id) else {
             return false;
         };
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.groups.contains_workspace(&workspace.local_id)
-            || self.board.cloud_groups.contains_workspace(&workspace.local_id)
-        {
-            return false;
-        }
         !self.detached_workspaces.contains_key(&workspace.local_id)
     }
 
@@ -154,9 +135,6 @@ impl HorizonApp {
                 if viewport_ui.ctx().requested_repaint_last_pass() {
                     self.frame_stats.mark_continuous();
                 }
-                // Feed the focus aggregate consumed by the end-of-frame
-                // unattended-recording privacy guard.
-                self.any_viewport_focused |= viewport_ui.input(|input| input.viewport().focused.unwrap_or(false));
                 self.render_detached_workspace_window(viewport_ui, workspace_id, &local_id_for_viewport);
             });
         }
@@ -223,8 +201,7 @@ impl HorizonApp {
 
         // Keyboard/text events are collected exactly once, by
         // handle_canvas_pan_in_rect below: a second pass would consume the
-        // one-shot frame keyboard metadata twice and re-run the stateful
-        // speech filter (leaking an orphan hotkey key-up).
+        // one-shot frame keyboard metadata twice.
         self.filter_held_navigation_keys(ctx);
         let session_picker_open =
             super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
@@ -628,8 +605,6 @@ fn detached_viewport_builder(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "cloud-workspaces")]
-    mod cloud;
 
     use std::collections::BTreeSet;
     use std::sync::Arc;

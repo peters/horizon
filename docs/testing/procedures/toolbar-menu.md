@@ -1,6 +1,6 @@
 ---
 procedure: toolbar-menu
-feature: The toolbar New cloud button and Menu
+feature: The toolbar Menu and the sidebar New button
 platforms: [linux]
 cost: none
 destructive: no
@@ -8,30 +8,21 @@ secrets: none
 owner: peters
 ---
 
-# Toolbar New cloud and Menu test procedure
+# Toolbar Menu test procedure
 
 ## 1. Purpose
 
-This procedure makes sure that the toolbar shows two controls at the right:
-**+ New cloud** and **Menu**. It also makes sure that each control does its
-action without a menu, that each Menu row shows a title and a one-line
-description, that each row does its action, and that the controls stay in the
-toolbar in a narrow window.
+This procedure makes sure that the toolbar shows **Menu** at the right. It also
+makes sure that each Menu row shows a title and a one-line description, that
+each row does its action, and that the control stays in the toolbar in a narrow
+window.
 
 ## 2. Applicability
 
 - Candidate: a build with the toolbar **Menu** button.
 - Platforms: Linux. The toolbar is the same on macOS.
 - This procedure does not test these functions:
-  - The New cloud dialog. The
-    [New cloud dialog procedure](cloud-panels/c-new-cloud-dialog.md) tests it.
-  - The machine and hourly price in the tooltip of **+ New cloud**. They need
-    a cloud account.
-  - A build or computer where cloud workspaces are not ready. Then
-    **+ New cloud** is dimmed, or not in a build without cloud workspaces. The
-    dimmed button takes no click and no keyboard focus, and its tooltip says why.
-    **Add cloud here** in the Menu is dimmed too and says why on hover. The unit tests of the toolbar and the Menu cover it.
-  - **New Cloud** and **New Workspace** on the empty canvas. The canvas shows
+  - **New Workspace** on the empty canvas. The canvas shows
     them only on a board without workspaces, and the fixture always has a
     workspace. The unit tests of the empty canvas cover them.
   - The words that a screen reader speaks. The unit tests of the menu rows
@@ -49,7 +40,6 @@ toolbar in a narrow window.
   `scripts/device-smoke/serve.py`, with `--native-view`, and a Horizon host
   with a Device panel for the fixture.
 - `xdotool` and `import` (ImageMagick) for the fixture display.
-- No cloud account in the private state of the fixture.
 
 ## 5. Setup
 
@@ -57,8 +47,7 @@ toolbar in a narrow window.
    `vnc_address`.
 
    Result: The Device panel shows the fixture desktop. The Horizon window shows
-   the toolbar with **Horizon**, the search field, the FPS meter,
-   **+ New cloud** and **Menu**.
+   the toolbar with **Horizon**, the search field, the FPS meter and **Menu**.
 
 2. Set the Horizon window to 1600 × 1000 pixels or the size of the fixture
    desktop.
@@ -69,21 +58,8 @@ toolbar in a narrow window.
 
 Give each result to the report with the task ID.
 
-### 6.1 NEW — New cloud and New workspace
-1. Move the pointer onto **+ New cloud**.
-
-   Result: The button becomes lighter. A tooltip says that the new workspace
-   gets a cloud worker.
-
-2. Click **+ New cloud**.
-
-   Result: No menu opens. The New cloud dialog opens for a new workspace.
-
-3. Click **Cancel**.
-
-   Result: The dialog closes and the new workspace goes again.
-
-4. Click **New** in the sidebar header.
+### 6.1 NEW — New workspace
+1. Click **New** in the sidebar header.
 
    Result: No menu opens. One more empty workspace shows under **This PC**.
    The toolbar has no button for an empty workspace.
@@ -95,12 +71,10 @@ Give each result to the report with the task ID.
    Result: A menu opens under the button. It shows these captions and rows, each
    row with a one-line description:
    - **GO TO**: **Quick Nav**, **Sessions** and **Remote Hosts**.
-   - **CLOUD**: **Add cloud here**, **Cloud settings** and **Fit all clouds**.
    - **HORIZON**: **Settings**.
 
    The rows of Quick Nav, Sessions, Remote Hosts and Settings show their
-   keyboard shortcut at the right. **Fit all clouds** is dimmed when the board
-   has no cloud.
+   keyboard shortcut at the right.
 
 2. Click **Quick Nav**.
 
@@ -118,15 +92,6 @@ Give each result to the report with the task ID.
 
    Result: The Settings window opens. Close it.
 
-6. Open **Menu** and click **Cloud settings**.
-
-   Result: The cloud settings open. Close them.
-
-7. Open **Menu** and click **Add cloud here**.
-
-   Result: The New cloud dialog opens for the current workspace. Click
-   **Cancel**.
-
 ### 6.3 NARROW — A narrow window
 
 1. Set the Horizon window to its minimum width of 800 pixels.
@@ -135,9 +100,9 @@ Give each result to the report with the task ID.
    DISPLAY=<display> xdotool search --pid <child-pid> --name '^Horizon$' windowsize %1 800 900
    ```
 
-   Result: The tagline stays after **Horizon**. The FPS meter, **+ New cloud**
-   and **Menu** stay. The search field gets narrower and cuts its placeholder
-   text. No control overlaps the search field.
+   Result: The tagline stays after **Horizon**. The FPS meter and **Menu**
+   stay. The search field gets narrower and cuts its placeholder text. No
+   control overlaps the search field.
 
 2. Open **Menu**.
 
@@ -155,13 +120,9 @@ Give each result to the report with the task ID.
 
 2. Press Tab.
 
-   Result: A focus ring shows around **+ New cloud** only.
+   Result: A focus ring shows around **Menu** only.
 
-3. Press Tab.
-
-   Result: The focus ring moves to **Menu**.
-
-4. Press Enter.
+3. Press Enter.
 
    Result: The Menu opens. Press Escape.
 
@@ -169,8 +130,7 @@ Give each result to the report with the task ID.
 
 1. Open **Menu › Settings**. Under **Appearance**, choose **Light**.
 
-   Result: The board uses the light theme. The text on **+ New cloud** stays
-   readable on the accent color.
+   Result: The board uses the light theme. The **Menu** label is readable.
 
 2. Open **Menu**.
 
@@ -183,15 +143,13 @@ Give each result to the report with the task ID.
 
 ## 7. Pass criteria
 
-- NEW opens New cloud for a new workspace from **+ New cloud**, and makes an
-  empty workspace on this computer from **New** in the sidebar. No control
-  opens a menu.
+- NEW makes an empty workspace on this computer from **New** in the sidebar.
+  The control opens no menu.
 - MENU opens each action from its row and shows the captions, descriptions and
   shortcuts as written.
-- KEYS moves a focus ring over **+ New cloud** and **Menu**, and Enter opens the
-  Menu.
+- KEYS moves a focus ring over **Menu**, and Enter opens the Menu.
 - LIGHT shows readable controls and menus in the light theme.
-- NARROW keeps **+ New cloud** and **Menu** in the toolbar in a narrow window.
+- NARROW keeps **Menu** in the toolbar in a narrow window.
 
 ## 8. Cleanup
 

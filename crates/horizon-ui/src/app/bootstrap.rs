@@ -12,7 +12,7 @@ use horizon_core::{
 
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
-    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, settings, speech, util,
+    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, util,
 };
 use crate::command_registry::{self, CommandEntry};
 use crate::input;
@@ -110,8 +110,7 @@ impl HorizonApp {
         }: AppBootstrap,
     ) -> Self {
         Self {
-            #[cfg(target_os = "linux")] casting: super::casting::CastState::new(session_store.home().root().join("cast-pairings")),
-            board, #[cfg(feature = "cloud-workspaces")] cloud_prototype: super::cloud_panel::CloudPrototype::default(),
+            board,
             panels_to_close: Vec::new(), panels_to_restart: Vec::new(),
             workspace_assignments: Vec::new(), workspace_creates: Vec::new(),
             appearance_theme: config.appearance.theme,
@@ -142,14 +141,6 @@ impl HorizonApp {
             config_path,
             transcript_root: None,
             template_config: config.clone(),
-            speech: speech::SpeechSystem::from_config(&config.features.speech),
-            speech_global_hotkeys: None, speech_global_hotkeys_tried: false, speech_global_hotkeys_suspended: false, speech_global_events_pending: Vec::new(),
-            speech_held_bindings: Vec::new(),
-            speech_engaged_profile: None,
-            speech_escape_cancelled: false, speech_escape_release_pending: false,
-            speech_escape_release_deadline: None,
-            speech_notice: None,
-            any_viewport_focused: true,
             shortcuts,
             presets: config.resolved_presets(),
             window_config: config.window.clone(),
@@ -171,7 +162,6 @@ impl HorizonApp {
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None, settings_io: super::settings_io::SettingsIo::new(), settings_reload_pending: false,
             remote_browser_credentials: spawn_remote_browser_credentials(config),
-            speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             press_frame: super::press_frame::PressFrame::default(),

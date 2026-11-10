@@ -2,20 +2,20 @@ use super::*;
 
 const SAMPLE: &str = r#"{
   "providers": {
-    "device_cloud": {
+    "device_remote": {
       "adapter": "webdriver",
       "endpoint": "https://grid.example.net/wd/hub/",
-      "authentication": {"kind": "basic", "username_ref": "cloud-user", "password_ref": "cloud-key"},
+      "authentication": {"kind": "basic", "username_ref": "remote-user", "password_ref": "remote-key"},
       "credential_bindings": {
-        "cloud-user": {"store": "os_keychain", "slot": "remote-browser/device-cloud/username"},
-        "cloud-key": {"store": "session"}
+        "remote-user": {"store": "os_keychain", "slot": "remote-browser/device-remote/username"},
+        "remote-key": {"store": "session"}
       },
       "limits": {"max_sessions": 1, "allocation_timeout_seconds": 120, "idle_release_seconds": 180, "max_session_seconds": 1800}
     }
   },
   "targets": {
     "ios_phone": {
-      "provider": "device_cloud",
+      "provider": "device_remote",
       "browser_name": "safari",
       "platform_name": "iOS",
       "device": {"kind": "physical", "model": "iPhone 16", "os_version": "18"},
@@ -31,7 +31,7 @@ fn sample() -> RemoteBrowserConfig {
 }
 
 fn provider(config: &RemoteBrowserConfig) -> &RemoteProviderProfile {
-    config.providers.get("device_cloud").expect("provider exists")
+    config.providers.get("device_remote").expect("provider exists")
 }
 
 #[test]
@@ -138,15 +138,15 @@ fn authentication_references_must_be_bound_exactly() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
-        .remove(&CredentialReference::from("cloud-key"));
+        .remove(&CredentialReference::from("remote-key"));
     assert_eq!(
         config.validate().expect_err("missing binding"),
         RemoteConfigError::InvalidCredential {
-            provider: "device_cloud".into(),
-            reference: "cloud-key".into(),
+            provider: "device_remote".into(),
+            reference: "remote-key".into(),
             problem: CredentialReferenceProblem::MissingBinding,
         }
     );
@@ -155,7 +155,7 @@ fn authentication_references_must_be_bound_exactly() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .insert(
@@ -176,11 +176,11 @@ fn authentication_references_must_be_bound_exactly() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .insert(
-            CredentialReference::from("cloud-user"),
+            CredentialReference::from("remote-user"),
             CredentialBinding {
                 store: CredentialStoreKind::OsKeychain,
                 slot: None,
@@ -200,11 +200,11 @@ fn malformed_present_bindings_fail_at_definition_time() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .insert(
-            CredentialReference::from("cloud-user"),
+            CredentialReference::from("remote-user"),
             CredentialBinding {
                 store: CredentialStoreKind::OsKeychain,
                 slot: None,
@@ -222,10 +222,10 @@ fn malformed_present_bindings_fail_at_definition_time() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
-        .get_mut(&CredentialReference::from("cloud-user"))
+        .get_mut(&CredentialReference::from("remote-user"))
         .expect("binding")
         .slot = Some("bad slot with spaces".into());
     assert!(matches!(
@@ -238,10 +238,10 @@ fn malformed_present_bindings_fail_at_definition_time() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
-        .remove(&CredentialReference::from("cloud-key"));
+        .remove(&CredentialReference::from("remote-key"));
     config
         .validate_definition()
         .expect("a missing binding is readiness, not a definition error");
@@ -252,14 +252,14 @@ fn limits_are_bounded_per_field() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .limits
         .max_sessions = 0;
     assert_eq!(
         config.validate().expect_err("zero sessions"),
         RemoteConfigError::InvalidLimit {
-            provider: "device_cloud".into(),
+            provider: "device_remote".into(),
             field: "max_sessions",
             min: 1,
             max: 8
@@ -268,7 +268,7 @@ fn limits_are_bounded_per_field() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .limits
         .max_session_seconds = 100_000;
@@ -488,14 +488,14 @@ fn portable_export_strips_bindings_and_reports_presence() {
     assert!(!encoded.contains("credential_bindings"));
     assert!(!encoded.contains("os_keychain"));
     assert!(
-        encoded.contains("cloud-user"),
+        encoded.contains("remote-user"),
         "authentication references stay in the portable form"
     );
 
     let presence = config.binding_presence();
-    let cloud = presence.get("device_cloud").expect("provider presence");
-    assert_eq!(cloud.get(&CredentialReference::from("cloud-user")), Some(&true));
-    assert!(!portable.binding_presence()["device_cloud"][&CredentialReference::from("cloud-key")]);
+    let provider = presence.get("device_remote").expect("provider presence");
+    assert_eq!(provider.get(&CredentialReference::from("remote-user")), Some(&true));
+    assert!(!portable.binding_presence()["device_remote"][&CredentialReference::from("remote-key")]);
 }
 
 #[test]
@@ -504,14 +504,14 @@ fn import_adds_new_definitions_and_keeps_local_bindings() {
     let mut incoming = sample().export_portable();
     incoming
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .limits
         .max_sessions = 2;
     incoming.targets.insert(
         "android_phone".into(),
         RemoteTargetProfile {
-            provider: "device_cloud".into(),
+            provider: "device_remote".into(),
             browser_name: "chrome".into(),
             platform_name: "Android".into(),
             device: DeviceRequirement {
@@ -524,7 +524,7 @@ fn import_adds_new_definitions_and_keeps_local_bindings() {
         },
     );
     let summary = local.import_portable(&incoming).expect("import");
-    assert_eq!(summary.providers_updated, vec!["device_cloud".to_string()]);
+    assert_eq!(summary.providers_updated, vec!["device_remote".to_string()]);
     assert_eq!(summary.targets_added, vec!["android_phone".to_string()]);
     assert_eq!(summary.targets_updated, vec!["ios_phone".to_string()]);
     assert_eq!(provider(&local).limits.max_sessions, 2);
@@ -540,18 +540,21 @@ fn import_refuses_bindings_and_endpoint_changes_without_touching_local_state() {
     assert_eq!(
         local.import_portable(&with_bindings).expect_err("bindings rejected"),
         RemoteConfigError::ImportCarriesBindings {
-            provider: "device_cloud".into()
+            provider: "device_remote".into()
         }
     );
     assert_eq!(local, before);
 
     let mut redirected = sample().export_portable();
-    redirected.providers.get_mut("device_cloud").expect("provider").endpoint =
-        ControlEndpoint::parse("https://attacker.example.net/wd/hub").expect("parses");
+    redirected
+        .providers
+        .get_mut("device_remote")
+        .expect("provider")
+        .endpoint = ControlEndpoint::parse("https://attacker.example.net/wd/hub").expect("parses");
     assert_eq!(
         local.import_portable(&redirected).expect_err("endpoint conflict"),
         RemoteConfigError::ImportEndpointConflict {
-            provider: "device_cloud".into()
+            provider: "device_remote".into()
         }
     );
     assert_eq!(local, before);
@@ -564,17 +567,17 @@ fn import_refuses_bindings_and_endpoint_changes_without_touching_local_state() {
     let mut reshaped = sample().export_portable();
     reshaped
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .authentication = RemoteAuthentication::Bearer {
-        token_ref: CredentialReference::from("cloud-token"),
+        token_ref: CredentialReference::from("remote-token"),
     };
     assert_eq!(
         local
             .import_portable(&reshaped)
             .expect_err("authentication shape changed under local bindings"),
         RemoteConfigError::ImportAuthenticationConflict {
-            provider: "device_cloud".into()
+            provider: "device_remote".into()
         }
     );
     assert_eq!(local, before);
@@ -582,16 +585,16 @@ fn import_refuses_bindings_and_endpoint_changes_without_touching_local_state() {
     let mut unbound = sample();
     unbound
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .clear();
     let summary = unbound
         .import_portable(&reshaped)
         .expect("without local bindings the shape may change");
-    assert_eq!(summary.providers_updated, vec!["device_cloud".to_string()]);
+    assert_eq!(summary.providers_updated, vec!["device_remote".to_string()]);
     assert!(matches!(
-        unbound.providers["device_cloud"].authentication,
+        unbound.providers["device_remote"].authentication,
         RemoteAuthentication::Bearer { .. }
     ));
 }
@@ -599,13 +602,13 @@ fn import_refuses_bindings_and_endpoint_changes_without_touching_local_state() {
 #[test]
 fn error_messages_name_identifiers_only() {
     let error = RemoteConfigError::InvalidCredential {
-        provider: "device_cloud".into(),
-        reference: "cloud-key".into(),
+        provider: "device_remote".into(),
+        reference: "remote-key".into(),
         problem: CredentialReferenceProblem::MissingBinding,
     };
     assert_eq!(
         error.to_string(),
-        "provider `device_cloud`: credential `cloud-key` is referenced by the authentication block but has no credential binding"
+        "provider `device_remote`: credential `remote-key` is referenced by the authentication block but has no credential binding"
     );
     let endpoint = RemoteConfigError::InvalidEndpoint {
         provider: "p".into(),
@@ -619,14 +622,14 @@ fn duplicate_os_slots_on_one_origin_are_rejected_at_definition_time() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .insert(
-            CredentialReference::from("cloud-key"),
+            CredentialReference::from("remote-key"),
             CredentialBinding {
                 store: CredentialStoreKind::OsKeychain,
-                slot: Some("remote-browser/device-cloud/username".into()),
+                slot: Some("remote-browser/device-remote/username".into()),
             },
         );
     assert!(matches!(
@@ -693,18 +696,18 @@ fn environment_bindings_name_variables_not_values() {
     let mut config = sample();
     let bindings = &mut config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings;
     bindings.insert(
-        CredentialReference::from("cloud-user"),
+        CredentialReference::from("remote-user"),
         CredentialBinding {
             store: CredentialStoreKind::Environment,
             slot: Some("REMOTE_BROWSER_USERNAME".into()),
         },
     );
     bindings.insert(
-        CredentialReference::from("cloud-key"),
+        CredentialReference::from("remote-key"),
         CredentialBinding {
             store: CredentialStoreKind::Environment,
             slot: Some("REMOTE_BROWSER_ACCESS_KEY".into()),
@@ -732,11 +735,11 @@ fn environment_bindings_reject_missing_and_malformed_names() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .insert(
-            CredentialReference::from("cloud-user"),
+            CredentialReference::from("remote-user"),
             CredentialBinding {
                 store: CredentialStoreKind::Environment,
                 slot: None,
@@ -753,11 +756,11 @@ fn environment_bindings_reject_missing_and_malformed_names() {
     let mut config = sample();
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .credential_bindings
         .insert(
-            CredentialReference::from("cloud-user"),
+            CredentialReference::from("remote-user"),
             CredentialBinding {
                 store: CredentialStoreKind::Environment,
                 slot: Some("REMOTE-BROWSER-USER".into()),
@@ -771,14 +774,14 @@ fn environment_bindings_reject_missing_and_malformed_names() {
             ..
         }
     ));
-    assert!(error.to_string().contains("cloud-user"), "{error}");
+    assert!(error.to_string().contains("remote-user"), "{error}");
     assert!(!error.to_string().contains("secret"), "{error}");
 }
 
 #[test]
 fn provider_managed_capacity_ignores_legacy_session_limit_but_keeps_timeouts() {
     let mut config = sample();
-    let provider = config.providers.get_mut("device_cloud").expect("provider");
+    let provider = config.providers.get_mut("device_remote").expect("provider");
     provider.adapter = RemoteAdapterKind::Browserstack;
     provider.limits.max_sessions = 0;
     assert_eq!(provider.local_session_limit(), None);
@@ -788,7 +791,7 @@ fn provider_managed_capacity_ignores_legacy_session_limit_but_keeps_timeouts() {
     restored.validate().expect("round trip");
     config
         .providers
-        .get_mut("device_cloud")
+        .get_mut("device_remote")
         .expect("provider")
         .limits
         .max_session_seconds = 0;

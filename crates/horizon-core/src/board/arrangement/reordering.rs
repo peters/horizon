@@ -39,8 +39,8 @@ impl Board {
         })
     }
 
-    /// Move the slot of an arranged panel dragged to `position` onto the slot, a panel's or
-    /// a cloud's, under its center.
+    /// Move the slot of an arranged panel dragged to `position` onto the slot
+    /// under its center.
     pub fn reorder_arranged_slot(&mut self, source: PanelId, position: [f32; 2]) -> bool {
         let Some(panel) = self.panel(source) else {
             return false;

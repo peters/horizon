@@ -53,7 +53,7 @@ pub struct RemoteOrientationState {
     pub applied: Option<RemoteOrientation>,
 }
 
-/// Runtime presentation shared by desktop and cloud hosts.
+/// Runtime presentation shared by a local and a remote host.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RemoteOrientationView {
     #[serde(default)]
@@ -65,7 +65,7 @@ pub struct RemoteOrientationView {
     pub error: Option<String>,
 }
 
-/// Bounded terminal acknowledgements survive latest-only cloud polling.
+/// Bounded terminal acknowledgements survive the polling of a remote host.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RemoteOrientationCompletion {
     pub action_id: String,

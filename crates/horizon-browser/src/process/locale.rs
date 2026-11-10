@@ -1,6 +1,6 @@
 //! Chromium converts the file paths of uploads and drops with the character
 //! set of the C library. In a locale without UTF-8, such as the default `C`
-//! locale of a cloud worker, it drops each file whose name is not ASCII.
+//! locale of a remote host, it drops each file whose name is not ASCII.
 use std::ffi::OsStr;
 use std::process::Command;
 

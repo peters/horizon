@@ -33,7 +33,7 @@ class PresetsConfigTests(unittest.TestCase):
     def test_the_list_becomes_the_presets_of_the_fixture(self):
         document = serve.application_document('/tmp/fixture-data', presets=PI_AND_VARIANT)
         self.assertEqual(document['presets'], PI_AND_VARIANT)
-        # Two presets of one agent stay two entries: the caret in New cloud needs both.
+        # Two presets of one agent stay two entries.
         self.assertEqual([preset['kind'] for preset in document['presets']], ['pi', 'pi'])
 
     def test_a_resume_mode_horizon_rejects_stops_the_fixture_before_it_starts(self):

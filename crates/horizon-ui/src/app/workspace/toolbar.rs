@@ -11,9 +11,7 @@ use super::{
     WorkspaceAction, WorkspaceInteraction, WorkspaceVisual,
 };
 
-/// A workspace with panels has the toolbar, even when they are all hidden. So does one
-/// that holds only cloud cards: they take layout slots, and its cast button is then the
-/// only way to cast the workspace.
+/// A workspace with panels has the toolbar, even when they are all hidden.
 pub(super) fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) -> bool {
     workspace.panel_count > 0 || !workspace.is_empty
 }
@@ -55,10 +53,6 @@ pub(super) fn render_workspace_layout_toolbar(
                         if render_detach_button(ui, workspace) {
                             action = Some(WorkspaceAction::Detach);
                         }
-                        #[cfg(target_os = "linux")]
-                        if render_cast_button(ui, workspace) {
-                            action = Some(WorkspaceAction::Cast);
-                        }
                     });
                 });
         });
@@ -66,7 +60,7 @@ pub(super) fn render_workspace_layout_toolbar(
     action
 }
 
-/// Shared segmented layout controls for workspaces and cloud groups.
+/// Shared segmented layout controls for workspaces.
 pub(in crate::app) fn workspace_layout_buttons(
     ui: &mut egui::Ui,
     selected: &mut Option<WorkspaceLayout>,
@@ -181,7 +175,6 @@ pub(super) fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
                 + workspace_layout_preset_row_width()
                 + 4.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
                 + 54.0
-                + workspace_cast_button_room()
                 + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X),
             WORKSPACE_LAYOUT_BUTTON_HEIGHT + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y),
         ),
@@ -208,47 +201,6 @@ fn workspace_layout_preset_row_width() -> f32 {
         + workspace_layout_button_width(WorkspaceLayout::Grid)
 }
 
-/// Width of the cast button and the gap before it; casting is Linux-only.
-fn workspace_cast_button_room() -> f32 {
-    if cfg!(target_os = "linux") {
-        WORKSPACE_LAYOUT_BUTTON_SPACING + WORKSPACE_CAST_BUTTON_WIDTH
-    } else {
-        0.0
-    }
-}
-
-const WORKSPACE_CAST_BUTTON_WIDTH: f32 = 30.0;
-
-/// Casts the whole workspace, its panels and clouds, to an Apple TV.
-#[cfg(target_os = "linux")]
-fn render_cast_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
-    let on = workspace.casting;
-    let response = ui.add(
-        Button::new("")
-            .min_size(Vec2::new(WORKSPACE_CAST_BUTTON_WIDTH, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
-            .fill(theme::alpha(
-                theme::blend(theme::PANEL_BG_ALT(), workspace.color, if on { 0.22 } else { 0.05 }),
-                220,
-            ))
-            .stroke(Stroke::new(
-                1.0_f32,
-                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
-            ))
-            .corner_radius(8),
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cast workspace"));
-    let color = if on {
-        ui.visuals().selection.stroke.color
-    } else if response.hovered() {
-        ui.visuals().strong_text_color()
-    } else {
-        theme::FG_SOFT()
-    };
-    let icon = Rect::from_center_size(response.rect.center(), Vec2::splat(16.0));
-    crate::app::casting::paint_cast_icon(ui.painter(), icon, color);
-    response.on_hover_text("Cast this workspace").clicked()
-}
-
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
     let response = ui
         .add_enabled(
@@ -265,8 +217,7 @@ fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool 
                 ))
                 .corner_radius(8),
         )
-        .on_hover_text("Open in a separate window")
-        .on_disabled_hover_text("Cloud workspaces stay in the main window. Use the cloud's Full screen action.");
+        .on_hover_text("Open in a separate window");
     response.clicked()
 }
 
@@ -301,8 +252,6 @@ mod tests {
                 can_detach: true,
                 can_remove_empty: false,
             },
-            #[cfg(target_os = "linux")]
-            casting: false,
         }
     }
 
@@ -343,32 +292,6 @@ mod tests {
         action
     }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_cast_button_after_detach_emits_cast() {
-        let toolbar_rect = Rect::from_min_size(Pos2::new(400.0, 140.0), Vec2::new(260.0, 34.0));
-        let visual = test_workspace_visual(toolbar_rect);
-        let y =
-            toolbar_rect.min.y + f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y) + WORKSPACE_LAYOUT_BUTTON_HEIGHT / 2.0;
-        // Buttons may grow past their minimum width with their labels, so scan the row:
-        // the last button inside the toolbar's reserved width casts, the one before
-        // it detaches.
-        let room = workspace_layout_toolbar_rect(Rect::from_min_size(Pos2::ZERO, Vec2::new(120.0, 26.0)));
-        let emitted: Vec<_> = (0_u16..400)
-            .map(|step| toolbar_rect.min.x + 2.0 * f32::from(step))
-            .take_while(|x| *x <= toolbar_rect.min.x + room.width())
-            .filter_map(|x| click_toolbar(&visual, Pos2::new(x, y)))
-            .collect();
-        let first_cast = emitted
-            .iter()
-            .position(|action| matches!(action, WorkspaceAction::Cast));
-        assert!(first_cast.is_some(), "the cast button lies inside the reserved width");
-        assert!(
-            first_cast.is_some_and(|index| index > 0 && matches!(emitted[index - 1], WorkspaceAction::Detach)),
-            "the cast button follows Detach"
-        );
-    }
-
     /// Regression test for the egui 0.36 upgrade: layers marked
     /// `interactable(false)` became click-through in hit-testing, which made
     /// every toolbar button dead. Clicking the Grid button must emit an
@@ -400,8 +323,6 @@ mod tests {
                 WorkspaceAction::ArrangeLayout(_) => "ArrangeLayout(non-Grid)",
                 WorkspaceAction::CloseAllPanels => "CloseAllPanels",
                 WorkspaceAction::Detach => "Detach",
-                #[cfg(target_os = "linux")]
-                WorkspaceAction::Cast => "Cast",
             })
         );
     }

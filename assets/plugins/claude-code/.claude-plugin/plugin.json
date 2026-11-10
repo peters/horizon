@@ -1,7 +1,7 @@
 {
     "name": "horizon",
     "version": "0.1.0",
-    "description": "Horizon MCP skills for browsers, native viewers and desktop input, casting, cloud companions and network access, native app tests, and local speech diagnostics.",
+    "description": "Horizon MCP skills for browsers, native viewers and desktop input.",
     "mcpServers": "./.mcp.json",
     "author": {
         "name": "Horizon"

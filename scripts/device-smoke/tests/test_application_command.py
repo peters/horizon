@@ -23,7 +23,7 @@ class ApplicationCommandTest(unittest.TestCase):
         command = serve.application_command(APP, CONFIG, saved_session=True)
 
         self.assertEqual(command, ['/opt/horizon', '--config', '/run/horizon.yaml', '--new-session'])
-        self.assertNotIn('--ephemeral', command, 'a cloud needs a saved session')
+        self.assertNotIn('--ephemeral', command, '--saved-session keeps the session')
 
 
 if __name__ == '__main__':

@@ -96,7 +96,7 @@ fn board() -> RuntimeState {
         Some("Continue the synthetic task".into()),
         Some(42),
     ));
-    let mut state = RuntimeState {
+    RuntimeState {
         window: Some(WindowConfig::default()),
         canvas_view: Some(CanvasViewState::new([24.0, -12.0], 1.5)),
         active_workspace_local_id: Some("second".into()),
@@ -107,32 +107,7 @@ fn board() -> RuntimeState {
             workspace("empty", Vec::new()),
         ],
         ..RuntimeState::default()
-    };
-    add_cloud(&mut state, "second");
-    state
-}
-
-#[cfg(feature = "cloud-workspaces")]
-fn add_cloud(state: &mut RuntimeState, workspace: &str) {
-    let mut group = crate::cloud_panel::CloudGroup::new(
-        104,
-        "Synthetic cloud".into(),
-        workspace.into(),
-        "/synthetic/repository".into(),
-        [24.0, 128.0],
-    );
-    group.panels = vec!["editor".into()];
-    state.cloud_groups.0.push(group);
-}
-
-#[cfg(not(feature = "cloud-workspaces"))]
-fn add_cloud(state: &mut RuntimeState, workspace: &str) {
-    state.cloud_groups.push(serde_json::json!({
-        "issue": 104,
-        "workspace": workspace,
-        "environment": {"id": "issue-104", "image": "synthetic", "connection": "LocalPrototype"},
-        "panels": ["editor"],
-    }));
+    }
 }
 
 fn value(state: &RuntimeState) -> Value {
@@ -184,24 +159,13 @@ fn every_schema_version_has_one_migration_and_a_new_index_is_marked() {
 }
 
 #[test]
-fn a_saved_board_reads_back_from_the_index_with_its_environments() {
+fn a_saved_board_reads_back_from_the_index() {
     let fixture = Fixture::new();
     let state = board();
     let session = fixture.create(state.clone());
 
     assert_eq!(value(&indexed(&fixture.index(&session))), value(&state));
     assert_eq!(value(&fixture.loaded(&session)), value(&state));
-    let environments: Option<String> = query(
-        &fixture.index(&session),
-        "SELECT environments FROM workspaces WHERE local_id = 'second'",
-    );
-    let environments: Value = serde_json::from_str(&environments.expect("cloud environments")).expect("json");
-    assert_eq!(environments[0]["id"], "issue-104");
-    let local: Option<String> = query(
-        &fixture.index(&session),
-        "SELECT environments FROM workspaces WHERE local_id = 'first'",
-    );
-    assert_eq!(local, None);
     assert_eq!(
         query::<i64>(
             &fixture.index(&session),
@@ -494,73 +458,4 @@ fn deleting_a_session_closes_and_removes_its_index() {
     fixture.store.delete_session(&session).expect("delete session");
 
     assert!(!fixture.home.session_dir(&session).exists());
-}
-
-#[cfg(feature = "cloud-workspaces")]
-#[test]
-fn cloud_panels_keep_their_park_state_and_last_status_line() {
-    use std::time::Duration;
-
-    use crate::cloud_runtime::session_status::{SessionActivity, SessionStatus};
-    use crate::{CloudPanelStatus, ParkedPanel};
-
-    let fixture = Fixture::new();
-    let mut state = board();
-    let session = fixture.create(state.clone());
-    let read = SessionStatus {
-        id: "synthetic-session".into(),
-        activity: SessionActivity::Exited(Some(2)),
-        quiet_for: Some(Duration::from_secs(30)),
-        lines: vec!["first line".into(), "last line".into()],
-    };
-    let record = |panels: &[ParkedPanel<'_>]| {
-        fixture
-            .store
-            .record_cloud_panels(&session, panels)
-            .expect("record cloud panels");
-    };
-
-    record(&[
-        ParkedPanel {
-            local_id: "editor",
-            parked: true,
-            status: Some(&read),
-        },
-        ParkedPanel {
-            local_id: "shell",
-            parked: true,
-            status: None,
-        },
-    ]);
-    record(&[ParkedPanel {
-        local_id: "editor",
-        parked: false,
-        status: None,
-    }]);
-
-    let statuses = fixture.store.cloud_panel_statuses(&session).expect("statuses");
-    assert_eq!(statuses.len(), 2);
-    let CloudPanelStatus {
-        panel_local_id,
-        parked,
-        activity,
-        quiet_for,
-        last_line,
-        read_at,
-    } = &statuses[0];
-    assert_eq!(panel_local_id, "editor");
-    assert!(!parked);
-    assert_eq!(*activity, Some(SessionActivity::Exited(Some(2))));
-    assert_eq!(*quiet_for, Some(Duration::from_secs(30)));
-    assert_eq!(last_line.as_deref(), Some("last line"));
-    assert!(read_at.is_some());
-    assert!(statuses[1].parked);
-    assert_eq!(statuses[1].activity, None);
-
-    state.workspaces[0].panels.remove(0);
-    fixture.store.save_runtime_state(&session, &state).expect("save");
-
-    let statuses = fixture.store.cloud_panel_statuses(&session).expect("statuses");
-    assert_eq!(statuses.len(), 1, "a panel that left the board keeps no status");
-    assert_eq!(statuses[0].panel_local_id, "editor");
 }

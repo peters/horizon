@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Platform cursor query, focused text injection, and global hotkeys for Horizon"
+description = "Platform cursor query for Horizon"
 repository.workspace = true
 
 [lints]
@@ -14,12 +14,5 @@ workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 x11rb = { version = "0.14", default-features = false }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-atspi.workspace = true
-tokio.workspace = true
-
 [target.'cfg(target_os = "macos")'.dependencies]
-axuielement.workspace = true
 core-graphics = "0.25"
-global-hotkey.workspace = true
-objc2-app-kit.workspace = true

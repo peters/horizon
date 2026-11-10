@@ -12,12 +12,7 @@ impl Board {
     /// this frame pay for the screen scan; quiet panels keep their status
     /// until a working flag goes stale.
     pub(super) fn update_agent_status(&mut self) {
-        // A parked member shows the status its worker reports, not its placeholder screen.
-        for panel in self
-            .panels
-            .iter_mut()
-            .filter(|panel| panel.kind.is_agent() && panel.cloud_wait() != Some(crate::panel::CloudWait::Parked))
-        {
+        for panel in self.panels.iter_mut().filter(|panel| panel.kind.is_agent()) {
             update_panel_agent_status(panel, WORKING_STALE_AFTER);
         }
     }

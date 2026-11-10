@@ -25,8 +25,6 @@ pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
     pub(super) catalog: super::browser_provider_catalog::CatalogHostState,
     pub(super) provider_usage: super::browser_provider_usage::UsageHostState,
-    /// Claimed `cloud_offers` requests waiting for current prices.
-    pub(super) cloud_offers: Vec<manifest::provider_usage::UsageRequest>,
     pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
     /// Answers to recovery requests that the coordination worker could not
     /// write yet, for a later frame and until each request's deadline.
@@ -117,7 +115,7 @@ impl HorizonApp {
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.close_ended_browser_panels();
-            changed |= self.poll_host_requests(ctx);
+            changed |= self.poll_host_requests();
             self.browser_create_host.forget_stamped_placement();
         }
         changed
@@ -219,11 +217,11 @@ impl HorizonApp {
         self.session_store.home().root()
     }
 
-    fn poll_host_requests(&mut self, ctx: &egui::Context) -> bool {
+    fn poll_host_requests(&mut self) -> bool {
         self.claim_host_requests();
         self.poll_browser_close_requests()
             | self.poll_remote_recovery()
-            | self.poll_provider_usage(ctx)
+            | self.poll_provider_usage()
             | self.poll_provider_catalog()
     }
 }

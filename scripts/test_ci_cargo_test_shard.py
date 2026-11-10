@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""The platform test shards keep one warm cache entry per build graph."""
+"""The platform test shards run ui and libs on Linux and on macOS."""
 
-import collections
 import os
 import re
 import subprocess
@@ -13,49 +12,25 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci-cargo-test-shard.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
-# The opt-in features of the cloud, gateway and encoder lanes build together.
-FEATURES = (
-    "horizon-cloud/exposure-firewall,horizon-core/one-service-gateway,"
-    "horizon-core/cloud-exposure,horizon-chromecast/encoder"
-)
-# The shipped horizon-cloud build, without an opt-in feature.
-DEFAULT_CLOUD = "cargo test --locked -p horizon-cloud"
+UI = "cargo test --locked -p horizon-ui"
 # nextest runs the workspace selection and keeps its libtest-json stream for the
 # duration gate; libtest keeps the doctests, which nextest cannot run.
 STREAM = "/tmp/nextest-libs.json"
-NEXTEST = (f"cargo nextest run --locked --workspace --exclude horizon-ui "
-           f"--features {FEATURES} --message-format libtest-json-plus > {STREAM}")
-DOCTESTS = f"cargo test --locked --workspace --exclude horizon-ui --features {FEATURES} --doc"
+NEXTEST = ("cargo nextest run --locked --workspace --exclude horizon-ui "
+           f"--message-format libtest-json-plus > {STREAM}")
+DOCTESTS = "cargo test --locked --workspace --exclude horizon-ui --doc"
 NEXTEST_ARGS = NEXTEST.split(" > ")[0]
 DURATION_GATE = f"python3 -B scripts/check-test-durations.py --stream {STREAM}"
-EXAMPLE = (
-    "cargo test --locked -p horizon-core --example cloud_deploy -- tailnets:: "
-    "tests::malformed_selection_arguments_never_create_cloud_paths"
-)
-PRODUCER = (
-    "cargo test --locked -p horizon-cloud-worker --features trusted-tcp-producer "
-    "trusted_tcp_producer::"
-)
-GATE = (
-    "cargo test --locked -p horizon-cloud-worker --features trusted-exposure-gate "
-    "exposure_gate::"
-)
 
 
-def shard_commands(shard, runner_os, *, ref="", cache_hit=""):
+def shard_commands(shard, runner_os):
     env = os.environ.copy()
     env["HORIZON_CI_SHARD"] = shard
     env["HORIZON_CI_SHARD_DRY_RUN"] = "1"
     env["RUNNER_OS"] = runner_os
-    env.pop("GITHUB_REF", None)
-    env.pop("HORIZON_CI_CACHE_HIT", None)
     # The dry run names the stream path, so it must not follow the caller.
     env.pop("RUNNER_TEMP", None)
-    if ref:
-        env["GITHUB_REF"] = ref
-    if cache_hit:
-        env["HORIZON_CI_CACHE_HIT"] = cache_hit
-    result = subprocess.run(
+    return subprocess.run(
         ["bash", str(SCRIPT)],
         cwd=ROOT,
         env=env,
@@ -63,176 +38,38 @@ def shard_commands(shard, runner_os, *, ref="", cache_hit=""):
         capture_output=True,
         text=True,
     )
-    return result
 
 
 class ShardCommandTests(unittest.TestCase):
     def test_ui_and_libs_select_disjoint_packages(self):
-        ui = shard_commands("ui", "Linux")
-        libs = shard_commands("libs", "macOS")
-        extra = shard_commands("libs-extra", "macOS")
-        self.assertEqual(ui.returncode, 0, ui.stderr)
-        self.assertEqual(libs.returncode, 0, libs.stderr)
-        self.assertEqual(extra.returncode, 0, extra.stderr)
-        self.assertEqual(ui.stdout.splitlines(), ["cargo test --locked -p horizon-ui"])
-        self.assertEqual(libs.stdout.splitlines(), [NEXTEST, DOCTESTS, DURATION_GATE])
-        self.assertEqual(extra.stdout.splitlines(), [DEFAULT_CLOUD, EXAMPLE])
-
-    def test_cloud_gateway_and_encoder_features_build_once_on_each_platform(self):
         for runner_os in ["Linux", "macOS"]:
             with self.subTest(runner_os=runner_os):
-                result = shard_commands("libs", runner_os)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                lines = result.stdout.splitlines()
-                self.assertEqual(lines.count(NEXTEST), 1)
-                self.assertEqual(lines.count(DOCTESTS), 1)
-                self.assertEqual(lines.count(DURATION_GATE), 1)
-                # A per-lane build of one package would rebuild every crate, so
-                # no lane may name these features outside the workspace run.
-                self.assertNotIn("-p horizon-core --lib --features", result.stdout)
-                self.assertNotIn("-p horizon-cloud --features", result.stdout)
-                self.assertNotIn("-p horizon-chromecast --features", result.stdout)
-                # The single-package shard never repeats the workspace selection.
-                extra = shard_commands("libs-extra", runner_os)
-                self.assertEqual(extra.returncode, 0, extra.stderr)
-                self.assertNotIn("--workspace", extra.stdout)
+                ui = shard_commands("ui", runner_os)
+                libs = shard_commands("libs", runner_os)
+                self.assertEqual(ui.returncode, 0, ui.stderr)
+                self.assertEqual(libs.returncode, 0, libs.stderr)
+                self.assertEqual(ui.stdout.splitlines(), [UI])
+                self.assertEqual(libs.stdout.splitlines(), [NEXTEST, DOCTESTS, DURATION_GATE])
 
-    def test_shipped_horizon_cloud_build_keeps_its_own_run(self):
-        # One horizon-cloud test asserts the default-build behaviour that
-        # exposure-firewall changes, so the feature build cannot replace it.
+    def test_the_workspace_selection_carries_no_opt_in_feature(self):
         for runner_os in ["Linux", "macOS"]:
             with self.subTest(runner_os=runner_os):
-                extra = shard_commands("libs-extra", runner_os)
-                self.assertEqual(extra.returncode, 0, extra.stderr)
-                self.assertEqual(extra.stdout.splitlines().count(DEFAULT_CLOUD), 1)
-                features = shard_commands("libs", runner_os)
-                self.assertEqual(features.returncode, 0, features.stderr)
-                self.assertNotIn(DEFAULT_CLOUD + "\n", features.stdout)
-
-    def test_cloud_deploy_example_runs_once_on_each_platform(self):
-        for runner_os in ["Linux", "macOS"]:
-            with self.subTest(runner_os=runner_os):
-                result = shard_commands("libs-extra", runner_os)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines().count(EXAMPLE), 1)
-
-    def test_enabled_producer_runs_only_in_linux_libs_extra(self):
-        for shard, runner_os, count in [
-            ("libs-extra", "Linux", 1), ("libs-extra", "macOS", 0),
-            ("libs", "Linux", 0), ("ui", "Linux", 0),
-            ("speech", "Linux", 0), ("speech", "macOS", 0),
-        ]:
-            with self.subTest(shard=shard, runner_os=runner_os):
-                result = shard_commands(shard, runner_os)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines().count(PRODUCER), count)
-
-    def test_producer_failure_keeps_the_later_checks_and_fails_linux(self):
-        env = os.environ.copy()
-        env.update(HORIZON_CI_SHARD="libs-extra", RUNNER_OS="Linux")
-        env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
-        with tempfile.TemporaryDirectory() as bin_dir:
-            log = Path(bin_dir) / "calls"
-            fake = Path(bin_dir) / "cargo"
-            fake.write_text(
-                "#!/usr/bin/env bash\n"
-                f"echo \"$*\" >> {log}\n"
-                "[[ \"$*\" == *'--features trusted-tcp-producer trusted_tcp_producer::'* ]] && exit 101\n"
-                "exit 0\n"
-            )
-            fake.chmod(0o755)
-            env["PATH"] = f"{bin_dir}:{env['PATH']}"
-            result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
-                                    capture_output=True, text=True, check=False)
-            calls = log.read_text().splitlines()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(
-            calls,
-            [command.removeprefix("cargo ") for command in [DEFAULT_CLOUD, PRODUCER, GATE, EXAMPLE]],
-        )
-
-    def test_trusted_gate_runs_once_only_in_linux_libs_extra(self):
-        for shard, runner_os, count in [
-            ("libs-extra", "Linux", 1), ("libs-extra", "macOS", 0),
-            ("libs", "Linux", 0), ("ui", "Linux", 0),
-            ("speech", "Linux", 0), ("speech", "macOS", 0),
-        ]:
-            with self.subTest(shard=shard, runner_os=runner_os):
-                result = shard_commands(shard, runner_os)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines().count(GATE), count)
-
-    def test_trusted_gate_failure_preserves_later_checks_and_fails_linux(self):
-        env = os.environ.copy()
-        env.update(HORIZON_CI_SHARD="libs-extra", RUNNER_OS="Linux")
-        env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
-        with tempfile.TemporaryDirectory() as bin_dir:
-            log = Path(bin_dir) / "calls"
-            fake = Path(bin_dir) / "cargo"
-            fake.write_text(
-                "#!/usr/bin/env bash\n"
-                f"echo \"$*\" >> {log}\n"
-                "[[ \"$*\" == *'--features trusted-exposure-gate exposure_gate::'* ]] && exit 101\n"
-                "exit 0\n"
-            )
-            fake.chmod(0o755)
-            env["PATH"] = f"{bin_dir}:{env['PATH']}"
-            result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
-                                    capture_output=True, text=True, check=False)
-            calls = log.read_text().splitlines()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(
-            calls,
-            [command.removeprefix("cargo ") for command in [DEFAULT_CLOUD, PRODUCER, GATE, EXAMPLE]],
-        )
-
-    def test_speech_shard_runs_the_speech_tests(self):
-        for runner_os in ["Linux", "macOS"]:
-            with self.subTest(runner_os=runner_os):
-                result = shard_commands("speech", runner_os, ref="refs/pull/1/merge", cache_hit="true")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(
-                    result.stdout.splitlines(),
-                    ["cargo test --locked -p horizon-ui --features speech"],
-                )
-
-    def test_cold_main_speech_shard_builds_the_whole_workspace_first(self):
-        cold = shard_commands("speech", "Linux", ref="refs/heads/main", cache_hit="false")
-        warm = shard_commands("speech", "Linux", ref="refs/heads/main", cache_hit="true")
-        self.assertEqual(cold.returncode, 0, cold.stderr)
-        self.assertEqual(warm.returncode, 0, warm.stderr)
-        self.assertEqual(
-            cold.stdout.splitlines(),
-            [
-                "cargo test --locked --workspace --no-run",
-                "cargo test --locked -p horizon-ui --features speech",
-            ],
-        )
-        self.assertEqual(
-            warm.stdout.splitlines(),
-            ["cargo test --locked -p horizon-ui --features speech"],
-        )
-
-    def test_macos_speech_shard_never_fills_the_entry_it_cannot_save(self):
-        # The libs job saves the macOS entry, so a cold macOS speech job must not
-        # pay for a workspace build that nothing keeps.
-        cold = shard_commands("speech", "macOS", ref="refs/heads/main", cache_hit="false")
-        self.assertEqual(cold.returncode, 0, cold.stderr)
-        self.assertEqual(
-            cold.stdout.splitlines(),
-            ["cargo test --locked -p horizon-ui --features speech"],
-        )
+                for shard in ["ui", "libs"]:
+                    result = shard_commands(shard, runner_os)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    # No opt-in cargo feature remains in the test matrix, and a
+                    # per-lane feature build would rebuild every crate.
+                    self.assertNotIn("--features", result.stdout)
 
     def test_libs_failure_keeps_the_remaining_checks(self):
         cases = [
-            ("libs", "macOS", f"--exclude horizon-ui --features {FEATURES}", [NEXTEST_ARGS, DOCTESTS]),
-            ("libs-extra", "macOS", "-p horizon-cloud", [DEFAULT_CLOUD, EXAMPLE]),
-            ("libs-extra", "macOS", "--example cloud_deploy", [DEFAULT_CLOUD, EXAMPLE]),
+            ("--exclude horizon-ui --message-format", [NEXTEST_ARGS, DOCTESTS]),
+            ("--doc", [NEXTEST_ARGS, DOCTESTS]),
         ]
-        for shard, runner_os, failing_flag, expected in cases:
-            with self.subTest(shard=shard, failing_flag=failing_flag):
+        for failing_flag, expected in cases:
+            with self.subTest(failing_flag=failing_flag):
                 env = os.environ.copy()
-                env.update(HORIZON_CI_SHARD=shard, RUNNER_OS=runner_os)
+                env.update(HORIZON_CI_SHARD="libs", RUNNER_OS="macOS")
                 env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
                 with tempfile.TemporaryDirectory() as bin_dir:
                     log = Path(bin_dir) / "calls"
@@ -255,10 +92,26 @@ class ShardCommandTests(unittest.TestCase):
                     [command.removeprefix("cargo ") for command in expected],
                 )
 
-    def test_unknown_shard_fails(self):
-        result = shard_commands("every", "Linux")
+    def test_ui_failure_fails_the_shard(self):
+        env = os.environ.copy()
+        env.update(HORIZON_CI_SHARD="ui", RUNNER_OS="Linux")
+        env.pop("HORIZON_CI_SHARD_DRY_RUN", None)
+        with tempfile.TemporaryDirectory() as bin_dir:
+            fake = Path(bin_dir) / "cargo"
+            fake.write_text("#!/usr/bin/env bash\nexit 101\n")
+            fake.chmod(0o755)
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            result = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env,
+                                    capture_output=True, text=True, check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Unknown CI test shard", result.stderr)
+
+    def test_unknown_shard_fails(self):
+        # The removed shard names are unknown, not silently successful.
+        for shard in ["every", "speech", "libs-extra"]:
+            with self.subTest(shard=shard):
+                result = shard_commands(shard, "Linux")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Unknown CI test shard", result.stderr)
 
 
 class WorkflowShardTests(unittest.TestCase):
@@ -270,63 +123,51 @@ class WorkflowShardTests(unittest.TestCase):
             dict(re.findall(r"^\s+-?\s*(\w+): (.+)$", entry, re.M))
             for entry in re.split(r"^\s+- os: ", rust.split("include:", 1)[1].split("steps:", 1)[0], flags=re.M)[1:]
         ]
-        shards = {(entry["name"], entry["shard"]) for entry in entries}
         self.assertEqual(
-            shards,
+            {(entry["name"], entry["shard"]) for entry in entries},
             {
                 ("Linux x64", "ui"),
                 ("Linux x64", "libs"),
-                ("Linux x64", "libs-extra"),
-                ("Linux x64", "speech"),
                 ("macOS arm64", "libs"),
-                ("macOS arm64", "libs-extra"),
-                ("macOS arm64", "speech"),
+                ("macOS arm64", "ui"),
             },
         )
-        # Exactly one job per cache key saves the entry it restores. A second
-        # saver would make the two jobs overwrite each other's entry, and none
-        # would leave the key empty after a lock bump.
-        savers_by_key = collections.Counter(
-            entry["cache_key"] for entry in entries if entry.get("save_cache") == "true"
-        )
-        self.assertEqual(
-            savers_by_key,
-            collections.Counter({entry["cache_key"]: 1 for entry in entries}),
-            "every cache key needs exactly one saving shard",
-        )
-        savers = {(entry["name"], entry["shard"]) for entry in entries if entry.get("save_cache") == "true"}
-        self.assertEqual(
-            savers,
-            {
-                ("Linux x64", "libs"),
-                ("Linux x64", "speech"),
-                ("macOS arm64", "libs"),
-                ("macOS arm64", "speech"),
-            },
-        )
-        # A shard that resolves its own feature selection keeps its own key, so
-        # the entry it restores was filled by that same selection. Compare the
-        # parsed values, because `linux-test` is a prefix of `linux-test-libs`
-        # and a substring check cannot tell the shared key from the dedicated one.
+        # One key per shard, because cargo resolves features per package
+        # selection: a key shared by two selections is a full match that still
+        # rebuilds. Compare the parsed values, because `linux-test` is a prefix
+        # of `linux-test-libs` and a substring check cannot tell them apart.
         self.assertEqual(
             {(entry["shard"], entry["cache_key"]) for entry in entries},
             {
                 ("ui", "linux-test"),
                 ("libs", "linux-test-libs"),
-                ("libs-extra", "linux-test"),
-                ("speech", "linux-test"),
                 ("libs", "macos-test-libs"),
-                ("libs-extra", "macos-test-libs"),
-                ("speech", "macos-test-speech"),
+                ("ui", "macos-test-ui"),
             },
+        )
+        # Every shard saves its own key, so each key holds one entry.
+        self.assertEqual(
+            len({entry["cache_key"] for entry in entries}),
+            len(entries),
+            "every cache key needs exactly one shard",
         )
         self.assertIn("key: ${{ matrix.cache_key }}", rust)
         self.assertNotIn("matrix.shard", rust.split("save-if:", 1)[0].split("key:", 1)[-1])
-        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && matrix.save_cache == true }}", rust)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' }}", rust)
+        self.assertNotIn("matrix.save_cache", rust)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes || 35 }}", rust)
-        self.assertIn("if: ${{ !cancelled() && startsWith(matrix.os, 'macos-') && matrix.shard == 'speech' }}", rust)
+        # The shard timeouts of the target design: Linux keeps the default, the
+        # macOS libs shard gets cold-cache headroom and the macOS ui shard less.
+        self.assertEqual(
+            {entry["shard"] + "-" + entry["name"]: entry.get("timeout_minutes") for entry in entries},
+            {"ui-Linux x64": None, "libs-Linux x64": None,
+             "libs-macOS arm64": "60", "ui-macOS arm64": "45"},
+        )
         self.assertEqual(rust.count("bash scripts/ci-cargo-test-shard.sh"), 1)
         self.assertNotIn("cargo test --locked --workspace\n", rust)
+        # The per-pull-request skip flag went with the removed lanes.
+        self.assertNotIn("HORIZON_CI_SKIP_", rust)
+        self.assertNotIn("HORIZON_CI_CACHE_HIT", rust)
 
     def test_only_the_libs_shards_install_and_run_nextest(self):
         workflow = WORKFLOW.read_text()
@@ -340,25 +181,28 @@ class WorkflowShardTests(unittest.TestCase):
         # not install it cannot run it.
         self.assertIn("nextest run", SCRIPT.read_text())
 
-    def test_apple_mobile_targets_install_retries_three_times(self):
-        workflow = WORKFLOW.read_text()
-        start = workflow.index("          for attempt in 1 2 3; do\n")
-        retry = workflow[start:workflow.index("\n          done\n", start) + len("\n          done\n")]
-        self.assertIn("rustup target add aarch64-apple-ios aarch64-apple-ios-sim", retry)
-        for failures, status in [(0, 0), (2, 0), (3, 1)]:
-            with self.subTest(failures=failures), tempfile.TemporaryDirectory() as bin_dir:
-                calls = Path(bin_dir) / "calls"
-                for name, body in [("rustup", f"echo x >> {calls}\n[ $(wc -l < {calls}) -gt {failures} ]\n"),
-                                   ("sleep", "exit 0\n")]:
-                    tool = Path(bin_dir) / name
-                    tool.write_text("#!/usr/bin/env bash\n" + body)
-                    tool.chmod(0o755)
-                env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
-                result = subprocess.run(["bash", "-eo", "pipefail", "-c", retry], env=env,
-                                        capture_output=True, text=True, check=False)
-                self.assertEqual(result.returncode, status, result.stdout + result.stderr)
-                self.assertEqual(len(calls.read_text().splitlines()), min(failures + 1, 3))
-                self.assertEqual("failed three times" in result.stdout, status == 1)
+    def test_the_linux_libs_shard_keeps_its_loopback_ssh_transport(self):
+        rust = jobs_of_workflow()["rust-test"]
+        condition = "!env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs'"
+        for step in ["bash scripts/install-ci-ubuntu-dependencies.sh openssh-server\n",
+                     "bash scripts/ci-ssh-transport.sh\n"]:
+            with self.subTest(step=step.split()[-1]):
+                start = rust.index(step)
+                self.assertIn(condition, rust[start - rust[:start].rfind("      - "):start])
+
+    def test_only_the_libs_shard_publishes_its_durations_on_main(self):
+        rust = jobs_of_workflow()["rust-test"]
+        self.assertIn(
+            "        if: ${{ !cancelled() && github.ref == 'refs/heads/main' "
+            "&& matrix.shard == 'libs' }}\n",
+            rust,
+        )
+        self.assertIn('--stream "$RUNNER_TEMP/nextest-libs.json"', rust)
+
+
+def jobs_of_workflow():
+    workflow = WORKFLOW.read_text()
+    return dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
 
 
 if __name__ == "__main__":

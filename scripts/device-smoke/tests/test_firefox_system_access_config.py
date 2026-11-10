@@ -44,8 +44,7 @@ class FirefoxSystemAccessConfigTests(unittest.TestCase):
             })
 
     def test_a_download_never_reaches_the_home_of_the_run(self):
-        # A worker desktop keeps HOME of the worker, so the fixture names its own
-        # folder for the downloads of a debug panel.
+        # The fixture names its own folder for the downloads of a debug panel.
         document = serve.application_document('/tmp/fixture-data')
         self.assertTrue(document['browser']['downloads_root'].startswith('/tmp/fixture-data/'))
 

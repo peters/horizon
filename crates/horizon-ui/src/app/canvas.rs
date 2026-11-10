@@ -40,22 +40,9 @@ pub(super) struct CanvasGridCache {
     offset: Vec2,
 }
 
-/// Whether the New cloud form covers the canvas HUD, so that nothing of the HUD paints over the
-/// form. Both rects are the last ones drawn; the form follows its workspace every frame.
-#[cfg(feature = "cloud-workspaces")]
-fn canvas_hud_covered_by_new_cloud(ctx: &Context) -> bool {
-    let form = ctx.memory(|memory| memory.area_rect(Id::unique("cloud-creation")));
-    let hud = ctx.memory(|memory| memory.area_rect(Id::unique("canvas_hud")));
-    form.zip(hud).is_some_and(|(form, hud)| form.intersects(hud))
-}
-
 impl HorizonApp {
     pub(super) fn render_canvas_hud(&self, ctx: &Context) {
         if !self.hud_visible {
-            return;
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.new_cloud_surface() && canvas_hud_covered_by_new_cloud(ctx) {
             return;
         }
 
@@ -225,21 +212,10 @@ impl HorizonApp {
             });
     }
 
-    /// The same two as the toolbar: a cloud first, then an empty workspace on this computer.
+    /// The empty state creates a workspace on this computer.
     fn render_empty_state_new_buttons(&mut self, ui: &mut egui::Ui) {
-        #[cfg(feature = "cloud-workspaces")]
-        if ui
-            .add_enabled(
-                self.new_cloud_workspace_ready(),
-                super::util::primary_button("New Cloud"),
-            )
-            .on_disabled_hover_text(super::sidebar::NEW_CLOUD_NOT_READY)
-            .clicked()
-        {
-            self.create_new_workspace(ui.ctx(), super::sidebar::NewWorkspace::Cloud, None);
-        }
         if ui.add(super::util::chrome_button("New Workspace")).clicked() {
-            self.create_new_workspace(ui.ctx(), super::sidebar::NewWorkspace::ThisPc, None);
+            self.create_new_workspace(ui.ctx(), None);
         }
     }
 

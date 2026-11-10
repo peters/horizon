@@ -23,12 +23,6 @@ pub(super) struct UsageHostState {
     /// The queue this host claims its requests from and answers them on. A
     /// test polls its own root, and the answers follow it.
     queue: UsageQueue,
-    #[cfg(feature = "cloud-workspaces")]
-    pub(in crate::app) image_destinations: horizon_core::cloud_runtime::publishing::operations::Manager,
-    #[cfg(feature = "cloud-workspaces")]
-    pub(in crate::app) tailnet_credentials: super::tailnets::requests::Requests,
-    #[cfg(feature = "cloud-workspaces")]
-    pub(in crate::app) browser_vm: super::browser_vm_requests::State,
 }
 
 struct PendingUsage {
@@ -83,53 +77,33 @@ impl HorizonApp {
         changed
     }
 
-    #[cfg(feature = "cloud-workspaces")]
-    fn poll_tailnet_credential_requests(&mut self) {
-        self.browser_create_host
-            .provider_usage
-            .tailnet_credentials
-            .poll(manifest::now_millis());
-        if let Some(editor) = &mut self.settings {
-            editor
-                .tailnet_status_state()
-                .discard_cancelled_api_draft(&self.browser_create_host.provider_usage.tailnet_credentials);
-        }
+    pub(super) fn poll_provider_usage(&mut self) -> bool {
+        self.poll_provider_usage_queue(&UsageQueue::default())
     }
 
-    pub(super) fn poll_provider_usage(&mut self, ctx: &egui::Context) -> bool {
-        self.poll_provider_usage_queue(&UsageQueue::default(), ctx)
-    }
-
-    fn poll_provider_usage_queue(&mut self, queue: &UsageQueue, ctx: &egui::Context) -> bool {
+    fn poll_provider_usage_queue(&mut self, queue: &UsageQueue) -> bool {
         self.browser_create_host.provider_usage.queue = queue.clone();
-        #[cfg(feature = "cloud-workspaces")]
-        self.poll_tailnet_credential_requests();
-        #[cfg(feature = "cloud-workspaces")]
-        self.poll_image_destination_operations(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        self.poll_browser_vm(ctx);
-        self.claim_provider_usage(queue, ctx);
+        self.claim_provider_usage(queue);
         let mut changed = self.finish_provider_usage();
         changed |= self.retry_host_usage_answers();
         changed
     }
 
-    /// Claims the agents' usage, catalog and cloud offer requests on the
-    /// coordination worker, then starts what they ask for. One claim runs at a
-    /// time, so a slow disk never queues one per tick.
-    fn claim_provider_usage(&mut self, queue: &UsageQueue, ctx: &egui::Context) {
+    /// Claims the agents' usage and catalog requests on the coordination
+    /// worker, then starts what they ask for. One claim runs at a time, so a
+    /// slow disk never queues one per tick.
+    fn claim_provider_usage(&mut self, queue: &UsageQueue) {
         if self.browser_create_host.provider_usage.claiming {
             return;
         }
         self.browser_create_host.provider_usage.claiming = true;
         let claiming = queue.clone();
         let host = manifest::host_instance().to_string();
-        let ctx = ctx.clone();
         self.browser_create_host.io.then(
             move || claim_usage(&claiming, &host),
             move |app, requests| {
                 app.browser_create_host.provider_usage.claiming = false;
-                app.dispatch_usage_requests(requests.unwrap_or_default(), &ctx);
+                app.dispatch_usage_requests(requests.unwrap_or_default());
                 app.finish_provider_usage();
                 // The catalog answers what the claim took on this frame, not on the next tick.
                 app.poll_provider_catalog();
@@ -138,48 +112,8 @@ impl HorizonApp {
     }
 
     /// Starts what each claimed request asks for, on this frame.
-    fn dispatch_usage_requests(&mut self, requests: Vec<UsageRequest>, ctx: &egui::Context) {
+    fn dispatch_usage_requests(&mut self, requests: Vec<UsageRequest>) {
         for request in requests {
-            if request.image_destination.is_some() {
-                self.answer_image_destination(&request, ctx);
-                continue;
-            }
-            if request.tailnet_credential.is_some() {
-                self.answer_tailnet_credential(&request);
-                continue;
-            }
-            if request.cloud_companion.is_some() {
-                self.queue_cloud_companion(request);
-                continue;
-            }
-            if request.cloud_list.is_some() {
-                self.queue_cloud_list(request);
-                continue;
-            }
-            if request.cloud_create.is_some() {
-                self.queue_cloud_create(request);
-                continue;
-            }
-            if request.cloud_delete.is_some() {
-                self.queue_cloud_delete(request);
-                continue;
-            }
-            if request.browser_vm.is_some() {
-                self.queue_browser_vm(request, ctx);
-                continue;
-            }
-            if request.cloud_exec.is_some() {
-                self.queue_cloud_exec(request, ctx);
-                continue;
-            }
-            if request.cloud_agent_message.is_some() || request.cloud_agent_read.is_some() {
-                self.queue_cloud_agent(request, ctx);
-                continue;
-            }
-            if request.cloud_offers.is_some() {
-                self.browser_create_host.cloud_offers.push(request);
-                continue;
-            }
             if request.catalog.is_some() {
                 self.browser_create_host.catalog.pending.push(request);
                 continue;
@@ -253,28 +187,6 @@ impl HorizonApp {
     }
 }
 
-impl HorizonApp {
-    #[cfg(not(feature = "cloud-workspaces"))]
-    fn answer_image_destination(&mut self, request: &UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("image_destination_unavailable: cloud support is disabled".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    fn answer_tailnet_credential(&mut self, request: &UsageRequest) {
-        let result = request.result(
-            Vec::new(),
-            Some("tailnet_credential_unavailable: cloud support is disabled".into()),
-        );
-        self.publish_host_usage_result(result, request.deadline_at_millis);
-    }
-}
-
 fn usage_summary(name: &str, profile: &RemoteProviderProfile, monitor: &ProviderUsageMonitor) -> ProviderUsageSummary {
     ProviderUsageSummary {
         provider: name.to_string(),
@@ -287,122 +199,6 @@ fn usage_summary(name: &str, profile: &RemoteProviderProfile, monitor: &Provider
             manifest::now_millis().saturating_sub(i64::try_from(at.elapsed().as_millis()).unwrap_or(i64::MAX))
         }),
         error: monitor.error.map(|error| error.to_string()),
-    }
-}
-
-impl HorizonApp {
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_cloud_companion(&mut self, request: UsageRequest) {
-        self.queue_cloud_companion_request(request);
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_cloud_list(&mut self, request: UsageRequest) {
-        self.queue_cloud_list_request(request);
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_cloud_exec(&mut self, request: UsageRequest, ctx: &egui::Context) {
-        self.start_cloud_exec(request, ctx);
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_cloud_agent(&mut self, request: UsageRequest, ctx: &egui::Context) {
-        self.start_cloud_agent(request, ctx);
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_cloud_agent(&mut self, request: UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("cloud_agent_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_cloud_exec(&mut self, request: UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("cloud_exec_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_cloud_list(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("cloud_list_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_browser_vm(&mut self, request: UsageRequest, _ctx: &egui::Context) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("browser_vm_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_cloud_create(&mut self, request: UsageRequest) {
-        self.queue_cloud_create_request(request);
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_cloud_create(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("cloud_create_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    fn queue_cloud_delete(&mut self, request: UsageRequest) {
-        self.queue_cloud_delete_request(request);
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_cloud_delete(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("cloud_delete_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
-    }
-
-    #[cfg(not(feature = "cloud-workspaces"))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn queue_cloud_companion(&mut self, request: UsageRequest) {
-        self.publish_host_usage_result(
-            request.result(
-                Vec::new(),
-                Some("cloud_companion_unavailable: this Horizon build has no cloud support".into()),
-            ),
-            request.deadline_at_millis,
-        );
     }
 }
 
@@ -431,7 +227,7 @@ mod tests {
     /// Polls the queue and applies what the coordination worker answered, as a
     /// later frame does.
     fn poll_usage(app: &mut HorizonApp, queue: &UsageQueue) {
-        app.poll_provider_usage_queue(queue, &egui::Context::default());
+        app.poll_provider_usage_queue(queue);
         app.settle_browser_host_io();
     }
 
@@ -454,8 +250,8 @@ mod tests {
             .expect("agent");
         let actor = browser_actor(&app.board.panel(agent).expect("panel").local_id);
         for (name, adapter) in [
-            ("cloud-a", RemoteAdapterKind::Browserstack),
-            ("cloud-b", RemoteAdapterKind::Browserstack),
+            ("browserstack-a", RemoteAdapterKind::Browserstack),
+            ("browserstack-b", RemoteAdapterKind::Browserstack),
             ("grid", RemoteAdapterKind::Webdriver),
         ] {
             app.template_config.browser.remote.providers.insert(
@@ -488,11 +284,13 @@ mod tests {
         assert!(!result.providers[2].supported);
         assert!(app.settings.is_none());
         assert!(app.browser_create_host.remote_allocations.summaries(None).is_empty());
-        let id = queue.enqueue(identity, Some("cloud-b".into())).expect("one provider");
+        let id = queue
+            .enqueue(identity, Some("browserstack-b".into()))
+            .expect("one provider");
         poll_usage(&mut app, &queue);
         let result = queue.take(identity, &id).expect("result").expect("completed");
         assert_eq!(result.providers.len(), 1);
-        assert_eq!(result.providers[0].provider, "cloud-b");
+        assert_eq!(result.providers[0].provider, "browserstack-b");
         let id = queue
             .enqueue(identity, Some("unknown".into()))
             .expect("unknown provider");
@@ -517,14 +315,14 @@ mod tests {
     }
     fn assert_removed_profile(app: &mut HorizonApp, queue: &UsageQueue, identity: AgentIdentity<'_>) {
         let id = queue
-            .enqueue(identity, Some("cloud-b".into()))
+            .enqueue(identity, Some("browserstack-b".into()))
             .expect("selected profile");
         let request = queue.claim(manifest::host_instance()).expect("claim").remove(0);
         app.browser_create_host.provider_usage.pending.push(PendingUsage {
             request,
-            providers: [("cloud-b".into(), ProviderUsageMonitor::default())].into(),
+            providers: [("browserstack-b".into(), ProviderUsageMonitor::default())].into(),
         });
-        app.template_config.browser.remote.providers.remove("cloud-b");
+        app.template_config.browser.remote.providers.remove("browserstack-b");
         poll_usage(app, queue);
         let result = queue.take(identity, &id).expect("result").expect("completed");
         assert_eq!(result.error.as_deref(), Some("provider_unknown"));
@@ -541,7 +339,7 @@ mod tests {
         };
         let mut completed = ProviderUsageMonitor::default();
         completed.update(
-            &app.template_config.browser.remote.providers["cloud-a"],
+            &app.template_config.browser.remote.providers["browserstack-a"],
             &app.remote_browser_credentials,
             false,
         );
@@ -550,8 +348,8 @@ mod tests {
         app.browser_create_host.provider_usage.pending.push(PendingUsage {
             request,
             providers: [
-                ("cloud-a".into(), completed),
-                ("cloud-b".into(), ProviderUsageMonitor::default()),
+                ("browserstack-a".into(), completed),
+                ("browserstack-b".into(), ProviderUsageMonitor::default()),
             ]
             .into(),
         });
@@ -594,7 +392,7 @@ mod tests {
         let (release, holder) = hold_lock(&temp.path().join("usage/runtime/browser-provider-usage/queue.json.lock"));
 
         let started = std::time::Instant::now();
-        app.poll_provider_usage_queue(&queue, &egui::Context::default());
+        app.poll_provider_usage_queue(&queue);
         let elapsed = started.elapsed();
         assert!(
             elapsed < std::time::Duration::from_millis(1500),
@@ -635,7 +433,7 @@ mod tests {
         // The claim of an earlier frame still waits on the worker.
         app.browser_create_host.provider_usage.claiming = true;
 
-        app.poll_provider_usage_queue(&queue, &egui::Context::default());
+        app.poll_provider_usage_queue(&queue);
 
         assert!(
             !app.browser_create_host.io.busy(),
@@ -758,85 +556,6 @@ mod tests {
         assert!(
             queue.take(identity, &id).expect("result").is_none(),
             "a retry after the request deadline writes nothing"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_held_usage_lock_never_stalls_the_cloud_offer_poll() {
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let queue = UsageQueue::new(temp.path().join("usage"));
-        let ctx = egui::Context::default();
-        // The host answers on the queue the offers are claimed from.
-        app.poll_provider_usage_queue(&queue, &ctx);
-        app.settle_browser_host_io();
-        let request: UsageRequest = serde_json::from_value(serde_json::json!({
-            "request_id": "offers", "actor": "horizon:missing-agent",
-            "host_instance": manifest::host_instance(), "deadline_at_millis": i64::MAX,
-            "cloud_offers": {}, "claimed": true
-        }))
-        .expect("offer request");
-        app.browser_create_host.cloud_offers.push(request);
-        let (release, holder) = hold_lock(&temp.path().join("usage/runtime/browser-provider-usage/queue.json.lock"));
-
-        let started = std::time::Instant::now();
-        let answered = app.poll_cloud_offers(&ctx);
-        let elapsed = started.elapsed();
-        let writing = app.browser_create_host.io.busy();
-        release.send(()).expect("the lock holder waits");
-        assert!(
-            elapsed < std::time::Duration::from_millis(1500),
-            "the offer poll stalled the frame: {elapsed:?}"
-        );
-        assert!(writing, "the answer is written on the coordination worker");
-        assert!(answered, "the offer was answered");
-
-        app.settle_browser_host_io();
-        holder.join().expect("the lock holder ends");
-        assert!(
-            app.browser_create_host.cloud_offers.is_empty(),
-            "the answered offer is not polled again"
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "cloud-workspaces")]
-    fn destination_operations_are_polled_even_when_the_usage_queue_is_unavailable() {
-        use horizon_core::cloud_runtime::publishing::operations::LaunchOwner;
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let (notify, received) = std::sync::mpsc::sync_channel(1);
-        app.browser_create_host
-            .provider_usage
-            .image_destinations
-            .dispatch_launch(
-                LaunchOwner {
-                    actor: "horizon:owned-poll".into(),
-                    host: manifest::host_instance().into(),
-                    root: temp.path().join("cloud"),
-                    directory: temp.path().join("missing-checkout"),
-                },
-                "owned-queue-failure",
-                Some("cpu".into()),
-                serde_json::json!({"operation":"list"}),
-                std::sync::Arc::new(move || {
-                    let _ = notify.try_send(());
-                }),
-            )
-            .unwrap();
-        received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        assert!(
-            app.browser_create_host.provider_usage.image_destinations.running(),
-            "the worker report still needs polling"
-        );
-        let unavailable = temp.path().join("not-a-directory");
-        std::fs::create_dir_all(unavailable.join("runtime")).unwrap();
-        std::fs::write(unavailable.join("runtime/browser-provider-usage"), b"fixture").unwrap();
-        let queue = UsageQueue::new(unavailable);
-        assert!(queue.claim(manifest::host_instance()).is_err());
-        poll_usage(&mut app, &queue);
-        assert!(
-            !app.browser_create_host.provider_usage.image_destinations.running(),
-            "queue failure must not suppress operation completion, scope or expiry polling"
         );
     }
 }

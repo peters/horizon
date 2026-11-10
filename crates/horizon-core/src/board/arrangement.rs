@@ -119,11 +119,7 @@ impl Board {
         {
             return false;
         }
-        // A cloud member moves inside its cloud. That must not drop the
-        // workspace preset, which only arranges panels outside the cloud.
-        if let Some(workspace_id) = self.panel_workspace_id(id)
-            && !self.panel_is_cloud_member(id)
-        {
+        if let Some(workspace_id) = self.panel_workspace_id(id) {
             self.set_workspace_layout(workspace_id, None);
         }
         if let Some(panel) = self.panel_mut(id) {
@@ -146,13 +142,6 @@ impl Board {
         workspace_collision_ids: &[WorkspaceId],
     ) -> bool {
         if self.panel(id).is_some_and(|panel| vec2_eq(panel.layout.size, size)) {
-            return false;
-        }
-        if self.panel_is_cloud_member(id) {
-            if let Some(panel) = self.panel_mut(id) {
-                panel.resize_layout(size);
-                return true;
-            }
             return false;
         }
         let ws_id = self.panel_workspace_id(id);
@@ -194,9 +183,6 @@ impl Board {
     /// Arrange panels in a workspace according to a predefined layout.
     /// Panels are equally sized and positioned with gaps.
     ///
-    /// Members of a cloud group are left where the cloud's own layout put
-    /// them. The workspace preset and the cloud preset are independent.
-    ///
     /// Selecting a preset re-arranges immediately, including from manual
     /// placement (default); panel sizes are fitted to the current content
     /// area so the arrangement fills the workspace frame instead of jumping
@@ -211,7 +197,7 @@ impl Board {
         self.resolve_workspace_collisions_after_frame_growth(id, previous_frame);
     }
 
-    /// Re-run the selected workspace preset, including clearance around clouds.
+    /// Re-run the selected workspace preset.
     pub fn reapply_workspace_layout_if_set(&mut self, id: WorkspaceId) {
         let Some(layout) = self.workspace_layout_value(id) else {
             return;
@@ -240,32 +226,13 @@ impl Board {
         true
     }
 
-    /// Workspace presets stay available when a cloud group is attached.
-    /// Cloud members are excluded from the arrangement instead of disabling it.
     #[must_use]
     pub fn workspace_accepts_panel_layout(&self, id: WorkspaceId) -> bool {
         self.workspace(id).is_some()
     }
 
-    pub(super) fn panel_is_cloud_member(&self, id: PanelId) -> bool {
-        // Builds without cloud frames still restore cloud members as ordinary
-        // visible panels. Only a cloud-enabled build should leave them out of
-        // the workspace preset.
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            self.panel(id).is_some_and(|panel| {
-                crate::runtime_state::cloud_groups::contains_panel(&self.cloud_groups, &panel.local_id)
-            })
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        {
-            let _ = id;
-            false
-        }
-    }
-
     pub(super) fn panel_follows_workspace_layout(&self, id: PanelId) -> bool {
-        self.panel(id).is_some_and(|panel| panel.visible) && !self.panel_is_cloud_member(id)
+        self.panel(id).is_some_and(|panel| panel.visible)
     }
 
     /// Compute the canvas position for the next workspace so it doesn't
@@ -373,10 +340,10 @@ impl Board {
     /// Compute the content area of a workspace from its current panel layout
     /// bounds (excluding chrome decoration).
     ///
-    /// A selected preset may have been translated away from the origin to
-    /// clear a cloud. Measure that arrangement's own span so the next preset
-    /// does not treat the clearance gap as panel size. Freeform layouts still
-    /// measure from the inner-padding edge to the farthest panel edge.
+    /// A selected preset may have been translated away from the origin.
+    /// Measure that arrangement's own span so the next preset does not treat
+    /// the clearance gap as panel size. Freeform layouts still measure from the
+    /// inner-padding edge to the farthest panel edge.
     fn workspace_content_size(&self, id: WorkspaceId) -> Option<[f32; 2]> {
         let workspace = self.workspace(id)?;
         let origin = workspace.position;
@@ -403,7 +370,7 @@ impl Board {
         Some([(max[0] - min_x).max(0.0), (max[1] - min_y).max(0.0)])
     }
 
-    /// The slot size of the current arrangement: an ordinary panel's, else a cloud's.
+    /// The slot size of the current arrangement.
     fn workspace_layout_panel_size(&self, id: WorkspaceId) -> Option<[f32; 2]> {
         let slots = self.arranged_slots(id);
         slots
@@ -429,77 +396,8 @@ impl Board {
             return;
         }
         let needed = self.place_slots(id, origin, layout, &slots, panel_size);
-        // A cloud that cannot shrink to the slot sets the size every slot shares.
         if !vec2_eq(needed, panel_size) {
             self.place_slots(id, origin, layout, &slots, needed);
-        }
-        self.keep_arranged_slots_clear_of_clouds(id, &slots);
-    }
-
-    /// A workspace preset must not paint its slots over a cloud that does not take one.
-    /// That cloud keeps its own position and internal layout; the arranged slots move
-    /// together until their chrome no longer covers it.
-    fn keep_arranged_slots_clear_of_clouds(&mut self, id: WorkspaceId, slots: &[Slot]) {
-        let obstacles = self.cloud_obstacle_rects(id);
-        if obstacles.is_empty() {
-            return;
-        }
-        let rects: Vec<[f32; 4]> = slots
-            .iter()
-            .filter_map(|slot| self.slot_rect(*slot))
-            .map(|(position, size)| super::panel_visual_rect(position, size))
-            .collect();
-        let shift = clearance_translation(&rects, &obstacles);
-        if shift[0].abs() <= f32::EPSILON && shift[1].abs() <= f32::EPSILON {
-            return;
-        }
-        self.translate_slots(slots, shift);
-    }
-
-    /// Clouds in `id` that a preset arranges around rather than into a slot.
-    fn cloud_obstacle_rects(&self, id: WorkspaceId) -> Vec<[f32; 4]> {
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            let Some(local_id) = self.workspace(id).map(|workspace| workspace.local_id.clone()) else {
-                return Vec::new();
-            };
-            self.cloud_groups
-                .0
-                .iter()
-                .filter(|group| group.workspace == local_id && !group.takes_workspace_slot())
-                .map(|group| {
-                    let (min, max) = group.overview_bounds();
-                    [min[0], min[1], max[0], max[1]]
-                })
-                .collect()
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        {
-            let _ = id;
-            Vec::new()
-        }
-    }
-
-    pub(super) fn cloud_overview_rects(&self, id: WorkspaceId) -> Vec<[f32; 4]> {
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            let Some(local_id) = self.workspace(id).map(|workspace| workspace.local_id.clone()) else {
-                return Vec::new();
-            };
-            self.cloud_groups
-                .0
-                .iter()
-                .filter(|group| group.workspace == local_id)
-                .map(|group| {
-                    let (min, max) = group.overview_bounds();
-                    [min[0], min[1], max[0], max[1]]
-                })
-                .collect()
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        {
-            let _ = id;
-            Vec::new()
         }
     }
 
@@ -525,7 +423,7 @@ impl Board {
     }
 
     /// Returns the visual frame rect `[min_x, min_y, max_x, max_y]` for a
-    /// workspace, including its clouds, the title area and background padding.
+    /// workspace, including the title area and background padding.
     #[must_use]
     pub fn workspace_frame_rect(&self, id: WorkspaceId) -> Option<[f32; 4]> {
         let workspace = self.workspace(id)?;
@@ -728,62 +626,4 @@ fn resize_axis_push(a: [f32; 4], b: [f32; 4], axis: ResizeCollisionAxis, gap: f3
 
 pub(super) fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
     !(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1])
-}
-
-/// Shortest axis-aligned move of the whole arrangement that leaves every
-/// obstacle uncovered. Each candidate is checked against every obstacle, so a
-/// step that merely lands on the next cloud is rejected.
-fn clearance_translation(rects: &[[f32; 4]], obstacles: &[[f32; 4]]) -> [f32; 2] {
-    if rects.is_empty() || obstacles.is_empty() || !arrangement_hits(rects, obstacles) {
-        return [0.0, 0.0];
-    }
-    let (min_x, min_y, max_x, max_y) = arrangement_bounds(rects);
-    let mut best: Option<(f32, [f32; 2])> = None;
-    let mut consider = |step: [f32; 2]| {
-        if step[0].abs() <= f32::EPSILON && step[1].abs() <= f32::EPSILON {
-            return;
-        }
-        if arrangement_hits(&shifted_rects(rects, step), obstacles) {
-            return;
-        }
-        let magnitude = step[0].abs() + step[1].abs();
-        if best.is_none_or(|(best_magnitude, _)| magnitude < best_magnitude) {
-            best = Some((magnitude, step));
-        }
-    };
-    for obstacle in obstacles {
-        consider([obstacle[2] + TILE_GAP - min_x, 0.0]);
-        consider([obstacle[0] - TILE_GAP - max_x, 0.0]);
-        consider([0.0, obstacle[3] + TILE_GAP - min_y]);
-        consider([0.0, obstacle[1] - TILE_GAP - max_y]);
-    }
-    best.map_or([0.0, 0.0], |(_, step)| step)
-}
-
-fn arrangement_hits(rects: &[[f32; 4]], obstacles: &[[f32; 4]]) -> bool {
-    rects
-        .iter()
-        .any(|rect| obstacles.iter().any(|obstacle| rects_overlap(*rect, *obstacle)))
-}
-
-fn arrangement_bounds(rects: &[[f32; 4]]) -> (f32, f32, f32, f32) {
-    let min_x = rects.iter().map(|rect| rect[0]).fold(f32::MAX, f32::min);
-    let min_y = rects.iter().map(|rect| rect[1]).fold(f32::MAX, f32::min);
-    let max_x = rects.iter().map(|rect| rect[2]).fold(f32::MIN, f32::max);
-    let max_y = rects.iter().map(|rect| rect[3]).fold(f32::MIN, f32::max);
-    (min_x, min_y, max_x, max_y)
-}
-
-fn shifted_rects(rects: &[[f32; 4]], shift: [f32; 2]) -> Vec<[f32; 4]> {
-    rects
-        .iter()
-        .map(|rect| {
-            [
-                rect[0] + shift[0],
-                rect[1] + shift[1],
-                rect[2] + shift[0],
-                rect[3] + shift[1],
-            ]
-        })
-        .collect()
 }

@@ -22,10 +22,8 @@ that an ephemeral session writes no session file.
 - Candidate: a build that writes `runtime.sqlite` next to `runtime.yaml`.
 - Platforms: Linux. On macOS, do the same tasks in an isolated desktop. Stop
   and start the candidate by hand at each restart.
-- This procedure does not test these functions:
-  - The park state and the status line of a cloud. The unit tests and the
-    [cloud park procedure](cloud-park-attach.md) cover them.
-  - The cloud list. That list is a later milestone.
+- This procedure does not test the park state of a workspace. The unit tests
+  cover it.
 
 ## 3. Safety
 
@@ -37,8 +35,8 @@ that an ephemeral session writes no session file.
 
 ## 4. Equipment and preconditions
 
-- A frozen candidate and its SHA-256. Use
-  [S01](cloud-panels/s-test-fixture.md#61-s01--build-and-freeze-the-candidate).
+- A frozen candidate and its SHA-256. Build it with `cargo build --release`
+  and copy the binary to `<run>/bin/horizon`.
 - Python 3 with the `sqlite3` module.
 - `xdotool` on the host.
 
@@ -47,7 +45,7 @@ These names apply in the steps:
 | Name | Value |
 |---|---|
 | `<run>` | A new task-owned directory for this run. |
-| `<state>` | The state directory of the persistent launcher, `<run>/fixture`. |
+| `<state>` | The state directory of the fixture, `<run>/fixture`. |
 | `<home>` | The private home of the fixture, `<state>/data/home`. |
 | `<session>` | The session directory, `<home>/.horizon/sessions/<id>`. |
 | `<index>` | The runtime index, `<session>/runtime.sqlite`. |
@@ -62,46 +60,34 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
 ## 5. Setup
 
-1. Make the persistent launcher with S02 steps 1, 2 and 5 of the
-   [test fixture area](cloud-panels/s-test-fixture.md#62-s02--start-the-persistent-launcher).
-
-   Result: `<run>/launcher` has a copy of `serve.py` with the restart branch. You
-   pass `--saved-session` when you start it, so the candidate keeps a saved
-   session.
-
-2. In the restart branch of the copy, add these two lines before `marker.unlink()`.
-
-   ```python
-                   while (args.state / 'restart-hold').exists():
-                       time.sleep(0.2)
-   ```
-
-   Result: While the restart hold exists, the launcher does not start the candidate again.
-
-3. In the copy, replace the `terminals` list of the fixture workspace with six editor panels.
-
-   ```python
-                   'terminals': [
-                       {'name': f'Editor {n}', 'kind': 'editor',
-                        'position': [40 + 560 * (n % 2), 60 + 300 * (n // 2)], 'size': [520, 260]}
-                       for n in range(6)]}]}
-   ```
-
-   Result: The board of the fixture has one workspace with six editor panels.
-
-4. Start the persistent launcher with a new state directory.
+1. Start the fixture with a new state directory and a saved session.
 
    ```sh
-   python3 <run>/launcher/serve.py --horizon <run>/bin/horizon --native-view --saved-session --state <state>
+   python3 scripts/device-smoke/serve.py --horizon <run>/bin/horizon --native-view --saved-session --reuse-state --state <state>
    ```
 
    Result: The output shows a `vnc_address`. `<state>/lab.json` shows `"session":
-   "saved"`.
+   "saved"`, and the manifest names the SHA-256 of the frozen candidate.
 
-5. Do [S03](cloud-panels/s-test-fixture.md#63-s03--show-the-fixture-in-a-device-panel)
-   and [S04](cloud-panels/s-test-fixture.md#64-s04--make-sure-that-the-frozen-candidate-runs).
+2. Show the fixture in a Device panel. Do the
+   [automatic viewer health check](../../../scripts/device-smoke/README.md#automatic-viewer-health-check)
+   and keep its observations.
 
-   Result: A Device panel shows a live view. The `horizon` child is the frozen candidate.
+   Result: A Device panel shows a live view with frames that advance.
+
+3. Make six editor panels. Hold Ctrl and double-click an empty part of the
+   board six times, and select **Editor** each time.
+
+   Result: The board has one workspace with six editor panels.
+
+4. Arrange the six panels in two columns and three rows, and note the exact
+   title of each panel.
+
+   Result: Each panel has a title that this procedure uses in a query.
+
+This procedure restarts the candidate several times. To restart it, close its
+window through the window manager and run the command of step 1 again with the
+same `<state>`. The fixture keeps the private home of that state path.
 
 ## 6. Tasks
 
@@ -119,14 +105,15 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
    Result: The output is `1 6 1`.
 
-3. Move the panel Editor 0 to a new position with its title bar.
+3. Move the first editor panel to a new position with its title bar. Write its
+   exact title as `<panel>`.
 
    Result: The panel shows at the new position.
 
-4. Wait 2 seconds. Show the position of Editor 0 in the index.
+4. Wait 2 seconds. Show its position in the index.
 
    ```sh
-   python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select data from panels where name=?",("Editor 0",)).fetchone()[0])' <index>
+   python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select data from panels where name=?",(sys.argv[2],)).fetchone()[0])' <index> <panel>
    ```
 
    Result: The `position` value is the new position.
@@ -135,43 +122,29 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
 1. Record a screenshot of the board.
 
-   Result: The screenshot shows Editor 0 at its new position.
-
-2. Make the restart marker.
-
-   ```sh
-   touch <state>/restart-request
-   ```
-
-   Result: The launcher starts the candidate again after the next close.
-
-3. Close the window of the candidate through the window manager.
-
-   Result: The candidate stops. The launcher starts it again.
-
-4. Do S04 again.
-
-   Result: The new `horizon` child is the frozen candidate.
-
-5. Compare the board with the screenshot of step 1.
-
-   Result: The workspace and the six panels are the same. Editor 0 is at its new position.
-
-### 6.3 R03: A damaged index falls back to runtime.yaml
-
-1. Make the restart hold and the restart marker.
-
-   ```sh
-   touch <state>/restart-hold <state>/restart-request
-   ```
-
-   Result: The launcher waits after the next close.
+   Result: The screenshot shows the panel of R01 at its new position.
 
 2. Close the window of the candidate through the window manager.
 
-   Result: The candidate stops. The launcher does not start it.
+   Result: The candidate stops, and the fixture stops.
 
-3. Replace the index with text. Remove the journal files of the index.
+3. Start the candidate again with the command of setup step 1 and the same
+   `<state>`.
+
+   Result: The manifest names the frozen candidate and its SHA-256.
+
+4. Compare the board with the screenshot of step 1.
+
+   Result: The workspace and the six panels are the same. The panel of R01
+   is at its new position.
+
+### 6.3 R03: A damaged index falls back to runtime.yaml
+
+1. Close the window of the candidate through the window manager.
+
+   Result: The candidate stops, and the fixture stops.
+
+2. Replace the index with text. Remove the journal files of the index.
 
    ```sh
    printf 'synthetic damage' > <index>
@@ -184,19 +157,16 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
    > `<index>-wal`. SQLite then reads the board from that file and does not
    > see the damage. Thus this step removes the journal files too.
 
-4. Remove the restart hold.
+3. Start the candidate again with the command of setup step 1 and the same
+   `<state>`.
 
-   ```sh
-   rm <state>/restart-hold
-   ```
+   Result: The candidate shows a board.
 
-   Result: The launcher starts the candidate.
-
-5. Compare the board with the screenshot of R02.
+4. Compare the board with the board of R02.
 
    Result: The board is the same. `<state>/horizon.log` contains `loading runtime.yaml of session`.
 
-6. Move the panel Editor 1 with its title bar. Wait 2 seconds.
+6. Move a second editor panel with its title bar. Wait 2 seconds.
 
    Result: The panel shows at the new position.
 
@@ -215,9 +185,9 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
 ### 6.4 R04: A missing index is imported one time
 
-1. Make the restart hold and the restart marker. Close the window through the window manager.
+1. Close the window through the window manager.
 
-   Result: The candidate stops. The launcher does not start it.
+   Result: The candidate stops, and the fixture stops.
 
 2. Remove the files of the runtime index. Keep the damaged copy.
 
@@ -228,15 +198,16 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
    Result: Only `runtime.yaml`, `meta.yaml`, the `transcripts` directory and the
    damaged copy stay.
 
-3. Record the SHA-256 of `runtime.yaml`. Remove the restart hold.
+3. Record the SHA-256 of `runtime.yaml`. Start the candidate again with the
+   command of setup step 1 and the same `<state>`.
 
-   Result: The launcher starts the candidate.
+   Result: The candidate shows a board.
 
 4. Compare the board with the board of R03.
 
    Result: The board is the same. The SHA-256 of `runtime.yaml` did not change.
 
-5. Move the panel Editor 2 with its title bar. Wait 2 seconds.
+5. Move a third editor panel with its title bar. Wait 2 seconds.
 
    Result: `runtime.sqlite` exists again.
 
@@ -246,9 +217,9 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
 ### 6.5 R05: runtime.yaml from an earlier release wins
 
-1. Make the restart hold and the restart marker. Close the window through the window manager.
+1. Close the window through the window manager.
 
-   Result: The candidate stops. The launcher does not start it.
+   Result: The candidate stops, and the fixture stops.
 
 2. Change the name of the workspace in `runtime.yaml`, as an earlier release does.
 
@@ -258,9 +229,8 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
    Result: `runtime.yaml` has the new name. The index has the old name.
 
-3. Remove the restart hold.
-
-   Result: The launcher starts the candidate.
+3. Start the candidate again with the command of setup step 1 and the same
+   `<state>`.
 
 4. Look at the workspace name on the board.
 
@@ -297,11 +267,11 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
 ## 8. Cleanup
 
-1. Remove the restart marker and the restart hold. Close the window of the candidate.
+1. Close the window of the candidate.
 
-   Result: The candidate stops and the launcher stops.
+   Result: The candidate stops and the fixture stops.
 
-2. Stop the baseline fixture with Ctrl-C.
+2. Stop the baseline fixture of R06 with Ctrl-C.
 
    Result: The fixture stops its child processes.
 

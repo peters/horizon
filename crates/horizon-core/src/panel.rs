@@ -1,5 +1,3 @@
-mod cloud_park;
-pub use cloud_park::ParkedScreen;
 mod lifecycle;
 mod spawn;
 mod work_resume;
@@ -16,7 +14,7 @@ use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line}
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
-use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, RemoteWorkspaceReference};
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::Terminal;
 #[cfg(test)]
@@ -62,8 +60,6 @@ pub enum PanelKind {
     Usage,
     Browser,
     Device,
-    /// The setup board: every repository whose cloud setup agent works on this computer.
-    SetupBoard,
 }
 
 impl PanelKind {
@@ -77,7 +73,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::GitChanges | Self::Usage | Self::Device | Self::SetupBoard)
+        !matches!(self, Self::GitChanges | Self::Usage | Self::Device)
     }
 
     #[must_use]
@@ -103,7 +99,6 @@ impl PanelKind {
             Self::Editor => "Editor",
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
-            Self::SetupBoard => "Setup board",
             Self::Browser => "Browser",
             Self::Device => "Device",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
@@ -160,7 +155,6 @@ pub struct PanelOptions {
     /// Whether the panel participates in layout, rendering, and input.
     pub visible: bool,
     pub local_id: Option<String>,
-    pub remote_workspace: Option<RemoteWorkspaceReference>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     /// Active `browser` config section, so spawn honors `--config` and
@@ -173,8 +167,6 @@ pub struct PanelOptions {
     /// it: a page that an agent asks for, a page of a local profile that a panel
     /// duplicates and a saved panel keep the backend that their caller chose.
     pub follows_browser_host: bool,
-    #[cfg(feature = "cloud-workspaces")]
-    pub cloud_connection: Option<crate::cloud_runtime::ssh::Connection>,
     /// Run the browser panel at a remote grid with this prepared request
     /// instead of launching a local browser.
     pub remote_session: Option<horizon_browser::RemoteSessionRequest>,
@@ -215,14 +207,11 @@ impl Default for PanelOptions {
             size: None,
             visible: true,
             local_id: None,
-            remote_workspace: None,
             session_binding: None,
             template: None,
             browser_config: None,
             browser_session_id: None,
             follows_browser_host: false,
-            #[cfg(feature = "cloud-workspaces")]
-            cloud_connection: None,
             remote_session: None,
             remote_target: None,
             browser_host: None,
@@ -247,32 +236,13 @@ impl PanelOptions {
         if !panel_runs_a_local_process(self.kind) {
             return false;
         }
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_connection.is_some() {
-            return false;
-        }
         true
     }
-}
-
-/// Why a restored member panel of a cloud does not run its process.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CloudWait {
-    /// Horizon reconnects the cloud. Remote processes continue independently.
-    Reconnecting,
-    /// The worker of the cloud is stopped. Resume worker restores the panel.
-    Stopped,
-    /// This build has no cloud support. Remote processes continue independently.
-    Unsupported,
-    /// Out of view for a while, so Horizon detached it. Its agent continues in tmux on
-    /// the worker, and the panel attaches again when it comes into view.
-    Parked,
 }
 
 pub struct Panel {
     pub id: PanelId,
     pub local_id: String,
-    remote_workspace: Option<RemoteWorkspaceReference>,
     pub title: String,
     pub terminal_title: String,
     pub kind: PanelKind,
@@ -280,16 +250,10 @@ pub struct Panel {
     pub work_resume: ResumePolicy,
     pub layout: PanelLayout,
     pub visible: bool,
-    /// Horizon neither saves nor restores this panel, such as a setup agent's hidden
-    /// panel whose arguments hold its task: a restart must not run it again unseen.
-    pub transient: bool,
     pub workspace_id: WorkspaceId,
     pub content: PanelContent,
-    /// Preserve browser identity while an inert restore placeholder awaits its remote worker.
     pub(crate) disconnected_browser_profile: Option<crate::runtime_state::BrowserProfileState>,
     pub(crate) disconnected_device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
-    /// What this panel says while its cloud does not run it; `None` for any other panel.
-    cloud_wait: Option<CloudWait>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     pub launched_at_millis: i64,
@@ -333,12 +297,6 @@ pub struct PanelProcessOutput {
 }
 
 impl Panel {
-    /// Execution identity is independent of the panel's visual workspace.
-    #[must_use]
-    pub fn remote_workspace(&self) -> Option<&RemoteWorkspaceReference> {
-        self.remote_workspace.as_ref()
-    }
-
     /// Convenience accessor for the terminal content (if this panel holds one).
     #[must_use]
     pub fn terminal(&self) -> Option<&Terminal> {
@@ -420,7 +378,7 @@ impl Panel {
         self.content.device()
     }
 
-    /// Supplied machine labels survive an inert cloud restore placeholder.
+    /// Supplied machine labels survive a restore that has no connection yet.
     #[must_use]
     pub fn device_identity(&self) -> Option<&crate::browser::manifest::device::DeviceIdentity> {
         self.device()
@@ -456,7 +414,6 @@ impl Panel {
         Self {
             id,
             local_id: format!("panel-{}", id.0),
-            remote_workspace: None,
             title: kind.display_name().to_string(),
             terminal_title: String::new(),
             kind,
@@ -466,10 +423,8 @@ impl Panel {
             visible: true,
             workspace_id,
             content,
-            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
-            cloud_wait: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,
@@ -502,53 +457,6 @@ impl Panel {
             opts,
             spawn::Placeholder::RestoreFailure(error_message),
         )
-    }
-
-    /// Build a placeholder for a restored member of a cloud that does not run it yet.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the placeholder terminal runtime cannot be created.
-    pub fn cloud_placeholder(
-        id: PanelId,
-        workspace_id: WorkspaceId,
-        opts: PanelOptions,
-        wait: CloudWait,
-    ) -> Result<Self> {
-        let mut panel = spawn::placeholder_panel(id, workspace_id, opts, spawn::Placeholder::Cloud(wait))?;
-        panel.cloud_wait = Some(wait);
-        // A parked member keeps no terminal, also one restored as parked.
-        if wait == CloudWait::Parked {
-            panel.show_parked_placeholder();
-        }
-        Ok(panel)
-    }
-
-    /// Makes a cloud placeholder say `wait` when it says something else. Every other
-    /// panel stays as it is, also a cloud member that runs again.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the new placeholder terminal cannot be created.
-    pub fn show_cloud_wait(&mut self, wait: CloudWait) -> Result<bool> {
-        if self.cloud_wait.is_none_or(|shown| shown == wait) {
-            return Ok(false);
-        }
-        let size = self
-            .terminal()
-            .map(|terminal| (terminal.rows(), terminal.cols()))
-            .or_else(|| self.parked_screen().map(ParkedScreen::size));
-        let Some((rows, cols)) = size else {
-            return Ok(false);
-        };
-        let replacement = spawn::placeholder_terminal(self, rows, cols, spawn::Placeholder::Cloud(wait))?;
-        if let PanelContent::Terminal(mut old) =
-            std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
-        {
-            old.request_shutdown();
-        }
-        self.cloud_wait = Some(wait);
-        Ok(true)
     }
 
     /// Follow the new directory of this workspace.
@@ -602,12 +510,6 @@ impl Panel {
             old.request_shutdown();
         }
         Ok(())
-    }
-
-    /// What this panel says while its cloud does not run it.
-    #[must_use]
-    pub fn cloud_wait(&self) -> Option<CloudWait> {
-        self.cloud_wait
     }
 
     /// Drain pending terminal events. Returns `true` if any output was processed.
@@ -760,11 +662,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_)
-            | PanelContent::Usage(_)
-            | PanelContent::SetupBoard(_)
-            | PanelContent::Device(_)
-            | PanelContent::Parked(_) => {}
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -788,11 +686,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_)
-            | PanelContent::Usage(_)
-            | PanelContent::SetupBoard(_)
-            | PanelContent::Device(_)
-            | PanelContent::Parked(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -805,11 +699,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_)
-            | PanelContent::Usage(_)
-            | PanelContent::SetupBoard(_)
-            | PanelContent::Device(_)
-            | PanelContent::Parked(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -915,7 +805,6 @@ mod tests {
         Panel {
             id: PanelId(1),
             local_id: "panel-1".to_string(),
-            remote_workspace: None,
             title: title.to_string(),
             terminal_title: terminal_title.to_string(),
             kind: PanelKind::Usage,
@@ -925,10 +814,8 @@ mod tests {
             visible: true,
             workspace_id: WorkspaceId(1),
             content: PanelContent::Usage(UsageDashboard::new()),
-            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
-            cloud_wait: None,
             session_binding: None,
             template: None,
             launched_at_millis: 0,
@@ -1129,7 +1016,7 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::SetupBoard] {
+        for kind in [PanelKind::GitChanges, PanelKind::Usage] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }

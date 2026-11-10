@@ -101,7 +101,7 @@ impl HostIo {
     /// Does `work` after every job asked for before it, then `apply` on the UI
     /// thread with its outcome, or with `None` when `work` panicked, so the UI
     /// always learns that the work ended. An outcome asked for on a board that
-    /// was replaced, by a session switch or a cloud prototype restore, applies
+    /// was replaced by a session switch applies
     /// as Horizon retiring that board: it refuses its request and changes no
     /// panel of the board that stands now.
     pub(super) fn then<T: Send + 'static>(
@@ -285,8 +285,8 @@ impl HorizonApp {
         }
     }
 
-    /// A session switch, and the restore of a cloud prototype board, wait like
-    /// an exit, on this thread and for at most [`EXIT_FLUSH`], so the old
+    /// A session switch waits like an exit, on this thread and for at most
+    /// [`EXIT_FLUSH`], so the old
     /// board's outcomes apply before it is saved and replaced; claims of the
     /// old board then take no request of the new one. A later exit waits for
     /// its own bound.
@@ -494,33 +494,6 @@ mod tests {
             [(true, false)],
             "the outcome applied to the retiring old board, before the new one replaced it"
         );
-    }
-
-    #[cfg(feature = "cloud-workspaces")]
-    #[test]
-    fn a_cloud_prototype_restore_applies_the_outcomes_of_the_old_board_before_it_replaces_it() {
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        let (release, released) = channel::<()>();
-        let (seen, applied) = channel();
-        app.browser_create_host.io.then(
-            move || {
-                let _ = released.recv();
-            },
-            move |app: &mut HorizonApp, _| seen.send(app.browser_host_retiring()).unwrap(),
-        );
-        let releasing = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(100));
-            release.send(()).unwrap();
-        });
-        app.restore_cloud_prototype_board(&horizon_core::RuntimeState::default())
-            .expect("restored board");
-        releasing.join().unwrap();
-        assert_eq!(
-            applied.try_iter().collect::<Vec<_>>(),
-            [true],
-            "the outcome applied as retiring the old board, before the restored one replaced it"
-        );
-        assert!(!app.browser_host_retiring());
     }
 
     #[test]

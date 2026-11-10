@@ -22,8 +22,8 @@ panel cannot start and asks for a directory instead.
 - Candidate: a Horizon build from this branch, built with
   `cargo build -p horizon-ui --bin horizon`.
 - Platforms: Linux. The procedure uses the local device smoke fixture.
-- This procedure does not test: cloud panels, SSH panels, and restored sessions
-  of a saved session file. Those panels start a remote shell, where a local
+- This procedure does not test: SSH panels and restored sessions of a saved
+  session file. Those panels start a remote shell, where a local
   directory decides nothing.
 
 ## 3. Safety

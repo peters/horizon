@@ -58,8 +58,8 @@ reflow rate of the grid does not control it.
 **Duplicate removal on read.** Remove the repeated bands when Horizon reads the
 scrollback. This does not reach the rendered history. The terminal widget reads
 `display_iter` from the alacritty grid, and the scrollbar and the history meter
-read `grid.total_lines()`. Only the board search and the cloud progress reader
-use `Terminal::full_text_lines`. The field `Grid.raw` and the module
+read `grid.total_lines()`. Only the board search uses
+`Terminal::full_text_lines`. The field `Grid.raw` and the module
 `storage` of `alacritty_terminal` 0.26 are private. The public API has
 `clear_history` and `update_history` only, so there is no operation that removes
 one band. A removal in `full_text_lines` would make the search count disagree

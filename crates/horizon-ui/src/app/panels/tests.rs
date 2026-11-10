@@ -1,51 +1,8 @@
 use crate::test_egui::DiscardTextures;
-use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use egui::{Context, Event, Id, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use horizon_core::{AgentSessionBinding, PanelKind};
 
-use super::{
-    CanvasClippedArea, MicState, clip_screen_rect_to_canvas, mic_accessibility_label, mic_control_enabled,
-    mic_control_response, mic_widget_info, render_session_rebind_options,
-};
-
-fn key_press(key: Key) -> Event {
-    Event::Key {
-        key,
-        physical_key: Some(key),
-        pressed: true,
-        repeat: false,
-        modifiers: Modifiers::NONE,
-    }
-}
-
-fn mic_frame(ctx: &Context, events: Vec<Event>, enabled: bool, request_focus: bool) -> (bool, String) {
-    let mut input = RawInput {
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 200.0))),
-        events,
-        ..RawInput::default()
-    };
-    input.viewport_id = egui::ViewportId::ROOT;
-    let mut clicked = false;
-    let output = ctx
-        .run_ui(input, |ui| {
-            clicked = egui::CentralPanel::default()
-                .show(ui, |ui| {
-                    let response = mic_control_response(
-                        ui,
-                        Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(24.0)),
-                        Id::unique("mic_keyboard_test"),
-                        enabled,
-                        MicState::Idle,
-                    );
-                    if request_focus {
-                        response.request_focus();
-                    }
-                    response.clicked()
-                })
-                .inner;
-        })
-        .discard_textures();
-    (clicked, output.platform_output.events_description())
-}
+use super::{CanvasClippedArea, clip_screen_rect_to_canvas, render_session_rebind_options};
 
 fn rebind_options_frame(
     ctx: &Context,
@@ -174,65 +131,6 @@ fn canvas_clipped_panel_area_does_not_block_overlay_input() {
 
     let canvas_clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 240.0));
     assert!(click_overlay_through_panel_clip(canvas_clip));
-}
-
-#[test]
-fn mic_widget_info_reports_button_state_and_label() {
-    for (state, label) in [
-        (MicState::Idle, "Start dictation"),
-        (MicState::Recording, "Stop dictation; recording"),
-        (MicState::Busy, "Dictation transcription in progress"),
-    ] {
-        let info = mic_widget_info(state, true);
-        assert_eq!(info.role, egui::Role::Button);
-        assert!(info.enabled);
-        assert_eq!(info.label.as_deref(), Some(label));
-        assert_eq!(info.selected, None);
-        assert_eq!(mic_accessibility_label(state), label);
-    }
-
-    assert!(!mic_widget_info(MicState::Idle, false).enabled);
-}
-
-#[test]
-fn mic_control_availability_matches_engine_and_viewport_state() {
-    assert!(mic_control_enabled(true, false, MicState::Idle));
-    assert!(mic_control_enabled(true, true, MicState::Recording));
-    assert!(!mic_control_enabled(true, true, MicState::Idle));
-    assert!(!mic_control_enabled(true, true, MicState::Busy));
-
-    for state in [MicState::Idle, MicState::Recording, MicState::Busy] {
-        assert!(!mic_control_enabled(false, true, state));
-    }
-}
-
-#[test]
-fn text_panels_are_eligible_for_dictation() {
-    assert!(PanelKind::Browser.accepts_text_input());
-    assert!(PanelKind::Shell.accepts_text_input());
-    assert!(PanelKind::Editor.accepts_text_input());
-    assert!(!PanelKind::GitChanges.accepts_text_input());
-}
-
-#[test]
-fn focused_mic_activates_once_from_enter_or_space() {
-    for key in [Key::Enter, Key::Space] {
-        let ctx = Context::default();
-        assert!(!mic_frame(&ctx, Vec::new(), true, true).0);
-        assert!(ctx.memory(|memory| memory.has_focus(Id::unique("mic_keyboard_test"))));
-        let (clicked, description) = mic_frame(&ctx, vec![key_press(key)], true, false);
-        assert!(clicked);
-        assert_eq!(description, "Start dictation: button");
-    }
-}
-
-#[test]
-fn disabled_mic_ignores_focused_keyboard_activation() {
-    let ctx = Context::default();
-    assert!(!mic_frame(&ctx, Vec::new(), true, true).0);
-    let (clicked, description) = mic_frame(&ctx, vec![key_press(Key::Enter)], false, false);
-    assert!(!clicked);
-    assert!(description.is_empty());
 }
 
 #[test]

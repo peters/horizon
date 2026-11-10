@@ -12,14 +12,14 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure checks widget identity, wheel input, accessibility roles, and cast image delivery after the egui update.
+This procedure checks widget identity, wheel input, accessibility roles and
+screenshot delivery after the egui update.
 
 ## 2. Applicability
 
 - Candidate: Horizon with egui 0.37 and its API migration.
 - Platforms: Linux and macOS.
-- The cast task needs an approved receiver with synthetic content.
-- This procedure does not test paid providers or native apps.
+- This procedure does not test paid remote browser providers.
 
 ## 3. Safety
 
@@ -50,24 +50,7 @@ Use synthetic terminal content only. Keep private content outside the isolated d
 
    Result: Wheel input and smooth motion tests pass with the new event source field.
 
-2. Run the cast tests:
-
-   ```sh
-   cargo test -p horizon-ui app::casting
-   ```
-
-   Result: Geometry, overlay privacy, and screenshot callback tests pass.
-   The callback keeps the capture ticket and delivers one image for one request.
-
-3. Run the cloud UI tests:
-
-   ```sh
-   cargo test -p horizon-ui app::cloud_panel
-   ```
-
-   Result: Cloud controls, accessibility labels, and scroll positions pass their checks.
-
-4. Run the device input tests:
+2. Run the device input tests:
 
    ```sh
    cargo test -p horizon-ui device_widget::tests::interact
@@ -97,39 +80,19 @@ Use synthetic terminal content only. Keep private content outside the isolated d
 
    Result: Panel positions and the selected workspace remain correct.
 
-### 6.3 CAST — Pending image lifetime
-
-1. With an approved receiver, start a cast of synthetic terminal content.
-
-   Result: The receiver shows the selected source.
-
-2. Cover the source with an unrelated overlay.
-
-   Result: The receiver gets no image of the overlay.
-
-3. Switch to another disposable session.
-
-   Result: The pending screenshot from the previous session does not reach the receiver.
-
 ## 7. Pass criteria
 
 - All applicable tests pass.
 - The base and candidate show no unexplained visual difference.
-- A covered source sends no image.
-- A session switch discards the pending screenshot.
-- Record each unavailable platform or receiver separately.
+- Record each unavailable platform separately.
 
 ## 8. Cleanup
 
-1. Stop the task-owned cast through Horizon.
-
-   Result: The receiver stops the cast.
-
-2. Close each candidate through its normal close control.
+1. Close each candidate through its normal close control.
 
    Result: The candidate exits. Other Horizon processes remain active.
 
-3. Stop only the fixtures that this run started.
+2. Stop only the fixtures that this run started.
 
    Result: The task-owned displays and servers stop.
 

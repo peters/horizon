@@ -1,7 +1,7 @@
 # Automatic native Device presentation
 
-Retain this regression plan with the Cloud Workspaces MVP. Track implementation,
-headless verification and native acceptance separately. No human visibility
+Retain this regression plan. Track implementation, headless verification and
+native acceptance separately. No human visibility
 confirmation, developer-desktop automation or restart of the active host.
 
 ## Candidate and live-view prerequisites
@@ -29,8 +29,8 @@ freshness. Use the bounded recovery procedure in scripts/device-smoke/README.md.
    continue while presentation is not_rendered. A second Reveal must return
    navigation_preserved without moving the canvas or changing focus. Continue
    testing in the background and record/decode the flow.
-4. Use a fresh, never-presented viewer for each hidden, collapsed-workspace/
-   cloud-group and fullscreen first-presentation scenario.
+4. Use a fresh, never-presented viewer for each hidden, collapsed-workspace
+   and fullscreen first-presentation scenario.
    Reveal may change presentation but must preserve the keyboard-focus panel and
    active workspace, including when they belong to another workspace. Confirm
    subsequent panel creation still uses the previous active workspace.
@@ -75,5 +75,5 @@ non-owner mutation refusal, detached off-canvas recovery with root OS focus and
 window geometry preserved, disconnection reporting and generation-reset reconnect
 pass on frozen candidate `2a1411c736376304964614b7c448e9681c0631526a18c987b0b0d41c13971200`.
 Public receipts and inspected 4K recordings are private `development-71/`.
-Cloud collapse, another workspace's active selection and restored ownership retain
-headless coverage; their native variants are not claimed complete by this pass.
+Another workspace's active selection and restored ownership retain headless
+coverage; their native variants are not claimed complete by this pass.

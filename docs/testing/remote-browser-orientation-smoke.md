@@ -25,7 +25,7 @@ is not physical-device qualification.
 | Startup readiness or lifecycle | Startup pending/failure, unavailable/opposite/unsupported geometry, cancellation before/during measurement, confirmed/uncertain exact release | First snapshot on all explicit start lanes, baseline compatibility and release |
 | Device/page measurement or frame verification | Allocation support discovery, committed-page measurement and driver orientation tests, stale/contradictory frames, absent APIs, deadlines | Three round trips per device, geometry samples, no-op and UI round trip |
 | Refs, visual origin, scroll or document identity | Navigation and semantic invalidation, edge coordinates, delayed document commit, input during rotation | Edge clicks, scroll/fill, keyboard, navigate/reload/back/forward and fresh refs in both orientations |
-| Host publication, ownership or cloud status | Coordination publication, lock consuming deadline, takeover/cancel, supersession, timeout tombstones, ledger saturation/eviction, worker queue refusal | MCP plus UI, polling after completion; two-viewer cloud lane where configured |
+| Host publication, ownership or status | Coordination publication, lock consuming deadline, takeover/cancel, supersession, timeout tombstones, ledger saturation/eviction, worker queue refusal | MCP plus UI, polling after completion; two-viewer lane where configured |
 | UI presentation | Measured selection, progress, nonfatal error, disabled/wrapped controls | Buttons, narrow/wide panel, host resize/fit, screenshots, native video and final GIF |
 | CLI transport/reporting | Direct executable measured success/refusal and durable output, create plan parity | Authorized direct CLI round trip and plan on owned candidate |
 
@@ -54,7 +54,7 @@ shared UI, MCP and CLI contract and exact-release assertions unchanged.
    release sections below; repeat three portrait/landscape round trips per device.
    Allocate sequentially and reconcile uncertainty before another create.
 5. For an added operation or status field, extend the change-to-test matrix,
-   deterministic regressions, UI controls, public MCP/CLI examples and cloud
+   deterministic regressions, UI controls, public MCP/CLI examples and status
    propagation assertions together. Check older configuration compatibility and
    unsupported providers explicitly.
 6. Record exact candidate hashes, observed geometry, device evidence, interface
@@ -245,10 +245,11 @@ identity and refusal evidence before closing the owned session.
   after measured device/page/frame agreement. Observe a fresh responsive layout,
   reacquire semantic refs and activate an edge control after each rotation.
 - Ensure controls wrap within narrow panels and remain legible after resize/fit.
-  Hide remote rotation controls on local browsers, including cloud-hosted local
+  Hide remote rotation controls on local browsers, including presented local
   Chromium/Firefox. Host requests for those browsers must return
   `orientation_unsupported` without queuing a rotation or entering pending state.
-  Keep rotation available for cloud presentations with an actual provider target.
+  Keep rotation available for a remote presentation with an actual provider
+  target.
   Disable controls while starting,
   stopped, rotating, unsupported, and while Teach mode is active.
 - A failed rotation must show an actionable error without discarding the browser
@@ -258,12 +259,12 @@ identity and refusal evidence before closing the owned session.
   applied orientation/viewport and durable report evidence. This CLI lane needs an
   explicitly authorized test executor; the implementing agent continues using
   only public browser MCP tools for browser interaction.
-- With two authorized cloud viewers, rotate from the second while the first waits;
+- With two authorized remote viewers, rotate from the second while the first waits;
   the first must receive superseded status and recover when the active rotation
   settles. Deterministic tests cover driver/worker queue refusal, expiry followed
   by unrelated or stale polls, matching acknowledgement and another viewer
   finishing after ledger eviction. Both completion histories retain their
-  freshest results across repeated snapshots. Use existing configured cloud
+  freshest results across repeated snapshots. Use existing configured provider
   infrastructure only; no implicit provisioning.
 - Capture the UI button round trip in the final native-viewed PR GIF.
 
@@ -308,10 +309,10 @@ identity and refusal evidence before closing the owned session.
 - Execute the same create/rotate/get/restore sequence through a CLI plan
   calling the public MCP contract on the candidate. Record measured results,
   not merely plan parsing.
-- Cover the desktop host and cloud worker create override through focused
-  tests. If live cloud qualification is required but unavailable, report it
-  explicitly; never provision a cloud implicitly.
-- Force cloud orientation-failure publication errors before writing the result
+- Cover the desktop host and the remote host create override through focused
+  tests. If a live remote qualification is required but unavailable, report it
+  explicitly; never rent a remote target implicitly.
+- Force remote orientation-failure publication errors before writing the result
   and after writing it but before retiring the request. Retry the same typed
   failure and release guidance; retain request/error state until completion
   succeeds, then schedule cleanup once.
@@ -335,7 +336,7 @@ acknowledgement time, audit action id, result (`pass`, `fail`, `blocked`,
 native-view health observations with it. Do not put raw provider session ids,
 credentials or secret-bearing responses in the ledger or public report.
 
-The PR report lists every matrix row, regression tier and UI/CLI/cloud/platform
+The PR report lists every matrix row, regression tier and UI/CLI/platform
 lane with actual results, plus release outcomes and any unperformed operations.
 Link this permanent procedure and the feature document. When reporting a completed
 requested cross-machine lane, use the exact repository `SMOKE-TEST REPORT` format

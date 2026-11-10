@@ -8,12 +8,11 @@ mod text;
 mod toolbar;
 
 pub(in crate::app) use list::ListCache;
-pub(in crate::app) use new_workspace::{NEW_CLOUD_NOT_READY, NewWorkspace};
 
 use std::collections::HashMap;
 
 use egui::{Align, Color32, Context, CornerRadius, CursorIcon, Id, Layout, Order, Pos2, Rect, Sense, Stroke, Vec2};
-use horizon_core::cloud_list::Row;
+use horizon_core::workspace_list::Row;
 use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, WorkspaceLayout};
 
 use crate::theme;
@@ -31,7 +30,7 @@ struct WorkspaceSidebarEntry {
     detached: bool,
     capabilities: WorkspaceLayoutCapabilities,
     panels: Vec<SidebarPanelEntry>,
-    /// The workspace's group, status dot and status line in the cloud list.
+    /// The workspace's status dot and status line in the workspace list.
     row: Row,
 }
 
@@ -210,7 +209,7 @@ impl HorizonApp {
                 // Rows and headers set their own gaps.
                 ui.spacing_mut().item_spacing.y = 0.0;
 
-                self.render_sidebar_groups(ui, workspace_data, actions, &mut drag_state);
+                self.render_sidebar_workspaces(ui, workspace_data, actions, &mut drag_state);
             });
 
         if drag_state.drop_requested {
@@ -252,7 +251,7 @@ impl HorizonApp {
                     actions.fit_active_workspace = true;
                 }
 
-                // New cloud lives in the toolbar; this one makes a workspace on this computer.
+                // The sidebar makes a workspace on this computer.
                 if ui
                     .add(util::chrome_button("New").min_size(Vec2::new(46.0, 24.0)))
                     .on_hover_text("A new empty workspace on this computer.")
@@ -274,9 +273,7 @@ impl HorizonApp {
         let accordion = self.template_config.features.sidebar_accordion;
         ui.add_space(2.0);
 
-        let row_rect = ui
-            .allocate_space(Vec2::new(ui.available_width(), rows::row_height(workspace)))
-            .1;
+        let row_rect = ui.allocate_space(Vec2::new(ui.available_width(), rows::ROW_HEIGHT)).1;
         let mut click_target_hovered = ui.rect_contains_pointer(row_rect);
         let surface = rows::paint_workspace_row_bg(
             ui,
@@ -372,7 +369,7 @@ impl HorizonApp {
         }
 
         if let Some(dragged_workspace_id) = self.sidebar_drag_workspace.filter(|id| *id != workspace.id)
-            && list::accepts_drop(self.sidebar_row(dragged_workspace_id).group, workspace)
+            && list::accepts_drop(workspace)
             && let Some(pointer_pos) = ui.ctx().pointer_interact_pos()
             && row_rect.expand2(Vec2::new(0.0, 4.0)).contains(pointer_pos)
         {
@@ -493,7 +490,7 @@ impl HorizonApp {
 
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
         if actions.create_workspace {
-            self.create_new_workspace(ctx, NewWorkspace::ThisPc, None);
+            self.create_new_workspace(ctx, None);
         }
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);

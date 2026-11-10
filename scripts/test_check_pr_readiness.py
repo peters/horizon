@@ -224,16 +224,16 @@ class ReadinessTests(unittest.TestCase):
     def test_feature_title_needs_procedure(self):
         self.write("crates/horizon-core/src/lib.rs")
         self.commit()
-        code, out = self.run_check("--title", "feat(cloud): add a thing")
+        code, out = self.run_check("--title", "feat(board): add a thing")
         self.assertEqual(code, 1)
         self.assertIn("error feature-procedure:", out)
-        self.assertEqual(self.run_check("--title", "fix(cloud): repair a thing")[0], 0)
+        self.assertEqual(self.run_check("--title", "fix(board): repair a thing")[0], 0)
 
     def test_skill_copies_change_together(self):
-        self.write("assets/plugins/claude-code/skills/horizon-cloud/SKILL.md")
+        self.write("assets/plugins/claude-code/skills/horizon-device/SKILL.md")
         self.commit()
         self.assertIn("error skill-copies:", self.run_check()[1])
-        self.write("assets/plugins/codex/skills/horizon-cloud/SKILL.md")
+        self.write("assets/plugins/codex/skills/horizon-device/SKILL.md")
         self.commit()
         self.assertEqual(self.run_check()[0], 0)
 

@@ -20,24 +20,15 @@ mod browser_remote_slots;
 mod browser_request_claims;
 mod browser_requests;
 mod browser_visibility_requests;
-#[cfg(feature = "cloud-workspaces")]
-mod browser_vm_requests;
 mod canvas;
 mod canvas_drag;
 mod canvas_gesture;
 mod canvas_scroll;
-#[cfg(target_os = "linux")]
-mod casting;
-mod cloud_offers;
-#[cfg(feature = "cloud-workspaces")]
-mod cloud_panel;
 mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;
 mod device_requests;
 mod device_reveal_wait;
-#[cfg(test)]
-mod device_tests;
 mod file_drop;
 mod file_drop_highlight;
 mod frame_stats;
@@ -58,11 +49,8 @@ mod settings_io;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
-pub(crate) mod speech;
 mod ssh_upload;
 mod startup_session;
-#[cfg(feature = "cloud-workspaces")]
-mod tailnets;
 #[cfg(test)]
 mod test_support;
 mod transcript_deletes;
@@ -81,8 +69,8 @@ use std::time::{Duration, Instant};
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
     AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, PanelId,
-    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShortcutBinding,
-    ShutdownProgress, StartupChooser, WindowConfig, WorkspaceId,
+    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
+    StartupChooser, WindowConfig, WorkspaceId,
 };
 
 use self::browser_requests::BrowserCreateHostState;
@@ -104,15 +92,9 @@ const SIDEBAR_WIDTH: f32 = 210.0;
 const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
 const PANEL_PADDING: f32 = 8.0;
 const PANEL_MIN_SIZE: [f32; 2] = [320.0, 220.0];
-#[cfg(feature = "cloud-workspaces")]
-const RESIZE_HANDLE_SIZE: f32 = 18.0;
 const WS_BG_PAD: f32 = 16.0;
 const WS_TITLE_HEIGHT: f32 = 38.0;
 const WS_EMPTY_SIZE: [f32; 2] = [304.0, 154.0];
-/// The frame of the workspace New cloud made to hold its form: the form's widest width plus its
-/// margins, and room for its heading, body and action bar.
-#[cfg(feature = "cloud-workspaces")]
-const WS_CLOUD_FORM_SIZE: [f32; 2] = [1244.0, 820.0];
 const WS_LABEL_HEIGHT: f32 = 30.0;
 const WS_LABEL_MIN_WIDTH: f32 = 110.0;
 const WS_LABEL_MAX_WIDTH: f32 = 260.0;
@@ -202,29 +184,6 @@ impl DetachedWorkspaceViewportState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HeldSpeechBinding {
-    binding: ShortcutBinding,
-    release_deadline: Option<Instant>,
-}
-
-impl HeldSpeechBinding {
-    const fn new(binding: ShortcutBinding) -> Self {
-        Self {
-            binding,
-            release_deadline: None,
-        }
-    }
-}
-
-/// Transient dictation feedback shown bottom-center: outcomes that would
-/// otherwise be invisible (ignored presses, empty transcripts, errors).
-struct SpeechNotice {
-    message: String,
-    error: bool,
-    shown_at: Instant,
-}
-
 /// Per-panel UI caches that survive across frames.
 #[derive(Default)]
 pub struct PanelRenderCaches {
@@ -239,11 +198,7 @@ pub struct PanelRenderCaches {
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct HorizonApp {
-    #[cfg(target_os = "linux")]
-    casting: casting::CastState,
     board: Board,
-    #[cfg(feature = "cloud-workspaces")]
-    cloud_prototype: cloud_panel::CloudPrototype,
     panels_to_close: Vec<PanelId>,
     panels_to_restart: Vec<PanelId>,
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
@@ -262,29 +217,6 @@ pub struct HorizonApp {
     ime_commit_normalizer: input::ImeCommitNormalizer,
     frame_keyboard_events: HashMap<ViewportId, Vec<input::FrameKeyEvent>>,
     terminal_keyboard_events: Vec<input::TerminalInputEvent>,
-    speech: Option<speech::SpeechSystem>,
-    speech_global_hotkeys: Option<horizon_cursor::GlobalHotkeys>,
-    speech_global_hotkeys_tried: bool,
-    speech_global_hotkeys_suspended: bool,
-    speech_global_events_pending: Vec<horizon_cursor::HotkeyEvent>,
-    /// Every push-to-talk chord currently held (used to keep their key
-    /// events, repeats, and releases out of the terminal input stream —
-    /// multiple profile keys can be down simultaneously).
-    speech_held_bindings: Vec<HeldSpeechBinding>,
-    /// The profile whose chord press started the active hold-mode recording;
-    /// releases only stop a recording when set (a no-op press must not stop a
-    /// mic-button recording).
-    speech_engaged_profile: Option<usize>,
-    /// Escape was consumed to cancel a recording this frame.
-    speech_escape_cancelled: bool,
-    /// The cancel-Escape's release has not yet been seen; it must also be
-    /// kept out of the terminal stream (kitty release reporting).
-    speech_escape_release_pending: bool,
-    speech_escape_release_deadline: Option<Instant>,
-    speech_notice: Option<SpeechNotice>,
-    /// Whether any Horizon viewport (root or detached) reported focus this
-    /// frame; evaluated at end of frame to cancel unattended recordings.
-    any_viewport_focused: bool,
     panel_screen_rects: HashMap<PanelId, Rect>,
     terminal_body_screen_rects: HashMap<PanelId, Rect>,
     panel_screen_order: Vec<PanelId>,
@@ -306,7 +238,7 @@ pub struct HorizonApp {
     held_navigation_keys: Vec<horizon_core::ShortcutBinding>,
     sidebar_visible: bool,
     sidebar_drag_workspace: Option<WorkspaceId>,
-    /// The rows of the sidebar's cloud list, read at most once a second.
+    /// The rows of the sidebar's workspace list, read at most once a second.
     sidebar_list: sidebar::ListCache,
     minimap_visible: bool,
     hud_visible: bool,
@@ -345,7 +277,6 @@ pub struct HorizonApp {
     settings_io: SettingsIo,
     /// A reload is in flight, so the window does not ask for another one.
     settings_reload_pending: bool,
-    speech_model_info_cache: settings::SpeechModelInfoCache,
     /// Session-only and OS-store provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     session_manager: Option<RuntimeSessionManagerState>,
@@ -414,22 +345,13 @@ impl HorizonApp {
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);
-            #[cfg(feature = "cloud-workspaces")]
-            if !self.finish_cloud_companion_shutdown(ctx) {
-                self.render_cloud_companion_shutdown(ctx);
-                return;
-            }
             self.poll_shutdown_progress();
             return;
         }
 
         let switching_session = self.poll_session_switch(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        self.sync_cloud_companion_session(ctx);
-        // Before the session chooser and any session: a billed builder left by a crash.
-        // Never in tests, which must not touch the real cloud root.
-        #[cfg(all(feature = "cloud-workspaces", not(test)))]
-        self.recover_rented_builder(ctx);
+        // Before the session chooser and any session: a lease left by a crash.
+        // Never in tests, which must not touch the real home.
         if switching_session {
             self.refresh_active_session_lease();
             self.render_session_switch_overlay(ui);
@@ -437,15 +359,11 @@ impl HorizonApp {
         }
 
         if !self.prepare_frame(ui) {
-            self.poll_speech_runtime(ctx, Vec::new());
-            self.render_speech_notice(ctx);
             return;
         }
 
         if self.startup_chooser.is_some() {
-            self.poll_speech_runtime(ctx, Vec::new());
             self.render_startup_chooser(ui);
-            self.render_speech_notice(ctx);
             return;
         }
 
@@ -471,12 +389,9 @@ impl HorizonApp {
             }
         }
         self.render_active_view(ui, block_root_interaction);
-        #[cfg(feature = "cloud-workspaces")]
-        self.apply_setup_board_requests(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
-        self.render_speech_notice(ctx);
         self.finalize_frame(ctx, had_panel_output, workspace_count_before, panel_count_before);
         // Last, after every phase that can move or hide a panel this frame.
         self.restamp_browser_manifests_for_placement();
@@ -490,8 +405,6 @@ impl eframe::App for HorizonApp {
         }
         self.update_ui(ui);
         self.render_saved_session_deletion_notice(ui.ctx());
-        #[cfg(target_os = "linux")]
-        self.cast_frame(ui.ctx());
         self.record_root_device_presentation(ui.ctx());
         // Immediate detached viewports have finished too. Reconcile once, even
         // when startup or session-switch overlays bypass panel rendering.
@@ -525,10 +438,8 @@ impl eframe::App for HorizonApp {
                         if ctx.input(|input| input.focused) {
                             let target = target
                                 .filter(|(_, widget)| {
-                                    !super::app::shortcuts::hotkey_capture_active(ctx)
-                                        && ctx
-                                            .memory(egui::Memory::focused)
-                                            .is_none_or(|focused| focused == *widget)
+                                    ctx.memory(egui::Memory::focused)
+                                        .is_none_or(|focused| focused == *widget)
                                 })
                                 .map(|(panel, _)| panel);
                             let scale = ctx.input(|input| input.viewport().native_pixels_per_point.unwrap_or(1.0));
@@ -562,29 +473,6 @@ impl eframe::App for HorizonApp {
 
     fn on_exit(&mut self) {
         self.abandon_device_reveals("Horizon is exiting");
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            let ctx = egui::Context::default();
-            if !self.finish_cloud_companion_shutdown(&ctx) {
-                tracing::info!("waiting for companion access removals to be saved before exit");
-            }
-            while !self.finish_cloud_companion_shutdown(&ctx) {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            // A cloud session save that keeps failing must not keep Horizon open. The limit
-            // counts from the start of a shutdown that already waited for it.
-            let started = self
-                .shutdown_progress
-                .as_ref()
-                .map_or_else(std::time::Instant::now, horizon_core::ShutdownProgress::started_at);
-            let deadline = started + Duration::from_secs(10);
-            while !Self::cloud_sessions_recorded() && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            if !Self::cloud_sessions_recorded() {
-                tracing::warn!("exiting while a cloud panel session is not yet in its cloud record");
-            }
-        }
         self.run_exit_cleanup();
         // macOS can leave Horizon running as a windowless app after eframe
         // has already torn down the viewport, so terminate explicitly.

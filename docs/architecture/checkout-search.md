@@ -1,9 +1,7 @@
 # Checkout search boundary
 
-**Where is your code?** in **New cloud** offers the Git checkouts on this
-computer by name (`horizon_core::dir_search::checkouts`), and the folders of a
-typed path. The user rules are in "Your repositories in New cloud" in
-`docs/cloud-workspaces.md`.
+`horizon_core::dir_search::checkouts` lists the Git checkouts on this computer
+by name. The folder picker lists the folders of a typed path.
 
 ## Untrusted input
 
@@ -12,8 +10,8 @@ typed path. The user rules are in "Your repositories in New cloud" in
 - A checkout's Git metadata: `.git` (folder, file or link), `HEAD`, `commondir`,
   `config`, ref files, `packed-refs` and the clone marker. Any program or a
   checked-out repository can write them, and they can change while they are read.
-- The origin address in a checkout's config. It is text to show and to match
-  against the connected account's repositories, never a trusted identity.
+- The origin address in a checkout's config. It is text to show, never a
+  trusted identity.
 
 The home folder is `HOME`, else `USERPROFILE`, the first that is set and not
 empty, on every platform. Without one, nothing is searched.
@@ -30,8 +28,7 @@ empty, on every platform. Without one, nothing is searched.
   searched below.
 - Only regular files are opened, never a pipe or a device. A metadata file is
   read to at most 256 KiB, and a longer one is not used; `packed-refs` to at
-  most 64 MiB. The config and clone marker reads in
-  `cloud_runtime::repository::source` stop at their limits in the same way.
+  most 64 MiB.
 - On macOS nothing inside the home folders that macOS guards with a privacy
   prompt (`GUARDED`) is opened, also through links: each link is followed one
   step at a time and refused when a step enters a guarded folder. A checkout
@@ -85,6 +82,3 @@ empty, on every platform. Without one, nothing is searched.
   any origin, so a checkout of another repository can stand in for an account
   repository of the same name.
 - Repositories that keep refs in reftable are never counted as finished.
-- Planning and running a clone use Git as before: `git rev-parse` in a folder
-  that already exists at the clone's place, then `git clone`. Those steps are
-  outside this boundary.

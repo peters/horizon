@@ -5,145 +5,6 @@ use super::{
 use horizon_core::WorkspaceDockSide;
 
 #[test]
-#[cfg(feature = "cloud-workspaces")]
-fn sidebar_presets_preserve_independent_cloud_layouts() {
-    use horizon_core::{WorkspaceLayout, cloud_panel::CloudGroup};
-    for layout in [None, Some(WorkspaceLayout::Rows)] {
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let cloud = app.board.create_workspace("cloud");
-        let ordinary = app.board.create_workspace("ordinary");
-        let first = app.board.create_panel(editor_panel_options("first"), cloud).unwrap();
-        let second = app.board.create_panel(editor_panel_options("second"), cloud).unwrap();
-        let local = app.board.workspace(cloud).unwrap().local_id.clone();
-        let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), [24.0, 128.0]);
-        group.attach(&mut app.board, first);
-        group.attach(&mut app.board, second);
-        group.set_layout(&mut app.board, layout);
-        app.cloud_prototype.groups.0.push(group);
-        app.board.cloud_groups = app.cloud_prototype.groups.clone();
-        let geometry = |app: &crate::app::HorizonApp| {
-            [first, second].map(|id| {
-                let panel = app.board.panel(id).unwrap();
-                (panel.layout.position, panel.layout.size)
-            })
-        };
-        let before = geometry(&app);
-        let rows = app.sidebar_workspace_data();
-        assert!(rows.iter().find(|r| r.id == cloud).unwrap().capabilities.can_arrange);
-        assert!(!rows.iter().find(|r| r.id == cloud).unwrap().capabilities.can_detach);
-        assert!(rows.iter().find(|r| r.id == ordinary).unwrap().capabilities.can_arrange);
-        for parent in WorkspaceLayout::ALL {
-            app.apply_sidebar_actions(
-                &egui::Context::default(),
-                &super::SidebarActions {
-                    arrange_layout: Some((cloud, parent)),
-                    clear_layout: Some(cloud),
-                    ..Default::default()
-                },
-            );
-            app.cloud_prototype.groups.reconcile(&mut app.board);
-            assert_eq!(geometry(&app), before);
-            assert_eq!(app.cloud_prototype.groups.0[0].layout, layout);
-            assert_eq!(app.board.workspace(cloud).unwrap().layout, Some(parent));
-        }
-        app.apply_sidebar_actions(
-            &egui::Context::default(),
-            &super::SidebarActions {
-                arrange_layout: Some((ordinary, WorkspaceLayout::Columns)),
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            app.board.workspace(ordinary).unwrap().layout,
-            Some(WorkspaceLayout::Columns)
-        );
-    }
-}
-
-#[test]
-#[cfg(feature = "cloud-workspaces")]
-fn sidebar_cannot_detach_a_cloud_but_keeps_ordinary_workspace_actions() {
-    let (temp, mut app) = crate::app::test_support::test_app();
-    let cloud = app.board.create_workspace("cloud");
-    let ordinary = app.board.create_workspace("ordinary");
-    let local = app.board.workspace(cloud).unwrap().local_id.clone();
-    app.cloud_prototype
-        .groups
-        .0
-        .push(horizon_core::cloud_panel::CloudGroup::new(
-            1,
-            "Cloud".into(),
-            local,
-            temp.path().into(),
-            [0.0; 2],
-        ));
-    let rows = app.sidebar_workspace_data();
-    assert!(
-        rows.iter()
-            .find(|row| row.id == cloud)
-            .unwrap()
-            .capabilities
-            .can_arrange
-    );
-    assert!(!rows.iter().find(|row| row.id == cloud).unwrap().capabilities.can_detach);
-    assert!(
-        rows.iter()
-            .find(|row| row.id == ordinary)
-            .unwrap()
-            .capabilities
-            .can_arrange
-    );
-    assert!(
-        rows.iter()
-            .find(|row| row.id == ordinary)
-            .unwrap()
-            .capabilities
-            .can_detach
-    );
-    app.apply_sidebar_actions(
-        &egui::Context::default(),
-        &super::SidebarActions {
-            detach_workspace: Some(cloud),
-            ..super::SidebarActions::default()
-        },
-    );
-    assert!(!app.workspace_is_detached(cloud));
-}
-
-#[test]
-#[cfg(feature = "cloud-workspaces")]
-fn sidebar_focus_reveals_empty_and_collapsed_cloud_workspaces() {
-    for collapsed in [false, true] {
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let workspace = app.board.create_workspace("fixture");
-        let mut group = horizon_core::cloud_panel::CloudGroup::new(
-            1,
-            "Fixture".into(),
-            app.board.workspace(workspace).unwrap().local_id.clone(),
-            temp.path().into(),
-            [1700.0, 900.0],
-        );
-        group.collapsed = collapsed;
-        app.cloud_prototype.groups.0.push(group);
-        assert!(app.board.workspace_bounds(workspace).is_none());
-        let ctx = egui::Context::default();
-        let (position, size) = app.workspace_focus_frame(workspace).unwrap();
-        app.pan_to_canvas_pos_aligned(&ctx, position, size, true);
-        let expected = app.pan_target.take();
-        assert!(expected.is_some());
-        app.apply_sidebar_actions(
-            &ctx,
-            &super::SidebarActions {
-                pan_to_workspace: Some(workspace),
-                ..Default::default()
-            },
-        );
-        assert_eq!(app.pan_target, expected);
-        assert_eq!(app.board.active_workspace, Some(workspace));
-    }
-}
-
-#[test]
 fn sidebar_drop_docks_attached_workspace_against_attached_target() {
     assert!(sidebar_workspace_drop_should_dock(false));
 }
@@ -292,7 +153,7 @@ fn workspace_row_reveal_gate_covers_accordion_and_panel_count() {
     assert_eq!(app.workspace_row_reveal(false, workspace, &two), None);
 }
 
-fn workspace_entry(row: horizon_core::cloud_list::Row, detached: bool) -> super::WorkspaceSidebarEntry {
+fn workspace_entry(row: horizon_core::workspace_list::Row, detached: bool) -> super::WorkspaceSidebarEntry {
     super::WorkspaceSidebarEntry {
         id: horizon_core::WorkspaceId(7),
         name: "sample".to_owned(),
@@ -310,44 +171,14 @@ fn workspace_entry(row: horizon_core::cloud_list::Row, detached: bool) -> super:
 }
 
 #[test]
-fn a_compact_parked_dot_tells_a_screen_reader_its_status_line() {
-    use horizon_core::cloud_list::{Dot, Group, Row};
-    let workspace = workspace_entry(
-        Row {
-            group: Group::Parked,
-            dot: Dot::Parked { working: true },
-            line: "tests passed".to_owned(),
-            hourly_rate: None,
-        },
-        false,
-    );
-    let labels = crate::test_egui::accesskit_texts(|ui| {
-        let row = ui.allocate_space(egui::vec2(210.0, super::rows::COMPACT_ROW_HEIGHT)).1;
-        super::rows::paint_workspace_row_contents(ui, row, &workspace, false, crate::theme::BG_ELEVATED());
-    });
-    assert!(
-        labels
-            .iter()
-            .any(|(label, _)| label == "Parked · an agent is working on the worker\ntests passed"),
-        "{labels:?}"
-    );
-}
-
-#[test]
-fn a_dragged_workspace_drops_only_in_its_own_group() {
-    use horizon_core::cloud_list::{Group, Row};
-    let row = |group| Row {
-        group,
-        ..Row::of(&[], false, None)
-    };
-    let cloud = workspace_entry(row(Group::Cloud), false);
-    assert!(super::list::accepts_drop(Group::Cloud, &cloud));
-    assert!(!super::list::accepts_drop(Group::ThisPc, &cloud));
-    assert!(!super::list::accepts_drop(Group::Parked, &cloud));
-    assert!(!super::list::accepts_drop(
-        Group::Cloud,
-        &workspace_entry(row(Group::Cloud), true)
-    ));
+fn a_dragged_workspace_drops_only_on_a_docked_row() {
+    use horizon_core::workspace_list::Row;
+    let docked = workspace_entry(Row::local(false, None), false);
+    assert!(super::list::accepts_drop(&docked));
+    assert!(!super::list::accepts_drop(&workspace_entry(
+        Row::local(false, None),
+        true
+    )));
 }
 
 #[test]

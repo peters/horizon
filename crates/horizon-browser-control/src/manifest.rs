@@ -39,25 +39,15 @@ use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 mod agent;
 mod audit;
-mod browser_vm;
 mod capture;
-pub mod cast;
 mod close;
-pub mod cloud_agent;
-mod cloud_companion;
-mod cloud_create;
-mod cloud_delete;
-mod cloud_list;
 mod create;
 pub mod device;
-pub mod exec;
-mod image_destination;
 mod ownership;
 pub mod provider_usage;
 pub mod recovery;
 mod request_queue;
 mod result;
-mod tailnet_credential;
 mod visibility;
 mod workspace;
 

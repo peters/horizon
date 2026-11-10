@@ -1,7 +1,6 @@
 //! The runtime index: a SQLite store of a session's board next to its `runtime.yaml`.
-//! It keeps the workspaces, the panels, the environments of cloud workspaces, and the
-//! park state and last status line of cloud panels, so that they can be read without
-//! the whole board.
+//! It keeps the workspaces and the panels, so that they can be read without the whole
+//! board.
 //!
 //! `runtime.yaml` stays the fallback for one release. A save writes it first and then
 //! records its digest in the index. A load uses the index while `runtime.yaml` is
@@ -13,8 +12,6 @@
 //! migrates; if not, it is damaged too.
 mod rows;
 mod schema;
-#[cfg(feature = "cloud-workspaces")]
-mod status;
 #[cfg(test)]
 mod tests;
 
@@ -35,15 +32,12 @@ use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState};
 use rows::{BoardRows, Encoded, Format};
 use schema::{check_header, header};
 
-#[cfg(feature = "cloud-workspaces")]
-pub use status::{CloudPanelStatus, ParkedPanel};
-
 /// Marks the file as a Horizon runtime index ("HRZI").
 const APPLICATION_ID: i32 = 0x4852_5a49;
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 /// The schema changes from each version to the next, in order. Never change a
 /// released entry; add a new one and increase `SCHEMA_VERSION`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
 /// How long a save waits for another Horizon process that writes the same index.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -85,6 +79,12 @@ CREATE TABLE cloud_panels (
     read_at INTEGER,
     updated_at INTEGER NOT NULL
 ) STRICT;
+";
+/// Version 2 removes the two objects that only the cut cloud workspaces kept:
+/// the `environments` column of `workspaces` and the `cloud_panels` table.
+const SCHEMA_V2: &str = "
+ALTER TABLE workspaces DROP COLUMN environments;
+DROP TABLE cloud_panels;
 ";
 
 #[derive(Debug, thiserror::Error)]
@@ -218,10 +218,10 @@ impl SessionStore {
     pub(super) fn index_runtime_state(&self, session_id: &str, state: &RuntimeState, yaml: &str) {
         let path = self.home.session_runtime_index_path(session_id);
         let digest = yaml_digest(yaml);
-        let result = BoardRows::new(state).map_err(IndexError::from).and_then(|rows| {
-            self.index
-                .with(&path, session_id, |connection| write_board(connection, &rows, &digest))
-        });
+        let rows = BoardRows::new(state);
+        let result = self
+            .index
+            .with(&path, session_id, |connection| write_board(connection, &rows, &digest));
         self.index.report(session_id, result.err().as_ref());
     }
 
@@ -400,43 +400,31 @@ fn write_board(
     };
     write_workspaces(&transaction, rows)?;
     write_panels(&transaction, rows)?;
-    // Cloud panels that left the board keep no status.
-    transaction.execute(
-        "DELETE FROM cloud_panels WHERE panel_local_id NOT IN (SELECT local_id FROM panels)",
-        [],
-    )?;
     transaction.commit()?;
     Ok(())
 }
 
 fn write_workspaces(transaction: &Connection, rows: &BoardRows<'_>) -> std::result::Result<(), IndexError> {
     let mut stored_rows = HashMap::new();
-    let mut select = transaction.prepare_cached("SELECT seq, format, data, environments FROM workspaces")?;
+    let mut select = transaction.prepare_cached("SELECT seq, format, data FROM workspaces")?;
     let mut query = select.query([])?;
     while let Some(row) = query.next()? {
         let key: i64 = row.get(0)?;
         let encoded = stored(&row.get::<_, String>(1)?, row.get(2)?)?;
-        stored_rows.insert(key, (encoded, row.get::<_, Option<String>>(3)?));
+        stored_rows.insert(key, encoded);
     }
     let mut insert = transaction.prepare_cached(
-        "INSERT OR REPLACE INTO workspaces (seq, local_id, name, environments, format, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR REPLACE INTO workspaces (seq, local_id, name, format, data) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
     for (index, workspace) in rows.workspaces.iter().enumerate() {
         let key = seq(index)?;
-        let previous = stored_rows.get(&key);
-        let data = changed(&workspace.state, previous.map(|(encoded, _)| encoded))?;
-        let same_environments = previous.is_some_and(|(_, environments)| *environments == workspace.environments);
-        let encoded = match (data, previous) {
-            (Some(encoded), _) => encoded,
-            (None, Some((encoded, _))) if !same_environments => encoded.clone(),
-            (None, _) => continue,
+        let Some(encoded) = changed(&workspace.state, stored_rows.get(&key))? else {
+            continue;
         };
         insert.execute(params![
             key,
             workspace.state.local_id,
             workspace.state.name,
-            workspace.environments,
             encoded.format.as_str(),
             encoded.data
         ])?;
@@ -536,7 +524,7 @@ fn read_board(path: &Path) -> std::result::Result<Option<StoredBoard>, IndexErro
 
     // Rows that do not make a valid board are damage too.
     let state = rows::assemble(board, workspaces, panels)
-        .and_then(RuntimeState::into_current)
+        .map(RuntimeState::into_current)
         .map_err(|error| IndexError::Damaged(error.to_string()))?;
     Ok(Some(StoredBoard { state, yaml_digest }))
 }

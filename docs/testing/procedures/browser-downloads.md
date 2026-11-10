@@ -22,8 +22,8 @@ download URL.
 - Candidate: the exact build of the pull request.
 - Platforms: Linux and macOS, local panels only.
 - Engines: Chromium and Firefox. Repeat each engine task for both.
-- This procedure does not test Safari, a remote device, or a cloud worker
-  browser. Those answer `unsupported_backend`, and task P06 checks this answer.
+- This procedure does not test Safari or a remote device browser. Those answer
+  `unsupported_backend`, and task P06 checks this answer.
 
 ## 3. Safety
 

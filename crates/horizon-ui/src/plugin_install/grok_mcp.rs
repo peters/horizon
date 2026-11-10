@@ -64,7 +64,7 @@ fn install_browser_skill(dir: &Path) -> io::Result<()> {
 }
 
 fn validate_browser_skill(dir: &Path) -> io::Result<()> {
-    super::mcp_skills::validate_skill_files(dir, super::BROWSER_SKILL_FILES)
+    super::owned_skills::validate_files(dir, super::BROWSER_SKILL_FILES)
 }
 
 pub(super) fn register(home: &Path, browser_host: Option<&BrowserHostConfig>) -> io::Result<bool> {

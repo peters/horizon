@@ -2,7 +2,7 @@ mod device;
 mod terminal;
 
 use terminal::spawn_terminal;
-pub(super) use terminal::{Placeholder, placeholder_lines, placeholder_panel, placeholder_terminal};
+pub(super) use terminal::{Placeholder, placeholder_panel, placeholder_terminal};
 #[cfg(test)]
 use terminal::{disconnected_snapshot_launch_command, prepare_transcript_restore};
 
@@ -99,7 +99,6 @@ impl StaticPanelSeed {
         Panel {
             id: self.id,
             local_id: self.local_id,
-            remote_workspace: None,
             title,
             terminal_title: String::new(),
             kind,
@@ -112,10 +111,8 @@ impl StaticPanelSeed {
             visible: true,
             workspace_id: self.workspace_id,
             content,
-            transient: false,
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
-            cloud_wait: None,
             session_binding: None,
             template: self.template,
             launched_at_millis: current_unix_millis(),
@@ -178,14 +175,6 @@ fn unusable_working_directory(path: &Path, reason: &str) -> UnusableWorkingDirec
 }
 
 pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
-    if opts.remote_workspace.is_some() {
-        return placeholder_panel(
-            id,
-            workspace_id,
-            opts,
-            Placeholder::RestoreFailure("Remote development has been removed; this saved view is read-only"),
-        );
-    }
     let deleting_binding = opts
         .session_binding
         .as_ref()
@@ -213,10 +202,6 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_usage(seed))
         }
-        PanelKind::SetupBoard => {
-            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
-            Ok(spawn_setup_board(seed))
-        }
         PanelKind::Device => {
             let command = opts.command.take();
             let is_restore = opts.is_restore;
@@ -234,8 +219,6 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let command = opts.command.take();
             let browser_config = opts.browser_config.take();
             let follows_browser_host = opts.follows_browser_host;
-            #[cfg(feature = "cloud-workspaces")]
-            let cloud_target = opts.remote_target.clone();
             let remote = match (opts.remote_session.take(), opts.remote_target.take()) {
                 (Some(request), _) => BrowserSpawnMode::Remote(Box::new(request)),
                 (None, Some(target)) => BrowserSpawnMode::RestoredRemote(target),
@@ -245,11 +228,6 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             // it. The host of today's settings does not decide a saved panel, and a
             // live page cannot move between machines.
             let remote = restored_browser_mode(remote, opts.browser_host.take())?;
-            #[cfg(feature = "cloud-workspaces")]
-            let remote = opts
-                .cloud_connection
-                .take()
-                .map_or(remote, |connection| BrowserSpawnMode::Cloud(connection, cloud_target));
             let remote = browser_spawn_mode(remote, crate::browser_host(), follows_browser_host)?;
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_browser(seed, command, browser_config, remote)
@@ -388,19 +366,6 @@ fn spawn_git_changes(mut seed: StaticPanelSeed, cwd: Option<PathBuf>) -> Panel {
     )
 }
 
-fn spawn_setup_board(mut seed: StaticPanelSeed) -> Panel {
-    let (title, has_custom_name) = seed.take_title(|| "Setup board".to_string());
-    tracing::info!("created setup board panel '{}' (id={})", title, seed.id.0);
-    seed.into_panel(
-        title,
-        PanelKind::SetupBoard,
-        PanelContent::SetupBoard(crate::SetupBoard::default()),
-        None,
-        None,
-        has_custom_name,
-    )
-}
-
 fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
     let (title, has_custom_name) = seed.take_title(|| "Usage".to_string());
     tracing::info!("created usage panel '{}' (id={})", title, seed.id.0);
@@ -427,8 +392,6 @@ enum BrowserSpawnMode {
     /// The browser host and profile that served a panel in a previous run. It
     /// comes back on that host, as a page cannot move between machines.
     RestoredHost(crate::browser::RemoteHostBackend),
-    #[cfg(feature = "cloud-workspaces")]
-    Cloud(crate::cloud_runtime::ssh::Connection, Option<String>),
 }
 
 /// The backend of a new browser panel: the browser host that the settings name,
@@ -504,14 +467,6 @@ fn spawn_browser(
     });
     let browser_config = browser_config.unwrap_or_default();
     let browser = match mode {
-        #[cfg(feature = "cloud-workspaces")]
-        BrowserSpawnMode::Cloud(connection, target) => crate::browser::BrowserPanelState::start_cloud(
-            seed.local_id.clone(),
-            connection,
-            target,
-            initial_url.clone(),
-            &browser_config,
-        )?,
         BrowserSpawnMode::Local(session_id) => crate::browser::BrowserPanelState::start_with_session(
             seed.local_id.clone(),
             &browser_config,
@@ -562,12 +517,9 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor
-        | PanelKind::GitChanges
-        | PanelKind::Usage
-        | PanelKind::Browser
-        | PanelKind::Device
-        | PanelKind::SetupBoard => (String::new(), Vec::new()),
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => {
+            (String::new(), Vec::new())
+        }
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -871,12 +823,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor
-            | PanelKind::GitChanges
-            | PanelKind::Usage
-            | PanelKind::Browser
-            | PanelKind::Device
-            | PanelKind::SetupBoard => 0,
+            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode

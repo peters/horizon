@@ -28,8 +28,6 @@ impl HorizonApp {
     /// background threads join terminal event loops and browser drivers.
     #[profiling::function]
     pub(in crate::app) fn begin_shutdown(&mut self) {
-        #[cfg(target_os = "linux")]
-        self.casting.stop_all();
         if self.shutdown_progress.is_some() {
             return;
         }
@@ -58,18 +56,7 @@ impl HorizonApp {
             return;
         };
         let complete = progress.is_complete();
-        #[cfg(target_os = "linux")]
-        let complete = complete && self.casting.finished();
         let timed_out = progress.started_at().elapsed() > MAX_SHUTDOWN_WAIT;
-        // The record of a cloud must hold the session of each panel the board saves.
-        #[cfg(feature = "cloud-workspaces")]
-        let recorded = Self::cloud_sessions_recorded();
-        #[cfg(feature = "cloud-workspaces")]
-        if timed_out && !recorded {
-            tracing::warn!("exiting while a cloud panel session is not yet in its cloud record");
-        }
-        #[cfg(feature = "cloud-workspaces")]
-        let complete = complete && recorded;
         let mut browser_outcome = if progress.browser_shutdown_is_complete() {
             BrowserShutdownOutcome::Complete
         } else {
@@ -93,19 +80,13 @@ impl HorizonApp {
         if self.session_saves_hold_exit() {
             return;
         }
-        // A draft that a frame just parked reaches the file on a worker thread. The frames of
-        // the exit wait for that write, within the shutdown limit.
-        #[cfg(feature = "cloud-workspaces")]
-        if !timed_out && self.cloud_drafts_hold_exit() {
-            return;
-        }
+        // A draft that a frame just set aside reaches the file on a worker thread. The
+        // frames of the exit wait for that write, within the shutdown limit.
         self.abandon_device_reveals("Horizon is exiting");
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
         self.exit_cleanup_complete = true;
         self.release_active_session_lease();
-        #[cfg(feature = "cloud-workspaces")]
-        self.end_cloud_repository_setup_for_exit();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
             tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
             crate::plugin_install::exit_after_releasing_plugins(1);
@@ -154,11 +135,6 @@ impl HorizonApp {
             return;
         }
 
-        #[cfg(target_os = "linux")]
-        if !self.casting.stop_and_wait(MAX_SHUTDOWN_WAIT) {
-            tracing::warn!("timed out waiting for casting teardown during exit cleanup");
-        }
-
         self.wait_for_saved_session_deletion();
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
@@ -203,9 +179,6 @@ impl HorizonApp {
         self.flush_session_saves_for_exit();
         self.git_watchers.clear();
         self.release_active_session_lease();
-        // After the terminals shut down, so a setup agent has had its hang-up.
-        #[cfg(feature = "cloud-workspaces")]
-        self.end_cloud_repository_setup_for_exit();
     }
 
     /// Queues the last save once, then holds the exit on each frame until the session

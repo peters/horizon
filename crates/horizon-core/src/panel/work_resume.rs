@@ -27,7 +27,6 @@ impl Panel {
     /// without an exact session target.
     pub fn check_work_resume(&self) -> Result<()> {
         if !self.work_resume.enabled
-            || self.remote_workspace.is_some()
             || self.launch_command.is_some()
             || !self.launch_args.is_empty()
             || !matches!(

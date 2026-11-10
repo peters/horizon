@@ -2,7 +2,6 @@ mod clipboard_paste;
 mod ime;
 mod input;
 mod layout;
-pub(crate) mod parked;
 mod render;
 mod scrollbar;
 

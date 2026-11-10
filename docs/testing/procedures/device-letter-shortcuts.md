@@ -14,7 +14,8 @@ This procedure proves that native device input sends lowercase `a`-`z` keysyms f
 ## 2. Applicability
 - Candidate: the source build of `horizon-device` with the `cli` feature and the `horizon` UI with the lowercase key contract.
 - Platforms: Linux X11 through the isolated fixture.
-- Not tested: macOS, Wayland, browser pages, real input devices, the cloud worker desktop, or key names outside `a`-`z`, Enter and Escape.
+- Not tested: macOS, Wayland, browser pages, real input devices, or key names
+  outside `a`-`z`, Enter and Escape.
 ## 3. Safety
 > **CAUTION:** USE ONLY THE TASK-OWNED ISOLATED DISPLAY. The test sends X11 input to the focused window. A different display can receive the keys.
 > **CAUTION:** DO NOT SEND AN ACTION AGAIN AFTER AN UNCLEAR RESULT. A repeated chord can run a shortcut two times. Take a new screenshot and stop the run.

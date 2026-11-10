@@ -411,7 +411,7 @@ mod tests {
                             Some(workspace),
                             [0.0, 0.0],
                             std::slice::from_ref(&preset),
-                            |_| Some("Agent is disabled by this cloud profile"),
+                            |_| Some("Agent is disabled by this workspace preset"),
                         );
                     },
                 )
@@ -433,7 +433,7 @@ mod tests {
         assert!(
             texts
                 .iter()
-                .any(|(text, _)| text == "Agent is disabled by this cloud profile")
+                .any(|(text, _)| text == "Agent is disabled by this workspace preset")
         );
         for label in ["Unavailable agent", "Dir"] {
             let pos = texts.iter().find(|(text, _)| text == label).unwrap().1;

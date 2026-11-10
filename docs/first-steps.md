@@ -5,9 +5,9 @@ describes Horizon as it is on `main`. Some functions work on Linux only. Read
 [the platform support](platform-support.md) before you start.
 
 The latest release is v0.2.7 from 2 August 2026. The `main` branch is more
-than 800 commits newer. The release does not have browser panels, Device
-panels, clouds, tailnets or casting. Some steps in this guide can also be
-different in the release. To do all procedures in this guide, build from source.
+than 800 commits newer. The release does not have browser panels or Device
+panels. Some steps in this guide can also be different in the release. To do
+all procedures in this guide, build from source.
 
 ## What Horizon does
 
@@ -26,17 +26,14 @@ These functions are available:
 | Device panels | A VNC view of a desktop on this computer or on an SSH host. | Linux and macOS | No |
 | Agent input to an isolated desktop | An agent clicks and types on an Xvfb desktop for an application test. | Linux with X11 | No |
 | Remote Hosts | SSH panels for your hosts and Tailscale devices. | Linux and macOS | Yes |
-| Clouds | A remote worker with its own shell, agent, browser and Device panels. | Linux and macOS | No |
-| Casting | A panel, a workspace or the window on an Apple TV. | Linux | No |
-| Speech | Dictation into terminals, editors and browser pages. | Source build only | Source build only |
 
 ## Select an install route
 
-| Route | Use it when | Speech |
-|---|---|---|
-| Release binary | You want to start quickly, and v0.2.7 has the functions that you need. | No |
-| Homebrew (macOS, Linux x64) | You use Homebrew. | No |
-| Source build | You want the functions in this guide, speech or GPU encoder features. | Yes, with a feature |
+| Route | Use it when |
+|---|---|
+| Release binary | You want to start quickly, and v0.2.7 has the functions that you need. |
+| Homebrew (macOS, Linux x64) | You use Homebrew. |
+| Source build | You want the functions in this guide. |
 
 Release builds use the default features. All release routes install v0.2.7.
 
@@ -187,25 +184,6 @@ Start Horizon from the new installation to make sure you use the new executable.
 If the build stops with a missing font, do step 6 again. On Linux, a
 `pkg-config` or linker error usually tells you that a `-dev` package is missing.
 
-### Speech and GPU features
-
-Speech needs CMake and a C++ compiler. Linux also needs the ALSA headers. The
-build does not find a GPU toolkit automatically.
-
-To build with speech, type one of these commands:
-
-```bash
-cargo speech          # CPU. Metal on macOS.
-cargo speech-cuda     # NVIDIA GPU. Needs the CUDA toolkit.
-cargo speech-vulkan   # Any GPU with Vulkan. Needs the Vulkan SDK.
-```
-
-To build with the NVENC encoder for casting on Linux, type this command:
-
-```bash
-cargo run --release --features cast-nvenc
-```
-
 ## Use the board
 
 On macOS, use Cmd instead of Ctrl in each step of this procedure. A shell
@@ -272,93 +250,7 @@ Codex and Grok panels.
 Device panels need a source build from `main`. A Device panel needs a VNC target in the configuration. See
 [Watch an app over VNC](../README.md#watch-an-app-over-vnc).
 
-## Start a first cloud
-
-Clouds work on Linux and macOS, with a source build from `main`. Read
-[Cloud workspaces](cloud-workspaces.md) for the full setup.
-
-> **CAUTION:** STOP OR DELETE EACH CLOUD THAT YOU DO NOT USE. A running worker
-> and a stopped volume continue to cost money.
-
-> **CAUTION:** DO NOT PUT AN API KEY IN A LOG, AN ISSUE OR A REPOSITORY. Horizon
-> keeps keys in private files and in the system credential store.
-
-A first cloud needs these items today:
-
-| Item | Need | Where |
-|---|---|---|
-| RunPod API key or Hetzner API token | Required | **Menu > Cloud settings** |
-| Worker image in a registry | Required, except for quick start. Quick start uses the public base image on RunPod. | Build it from [`examples/cloud-worker`](../examples/cloud-worker/README.md) |
-| Git and OpenSSH | Required | This computer |
-| Docker with buildx | Required, except for quick start. Quick start does not use Docker. | This computer |
-| `.horizon/cloud.yml` in the selected commit | Required, except for quick start or an image-only profile in the working copy | The repository. **New cloud** can open a setup agent that writes it. See [Repository setup](cloud-workspaces.md#repository-setup-and-deployment) |
-| Registry push and pull logins | Required for a private image | **Cloud settings > Container registry** |
-| Agent API key, ChatGPT sign-in for Codex, or a setup token or sign-in on the worker for Claude | One for each agent | **Cloud settings** |
-| Tailscale auth key | Optional | **Settings > Tailnets** |
-| Git push credential for the worker | Optional | `~/.horizon/cloud/settings.json` |
-
-Horizon makes the SSH identity for the worker. **Cloud settings** does not
-test a key when you save it. **New cloud** uses the key to get the live worker
-catalog. If it cannot get the catalog, you cannot start the cloud.
-
-Deploy sends committed source only. Horizon does not fetch your local clone
-from `origin` before deploy. Commit and update the branch before you start.
-
-1. Open a workspace in a Git repository.
-2. Click **Menu** in the toolbar.
-3. Click **Add cloud here**.
-
-   Result: The **Where is your code?** step opens.
-
-4. If the code is on a Git server, paste the repository link.
-5. If the code is on this computer, type its name or its path.
-
-   Result: The results list the checkouts on this computer and, with GitHub
-   connected, your GitHub repositories.
-
-6. If you typed a name or a path, press **Enter** on the result.
-
-   Result: The results go away and the dialog reads the repository.
-
-7. If the dialog shows **No cloud setup yet**, click **Start on the base image**
-   in the **Quick start** card.
-
-   Result: The dialog shows the profile `quick-start`. See
-   [Quick start](cloud-workspaces.md#quick-start).
-
-8. Select a worker in the catalog.
-
-   Result: The summary shows the compute price for each hour and an estimated
-   cost for the run. The default run time is one hour.
-
-9. Click **Start cloud**.
-
-   Result: The cloud card shows each stage with its time.
-
-## Stop or delete the first cloud
-
-A stopped worker keeps its workspace storage, and the storage continues to
-cost money. A deleted cloud costs nothing more.
-
-> **CAUTION:** DELETE ONLY A CLOUD THAT YOU DO NOT NEED. Delete removes the
-> worker, the workspace storage and all work on it. You cannot undo it.
-
-1. On the cloud card, click **Manage…**.
-2. If you want to use the cloud again later, click **Stop worker…**.
-3. If you clicked **Stop worker…**, click **Stop worker** to confirm.
-
-   Result: The worker stops. The workspace storage stays.
-
-4. If you do not need the cloud, click **Delete cloud resources…**.
-5. If you clicked **Delete cloud resources…**, click **Delete resources
-   permanently** to confirm.
-
-   Result: The card shows **Deleted**.
-
 ## Get help
 
 - [Platform support](platform-support.md)
-- [Cloud workspaces](cloud-workspaces.md)
-- [Casting](casting.md)
-- [Local Network Bridge](local-network-bridge.md)
 - [README](../README.md)

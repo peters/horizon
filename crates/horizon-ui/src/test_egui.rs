@@ -22,13 +22,6 @@ pub(crate) fn accesskit_labels(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, 
     accesskit_nodes(draw, egui::accesskit::Node::label)
 }
 
-/// What a screen reader reads from each node of one headless pass: its label, or the
-/// value that egui gives a text label instead. Each comes with its disabled flag.
-#[cfg(test)]
-pub(crate) fn accesskit_texts(draw: impl FnMut(&mut egui::Ui)) -> Vec<(String, bool)> {
-    accesskit_nodes(draw, |node| node.label().or_else(|| node.value()))
-}
-
 #[cfg(test)]
 fn accesskit_nodes(
     draw: impl FnMut(&mut egui::Ui),

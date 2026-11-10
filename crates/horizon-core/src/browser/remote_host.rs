@@ -4,8 +4,7 @@
 //! of their signed-in sites. This panel shows a page of that host and sends the
 //! input of the person there, over one SSH channel that carries the MCP contract
 //! of the host: the same tools that an agent of another computer uses, on the
-//! same server. Horizon starts that channel itself and is its client, the way the
-//! cloud view of this module's neighbours is a client of a worker browser.
+//! same server. Horizon starts that channel itself and is its client.
 //!
 //! The frames of the page are the PNG that `browser_screenshot` inlines, so the
 //! panel never reads a private path on the remote machine. The input crosses as

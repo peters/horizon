@@ -18,11 +18,9 @@ pub(crate) fn panel_visual_rect(position: [f32; 2], size: [f32; 2]) -> [f32; 4] 
 }
 
 impl Board {
-    /// Computes the bounding rectangle of the visible panels in a workspace
-    /// and any attached cloud overview.
+    /// Computes the bounding rectangle of the visible panels in a workspace.
     /// Returns `(min, max)` in canvas coordinates, or `None` when the
-    /// workspace does not exist or has neither visible panels nor an
-    /// attached cloud.
+    /// workspace does not exist or has no visible panel.
     #[must_use]
     pub fn workspace_bounds(&self, id: WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
         let workspace = self.workspace(id)?;
@@ -44,32 +42,16 @@ impl Board {
             max[0] = max[0].max(rect[2]);
             max[1] = max[1].max(rect[3]);
         }
-        // These rects stay aligned with the workspace because
-        // `translate_workspace` moves each attached cloud, including its
-        // remembered workspace origin, before collision reads this frame.
-        for rect in self.cloud_overview_rects(id) {
-            any = true;
-            min[0] = min[0].min(rect[0]);
-            min[1] = min[1].min(rect[1]);
-            max[0] = max[0].max(rect[2]);
-            max[1] = max[1].max(rect[3]);
-        }
         any.then_some((min, max))
     }
 
-    /// Bounds that neighbouring workspaces must clear: the panels plus any
-    /// cloud frames and runtime cards, matching the frame the canvas draws.
+    /// Bounds that neighbouring workspaces must clear, matching the frame the
+    /// canvas draws.
     pub(super) fn workspace_collision_bounds(&self, id: WorkspaceId) -> Option<([f32; 2], [f32; 2])> {
-        let panels = self.workspace_bounds(id);
-        #[cfg(feature = "cloud-workspaces")]
-        if let Some(clouds) = self.cloud_groups.workspace_extent(self, id) {
-            return Some(panels.map_or(clouds, |panels| crate::layout::union_bounds(panels, clouds)));
-        }
-        panels
+        self.workspace_bounds(id)
     }
 
-    /// Computes bounds for every workspace that has a visible panel or an
-    /// attached cloud, in one pass over panels and one pass over clouds.
+    /// Computes bounds for every workspace that has a visible panel.
     #[must_use]
     pub fn workspace_bounds_map(&self) -> HashMap<WorkspaceId, ([f32; 2], [f32; 2])> {
         let workspace_origins: HashMap<_, _> = self
@@ -99,45 +81,6 @@ impl Board {
             entry.1[1] = entry.1[1].max(rect[3]);
         }
 
-        self.include_cloud_overviews(&workspace_origins, &mut bounds);
         bounds
-    }
-
-    fn include_cloud_overviews(
-        &self,
-        origins: &HashMap<WorkspaceId, [f32; 2]>,
-        bounds: &mut HashMap<WorkspaceId, ([f32; 2], [f32; 2])>,
-    ) {
-        #[cfg(feature = "cloud-workspaces")]
-        {
-            let local_ids: HashMap<&str, WorkspaceId> = self
-                .workspaces
-                .iter()
-                .map(|workspace| (workspace.local_id.as_str(), workspace.id))
-                .collect();
-            for group in &self.cloud_groups.0 {
-                let Some(&workspace_id) = local_ids.get(group.workspace.as_str()) else {
-                    continue;
-                };
-                let Some(&origin) = origins.get(&workspace_id) else {
-                    continue;
-                };
-                let (cloud_min, cloud_max) = group.overview_bounds();
-                let entry = bounds.entry(workspace_id).or_insert_with(|| {
-                    (
-                        [origin[0] + WS_INNER_PAD, origin[1] + WS_INNER_PAD],
-                        [f32::MIN, f32::MIN],
-                    )
-                });
-                entry.0[0] = entry.0[0].min(cloud_min[0]);
-                entry.0[1] = entry.0[1].min(cloud_min[1]);
-                entry.1[0] = entry.1[0].max(cloud_max[0]);
-                entry.1[1] = entry.1[1].max(cloud_max[1]);
-            }
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        {
-            let _ = (origins, bounds);
-        }
     }
 }

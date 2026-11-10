@@ -22,10 +22,7 @@ the hovered or focused row.
 
 - Candidate: a build that shows workspace tiles in the sidebar.
 - Platforms: Linux.
-- This procedure does not test these functions:
-  - The groups **Needs you**, **Cloud** and **Parked**. The
-    [cloud list procedure](cloud-list.md) tests them with a real cloud.
-  - The status of a cloud workspace. The unit tests of the cloud list cover it.
+- This procedure does not test the group **Needs you** of the sidebar.
 
 ## 3. Safety
 

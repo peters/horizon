@@ -47,53 +47,23 @@ applyTo: "crates/horizon-core/src/dir_search.rs,crates/horizon-core/src/dir_sear
 3. Write the boundary in ASD-STE100 Simplified Technical English. Use the
    names in [`../style/technical-names.md`](../style/technical-names.md).
 4. Write each path in the text from the repository root, for example
-   `docs/architecture/exposure-policy.md`.
+   `docs/architecture/browser-downloads.md`.
 5. Add the `applyTo` globs, and run the checks below.
 
 ## The boundary groups
 
-The boundaries divide into nine groups. The group shows the neighbours of a
+The boundaries divide into two groups. The group shows the neighbours of a
 subsystem, not the crate that holds it. [`trust-boundary-audit.md`](trust-boundary-audit.md)
 gives the untrusted input, the guarantee and the limit of each boundary.
 
 1. **Local host and private files** — a program on this computer reads a
-   private file, a host file or a Docker host. Boundaries:
+   private file or a host file. Boundaries:
    `browser-profile-host`, `browser-remote-bridge`, `browser-remote-panel`,
-   `standalone-remote-host`, `native-client-file`, `checkout-search`,
-   `docker-host-provider`, `device-key-input`.
+   `standalone-remote-host`, `checkout-search`, `device-key-input`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
    drop a file, answer a passkey request, save a download or judge a semantic
    action. Boundaries: `browser-webauthn`, `browser-semantic-actions`,
-   `browser-downloads`, `cloud-browser-uploads`, `cloud-file-drop`.
-3. **Cloud records and durable evidence** — saved JSON, journals and records
-   that a later start reads again. Boundaries: `publication-records`,
-   `exposure-records`, `one-device-admission-records`,
-   `tailnet-enrollment-receipts`, `rebuild-uncommitted`, `cloud-removal`,
-   `browser-vm-deploy`.
-4. **Tailnet identity** — an auth key, an API credential, a device ID and the
-   removal of a device. Boundaries: `tailnet-api-credentials`,
-   `tailnet-enrollment`, `tailnet-node-api`, `tailnet-node-cleanup`.
-5. **Exposure policy and control** — the passive policy facts and the bounded
-   messages of the exposure feature. Boundaries: `exposure-policy`,
-   `exposure-control`.
-6. **Worker ingress and provider absence** — the worker gate, the original peer,
-   the provider calls and the observed absence of a provider resource.
-   Boundaries: `worker-exposure-gate`, `trusted-exposure-gate`,
-   `trusted-tcp-producer`, `tailscale-unix-proxy`, `exposure-firewalls`,
-   `exposure-management`, `hetzner-observed-absence`,
-   `runpod-exposure-ports`.
-7. **Protected ingress and the local network bridge** — the protected host
-   publication, its receipt reader and the one-device endpoint.
-   Boundaries: `protected-host-ingress`, `protected-ingress-reader`,
-   `one-service-gateway`, `one-device-owner-admission`.
-8. **Image publishing, the setup agent and an agent's cloud** — the publication
-   destination, the proof of a setup, the Claude setup token, the GitHub chain that
-   an agent's cloud worker holds, and the create and delete operations that rent
-   and delete a cloud on this machine's credentials. Boundaries:
-   `image-publishing`, `repository-setup`, `claude-setup-token`,
-   `cloud-worker-person-chain`, `cloud-create-request`, `cloud-delete-request`.
-9. **Worker command authority** — an agent runs one command in a worker as the
-   unprivileged agent user. Boundaries: `cloud-exec-request`.
+   `browser-downloads`.
 
 ## Checks
 
@@ -123,13 +93,8 @@ records which paths and symbols of a boundary were examined against the code.
 
 ## Pointers at the old paths
 
-The review rules were in `.github/copilot-instructions.md` and
-`.github/instructions/` until the audit of issue #1787. Two short pointer files
-stay at the old paths, so an old link still works:
-
-- `.github/copilot-instructions.md` points to this folder.
-- `.github/instructions/rebuild-uncommitted.instructions.md` points to its new
-  page, because the procedure `../testing/procedures/cloud-uncommitted-build-context.md`
-  links to it.
+The review rules were in `.github/copilot-instructions.md` until the audit of
+issue #1787. One short pointer file stays at the old path, so an old link still
+works: `.github/copilot-instructions.md` points to this folder.
 
 The pointers hold no review rule and no `applyTo` glob.

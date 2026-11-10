@@ -23,8 +23,8 @@ bound covers the whole evaluation.
   [the remote browser document](../../architecture/remote-browser-sessions.md#evaluation-contract).
 - Platforms: the host can run on any supported platform. The browser must run on
   the selected physical device.
-- This procedure does not test: local browsers, the Horizon desktop panel, cloud
-  natives, network capture or file transfer.
+- This procedure does not test: local browsers, the Horizon desktop panel,
+  network capture or file transfer.
 
 ## 3. Safety
 

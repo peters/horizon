@@ -24,7 +24,7 @@
 Companions of `horizon`:
 
 - Uses: `company` (shared maintenance procedures); `finter-kunnskap` (horizon-finter skill).
-- Used by: `anpr.classification` (Horizon browser_* / device_panel MCP tools); `desktop-migration` (Horizon browser_* / device_panel MCP tools); `jetpack-migration` (Horizon browser_* / device_panel MCP tools); `nativesdk` (Horizon browser_* / device_panel MCP tools); `vagpass.se` (Horizon browser_* / device_panel MCP tools); `youpark.mobile.native` (Horizon browser_* / device_panel MCP tools); `youpark.no` (Horizon browser_* / device_panel MCP tools, Horizon cloud image pins); `youpayv2` (Horizon browser_* / device_panel MCP tools).
+- Used by: `anpr.classification` (Horizon browser_* / device_panel MCP tools); `desktop-migration` (Horizon browser_* / device_panel MCP tools); `jetpack-migration` (Horizon browser_* / device_panel MCP tools); `nativesdk` (Horizon browser_* / device_panel MCP tools); `vagpass.se` (Horizon browser_* / device_panel MCP tools); `youpark.mobile.native` (Horizon browser_* / device_panel MCP tools); `youpark.no` (Horizon browser_* / device_panel MCP tools); `youpayv2` (Horizon browser_* / device_panel MCP tools).
 
 When you change a contract shared with a companion (API, package, model files, fixtures, deploy order), check that repo too and update `../company/docs/products.json` if the link itself changes.
 <!-- company-products:end -->
@@ -45,7 +45,7 @@ Pre-built binaries are attached to GitHub releases. Prefer the latest **non-prer
 | macOS arm64 | `horizon-osx-arm64.tar.gz` | Single `horizon` binary — extract and make executable |
 | macOS x64 | `horizon-osx-x64.tar.gz` | Single `horizon` binary — extract and make executable |
 
-No Rust toolchain or system headers are needed for this path. Release binaries are built with the default features, so they have no speech input. Many functions work on Linux only; read [the platform support](docs/platform-support.md) before you promise a function to a user. [First steps](docs/first-steps.md) is the user guide for the first start.
+No Rust toolchain or system headers are needed for this path. Many functions work on Linux only; read [the platform support](docs/platform-support.md) before you promise a function to a user. [First steps](docs/first-steps.md) is the user guide for the first start.
 
 ### Option B — Build from source
 
@@ -59,7 +59,6 @@ No Rust toolchain or system headers are needed for this path. Release binaries a
   - Arch: `sudo pacman -S --needed base-devel wayland libxkbcommon vulkan-icd-loader cmake nasm`
 - **macOS:** Xcode Command Line Tools (`xcode-select --install`). Metal ships with the OS.
 - **AV1 recording on x86_64:** NASM ≥ 2.15 must be on `PATH` for rav1e's runtime-dispatched assembly kernels. The Linux commands above include it; on Intel macOS use `brew install nasm`. ARM64 uses the platform C compiler's assembler. Builds without `video-capture` do not require NASM.
-- **Speech input (`--features speech`, opt-in):** additionally needs **CMake** and a **C++ compiler** (to build the vendored transcribe.cpp), plus on Linux the ALSA headers (`libasound2-dev`/`alsa-lib-devel`) for microphone capture. The default build does not require these.
 
 #### Build & Run
 
@@ -76,8 +75,7 @@ cargo run --release
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo test --workspace --features speech   # speech tier (needs CMake + ALSA headers)
-cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
+cargo clippy --all-targets --features trace-profiling -- -D warnings
 ```
 
 If any step fails, read the error, fix the prerequisite, and retry. On Linux, missing system headers are the most common issue — look for `pkg-config` or linker errors and install the corresponding `-dev` package.
@@ -151,15 +149,10 @@ Use `localci` for equivalent workflow steps, or run these commands directly. Do 
 ```bash
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
-# `--features speech` is the widest runner-buildable set (GPU features need
-# machine toolchains and add no Rust surface; needs libasound2-dev on Linux).
-# horizon-ui declares the feature, so every other crate builds identically
-# with and without it and the feature pass only needs that crate.
 RUSTFLAGS="-D warnings" cargo test --workspace
-RUSTFLAGS="-D warnings" cargo test -p horizon-ui --features speech
-cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
-cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
+cargo clippy --all-targets --features trace-profiling -- -D warnings
+cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
 ```
 
 ### Local CI with localci
@@ -181,20 +174,10 @@ localci skill install
   so localci does not run it. Install the packages that these steps name one
   time on your computer.
 - Some setup commands still run locally: `rustup component add` for rustfmt
-  and clippy, and a `pip install` into a temporary virtual environment for the
-  casting benchmark check.
+  and clippy.
 - localci runs only the jobs for your operating system. The macOS jobs run on
   GitHub, or on a computer with macOS.
-- Some cloud worker tests need root. A local run skips them with a warning.
-  GitHub CI runs them.
 - A local result does not replace the CI result on GitHub.
-
-### Cloud Development Profiles
-
-The repository's `.horizon/cloud.yml` defines CPU and GPU development profiles.
-Use [the cloud development guide](.horizon/README.md) for image prerequisites,
-isolated build caches, validation commands and native smoke requirements. The
-GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
 
 ### Feature skills
 
@@ -215,27 +198,6 @@ GPU profile requires GPU capacity; a CPU result cannot qualify that lane.
 - Validate each supported interface and document actual runtime requirements and
   unsupported cases explicitly. Do not silently defer CLI/MCP support or require
   the settings UI to be open for an agent-facing capability to work.
-
-### Native app testing
-
-Use [the native runbook](docs/architecture/remote-device-testing.md) for iOS/Android App Automate work.
-The runbook and [test procedure](docs/testing/procedures/native-app-automate.md) follow the repository's STE100 rules.
-
-1. Read the selected app's and companion backend's `AGENTS.md`.
-   Result: The builds, synthetic services, matrix and recipes are declared.
-> **CAUTION:** USE ONLY THE APPROVED DEVICE QUOTA AND DECLARED LOOPBACK PORTS.
-> Device runs consume paid capacity and delete their owned resources.
-
-2. Use `device_test_run`, the `app_*` MCP tools or `horizon --native-run`.
-   Result: All interfaces use the same native controller. Credentials stay in Horizon.
-3. Use one immutable artifact for each platform per run.
-   Result: The host builds and uploads each platform once. Each lane uses its own isolated backend.
-4. Run at most two lanes within the current native quota.
-   Result: Browser quota does not replace App Automate quota.
-5. Observe live sessions through public `device_panel` viewers.
-   Result: Displayed frames, app requests, step evidence and cleanup have separate proof.
-6. Preserve the original owner and private state after uncertainty.
-   Result: Exact reconciliation cannot bypass an unresolved operation.
 
 ### Configuration Changes
 
@@ -275,8 +237,8 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 
 | Tier | Command | Status |
 |------|---------|--------|
-| Blocking | `cargo clippy --all-targets --features speech,trace-profiling -- -D warnings` | Must pass |
-| Strict | `cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
+| Blocking | `cargo clippy --all-targets --features trace-profiling -- -D warnings` | Must pass |
+| Strict | `cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used` | Must pass |
 | Pedantic | `cargo clippy ... -W clippy::pedantic` | Advisory (will promote) |
 
 ### Commit Guidelines
@@ -297,7 +259,7 @@ The runbook and [test procedure](docs/testing/procedures/native-app-automate.md)
 - Before you keep a large feature together, try a feature flag: land its parts in serial PRs, for example the engine before its UI and the UI before the commit path, behind a flag that stays off until the last part merges. Large diffs make the PR review slow to converge. Each round reviews part of the diff and finds new items in code that did not change.
 - Start a stacked PR only when its base is ready to merge. Each change to the base costs a rebase and a new review of every PR on it.
 - Before the first review of work that reads untrusted input or crosses a trust boundary, write the boundary down in the docs: what is untrusted, what the change guarantees and what it does not. The review rules are in `docs/review/`, which is their only home. [`docs/review/README.md`](docs/review/README.md) gives the review scope and states which trust boundary a changed file routes to. Keep the boundary in step with that rule, so each review examines the same boundary.
-- When correctness depends on real inputs, such as real repositories, devices or providers, run the real-input check on the first reviewable head and again on the final head, not only at the end. For the setup agent, that is the real-repository [setup gate](docs/testing/procedures/cloud-setup-gate.md).
+- When correctness depends on real inputs, such as real repositories, devices or providers, run the real-input check on the first reviewable head and again on the final head, not only at the end.
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
 - Keep self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the automatic PR review below.
@@ -412,15 +374,6 @@ Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-
 
 When cutting a new release, generate concise release notes from the commits since the last tag (`git log <prev-tag>..HEAD --oneline --no-merges`). Group into **What's new** (features) and **Fixes** (bug fixes). Keep it scannable -- one line per item, no commit hashes. Pass the notes to `gh release create --notes --draft`.
 
-### Casting autoresearch
-
-For CPU, memory or GPU optimization of `horizon-cast`, start with
-[`auto/cast/program.md`](auto/cast/program.md) and its canonical `bench.sh`.
-Read the complete append-only experiment ledger before proposing a hypothesis.
-Compare same-machine warm baselines, preserve independent decode/quality and
-lifecycle gates, and record every keep/discard with evidence. This loop does not
-authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
-
 ### Documentation Standard
 
 - ASD-STE100 Simplified Technical English (STE) is the default language for technical documentation. Write each new or changed document in STE. Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md).
@@ -456,12 +409,6 @@ authorize real-TV use, change UI smoke requirements, or replace PR review/CI.
 - Run parallel application scenarios on distinct task-owned displays, control targets, ports, private state and evidence directories. Freeze candidate executables before launching and verify the actual application child PID and executable hash, not just a sandbox wrapper.
 - Keep internal application names, workflows, screenshots, videos and operational details out of public issues, PRs, logs and attachments. Public demonstrations use generic synthetic fixtures only.
 - On Linux, use the [local Horizon smoke fixture](scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel) with `--native-view`: a separate Xvfb display and window manager, private application state and a loopback VNC server. The separate desktop and private state provide isolation; mirroring the developer's desktop does not satisfy this rule.
-- In a Horizon cloud worker, this rule has one exception. There, `device_panel` refuses with `viewer_requires_horizon`, and no viewer can show a fixture display.
-  - Start the candidate with `python3 scripts/device-smoke/serve.py --worker-desktop`, as the [worker desktop runbook](scripts/device-smoke/README.md#horizon-on-a-cloud-worker-desktop) shows. It builds the checkout at low priority into `$HORIZON_SESSION_DIR`, freezes the binary and records its SHA-256. It starts the binary on the worker desktop `:99` with private state in `HORIZON_HOME`, with `HORIZON_AGENT_INTEGRATIONS=off` so that nothing is installed in the worker home, and without the worker identity variables, and prints a manifest.
-  - The viewer is **Add desktop viewer** on the cloud card. Agents cannot create it: ask the person to open it. Use `device_screenshot` with the target `cloud-desktop` for evidence.
-  - The worker desktop is shared by all sessions on the worker. It is not task-owned, so other windows can show on it.
-  - The cloud desktop is read-only by decision (#1508): the person can watch the debug app but cannot click in it.
-  - The other parts of this rule still apply: a frozen candidate, the exact PID and hash, private state, screenshots and a clean stop.
 - Use the public `device_panel` tool to create the viewer in the calling agent's current workspace using the fixture's `vnc_address`. Inspect `connection`, `image_received`, `image_displayed` and advancing `frame_sequence` during changing output before claiming a live view; creation or `visible: true` alone is insufficient. If the tool, supporting host or visible native panel is unavailable, report the blocked lane. Do not substitute noVNC, alter private runtime files, restart active sessions, or automate the developer's desktop.
 - Diagnose viewer liveness automatically; do not ask a human to confirm visibility or whether the image is updating. Follow the [bounded viewer health procedure](scripts/device-smoke/README.md#automatic-viewer-health-check) and retain timestamped observations. Distinguish a static target from a disconnected or unpresented viewer; recover only the task-owned viewer through public lifecycle operations. Recheck actual presentation after recovery: setting visibility or reconnecting does not guarantee that an off-screen panel is brought into view. If the public contract cannot establish live presentation, record the precise blocked lane and a deduplicated follow-up issue, then continue independent checks. Once live presentation was established for a connection, a viewer that later reports `not_rendered` with `outside_canvas` was navigated away from by the person: keep the interactive test and its recording running, do not pause the lane, and do not reveal again just to advance counters. Never restart the user's Horizon instance to repair test visibility. Track the missing presentation/freshness diagnostics in [issue #801](https://github.com/peters/horizon/issues/801).
 - Drive the isolated application through explicitly configured device CLI/MCP targets; native automation, when needed, must be scoped to the fixture display and exact PID. The Device panel is read-only for agents: its Interact toggle is a person's choice in the UI, and no agent tool can turn it on. Browser-page interaction remains on the `horizon-browser` skill's public `browser_*` tools; native VNC Device panels use the `horizon-device` skill and `device_panel`.
@@ -499,16 +446,6 @@ Multi-machine validation (e.g. macOS/Metal on one box, Linux/CUDA on another) is
 - Prefer repeatable native-window assertions over visual guesswork: sample outer window position before, during, and after drag/resize to confirm the window moves monotonically and does not snap back, alternate between coordinates, or keep replaying a saved restore position
 - Validate the exact branch or commit that will be pushed. If you use a merge-test worktree or disposable checkout for diagnosis, rerun the decisive smoke pass in the final branch/worktree before concluding the PR is fixed
 - Window titles may lag behind state changes or differ across restore paths. When automating detached-window tests, identify the root and detached windows by PID plus non-root window membership rather than by title string alone when possible
-
-### Speech-to-Text Smoke Testing
-
-- On Linux with PipeWire/PulseAudio, prefer a deterministic synthetic-voice smoke over recording the room: select the monitor source for the output sink (for example `Monitor of <sink>`) as `features.speech.input_device`, then play a known phrase through that sink while holding the configured speech hotkey. Confirm the monitor source exists with `pactl list short sources` or CPAL device enumeration; do not change the user's default source or sink just to make the test work
-- Use an isolated temporary config outside the repository and launch the exact candidate with `--config <temp-config> --ephemeral`. Unset `HORIZON` for the child process and define an explicit disposable terminal such as `/bin/bash --noprofile --norc`; otherwise a smoke launch from an active agent environment can inherit or resume an unrelated session
-- Use the task-owned virtual display and lightweight window manager described in the native VNC testing rule above so focus and hotkey automation cannot interfere with the user's desktop. Allocate an unused display atomically, and stop only the display and window-manager processes created for the test
-- Scope desktop automation to the exact Horizon PID and its non-root window. Focus only the disposable transcript terminal, press the configured hotkey down, run a blocking synthesizer command such as `spd-say -w "alpha bravo charlie, final marker zephyr"`, and release the hotkey only after synthesis finishes. Never target Horizon windows by application name when another Horizon process may be running
-- Make the final words unique and assert that the inserted transcript includes the tail marker, not merely the beginning. Cover a short utterance, a normal 3–5 second utterance, an 8–10 second utterance, rapid release, and cancellation; the tail assertion is required because buffered capture regressions can look like successful partial transcription
-- Capture proof of the recording state and the completed transcript, inspect the image, and correlate it with logs for the selected input device, negotiated sample rate/channel count, submitted duration, and transcription result. Treat output-device routing and audible playback as test preconditions rather than silently changing the user's audio setup
-- Close the exact smoke-test window through its normal window-manager close path, verify that the candidate process exited, and remove the temporary config and proof artifacts. Never stop, signal, or reuse a pre-existing Horizon process for this test
 
 ### Performance Profiling
 

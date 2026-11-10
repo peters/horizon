@@ -56,10 +56,10 @@ cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
 ./scripts/check-version-sync.sh
 RUSTFLAGS="-D warnings" cargo test --workspace
-RUSTFLAGS="-D warnings" cargo test --workspace --features speech
-cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
-cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
+RUSTFLAGS="-D warnings" cargo test --workspace
+cargo clippy --all-targets --features trace-profiling -- -D warnings
+cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
 ```
 
 For package-boundary changes, also run:

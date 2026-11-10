@@ -57,7 +57,7 @@ fn collect_minimap_workspace_labels<'a>(
             workspace.id,
             workspace.position,
             workspace_bounds,
-            app.empty_workspace_size(workspace.id),
+            HorizonApp::empty_workspace_size(),
         );
         let title_strip_rect = minimap_workspace_title_strip_rect(workspace_rect, model.scale_y);
 

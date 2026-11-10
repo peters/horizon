@@ -1,8 +1,6 @@
 //! How a board is split into the rows of the runtime index and put together again.
 //! Each row keeps its value as JSON. A value that JSON cannot carry exactly, such as
 //! a position that is not a number, is kept as YAML, as `runtime.yaml` keeps it.
-use std::collections::HashMap;
-
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -79,30 +77,22 @@ pub(super) struct BoardRows<'a> {
 pub(super) struct WorkspaceRow<'a> {
     /// The workspace without its panels.
     pub state: WorkspaceState,
-    /// The environments of the clouds in this workspace as a JSON array; `None` on This PC.
-    pub environments: Option<String>,
     pub panels: &'a [PanelState],
 }
 
 impl<'a> BoardRows<'a> {
-    /// # Errors
-    /// Returns an error if the cloud groups cannot be read for their environments.
-    pub(super) fn new(state: &'a RuntimeState) -> Result<Self> {
-        let mut environments = environments(&state.cloud_groups)?;
-        Ok(Self {
+    pub(super) fn new(state: &'a RuntimeState) -> Self {
+        Self {
             board: without_workspaces(state),
             workspaces: state
                 .workspaces
                 .iter()
                 .map(|workspace| WorkspaceRow {
                     state: without_panels(workspace),
-                    environments: environments
-                        .remove(&workspace.local_id)
-                        .map(|values| serde_json::Value::Array(values).to_string()),
                     panels: &workspace.panels,
                 })
                 .collect(),
-        })
+        }
     }
 }
 
@@ -128,27 +118,6 @@ pub(super) fn assemble(
     Ok(board)
 }
 
-/// The environment of each cloud group by the local id of its workspace. The groups
-/// are read as JSON so that builds without cloud workspaces index them the same way.
-fn environments(
-    groups: &crate::runtime_state::cloud_groups::CloudGroupsState,
-) -> Result<HashMap<String, Vec<serde_json::Value>>> {
-    let value = serde_json::to_value(groups).map_err(|error| Error::State(error.to_string()))?;
-    let mut environments: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-    for group in value.as_array().into_iter().flatten() {
-        if let (Some(workspace), Some(environment)) = (
-            group.get("workspace").and_then(serde_json::Value::as_str),
-            group.get("environment"),
-        ) {
-            environments
-                .entry(workspace.to_owned())
-                .or_default()
-                .push(environment.clone());
-        }
-    }
-    Ok(environments)
-}
-
 /// Every field is named, so a field added to the board must be handled here.
 fn without_workspaces(state: &RuntimeState) -> RuntimeState {
     let RuntimeState {
@@ -160,7 +129,6 @@ fn without_workspaces(state: &RuntimeState) -> RuntimeState {
         focused_panel_local_id,
         detached_workspaces,
         workspaces: _,
-        cloud_groups,
         browser,
     } = state;
     RuntimeState {
@@ -172,7 +140,6 @@ fn without_workspaces(state: &RuntimeState) -> RuntimeState {
         focused_panel_local_id: focused_panel_local_id.clone(),
         detached_workspaces: detached_workspaces.clone(),
         workspaces: Vec::new(),
-        cloud_groups: cloud_groups.clone(),
         browser: browser.clone(),
     }
 }
@@ -181,7 +148,6 @@ fn without_workspaces(state: &RuntimeState) -> RuntimeState {
 fn without_panels(workspace: &WorkspaceState) -> WorkspaceState {
     let WorkspaceState {
         local_id,
-        remote_workspace,
         name,
         cwd,
         position,
@@ -191,7 +157,6 @@ fn without_panels(workspace: &WorkspaceState) -> WorkspaceState {
     } = workspace;
     WorkspaceState {
         local_id: local_id.clone(),
-        remote_workspace: remote_workspace.clone(),
         name: name.clone(),
         cwd: cwd.clone(),
         position: *position,

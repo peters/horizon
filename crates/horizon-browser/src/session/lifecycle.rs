@@ -502,7 +502,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
     ) {
         if self.pending_reattach && !self.reattach_in_flight {
-            // A rejected re-attach parked a backoff delay first.
+            // A rejected re-attach set a backoff delay first.
             if let Some(due) = self.pending_restart_at {
                 if Instant::now() < due {
                     return;

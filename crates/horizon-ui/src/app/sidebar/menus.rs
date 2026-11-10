@@ -54,7 +54,6 @@ impl HorizonApp {
                     workspace.detached || workspace.capabilities.can_detach,
                     Button::new(egui::RichText::new(detach_label).size(12.0).color(theme::FG_SOFT())).frame(false),
                 )
-                .on_disabled_hover_text("Cloud workspaces stay in the main window. Use the cloud's Full screen action.")
                 .clicked()
             {
                 if workspace.detached {
@@ -76,9 +75,7 @@ impl HorizonApp {
                     )
                     .frame(false),
                 )
-                .on_disabled_hover_text(
-                    "This workspace holds a panel, a cloud or a remote workspace, or it is the last one.",
-                )
+                .on_disabled_hover_text("This workspace holds a panel, or it is the last one.")
                 .clicked()
             {
                 actions.remove_empty_workspace = Some(workspace.id);
@@ -120,7 +117,7 @@ impl HorizonApp {
         let popup_layer = egui::LayerId::new(egui::Order::Tooltip, popup.get_id());
         let shown = popup.show(|ui| {
             ui.set_min_width(160.0);
-            if let Some(destination) = self.show_workspace_destination(ui, response, panel_id, workspace.id) {
+            if let Some(destination) = self.show_workspace_destination(ui, response, workspace.id) {
                 self.board.assign_panel_to_workspace(panel_id, destination);
                 self.mark_runtime_dirty();
             }

@@ -16,7 +16,7 @@ const LIMIT: usize = 2000;
 /// The most folders read while looking, so a huge home never keeps the search busy.
 const VISITS: usize = 50_000;
 
-/// Home folders that macOS guards with a privacy prompt; opening New cloud never asks.
+/// Home folders that macOS guards with a privacy prompt; the directory search never asks.
 const GUARDED: [&str; 8] = [
     "Desktop",
     "Documents",
@@ -478,20 +478,15 @@ fn read(path: &Path, guarded: &[PathBuf]) -> Option<Checkout> {
             .and_then(|meta| meta.modified())
             .ok()
     };
-    // A marker that is there but cannot be read, or is too long, still says the clone did
-    // not finish.
-    let marker = git.join(crate::cloud_runtime::repository::source::CLONE_MARKER);
-    let stopped = std::fs::symlink_metadata(&marker).is_ok()
-        && crate::cloud_runtime::repository::source::clone_stopped(&small_file(&marker, guarded).unwrap_or_default());
     // Branches live in the repository's shared folder, also for a worktree.
-    let complete = common.is_some_and(|common| head_resolves(&common, head.trim(), guarded)) && !stopped;
+    let complete = common.is_some_and(|common| head_resolves(&common, head.trim(), guarded));
     Some(Checkout {
         path: path.to_owned(),
         origin: origin(&config),
         branch,
         touched: modified("index").or_else(|| modified("HEAD")),
         complete,
-        stopped,
+        stopped: false,
         worktree,
     })
 }

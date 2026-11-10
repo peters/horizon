@@ -51,8 +51,8 @@ convert historical documents. Move them to `docs/archive/` instead.
 
 4. Do not leave out "the", "a" or "this".
 5. A technical verb is permitted when it names an operation in Horizon or a
-   tool. Examples: "deploy", "provision", "squash-merge", "rebase". Write it in
-   the glossary before you use it.
+   tool. Examples: "freeze", "pin", "squash-merge", "rebase". Write it in the
+   glossary before you use it.
 
 ## Noun clusters
 
@@ -65,8 +65,8 @@ convert historical documents. Move them to `docs/archive/` instead.
 - Use these forms only: the imperative, the simple present, the simple past,
   the simple future, the infinitive, and the past participle as an adjective.
 - Do not use the -ing form as a verb. You can use it in a technical name, for
-  example "Local Network Bridge settings".
-- Do not use perfect tenses. Write "The worker stopped", not "The worker has
+  example "browser profile settings".
+- Do not use perfect tenses. Write "The device stopped", not "The device has
   stopped".
 - Use the active voice in procedures. Use the passive voice in descriptive
   text only when the agent is not known or not important.
@@ -87,7 +87,7 @@ Count a command, a path or a UI label as one word.
 1. Write each step as a command.
 2. Write one instruction in each step.
 3. If a condition applies, write the condition first. Example: "If the card
-   shows Ready, click Stop worker".
+   shows Ready, click Stop".
 4. Write the expected result on a separate line that starts with `Result:`.
 5. Use a vertical list for three or more items.
 6. Put a command that you must type in a code block.
@@ -108,15 +108,15 @@ Write the instruction as follows:
 
 Example:
 
-> **CAUTION:** DELETE ONLY THE WORKERS THAT THIS RUN RECORDED. If you delete
-> other workers, other people lose their work.
+> **CAUTION:** DELETE ONLY THE SESSIONS THAT THIS RUN RECORDED. If you delete
+> other sessions, other people lose their work.
 
 Most Horizon procedures need a CAUTION in these conditions:
 
 - The step rents compute or a paid device.
-- The step deletes a cloud, a volume, a credential or a session.
-- The step sends a secret, for example an API key or an auth key.
-- The step changes access, for example a tailnet or a firewall rule.
+- The step deletes a session, a credential or a browser profile.
+- The step sends a secret, for example an API key or a token.
+- The step changes access, for example a host key or a provider target.
 - The step publishes something that you cannot undo, for example a release.
 
 ## Descriptive text

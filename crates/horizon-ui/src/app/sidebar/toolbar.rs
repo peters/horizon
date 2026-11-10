@@ -86,12 +86,6 @@ impl HorizonApp {
                 for item in &layout.visible_items {
                     match *item {
                         ToolbarItem::FpsMeter => self.render_toolbar_fps_meter(ui),
-                        ToolbarItem::NewCloud { compact } => self.render_toolbar_new_cloud(ui, compact),
-                        // Casting is Linux-only, so no other build lists this item.
-                        #[cfg(target_os = "linux")]
-                        ToolbarItem::Cast => self.render_toolbar_cast(ui),
-                        #[cfg(not(target_os = "linux"))]
-                        ToolbarItem::Cast => {}
                         ToolbarItem::Menu => self.render_toolbar_menu(ui),
                     }
                 }
@@ -163,8 +157,6 @@ impl HorizonApp {
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Settings => self.toggle_settings(),
-            #[cfg(feature = "cloud-workspaces")]
-            ToolbarAction::Cloud => self.open_cloud_accounts(ctx, false),
         }
     }
 }

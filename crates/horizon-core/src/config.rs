@@ -9,7 +9,6 @@ use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::{AppShortcuts, ShortcutBinding};
-pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 
 mod browser_host;
@@ -252,7 +251,6 @@ pub struct FeaturesConfig {
     #[serde(alias = "organize_workspaces_on_startup")]
     pub organize_workspaces_on_session_load: bool,
     pub sidebar_accordion: bool,
-    pub speech: SpeechConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -544,8 +542,6 @@ impl Config {
 
     #[must_use]
     pub fn expand_tilde(s: &str) -> PathBuf {
-        // Single implementation shared with speech model paths, so every
-        // path-taking config field expands `~` identically.
         crate::dir_search::expand_tilde(s)
     }
 
@@ -570,8 +566,7 @@ impl Config {
             .remote
             .validate_definition()
             .map_err(|error| Error::Config(format!("browser.remote: {error}")))?;
-        let shortcuts = self.shortcuts.resolve()?;
-        crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
+        self.shortcuts.resolve()?;
         self.remote_hosts.validate()?;
         self.browser_host.validate()?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
@@ -1085,6 +1080,8 @@ workspaces:
         assert!(!Config::default().features.sidebar_accordion);
     }
 
+    /// A settings file of an older Horizon may hold keys of features that this
+    /// build no longer has. They are ignored, and the rest of the file applies.
     #[test]
     fn missing_sidebar_accordion_setting_keeps_it_disabled() {
         let config =
@@ -1288,18 +1285,18 @@ workspaces:
 browser:
   remote:
     providers:
-      device_cloud:
+      device_remote:
         adapter: webdriver
         endpoint: https://grid.example.net/wd/hub
         authentication:
           kind: basic
-          username_ref: device-cloud-user
-          password_ref: device-cloud-key
+          username_ref: device-remote-user
+          password_ref: device-remote-key
         credential_bindings:
-          device-cloud-user:
+          device-remote-user:
             store: os_keychain
-            slot: remote-browser/device-cloud/username
-          device-cloud-key:
+            slot: remote-browser/device-remote/username
+          device-remote-key:
             store: session
         limits:
           max_sessions: 1
@@ -1308,7 +1305,7 @@ browser:
           max_session_seconds: 1800
     targets:
       ios_phone:
-        provider: device_cloud
+        provider: device_remote
         browser_name: safari
         platform_name: iOS
         device:
@@ -1325,7 +1322,7 @@ browser:
             "local defaults are untouched"
         );
         let target = config.browser.remote.targets.get("ios_phone").expect("target");
-        assert_eq!(target.provider, "device_cloud");
+        assert_eq!(target.provider, "device_remote");
         let encoded = config.to_yaml().expect("serializes");
         let decoded = Config::from_yaml(&encoded).expect("re-parses");
         assert_eq!(decoded.browser.remote, config.browser.remote);

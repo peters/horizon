@@ -141,12 +141,6 @@ impl RemoteHost {
         }
         self.holds.answer();
         self.usage.answer(&self.config, &self.host, &self.actor);
-        if let Ok(requests) = manifest::cast::claim(&self.host) {
-            for request in requests {
-                let outcome = manifest::cast::CastOutcome::failed("cast_unavailable: requires a Horizon host");
-                let _ = manifest::cast::complete(&request, outcome);
-            }
-        }
         if let Ok(requests) = manifest::device::claim(&self.host) {
             for request in requests {
                 let outcome = manifest::device::Outcome::failed(

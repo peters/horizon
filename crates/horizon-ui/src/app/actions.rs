@@ -37,16 +37,6 @@ fn add_panel_position(
 }
 
 enum PresetPickerAction {
-    #[cfg(feature = "cloud-workspaces")]
-    CreateCloud {
-        workspace_id: WorkspaceId,
-    },
-    /// A new workspace in the cloud, from the New Workspace picker.
-    #[cfg(feature = "cloud-workspaces")]
-    NewCloudWorkspace {
-        canvas_pos: [f32; 2],
-        choice: super::sidebar::NewWorkspace,
-    },
     CreatePanel {
         workspace_id: WorkspaceId,
         preset: PresetConfig,

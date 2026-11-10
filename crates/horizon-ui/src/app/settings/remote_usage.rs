@@ -90,15 +90,15 @@ mod tests {
             },
             std::time::Instant::now(),
         ));
-        let mut panels = UsagePanels::from([("cloud".into(), monitor)]);
+        let mut panels = UsagePanels::from([("remote".into(), monitor)]);
         let credentials = CredentialWorkbench::with_opener(Box::new(|| Ok(Box::new(FakeCredentialStore::new()))));
         let context = egui::Context::default();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-            render(ui, "cloud", &profile, &credentials, &mut panels);
+            render(ui, "remote", &profile, &credentials, &mut panels);
         });
         output.textures_delta.clear();
         assert!(
-            !panels.contains_key("cloud"),
+            !panels.contains_key("remote"),
             "re-enabling usage must start with a fresh monitor"
         );
     }

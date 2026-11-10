@@ -23,7 +23,7 @@ an unusable panel file stops the fixture before Horizon starts.
   panel file it reads.
 - Platforms: Linux with the local device smoke fixture.
 - This procedure does not test: a real agent that signs in to a model provider,
-  any cloud operation, or the tools of a panel.
+  or the tools of a panel.
 
 ## 3. Safety
 

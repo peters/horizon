@@ -2,100 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use uuid::Uuid;
 
 use crate::board::WorkspaceLayout;
 use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
-use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
 use crate::ssh::SshConnection;
 
 use super::{DEFAULT_COLS, DEFAULT_ROWS, new_local_id, normalize_cwd};
-
-pub(super) fn valid_local_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-/// An inert legacy client reference retained to prevent local command replay.
-/// Historical client panels were SSH transport views of a separately owned
-/// aggregate. They must never become local agent sessions after removal.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(try_from = "RemoteReferenceFields")]
-pub struct RemoteWorkspaceReference {
-    owner_session_id: String,
-    workspace_local_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RemoteReferenceFields {
-    owner_session_id: String,
-    workspace_local_id: String,
-}
-
-impl RemoteWorkspaceReference {
-    /// Create an inert reference with canonical identities.
-    /// # Errors
-    /// Rejects malformed, nil or noncanonical owner UUIDs and invalid workspace ids.
-    pub fn new(owner_session_id: String, workspace_local_id: String) -> Result<Self> {
-        let valid_owner =
-            Uuid::parse_str(&owner_session_id).is_ok_and(|id| !id.is_nil() && id.to_string() == owner_session_id);
-        if !valid_owner || !valid_local_id(&workspace_local_id) {
-            return Err(Error::State("invalid remote workspace reference".into()));
-        }
-        Ok(Self {
-            owner_session_id,
-            workspace_local_id,
-        })
-    }
-
-    /// Claimed owner only. Callers must compare the actual resolved client session
-    /// before using that session for the store's exact-owner lookup.
-    #[must_use]
-    pub fn owner_session_id(&self) -> &str {
-        &self.owner_session_id
-    }
-
-    #[must_use]
-    pub fn workspace_local_id(&self) -> &str {
-        &self.workspace_local_id
-    }
-
-    pub(crate) fn validate_client_panel(
-        local_id: &str,
-        kind: PanelKind,
-        resume: &PanelResume,
-        binding: Option<&AgentSessionBinding>,
-    ) -> Result<()> {
-        if !valid_local_id(local_id) || kind != PanelKind::Ssh || *resume != PanelResume::Fresh || binding.is_some() {
-            return Err(Error::State(
-                "remote client panels require a stable SSH view without local agent bindings".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl TryFrom<RemoteReferenceFields> for RemoteWorkspaceReference {
-    type Error = Error;
-
-    fn try_from(fields: RemoteReferenceFields) -> Result<Self> {
-        Self::new(fields.owner_session_id, fields.workspace_local_id)
-    }
-}
-
-fn deserialize_remote_reference<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<RemoteWorkspaceReference>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    RemoteWorkspaceReference::deserialize(deserializer).map(Some)
-}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -108,12 +21,6 @@ pub struct DetachedWorkspaceState {
 #[serde(default)]
 pub struct WorkspaceState {
     pub local_id: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_remote_reference"
-    )]
-    pub remote_workspace: Option<RemoteWorkspaceReference>,
     pub name: String,
     pub cwd: Option<String>,
     pub position: Option<[f32; 2]>,
@@ -180,7 +87,6 @@ impl WorkspaceState {
 
         Self {
             local_id: new_local_id(),
-            remote_workspace: None,
             name: workspace.name.clone(),
             cwd: workspace_cwd,
             position: Some(resolved_position),
@@ -200,12 +106,6 @@ pub struct PanelState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub local_id: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_remote_reference"
-    )]
-    pub remote_workspace: Option<RemoteWorkspaceReference>,
     pub name: String,
     /// Whether `name` was explicitly chosen rather than generated. Missing
     /// values retain the legacy restore behavior for older runtime snapshots.
@@ -303,7 +203,6 @@ impl PanelState {
 
         Self {
             local_id: new_local_id(),
-            remote_workspace: None,
             name: panel.name.clone(),
             name_is_custom: Some(!panel.name.is_empty()),
             kind: panel.kind,
@@ -358,8 +257,8 @@ impl PanelState {
         };
         PanelOptions {
             device_identity: self.device_identity.clone(),
-            // Not saved: a cloud desktop viewer restores as a cloud placeholder, which has
-            // no viewer, and the cloud sets the input again when it attaches the viewer.
+            // Not saved: a restored device panel has no viewer yet, and the
+            // input is set again when the viewer attaches.
             device_input: crate::DeviceInput::default(),
             name: if self.name.is_empty() {
                 None
@@ -380,7 +279,6 @@ impl PanelState {
             size: self.size,
             visible: self.browser_profile.as_ref().is_none_or(|profile| !profile.hidden),
             local_id: Some(self.local_id.clone()),
-            remote_workspace: self.remote_workspace.clone(),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
             browser_session_id: self
@@ -398,8 +296,6 @@ impl PanelState {
                 .and_then(|profile| profile.remote_target.clone()),
             browser_host: self.browser_profile.as_ref().and_then(|profile| profile.host.clone()),
             transcript_root: None,
-            #[cfg(feature = "cloud-workspaces")]
-            cloud_connection: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
             launch_wrapper: Vec::new(),
@@ -411,7 +307,6 @@ impl Default for PanelState {
     fn default() -> Self {
         Self {
             local_id: String::new(),
-            remote_workspace: None,
             name: String::new(),
             name_is_custom: None,
             kind: PanelKind::default(),

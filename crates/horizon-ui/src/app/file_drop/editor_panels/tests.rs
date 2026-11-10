@@ -125,7 +125,7 @@ fn a_read_that_applies_after_a_board_replacement_opens_no_panel() {
     let held = HeldRead::start(temp.path().join("held.md"));
 
     drop_files(&mut app, &ctx, std::slice::from_ref(&held.path));
-    // A session switch or a cloud prototype restore replaces the board while
+    // A session switch replaces the board while
     // the read runs, so its outcome may not touch the board that stands now.
     app.browser_create_host.io.replace_board();
     held.release();

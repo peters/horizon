@@ -1,4 +1,4 @@
-//! Host-side queuing of user rotation, shared by local and cloud panels.
+//! Host-side queuing of user rotation, shared by local and remote panels.
 use super::{BrowserCommand, BrowserPanelState, remote::RemoteOrientation};
 impl BrowserPanelState {
     pub(super) fn reset_orientation_view(&mut self) {

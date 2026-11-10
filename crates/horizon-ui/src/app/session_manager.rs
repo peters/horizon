@@ -280,31 +280,9 @@ impl HorizonApp {
 
     fn begin_session_switch(&mut self, session: &ResolvedSession) {
         self.reset_native_file_input();
-        #[cfg(target_os = "linux")]
-        {
-            self.casting.reset_for_session_switch();
-        }
-        // A New cloud dialog ends before the board is saved, so a workspace New workspace made
-        // for a cloud that never came is not kept.
-        #[cfg(feature = "cloud-workspaces")]
-        self.close_cloud_creation_for_session_switch();
         let _ = self.auto_save_runtime_state();
         // Panel ids restart from 1 in the next board; a transcript finishing
-        // after the switch must not inject into an unrelated same-id panel,
-        // and no microphone may survive the teardown. Rebuilding drops the
-        // workers (cancelling any in-flight inference via their tokens).
-        // Old system retired BEFORE the replacement is constructed:
-        // `from_config` can start loading immediately (preloaded profiles),
-        // and a preloader must find these workers already registered as
-        // retiring.
-        self.speech = None;
-        self.reset_speech_global_hotkeys();
-        self.speech = super::speech::SpeechSystem::from_config(&self.template_config.features.speech);
-        self.sync_speech_global_hotkeys();
-        // Held bindings persist until their release is consumed by the
-        // terminal filter, so a key-up after the switch cannot leak into a
-        // new-board terminal; only stop-attribution is reset.
-        self.speech_engaged_profile = None;
+        // after the switch must not inject into an unrelated same-id panel.
         self.retire_browser_requests();
         // The switch overlay hides every viewer until the old board is gone.
         self.abandon_device_reveals("Device panel closed by a session switch");
@@ -446,8 +424,6 @@ impl HorizonApp {
     }
 
     fn finish_session_switch(&mut self) {
-        #[cfg(feature = "cloud-workspaces")]
-        self.end_cloud_repository_setup();
         self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;

@@ -6,7 +6,6 @@ struct Harness {
     ctx: Context,
     workspaces: Vec<Workspace>,
     chosen: Option<WorkspaceId>,
-    blocked: Option<WorkspaceId>,
     launcher_id: egui::Id,
 }
 
@@ -20,7 +19,6 @@ impl Harness {
                 .map(|(index, name)| Workspace::new(WorkspaceId(index as u64), name.into(), index))
                 .collect(),
             chosen: None,
-            blocked: None,
             launcher_id: egui::Id::NULL,
         }
     }
@@ -31,8 +29,7 @@ impl Harness {
             .with("query")
     }
 
-    fn frame(&mut self, events: Vec<Event>, render: bool, blocked: Option<WorkspaceId>) -> egui::FullOutput {
-        self.blocked = blocked;
+    fn frame(&mut self, events: Vec<Event>, render: bool) -> egui::FullOutput {
         self.ctx
             .run_ui(
                 RawInput {
@@ -44,10 +41,7 @@ impl Harness {
                     let launcher = ui.button("Panel");
                     self.launcher_id = launcher.id;
                     if render {
-                        self.chosen =
-                            render_destination_search(ui, &launcher, &self.workspaces, WorkspaceId(0), |workspace| {
-                                Some(workspace.id) != blocked
-                            });
+                        self.chosen = render_destination_search(ui, &launcher, &self.workspaces, WorkspaceId(0));
                     }
                 },
             )
@@ -64,7 +58,6 @@ impl Harness {
                 modifiers: Modifiers::NONE,
             }],
             true,
-            self.blocked,
         );
     }
 }
@@ -72,8 +65,8 @@ impl Harness {
 #[test]
 fn typing_filters_case_insensitively_and_enter_selects_a_stable_id() {
     let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, None);
-    harness.frame(vec![Event::Text("  yOuPaY  ".into())], true, None);
+    harness.frame(Vec::new(), true);
+    harness.frame(vec![Event::Text("  yOuPaY  ".into())], true);
     harness.key(Key::Enter);
     assert_eq!(harness.chosen, Some(WorkspaceId(2)));
 }
@@ -81,13 +74,13 @@ fn typing_filters_case_insensitively_and_enter_selects_a_stable_id() {
 #[test]
 fn unicode_search_and_duplicate_names_keep_distinct_destinations() {
     let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, None);
-    harness.frame(vec![Event::Text("ÅLE".into())], true, None);
+    harness.frame(Vec::new(), true);
+    harness.frame(vec![Event::Text("ÅLE".into())], true);
     harness.key(Key::Enter);
     assert_eq!(harness.chosen, Some(WorkspaceId(3)));
     let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, None);
-    harness.frame(vec![Event::Text("youpark".into())], true, None);
+    harness.frame(Vec::new(), true);
+    harness.frame(vec![Event::Text("youpark".into())], true);
     harness.key(Key::ArrowDown);
     harness.key(Key::Enter);
     assert_eq!(harness.chosen, Some(WorkspaceId(4)));
@@ -97,8 +90,8 @@ fn unicode_search_and_duplicate_names_keep_distinct_destinations() {
 fn empty_results_and_current_workspace_never_move_a_panel() {
     for query in ["missing", "Current"] {
         let mut harness = Harness::new();
-        harness.frame(Vec::new(), true, None);
-        harness.frame(vec![Event::Text(query.into())], true, None);
+        harness.frame(Vec::new(), true);
+        harness.frame(vec![Event::Text(query.into())], true);
         harness.key(Key::ArrowDown);
         harness.key(Key::Enter);
         assert_eq!(harness.chosen, None);
@@ -106,18 +99,9 @@ fn empty_results_and_current_workspace_never_move_a_panel() {
 }
 
 #[test]
-fn arrows_wrap_and_skip_disabled_destinations() {
-    let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, Some(WorkspaceId(1)));
-    harness.key(Key::ArrowUp);
-    harness.key(Key::Enter);
-    assert_eq!(harness.chosen, Some(WorkspaceId(4)));
-}
-
-#[test]
 fn removed_selection_reconciles_before_enter() {
     let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, None);
+    harness.frame(Vec::new(), true);
     harness.key(Key::ArrowDown);
     harness.workspaces.retain(|workspace| workspace.id != WorkspaceId(2));
     harness.key(Key::Enter);
@@ -127,11 +111,11 @@ fn removed_selection_reconciles_before_enter() {
 #[test]
 fn reopening_resets_search_and_focus() {
     let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, None);
-    harness.frame(vec![Event::Text("missing".into())], true, None);
-    harness.frame(Vec::new(), false, None);
-    harness.frame(Vec::new(), false, None);
-    harness.frame(Vec::new(), true, None);
+    harness.frame(Vec::new(), true);
+    harness.frame(vec![Event::Text("missing".into())], true);
+    harness.frame(Vec::new(), false);
+    harness.frame(Vec::new(), false);
+    harness.frame(Vec::new(), true);
     harness.key(Key::Enter);
     assert_eq!(harness.chosen, Some(WorkspaceId(1)));
 }
@@ -145,7 +129,7 @@ fn many_workspaces_do_not_expand_the_picker_beyond_the_viewport() {
             .push(Workspace::new(WorkspaceId(index), format!("Workspace {index}"), 0));
     }
     for _ in 0..3 {
-        let output = harness.frame(Vec::new(), true, None);
+        let output = harness.frame(Vec::new(), true);
         let bottom = output
             .shapes
             .iter()
@@ -153,16 +137,6 @@ fn many_workspaces_do_not_expand_the_picker_beyond_the_viewport() {
             .fold(0.0, f32::max);
         assert!(bottom < 600.0, "bounded picker bottom: {bottom}");
     }
-}
-
-#[test]
-fn disabled_selection_reconciles_before_enter() {
-    let mut harness = Harness::new();
-    harness.frame(Vec::new(), true, None);
-    harness.key(Key::ArrowDown);
-    harness.frame(Vec::new(), true, Some(WorkspaceId(2)));
-    harness.key(Key::Enter);
-    assert_eq!(harness.chosen, Some(WorkspaceId(1)));
 }
 
 #[test]
@@ -188,7 +162,7 @@ fn popup_keeps_search_clicks_open_and_cancels_without_moving() {
                     popup = popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
                 }
                 popup.show(|ui| {
-                    chosen = render_destination_search(ui, &launcher, &workspaces, WorkspaceId(0), |_| true);
+                    chosen = render_destination_search(ui, &launcher, &workspaces, WorkspaceId(0));
                     ui.separator();
                     let _ = ui.button("New Workspace");
                 });
@@ -365,8 +339,8 @@ fn menu_search_field_uses_an_inset_well_instead_of_the_selection_stroke() {
     let mut harness = Harness::new();
     theme::apply(&harness.ctx, horizon_core::AppearanceTheme::Dark);
     // The opening frame requests focus after the editor is painted.
-    harness.frame(Vec::new(), true, None);
-    let output = harness.frame(Vec::new(), true, None);
+    harness.frame(Vec::new(), true);
+    let output = harness.frame(Vec::new(), true);
     assert!(
         harness.ctx.memory(|memory| memory.has_focus(harness.query_id())),
         "the focused frame is the frame under test"

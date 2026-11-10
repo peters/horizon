@@ -38,11 +38,7 @@ impl HorizonApp {
         if self.saved_session_deletion.has_notice() {
             return true;
         }
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_close_confirmation_open() {
-            return true;
-        }
-        self.cloud_creation_open() || self.browser_file_chooser_open()
+        self.browser_file_chooser_open()
     }
 
     pub(super) fn render_browser_file_chooser(&mut self, ctx: &egui::Context, workspace: Option<WorkspaceId>) {

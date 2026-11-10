@@ -6,7 +6,6 @@
 //! runtime, image decoding, filesystem coordination, MCP, or UI code.
 
 mod audit;
-pub mod cloud_view;
 mod command;
 mod control;
 mod downloads;

@@ -9,9 +9,7 @@ impl HorizonApp {
         let Some(panel) = self.board.panel(panel_id) else {
             return;
         };
-        if (!panel.kind.supports_session_binding() && panel.kind != PanelKind::KiloCode)
-            || panel.remote_workspace().is_some()
-        {
+        if !panel.kind.supports_session_binding() && panel.kind != PanelKind::KiloCode {
             return;
         }
         let mut enabled = panel.work_resume.enabled;

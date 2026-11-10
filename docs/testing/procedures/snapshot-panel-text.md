@@ -13,7 +13,7 @@ owner: peters
 ## 1. Purpose
 
 This procedure tests that a snapshot panel keeps its saved text and title.
-A snapshot panel is a restore failure placeholder, a cloud placeholder, a parked cloud member or a disconnected SSH snapshot.
+A snapshot panel is a restore failure placeholder or a disconnected SSH snapshot.
 Each one starts a short process only because a terminal needs a PTY.
 The output of that process must not change the panel.
 
@@ -22,7 +22,7 @@ The output of that process must not change the panel.
 - Candidate: each build that changes terminal spawn, PTY output handling or snapshot panels.
 - Platforms: Linux and macOS.
   The test process clears the screen and sets a console title when it starts.
-- This procedure does not test: live terminals, cloud workers or SSH connections.
+- This procedure does not test: live terminals or SSH connections.
 
 ## 3. Equipment and preconditions
 

@@ -20,7 +20,7 @@ full-opacity accent ring.
 
 - Candidate: a Horizon build that contains this change.
 - Platforms: Linux, with the local device fixture.
-- This procedure does not test the move rules for a cloud panel.
+- This procedure does not test the move rules for an SSH panel.
 
 ## 3. Safety
 

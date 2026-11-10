@@ -68,9 +68,6 @@ pub struct RunState {
     /// Names of variables removed from the saved plan as HTTP auth secrets.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub redacted_auth_variables: BTreeSet<String>,
-    /// Names of variables removed from the saved plan as casting PINs.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub redacted_cast_variables: BTreeSet<String>,
     /// Private initialization, plan-execution, or MCP shutdown error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -334,7 +331,6 @@ impl DurableRun {
             completed_steps: 0,
             checkpoint: RunCheckpoint::default(),
             redacted_auth_variables: crate::variables::http_auth_secret_variables(plan),
-            redacted_cast_variables: crate::variables::cast_pin_secret_variables(plan),
             error: None,
         };
         write_private_json(
@@ -496,13 +492,6 @@ impl DurableRun {
         let selection = select_resume(&plan, Some(&run.state.checkpoint), &run.completed_reports, policy)?;
         if selection.start_index >= plan.steps.len() && selection.skipped.is_none() {
             return Err(ResumeError::NothingToResume(job_id.to_string()));
-        }
-        if crate::variables::resume_blocked_by_cast_secrets(
-            &plan,
-            selection.start_index,
-            &run.state.redacted_cast_variables,
-        ) {
-            return Err(ResumeError::CastPairingNotReplayable(job_id.to_string()));
         }
         if crate::variables::resume_blocked_by_http_auth_secrets(
             &plan,
@@ -1774,60 +1763,5 @@ mod tests {
 
         assert_eq!(encoded["job_dir"], json!(run.directory.display().to_string()));
         assert_eq!(encoded["state_path"], json!(run.state_path.display().to_string()));
-    }
-
-    #[test]
-    fn durable_cast_pin_is_removed_with_provenance_for_later_reuse() {
-        // A digits-only PIN can occur by chance in the job UUID, a timestamp or the
-        // runner PID, so the leak checks below look for text that generated state
-        // cannot contain.
-        const PIN: &str = "Synthetic-PIN-7391";
-        for pin in [json!(PIN), json!({"$var":"code"}), json!([{"$var":"code"}, PIN])] {
-            let root = tempfile::tempdir().expect("job root");
-            let original = Plan {
-                version: 1,
-                project: None,
-                variables: std::collections::BTreeMap::from([("code".into(), json!(PIN))]),
-                steps: vec![
-                    PlanStep {
-                        id: "pair".into(),
-                        tool: "cast".into(),
-                        arguments: serde_json::Map::from_iter([
-                            ("operation".into(), json!("pair")),
-                            ("pin".into(), pin),
-                        ]),
-                    },
-                    PlanStep {
-                        id: "reuse".into(),
-                        tool: "browser_act".into(),
-                        arguments: serde_json::Map::from_iter([("value".into(), json!({"$var":"code"}))]),
-                    },
-                ],
-            };
-            let run = DurableRun::prepare_in(root.path(), &original, None, None).expect("prepare");
-            let saved = run.load_plan().expect("saved");
-            let saved_text = std::fs::read_to_string(run.directory.join(PLAN_FILE)).expect("plan");
-            let state_text = std::fs::read_to_string(&run.state_path).expect("state");
-            // A variable is sensitive only when it supplies the PIN.
-            if original.steps[0].arguments["pin"].is_string() {
-                assert_eq!(saved.steps[0].arguments["pin"], json!("<redacted>"));
-            } else {
-                assert!(!saved_text.contains(PIN));
-                assert!(crate::variables::resume_blocked_by_cast_secrets(
-                    &saved,
-                    1,
-                    &run.state.redacted_cast_variables
-                ));
-            }
-            assert!(!state_text.contains(PIN));
-            assert_eq!(original.variables["code"], json!(PIN));
-            let mut legacy: Value = serde_json::from_str(&state_text).expect("state json");
-            legacy
-                .as_object_mut()
-                .expect("object")
-                .remove("redacted_cast_variables");
-            let legacy: RunState = serde_json::from_value(legacy).expect("old state");
-            assert!(legacy.redacted_cast_variables.is_empty());
-        }
     }
 }

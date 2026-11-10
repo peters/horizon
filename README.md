@@ -32,8 +32,7 @@
   <a href="#configuration">Config</a> ·
   <a href="#browse-any-website">Browse</a> ·
   <a href="#watch-an-app-over-vnc">VNC</a> ·
-  <a href="#browser-panels">Browser reference</a> ·
-  <a href="#speech-input-opt-in">Speech</a>
+  <a href="#browser-panels">Browser reference</a>
 </p>
 
 ---
@@ -108,11 +107,9 @@ Once that loop is familiar, the rest is optional: **New** in the sidebar for an 
 
 ## More to explore
 
-New here? [First steps](docs/first-steps.md) walks you from install to your first board, agent, browser and cloud.
+New here? [First steps](docs/first-steps.md) walks you from install to your first board, agent and browser.
 
-- **Cloud workspaces** — rent a RunPod or Hetzner worker and get its shell, agent, browser and Device panels on your board. Agents keep working when your laptop sleeps. Linux and macOS. See [Cloud workspaces](docs/cloud-workspaces.md).
-- **Local Network Bridge** — let a cloud reach devices on your home or office network. See [Local Network Bridge](docs/local-network-bridge.md).
-- **Casting** — show a panel, a workspace or the whole window on an Apple TV. Linux only. See [Casting](docs/casting.md).
+- **Remote Hosts**. Open a terminal or a desktop on another machine, over SSH or from your Tailscale devices. See [Remote Hosts](#remote-hosts).
 - **Agent-driven desktops** — agents click and type in an isolated X11 desktop while you watch it in a Device panel. Linux only. See [Watch an app over VNC](#watch-an-app-over-vnc).
 
 ## Highlights
@@ -213,12 +210,6 @@ Drop a `.md` file onto the canvas or create one from the palette. **Split view**
 <tr>
 <td>
 
-### Speech Input
-Opt-in, on-device dictation into terminals and browser pages. Hold a push-to-talk key (default **F9**) or use the title-bar mic. Nothing leaves the machine.
-
-</td>
-<td>
-
 ### Audited Browser Automation
 Agents discover one MCP browser contract automatically. Every action is correlated in a redacted audit trail. The `horizon-browser` CLI runs prompt jobs and repeatable JSON plans.
 
@@ -242,9 +233,7 @@ Grab the latest release from [**Releases**](https://github.com/peters/horizon/re
 
 To update a downloaded copy, download the new release and replace the executable after you close Horizon. For package-manager installs, use the package manager's upgrade command. Horizon has no in-app updater.
 
-Release builds don't include [speech input](#speech-input-opt-in). Build from source if you want dictation.
-
-The latest release (v0.2.7, August 2026) predates browser panels, Device panels, cloud workspaces and casting. Until the next release, [build from source](#build-from-source) to get them.
+The latest release (v0.2.7, August 2026) predates browser panels and Device panels. Until the next release, [build from source](#build-from-source) to get them.
 
 ### What works where
 
@@ -255,10 +244,7 @@ Horizon runs on Linux and macOS, and some features are Linux-only today:
 | Board, shell, browser and Device panels | ✓ | ✓ |
 | Coding-agent panels | ✓ | ✓ |
 | Safari browser panels | — | ✓ |
-| Cloud workspaces | ✓ | ✓ |
 | Agent-driven desktops | X11 | — |
-| Apple TV casting | ✓ | — |
-| Global push-to-talk | X11 | ✓ |
 
 The full list, with the reason for each gap, is in [Platform support](docs/platform-support.md).
 
@@ -525,7 +511,7 @@ docker run --rm \
 
 ### State folder
 
-Horizon keeps its settings store, sessions, browser profiles, cloud settings and runtime files in `~/.horizon`. Set `HORIZON_HOME` to an absolute path to keep them in another folder instead, for example to run a second Horizon that cannot touch your usual one:
+Horizon keeps its settings store, sessions, browser profiles and runtime files in `~/.horizon`. Set `HORIZON_HOME` to an absolute path to keep them in another folder instead, for example to run a second Horizon that cannot touch your usual one:
 
 ```bash
 HORIZON_HOME=/path/to/private-horizon horizon
@@ -805,75 +791,6 @@ workspaces:
 
 ---
 
-## Speech Input (opt-in)
-
-Dictate into a terminal, editor, or browser page. Terminal, Editor, and Browser panels get a mic button in the title bar (Git Changes and Usage do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus. Editor dictation inserts at the caret.
-
-Speech is a compile-time opt-in because it builds a native C++ inference library, so the release downloads and package-manager installs don't include it. You need **CMake and a C++ compiler**, plus on Linux the ALSA headers (`libasound2-dev` / `alsa-lib-devel`):
-
-```bash
-cargo speech          # alias for: cargo run --release --features speech  (CPU inference; Metal on macOS)
-cargo speech-cuda     # NVIDIA GPU inference (needs the CUDA toolkit)
-cargo speech-vulkan   # any GPU via Vulkan (needs the Vulkan SDK to build)
-```
-
-On Linux, capture routes through PulseAudio/PipeWire whenever that sound server is running, so the microphone stays shared with other apps. Without a sound server it falls back to raw ALSA, which claims the device exclusively.
-
-```yaml
-features:
-  speech:
-    enabled: true
-    model: /path/to/models/whisper-large-v3-Q8_0.gguf  # any transcribe.cpp GGUF
-    language: "no"       # ISO hint; "auto" detects. Supported set = the model's GGUF metadata
-    task: transcribe     # translate = speak any language, insert English text
-    backend: auto        # auto | cpu | cuda | vulkan | metal
-    input_device: ""     # microphone name; "" = system default
-    hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
-    hotkey_mode: hold    # hold (Ventrilo-style) | toggle
-    preload: false       # true = load the model at startup
-    desktop_injection: false  # true = insert into another app (macOS or X11 Linux); no clipboard
-```
-
-The push-to-talk hotkey listens in focused Horizon windows, and panels in detached windows can also dictate via their title-bar mic button. A focused terminal, editor, or browser panel receives the transcript locally (PTY, caret, or page `insertText`). Git Changes and Usage have no text surface. With `desktop_injection: true`, the same hotkey is grabbed globally on macOS and X11 Linux. A focused Horizon window still receives the transcript locally, including when a global hotkey grab makes the toolkit briefly report the window as unfocused. On macOS, an external editable field is captured through Accessibility when recording starts and any later focus change discards the transcript. On Linux, insertion prefers the focused AT-SPI editable field when the transcript is ready; if the focused app does not expose one (Chromium, Electron, and Microsoft Teams typically do not), the transcript is typed through the accessibility key controller into the focused window. Classified password fields and visible selections are still refused. Both paths insert without reading or writing the clipboard, sending a paste shortcut, or pressing Return. Background push-to-talk is unavailable in a pure Wayland session.
-
-Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages). For Norwegian — including dialects — convert [NB-Whisper Large](https://huggingface.co/NbAiLab/nb-whisper-large) to GGUF per the transcribe.cpp docs and set `language: "no"` (or `"nn"`). NB-Whisper normalizes dialect speech into standard written Norwegian and ignores the `translate` task; spoken-Norwegian → English text needs stock `whisper-large-v3`.
-
-Settings → General → Features → **Speech Input** exposes all of this with a model-aware UI: languages from the GGUF metadata, a rebindable push-to-talk key, a microphone picker, and the actually-selected backend next to `auto`. Saved changes apply live.
-
-### Speech profiles: one key per language
-
-Each profile has its own model, language, output, and push-to-talk key. Hold **F1** for Norwegian, **F2** for English, **F3** to speak Norwegian and insert English. Models load lazily on first use unless `preload: true`.
-
-```yaml
-features:
-  speech:
-    enabled: true
-    backend: auto
-    hotkey_mode: hold
-    profiles:
-      - name: Norsk
-        model: ~/models/nb-whisper-large-Q8_0.gguf
-        language: "no"
-        task: transcribe
-        hotkey: F1
-        preload: true
-      - name: English
-        model: ~/models/whisper-large-v3-Q8_0.gguf
-        language: en
-        task: transcribe
-        hotkey: F2
-      - name: NO→EN
-        model: ~/models/whisper-large-v3-Q8_0.gguf
-        language: "no"
-        task: translate
-        target_language: en
-        hotkey: F3
-```
-
-Profile hotkeys are validated against each other and against every global shortcut. The mic button uses the last-used profile; with no `profiles:` list, the flat `model` / `language` / `hotkey` fields act as a single profile.
-
----
-
 ## Built With
 
 | | |
@@ -895,7 +812,7 @@ Manual smoke-test plans live under [**docs/testing**](docs/testing).
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
-cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
+cargo clippy --all-targets --features trace-profiling -- -D warnings
 ```
 
 ---

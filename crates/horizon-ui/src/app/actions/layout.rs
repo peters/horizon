@@ -47,10 +47,6 @@ impl HorizonApp {
 
     pub(in crate::app) fn canvas_rect(&self, ctx: &Context) -> Rect {
         let viewport = viewport_local_rect(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.fullscreen.is_some() {
-            return Rect::from_min_max(viewport.min + Vec2::new(0.0, 70.0), viewport.max);
-        }
         let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
         let sidebar_width = if self.sidebar_visible {
@@ -86,20 +82,6 @@ impl HorizonApp {
     /// elements (e.g. workspace labels) so they stay clear.
     pub(in crate::app) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
         let viewport = viewport_local_rect(ctx);
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.fullscreen.is_some() {
-            let mut zones = vec![Rect::from_min_max(
-                viewport.min,
-                Pos2::new(viewport.max.x, viewport.min.y + 70.0),
-            )];
-            zones.extend(self.preset_picker_rect(ctx));
-            zones.extend(self.settings_panel_rect(ctx, viewport));
-            zones.extend(self.settings_bar_rect(ctx, viewport));
-            zones.extend(self.cloud_drawer_screen_rects(ctx));
-            #[cfg(target_os = "linux")]
-            zones.extend(self.cast_control_screen_rects(ctx));
-            return OverlayExclusion::new(zones);
-        }
         let mut zones: Vec<_> = self.preset_picker_rect(ctx).into_iter().collect();
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
@@ -128,19 +110,10 @@ impl HorizonApp {
         if let Some(rect) = self.work_resume_overlay_rect(ctx) {
             zones.push(rect);
         }
-        #[cfg(feature = "cloud-workspaces")]
-        zones.extend(self.cloud_drawer_screen_rects(ctx));
-        #[cfg(target_os = "linux")]
-        zones.extend(self.cast_control_screen_rects(ctx));
-
         OverlayExclusion::new(zones)
     }
 
     pub(in crate::app) fn minimap_overlay_rect(&self, ctx: &Context) -> Option<Rect> {
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.fullscreen.is_some() {
-            return None;
-        }
         if !self.fixed_overlays_visible() || !self.minimap_visible || !self.any_attached_workspace() {
             return None;
         }

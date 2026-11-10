@@ -41,49 +41,6 @@ fn from_board_records_each_browser_launch_profile_root() {
 }
 
 #[test]
-fn a_browser_hidden_only_for_its_clouds_disposal_is_saved_as_it_was() {
-    let temp = tempfile::tempdir().expect("temporary profile root");
-    let mut board = Board::new();
-    let workspace = board.create_workspace("browser");
-    let browser = board
-        .create_panel(
-            PanelOptions {
-                kind: PanelKind::Browser,
-                local_id: Some("cloud-browser".to_string()),
-                visible: true,
-                browser_config: Some(crate::browser::BrowserConfig {
-                    command: Some(temp.path().join("missing-chrome").display().to_string()),
-                    profile_root: Some(temp.path().join("profiles")),
-                    ..crate::browser::BrowserConfig::default()
-                }),
-                ..PanelOptions::default()
-            },
-            workspace,
-        )
-        .expect("Browser panel state should start");
-    let hidden = |board: &Board| {
-        RuntimeState::from_board(board, WindowConfig::default(), CanvasViewState::default()).workspaces[0].panels[0]
-            .browser_profile
-            .as_ref()
-            .is_some_and(|profile| profile.hidden)
-    };
-    assert!(!hidden(&board));
-
-    assert!(board.hide_for_disposal(browser));
-    assert!(
-        !hidden(&board),
-        "quitting during a disposal must not save a visible browser as hidden"
-    );
-
-    board.end_disposal_hiding(browser, false);
-    assert!(
-        hidden(&board),
-        "once the hiding ends without showing it, it is simply hidden"
-    );
-    board.shutdown_terminal_panels();
-}
-
-#[test]
 fn empty_committed_browser_url_overrides_the_requested_command() {
     let panel = PanelState {
         kind: PanelKind::Browser,
@@ -385,42 +342,6 @@ fn board_snapshot_preserves_the_panel_work_policy() {
     let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
     assert!(state.workspaces[0].panels[0].work_resume.enabled);
     board.shutdown_terminal_panels();
-}
-
-#[test]
-fn a_transient_panel_is_not_saved() {
-    let mut board = Board::new();
-    let workspace = board.create_workspace("setup");
-    let kept = board
-        .create_panel(
-            PanelOptions {
-                kind: PanelKind::Editor,
-                local_id: Some("kept".to_string()),
-                ..PanelOptions::default()
-            },
-            workspace,
-        )
-        .expect("editor panel");
-    let hidden = board
-        .create_panel(
-            PanelOptions {
-                kind: PanelKind::Editor,
-                local_id: Some("hidden-task".to_string()),
-                visible: false,
-                ..PanelOptions::default()
-            },
-            workspace,
-        )
-        .expect("editor panel");
-    board.panel_mut(hidden).expect("hidden panel").transient = true;
-
-    let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
-    let saved: Vec<_> = state.workspaces[0]
-        .panels
-        .iter()
-        .map(|panel| panel.local_id.clone())
-        .collect();
-    assert_eq!(saved, [board.panel(kept).expect("kept panel").local_id.clone()]);
 }
 
 #[test]

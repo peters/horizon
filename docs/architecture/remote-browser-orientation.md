@@ -108,8 +108,8 @@ labels. Selection reflects
 measured applied orientation, with **Rotating…**, **Verified**, **Unverified** or
 **Unsupported** status. Controls wrap in narrow panels and are disabled during
 startup, shutdown, pending rotation, Teach mode or explicit lack of support.
-Local browsers, including those presented from a cloud worker, do not show them.
-Cloud presentation alone does not make a browser a remote device target.
+Local browsers do not show them. A presented local browser does not become a
+remote device target.
 A failed rotation leaves a nonfatal message and
 keeps the usable browser frame.
 
@@ -150,8 +150,8 @@ in CLI plans:
 
 These interfaces require a live matching Horizon host with the configured
 provider binding. The settings window need not be open. Older hosts cannot
-silently ignore the new create contract. A cloud-hosted panel uses the same
-orientation state and shared provider policy; cloud status retains bounded
+silently ignore the new create contract. A remote panel uses the same
+orientation state and shared provider policy, and status retains bounded
 per-request completion so another viewer or a later poll can see the outcome.
 
 ## Verification, input and failure handling
@@ -208,7 +208,7 @@ not turn that request into a success.
 If a host loses or evicts a pending acknowledgement, expiry clears the previous
 applied orientation and shows Unverified. Stale polls cannot restore it; a
 matching terminal observation must settle the retained request.
-A local UI queue refusal remains visible across cloud polls while measured
+A local UI queue refusal remains visible across status polls while measured
 status and older request acknowledgements continue updating. A successfully
 queued retry or session reset clears that refusal.
 The driver publishes unknown applied orientation and pending rotation to the UI
@@ -242,8 +242,8 @@ Creation lifecycle records preserve the effective starting orientation from the
 resolved launch plan, including configuration and per-create overrides. The
 same value appears in queued, dispatched, completed and failed records, even
 if configuration or device orientation changes while startup is pending.
-Cloud workers retain typed startup-failure state until result publication and
-request retirement both succeed, then schedule cleanup. A partial filesystem
+A remote host retains typed startup-failure state until result publication and
+request retirement both succeed, then schedules cleanup. A partial filesystem
 failure must not discard the failure code or release guidance on retry.
 
 ## Maintenance boundaries
@@ -253,7 +253,7 @@ Normalized options and presentation types live in
 Provider mapping is shared with remote configuration. The driver's
 [`orientation` module](../../crates/horizon-browser/src/webdriver/session/orientation.rs)
 owns request servicing, document invalidation, acknowledgement and startup
-rejection. Desktop and cloud adapters consume those results; UI rendering must
+rejection. Desktop and remote adapters consume those results; UI rendering must
 not implement another provider policy. MCP and CLI must not add a separate
 driver controller.
 

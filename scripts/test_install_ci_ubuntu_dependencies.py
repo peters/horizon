@@ -177,8 +177,7 @@ class WorkflowTests(unittest.TestCase):
         prefix = "bash scripts/install-ci-ubuntu-dependencies.sh "
         expected = {
             "device": [["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth", "bubblewrap"]],
-            "clippy": [["libasound2-dev", "pkg-config"]],
-            "rust-test": [["libasound2-dev", "pkg-config"], ["tmux"], ["openssh-server"]],
+            "rust-test": [["openssh-server"]],
         }
         sites = sum(len(commands) for commands in expected.values())
         self.assertEqual(workflow.count(prefix), sites)
@@ -192,14 +191,8 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual([shlex.split(command) for command in commands], packages)
                 if name == "rust-test":
                     self.assertIn(
-                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'speech'"
-                        " && env.HORIZON_CI_SKIP_SPEECH != 'true' }}\n"
-                        "        run: " + prefix,
-                        jobs[name],
-                    )
-                    self.assertIn(
-                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs-extra' }}\n"
-                        "        run: " + prefix + "tmux",
+                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}\n"
+                        "        run: " + prefix + "openssh-server",
                         jobs[name],
                     )
                 else:
@@ -212,46 +205,13 @@ class WorkflowTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         sites = workflow.count("run: bash scripts/install-ci-video-build-tools.sh")
         guarded = re.findall(
-            # The Linux speech leg also skips it on a pull request without speech inputs.
-            r"- name: Install video assembler\n\s+if: \$\{\{ !env\.LOCALCI"
-            r"(?: && env\.HORIZON_CI_SKIP_SPEECH != 'true')? \}\}\n(?:\s+shell: bash\n)?"
+            r"- name: Install video assembler\n\s+if: \$\{\{ !env\.LOCALCI \}\}\n(?:\s+shell: bash\n)?"
             r"\s+run: bash scripts/install-ci-video-build-tools\.sh",
             workflow,
         )
         self.assertGreater(sites, 0)
         self.assertEqual(len(guarded), sites)
 
-    def test_skipped_cloud_worker_tests_fail_on_github_and_warn_locally(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn("bash scripts/run-cloud-worker-tests.sh", workflow)
-        match = re.search(
-            r"^( +)if \[ \"\$status\" -eq 3 \]; then\n.*?^\1fi\n",
-            workflow,
-            re.M | re.S,
-        )
-        self.assertIsNotNone(match, "the step keeps its skip rule")
-        check = "\n".join(line[len(match.group(1)):] for line in match.group(0).splitlines())
-        for localci, code, annotation in [("", 1, "::error::"), ("true", 0, "::warning::")]:
-            with self.subTest(localci=localci):
-                env = {"PATH": os.environ["PATH"], "LOCALCI": localci, "status": "3"}
-                result = subprocess.run(["bash", "-c", check], env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, code)
-                self.assertIn(annotation, result.stdout)
-        # Any other nonzero code is a failure: a failed module, or the runner refusing to run.
-        failure = re.search(
-            r"^( +)elif \[ \"\$status\" -ne 0 \]; then\n.*?^\1fi\n",
-            workflow,
-            re.M | re.S,
-        )
-        self.assertIsNotNone(failure)
-        rest = "\n".join(line[len(failure.group(1)):] for line in failure.group(0).splitlines())
-        # The block is the `elif` of the skip rule; on its own it starts an `if`.
-        rest = rest.replace('elif [ "$status" -ne 0 ]; then', 'if [ "$status" -ne 0 ]; then', 1)
-        for status in ["1", "2", "5"]:
-            with self.subTest(status=status):
-                env = {"PATH": os.environ["PATH"], "status": status}
-                result = subprocess.run(["bash", "-c", rest], env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 1, "a run that passed nothing fails the step")
 
 if __name__ == "__main__":
     unittest.main()

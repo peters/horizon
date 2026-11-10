@@ -358,14 +358,6 @@ impl HorizonApp {
 
     pub(super) fn workspace_focus_frame(&self, workspace_id: WorkspaceId) -> Option<(Pos2, Vec2)> {
         let bounds = self.board.workspace_bounds_map();
-        #[cfg(feature = "cloud-workspaces")]
-        let bounds = {
-            let mut bounds = bounds;
-            self.cloud_prototype
-                .groups
-                .extend_workspace_bounds(&self.board, &mut bounds);
-            bounds
-        };
         if let Some(&(min, max)) = bounds.get(&workspace_id) {
             return Some((
                 Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT),
@@ -379,20 +371,13 @@ impl HorizonApp {
         self.board.workspace(workspace_id).map(|workspace| {
             (
                 Pos2::new(workspace.position[0], workspace.position[1]),
-                self.empty_workspace_size(workspace_id),
+                Self::empty_workspace_size(),
             )
         })
     }
 
-    /// The frame an empty workspace is drawn at. New cloud's own workspace holds its form, and
-    /// every other empty workspace, also one the person made, keeps the empty size.
-    pub(super) fn empty_workspace_size(&self, workspace_id: WorkspaceId) -> Vec2 {
-        #[cfg(feature = "cloud-workspaces")]
-        if self.cloud_prototype.holds_cloud_form(workspace_id) {
-            return Vec2::new(super::WS_CLOUD_FORM_SIZE[0], super::WS_CLOUD_FORM_SIZE[1]);
-        }
-        #[cfg(not(feature = "cloud-workspaces"))]
-        let _ = workspace_id;
+    /// The frame an empty workspace is drawn at.
+    pub(super) fn empty_workspace_size() -> Vec2 {
         Vec2::new(super::WS_EMPTY_SIZE[0], super::WS_EMPTY_SIZE[1])
     }
 }
@@ -491,96 +476,6 @@ mod tests {
         aligned_pan_offset, canvas_scene_transform, fit_workspace_zoom, fit_zoom_for_frame, panel_focus_frame,
         reveal_view_state,
     };
-
-    #[test]
-    #[cfg(feature = "cloud-workspaces")]
-    fn workspace_fit_includes_empty_cloud_and_runtime_card() {
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let workspace = app.board.create_workspace("fixture");
-        let group = horizon_core::cloud_panel::CloudGroup::new(
-            1,
-            "Fixture".into(),
-            app.board.workspace(workspace).unwrap().local_id.clone(),
-            temp.path().into(),
-            [1700.0, 900.0],
-        );
-        let (min, max) = group.overview_bounds();
-        app.cloud_prototype.groups.0.push(group);
-        let (position, size) = app.workspace_focus_frame(workspace).unwrap();
-        let frame = Rect::from_min_size(position, size);
-        assert!(frame.contains(Pos2::from(min)));
-        assert!(frame.contains(Pos2::from(max)));
-    }
-
-    #[test]
-    #[cfg(feature = "cloud-workspaces")]
-    fn fitting_viewports_do_not_move_a_cloud_placed_among_panels() {
-        use horizon_core::{PanelKind, PanelOptions, cloud_panel::CloudGroup};
-
-        let (temp, mut app) = crate::app::test_support::test_app();
-        let workspace = app.board.create_workspace_at("Local", [360.0, 140.0]);
-        let origin = app.board.workspace(workspace).expect("workspace").position;
-        let panel = |position, size| PanelOptions {
-            kind: PanelKind::Usage,
-            position: Some(position),
-            size: Some(size),
-            ..PanelOptions::default()
-        };
-        let top = app
-            .board
-            .create_panel(panel([origin[0] + 30.0, origin[1] + 40.0], [620.0, 380.0]), workspace)
-            .expect("panel");
-        app.board
-            .create_panel(panel([origin[0] + 40.0, origin[1] + 460.0], [480.0, 240.0]), workspace)
-            .expect("lower panel");
-        app.board.workspace_mut(workspace).expect("workspace").layout = None;
-        assert!(app.board.resize_panel(top, [760.0, 520.0]));
-        let local = app.board.workspace(workspace).expect("workspace").local_id.clone();
-        let relative = app.cloud_prototype.groups.next_position(&local, &app.board);
-        let mut group = CloudGroup::new(1, "Cloud".into(), local, temp.path().into(), relative);
-        group.reconcile(&mut app.board);
-        let layouts: Vec<_> = app
-            .board
-            .panels
-            .iter()
-            .map(|panel| (panel.layout.position, panel.layout.size))
-            .collect();
-        let cloud = group.position;
-        let panel_bottom = app
-            .board
-            .panels
-            .iter()
-            .map(|panel| panel.layout.position[1] + panel.layout.size[1])
-            .fold(f32::MIN, f32::max);
-        assert!(cloud[1] >= panel_bottom + 48.0);
-        app.cloud_prototype.groups.0.push(group);
-        app.board.cloud_groups.clone_from(&app.cloud_prototype.groups);
-        let current = |app: &crate::app::HorizonApp| -> Vec<([f32; 2], [f32; 2])> {
-            app.board
-                .panels
-                .iter()
-                .map(|panel| (panel.layout.position, panel.layout.size))
-                .collect()
-        };
-        let same_cloud = |app: &crate::app::HorizonApp| {
-            app.cloud_prototype.groups.0[0]
-                .position
-                .into_iter()
-                .zip(cloud)
-                .all(|(left, right)| (left - right).abs() <= f32::EPSILON)
-        };
-        assert_eq!(current(&app), layouts);
-        assert!(same_cloud(&app));
-        for canvas in [
-            Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(3840.0, 2160.0)),
-            Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(1280.0, 720.0)),
-        ] {
-            assert!(app.fit_workspace_in_rect(workspace, canvas));
-            assert_eq!(current(&app), layouts);
-            assert!(same_cloud(&app));
-            assert!(app.cloud_prototype.groups.0[0].panels.is_empty());
-        }
-    }
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {

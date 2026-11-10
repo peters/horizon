@@ -180,7 +180,7 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
                  'position': [630, 60], 'size': [550, 420]}]}]}
     # A panel saves its page's downloads into the Downloads folder of its home.
     # The fixture keeps them in its own state directory instead, so a run leaves
-    # nothing behind in the Downloads folder of the person or of a worker.
+    # nothing behind in the Downloads folder of the person.
     browser = {'downloads_root': os.path.join(cwd, 'browser-downloads')}
     if device_address:
         fixture['workspaces'][0]['terminals'] = [
@@ -228,9 +228,8 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
 def application_command(app, config, saved_session):
     """The command line of the candidate in the fixture.
 
-    A saved session keeps its session file in the private home of the fixture, which
-    starting a cloud needs: a cloud card belongs to a saved session. The default stays
-    ephemeral, which writes no session file.
+    A saved session keeps its session file in the private home of the fixture. The
+    default stays ephemeral, which writes no session file.
     """
     session = '--new-session' if saved_session else '--ephemeral'
     return [str(app), '--config', str(config), session]
@@ -261,9 +260,6 @@ def require_writable_tmp(directory=None):
 
 
 def main():
-    if '--worker-desktop' in sys.argv[1:]:
-        import worker_desktop
-        return worker_desktop.main()
     require_writable_tmp()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--horizon', type=Path, required=True, help='Horizon debug binary for an isolated smoke')
@@ -284,7 +280,7 @@ def main():
              'the same state. Use only a state path that this person owns.')
     parser.add_argument(
         '--saved-session', action='store_true',
-        help='Keep the session of the fixture in its private home, which starting a cloud needs')
+        help='Keep the session of the fixture in its private home')
     parser.add_argument(
         '--presets',
         type=Path,
@@ -301,12 +297,6 @@ def main():
         type=Path,
         help='JSON list of extra workspace panels the fixture opens at start, such as an '
              'agent panel that runs a scripted MCP client')
-    parser.add_argument(
-        '--cloud-settings',
-        metavar='DIR',
-        help='Cloud settings folder copied to ~/.horizon/cloud in the private home at 0700, '
-             'so a procedure that rents, stops or deletes a cloud machine has the account '
-             'settings of the fixture')
     parser.add_argument(
         '--ssh-config',
         type=Path,
@@ -338,7 +328,6 @@ def main():
         extra_ro_binds.append(args.tools.resolve())
     box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds, reuse=args.reuse_state)
     sandbox.seed_ssh(box.private_home, ssh_config, ssh_identity)
-    cloud_files = sandbox.seed_cloud_settings(box.private_home, args.cloud_settings)
     data = box.data
     namespace = box.namespace
     host_env = box.host_env
@@ -443,7 +432,6 @@ def main():
                     'vnc_address': f'127.0.0.1:{vnc_port}', 'app': str(app),
                     'pids': [p.pid for p in children], 'fixture': 'horizon-debug',
                     'session': 'saved' if args.saved_session else 'ephemeral',
-                    'cloud_settings_files': cloud_files,
                     'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))

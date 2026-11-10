@@ -74,10 +74,11 @@ for a known panel. Discovery and control are scoped to the workspace that
 contains your agent panel: `browser_list` never shows panels from other
 workspaces, every other tool rejects their ids, and a panel's `visible` field
 is host presentation state, not proof that the panel is in your workspace. If
-nothing usable is listed, create a panel rather than guessing an id. On a cloud
-worker, your injected actor must match a registered workspace session. For a
-request addressed to the current worker, an actor outside that workspace receives `panel_outside_workspace` before a browser starts.
-Use the registered session identity; do not retry an unregistered actor. Before
+nothing usable is listed, create a panel rather than guessing an id. Your
+injected actor must match a registered workspace session. For a request
+addressed to another workspace, an actor outside that workspace receives
+`panel_outside_workspace` before a browser starts. Use the registered session
+identity; do not retry an unregistered actor. Before
 interacting, call `browser_snapshot` or `browser_query` and prefer its
 short-lived `ref` in `browser_act`. Remote iOS clicks and field entry use
 synchronous target checks before trusted native input. Verify the visible result
@@ -449,9 +450,7 @@ or an explicitly permitted attachment root. These paths are on the server host.
 Do not widen roots or upload private files without task authorization.
 Read attached names and sizes for `set_files`, then examine page acceptance.
 A dispatched drop does not prove that an application accepted the files.
-On a cloud worker, these paths are worker paths. The files of a person's own
-computer reach a cloud browser only through Horizon's file picker or a drop on
-the panel. A click on an upload button opens that picker for the person who
+A click on an upload button opens Horizon's file picker for the person who
 views the panel, and page actions return `file_chooser_pending` until that
 person answers, so use `set_files` on the input instead of clicking the button.
 
@@ -462,56 +461,3 @@ host or profile host. It takes no fresh navigation or full-page capture. Optiona
 not OS acknowledgement. Capture claims ownership and refuses another live owner,
 human steering, or pending handoff. It changes no focus, visibility, or canvas.
 Copy needed evidence before panel close or host exit; only eight exports remain.
-
-## The browser VM
-
-`browser_vm` rents one dedicated machine that runs the browser image of issue
-1780, so a person signs in to each site one time.
-
-- `deploy` needs an immutable image reference (`name@sha256:...`, never a tag)
-  and a dedicated `ccx` server type such as `ccx13`. It uses the first location
-  of the Hetzner settings and a 20 GB state volume unless the request names
-  them. It answers with the phase it started.
-- `status` reads the record and touches no provider. Poll it until the phase is
-  `ready`, `stopped`, `deleted` or `failed`.
-- `stop` releases the server and keeps the state volume, so the sign-ins stay.
-  `resume` rents a new server on that volume. `delete` removes the server and
-  the volume, and it is the only operation that removes a sign-in.
-- A `ready` answer holds `ssh_target` (`horizon-browser-vm`), a route for the
-  native Device panel and a `person_step`. Horizon writes the ssh entry
-  `horizon-browser-vm` into the ssh configuration of the person, so that entry
-  names the machine with the key of the deploy and the host keys that Horizon
-  trusted. Every route that runs `ssh horizon-browser-vm` then reaches the
-  machine, with no copy of a key and no manual host-key step. A person must sign
-  in: open the panel as the `horizon-device` skill describes, with the `ssh`
-  route of the answer, and ask the person to sign in to the sites on the
-  display. An agent cannot do that step.
-- The `ssh_target` is the `browser_host` entry of the Settings window. It
-  applies at the next start of Horizon. A `stop` removes the ssh entry and a
-  `resume` writes it again, so the entry survives a new address of the machine.
-- `ssh_note` explains the answer when the entry is not the plain case: the name
-  `horizon-browser-vm` is taken by a host block of the person, this Horizon does
-  not know the home directory of the person, or the host keys of the machine
-  were not scanned yet. `ssh_target` is then `root@<address>` for the missing
-  entry, and the routes of that answer use the address. Do not edit the ssh
-  configuration of the person to make room.
-- `provider: local` runs the same image in a container on this computer instead
-  of renting a machine. A local `deploy` names no image, server type, location
-  or volume: Horizon owns the container name, the image tag and the ports, both
-  of which it publishes on `127.0.0.1` only. The answer holds `vnc_address` and
-  a Device panel `endpoint` for that loopback address, because this computer's
-  display needs no ssh hop; the ssh entry `horizon-browser-vm` is still written,
-  so a browser that reaches the container over ssh names the same target. A
-  `stop` keeps the state volume and the container key, and a `delete` removes
-  the container and keeps the volume, because the volume holds the sign-ins.
-  The image must exist first: the tool starts it and never builds it, so a
-  person builds `horizon-browser-vm-local:latest` from
-  `packaging/browser-vm/Dockerfile` with the target `browser-vm-local`, or runs
-  `horizon --browser-vm-local up --build <checkout>`, which builds it and starts
-  the same container. A start adopts a container of the same image that a broken
-  run left behind, and refuses a container of another image that holds the name.
-- One run at a time. A second run is refused with `browser_vm_busy`. A failed
-  run keeps its record, so you retry or delete it, and never rent twice.
-
-Casting uses `horizon-cast`. Cloud offers and companions use `horizon-cloud`.
-Native iOS and Android sessions use `horizon-app-testing`.

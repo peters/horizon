@@ -5,7 +5,6 @@ mod agent_work_hook;
 mod app;
 mod badge;
 mod branding;
-mod browser_vm_local_command;
 mod browser_widget;
 mod clipboard_image;
 mod command_palette;
@@ -19,13 +18,12 @@ mod input;
 #[cfg(any(test, target_os = "linux"))]
 mod linux_desktop;
 mod loading_spinner;
-mod native_app;
+mod native_window;
 mod plugin_install;
 mod primary_selection;
 mod remote_hosts_overlay;
 mod screenshot;
 mod search_overlay;
-mod setup_board_widget;
 mod terminal_widget;
 #[cfg(test)]
 mod test_egui;
@@ -38,7 +36,6 @@ use std::path::PathBuf;
 
 use agent_integrations::AgentIntegrations;
 use app::HorizonApp;
-use browser_vm_local_command::{Action, LocalCommand};
 use std::sync::Arc;
 
 use eframe::{egui_wgpu, wgpu};
@@ -51,9 +48,6 @@ use tracing_subscriber::fmt::format::FmtSpan;
 fn main() -> eframe::Result {
     // The native modes prepare the Horizon home themselves. The agent work hook writes only to
     // HORIZON_WORK_ROOT and must keep its own exit codes, which steer the agent's turn.
-    if horizon_app_host::entry::run_if_requested() {
-        return Ok(());
-    }
     if agent_work_hook::run_if_requested() {
         return Ok(());
     }
@@ -140,7 +134,7 @@ fn main() -> eframe::Result {
     let app_keyboard_inputs = observed_keyboard_inputs.clone();
     let device_requests = app::DeviceRequestBridge::new();
     let device_requests_for_app = Arc::clone(&device_requests);
-    native_app::run_native_with_keyboard_observer(
+    native_window::run_native_with_keyboard_observer(
         branding::APP_NAME,
         options,
         Box::new(move |cc| {
@@ -390,10 +384,6 @@ fn run_command(command: &Command, config_path: &std::path::Path) -> ! {
     let code = match command {
         Command::ExportConfig(destination) => run_export_config_command(config_path, destination.as_deref()),
         Command::RemoteProfile(profile) => run_remote_profile_command(config_path, profile),
-        Command::BrowserVmLocal(local) => {
-            let cloud = horizon_core::HorizonHome::resolve().root().join("cloud");
-            local.run(&cloud)
-        }
     };
     plugin_install::exit_after_releasing_plugins(code)
 }
@@ -586,8 +576,6 @@ fn init_tracing() {
 
 const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
        horizon [--config <path>] --export-config [<path>]
-       horizon [--config <path>] --browser-vm-local <up|down|status> [--build <repository>]
-               [--name <name>] [--image <reference>] [--vnc-port <port>] [--ssh-port <port>]
        horizon [--config <path>] --export-remote-profile <path>
        horizon [--config <path>] --import-remote-profile <path>";
 
@@ -611,8 +599,6 @@ enum Command {
     /// Write the settings as YAML. `None` uses the settings path itself.
     ExportConfig(Option<PathBuf>),
     RemoteProfile(RemoteProfileCommand),
-    /// Start, stop or report the local container of the browser image.
-    BrowserVmLocal(LocalCommand),
 }
 
 /// Parse the launch flags. The remote-profile commands take exactly one
@@ -654,18 +640,6 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
                 };
                 set_command(&mut command, Command::RemoteProfile(profile))?;
             }
-            "--browser-vm-local" => {
-                let action = args.next().unwrap_or_default();
-                set_command(
-                    &mut command,
-                    Command::BrowserVmLocal(LocalCommand::new(Action::parse(&action)?)),
-                )?;
-            }
-            // The flags of `--browser-vm-local` may follow the action or precede it.
-            flag if LocalCommand::handles(flag) => match &mut command {
-                Some(Command::BrowserVmLocal(local)) => local.apply(&arg, &mut args)?,
-                _ => return Err(format!("{flag} belongs to --browser-vm-local up")),
-            },
             "--new-session" => new_session = true,
             "--ephemeral" => ephemeral = true,
             "--blank" => blank = true,
@@ -686,7 +660,7 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
 fn set_command(command: &mut Option<Command>, next: Command) -> Result<(), String> {
     if command.replace(next).is_some() {
         return Err(
-            "give one command only, once: --export-config, --export-remote-profile, --import-remote-profile or --browser-vm-local"
+            "give one command only, once: --export-config, --export-remote-profile or --import-remote-profile"
                 .to_string(),
         );
     }
@@ -730,7 +704,7 @@ mod log_filter_tests {
 
 #[cfg(test)]
 mod cli_args_tests {
-    use super::{Action, Command, LocalCommand, RemoteProfileCommand, parse_cli_args};
+    use super::{Command, RemoteProfileCommand, parse_cli_args};
 
     fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
         parse_cli_args(args.iter().map(|arg| (*arg).to_string()))
@@ -771,24 +745,6 @@ mod cli_args_tests {
 
     #[test]
     fn export_config_takes_an_optional_path_and_runs_alone() {
-        let args = parse(&["--browser-vm-local", "up"]).expect("start the local browser VM");
-        assert_eq!(
-            args.command,
-            Some(Command::BrowserVmLocal(LocalCommand::new(Action::Up)))
-        );
-        let args = parse(&["--browser-vm-local", "up", "--build", "/src/horizon"]).expect("build first");
-        let mut expected = LocalCommand::new(Action::Up);
-        expected
-            .apply("--build", &mut ["/src/horizon".to_string()].into_iter())
-            .expect("a build path");
-        assert_eq!(args.command, Some(Command::BrowserVmLocal(expected)));
-        assert!(parse(&["--browser-vm-local"]).is_err());
-        assert!(parse(&["--browser-vm-local", "restart"]).is_err());
-        assert!(
-            parse(&["--build", "/src/horizon"]).is_err(),
-            "--build belongs to the container command"
-        );
-
         let args = parse(&["--export-config"]).expect("export to the settings path");
         assert_eq!(args.command, Some(Command::ExportConfig(None)));
         let args = parse(&["--export-config", "out.yaml"]).expect("export to a path");

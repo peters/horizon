@@ -5,8 +5,7 @@
 //! then carries each queued panel command to that page and reads one frame per
 //! tick, so the panel's slot always holds the latest page of the host. The panel
 //! thread never waits on the channel: it reads the latest state from a slot and
-//! sends a command through the queue, which is how the cloud view of a worker
-//! browser works as well.
+//! sends a command through the queue.
 
 use std::io::{BufRead, Write};
 use std::sync::{

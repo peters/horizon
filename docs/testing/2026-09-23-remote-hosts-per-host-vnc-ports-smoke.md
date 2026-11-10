@@ -35,7 +35,7 @@ Must include:
   re-saved VNC shortcut freezes the typed port into the preset command.
 
 Status: **PASS** (2026-09-23, Linux x64; 8 core `remote_hosts` tests, 40 UI
-`remote_host` tests, full workspace and speech test tiers green).
+`remote_host` tests and the full workspace test tier green).
 
 ## Lane B — live overlay on an isolated desktop (Linux)
 

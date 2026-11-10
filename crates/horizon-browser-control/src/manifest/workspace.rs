@@ -53,8 +53,8 @@ pub fn host_instance() -> &'static str {
     HOST_INSTANCE.get_or_init(|| uuid::Uuid::new_v4().to_string())
 }
 
-/// Adopt an identity that another process assigned to this host, such as the
-/// cloud worker supervisor that also gives it to the worker's agent sessions.
+/// Adopt an identity that another process assigned to this host, such as a
+/// supervisor that shares one identity with the sessions it starts.
 /// Call it before anything reads [`host_instance`]; repeating the same value
 /// is allowed.
 ///

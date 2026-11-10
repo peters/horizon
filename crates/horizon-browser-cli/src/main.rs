@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod cloud;
 mod orientation;
 mod run_finalization;
 mod run_preparation;
@@ -40,7 +39,6 @@ USAGE:
     horizon-browser "<GOAL>" [--backend <auto|chromium|firefox|safari>] [--visible] [--json]
     horizon-browser do "<GOAL>" [OPTIONS]
     horizon-browser orientation <PANEL-ID> <portrait|landscape> [--timeout-millis <MILLIS>] [-o <REPORT.json|->]
-    horizon-browser cloud <list|attach|park> [CLOUD-ID] [-o <REPORT.json|->]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
@@ -51,7 +49,6 @@ USAGE:
 
 COMMANDS:
     orientation Rotate a remote device through browser_orientation; reports measured acknowledgement.
-    cloud  The cloud list of your Horizon workspace through cloud_list, from a Horizon agent panel.
     do     Ask an optional local agent to complete a goal through Horizon MCP.
            This is the default when the first argument is a quoted goal.
     run    Execute a fail-fast JSON plan through the existing MCP tools.
@@ -95,7 +92,6 @@ OPTIONS:
 
 enum Command {
     Orientation(orientation::Options),
-    Cloud(cloud::Options),
     Run {
         plan: PathBuf,
         output: Option<PathBuf>,
@@ -143,7 +139,6 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Command::Orientation(options)) => options.run().await,
-        Ok(Command::Cloud(options)) => options.run().await,
         Ok(Command::Do(options)) => run_job(&options),
         Ok(Command::Mcp {
             standalone,
@@ -709,7 +704,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Some("host") => parse_host(args),
         Some("do") => parse_do(args),
         Some("orientation") => orientation::Options::parse(args).map(Command::Orientation),
-        Some("cloud") => cloud::Options::parse(args).map(Command::Cloud),
         Some("run") => parse_run(args),
         Some("resume") => parse_resume(args),
         Some(prompt) if !prompt.starts_with('-') => parse_job(prompt.to_string(), args),

@@ -302,7 +302,7 @@ fn minimap_hit_target(
                         workspace.id,
                         workspace.position,
                         workspace_bounds,
-                        app.empty_workspace_size(workspace.id),
+                        HorizonApp::empty_workspace_size(),
                     ),
                 )
             }),

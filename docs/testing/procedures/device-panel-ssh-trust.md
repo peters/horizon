@@ -25,7 +25,7 @@ fingerprint to accept or an ssh option. Only a person changes `known_hosts`.
 - Use a current Horizon candidate on Linux.
 - Use an agent in the candidate's workspace that has the `device_panel` tool.
 - Use an isolated desktop from the local device fixture for the VNC endpoint.
-- This procedure does not test a remote cloud machine, a VNC password or video.
+- This procedure does not test a VNC password or video.
 
 ## 3. Safety
 

@@ -73,13 +73,14 @@ These names apply in the steps:
 
    Result: The output is `error: HORIZON_HOME must be an absolute path, not relative` and `exit 2`.
 
-2. Start a native mode and the browser MCP mode with the relative value.
+2. Start the browser MCP mode with the relative value.
 
    ```sh
-   cd <run> && for mode in --native-catalog --browser-mcp; do HOME=<home> HORIZON_HOME=relative <bin>/horizon $mode </dev/null; echo "exit $?"; done
+   cd <run> && HOME=<home> HORIZON_HOME=relative <bin>/horizon --browser-mcp </dev/null; echo "exit $?"
    ```
 
-   Result: Each mode shows the same error and `exit 2`. `<run>/relative` does not exist.
+   Result: The mode shows the same error and `exit 2`. `<run>/relative` does not
+   exist.
 
 3. Start the agent work hook with the relative value.
 

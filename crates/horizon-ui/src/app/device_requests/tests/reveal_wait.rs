@@ -412,11 +412,7 @@ fn pending_reveals_cannot_move_a_viewer_that_was_presented_in_the_meantime() {
     );
     app.canvas_view.set_pan_offset([20_000.0, 5_000.0]);
     let before = app.canvas_view;
-    app.panel_render_caches.pending_device_reveal = Some(PendingDeviceReveal {
-        id,
-        restored_fullscreen: None,
-        deadline: Instant::now() + Duration::from_secs(2),
-    });
+    app.panel_render_caches.pending_device_reveal = Some(PendingDeviceReveal { id });
     app.apply_pending_root_device_reveal(&ctx);
     assert!(app.panel_render_caches.pending_device_reveal.is_none());
     assert_eq!(app.canvas_view, before);

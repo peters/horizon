@@ -7,7 +7,6 @@ use super::super::Board;
 fn shell_panel_state(local_id: &str, cwd: Option<&std::path::Path>) -> PanelState {
     PanelState {
         local_id: local_id.to_string(),
-        remote_workspace: None,
         name: "Shell".to_string(),
         name_is_custom: None,
         kind: PanelKind::Shell,
@@ -75,7 +74,6 @@ fn a_restored_panel_says_why_it_cannot_use_its_saved_directory() {
         workspaces: vec![WorkspaceState {
             local_id: "workspace".to_string(),
             name: "Moved".to_string(),
-            remote_workspace: None,
             cwd: Some(missing.display().to_string()),
             position: Some([0.0, 40.0]),
             template: None,

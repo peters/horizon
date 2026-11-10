@@ -34,7 +34,7 @@ class ReusedState(unittest.TestCase):
         with tempfile.TemporaryDirectory() as parent:
             state = sandbox.prepare_state(Path(parent) / 'run', reuse=True)
             sandbox.prepare(state, reuse=True)
-            kept = state / 'data' / 'home' / '.horizon' / 'cloud' / 'drafts.json'
+            kept = state / 'data' / 'home' / '.horizon' / 'drafts.json'
             kept.parent.mkdir(parents=True)
             kept.write_text('{"kept": true}')
 

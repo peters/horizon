@@ -111,20 +111,10 @@ pub(in crate::app) fn session_picker_panels(ctx: &egui::Context) -> Vec<PanelId>
         .collect()
 }
 
-pub(in crate::app) fn focused_session_picker_panel(ctx: &egui::Context) -> Option<PanelId> {
-    let viewport = ctx
-        .input(|input| {
-            input
-                .raw
-                .viewports
-                .iter()
-                .find_map(|(&id, info)| (id != egui::ViewportId::ROOT && info.focused == Some(true)).then_some(id))
-        })
-        .unwrap_or_else(|| ctx.viewport_id());
-    session_picker_panel_in_viewport(ctx, viewport)
-}
-
-fn session_picker_panel_in_viewport(ctx: &egui::Context, viewport: egui::ViewportId) -> Option<PanelId> {
+pub(in crate::app) fn session_picker_panel_in_viewport(
+    ctx: &egui::Context,
+    viewport: egui::ViewportId,
+) -> Option<PanelId> {
     let id = egui::Id::unique(("session_recovery_picker", viewport));
     let state = ctx.data(|data| data.get_temp::<SessionPicker>(id))?;
     let frame = ctx.cumulative_frame_nr_for(viewport);
