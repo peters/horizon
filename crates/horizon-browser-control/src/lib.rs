@@ -4,6 +4,7 @@
 
 pub mod atomic_file;
 pub mod attachments;
+pub mod block;
 pub mod manifest;
 pub mod paths;
 pub mod remote_authorization;
