@@ -85,6 +85,9 @@ impl DriverState {
             BrowserControlAction::Click { target, count } => {
                 self.semantic_click(link, event_tx, frame_slot, target, *count)
             }
+            BrowserControlAction::ClickPoint { x, y, count } => {
+                self.semantic_click_at(link, event_tx, frame_slot, *x, *y, *count)
+            }
             BrowserControlAction::Fill { target, value } => {
                 self.semantic_fill(link, event_tx, frame_slot, target, value)
             }
@@ -253,6 +256,29 @@ impl DriverState {
         for click_count in 1..=count {
             self.send_semantic_input(link, event_tx, frame_slot, pointer_press(x, y, click_count))?;
             self.send_semantic_input(link, event_tx, frame_slot, pointer_release(x, y, click_count))?;
+        }
+        Ok(BrowserControlValue::Accepted)
+    }
+
+    /// Click one point of the page: one trusted press and release for each
+    /// click. A point outside the viewport that the panel draws is refused.
+    fn semantic_click_at(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        x: f64,
+        y: f64,
+        count: u32,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let page = frame_slot.latest().map(|frame| (frame.width, frame.height));
+        crate::pointer::check_point(page, x, y)?;
+        self.capture_teach_fingerprint(link, event_tx, frame_slot, Some((x, y)))?;
+        self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
+        for click_count in 1..=count {
+            for input in crate::pointer::click_inputs(x, y, click_count) {
+                self.send_semantic_input(link, event_tx, frame_slot, input)?;
+            }
         }
         Ok(BrowserControlValue::Accepted)
     }

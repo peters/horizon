@@ -165,6 +165,9 @@ struct ButtonReplayEvent {
 /// Release every captured click at the last known position: the pointer
 /// left the window mid-drag, so end the drag where we last saw it instead
 /// of stranding Chrome's button state down.
+///
+/// A panel whose channel carries no button state takes no release here: the
+/// person released nothing, and one release on that channel is one click.
 fn end_captured_drags(
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
@@ -173,12 +176,16 @@ fn end_captured_drags(
     event_modifiers: BrowserModifiers,
 ) {
     let p = state.last_mouse.unwrap_or_else(|| frame.rect.center());
+    let carries_buttons = browser.carries_pointer_button_state();
     for captured in &mut state.captured_clicks {
         let Some(click) = captured.take() else {
             continue;
         };
         let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
         *event_buttons &= !button_mask(click.button);
+        if !carries_buttons {
+            continue;
+        }
         browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
             x,
             y,
@@ -380,6 +387,13 @@ fn flush_pending_move(browser: &BrowserPanelState, pending_move: &mut Option<(f6
     }
 }
 
+/// End every captured click without the person: the widget lost the capture,
+/// so the local engine gets its release and keeps no button down.
+///
+/// A panel whose channel carries no button state takes no release here. That
+/// channel has no pressed button to end, and one release on it is one click, so
+/// a cancelled capture would click the page at a point the person never chose,
+/// which is `(0, 0)` while the panel draws no body.
 pub(in crate::browser_widget) fn cancel_pointer_capture(
     browser: &BrowserPanelState,
     state: &mut BrowserUiState,
@@ -393,12 +407,16 @@ pub(in crate::browser_widget) fn cancel_pointer_capture(
         .map_or((0.0, 0.0), |((rect, frame_size), position)| {
             to_page_coords(rect, frame_size, position)
         });
+    let carries_buttons = browser.carries_pointer_button_state();
     let mut buttons = captured_buttons(state);
     for captured in &mut state.captured_clicks {
         let Some(click) = captured.take() else {
             continue;
         };
         buttons &= !button_mask(click.button);
+        if !carries_buttons {
+            continue;
+        }
         browser.send(BrowserCommand::Input(BrowserInput::MouseRelease {
             x: coordinates.0,
             y: coordinates.1,
@@ -607,6 +625,49 @@ mod tests {
         run(vec![button(grip.center(), false)]);
         assert!(run(vec![button(body.center(), true)]));
         assert!(!run(vec![button(grip.center(), false)]));
+    }
+
+    #[test]
+    fn a_cancelled_capture_on_a_browser_host_panel_clicks_no_page() {
+        // The channel of a browser host carries no press, so the release that
+        // ends a cancelled capture would be a click that the person never made.
+        let backend = horizon_core::browser::RemoteHostBackend::new("browser-vm", None).expect("one SSH name");
+        let mut remote = BrowserPanelState::start_remote_host(
+            "panel-cancelled-capture",
+            &horizon_core::browser::BrowserConfig::default(),
+            None,
+            &backend,
+        );
+        assert!(
+            !remote.carries_pointer_button_state(),
+            "a panel of a browser host holds no button state"
+        );
+        let mut state = BrowserUiState::default();
+        state.captured_clicks[button_index(BrowserButton::Left)] = Some(BrowserPointerClick {
+            button: BrowserButton::Left,
+            position: egui::Pos2::ZERO,
+            time: 0.0,
+            count: 1,
+        });
+        state.last_mouse = Some(egui::Pos2::ZERO);
+        // No body rect and no frame size is the state that the refused click
+        // of this path aimed at (0, 0) with.
+        cancel_pointer_capture(&remote, &mut state, None, None);
+        assert!(
+            state.captured_clicks.iter().all(Option::is_none),
+            "the capture ends, so no later release carries it"
+        );
+        assert_eq!(
+            state.last_mouse, None,
+            "the panel tracks the pointer again from scratch"
+        );
+        remote.stop();
+
+        let local = BrowserPanelState::inert();
+        assert!(
+            local.carries_pointer_button_state(),
+            "a local engine keeps a button down until its release"
+        );
     }
 
     #[test]

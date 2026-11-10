@@ -17,7 +17,7 @@ mod remote_panel;
 pub use remote_panel::RemoteFailure;
 mod remote_host;
 pub use remote_host::{
-    KEPT_HOST_NOTE, PANEL_ACTOR, POINTER_NOTE, RemoteHostBackend, RemoteHostFailure, RemoteHostRefusal,
+    HOST_INPUT_NOTE, KEPT_HOST_NOTE, PANEL_ACTOR, RemoteHostBackend, RemoteHostFailure, RemoteHostRefusal,
 };
 #[cfg(feature = "cloud-workspaces")]
 mod cloud;

@@ -237,6 +237,7 @@ impl Driver {
                 "selector waits are observed from the driver loop",
             )),
             BrowserControlAction::Click { target, count } => self.semantic_click(target, *count, event_tx),
+            BrowserControlAction::ClickPoint { x, y, count } => self.semantic_click_at(*x, *y, *count, event_tx),
             BrowserControlAction::Fill { target, value } => self.semantic_fill(target, value, event_tx),
             BrowserControlAction::Press { key, modifiers, count } => {
                 self.semantic_press(*key, *modifiers, *count, event_tx)
@@ -390,6 +391,24 @@ impl Driver {
             result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
             return Ok(BrowserControlValue::Accepted);
         }
+        self.perform_click(x, y, count, event_tx)
+            .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+        Ok(BrowserControlValue::Accepted)
+    }
+
+    /// Click one point of the page. A point outside the viewport that the
+    /// panel draws is refused, so no caller aims at the chrome of the browser
+    /// or at another panel.
+    fn semantic_click_at(
+        &mut self,
+        x: f64,
+        y: f64,
+        count: u32,
+        event_tx: &BrowserEventSender,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let page = self.panel_slot.latest().map(|frame| (frame.width, frame.height));
+        crate::pointer::check_point(page, x, y)?;
+        self.capture_teach_fingerprint(Some((x, y)))?;
         self.perform_click(x, y, count, event_tx)
             .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         Ok(BrowserControlValue::Accepted)
