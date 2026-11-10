@@ -181,15 +181,6 @@ class WorkflowShardTests(unittest.TestCase):
         # not install it cannot run it.
         self.assertIn("nextest run", SCRIPT.read_text())
 
-    def test_the_linux_libs_shard_keeps_its_loopback_ssh_transport(self):
-        rust = jobs_of_workflow()["rust-test"]
-        condition = "!env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs'"
-        for step in ["bash scripts/install-ci-ubuntu-dependencies.sh openssh-server\n",
-                     "bash scripts/ci-ssh-transport.sh\n"]:
-            with self.subTest(step=step.split()[-1]):
-                start = rust.index(step)
-                self.assertIn(condition, rust[start - rust[:start].rfind("      - "):start])
-
     def test_only_the_libs_shard_publishes_its_durations_on_main(self):
         rust = jobs_of_workflow()["rust-test"]
         self.assertIn(

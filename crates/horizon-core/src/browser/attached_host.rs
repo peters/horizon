@@ -120,6 +120,9 @@ enum AttachOutcome {
 /// Read the endpoint of the browser of `host`, reuse that browser through a new
 /// forward, and start it when it is gone.
 fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool) -> AttachOutcome {
+    if stop.load(Ordering::Acquire) {
+        return AttachOutcome::Cancelled;
+    }
     let target = host.ssh_target();
     let endpoint_text = match ssh.run_remote(target, &remote_port_command(host.profile()), PORT_READ_DEADLINE) {
         Ok(text) => text,

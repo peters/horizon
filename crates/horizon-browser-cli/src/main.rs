@@ -43,9 +43,8 @@ USAGE:
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
     horizon-browser mcp --standalone --config <HOST-FILE>
-    horizon-browser mcp --connect --inline-screenshots [--remote <SSH-TARGET> [--profile <NAME>]]
+    horizon-browser mcp --connect --inline-screenshots
     horizon-browser mcp --stop [PANEL-ID]
-    horizon-browser host --config <HOST-FILE> [--visible]
 
 COMMANDS:
     orientation Rotate a remote device through browser_orientation; reports measured acknowledgement.
@@ -65,18 +64,9 @@ COMMANDS:
            names a host file of remote targets and credential files; the
            standalone host then serves only those targets and releases their
            sessions when MCP stdin closes. --inline-screenshots (--connect
-           only) also returns the PNG of each browser_screenshot of a profile
-           host as an image block, for a client on another computer than the
-           host. The screenshots of a Horizon host stay a path. --remote
-           relays the same contract over `ssh -T <SSH-TARGET>` to the profile
-           host of another machine, stages the files of set_files there, and
-           returns a bounded video or network capture inline. --profile names
-           the profile that a browser_create without a target opens in.
-    host   Keep the named persistent profiles of a host file (browser.profiles)
-           for `mcp --connect` clients until an interrupt or a termination
-           signal. A client names a profile as the browser_create target; the
-           pages of one profile share its cookies, and each client sees only
-           its own pages. --visible shows each page as a window on the display.
+           only) also returns the PNG of each browser_screenshot as an image
+           block, for a client that a person reaches over a stream of its own.
+           The screenshots of a Horizon host stay a path.
 
 OPTIONS:
     --backend <BACKEND>   Select a backend; prompt/MCP jobs default to auto.
@@ -109,14 +99,9 @@ enum Command {
         options: StandaloneOptions,
         config: Option<PathBuf>,
         inline_screenshots: bool,
-        remote: Option<RemoteBridge>,
     },
     Stop {
         panel_id: Option<String>,
-    },
-    Host {
-        config: PathBuf,
-        visible: bool,
     },
     Help,
     Version,
@@ -145,19 +130,8 @@ async fn main() -> ExitCode {
             options,
             config,
             inline_screenshots,
-            remote,
-        }) => {
-            serve_mcp(
-                standalone,
-                options,
-                config.as_deref(),
-                inline_screenshots,
-                remote.as_ref(),
-            )
-            .await
-        }
+        }) => serve_mcp(standalone, options, config.as_deref(), inline_screenshots).await,
         Ok(Command::Stop { panel_id }) => stop_standalone(panel_id.as_deref()),
-        Ok(Command::Host { config, visible }) => serve_profile_host(&config, visible).await,
         Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
         Ok(Command::Resume {
             job_id,
@@ -216,14 +190,9 @@ async fn serve_mcp(
     options: StandaloneOptions,
     config: Option<&Path>,
     inline_screenshots: bool,
-    remote: Option<&RemoteBridge>,
 ) -> ExitCode {
     horizon_browser_cli::standalone::prune_dead_hosts();
-    let result = if let Some(remote) = remote {
-        // The bridge owns this process's standard streams until the client or
-        // the remote server stops, so it runs without a browser of this machine.
-        horizon_browser_mcp::remote::serve(&remote.target, remote.profile.as_deref()).map_err(|error| error.to_string())
-    } else if let Some(config) = config {
+    let result = if let Some(config) = config {
         horizon_browser_cli::standalone::remote::serve(config)
             .await
             .map_err(|error| error.to_string())
@@ -244,16 +213,6 @@ async fn serve_mcp(
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "Horizon browser MCP server stopped with an error");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-async fn serve_profile_host(config: &Path, visible: bool) -> ExitCode {
-    match horizon_browser_cli::standalone::profile::serve(config, visible).await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("error: {error}");
             ExitCode::FAILURE
         }
     }
@@ -701,7 +660,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Some("-h" | "--help") => no_more(args, Command::Help),
         Some("-V" | "--version") => no_more(args, Command::Version),
         Some("mcp") => parse_mcp(args),
-        Some("host") => parse_host(args),
         Some("do") => parse_do(args),
         Some("orientation") => orientation::Options::parse(args).map(Command::Orientation),
         Some("run") => parse_run(args),
@@ -746,13 +704,6 @@ fn parse_job(prompt: String, mut args: impl Iterator<Item = OsString>) -> Result
     }))
 }
 
-/// The SSH target of a profile host that this process relays to, and the
-/// profile that a `browser_create` without a target opens in.
-struct RemoteBridge {
-    target: String,
-    profile: Option<String>,
-}
-
 /// The flags of one `mcp` command, before their combinations are checked.
 #[derive(Default)]
 struct McpFlags {
@@ -766,8 +717,6 @@ struct McpFlags {
     stop: bool,
     stop_panel: Option<String>,
     inline_screenshots: bool,
-    remote: Option<String>,
-    profile: Option<String>,
 }
 
 fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
@@ -779,8 +728,6 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             || flags.visible
             || flags.config.is_some()
             || flags.inline_screenshots
-            || flags.remote.is_some()
-            || flags.profile.is_some()
         {
             return Err("--stop cannot be combined with other MCP mode flags".to_string());
         }
@@ -788,13 +735,6 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             panel_id: flags.stop_panel,
         });
     }
-    let remote = remote_bridge(
-        flags.remote,
-        flags.profile.as_deref(),
-        flags.standalone,
-        flags.backend_seen || flags.visible || flags.keep_alive,
-        flags.config.is_some(),
-    )?;
     let local_browser_flags = flags.backend_seen || flags.visible || flags.keep_alive;
     if !flags.standalone && (local_browser_flags || flags.config.is_some()) {
         return Err("--backend, --visible, --keep-alive, and --config require standalone MCP mode".to_string());
@@ -823,7 +763,6 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
         },
         config,
         inline_screenshots: flags.inline_screenshots,
-        remote,
     })
 }
 
@@ -877,14 +816,6 @@ fn parse_mcp_flags(args: impl Iterator<Item = OsString>) -> Result<McpFlags, Str
                 ));
             }
             Some("--config") => return Err("--config may be specified only once".to_string()),
-            Some("--remote") if flags.remote.is_none() => {
-                flags.remote = Some(next_value(&mut args, "--remote requires an SSH target")?);
-            }
-            Some("--remote") => return Err("--remote may be specified only once".to_string()),
-            Some("--profile") if flags.profile.is_none() => {
-                flags.profile = Some(next_value(&mut args, "--profile requires a profile name")?);
-            }
-            Some("--profile") => return Err("--profile may be specified only once".to_string()),
             Some(argument) => return Err(format!("unexpected mcp argument `{argument}`")),
             None => return Err("mcp argument is not valid UTF-8".to_string()),
         }
@@ -893,60 +824,6 @@ fn parse_mcp_flags(args: impl Iterator<Item = OsString>) -> Result<McpFlags, Str
 }
 
 /// The remote bridge of an MCP command, or `None` for the local server.
-fn remote_bridge(
-    target: Option<String>,
-    profile: Option<&str>,
-    standalone: bool,
-    local_browser_flags: bool,
-    host_file: bool,
-) -> Result<Option<RemoteBridge>, String> {
-    let profile = match profile.map(str::trim) {
-        Some("") => return Err("--profile takes one profile name".to_string()),
-        profile => profile.map(str::to_string),
-    };
-    if profile.is_some() && target.is_none() {
-        return Err("--profile names a profile of the host that --remote reaches".to_string());
-    }
-    let Some(target) = target else {
-        return Ok(None);
-    };
-    if standalone || local_browser_flags || host_file {
-        return Err("--remote requires --connect and no host file of remote targets".to_string());
-    }
-    if target.trim().is_empty() || target.starts_with('-') {
-        return Err("--remote takes one SSH target without a leading dash".to_string());
-    }
-    Ok(Some(RemoteBridge { target, profile }))
-}
-
-fn next_value(args: &mut impl Iterator<Item = OsString>, message: &str) -> Result<String, String> {
-    args.next()
-        .and_then(|value| value.into_string().ok())
-        .ok_or_else(|| message.to_string())
-}
-
-fn parse_host(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
-    let mut config = None;
-    let mut visible = false;
-    while let Some(argument) = args.next() {
-        match argument.to_str() {
-            Some("--config") if config.is_none() => {
-                config = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| "--config requires a host file path".to_string())?,
-                ));
-            }
-            Some("--config") => return Err("--config may be specified only once".to_string()),
-            Some("--visible") if !visible => visible = true,
-            Some("--visible") => return Err("--visible may be specified only once".to_string()),
-            Some(argument) => return Err(format!("unexpected host argument `{argument}`")),
-            None => return Err("host argument is not valid UTF-8".to_string()),
-        }
-    }
-    let config = config.ok_or_else(|| "host requires --config <HOST-FILE>".to_string())?;
-    Ok(Command::Host { config, visible })
-}
-
 fn parse_backend(value: Option<&OsString>) -> Result<Option<BackendKind>, String> {
     match value.and_then(|value| value.to_str()) {
         Some("auto") => Ok(None),
@@ -1231,86 +1108,12 @@ mod tests {
     }
 
     #[test]
-    fn the_remote_bridge_takes_one_ssh_target_and_one_optional_profile() {
-        let Command::Mcp { remote, .. } =
-            parse_args(["mcp", "--connect", "--remote", "browser-vm"].map(OsString::from)).expect("remote MCP")
-        else {
-            panic!("expected MCP command");
-        };
-        let remote = remote.expect("a remote bridge");
-        assert_eq!(remote.target, "browser-vm");
-        assert_eq!(remote.profile, None, "a bridge without a profile rewrites no create");
-
-        let Command::Mcp { remote, .. } = parse_args(
-            [
-                "mcp",
-                "--connect",
-                "--inline-screenshots",
-                "--remote",
-                "peters@10.0.0.5",
-                "--profile",
-                "mail",
-            ]
-            .map(OsString::from),
-        )
-        .expect("remote MCP over an address with a profile") else {
-            panic!("expected MCP command");
-        };
-        let remote = remote.expect("a remote bridge");
-        assert_eq!(remote.target, "peters@10.0.0.5");
-        assert_eq!(remote.profile.as_deref(), Some("mail"));
-
+    fn the_browser_host_of_an_agent_is_no_argument_of_this_cli() {
         for refused in [
-            &["mcp", "--connect", "--profile", "mail"][..],
-            &["mcp", "--connect", "--remote", "browser-vm", "--profile"],
-            &[
-                "mcp",
-                "--connect",
-                "--remote",
-                "browser-vm",
-                "--profile",
-                "mail",
-                "--profile",
-                "chat",
-            ],
-            &["mcp", "--connect", "--remote", "browser-vm", "--profile", "  "],
+            &["mcp", "--connect", "--remote", "browser-vm"][..],
+            &["mcp", "--connect", "--profile", "mail"],
             &["mcp", "--connect", "--remote"],
-            &["mcp", "--connect", "--remote", "a", "--remote", "b"],
-            &["mcp", "--connect", "--remote", "-oProxyCommand=evil"],
-            &["mcp", "--connect", "--remote", "  "],
-            &["mcp", "--standalone", "--remote", "browser-vm"],
-            &["mcp", "--connect", "--remote", "browser-vm", "--config", "/h.yaml"],
-            &["mcp", "--connect", "--remote", "browser-vm", "--visible"],
-            &["mcp", "--stop", "--remote", "browser-vm"],
-        ] {
-            assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
-        }
-    }
-
-    #[test]
-    fn the_profile_host_takes_one_host_file_and_an_optional_visible_flag() {
-        let Command::Host { config, visible } =
-            parse_args(["host", "--config", "/profiles/host.yaml", "--visible"].map(OsString::from))
-                .expect("profile host")
-        else {
-            panic!("expected host command");
-        };
-        assert_eq!(config, Path::new("/profiles/host.yaml"));
-        assert!(visible);
-        let Command::Host { visible, .. } =
-            parse_args(["host", "--config", "/h.yaml"].map(OsString::from)).expect("headless profile host")
-        else {
-            panic!("expected host command");
-        };
-        assert!(!visible);
-        for refused in [
-            &["host"][..],
-            &["host", "--visible"],
-            &["host", "--config"],
-            &["host", "--config", "/h.yaml", "--config", "/i.yaml"],
-            &["host", "--config", "/h.yaml", "--visible", "--visible"],
-            &["host", "--config", "/h.yaml", "--backend", "chromium"],
-            &["host", "--config", "/h.yaml", "--keep-alive"],
+            &["host", "--config", "/profiles/host.yaml"],
         ] {
             assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
         }

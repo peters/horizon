@@ -6,10 +6,10 @@ fn registration_preserves_settings_and_is_idempotent() {
     let path = home.path().join("config.toml");
     let original = "# User settings\n[cli]\nuse_leader = true\n[permissions]\nmode = 'default'\n[mcp_servers.other]\ncommand = 'other-server'\n";
     fs::write(&path, original).expect("settings");
-    assert!(register(home.path(), None).expect("register"));
+    assert!(register(home.path()).expect("register"));
     let registered = fs::read_to_string(&path).expect("registered settings");
     assert!(registered.starts_with(original));
-    assert!(!register(home.path(), None).expect("idempotent registration"));
+    assert!(!register(home.path()).expect("idempotent registration"));
     assert_eq!(fs::read_to_string(&path).expect("settings"), registered);
     let document = parse(&registered).expect("valid TOML");
     assert_eq!(
@@ -29,7 +29,7 @@ fn registration_preserves_unmanaged_collisions_and_invalid_configuration() {
         let home = tempfile::tempdir().expect("home");
         let path = home.path().join("config.toml");
         fs::write(&path, original).expect("settings");
-        assert!(register(home.path(), None).is_err());
+        assert!(register(home.path()).is_err());
         assert_eq!(fs::read_to_string(path).expect("preserved"), original);
     }
 }
@@ -42,7 +42,7 @@ fn registration_preserves_permissions_and_refuses_symlinks() {
     let path = home.path().join("config.toml");
     fs::write(&path, "# settings\n").expect("settings");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("permissions");
-    register(home.path(), None).expect("register");
+    register(home.path()).expect("register");
     assert_eq!(
         fs::metadata(&path).expect("metadata").permissions().mode() & 0o777,
         0o640
@@ -51,7 +51,7 @@ fn registration_preserves_permissions_and_refuses_symlinks() {
     let target = home.path().join("original.toml");
     fs::write(&target, "# original\n").expect("target");
     symlink(&target, &path).expect("symlink");
-    assert!(register(home.path(), None).is_err());
+    assert!(register(home.path()).is_err());
     assert_eq!(fs::read_to_string(target).expect("target unchanged"), "# original\n");
 }
 
@@ -60,11 +60,11 @@ fn registration_respects_the_providers_config_lock() {
     let home = tempfile::tempdir().expect("home");
     let lock = fs::File::create(home.path().join(".config-init.lock")).expect("provider lock");
     lock.lock().expect("hold provider lock");
-    let error = register(home.path(), None).expect_err("busy provider config");
+    let error = register(home.path()).expect_err("busy provider config");
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
     assert!(!home.path().join("config.toml").exists());
     drop(lock);
-    assert!(register(home.path(), None).expect("register after provider finishes"));
+    assert!(register(home.path()).expect("register after provider finishes"));
 }
 
 #[test]
@@ -77,13 +77,9 @@ enabled=true
 command='${HORIZON_BROWSER_MCP_EXECUTABLE:-}'
 env={HORIZON_BROWSER_HOST_INSTANCE='${HORIZON_BROWSER_HOST_INSTANCE:-}',HORIZON_BROWSER_ACTOR='${HORIZON_BROWSER_ACTOR:-}'}
 ";
-    assert!(
-        append_registration(normalized, None)
-            .expect("equivalent table")
-            .is_none()
-    );
+    assert!(append_registration(normalized).expect("equivalent table").is_none());
     let altered = normalized.replace("tool_timeout_sec=3660", "tool_timeout_sec=60");
-    assert!(append_registration(&altered, None).is_err());
+    assert!(append_registration(&altered).is_err());
 }
 
 #[test]
@@ -102,7 +98,7 @@ fn rejected_registration_never_leases_or_removes_existing_browser_skill() {
         fs::create_dir_all(&dir).expect("skill directory");
         fs::write(dir.join("SKILL.md"), skill).expect("skill");
         fs::write(home.path().join("config.toml"), settings).expect("config");
-        let mut roots = bind_browser_skill(home.path(), std::ffi::OsStr::new("host"), None).unwrap_or_default();
+        let mut roots = bind_browser_skill(home.path(), std::ffi::OsStr::new("host")).unwrap_or_default();
         assert!(roots.is_empty());
         release_skill_roots(&mut roots);
         assert_eq!(
@@ -121,9 +117,9 @@ fn browser_skill_survives_until_last_registered_host_exits() {
     use super::super::{BROWSER_SKILL_FILES, release_skill_roots, sync_plugin_files};
     let home = tempfile::tempdir().expect("home");
     let dir = home.path().join("skills/horizon-browser");
-    let mut first = bind_browser_skill(home.path(), std::ffi::OsStr::new("first"), None).expect("first lease");
+    let mut first = bind_browser_skill(home.path(), std::ffi::OsStr::new("first")).expect("first lease");
     sync_plugin_files(&dir, BROWSER_SKILL_FILES).expect("install");
-    let mut second = bind_browser_skill(home.path(), std::ffi::OsStr::new("second"), None).expect("second lease");
+    let mut second = bind_browser_skill(home.path(), std::ffi::OsStr::new("second")).expect("second lease");
     assert_eq!(first.len(), 1);
     assert_eq!(second.len(), 1);
     release_skill_roots(&mut first);
@@ -139,7 +135,7 @@ fn browser_skill_with_extra_user_content_is_preserved() {
     let dir = home.path().join("skills/horizon-browser");
     sync_plugin_files(&dir, BROWSER_SKILL_FILES).expect("install");
     fs::write(dir.join("notes.txt"), "user notes").expect("notes");
-    assert!(bind_browser_skill(home.path(), std::ffi::OsStr::new("host"), None).is_err());
+    assert!(bind_browser_skill(home.path(), std::ffi::OsStr::new("host")).is_err());
     assert_eq!(
         fs::read_to_string(dir.join("notes.txt")).expect("notes preserved"),
         "user notes"
@@ -169,7 +165,7 @@ fn concurrent_startup_waits_for_complete_skill_installation() {
                 dir.clone(),
                 validate_browser_skill,
                 || {
-                    register(home.path(), None)?;
+                    register(home.path())?;
                     fs::create_dir_all(dir)?;
                     fs::write(dir.join("SKILL.md"), "partial")?;
                     partial_tx.send(()).expect("partial signal");
@@ -182,7 +178,7 @@ fn concurrent_startup_waits_for_complete_skill_installation() {
         });
         partial_rx.recv().expect("partial installation");
         let second = scope.spawn(|| {
-            let result = bind_browser_skill(home.path(), std::ffi::OsStr::new("second"), None);
+            let result = bind_browser_skill(home.path(), std::ffi::OsStr::new("second"));
             second_tx.send(()).expect("second finished");
             result
         });
@@ -204,7 +200,7 @@ fn cleanup_preserves_skill_content_added_or_replaced_after_startup() {
     for replace in [false, true] {
         let home = tempfile::tempdir().expect("home");
         let dir = home.path().join("skills/horizon-browser");
-        let mut leases = bind_browser_skill(home.path(), std::ffi::OsStr::new("host"), None).expect("lease");
+        let mut leases = bind_browser_skill(home.path(), std::ffi::OsStr::new("host")).expect("lease");
         let path = dir.join(if replace { "SKILL.md" } else { "notes.txt" });
         fs::write(&path, "user content").expect("user edit");
         release_skill_roots(&mut leases);
@@ -221,7 +217,7 @@ fn registration_extends_inline_server_tables_without_changing_existing_settings(
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("config.toml");
     fs::write(&path, original).expect("original");
-    assert!(register(home.path(), None).expect("register inline"));
+    assert!(register(home.path()).expect("register inline"));
     let text = fs::read_to_string(&path).expect("registered");
     let document = parse(&text).expect("valid config");
     let prior = parse(original).expect("prior config");
@@ -232,27 +228,19 @@ fn registration_extends_inline_server_tables_without_changing_existing_settings(
     assert!(equivalent(&document["cli"], &prior["cli"]));
     assert!(text.contains("# custom settings"));
     assert!(text.contains("# keep comment"));
-    assert!(!register(home.path(), None).expect("idempotent"));
+    assert!(!register(home.path()).expect("idempotent"));
     assert_eq!(fs::read_to_string(path).expect("unchanged second pass"), text);
 }
 
 #[test]
-fn a_named_browser_host_keeps_the_local_arguments_of_the_grok_registration() {
-    let local = registration(None);
-    assert!(local.contains("args = [\"--browser-mcp\"]"), "{local}");
-    assert!(!local.contains("--remote"), "the local registration names no host");
-
-    let browser_host = horizon_core::BrowserHostConfig {
-        ssh_target: Some("browser-vm".to_string()),
-        profile: Some("mail".to_string()),
-    };
-    let named = registration(Some(&browser_host));
-    assert_eq!(
-        local, named,
-        "a panel that follows the browser host is the ordinary browser panel, so the agent serves every panel of this Horizon"
+fn the_registration_names_the_local_server_of_this_horizon() {
+    let registration = registration();
+    assert!(registration.contains("args = [\"--browser-mcp\"]"), "{registration}");
+    assert!(
+        !registration.contains("--remote") && !registration.contains("--profile"),
+        "the registration names no host: {registration}"
     );
-    assert!(!named.contains("--remote") && !named.contains("--profile"), "{named}");
-    let document = parse(&named).expect("valid TOML");
+    let document = parse(&registration).expect("valid TOML");
     assert_eq!(
         document["mcp_servers"]["horizon-browser"]["tool_timeout_sec"].as_integer(),
         Some(3660),
@@ -260,7 +248,7 @@ fn a_named_browser_host_keeps_the_local_arguments_of_the_grok_registration() {
     );
 
     let home = tempfile::tempdir().expect("home");
-    assert!(register(home.path(), Some(&browser_host)).expect("register"));
+    assert!(register(home.path()).expect("register"));
     let text = fs::read_to_string(home.path().join("config.toml")).expect("registered");
     assert!(text.contains("args = [\"--browser-mcp\"]"), "{text}");
     assert!(!text.contains("--remote"), "{text}");
@@ -276,27 +264,30 @@ fn args_of(text: &str) -> Vec<String> {
 }
 
 #[test]
-fn an_entry_of_the_local_server_is_rewritten_for_a_named_host_and_keeps_its_lease() {
+fn an_entry_of_an_earlier_install_that_named_a_host_is_rewritten_and_keeps_its_lease() {
     use super::super::release_skill_roots;
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("config.toml");
     fs::write(&path, "# User settings\n[cli]\nuse_leader = true\n").expect("settings");
-    let mut local = bind_browser_skill(home.path(), std::ffi::OsStr::new("host"), None).expect("local registration");
+    let mut local = bind_browser_skill(home.path(), std::ffi::OsStr::new("host")).expect("local registration");
     assert_eq!(local.len(), 1);
     release_skill_roots(&mut local);
     assert_eq!(
         args_of(&fs::read_to_string(&path).expect("registered")),
         ["--browser-mcp"],
-        "a start without a host writes the entry of the local server"
+        "a start writes the entry of the local server"
     );
 
-    let browser_host = horizon_core::BrowserHostConfig {
-        ssh_target: Some("browser-vm".to_string()),
-        profile: Some("mail".to_string()),
-    };
-    let mut remote = bind_browser_skill(home.path(), std::ffi::OsStr::new("host"), Some(&browser_host))
-        .expect("the entry of a named host is the entry of the local server");
+    // An install before the tunnel named the host of the entry, so the start
+    // must update the args of that table instead of refusing it.
+    let earlier = fs::read_to_string(&path).expect("registered").replace(
+        "args = [\"--browser-mcp\"]",
+        "args = [\"--browser-mcp\", \"--remote\", \"browser-vm\", \"--profile\", \"mail\"]",
+    );
+    fs::write(&path, earlier).expect("earlier entry");
+    let mut remote = bind_browser_skill(home.path(), std::ffi::OsStr::new("host"))
+        .expect("the entry of an earlier install becomes the entry of the local server");
     assert_eq!(remote.len(), 1, "the update takes the skill lease");
     release_skill_roots(&mut remote);
     let text = fs::read_to_string(&path).expect("registered");
@@ -323,28 +314,24 @@ fn an_entry_of_the_local_server_is_rewritten_for_a_named_host_and_keeps_its_leas
     );
 
     assert!(
-        !register(home.path(), None).expect("a start without a host writes the same entry"),
-        "the entry of a named host is already the entry of the local server"
+        !register(home.path()).expect("a second start writes the same entry"),
+        "the rewritten entry is the entry of the local server"
     );
 }
 
 #[test]
 fn an_absent_server_table_is_created_as_before() {
     let home = tempfile::tempdir().expect("home");
-    assert!(register(home.path(), None).expect("register"));
+    assert!(register(home.path()).expect("register"));
     assert_eq!(
         fs::read_to_string(home.path().join("config.toml")).expect("registered"),
-        format!("\n{}", registration(None)),
+        format!("\n{}", registration()),
         "an absent entry keeps the text that Horizon wrote before this setting"
     );
 }
 
 #[test]
 fn a_server_table_that_horizon_did_not_write_is_still_refused() {
-    let browser_host = horizon_core::BrowserHostConfig {
-        ssh_target: Some("browser-vm".to_string()),
-        profile: Some("mail".to_string()),
-    };
     for original in [
         // Horizon's keys, but an argument list that Horizon never writes.
         r#"[mcp_servers.horizon-browser]
@@ -383,7 +370,7 @@ HORIZON_BROWSER_HOST_INSTANCE = "${HORIZON_BROWSER_HOST_INSTANCE:-}"
         let home = tempfile::tempdir().expect("home");
         let path = home.path().join("config.toml");
         fs::write(&path, original).expect("settings");
-        let error = register(home.path(), Some(&browser_host)).expect_err("a table that is not Horizon's");
+        let error = register(home.path()).expect_err("a table that is not Horizon's");
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{original}");
         assert!(
             error.to_string().contains("different horizon-browser server"),
@@ -401,13 +388,13 @@ HORIZON_BROWSER_HOST_INSTANCE = "${HORIZON_BROWSER_HOST_INSTANCE:-}"
 fn interrupted_skill_staging_does_not_block_a_later_host() {
     use super::super::release_skill_roots;
     let home = tempfile::tempdir().expect("home");
-    register(home.path(), None).expect("registration before interrupted install");
+    register(home.path()).expect("registration before interrupted install");
     let staging = home.path().join("skills/.horizon-browser-interrupted");
     fs::create_dir_all(&staging).expect("interrupted staging");
     fs::write(staging.join("partial.tmp"), "partial").expect("incomplete write");
     let dir = home.path().join("skills/horizon-browser");
     assert!(!dir.exists());
-    let mut leases = bind_browser_skill(home.path(), std::ffi::OsStr::new("retry"), None).expect("recover install");
+    let mut leases = bind_browser_skill(home.path(), std::ffi::OsStr::new("retry")).expect("recover install");
     assert_eq!(leases.len(), 1);
     validate_browser_skill(&dir).expect("complete skill");
     release_skill_roots(&mut leases);

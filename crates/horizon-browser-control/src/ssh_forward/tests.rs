@@ -7,6 +7,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use super::remote_browser::{REMOTE_BROWSER_INSTALLATIONS, REMOTE_BROWSER_NAMES};
+use super::transport::{failure_reason, quote, ssh_command};
 use super::{
     Ssh, SshForward, SshForwardError, accepts_connection, forward_command, remote_browser_command, remote_port_command,
     run_remote_with, valid_profile,
@@ -361,4 +362,61 @@ fn a_command_on_the_remote_machine_that_never_answers_ends_on_its_deadline() {
         matches!(&error, SshForwardError::RemoteNoAnswer { target, .. } if target == "browser-vm"),
         "{error}"
     );
+}
+
+#[test]
+fn every_ssh_of_a_connect_is_bounded_and_can_not_ask_a_question() {
+    let command = ssh_command("ssh", "browser-vm", "cat \"$HOME/x\"");
+    let args = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    for bounded in [
+        "BatchMode=yes",
+        "ConnectTimeout=5",
+        "ServerAliveInterval=5",
+        "ServerAliveCountMax=2",
+    ] {
+        assert!(
+            args.iter().any(|argument| argument == bounded),
+            "{bounded} is missing: {args:?}"
+        );
+    }
+    assert!(
+        args.first().is_some_and(|first| first == "-T"),
+        "no controlling terminal: {args:?}"
+    );
+    assert!(
+        args.iter().any(|argument| argument == "LogLevel=ERROR"),
+        "a fatal line of ssh reaches the reason: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|argument| argument == "-q" || argument == "-Tq"),
+        "the quiet flag drops the fatal line of ssh and leaves an empty reason: {args:?}"
+    );
+    assert_eq!(
+        args.iter().rev().take(2).rev().collect::<Vec<_>>(),
+        ["browser-vm", "cat \"$HOME/x\""],
+        "the target and the remote command stay the last two words: {args:?}"
+    );
+}
+
+#[test]
+fn a_failed_call_that_wrote_nothing_carries_its_exit_status() {
+    assert_eq!(
+        failure_reason(Some(255), ""),
+        "ssh exited with status 255 and wrote no reason"
+    );
+    assert_eq!(failure_reason(None, ""), "ssh ended on a signal and wrote no reason");
+    assert_eq!(
+        failure_reason(Some(255), "Host key verification failed."),
+        "Host key verification failed."
+    );
+}
+
+#[test]
+fn a_value_of_that_machine_stays_one_word_of_the_remote_shell() {
+    assert_eq!(quote("/srv/browser state"), "'/srv/browser state'");
+    assert_eq!(quote("/tmp/a'b"), "'/tmp/a'\\''b'");
+    assert_eq!(quote("a;rm -rf /"), "'a;rm -rf /'");
 }

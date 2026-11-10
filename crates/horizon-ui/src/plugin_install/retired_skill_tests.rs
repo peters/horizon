@@ -63,7 +63,6 @@ fn install_run_removes_retired_mcp_skills_from_horizon_owned_directories() {
         None,
         AgentMcpEntry {
             command: Path::new("/opt/horizon"),
-            browser_host: None,
         },
         None,
     )

@@ -9,8 +9,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::transport::ssh_program;
 use super::{READY_DEADLINE, REMOTE_OUTPUT_LIMIT, SshForward, SshForwardError, accepts_connection, run_remote_with};
-use crate::remote_host::ssh_program;
 
 /// The `ssh` of this computer, or the stand-in program of a test.
 #[derive(Clone)]

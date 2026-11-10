@@ -177,7 +177,6 @@ class WorkflowTests(unittest.TestCase):
         prefix = "bash scripts/install-ci-ubuntu-dependencies.sh "
         expected = {
             "device": [["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth", "bubblewrap"]],
-            "rust-test": [["openssh-server"]],
         }
         sites = sum(len(commands) for commands in expected.values())
         self.assertEqual(workflow.count(prefix), sites)
@@ -189,14 +188,7 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(job=name):
                 commands = re.findall(r"run: " + re.escape(prefix) + r"([^\n]+)", jobs[name])
                 self.assertEqual([shlex.split(command) for command in commands], packages)
-                if name == "rust-test":
-                    self.assertIn(
-                        "- if: ${{ !env.LOCALCI && matrix.os == 'ubuntu-latest' && matrix.shard == 'libs' }}\n"
-                        "        run: " + prefix + "openssh-server",
-                        jobs[name],
-                    )
-                else:
-                    self.assertIn("runs-on: ubuntu-latest", jobs[name])
+                self.assertIn("runs-on: ubuntu-latest", jobs[name])
         self.assertIn(
             "python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v", jobs["repo-checks"]
         )

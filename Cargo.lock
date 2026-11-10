@@ -2012,7 +2012,6 @@ dependencies = [
  "horizon-browser-control",
  "horizon-browser-mcp",
  "horizon-browser-protocol",
- "png",
  "rmcp",
  "serde",
  "serde_json",

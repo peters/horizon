@@ -558,7 +558,7 @@ fn resolve_agent_launch_command(
     let uses_default_command = command.is_none();
     let program = command.unwrap_or_else(|| definition.default_command.to_string());
     let mut launch_args = match definition.integration {
-        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(crate::browser_host()),
+        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
         AgentIntegrationKind::GrokMcp
             if uses_default_command
                 && !args
@@ -780,8 +780,7 @@ pub fn browser_actor(local_id: &str) -> String {
 }
 
 /// The browser MCP entry of a Codex panel, as the `-c` arguments of `codex`.
-/// `browser_host` is the host that the settings name, when there is one.
-fn horizon_codex_mcp_args(browser_host: Option<&crate::BrowserHostConfig>) -> Vec<String> {
+fn horizon_codex_mcp_args() -> Vec<String> {
     let Some(command) = crate::browser_mcp_executable()
         .and_then(|path| path.into_os_string().into_string().ok())
         .and_then(|path| serde_json::to_string(&path).ok())
@@ -789,8 +788,8 @@ fn horizon_codex_mcp_args(browser_host: Option<&crate::BrowserHostConfig>) -> Ve
         tracing::warn!("could not resolve Horizon executable for browser MCP integration");
         return Vec::new();
     };
-    let server_args = serde_json::to_string(&crate::browser_mcp_args(browser_host))
-        .unwrap_or_else(|_| "[\"--browser-mcp\"]".to_string());
+    let server_args =
+        serde_json::to_string(&crate::browser_mcp_args()).unwrap_or_else(|_| "[\"--browser-mcp\"]".to_string());
     vec![
         "-c".to_string(),
         format!("mcp_servers.horizon-browser.command={command}"),
@@ -966,31 +965,16 @@ mod tests {
     }
 
     #[test]
-    fn a_named_browser_host_reaches_the_codex_entry_and_an_unnamed_keeps_the_local_server() {
-        let local = horizon_codex_mcp_args(None).join(" ");
+    fn the_codex_entry_of_an_agent_names_the_local_server() {
+        let entry = horizon_codex_mcp_args().join(" ");
         assert!(
-            local.contains("mcp_servers.horizon-browser.args=[\"--browser-mcp\"]"),
-            "{local}"
+            entry.contains("mcp_servers.horizon-browser.args=[\"--browser-mcp\"]"),
+            "{entry}"
         );
-        assert!(!local.contains("--remote"), "no host means the local server: {local}");
-        assert_eq!(
-            local,
-            horizon_codex_mcp_args(Some(&crate::BrowserHostConfig::default())).join(" "),
-            "an entry that names no host is the entry of the local server"
-        );
-
-        let browser_host = crate::BrowserHostConfig {
-            ssh_target: Some("browser-vm".to_string()),
-            profile: Some("mail".to_string()),
-        };
-        let named = horizon_codex_mcp_args(Some(&browser_host)).join(" ");
-        assert_eq!(
-            named, local,
-            "the tools of an agent drive the panels of this Horizon, on whatever machine they run"
-        );
+        assert!(!entry.contains("--remote"), "the entry names no host: {entry}");
         assert!(
-            named.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"),
-            "the entry keeps the handoff timeout: {named}"
+            entry.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"),
+            "the entry keeps the handoff timeout: {entry}"
         );
     }
 
@@ -1340,12 +1324,8 @@ mod tests {
         )
         .expect("a local browser panel");
         let browser = panel.browser().expect("a browser panel");
-        assert!(!browser.is_remote_host(), "a panel without a host stays local");
         assert!(!browser.is_attached(), "a panel without a host runs on this computer");
         assert_eq!(browser.attached_host_target(), None);
-        assert_eq!(browser.remote_host_target(), None);
-        assert_eq!(browser.remote_host_note(), None);
-        assert_eq!(browser.kept_host_note(), None);
         assert_eq!(
             panel.launch_command.as_deref(),
             Some("https://example.test/"),

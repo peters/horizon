@@ -9,7 +9,7 @@
 //! The far side needs `sh`, `cat`, `mkdir`, `nohup` and a Chromium program. No
 //! Horizon program, record file or interactive prompt takes part.
 
-use crate::remote_host::quote;
+use super::transport::quote;
 
 /// The folder of the browser profiles of the remote machine, under its home.
 const REMOTE_PROFILE_ROOT: &str = "\"$HOME/.horizon/browser-profiles/\"";

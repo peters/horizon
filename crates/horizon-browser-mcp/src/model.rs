@@ -112,7 +112,7 @@ pub(crate) struct BrowserPanelAgentState {
 }
 
 impl BrowserPanel {
-    pub(crate) fn from_manifest(value: BrowserManifest, actor: &str, bridged: bool) -> Self {
+    pub(crate) fn from_manifest(value: BrowserManifest, actor: &str) -> Self {
         let now = manifest::now_millis();
         let owner = value.owner.as_ref().map(|owner| owner.name.clone());
         let owned_by_caller = owner.as_deref() == Some(actor);
@@ -156,7 +156,6 @@ impl BrowserPanel {
             capabilities: semantic_capabilities(
                 value.backend,
                 remote,
-                bridged,
                 value.remote_file_upload,
                 value.remote_orientation,
             ),
@@ -1021,7 +1020,6 @@ pub(crate) const fn backend_name(backend: BackendKind) -> &'static str {
 fn semantic_capabilities(
     backend: BackendKind,
     remote: bool,
-    bridged: bool,
     remote_file_upload: bool,
     orientation: Option<horizon_browser::remote::RemoteOrientationState>,
 ) -> Vec<String> {
@@ -1043,10 +1041,7 @@ fn semantic_capabilities(
         "audit",
     ]
     .into_iter()
-    .filter(|capability| {
-        (*capability != "handoff" || !bridged)
-            && (!remote || (*capability != "handoff" && (*capability != "set_files" || remote_file_upload)))
-    })
+    .filter(|capability| !remote || (*capability != "handoff" && (*capability != "set_files" || remote_file_upload)))
     .map(str::to_string)
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver && !remote {
@@ -1169,7 +1164,7 @@ mod tests {
             remote_device: Some("Google Pixel 9, OS 16.0, physical device".to_string()),
             ..BrowserManifest::default()
         };
-        let panel = BrowserPanel::from_manifest(manifest, "agent", false);
+        let panel = BrowserPanel::from_manifest(manifest, "agent");
         assert_eq!(panel.remote_target.as_deref(), Some("android_phone"));
         assert_eq!(panel.protocol, ProtocolKind::WebDriver);
         assert!(!panel.network_capture.supported);
@@ -1193,7 +1188,6 @@ mod tests {
                 ..BrowserManifest::default()
             },
             "agent",
-            false,
         );
         assert!(
             supported
@@ -1210,7 +1204,6 @@ mod tests {
                 ..BrowserManifest::default()
             },
             "agent",
-            false,
         );
         assert_eq!(local.remote_target, None);
         assert_eq!(local.protocol, ProtocolKind::Cdp);
@@ -1226,7 +1219,6 @@ mod tests {
                 ..BrowserManifest::default()
             },
             "agent",
-            false,
         );
         assert!(waiting.passkey_pending);
     }
@@ -1282,33 +1274,27 @@ mod tests {
             horizon_browser::BrowserControlAction::DropFiles { .. }
         ));
         assert_eq!(action.attachment_paths(), Some([path].as_slice()));
+        assert!(semantic_capabilities(BackendKind::ChromiumCdp, false, false, None).contains(&"drop_files".into()));
         assert!(
-            semantic_capabilities(BackendKind::ChromiumCdp, false, false, false, None).contains(&"drop_files".into())
+            !semantic_capabilities(BackendKind::SafariWebDriver, false, false, None).contains(&"drop_files".into())
         );
-        assert!(
-            !semantic_capabilities(BackendKind::SafariWebDriver, false, false, false, None)
-                .contains(&"drop_files".into())
-        );
-        assert!(
-            !semantic_capabilities(BackendKind::FirefoxBidi, true, false, true, None).contains(&"drop_files".into())
-        );
+        assert!(!semantic_capabilities(BackendKind::FirefoxBidi, true, true, None).contains(&"drop_files".into()));
     }
 
     #[test]
     fn a_local_engine_states_the_downloads_it_observes() {
         for backend in [BackendKind::ChromiumCdp, BackendKind::FirefoxBidi] {
             assert!(
-                semantic_capabilities(backend, false, false, false, None).contains(&"downloads".into()),
+                semantic_capabilities(backend, false, false, None).contains(&"downloads".into()),
                 "{backend:?} saves the downloads of its pages"
             );
         }
         assert!(
-            !semantic_capabilities(BackendKind::SafariWebDriver, false, false, false, None)
-                .contains(&"downloads".into()),
+            !semantic_capabilities(BackendKind::SafariWebDriver, false, false, None).contains(&"downloads".into()),
             "Safari's classic driver reports no download"
         );
         assert!(
-            !semantic_capabilities(BackendKind::ChromiumCdp, true, false, false, None).contains(&"downloads".into()),
+            !semantic_capabilities(BackendKind::ChromiumCdp, true, false, None).contains(&"downloads".into()),
             "a remote device writes its files on the provider's machine"
         );
     }

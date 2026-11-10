@@ -138,11 +138,10 @@ impl BrowserHostConfig {
 ///
 /// A browser panel that follows `browser_host` is the ordinary browser panel,
 /// whose Chromium runs on that machine over a tunnel, so the tools of an agent
-/// reach it exactly as they reach a panel of this computer. The entry no longer
-/// names the host, and the argument stays until the bridge to the old host
-/// server is removed.
+/// reach it exactly as they reach a panel of this computer. The entry therefore
+/// names no host.
 #[must_use]
-pub fn browser_mcp_args(_browser_host: Option<&BrowserHostConfig>) -> Vec<String> {
+pub fn browser_mcp_args() -> Vec<String> {
     vec!["--browser-mcp".to_string()]
 }
 
@@ -198,19 +197,11 @@ mod tests {
 
     #[test]
     fn every_entry_of_an_agent_names_the_local_server() {
-        for host in [
-            None,
-            Some(BrowserHostConfig::default()),
-            Some(entry(Some("  "), None)),
-            Some(entry(Some("browser-vm"), None)),
-            Some(entry(Some("browser-vm"), Some("mail"))),
-        ] {
-            assert_eq!(
-                browser_mcp_args(host.as_ref()),
-                vec!["--browser-mcp"],
-                "the tools of an agent drive the panels of this Horizon: {host:?}"
-            );
-        }
+        assert_eq!(
+            browser_mcp_args(),
+            vec!["--browser-mcp"],
+            "the tools of an agent drive the panels of this Horizon"
+        );
     }
 
     #[test]

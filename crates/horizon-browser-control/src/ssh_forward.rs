@@ -20,13 +20,14 @@ use std::time::{Duration, Instant};
 
 mod remote_browser;
 mod ssh;
+mod transport;
 
-pub use super::remote_host::valid_target;
 pub use horizon_browser::valid_profile_name as valid_profile;
 pub use remote_browser::{remote_browser_command, remote_port_command};
 pub use ssh::Ssh;
+pub use transport::valid_target;
 
-use super::remote_host::{
+use self::transport::{
     CONNECT_TIMEOUT_SECONDS, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, failure_reason, run_bounded,
     ssh_command, ssh_program,
 };

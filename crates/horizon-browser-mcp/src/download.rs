@@ -1,9 +1,8 @@
 //! The bytes of one finished download that the caller named, added to the
 //! answer of `browser_downloads`.
 //!
-//! A download is saved on the computer that runs the page. An agent that works
-//! through a profile host of another computer (`horizon-browser mcp --connect
-//! --remote <target>`) cannot open the path of that computer with its own
+//! A download is saved on the computer that runs the page. A client that works
+//! through a stream of its own cannot open the path of that computer with its
 //! read-only tools, so this rewrite adds the bytes of the one file the caller
 //! named. The bound keeps a line of the MCP stream within the same limit that an
 //! inlined capture or screenshot uses.
@@ -20,7 +19,7 @@ use serde_json::Value;
 pub const MAX_INLINE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The structured field that states that the bytes did not cross, with the same
-/// name and meaning as for a withheld capture of the remote bridge.
+/// name and meaning as for a withheld capture.
 const WITHHELD_FIELD: &str = "inline_withheld";
 
 /// Why the bytes of the named download are not in the answer.

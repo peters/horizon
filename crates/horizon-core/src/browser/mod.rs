@@ -19,10 +19,6 @@ mod status;
 pub use status::BrowserStatus;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
-mod remote_host;
-pub use remote_host::{
-    KEPT_HOST_NOTE, PANEL_ACTOR, POINTER_NOTE, RemoteHostBackend, RemoteHostFailure, RemoteHostRefusal,
-};
 pub mod file_chooser;
 pub mod remote_catalog;
 pub mod remote_profile;
@@ -103,9 +99,6 @@ pub struct BrowserPanelState {
     /// The remote session this panel runs (or ran) at; `None` for a local
     /// browser. Carries the resolved authorization for this process only.
     remote: Option<remote_panel::RemoteLifecycle>,
-    /// The browser host of another machine that holds the page of this panel,
-    /// with the channel that reads its frames; `None` for a local browser.
-    remote_host: Option<remote_host::RemoteHostSlot>,
     /// The machine that runs the Chromium of this panel, with the forward that
     /// carries its `DevTools` port; `None` for a browser of this computer.
     attached: Option<attached_host::AttachedHostSlot>,
@@ -144,10 +137,6 @@ impl BrowserPanelState {
     /// its driver is still recovering or waiting to relaunch.
     #[must_use]
     pub fn has_ended(&self) -> bool {
-        // Losing a presentation connection does not end the worker-owned browser.
-        if self.is_remote_host() {
-            return !self.status.is_alive();
-        }
         !self.status.is_alive() && self.session.is_none() && self.pending_relaunch.is_none()
     }
 
@@ -180,7 +169,6 @@ impl BrowserPanelState {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -247,7 +235,6 @@ impl BrowserPanelState {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -268,10 +255,6 @@ impl BrowserPanelState {
     pub fn relaunch(&mut self) {
         if self.is_attached() {
             self.relaunch_attached();
-            return;
-        }
-        if self.is_remote_host() {
-            self.relaunch_remote_host();
             return;
         }
         self.launch_session(self.relaunch_target());
@@ -329,8 +312,6 @@ impl BrowserPanelState {
     pub fn backend_capabilities(&self) -> BackendCapabilities {
         if self.is_remote() {
             BackendCapabilities::remote_session()
-        } else if self.is_remote_host() {
-            self.remote_host_capabilities()
         } else {
             self.config.backend.capabilities()
         }
@@ -345,12 +326,7 @@ impl BrowserPanelState {
     /// backend. The replacement starts only after the old process has been
     /// reaped, so panel switching cannot overlap profile or port ownership.
     pub fn switch_backend(&mut self, backend: BackendKind) {
-        if self.teach.is_some()
-            || self.config.backend == backend
-            || self.is_remote()
-            || self.is_remote_host()
-            || self.is_attached()
-        {
+        if self.teach.is_some() || self.config.backend == backend || self.is_remote() || self.is_attached() {
             // A remote session's browser is fixed by its target, and the engine
             // of a page of a browser host is fixed by the profile of that host.
             return;
@@ -485,19 +461,12 @@ impl BrowserPanelState {
         if self.is_attached() {
             return self.needs_attached_waker();
         }
-        if self.is_remote_host() {
-            return self.needs_remote_host_waker();
-        }
         self.session.as_ref().is_some_and(|session| session.needs_event_waker())
     }
 
     pub fn set_event_waker(&self, callback: BrowserEventWaker) {
         if self.is_attached() {
             self.set_attached_waker(callback);
-            return;
-        }
-        if self.is_remote_host() {
-            self.set_remote_host_waker(callback);
             return;
         }
         if let Some(session) = &self.session {
@@ -520,17 +489,6 @@ impl BrowserPanelState {
     /// Queue a command only when the driver session currently exists.
     #[must_use]
     pub fn try_send(&self, command: BrowserCommand) -> bool {
-        if self.is_remote_host() {
-            if self.remote_host_refusal(&command).is_some() {
-                return false;
-            }
-            let may_navigate = page::command_may_navigate(&command);
-            let accepted = self.send_remote_host(command);
-            if accepted && may_navigate {
-                self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            return accepted;
-        }
         // Chrome commands, and the input that can navigate from inside the
         // page (a click on a link, Enter in a form), count as user activity
         // that may take a pending startup navigation over, but only once the
@@ -594,7 +552,6 @@ impl BrowserPanelState {
     /// released.
     pub fn stop(&mut self) {
         self.shutdown_attached();
-        self.shutdown_remote_host();
         self.clear_remote_identity();
         // A queued Retry must not survive an explicit stop: drain_events
         // would otherwise relaunch Chrome after the caller stopped it.
@@ -612,7 +569,6 @@ impl BrowserPanelState {
     /// lock.
     pub fn request_shutdown(&mut self) {
         self.shutdown_attached();
-        self.shutdown_remote_host();
         self.clear_remote_identity();
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
@@ -695,11 +651,6 @@ impl BrowserPanelState {
                 had_output: true,
                 ..BrowserDrainOutput::default()
             };
-        }
-        if self.is_remote_host() {
-            let mut output = self.drain_remote_host();
-            output.had_output |= orientation_expired;
-            return output;
         }
         let relaunched = self.continue_pending_relaunch();
         let config_changed = std::mem::take(&mut self.persisted_config_changed);
@@ -1059,7 +1010,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1110,7 +1060,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1155,7 +1104,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1208,7 +1156,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1278,7 +1225,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1372,7 +1318,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1419,7 +1364,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1465,7 +1409,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,
@@ -1514,7 +1457,6 @@ mod tests {
             orientation_pending_since: None,
             orientation_queue_rejection: None,
             remote: None,
-            remote_host: None,
             attached: None,
             attach_endpoint: None,
             pending_user_navigation: None,

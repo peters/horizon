@@ -200,16 +200,15 @@ impl Drop for AgentPluginHostGuard {
     }
 }
 
-/// The browser MCP entry that Horizon writes for an agent: the program, and the
-/// remote browser host that the entry names when the settings name one.
+/// The browser MCP entry that Horizon writes for an agent: the program of the
+/// local server, whose panels hold the pages of every host.
 #[derive(Clone, Copy)]
 struct AgentMcpEntry<'a> {
     command: &'a Path,
-    browser_host: Option<&'a BrowserHostConfig>,
 }
 
-/// The remote browser host that the settings name, or `None` when the agents of
-/// this Horizon use the browser of this computer.
+/// The remote browser host that the settings name, or `None` when a browser
+/// panel of this Horizon runs on this computer.
 ///
 /// A settings store that cannot be read gives `None` here: the start reads it
 /// again, and a store of another version is the report of that read.
@@ -218,10 +217,7 @@ pub(crate) fn browser_host_setting(config_path: &Path) -> Option<BrowserHostConf
     config.browser_host.names_host().then_some(config.browser_host)
 }
 
-pub(crate) fn install_agent_plugins(
-    horizon_home: &HorizonHome,
-    browser_host: Option<&BrowserHostConfig>,
-) -> AgentPluginHostGuard {
+pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHostGuard {
     let user_home = user_home_dir();
     let grok_home = grok_home_dir();
     let codex_home = codex_home_dir();
@@ -244,7 +240,7 @@ pub(crate) fn install_agent_plugins(
         tracing::warn!(%error, "failed to bind Horizon skill root leases");
     }
     if let Some(root) = provider_home(grok_home.as_deref(), user_home.as_deref(), ".grok") {
-        match grok_mcp::bind_browser_skill(&root, manifest::host_instance().as_ref(), browser_host) {
+        match grok_mcp::bind_browser_skill(&root, manifest::host_instance().as_ref()) {
             Ok(roots) => {
                 lease.skill_roots.extend(roots);
                 lease.bind_grok_device_skill(&root, true);
@@ -262,10 +258,7 @@ pub(crate) fn install_agent_plugins(
         user_home.as_deref(),
         grok_home.as_deref(),
         codex_home.as_deref(),
-        AgentMcpEntry {
-            command: &mcp_command,
-            browser_host,
-        },
+        AgentMcpEntry { command: &mcp_command },
     );
 
     match prune_stale_agent_plugin_hosts(&host_dir) {
@@ -403,7 +396,7 @@ fn install_agent_plugins_impl(
     updated_files += sync_plugin_files(claude_plugin_dir, CLAUDE_PLUGIN_FILES)?;
     updated_files += usize::from(sync_file_if_changed(
         &claude_plugin_dir.join(".mcp.json"),
-        &claude_mcp_config(entry.command, entry.browser_host)?,
+        &claude_mcp_config(entry.command)?,
     )?);
     remove_horizon_skill_dir(&horizon_home.codex_integrations_dir().join(RETIRED_NOTIFY_SKILL));
     for skill in RETIRED_MCP_SKILLS {
@@ -420,7 +413,7 @@ fn install_agent_plugins_impl(
         let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
         let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
-            match grok_mcp::register(&grok_root, entry.browser_host) {
+            match grok_mcp::register(&grok_root) {
                 Ok(changed) => {
                     updated_files += usize::from(changed);
                     updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
@@ -512,7 +505,7 @@ fn user_skill_dir(home: &Path, skill_root: &[&str], skill_name: &str) -> PathBuf
     dir
 }
 
-fn claude_mcp_config(command: &Path, browser_host: Option<&BrowserHostConfig>) -> std::io::Result<String> {
+fn claude_mcp_config(command: &Path) -> std::io::Result<String> {
     let command = command.to_str().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -522,7 +515,7 @@ fn claude_mcp_config(command: &Path, browser_host: Option<&BrowserHostConfig>) -
     serde_json::to_string_pretty(&serde_json::json!({
         "horizon-browser": {
             "command": command,
-            "args": browser_mcp_args(browser_host),
+            "args": browser_mcp_args(),
             // Per-server timeout is also Claude Code's idle-abort floor.
             // One hour of handoff wait plus 60s to deliver the result.
             "timeout": 3_660_000
@@ -647,7 +640,7 @@ mod tests {
 
     #[test]
     fn the_mcp_entry_of_an_agent_serves_the_panels_of_this_horizon() {
-        let local = claude_mcp_config(Path::new("/opt/horizon"), None).expect("local entry");
+        let local = claude_mcp_config(Path::new("/opt/horizon")).expect("local entry");
         assert_eq!(
             local,
             r#"{
@@ -659,7 +652,7 @@ mod tests {
     "timeout": 3660000
   }
 }"#,
-            "without a named host the entry is the local server, byte for byte"
+            "the entry is the local server of this Horizon, byte for byte"
         );
 
         let parsed: serde_json::Value = serde_json::from_str(&local).expect("JSON entry");
@@ -667,25 +660,6 @@ mod tests {
             parsed["horizon-browser"]["timeout"],
             serde_json::json!(3_660_000),
             "the entry keeps the handoff timeout"
-        );
-
-        let browser_host = horizon_core::BrowserHostConfig {
-            ssh_target: Some("browser-vm".to_string()),
-            profile: Some("mail".to_string()),
-        };
-        let named = claude_mcp_config(Path::new("/opt/horizon"), Some(&browser_host)).expect("named entry");
-        let parsed: serde_json::Value = serde_json::from_str(&named).expect("JSON entry");
-        assert_eq!(
-            parsed["horizon-browser"]["args"],
-            serde_json::json!(["--browser-mcp"]),
-            "a panel of that host is the ordinary browser panel, so the agent serves the panels of this Horizon"
-        );
-
-        let empty = horizon_core::BrowserHostConfig::default();
-        assert_eq!(
-            claude_mcp_config(Path::new("/opt/horizon"), Some(&empty)).expect("entry"),
-            local,
-            "an entry that names no host keeps the local server"
         );
     }
 
@@ -758,7 +732,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
-                browser_host: None,
             },
             None,
         )
@@ -848,7 +821,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
-                browser_host: None,
             },
         );
 
@@ -874,7 +846,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
-                browser_host: None,
             },
             None,
         )
@@ -917,7 +888,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
-                browser_host: None,
             },
         );
 
@@ -969,7 +939,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon-a"),
-                browser_host: None,
             },
             None,
         )
@@ -982,7 +951,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon-b"),
-                browser_host: None,
             },
             None,
         )
@@ -1100,7 +1068,6 @@ mod tests {
             None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
-                browser_host: None,
             },
         );
 

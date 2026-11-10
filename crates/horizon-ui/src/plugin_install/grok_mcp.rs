@@ -6,13 +6,13 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use horizon_core::{BrowserHostConfig, browser_mcp_args};
+use horizon_core::browser_mcp_args;
 use toml_edit::{Array, DocumentMut, Item, Value};
 
-/// The registration, with the arguments that a named remote browser host needs.
-/// Without a host the text is the local server of this computer.
-fn registration(browser_host: Option<&BrowserHostConfig>) -> String {
-    let args = browser_mcp_args(browser_host)
+/// The registration, with the arguments of the local server of this computer,
+/// whose panels hold the pages of every host that the settings name.
+fn registration() -> String {
+    let args = browser_mcp_args()
         .iter()
         .map(|argument| format!("\"{}\"", argument.replace('\\', "\\\\").replace('"', "\\\"")))
         .collect::<Vec<_>>()
@@ -33,15 +33,11 @@ HORIZON_BROWSER_HOST_INSTANCE = "${{HORIZON_BROWSER_HOST_INSTANCE:-}}"
     )
 }
 
-pub(super) fn bind_browser_skill(
-    home: &Path,
-    host_id: &std::ffi::OsStr,
-    browser_host: Option<&BrowserHostConfig>,
-) -> io::Result<Vec<super::SkillRootLease>> {
+pub(super) fn bind_browser_skill(home: &Path, host_id: &std::ffi::OsStr) -> io::Result<Vec<super::SkillRootLease>> {
     let dir = home.join("skills").join(super::HORIZON_BROWSER_SKILL);
     let lease = super::user_skills::bind_prepared_skill_root(host_id, dir.clone(), validate_browser_skill, || {
         validate_browser_skill(&dir)?;
-        register(home, browser_host)?;
+        register(home)?;
         install_browser_skill(&dir)
     })?;
     Ok(vec![lease])
@@ -67,7 +63,7 @@ fn validate_browser_skill(dir: &Path) -> io::Result<()> {
     super::owned_skills::validate_files(dir, super::BROWSER_SKILL_FILES)
 }
 
-pub(super) fn register(home: &Path, browser_host: Option<&BrowserHostConfig>) -> io::Result<bool> {
+pub(super) fn register(home: &Path) -> io::Result<bool> {
     fs::create_dir_all(home)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -92,7 +88,7 @@ pub(super) fn register(home: &Path, browser_host: Option<&BrowserHostConfig>) ->
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error),
     };
-    let Some(updated) = append_registration(&original, browser_host)? else {
+    let Some(updated) = append_registration(&original)? else {
         return Ok(false);
     };
     let mut temporary = tempfile::NamedTempFile::new_in(home)?;
@@ -138,9 +134,9 @@ fn lock_config(file: &fs::File) -> io::Result<()> {
     }
 }
 
-fn append_registration(original: &str, browser_host: Option<&BrowserHostConfig>) -> io::Result<Option<String>> {
+fn append_registration(original: &str) -> io::Result<Option<String>> {
     let mut document = parse(original)?;
-    let registration = registration(browser_host);
+    let registration = registration();
     let expected = parse(&registration)?;
     let expected_table = &expected["mcp_servers"]["horizon-browser"];
     let mut rewrite_args = false;
@@ -155,8 +151,8 @@ fn append_registration(original: &str, browser_host: Option<&BrowserHostConfig>)
                 return Ok(None);
             }
             // Horizon owns the tables it wrote, so a change of the entry, such
-            // as a person who now names a browser host, updates that table
-            // instead of leaving the entry of an earlier start in place. A
+            // as the args of an earlier install that named a browser host,
+            // updates that table instead of leaving those args in place. A
             // table that Horizon did not write is still another server.
             if !is_horizon_table(existing, expected_table) {
                 return Err(io::Error::new(
@@ -168,7 +164,7 @@ fn append_registration(original: &str, browser_host: Option<&BrowserHostConfig>)
         }
     }
     if rewrite_args {
-        return replace_args(&mut document, &browser_mcp_args(browser_host)).map(Some);
+        return replace_args(&mut document, &browser_mcp_args()).map(Some);
     }
     if let Some(servers) = document.get_mut("mcp_servers").and_then(Item::as_inline_table_mut) {
         let registration = expected["mcp_servers"]["horizon-browser"]
@@ -209,10 +205,10 @@ fn replace_args(document: &mut DocumentMut, args: &[String]) -> io::Result<Strin
     Ok(updated)
 }
 
-/// Whether an existing `horizon-browser` table is one that Horizon wrote for
-/// some browser host: every key and every value is the one of the expected
-/// registration, except `args`, which is an argument list of
-/// `horizon --browser-mcp` for any host. Horizon never wrote another shape.
+/// Whether an existing `horizon-browser` table is one that Horizon wrote:
+/// every key and every value is the one of the expected registration, except
+/// `args`, which is an argument list of `horizon --browser-mcp` of this install
+/// or of one that named a browser host. Horizon never wrote another shape.
 fn is_horizon_table(existing: &Item, expected: &Item) -> bool {
     let (Some(existing), Some(expected)) = (existing.as_table_like(), expected.as_table_like()) else {
         return false;
@@ -226,8 +222,12 @@ fn is_horizon_table(existing: &Item, expected: &Item) -> bool {
         })
 }
 
-/// Whether a value is the `args` of a browser MCP server that Horizon writes:
-/// `--browser-mcp` first, then only `--remote <target>` and `--profile <name>`.
+/// Whether a value is the `args` of a browser MCP server that Horizon writes.
+///
+/// Horizon writes `--browser-mcp` alone. A server that an earlier install wrote
+/// names the host that the entry served, so `--remote <target>` and
+/// `--profile <name>` still count as the args of Horizon: the start rewrites
+/// them instead of refusing the entry of the person.
 fn is_browser_mcp_args(item: &Item) -> bool {
     let Some(args) = item.as_array() else {
         return false;
