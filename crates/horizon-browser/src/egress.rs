@@ -1,8 +1,8 @@
 //! Where a browser profile sends its traffic.
 //!
-//! A profile host names the egress of a profile once, and the engine reads that
-//! record instead of a string inside the browser arguments, so a later change can
-//! answer for a proxy that does not answer and can report which egress a page uses.
+//! A browser profile names its egress once, and the engine reads that record
+//! instead of a string inside the browser arguments, so a later change can answer
+//! for a proxy that does not answer and can report which egress a page uses.
 
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs as _};
 use std::time::Duration;
@@ -17,7 +17,7 @@ pub const MAX_PROXY_BYTES: usize = 512;
 /// it reports that the egress does not answer.
 pub const MAX_PROBE: Duration = Duration::from_secs(2);
 
-/// The proxy schemes that a profile host accepts. Chromium reads these three.
+/// The proxy schemes that a browser profile accepts. Chromium reads these three.
 /// `socks5h` is not one of them: Chromium drops a proxy it does not know, and
 /// the profile would then reach its pages without the proxy.
 const SCHEMES: [&str; 3] = ["socks5", "http", "https"];

@@ -37,6 +37,10 @@ The checks in [`README.md`](README.md) repeat steps 1 and 3 for every boundary.
   - `set_files`, an attachment action in
     `crates/horizon-browser-protocol/src/control.rs`.
   - `HostIo`, in `crates/horizon-ui/src/app/browser_host_io.rs`.
+- One name of [`remote-browser-tunnel`](trust-boundaries/remote-browser-tunnel.md)
+  is defined outside its paths: `host_port_from_ws_url`, the loopback rule of a
+  `DevTools` URL, in `crates/horizon-browser/src/cdp.rs`. Its caller is
+  `crates/horizon-browser/src/process/attach.rs`, inside the paths.
 - No boundary is left without a group.
 
 ## What the audit does not show
@@ -57,50 +61,23 @@ boundary pages went away with their features.
 
 ### Local host and private files
 
-- [`browser-profile-host`](trust-boundaries/browser-profile-host.md)
-  - Untrusted: the create, close and visibility requests of each connect
-    client, the pages that a client opens, and a host file that the group or
-    other users can write.
-  - Guarantees: the host claims only the requests of its own host instance; one
-    actor holds at most 4 pages and the host runs at most 16; a screenshot goes
-    only to the actor that holds the page; the host refuses a host file of more
-    than 256 KiB, and a host file that the group or other users can write.
-  - Does not guarantee: the pages of one browser profile share its cookies and
-    its storage; a process of the same operating-system user can read the
-    runtime root and write a request as any actor; the host instance in
-    `profile-host.json` is not a secret.
-- [`browser-remote-bridge`](trust-boundaries/browser-remote-bridge.md) (added
-  after this audit, with #1780)
-  - Untrusted: the remote host and its record, the results of that host, and the
-    files of this computer that an attachment call names.
+- [`remote-browser-tunnel`](trust-boundaries/remote-browser-tunnel.md)
+  (added after this audit, with the SSH forward of #1780)
+  - Untrusted: the host machine, its shell, the endpoint file that its browser
+    writes, and the results of its page.
   - Guarantees: the settings entry refuses a target that `ssh` reads as an
-    option, a space and a control character, and a profile off the host-file
-    rule; only an authorized path is staged, with a 512 MiB limit for one file
-    and for one call; the bridge removes the staging folder of a call after its
-    answer and after a failure; the host instance always comes from the record
-    of the remote machine; a `browser_create` that names no target gets the
-    profile of the entry, and a create that names one keeps it; a capture
-    crosses inline only up to 8 MiB; the bridge starts no listener and holds no
-    credential.
-  - Does not guarantee: a staged file is readable on the remote machine for the
-    duration of the call; a process of the operating-system user on that machine
-    can read the staged copies and the runtime root; the bridge does not check
-    the profile of its entry against the host file, so an unknown profile is
-    reported by the host as `target_unknown`.
-- [`browser-remote-panel`](trust-boundaries/browser-remote-panel.md)
-  - Untrusted: the record and the results of the remote browser host, and the
-    input of the person that a panel sends there.
-  - Guarantees: the actor of every page of a panel is the constant
-    `horizon:person:browser-panel`; the host instance always comes from the
-    record of the remote machine; a frame is a bounded inline PNG and the panel
-    reads no remote path; a pointer position, a local dropped file, a video
-    capture and a handoff are refused with a typed reason and never sent as page
-    script; one line of the channel is bounded to 24 MiB.
-  - Does not guarantee: the host decides which profile and which page an actor
-    sees; one profile of the host shares its cookies with every page of that
-    profile; a compromised remote machine can send any PNG as a frame; a process
-    of the same operating-system user on the remote machine can write a request
-    as any actor.
+    option, a space and a control character, and a profile off the folder-name
+    rule, before any `ssh` starts; every value reaches the remote shell as one
+    quoted word; the forward is loopback on both ends and the endpoint is
+    validated as a loopback URL again after the local port replaces the remote
+    one; every `ssh` call is bounded and can not ask a question, and none of them
+    runs on the UI thread; the panel sends no `Browser.close`, sets no download
+    path and refuses a file of this computer with `remote_file_upload_unsupported`.
+  - Does not guarantee: every local account of the host machine can drive the
+    loopback `DevTools` port and use the sign-ins of the profile; the browser
+    keeps running after Horizon exits; the panels of one profile share its
+    cookies and storage; a download stays on that machine and is not reported;
+    the host key is the trust of the OpenSSH configuration of the person.
 - [`standalone-remote-host`](trust-boundaries/standalone-remote-host.md)
   - Untrusted: the MCP client and its tool calls.
   - Guarantees: the client cannot supply an endpoint, a capability or a

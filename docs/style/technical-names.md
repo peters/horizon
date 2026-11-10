@@ -47,9 +47,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
 | browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
 | browser tools | The `browser_*` MCP tools of an agent. | browser MCP |
-| profile host | The process `horizon-browser host --config <host file>`. It keeps named browser profiles for agents on the same computer. | profile server |
-| background window | A Chromium window that opens without the keyboard focus. A profile host opens each visible page in one. | hidden window |
-| browser profile | A named entry under `browser.profiles` in the host file of a profile host, and the persistent folder of its browser. Its pages share its cookies. | profile (alone) |
+| browser host | The machine whose Chromium serves a browser panel. The settings entry `browser_host` names its SSH target and one profile. | profile host, remote browser |
+| browser tunnel | The one `ssh -N -L` process that forwards the loopback `DevTools` port of the browser of a host to a loopback port of this computer. | port forward, relay |
+| attached panel | A browser panel whose Chromium runs on a browser host. Its tools, frames and input are the ones of a local panel. | remote panel |
+| browser profile | The folder `~/.horizon/browser-profiles/<profile>` on a browser host, and the sign-ins in it. The pages of one profile share its cookies. | profile (alone) |
 | host file | The YAML file that `--config` gives to a standalone `horizon-browser`. It holds no credential value. | config file |
 | connect client | The process `horizon-browser mcp --connect`. It gives the browser tools of a host to one agent. | MCP proxy |
 

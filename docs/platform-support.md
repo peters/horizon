@@ -47,6 +47,7 @@ function, update this document in the same PR.
 | Device panels (VNC viewer) | Yes | Yes |
 | Agent input to an isolated desktop | Partial (note 2) | No (note 2) |
 | Remote Hosts: SSH and Tailscale | Yes | Yes |
+| Browser panel of a browser on another machine | Yes (note 4) | Yes (note 4) |
 | Native image paste into a terminal | Yes | Partial (note 3) |
 | Panel screenshot and image copy | Yes | Yes |
 
@@ -58,6 +59,15 @@ function, update this document in the same PR.
    The Device panel viewer works on both platforms.
 3. A file drop uses the usual window file drop. The native positioned image
    paste is a Linux function (`crates/horizon-ui/src/app/file_drop.rs`).
+4. The client needs the OpenSSH client. The host machine needs an `sshd` that
+   answers without a prompt, Chrome or Chromium, and a graphical login session,
+   because Horizon starts that browser headed with no window of its own
+   (`crates/horizon-browser-control/src/ssh_forward/remote_browser.rs`). The
+   path is Chromium only: a Firefox or Safari create returns
+   `unsupported_backend` (`crates/horizon-core/src/browser/attached_host.rs`).
+   The live lane of this path used a macOS host. No run examined a Linux host,
+   so that lane is "Not tested". Test it with
+   [the remote browser tunnel procedure](testing/procedures/remote-browser-tunnel.md).
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux

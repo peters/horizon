@@ -110,6 +110,13 @@ Examples:
 - `spawn_startup_bootstrap` in
   [`session.rs`](../../crates/horizon-ui/src/app/session.rs) validates the saved
   agent sessions on a thread and sends one outcome.
+- `AttachedHostSlot::connecting` in
+  [`attached_host.rs`](../../crates/horizon-core/src/browser/attached_host.rs)
+  starts the thread `browser-attach`. That thread reads the `DevTools` endpoint
+  of another machine, starts its browser and opens the forward, so the `ssh`
+  calls of a browser panel of that machine never run on the UI thread. Creating
+  the panel returns at once, and the panel draws the connect as a state. The
+  Retry of the person starts one more connect on a new thread.
 
 ### State of the work on the app
 

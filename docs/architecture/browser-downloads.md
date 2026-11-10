@@ -138,8 +138,8 @@ the folder's size or examine what a page saved, so a person deletes the folder t
 reclaim space.
 
 A download is saved on the computer that runs the page, and an agent that works
-through a profile host of another computer cannot open that path with its own
-tools. `browser_downloads` therefore takes one optional `fetch` argument: the file name
+through a stream of its own to another computer cannot open that path with its
+own tools. `browser_downloads` therefore takes one optional `fetch` argument: the file name
 of one completed row. The answer keeps every row, and it adds the bytes of that
 file as an `application/octet-stream` resource block, with `fetched_file_name` and
 `fetched_bytes` in the structured result. Those two fields state the file whose

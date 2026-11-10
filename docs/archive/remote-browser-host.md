@@ -10,6 +10,11 @@ owner: peters
 
 # Remote browser host bridge test procedure
 
+> **Archived.** This procedure is for the MCP-over-SSH browser host, which is
+> removed. A browser of another machine is now the ordinary browser panel over a
+> tunnel; use
+> [the remote browser tunnel procedure](../testing/procedures/remote-browser-tunnel.md).
+
 ## 1. Purpose
 
 This procedure proves that the agents of one computer can use the profile host of

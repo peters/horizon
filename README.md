@@ -527,7 +527,7 @@ HORIZON_HOME=/path/to/private-horizon horizon
 
 ## Browse any website
 
-A Browser panel is a real browser drawn on the canvas. Type an address and the page renders there. You and an agent share that same panel. Two places can run the page: a browser on this computer, or a browser or physical device on [BrowserStack](https://www.browserstack.com/).
+A Browser panel is a real browser drawn on the canvas. Type an address and the page renders there. You and an agent share that same panel. Three places can run the page: a browser on this computer, a browser on another computer of yours, or a browser or physical device on [BrowserStack](https://www.browserstack.com/).
 
 ### On this computer
 
@@ -557,6 +557,28 @@ browser:
 ```
 
 That needs a working desktop. The native window can appear briefly at startup and stays in the taskbar or Dock. The embedded page keeps running while the Horizon panel is unfocused.
+
+### On another computer of yours
+
+A Browser panel can use the Chromium of a machine that you already log in to, over SSH — a build server, a mini PC, or a second laptop. The page renders in the panel here, and you click, type, scroll and resize it as usual. Your sign-ins live on that machine, so a site that refuses a headless browser there, or needs an account that is already signed in, still works.
+
+Name that machine and one profile in the settings YAML (**Settings**, **Ctrl+Shift+,**), in the section `browser_host`:
+
+```yaml
+browser_host:
+  ssh_target: build-server
+  profile: mail
+```
+
+`ssh_target` is a name that `ssh` already understands, such as an alias from `~/.ssh/config`. The profile is a folder on that machine, `~/.horizon/browser-profiles/<profile>`, that keeps the cookies and sign-ins; leave it out and Horizon uses `default`. The next start of Horizon applies the entry.
+
+What to expect:
+
+- Horizon starts Chrome or Chromium on that machine when no browser answers, signs nothing in for you, and keeps it running after you close Horizon. Open the panel again and you are still signed in.
+- Only Chromium works there. A Firefox or Safari panel stays on this computer.
+- Downloads are saved on that machine and the panel does not list them. File upload from this computer is refused, because that browser cannot read your files here.
+- Every account on that machine can drive that browser, so use a machine and a profile that you trust. If the machine does not answer, the panel says why and offers **Retry**.
+- The test procedure is [remote browser tunnel](docs/testing/procedures/remote-browser-tunnel.md).
 
 ### On BrowserStack
 

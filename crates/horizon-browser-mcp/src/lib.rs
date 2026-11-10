@@ -34,10 +34,10 @@ pub async fn serve_stdio() -> Result<(), StdioServerError> {
 }
 
 /// Serve as [`serve_stdio`] does, and also give the PNG of each
-/// `browser_screenshot` of a profile host as an image block, for a client on
-/// another computer that cannot read the private path of the result. Only a
-/// PNG under the runtime root is read, so the screenshots of a Horizon host
-/// stay a path.
+/// `browser_screenshot` as an image block, for a client that reaches this
+/// server over a stream of its own and cannot read the private path of the
+/// result. Only a PNG under the runtime root is read, so a client of Horizon
+/// itself keeps the path.
 ///
 /// # Errors
 /// Returns when transport initialization or the service task fails.

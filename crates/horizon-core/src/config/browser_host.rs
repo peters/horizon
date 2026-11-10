@@ -1,10 +1,11 @@
-//! The one remote browser host that the workspace agents of this Horizon use.
+//! The browser host that the browser panels of this Horizon follow.
 //!
-//! A person attaches a machine that already runs `horizon-browser host`. Horizon
-//! writes this entry into the settings store; the MCP entry that Horizon gives
-//! an agent then reaches that host over SSH instead of starting a local browser.
-//! The settings window edits it in a later change, so the store is the only
-//! writer for now.
+//! A person names one machine and one profile of its Chromium. A browser panel
+//! is then the ordinary browser panel, whose Chromium runs on that machine over a
+//! loopback SSH forward. This module owns the entry and the rule of a target and
+//! a profile; the tunnel lives in `horizon-browser-control::ssh_forward` and the
+//! panel in `crate::browser::attached_host`. The settings window edits the entry,
+//! and a change of it applies at the next start.
 
 use std::sync::OnceLock;
 
@@ -16,12 +17,12 @@ use crate::error::{Error, Result};
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BrowserHostConfig {
-    /// SSH target of the machine that runs `horizon-browser host`. It is the
-    /// name that `ssh` resolves: an SSH config alias, a user and host, or an
-    /// address.
+    /// SSH target of the machine that runs the Chromium of the browser panels.
+    /// It is the name that `ssh` resolves: an SSH config alias, a user and host,
+    /// or an address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_target: Option<String>,
-    /// Profile of that host whose pages the workspace agents use. A
+    /// Profile of that machine whose pages the browser panels use. A
     /// `browser_create` that names no target opens in this profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -42,15 +43,15 @@ pub fn configure_browser_host(browser_host: Option<BrowserHostConfig>) {
     let _ = BROWSER_HOST.set(browser_host);
 }
 
-/// The browser host that the settings named at start, or `None` when the agents
-/// of this Horizon use the browser of this computer.
+/// The browser host that the settings named at start, or `None` when a browser
+/// panel of this Horizon runs on this computer.
 #[must_use]
 pub fn browser_host() -> Option<&'static BrowserHostConfig> {
     BROWSER_HOST.get().and_then(Option::as_ref)
 }
 
 impl BrowserHostConfig {
-    /// Longest profile name, as the host file of `horizon-browser host` allows.
+    /// Longest profile name, as one folder of a browser profile allows.
     pub const MAX_PROFILE_LEN: usize = horizon_browser::MAX_PROFILE_NAME_CHARS;
     /// Longest SSH target. It is one argument of `ssh`, so a short name is
     /// enough for an alias, a `user@host` and an address.
@@ -95,7 +96,7 @@ impl BrowserHostConfig {
 
     /// # Errors
     /// Rejects an SSH target that `ssh` would read as an option or that holds a
-    /// control character, a profile that the host file rule does not accept,
+    /// control character, a profile that the profile-name rule does not accept,
     /// and a profile without an SSH target.
     pub fn validate(&self) -> Result<()> {
         if let Some(target) = self.ssh_target() {
@@ -145,8 +146,8 @@ pub fn browser_mcp_args() -> Vec<String> {
     vec!["--browser-mcp".to_string()]
 }
 
-/// The profile-name rule of the host file of `horizon-browser host`, shared
-/// with the remote tunnel so that both accept the same names.
+/// The profile-name rule of a browser profile, one implementation for the
+/// settings entry and the remote tunnel so that both accept the same names.
 fn valid_profile(profile: &str) -> bool {
     horizon_browser::valid_profile_name(profile)
 }

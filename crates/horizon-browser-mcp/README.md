@@ -97,10 +97,10 @@ shell commands, files, or other MCP servers.
   retained pixels, not full-page captures or a forced fresh frame. No focus,
   visibility, viewport or canvas change is required. Captures reject another
   live owner's panel; browser capture acquires or renews the caller's claim and requires it at dispatch and result delivery. Active human steering and handoff remain protected. A live Horizon host
-  or a profile host (`horizon-browser host`) is required; other standalone
-  browser hosts cannot provide this route. A profile host ignores
-  `copy_to_clipboard`, and `mcp --connect --inline-screenshots` also returns
-  the PNG of a profile host as an image block. Exports
+  is required; a standalone browser host cannot provide this route. A client
+  that reaches this server over a stream of its own, for example
+  `mcp --connect --inline-screenshots` through `ssh`, also gets the PNG as an
+  image block. Exports
   use private temporary storage, retain the latest eight captures per panel,
   survive browser theme/backend cache resets, and are deleted on panel close or
   normal host exit. Copy a returned file elsewhere before its retention ends.
@@ -244,7 +244,10 @@ shell commands, files, or other MCP servers.
   that is not a file input returns
   `not_file_input`, a path outside the roots returns `attachment_policy`, a
   malformed path `invalid_input`, a missing path `invalid_input` as well,
-  and a file over the limit `file_too_large`, all with no side effects. The
+  and a file over the limit `file_too_large`, all with no side effects. A
+  panel whose browser runs on another machine refuses the call with
+  `remote_file_upload_unsupported`, because that browser cannot read a file
+  of this computer. The
   request's shape (count, absolute, UTF-8, length, control characters) is
   checked before any backend or panel state, so it fails the same way on
   every backend; an unsupported remote platform is then refused with `unsupported_backend`
@@ -338,7 +341,7 @@ shell commands, files, or other MCP servers.
   files stay in the folder. A report never holds the download URL, because that
   URL can carry a credential. Name one completed row in `fetch` and the answer
   also carries that file as an `application/octet-stream` resource block, which
-  is how an agent reaches a file that was saved on a host of another computer;
+  is how an agent reaches a file that was saved on another computer;
   a file above 8 MiB stays there and the answer states `inline_withheld: true`.
   The tool starts no download and writes no file.
   Safari and remote sessions return `unsupported_backend`. The engine behavior

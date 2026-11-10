@@ -318,166 +318,47 @@ listener. Both modes share the same private Horizon coordination state and MCP
 tool schemas; the standalone host does not introduce another browser action
 API.
 
-## Profile host
+## Browser of another machine
 
-`horizon-browser host --config <host file> [--visible]` keeps named persistent
-profiles for `--connect` clients, for example one signed-in profile for each
-site on a shared browser machine. The host file names each profile:
+Horizon can drive the Chromium of another machine as an ordinary browser panel.
+This CLI takes no part in that path: Horizon reads the profile of that machine
+over `ssh`, starts its Chromium when none answers, and forwards its loopback
+`DevTools` port to a loopback port of this computer. The settings entry
+`browser_host` names the SSH target and the profile:
 
 ```yaml
-browser:
-  profiles:
-    mail:
-      backend: chromium
-      args: ["--proxy-server=socks5://proxy.internal:1080"]
-    chat:
-      backend: firefox
-      firefox_prefs:
-        network.proxy.type: 1
-        network.proxy.socks: proxy.internal
-        network.proxy.socks_port: 1080
+browser_host:
+  ssh_target: browser-vm
+  profile: mail
 ```
 
-- A profile name is 1 to 40 of `a-z`, `0-9` and `-`, with a letter or a
-  digit at each end. Its folder is
-  `<root>/browser-profiles/profile-<name>` (mode 700). The host never deletes
-  a profile; remove its folder while no host runs to forget a sign-in.
-- `args` go to the browser process. Arguments that the engine manages (the
-  profile folder, the automation endpoint, headless mode) are refused.
-- `firefox_prefs` (booleans, integers or strings) are written to the
-  `user.js` of a Firefox profile at each start of the host. A preference
-  that the host file no longer names gets its default again.
-- The host file must be a regular file of at most 256 KiB that group and
-  other users cannot write. It holds no credential.
+- The SSH target is one name that `ssh` resolves. A target that starts with `-`,
+  or that holds a space or a control character, is refused.
+- The profile is 1 to 40 of `a-z`, `0-9` and `-`, with a letter or a digit at
+  each end. Its folder is `~/.horizon/browser-profiles/<profile>` on that
+  machine, created with the mode 0700. Without a profile, Horizon uses `default`.
+- Horizon starts that Chromium headed with no window of its own, detached with
+  `nohup`, so it survives the end of Horizon and a later panel attaches to the
+  same signed-in browser. That machine needs a graphical login session.
+- Horizon closes only its own page and never the browser. The browser keeps the
+  profile, its cookies and its sign-ins, and every local account of that machine
+  can reach its loopback `DevTools` port.
+- A download is saved on that machine and is not reported to the panel. A file
+  of this computer can not reach a page of that browser: `set_files` and
+  `drop_files` answer `remote_file_upload_unsupported`.
+- Only Chromium works on that path. A Firefox or Safari create is refused with
+  `unsupported_backend`.
+- The words of `ssh` reach the panel when the target does not answer, with the
+  typed codes `attached_host_unreachable`, `attached_host_no_browser`,
+  `attached_host_not_started` and `attached_host_no_endpoint`. The button
+  **Retry** connects again with a fresh forward.
 
-One host runs on each runtime root (`HORIZON_BROWSER_ROOT`). It keeps one
-stable host instance in `<root>/profile-host.json` (mode 600, with
-`host_instance`, `pid` and `started_at`), written when the host is ready, so
-the instance stays the same over each restart. A client sets
-`HORIZON_BROWSER_ROOT`, a `horizon:` identity in `HORIZON_BROWSER_ACTOR` and
-that instance in `HORIZON_BROWSER_HOST_INSTANCE`, runs
-`horizon-browser mcp --connect`, and calls `browser_create` with a profile
-name as `target`:
+`docs/testing/procedures/remote-browser-tunnel.md` gives the test procedure.
 
-- The host opens each page in the shared browser of its profile, so the
-  pages of one profile share its cookies and storage. `browser_duplicate`
-  opens the current URL of one of your pages in another page of the same
-  profile. As for any create with a target, a `browser_create` of a client
-  that already holds a page needs `allow_additional: true`.
-- Each page ID is `profile-<name>-` and 12 hex digits. The host stamps each
-  page for the actor that opened it only: `browser_list` of a client shows
-  only its own pages, and a client of another host instance sees none.
-- A create with no target, with a remote target, with a name that the host
-  file does not have, or with a backend is refused (`target_required`,
-  `target_invalid`, `target_unknown`, `unsupported_backend`). At most 16
-  pages run, and at most 4 of one actor; the 16th page goes only to an actor
-  with no page, so busy clients never lock out a new one
-  (`page_limit_reached`). A page with no action for 60 minutes closes.
-- `browser_screenshot` writes the newest frame of a page as a private PNG
-  under `<root>/profile-host-captures/` (at most 8 for each page, removed
-  when the page closes) and returns its path. A client whose agent runs on
-  another computer starts `horizon-browser mcp --connect --inline-screenshots`:
-  the result then also holds the PNG (at most 8 MiB) as an MCP image block.
-  The flag reads only a PNG under the runtime root, so the screenshots of a
-  Horizon host stay a path. A screenshot counts as an action of the page.
-  `copy_to_clipboard` has no effect, and `clipboard_requested` is `false`.
-  Other device viewer requests are refused.
-- With `--visible`, each page is a window on the display of the host
-  process (`$WAYLAND_DISPLAY` when it is set, else `$DISPLAY`); without it,
-  the browsers are headless. A visible Chromium starts with no window of its
-  own and opens each page in its own window in the background, so a new
-  page never takes the keyboard from a person who types on that display
-  (a window manager must also give new windows no focus).
-- An interrupt or a termination signal closes every page, lets each browser
-  write its profile, and keeps every profile.
-
-The profile host runs no MCP server of its own and opens no network
-listener. Its clients reach it only through the private coordination files of
-the runtime root, so each client must run on the same computer, as the same
-user, with the same root.
-
-## Remote host bridge
-
-An agent that runs on the computer of the person can use the profile host of
-another machine. Horizon writes one setting, `browser_host`, with the SSH target
-of that machine and an optional profile name. It then gives each agent this MCP
-entry, which runs the bridge of this computer:
-
-```text
-<horizon> --browser-mcp --remote <ssh-target> [--profile <name>]
-```
-
-The bridge starts the server of the other machine through one `ssh` call and
-forwards the JSON-RPC lines of both directions. The same bridge is available
-from the CLI, which is how the tests and a script reach it:
-
-```bash
-horizon-browser mcp --connect --inline-screenshots --remote browser-vm --profile mail
-```
-
-The process on the other machine is:
-
-```text
-env HORIZON_BROWSER_ACTOR=<actor of the agent> \
-    HORIZON_BROWSER_HOST_INSTANCE=<instance of the remote host> \
-    horizon-browser mcp --connect --inline-screenshots
-```
-
-- The actor is the identity of the agent panel on this computer. The remote host
-  stamps each page for it, so one agent sees the pages that it opened.
-- The host instance is the one that the remote host wrote in its
-  `profile-host.json`. The bridge reads it over the same SSH transport before it
-  forwards a line, and it refuses with a typed reason when no host runs there.
-- The profile of the entry is the profile that a `browser_create` opens when the
-  call names no `target`. The bridge adds the profile as the `target` of that
-  call, so every page of the agent lands in the profile that the person chose,
-  and the agent does not have to know the profile name. A create that names its
-  own `target` keeps it. The bridge does not check the profile against the host:
-  the host refuses a profile that its host file does not name with its own
-  reason (`target_unknown`), and that reason crosses unchanged. A folder under
-  `browser-profiles` of that machine is no proof that the host serves the
-  profile, because the host never deletes a profile folder.
-- `--profile` without `--remote` is an error, because a profile is a profile of
-  a host.
-- The runtime root of the remote host is its default, `$HOME/.horizon`. To use
-  another root, set `HORIZON_BROWSER_REMOTE_ROOT` to that path on the remote
-  machine.
-- The remote server runs the `horizon-browser` program of that machine. To name
-  another program, or a path that the login shell of the target does not find on
-  its `PATH`, set `HORIZON_BROWSER_REMOTE_EXECUTABLE`.
-- The SSH target must answer without a prompt, because the bridge runs inside an
-  agent turn. Run the first connection of a target from a terminal.
-
-One call names a profile, and two results name a file. A file of one computer
-is not a file of the other, so the bridge changes exactly three things:
-
-1. `browser_create` without a `target` gets the profile of the entry as its
-   `target`. A create that names a target keeps it.
-2. `browser_act` with `set_files` or `drop_files` names files of this computer.
-   The bridge stages each file under `<remote root>/browser-staging/call-<id>/`
-   on the remote machine with `ssh`, then forwards the remote paths. A page
-   reads the staged copy, which keeps the name of the file. The bridge removes
-   the folder of the call when its answer arrives, and it also removes a folder
-   when a staging step fails, so a failed call leaves no copy.
-   - Only files under the work root of the agent (`HORIZON_WORK_ROOT`, else the
-     working directory) or a root in `HORIZON_BROWSER_ATTACHMENT_ROOTS` are
-     staged. A path outside those roots is refused with the message that a local
-     call gives.
-   - One file keeps the local attachment limit of 512 MiB, and one call stages
-     at most 512 MiB in total.
-   - A staged file exists on the remote machine for the duration of the call.
-     The person trusts that machine with the file, as for any other file of that
-     machine.
-3. `browser_video` and `browser_network` write a private file on the remote
-   machine. When such a result names a file of at most 8 MiB, the bridge adds
-   its bytes to the result as an MCP resource block, with `video/webm` or
-   `application/x-ndjson`. A larger capture stays a path on the remote machine
-   and the result says so.
-
-Every other tool and every other result crosses the bridge unchanged, and
-`tools/list` of the bridge is the `tools/list` of the remote host. A screenshot
-crosses as an image block, because the remote server already runs with
-`--inline-screenshots`.
+A client that reaches a Horizon MCP server over a stream of its own, for
+example `ssh <host> horizon-browser mcp --connect --inline-screenshots`, gets
+the PNG of each `browser_screenshot` as an image block instead of a path of that
+machine.
 
 ## Dependency boundary
 

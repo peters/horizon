@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::{BackendKind, BrowserConfig, paths};
 
-/// Longest profile name of a host file, as `horizon-browser host` allows it.
+/// Longest name of a browser profile folder, as the settings entry of a browser
+/// host and the remote tunnel allow it.
 pub const MAX_PROFILE_NAME_CHARS: usize = 40;
 
 pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<BrowserConfig> {

@@ -116,8 +116,8 @@ top-level document. Child-frame
 refs do not support `scroll` or `set_files`. Safari and remote sessions scan only
 the top-level document. If these tools cannot reach the embedded frame content,
 use `browser_handoff` on the original panel only when its capabilities include
-`handoff`. Remote sessions and a page behind the bridge do not advertise
-`handoff` and return `unsupported_backend`; report that limitation. Do not open a separate panel for
+`handoff`. Remote device sessions do not advertise `handoff` and return
+`unsupported_backend`; report that limitation. Do not open a separate panel for
 the frame.
 
 Local fills support contenteditable elements, textareas, and input types `text`,
@@ -180,7 +180,7 @@ passkey button as usual, then wait for the signed-in page with `browser_wait`.
 A human approval can take up to two minutes, so wait again after a
 `wait_timeout`. Meanwhile `browser_panel` reports `passkey_pending: true`
 and the panel chip shows **passkey request waiting**. Do not retry in a
-loop: the bridge allows six requests a minute per panel. Without the setting,
+loop: the passkey bridge allows six requests a minute per panel. Without the setting,
 or on Safari and remote sessions, the browser's own passkey behavior applies,
 so ask the user to sign in with `browser_handoff` instead.
 
@@ -239,10 +239,12 @@ of one name replaces the first under Chromium and saves the second beside it
 under Firefox, so trust the `path` in each row. Read a saved file with ordinary
 read-only tools, or name one completed row in `fetch` and the answer also carries
 its bytes as an `application/octet-stream` resource block: that is how you reach a
-file saved on a browser host of another computer. The bound is 8 MiB, and a
-larger file stays there with `inline_withheld: true`. The tool starts no
-download, writes no file, and returns no download URL, because a download URL
-can carry a credential. Safari and remote sessions return `unsupported_backend`.
+file saved on another computer. The bound is 8 MiB, and a larger file stays there
+with `inline_withheld: true`. The tool starts no download, writes no file, and
+returns no download URL, because a download URL can carry a credential. Safari
+and remote device sessions return `unsupported_backend`, and a panel whose
+browser runs on another machine reports no download at all (`reporting: false`):
+that browser saves the file there.
 
 Chromium HTTP bodies and WebSocket frames are protocol-native, but CDP cannot
 return a `fetch()` body the page drained with `response.blob()`; that
@@ -256,10 +258,12 @@ advertises both distinctions. Safari network capture is currently unsupported.
 Do not describe Firefox WebSocket instrumentation as undetectable.
 
 When the user must steer, first check that the panel advertises `handoff`.
-Remote sessions, and a page that runs on another machine behind the bridge,
-return `unsupported_backend` without starting a handoff or wait: the person who
-steers must sit at the machine that runs the page. For supported local sessions, announce what the user needs to do in a
-progress message, then call `browser_handoff` with a concise reason. Keep this turn active until
+Remote device sessions return `unsupported_backend` without starting a handoff
+or a wait: the person who steers must sit at the machine that runs the page. A
+panel of a browser on another machine keeps `handoff`, because the person steers
+the panel here and only the browser runs there. For a supported session, announce
+what the user needs to do in a progress message, then call `browser_handoff` with
+a concise reason. Keep this turn active until
 the user selects **Done — hand back to agent**. Omit `timeout_millis` for the
 15-minute human wait; do not substitute a short page-action timeout such as
 60000 ms. Leave `wait` true (the default) and stop issuing page actions while
@@ -363,62 +367,51 @@ the same tools for the remote targets of a host file. It starts no local
 browser, so `browser_create` needs a `target`. Close each session when the task
 ends; the host also releases every session when the MCP client disconnects.
 
-A profile host (`horizon-browser host --config <host-file>`) keeps named,
-persistent browser profiles on its computer for `horizon-browser mcp --connect`
-clients. There, `browser_create` needs a profile name as `target` and takes no
-`backend`; `browser_duplicate` opens your page again in the same profile. As for
-any target, a second `browser_create` needs `allow_additional: true`. The pages
-of one profile share its cookies and sign-ins with every agent of the host, but
-`browser_list` shows only your own pages. One agent holds at most 4 pages, and a
-page with no action for 60 minutes closes. Close each page when the task ends;
-the profile and its sign-ins stay. `browser_screenshot` returns the path of a
-private PNG on the host's computer; a client started with
-`mcp --connect --inline-screenshots` also gets the PNG as an image block. A
-screenshot counts as an action of the page.
+A browser panel can drive the Chromium of another machine. Horizon reads the
+settings entry `browser_host`, which names the SSH target of that machine and
+one profile, and the panel then behaves as a panel of this computer: same tools,
+same frames, same click, wheel and key input. Horizon reads the `DevTools`
+endpoint of that profile over `ssh`, starts the Chromium of that machine when no
+browser answers, and forwards its loopback port to a loopback port of this
+computer.
 
-A host file names the egress of a Chromium profile in the `egress` block of that
-profile, `egress: {proxy: socks5://host:port}`, and the engine starts that
-profile's Chromium behind the proxy. A navigation of such a profile answers
-`egress_unreachable` when the proxy does not answer, with the proxy in the text,
-so a page that never loads is not reported as a slow page. A profile with `egress` holds no argument
-that selects or bypasses a proxy (`--proxy-server`, `--no-proxy-server`,
-`--proxy-pac-url`, `--proxy-auto-detect`, `--proxy-bypass-list`), and an egress
-address holds no credential. A Firefox
-profile states its proxy in `firefox_prefs`.
+- The SSH target is one name that `ssh` resolves. A target that starts with
+  `-`, or that holds a space or a control character, is refused.
+- The profile is 1 to 40 of `a-z`, `0-9` and `-`, with a letter or a digit at
+  each end; without a profile, Horizon uses `default`. Its folder is
+  `~/.horizon/browser-profiles/<profile>` on that machine, and it keeps the
+  sign-ins of that browser.
+- Only Chromium runs on that path: a `browser_create` with `backend: firefox`
+  or `backend: safari` is refused with `unsupported_backend`.
+- That browser starts headed with no window of its own, and it keeps running
+  after Horizon stops. A later panel and the next Horizon attach to the same
+  browser, so a signed-in page is still signed in. Horizon closes only its own
+  page (`Target.closeTarget`) and never the browser.
+- The panels of one profile share its cookies and its storage: that is one
+  Chromium. There is no isolation between two panels of one profile.
+  `browser_duplicate` of such a panel answers `browser_unavailable`, because the
+  path keeps no shared local profile; call `browser_create` with
+  `allow_additional: true` for a second page in that browser.
+- `set_files` and `drop_files` answer `remote_file_upload_unsupported`, because
+  that browser cannot read a file of this computer. A download stays on that
+  machine, and the panel reports `reporting: false` for it.
+- `browser_handoff` stays available: the person steers the panel here, and only
+  the browser runs there.
+- A host that does not answer, a host without a Chromium, a browser that wrote
+  no endpoint and an endpoint that gives no answer are the typed codes
+  `attached_host_unreachable`, `attached_host_no_browser`,
+  `attached_host_not_started` and `attached_host_no_endpoint`. Each answer keeps
+  the words of `ssh` or of the start snippet, and the person has the button
+  **Retry**, which connects with a fresh forward.
+- Every local account of that machine can reach the loopback `DevTools` port of
+  that browser and use its sign-ins. Never claim that the browser is isolated
+  from the other users of that machine.
 
-A profile host on another computer is reachable over SSH. Horizon writes the
-`browser_host` entry with the SSH target, or you start the bridge yourself:
-
-```bash
-horizon-browser mcp --connect --inline-screenshots --remote <ssh-target>
-```
-
-The bridge runs `ssh -T <ssh-target> horizon-browser mcp --connect
---inline-screenshots` and forwards the MCP lines of both directions unchanged.
-A refusal of the transport carries the words of `ssh`, so a name that does not
-resolve, or a connection that is refused, states that reason.
-The pages, the profiles and the cookies stay on that machine. Your actor
-identity crosses, so the host stamps each page for you, and the host instance
-comes from the `profile-host.json` of that machine.
-
-- The bridge refuses with `remote browser host <target> is not running` when no
-  host runs on the runtime root of that machine. It takes no profile and refuses
-  none: name a profile of the host as the `browser_create` target, and the host
-  itself refuses a profile that its host file does not name with
-  `target_unknown`.
-- For `set_files` and `drop_files`, the bridge stages each local path on the
-  remote machine under `<remote root>/browser-staging/call-<id>/` and forwards
-  the remote path, so the page reads a copy. Only a file under the work root or a
-  permitted attachment root is staged, at most 512 MiB in one call. The copy
-  exists on that machine for the duration of the call, and the bridge removes it
-  when the answer arrives.
-- A `browser_video` or `browser_network` result carries its bytes as an MCP
-  resource block up to 8 MiB. A larger capture stays a path on the remote
-  machine, which you cannot open from here, and its answer states
-  `inline_withheld: true` with a text block that names the bound and the path.
-- `HORIZON_BROWSER_REMOTE_ROOT` names another runtime root on that machine, and
-  `HORIZON_BROWSER_REMOTE_EXECUTABLE` names another `horizon-browser` program.
-  The SSH target must answer without a prompt.
+You cannot set the `browser_host` entry yourself: it belongs to the settings of
+the person, and a change applies at the next start of Horizon. When no panel
+runs on another machine, the tools of the panels of this computer are the same
+tools, and a panel of another machine appears in `browser_list` like any other
+panel.
 
 ## Actions, attachments, and screenshots
 
@@ -456,7 +449,7 @@ person answers, so use `set_files` on the input instead of clicking the button.
 
 `browser_screenshot` returns retained viewport pixels as a private PNG path and
 original dimensions. It requires a ready panel and a live supporting Horizon
-host or profile host. It takes no fresh navigation or full-page capture. Optional
+host. It takes no fresh navigation or full-page capture. Optional
 `copy_to_clipboard` defaults false; `clipboard_requested` proves host dispatch,
 not OS acknowledgement. Capture claims ownership and refuses another live owner,
 human steering, or pending handoff. It changes no focus, visibility, or canvas.

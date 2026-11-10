@@ -199,6 +199,12 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   that a host's own stores supply, and `remote_slots` owns the cross-instance
   provider slot leases and their quota key. Every host uses these two modules, so
   a host without core forms the same header and counts the same slots.
+- `ssh_forward.rs` owns the one loopback forward to the `DevTools` port of
+  another machine, and `ssh_forward/` holds its leaves: `transport.rs` is the
+  bounded `ssh` call and the quoting rule, `ssh.rs` carries the program and the
+  bounds of a connect, and `remote_browser.rs` holds the two `sh` snippets that
+  start a Chromium and read its endpoint. The crate holds no Horizon program on
+  the far side and no record file.
 
 ### `horizon-core`
 
@@ -233,6 +239,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   retry/teardown behavior. `browser/manifest.rs` reexports the shared
   `horizon-browser-control::manifest` implementation so existing host callers
   retain identical types, locks, and process identity.
+- `browser/attached_host.rs` owns a browser panel whose Chromium runs on another
+  machine: the connect order (read the endpoint, forward it, start the browser
+  and retry once), the typed failures in `attached_host/failure.rs`, and the
+  worker thread of the connect. Its tests are in `attached_host/tests.rs`.
 - `runtime_state.rs` should stay focused on persisted board/window orchestration.
   Persisted workspace, panel, template, and session-binding models live in
   `runtime_state/models.rs`, with board/workspace and panel persistence tests in

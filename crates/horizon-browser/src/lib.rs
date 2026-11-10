@@ -174,8 +174,8 @@ pub struct BrowserConfig {
     /// Open each page of a headed Chromium in its own window in the
     /// background, and start Chromium with no window of its own, so that a
     /// new page never takes the keyboard of a display that a person types on
-    /// (a profile host on a shared display). Ignored when headless and by
-    /// other backends. Not saved.
+    /// (a browser of another machine on a shared display). Ignored when
+    /// headless and by other backends. Not saved.
     #[serde(skip)]
     pub background_windows: bool,
 }

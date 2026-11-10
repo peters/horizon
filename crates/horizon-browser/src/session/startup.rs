@@ -541,7 +541,7 @@ pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool
     result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
 }
 
-/// The Chromium switch of the egress record, when the profile host named one.
+/// The Chromium switch of the egress record, when the browser profile names one.
 ///
 /// # Errors
 /// The session states an egress and also carries an argument that selects or

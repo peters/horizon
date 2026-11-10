@@ -57,9 +57,9 @@ subsystem, not the crate that holds it. [`trust-boundary-audit.md`](trust-bounda
 gives the untrusted input, the guarantee and the limit of each boundary.
 
 1. **Local host and private files** — a program on this computer reads a
-   private file or a host file. Boundaries:
-   `browser-profile-host`, `browser-remote-bridge`, `browser-remote-panel`,
-   `standalone-remote-host`, `checkout-search`, `device-key-input`.
+   private file, a host file or a machine that another person controls.
+   Boundaries: `remote-browser-tunnel`, `standalone-remote-host`,
+   `checkout-search`, `device-key-input`.
 2. **Browser page input** — a page or an agent asks Horizon to attach a file,
    drop a file, answer a passkey request, save a download or judge a semantic
    action. Boundaries: `browser-webauthn`, `browser-semantic-actions`,

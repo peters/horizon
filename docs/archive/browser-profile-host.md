@@ -10,6 +10,11 @@ owner: peters
 
 # Browser profile host test procedure
 
+> **Archived.** This procedure is for the MCP-over-SSH browser host, which is
+> removed. A browser of another machine is now the ordinary browser panel over a
+> tunnel; use
+> [the remote browser tunnel procedure](../testing/procedures/remote-browser-tunnel.md).
+
 ## 1. Purpose
 
 This procedure tests the profile host of `horizon-browser`, part by part.
