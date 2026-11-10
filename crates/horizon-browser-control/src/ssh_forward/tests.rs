@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use super::remote_browser::{REMOTE_BROWSER_INSTALLATIONS, REMOTE_BROWSER_NAMES};
 use super::{
-    REMOTE_BROWSER_INSTALLATIONS, REMOTE_BROWSER_NAMES, SshForward, SshForwardError, accepts_connection,
-    forward_command, remote_browser_command, remote_port_command, run_remote_with, valid_profile,
+    Ssh, SshForward, SshForwardError, accepts_connection, forward_command, remote_browser_command, remote_port_command,
+    run_remote_with, valid_profile,
 };
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -208,16 +209,18 @@ fn the_forward_names_one_loopback_forward_and_exits_on_a_failed_bind() {
 }
 
 #[test]
-fn the_browser_command_starts_the_profile_of_that_machine_when_it_has_no_endpoint() {
+fn the_browser_command_starts_the_profile_of_that_machine_after_a_stale_endpoint() {
     let _serial = serial();
     let headless = remote_browser_command("mail", true);
     let headed = remote_browser_command("mail", false);
     for expected in [
         r#"profile_dir="$HOME/.horizon/browser-profiles/"'mail'"#,
         r#"active="$profile_dir/DevToolsActivePort""#,
-        r#"if [ -s "$active" ]; then"#,
+        r#"rm -f "$active""#,
         r"umask 077",
         r#"mkdir -p "$profile_dir" || exit 4"#,
+        r"exit 3",
+        r"exit 5",
         r#"nohup "$binary" --remote-debugging-port=0 --remote-debugging-address=127.0.0.1 --user-data-dir="$profile_dir""#,
         r#"--no-first-run --no-default-browser-check --disable-features=TranslateUI about:blank >>"$profile_dir/chromium.log" 2>&1 </dev/null &"#,
         "cat \"$active\"",
@@ -228,6 +231,10 @@ fn the_browser_command_starts_the_profile_of_that_machine_when_it_has_no_endpoin
     assert!(!headless.contains("--no-startup-window"), "{headless}");
     assert!(headed.contains("--no-startup-window"), "{headed}");
     assert!(!headed.contains("--headless=new"), "{headed}");
+    assert!(
+        !headless.contains(r#"if [ -s "$active" ]; then"#),
+        "the start snippet must replace a stale endpoint instead of printing it:\n{headless}"
+    );
     for name in REMOTE_BROWSER_NAMES {
         assert!(
             headless.contains(name),
@@ -247,7 +254,11 @@ fn the_port_command_reads_the_endpoint_of_that_profile_only() {
     let _serial = serial();
     assert_eq!(
         remote_port_command("mail"),
-        r#"cat "$HOME/.horizon/browser-profiles/"'mail'/DevToolsActivePort"#
+        concat!(
+            r#"if [ -s "$HOME/.horizon/browser-profiles/"'mail'/DevToolsActivePort ]; then "#,
+            r#"cat "$HOME/.horizon/browser-profiles/"'mail'/DevToolsActivePort; fi"#
+        ),
+        "a profile folder without an endpoint prints nothing instead of failing"
     );
 }
 
@@ -283,6 +294,34 @@ fn a_profile_of_that_machine_is_one_folder_name_and_nothing_else() {
         command.contains(r"'a'\''b'"),
         "a quote in the profile breaks the shell word: {command}"
     );
+}
+
+#[test]
+fn the_settings_of_a_connect_carry_the_program_and_the_bounds_of_a_test() {
+    let _serial = serial();
+    let directory = scratch();
+    let pid_file = directory.path().join("ssh.pid");
+    let program = stand_in(
+        directory.path(),
+        &format!(
+            "case \" $* \" in\n  *\" -N \"*) printf '%s' \"$$\" > {}; exec sleep 60 ;;\n  *) printf '%s\\n' '41000' '/devtools/browser/6a0c1f' ;;\nesac",
+            quoted(&pid_file)
+        ),
+    );
+    let ssh = Ssh::default().with_program(&program).with_probe(|_port| true);
+    let answer = ssh
+        .run_remote("browser-vm", "cat \"$HOME/x\"", DEADLINE)
+        .expect("the answer of the remote command");
+    assert_eq!(answer, "41000\n/devtools/browser/6a0c1f\n");
+
+    let forward = ssh
+        .start_forward("browser-vm", 9222)
+        .expect("a forward of the stand-in");
+    assert_ne!(forward.local_port(), 0);
+    let pid = read_pid(&pid_file);
+    assert!(process_exists(pid), "the stand-in ssh is up");
+    drop(forward);
+    assert!(!process_exists(pid), "Drop left the child behind");
 }
 
 #[test]

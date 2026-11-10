@@ -18,11 +18,17 @@ use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod remote_browser;
+mod ssh;
+
+pub use super::remote_host::valid_target;
 pub use horizon_browser::valid_profile_name as valid_profile;
+pub use remote_browser::{remote_browser_command, remote_port_command};
+pub use ssh::Ssh;
 
 use super::remote_host::{
-    CONNECT_TIMEOUT_SECONDS, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, failure_reason, quote, run_bounded,
-    ssh_command, ssh_program, valid_target,
+    CONNECT_TIMEOUT_SECONDS, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, failure_reason, run_bounded,
+    ssh_command, ssh_program,
 };
 
 /// Bound of the readiness of one forward. It holds the SSH connect, the
@@ -44,30 +50,6 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(3);
 const REAP_POLL: Duration = Duration::from_millis(20);
 /// Bound of the answer of one one-shot command on the remote machine.
 const REMOTE_OUTPUT_LIMIT: u64 = 64 * 1024;
-/// The browser start polls its endpoint file this often, this many times.
-const BROWSER_READY_ATTEMPTS: u32 = 20;
-const BROWSER_READY_INTERVAL_SECONDS: u32 = 1;
-/// The folder of the browser profiles of the remote machine, under its home.
-const REMOTE_PROFILE_ROOT: &str = "\"$HOME/.horizon/browser-profiles/\"";
-/// The file that Chromium writes its `DevTools` port and browser path into.
-const DEVTOOLS_ACTIVE_PORT: &str = "DevToolsActivePort";
-/// The programs that serve a Chromium `DevTools` port, in the order of use.
-const REMOTE_BROWSER_NAMES: [&str; 6] = [
-    "google-chrome",
-    "google-chrome-stable",
-    "chromium",
-    "chromium-browser",
-    "brave-browser",
-    "microsoft-edge",
-];
-/// The bundle paths of that same list on macOS, where a browser is not on the
-/// `PATH` of a non-interactive login.
-const REMOTE_BROWSER_INSTALLATIONS: [&str; 4] = [
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-];
 
 /// Why this computer cannot reach the browser of another machine.
 #[derive(Debug, thiserror::Error)]
@@ -94,7 +76,13 @@ pub enum SshForwardError {
         reason: String,
     },
     #[error("the command on {target} failed: {reason}")]
-    RemoteCommandFailed { target: String, reason: String },
+    RemoteCommandFailed {
+        target: String,
+        /// Exit code of the command on that machine. A snippet names its own
+        /// refusal with one, and `ssh` itself refuses with 255.
+        code: Option<i32>,
+        reason: String,
+    },
     #[error("the command on {target} gave no answer within {seconds} seconds")]
     RemoteNoAnswer { target: String, seconds: u64 },
 }
@@ -380,97 +368,18 @@ fn run_remote_with(
         }
         SshForwardError::RemoteCommandFailed {
             target: target.to_string(),
+            code: None,
             reason: error.to_string(),
         }
     })?;
     if !output.succeeded() {
         return Err(SshForwardError::RemoteCommandFailed {
             target: target.to_string(),
+            code: output.code,
             reason: failure_reason(output.code, &output.stderr),
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// Print the `DevTools` endpoint of the browser of `profile` on the remote
-/// machine, starting that browser when its profile folder names none.
-///
-/// A profile folder that holds an endpoint names a browser that this computer
-/// may reuse, which is the whole point of a browser that outlives a session. An
-/// endpoint of a browser that is gone is left to the caller, which removes it
-/// and starts again.
-#[must_use]
-pub fn remote_browser_command(profile: &str, headless: bool) -> String {
-    let window_switch = if headless {
-        "--headless=new"
-    } else {
-        "--no-startup-window"
-    };
-    let names = REMOTE_BROWSER_NAMES.map(quote).join(" ");
-    let installations = REMOTE_BROWSER_INSTALLATIONS.map(quote).join(" ");
-    format!(
-        r#"set -u
-profile_dir={root}{profile}
-active="$profile_dir/{active_port}"
-if [ -s "$active" ]; then
-  cat "$active"
-  exit 0
-fi
-umask 077
-mkdir -p "$profile_dir" || exit 4
-binary=
-for name in {names}; do
-  found=$(command -v "$name" 2>/dev/null) || found=
-  if [ -n "$found" ]; then
-    binary=$found
-    break
-  fi
-done
-if [ -z "$binary" ]; then
-  for candidate in {installations}; do
-    if [ -x "$candidate" ]; then
-      binary=$candidate
-      break
-    fi
-  done
-fi
-if [ -z "$binary" ]; then
-  printf '%s\n' 'this machine has no chromium program' >&2
-  exit 3
-fi
-cd "$profile_dir" || exit 4
-nohup "$binary" --remote-debugging-port=0 --remote-debugging-address=127.0.0.1 --user-data-dir="$profile_dir" {window_switch} --no-first-run --no-default-browser-check --disable-features=TranslateUI about:blank >>"$profile_dir/chromium.log" 2>&1 </dev/null &
-tries=0
-while [ ! -s "$active" ]; do
-  tries=$((tries + 1))
-  if [ "$tries" -ge {attempts} ]; then
-    printf '%s\n' 'the browser wrote no {active_port}' >&2
-    exit 5
-  fi
-  sleep {interval}
-done
-cat "$active"
-"#,
-        root = REMOTE_PROFILE_ROOT,
-        profile = quote(profile),
-        active_port = DEVTOOLS_ACTIVE_PORT,
-        names = names,
-        installations = installations,
-        window_switch = window_switch,
-        attempts = BROWSER_READY_ATTEMPTS,
-        interval = BROWSER_READY_INTERVAL_SECONDS,
-    )
-}
-
-/// Print the `DevTools` endpoint that the browser of `profile` on the remote
-/// machine wrote, without starting one.
-#[must_use]
-pub fn remote_port_command(profile: &str) -> String {
-    format!(
-        "cat {root}{profile}/{DEVTOOLS_ACTIVE_PORT}",
-        root = REMOTE_PROFILE_ROOT,
-        profile = quote(profile)
-    )
 }
 
 #[cfg(test)]

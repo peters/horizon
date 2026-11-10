@@ -9,6 +9,10 @@ pub mod manifest;
 mod orientation;
 mod remote_identity;
 pub use remote_identity::RemoteIdentityDisplay;
+mod attached_host;
+pub use attached_host::{
+    AttachedHost, AttachedHostFailure, AttachedHostFailureKind, DEFAULT_HOST_PROFILE, attached_host_backend_refusal,
+};
 mod page;
 pub use page::panel_title_for_url;
 mod status;
@@ -102,6 +106,13 @@ pub struct BrowserPanelState {
     /// The browser host of another machine that holds the page of this panel,
     /// with the channel that reads its frames; `None` for a local browser.
     remote_host: Option<remote_host::RemoteHostSlot>,
+    /// The machine that runs the Chromium of this panel, with the forward that
+    /// carries its `DevTools` port; `None` for a browser of this computer.
+    attached: Option<attached_host::AttachedHostSlot>,
+    /// The endpoint of the connect that the next session drives. It exists only
+    /// for the moment between a finished connect and the session of that
+    /// browser.
+    attach_endpoint: Option<horizon_browser::DevtoolsEndpoint>,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -170,6 +181,8 @@ impl BrowserPanelState {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -235,6 +248,8 @@ impl BrowserPanelState {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -251,6 +266,10 @@ impl BrowserPanelState {
     /// browser returns the user to where they were rather than the panel's
     /// initial URL.
     pub fn relaunch(&mut self) {
+        if self.is_attached() {
+            self.relaunch_attached();
+            return;
+        }
         if self.is_remote_host() {
             self.relaunch_remote_host();
             return;
@@ -326,7 +345,12 @@ impl BrowserPanelState {
     /// backend. The replacement starts only after the old process has been
     /// reaped, so panel switching cannot overlap profile or port ownership.
     pub fn switch_backend(&mut self, backend: BackendKind) {
-        if self.teach.is_some() || self.config.backend == backend || self.is_remote() || self.is_remote_host() {
+        if self.teach.is_some()
+            || self.config.backend == backend
+            || self.is_remote()
+            || self.is_remote_host()
+            || self.is_attached()
+        {
             // A remote session's browser is fixed by its target, and the engine
             // of a page of a browser host is fixed by the profile of that host.
             return;
@@ -380,7 +404,7 @@ impl BrowserPanelState {
         let capture_directory = self.capture_directory(&home);
         self.frame_slot.file_chooser().register_consumer();
         let session_config = session::BrowserSessionConfig {
-            attach: None,
+            attach: self.take_attach_endpoint(),
             browser,
             panel_local_id: self.panel_local_id.clone(),
             // A navigation typed while the driver was absent takes precedence
@@ -458,6 +482,9 @@ impl BrowserPanelState {
 
     #[must_use]
     pub fn needs_event_waker(&self) -> bool {
+        if self.is_attached() {
+            return self.needs_attached_waker();
+        }
         if self.is_remote_host() {
             return self.needs_remote_host_waker();
         }
@@ -465,6 +492,10 @@ impl BrowserPanelState {
     }
 
     pub fn set_event_waker(&self, callback: BrowserEventWaker) {
+        if self.is_attached() {
+            self.set_attached_waker(callback);
+            return;
+        }
         if self.is_remote_host() {
             self.set_remote_host_waker(callback);
             return;
@@ -562,6 +593,7 @@ impl BrowserPanelState {
     /// over the stopping driver and undrained frame notifications are
     /// released.
     pub fn stop(&mut self) {
+        self.shutdown_attached();
         self.shutdown_remote_host();
         self.clear_remote_identity();
         // A queued Retry must not survive an explicit stop: drain_events
@@ -579,6 +611,7 @@ impl BrowserPanelState {
     /// the app-shutdown paths join on it so exit cannot outrun the profile
     /// lock.
     pub fn request_shutdown(&mut self) {
+        self.shutdown_attached();
         self.shutdown_remote_host();
         self.clear_remote_identity();
         self.pending_relaunch = None;
@@ -613,6 +646,13 @@ impl BrowserPanelState {
     #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
     pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
         self.request_shutdown();
+        if self.is_attached() {
+            // The Chromium of another machine keeps its profile there, and this
+            // computer must not delete a local folder that it never made.
+            return self
+                .take_shutdown_signal()
+                .unwrap_or_else(BrowserShutdownSignal::completed);
+        }
         let profile_id = self.shared_profile_id().unwrap_or(&self.panel_local_id).to_string();
         let group = self.shared_session.take();
         let last_panel = group.as_ref().is_none_or(|group| Arc::strong_count(group) == 1);
@@ -650,6 +690,12 @@ impl BrowserPanelState {
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
         let orientation_expired = self.expire_orientation_pending();
+        if self.poll_attached() {
+            return BrowserDrainOutput {
+                had_output: true,
+                ..BrowserDrainOutput::default()
+            };
+        }
         if self.is_remote_host() {
             let mut output = self.drain_remote_host();
             output.had_output |= orientation_expired;
@@ -855,6 +901,7 @@ impl BrowserPanelState {
     }
 
     fn apply_stopped(&mut self, code: Option<i32>, output: &mut BrowserDrainOutput) {
+        self.release_attached_forward();
         self.reset_orientation_view();
         self.clear_remote_identity();
         if let Some(session) = self.session.take() {
@@ -1013,6 +1060,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1062,6 +1111,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1105,6 +1156,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1156,6 +1209,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1224,6 +1279,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1316,6 +1373,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1361,6 +1420,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1405,6 +1466,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1452,6 +1515,8 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             remote_host: None,
+            attached: None,
+            attach_endpoint: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
