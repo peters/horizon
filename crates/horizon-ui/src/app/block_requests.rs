@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use egui::Context;
 use horizon_browser_control::block::{BlockDocument, parse_document};
+use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_terminal;
 use horizon_core::browser::manifest::{
     self,
@@ -181,29 +182,48 @@ impl HorizonApp {
                 remote_command,
                 title,
                 key,
+                machine,
+            } => self.answer_open_terminal(
+                &OpenTerminalFields {
+                    ssh: ssh.as_ref(),
+                    remote_command: remote_command.as_deref(),
+                    title: title.as_deref(),
+                    key: key.as_deref(),
+                    machine: machine.as_deref(),
+                },
+                actor,
+                request,
+                root,
+                ctx,
+            ),
+            Operation::MachineSet {
+                name,
+                ssh,
+                key,
+                session,
+                provider,
             } => {
-                let terminal = match block_terminal::check(ssh, remote_command.as_deref()) {
-                    Ok(terminal) => terminal,
-                    Err(refusal) => return Some(Outcome::failed(refusal.code, &refusal.message)),
-                };
-                match key {
-                    None => Some(self.open_terminal(&terminal, title.as_deref(), None, actor, &request.actor, ctx)),
-                    Some(key) => {
-                        // The key lives in a file, so the worker checks it and the
-                        // frame that applies the check opens the panel.
-                        self.answer_key_terminal(
-                            &block_machine_keys::KeyTerminal {
-                                terminal: &terminal,
-                                title: title.as_deref(),
-                                key,
-                            },
-                            request,
-                            root,
-                            ctx,
-                        );
-                        None
-                    }
-                }
+                self.answer_machine_set(
+                    &super::block_machines::MachineSetFields {
+                        name,
+                        ssh,
+                        key: key.as_deref(),
+                        session: session.as_deref(),
+                        provider: provider.as_deref(),
+                    },
+                    request,
+                    root,
+                    ctx,
+                );
+                None
+            }
+            Operation::MachineDelete { name } => {
+                self.answer_machine_delete(name, request, root, ctx);
+                None
+            }
+            Operation::Machines => {
+                self.answer_machines(request, root, ctx);
+                None
             }
             Operation::MachineKey { name } => {
                 self.answer_machine_key(name, request, root, ctx);
@@ -215,6 +235,75 @@ impl HorizonApp {
             }
             Operation::DeleteMachineKey { name } => {
                 self.answer_deleted_machine_key(name, request, root, ctx);
+                None
+            }
+        }
+    }
+
+    /// Answers `open_terminal`: a route of its own, or the record of a machine of
+    /// this Horizon. A caller that names a machine passes none of the fields that
+    /// the record holds.
+    fn answer_open_terminal(
+        &mut self,
+        asked: &OpenTerminalFields<'_>,
+        actor: ActorPanel,
+        request: &Request,
+        root: Option<&Path>,
+        ctx: &Context,
+    ) -> Option<Outcome> {
+        let OpenTerminalFields {
+            ssh,
+            remote_command,
+            title,
+            key,
+            machine,
+        } = *asked;
+        if let Err(refusal) = block_machines::check_single_target(ssh.is_some(), machine.is_some()) {
+            return Some(Outcome::failed(refusal.code, &refusal.message));
+        }
+        if let Some(machine) = machine {
+            for (field, given) in [
+                ("ssh", ssh.is_some()),
+                ("key", key.is_some()),
+                ("remote_command", remote_command.is_some()),
+            ] {
+                if given {
+                    return Some(Outcome::failed(
+                        block_machines::INVALID_REQUEST,
+                        &format!(
+                            "open_terminal takes {field} from the machine record: leave {field} out when you pass machine"
+                        ),
+                    ));
+                }
+            }
+            self.answer_machine_terminal(machine, title, actor, request, root, ctx);
+            return None;
+        }
+        let Some(ssh) = ssh else {
+            return Some(Outcome::failed(
+                block_machines::INVALID_REQUEST,
+                "open_terminal needs ssh or machine",
+            ));
+        };
+        let terminal = match block_terminal::check(ssh, remote_command) {
+            Ok(terminal) => terminal,
+            Err(refusal) => return Some(Outcome::failed(refusal.code, &refusal.message)),
+        };
+        match key {
+            None => Some(self.open_terminal(&terminal, title, None, actor, &request.actor, ctx)),
+            Some(key) => {
+                // The key lives in a file, so the worker checks it and the frame
+                // that applies the check opens the panel.
+                self.answer_key_terminal(
+                    &block_machine_keys::KeyTerminal {
+                        terminal: &terminal,
+                        title,
+                        key,
+                    },
+                    request,
+                    root,
+                    ctx,
+                );
                 None
             }
         }
@@ -560,6 +649,15 @@ impl HorizonApp {
     pub(in crate::app) fn block_claims_outstanding(&self) -> bool {
         self.block_claim.outstanding()
     }
+}
+
+/// The fields of one `open_terminal` request, as the dispatch reads them.
+struct OpenTerminalFields<'a> {
+    ssh: Option<&'a block_terminal::TerminalRoute>,
+    remote_command: Option<&'a str>,
+    title: Option<&'a str>,
+    key: Option<&'a str>,
+    machine: Option<&'a str>,
 }
 
 pub(in crate::app) fn card_owner(panel: &Panel) -> Option<&str> {

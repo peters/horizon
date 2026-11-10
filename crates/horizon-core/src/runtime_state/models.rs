@@ -146,6 +146,11 @@ pub struct PanelState {
     /// Only `open_terminal` sets it; a panel the person made keeps `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<String>,
+    /// The machine of Horizon's machine list that this terminal connects to, so
+    /// a restored panel attaches to the same tmux session and a click on the
+    /// machine row focuses it instead of opening a second one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 impl PanelState {
@@ -242,6 +247,7 @@ impl PanelState {
             browser_url: None,
             block: None,
             opened_by: None,
+            machine: None,
         }
     }
 
@@ -312,6 +318,7 @@ impl PanelState {
             launch_wrapper: Vec::new(),
             block: self.block.clone(),
             opened_by: self.opened_by.clone(),
+            machine: self.machine.clone(),
         }
     }
 }
@@ -341,6 +348,7 @@ impl Default for PanelState {
             browser_url: None,
             block: None,
             opened_by: None,
+            machine: None,
         }
     }
 }

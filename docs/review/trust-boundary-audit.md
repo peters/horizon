@@ -155,11 +155,16 @@ boundary pages went away with their features.
     per-key known-hosts file and `accept-new` when a machine key is named, and
     the command last; the mark in the titlebar is Horizon's own text, saved with
     the panel; one agent panel opens at most eight terminals in one run; keys
-    belong to one workspace, stay in a `0700` directory with a `0600` private
-    key under the Horizon home, are made and read on the coordination worker, and
-    only the public line reaches an answer.
-  - Does not guarantee: the agent chooses the host and the command, so the
-    command runs with the account the person logs in as; the host key question
+    belong to the Horizon home, stay in a `0700` directory with a `0600` private
+    key, are made and read on the coordination worker, and only the public line
+    reaches an answer; a machine record passes the same route rule, a session
+    name of `A-Z`, `a-z`, `0-9`, `_` and `-`, a key name and a 60-character
+    provider line, holds no command line, is re-validated at click time, and its
+    click runs the argv that Horizon builds from the record.
+  - Does not guarantee: the agent chooses the host and the command, and it names
+    the machine of a record, so a click reaches a host of its choice with the
+    account in the record; any agent panel of this Horizon may use any machine
+    key by name; the command runs with the account the person logs in as; the host key question
     and the login wait for the person in that terminal, or are pinned on first
     contact when a machine key is named; the text the person types there leaves
     this computer; the private key is a file that a local agent running as the

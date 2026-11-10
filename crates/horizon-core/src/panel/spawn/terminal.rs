@@ -37,6 +37,7 @@ struct TerminalPanelBuildArgs {
     launch_cwd: Option<PathBuf>,
     ssh_connection: Option<SshConnection>,
     opened_by: Option<String>,
+    machine: Option<String>,
 }
 
 /// What a placeholder panel says instead of running its process.
@@ -129,6 +130,7 @@ pub(in crate::panel) fn placeholder_panel(
             launch_cwd: cwd,
             ssh_connection: saved_ssh_connection,
             opened_by: None,
+            machine: None,
         },
         terminal,
         ssh_status,
@@ -188,6 +190,7 @@ pub(super) fn spawn_terminal(
         is_restore,
         launch_wrapper,
         opened_by,
+        machine,
         ..
     } = opts;
 
@@ -231,6 +234,7 @@ pub(super) fn spawn_terminal(
         launch_cwd: saved_cwd,
         ssh_connection: saved_ssh_connection,
         opened_by,
+        machine,
     };
     if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh && had_persisted_transcript_state {
         return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
@@ -420,6 +424,7 @@ fn build_terminal_panel(
         launch_cwd,
         ssh_connection,
         opened_by,
+        machine,
     } = panel_args;
     Panel {
         id,
@@ -450,6 +455,7 @@ fn build_terminal_panel(
         launch_cwd,
         ssh_connection,
         opened_by,
+        machine,
         ssh_status,
     }
 }

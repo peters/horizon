@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use horizon_browser_control::block::parse_document;
 use horizon_browser_control::manifest::block::{self, Operation, Outcome};
 use horizon_browser_control::manifest::block_keys;
+use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_terminal;
 
 use super::BrowserController;
@@ -72,6 +73,9 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::Visibility { .. }
         | Operation::Close { .. }
         | Operation::OpenTerminal { .. }
+        | Operation::MachineSet { .. }
+        | Operation::MachineDelete { .. }
+        | Operation::Machines
         | Operation::MachineKey { .. }
         | Operation::MachineKeys
         | Operation::DeleteMachineKey { .. } => {
@@ -84,25 +88,69 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         .map(|error| Outcome::failed(error.code(), &error.to_string()))
 }
 
-/// The route and the remote command of an `open_terminal`, checked before the
-/// queue holds them: the answer names the field at once and no request file is
-/// written for a route that Horizon would refuse.
+/// The target and the remote command of an `open_terminal`, and the route of a
+/// `machine_set`, checked before the queue holds them: the answer names the
+/// field at once and no request file is written for a terminal or a record that
+/// Horizon would refuse.
 fn refused_terminal(operation: &Operation) -> Option<Outcome> {
-    let Operation::OpenTerminal {
-        ssh, remote_command, ..
-    } = operation
-    else {
-        return None;
+    let (ssh, remote_command, machine) = match operation {
+        Operation::OpenTerminal {
+            ssh,
+            remote_command,
+            machine,
+            ..
+        } => (ssh.as_ref(), remote_command.as_deref(), machine.as_deref()),
+        Operation::MachineSet { ssh, .. } => (Some(ssh), None, None),
+        _ => return None,
     };
-    block_terminal::check(ssh, remote_command.as_deref())
+    if machine.is_some()
+        && let Err(refusal) = block_machines::check_single_target(ssh.is_some(), true)
+    {
+        return Some(Outcome::failed(refusal.code, &refusal.message));
+    }
+    if matches!(operation, Operation::OpenTerminal { .. })
+        && let Err(refusal) = block_machines::check_single_target(ssh.is_some(), machine.is_some())
+    {
+        return Some(Outcome::failed(refusal.code, &refusal.message));
+    }
+    let ssh = ssh?;
+    block_terminal::check(ssh, remote_command)
         .err()
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }
 
-/// The key name of an operation that carries one, checked before the queue
-/// holds it: the name becomes a file name under the Horizon home, and a refusal
-/// here writes no request file.
+/// The machine name and the key name of an operation that carries one, checked
+/// before the queue holds it: a name becomes a file name under the Horizon home,
+/// and a refusal here writes no request file.
 fn refused_key(operation: &Operation) -> Option<Outcome> {
+    if let Operation::MachineSet { name, key, session, .. } = operation {
+        if let Err(refusal) = block_machines::check_machine_name(name) {
+            return Some(Outcome::failed(refusal.code, &refusal.message));
+        }
+        if let Some(refusal) = session
+            .as_deref()
+            .and_then(|session| block_machines::check_session_name(session).err())
+        {
+            return Some(Outcome::failed(refusal.code, &refusal.message));
+        }
+        return key
+            .as_deref()
+            .and_then(|key| block_keys::check_name(key).err())
+            .map(|refusal| Outcome::failed(refusal.code, &refusal.message));
+    }
+    if let Operation::MachineDelete { name } = operation {
+        return block_machines::check_machine_name(name)
+            .err()
+            .map(|refusal| Outcome::failed(refusal.code, &refusal.message));
+    }
+    if let Operation::OpenTerminal {
+        machine: Some(machine), ..
+    } = operation
+    {
+        return block_machines::check_machine_name(machine)
+            .err()
+            .map(|refusal| Outcome::failed(refusal.code, &refusal.message));
+    }
     let name = match operation {
         Operation::MachineKey { name } | Operation::DeleteMachineKey { name } => name,
         Operation::OpenTerminal { key: Some(key), .. } => key,
@@ -114,6 +162,9 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         | Operation::Visibility { .. }
         | Operation::Close { .. }
         | Operation::OpenTerminal { key: None, .. }
+        | Operation::MachineSet { .. }
+        | Operation::MachineDelete { .. }
+        | Operation::Machines
         | Operation::MachineKeys => {
             return None;
         }

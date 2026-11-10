@@ -85,6 +85,9 @@ impl HorizonApp {
         };
         let mut app = Self::initial_state(config, bootstrap);
         app.restore_saved_session_deletion_notice();
+        // The machines belong to the person and not to the session that the
+        // startup decision opens, so they are read once, before any session.
+        app.load_machines();
 
         match startup {
             StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
@@ -125,6 +128,9 @@ impl HorizonApp {
             block_claim: super::block_requests::BlockClaimState::default(),
             block_clicks: super::block_clicks::BlockClickState::default(),
             agent_terminals: super::block_terminals::AgentTerminals::default(),
+            machine_list: empty_machine_list(session_store.home()),
+            machine_epoch: 0,
+            machine_load_rx: None,
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
@@ -203,6 +209,11 @@ impl HorizonApp {
             transcript_deletes: super::transcript_deletes::PendingTranscriptDeletes::default(),
         }
     }
+}
+
+/// The machine list before its read answers: this home keeps no machine yet.
+fn empty_machine_list(home: &horizon_core::HorizonHome) -> horizon_core::Machines {
+    horizon_core::Machines::with_records(horizon_core::MachineRegistry::from_home(home), Vec::new())
 }
 
 fn spawn_remote_browser_credentials(config: &Config) -> CredentialWorkbench {

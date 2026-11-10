@@ -47,10 +47,11 @@ fn request(app: &HorizonApp, operation: block::Operation) -> block::Request {
 
 fn open_terminal(title: Option<&str>, command: Option<&str>) -> block::Operation {
     block::Operation::OpenTerminal {
-        ssh: route("lab-1.invalid", Some("deploy"), Some(2222)),
+        ssh: Some(route("lab-1.invalid", Some("deploy"), Some(2222))),
         remote_command: command.map(str::to_string),
         title: title.map(str::to_string),
         key: None,
+        machine: None,
     }
 }
 
@@ -127,10 +128,11 @@ fn a_title_is_one_trimmed_line_and_a_plain_shell_needs_no_tty() {
         &request(
             &app,
             block::Operation::OpenTerminal {
-                ssh: route("lab-1.invalid", None, None),
+                ssh: Some(route("lab-1.invalid", None, None)),
                 remote_command: None,
                 title: Some(long),
                 key: None,
+                machine: None,
             },
         ),
         &ctx,
@@ -194,46 +196,51 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
     for (operation, expected) in [
         (
             block::Operation::OpenTerminal {
-                ssh: route("-oProxyCommand=touch /tmp/horizon-c5", None, None),
+                ssh: Some(route("-oProxyCommand=touch /tmp/horizon-c5", None, None)),
                 remote_command: None,
                 title: None,
                 key: None,
+                machine: None,
             },
             "invalid_ssh_route",
         ),
         (
             block::Operation::OpenTerminal {
-                ssh: route("lab-1.invalid", Some("-L2222"), None),
+                ssh: Some(route("lab-1.invalid", Some("-L2222"), None)),
                 remote_command: None,
                 title: None,
                 key: None,
+                machine: None,
             },
             "invalid_ssh_route",
         ),
         (
             block::Operation::OpenTerminal {
-                ssh: route("lab-1.invalid", None, Some(0)),
+                ssh: Some(route("lab-1.invalid", None, Some(0))),
                 remote_command: None,
                 title: None,
                 key: None,
+                machine: None,
             },
             "invalid_ssh_route",
         ),
         (
             block::Operation::OpenTerminal {
-                ssh: route("lab-1.invalid", None, None),
+                ssh: Some(route("lab-1.invalid", None, None)),
                 remote_command: Some("tmux new; id".into()),
                 title: None,
                 key: None,
+                machine: None,
             },
             "invalid_remote_command",
         ),
         (
             block::Operation::OpenTerminal {
-                ssh: route("lab-1.invalid", None, None),
+                ssh: Some(route("lab-1.invalid", None, None)),
                 remote_command: Some("-oProxyCommand=id".into()),
                 title: None,
                 key: None,
+                machine: None,
             },
             "invalid_remote_command",
         ),

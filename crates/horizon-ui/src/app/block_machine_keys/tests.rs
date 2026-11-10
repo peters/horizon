@@ -56,14 +56,15 @@ fn request(app: &HorizonApp, operation: block::Operation) -> block::Request {
 
 fn open_terminal(key: Option<&str>) -> block::Operation {
     block::Operation::OpenTerminal {
-        ssh: TerminalRoute {
+        ssh: Some(TerminalRoute {
             host: "203.0.113.10".into(),
             user: Some("root".into()),
             port: None,
-        },
+        }),
         remote_command: Some("tmux new -A -s build".into()),
         title: None,
         key: key.map(str::to_string),
+        machine: None,
     }
 }
 

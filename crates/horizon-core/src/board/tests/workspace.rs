@@ -490,6 +490,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                     browser_url: None,
                     block: None,
                     opened_by: None,
+                    machine: None,
                 }],
             },
         ],
@@ -539,6 +540,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                     browser_url: None,
                     block: None,
                     opened_by: None,
+                    machine: None,
                 },
                 PanelState {
                     local_id: "panel-b".to_string(),
@@ -563,6 +565,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                     browser_url: None,
                     block: None,
                     opened_by: None,
+                    machine: None,
                 },
             ],
         }],
@@ -614,6 +617,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
                 browser_url: None,
                 block: None,
                 opened_by: None,
+                machine: None,
             }],
         }],
         ..RuntimeState::default()
@@ -670,6 +674,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                     browser_url: None,
                     block: None,
                     opened_by: None,
+                    machine: None,
                 },
                 PanelState {
                     local_id: "broken-codex".to_string(),
@@ -694,6 +699,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                     browser_url: None,
                     block: None,
                     opened_by: None,
+                    machine: None,
                 },
             ],
         }],

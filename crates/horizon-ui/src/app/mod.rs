@@ -2,6 +2,7 @@ mod actions;
 mod answer_retries;
 mod block_clicks;
 mod block_machine_keys;
+mod block_machines;
 mod block_requests;
 mod block_terminals;
 mod bootstrap;
@@ -38,6 +39,7 @@ mod file_drop;
 mod file_drop_highlight;
 mod frame_stats;
 mod lifecycle;
+mod machine_open;
 mod minimap;
 mod navigation_input;
 mod panel_chrome;
@@ -73,7 +75,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, PanelId,
+    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, Machines, PanelId,
     PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
     StartupChooser, WindowConfig, WorkspaceId,
 };
@@ -250,6 +252,15 @@ pub struct HorizonApp {
     /// The SSH terminals each agent panel opened for the person in this run,
     /// bounded per agent. It lives here for the same reason as `block_claim`.
     pub(in crate::app) agent_terminals: block_terminals::AgentTerminals,
+    /// The machines that agents registered with this Horizon, read from its home
+    /// on the coordination worker. The list belongs to the person, so it
+    /// outlives a session and a workspace.
+    pub(in crate::app) machine_list: horizon_core::Machines,
+    /// Counts the writes of the machine list, so a read asked for before a write
+    /// never replaces it.
+    machine_epoch: u64,
+    /// The startup read of the machine list, on its own thread.
+    machine_load_rx: Option<Receiver<Result<Machines, horizon_core::MachineError>>>,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
@@ -361,6 +372,7 @@ impl HorizonApp {
         self.browser_create_host.io.wake_with(ctx);
         self.apply_browser_host_io();
         self.apply_settings_io(ctx);
+        self.poll_machine_load();
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);

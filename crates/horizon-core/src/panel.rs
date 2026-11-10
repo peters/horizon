@@ -192,6 +192,11 @@ pub struct PanelOptions {
     /// The agent that opened this panel for the person, as Horizon names that
     /// agent; `None` for a panel the person made.
     pub opened_by: Option<String>,
+    /// The name of the machine in Horizon's machine list that this panel
+    /// connects to, when it was opened from one. A click on the machine row
+    /// focuses this panel instead of opening a second one, and the saved panel
+    /// attaches to the same tmux session after a restart.
+    pub machine: Option<String>,
 }
 
 impl Default for PanelOptions {
@@ -228,6 +233,7 @@ impl Default for PanelOptions {
             is_restore: false,
             launch_wrapper: Vec::new(),
             opened_by: None,
+            machine: None,
         }
     }
 }
@@ -286,6 +292,8 @@ pub struct Panel {
     /// `open_terminal`, as Horizon names that agent. The titlebar marks such a
     /// panel so a person can tell it from one they opened themselves.
     pub(crate) opened_by: Option<String>,
+    /// The machine of Horizon's machine list that this terminal connects to.
+    pub(crate) machine: Option<String>,
     /// UI-facing SSH connection status for panels that remain visible after exit.
     pub ssh_status: Option<SshConnectionStatus>,
 }
@@ -331,6 +339,12 @@ impl Panel {
     #[must_use]
     pub fn opened_by(&self) -> Option<&str> {
         self.opened_by.as_deref()
+    }
+
+    /// The machine that this panel connects to, when it was opened from one.
+    #[must_use]
+    pub fn machine(&self) -> Option<&str> {
+        self.machine.as_deref()
     }
 
     #[must_use]
@@ -468,6 +482,7 @@ impl Panel {
             launch_cwd: None,
             ssh_connection: None,
             opened_by: None,
+            machine: None,
             ssh_status: None,
         }
     }
@@ -865,6 +880,7 @@ mod tests {
             launch_cwd: None,
             ssh_connection: None,
             opened_by: None,
+            machine: None,
             ssh_status: None,
         }
     }

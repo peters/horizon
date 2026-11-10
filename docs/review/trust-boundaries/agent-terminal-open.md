@@ -1,8 +1,8 @@
 ---
-applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**"
+applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**"
 ---
 
-# Trust boundary of an agent-opened SSH terminal
+# Trust boundary of an agent-opened SSH terminal and of a machine record
 
 An agent asks Horizon to open an SSH terminal panel for the person with the
 `open_terminal` operation of `block_panel`. Horizon builds the `ssh` command
@@ -73,6 +73,72 @@ describe the same boundary. The key half is described by
 - **The panel is then the person's.** No operation of `block_panel` reads,
   writes to or closes the terminal. The agent cannot type into it, and it has no
   card document and no `next_click`.
+
+## Machine records
+
+An agent also writes a **machine record** with `machine_set`: a name, a route, a
+key name, a tmux session and a provider line. The person then connects to that
+machine with one click in the sidebar, without an agent, so the record is the
+input of a click. It is stored as one file per Horizon home,
+`machines/registry.json`.
+
+### Untrusted: every field of a record
+
+- **The name is a key label.** It is 1 to 40 characters of `a-z`, `0-9` and `-`,
+  with no `-` at either end, so the record and its key pair always have one
+  name. A violation is `invalid_machine_name`.
+- **The route is the route of a terminal.** `ssh` is checked with
+  `block_terminal::check`, so the host, the user and the port rules of
+  `open_terminal` apply and a violation is `invalid_ssh_route`.
+- **The tmux session is one word.** `session` is 1 to 40 characters of `A-Z`,
+  `a-z`, `0-9`, `_` and `-`, and it cannot start with `-`. Horizon builds
+  `tmux new -A -s <session>` itself from that name, so a space, a quote, a `;`
+  or a leading `-` never reaches the command. A violation is
+  `invalid_session_name`.
+- **The key name is a key name.** It passes the key rule
+  (`invalid_key_name`) and its file must be there (`key_unavailable` when it is
+  not).
+- **The provider line is a claim.** It is folded to one line and cut to 60
+  characters. Horizon draws it in a low-emphasis style under the machine name. It
+  is never read by a program and never becomes a command, a path or a title.
+- **No command line is saved.** A record holds no argv and no remote command.
+  Horizon builds both from the record when a panel opens.
+
+### Guarantees of a record and of a click
+
+- **The click re-validates.** At click time Horizon checks the record again with
+  the same rules (`Machine::checked_terminal`) and re-derives the key path from
+  the key name on the coordination worker. A record that no longer passes a rule
+  opens nothing, and the sidebar says the typed reason.
+- **The argv is Horizon's.** A click runs `ssh` with the argv of
+  `SshConnection::for_agent_terminal_with_key`: the key of the record, the two
+  keepalive options, `-p` when the record has a port, `-t` when it has a session,
+  `user@host` as one argument and `tmux new -A -s <session>` last. A hand-edited
+  registry cannot add an ssh option, a proxy, an identity file or a second
+  command.
+- **The list is private to the person.** It is one file of the Horizon home, in a
+  `0700` directory, written as `0600` through a temporary file and a rename, on
+  the coordination worker. It is not part of a session or a workspace.
+- **The record is not a reachability claim.** `terminal_open` reports whether a
+  terminal of the machine is open now. Horizon never polls the machine, and the
+  row says `no terminal open` rather than `offline`.
+
+### Does not guarantee
+
+- **The host is the agent's choice.** A click connects to the host that an agent
+  named, with the account in the record. Horizon does not verify that the host is
+  the one the agent meant, and first contact with its host key is accepted and
+  pinned for that key.
+- **A record is agent text about a machine.** The provider line is the agent's
+  reading of its CLI, and the record outlives the agent panel that wrote it. A
+  person who keeps a record keeps an agent's claim about a host.
+- **A forgotten record does not close a terminal.** `machine_delete` forgets the
+  record and keeps the key. A terminal that the machine opened keeps its own saved
+  connection, reconnects after a restart and is not tied to the record any more.
+- **Every agent panel of this Horizon reaches every machine key.** The keys
+  belong to the Horizon home, so the workspace boundary is not a key boundary.
+  An agent that the person runs in another workspace of the same Horizon reaches
+  the same machines by name.
 
 ## Machine keys
 

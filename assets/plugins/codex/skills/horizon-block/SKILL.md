@@ -16,8 +16,9 @@ agent panel that Horizon launched and to its workspace. A caller without that
 panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
-`next_click`, `visibility`, `close`, `open_terminal`, `machine_key`,
-`machine_keys` and `delete_machine_key`.
+`next_click`, `visibility`, `close`, `open_terminal`, `machine_set`,
+`machine_delete`, `machines`, `machine_key`, `machine_keys` and
+`delete_machine_key`.
 
 ## Create a card
 
@@ -107,7 +108,9 @@ need from `inspect` before you close it.
 
 `open_terminal` opens an SSH terminal panel for the person. The panel goes in the
 calling workspace, beside your agent panel, and it does not take keyboard focus.
-Use it when the person needs a shell on a machine that you set up.
+Use it when the person needs a shell on a machine that you set up. Name either a
+route with `ssh` or a machine of this Horizon with `machine`, never both and never
+neither: the other order is `invalid_request`, and the message names the field.
 
 ```json
 {"operation": "open_terminal",
@@ -137,12 +140,83 @@ ssh lab-1 -t tmux new -A -s build
 
 You can pass no other field. Horizon builds the `ssh` command line itself, so
 you cannot add an ssh option, an identity file, an argument or an environment.
+With `machine`, the record holds the route, the key and the tmux session, so
+pass no `ssh`, `key` or `remote_command`; each of them is `invalid_request`.
 
 Tell the person on a card what the terminal is for, and what to do in it. The
 titlebar of the panel carries the mark `opened by <agent>`, so the person knows
 that you opened it. The panel is an ordinary SSH terminal after that: the person
 types in it and closes it. You cannot read it, write to it or close it with this
 tool.
+
+## Register a machine
+
+A machine record lets the person connect to a host that you set up with one
+click in the sidebar, when your agent panel is gone. The list belongs to the
+person's Horizon and not to a workspace or a session: every agent panel of this
+Horizon sees it, it survives a restart, and Horizon draws it below the
+workspaces.
+
+```json
+{"operation": "machine_set",
+ "name": "build-1",
+ "ssh": {"host": "203.0.113.10", "user": "root"},
+ "key": "build-1",
+ "session": "build-1",
+ "provider": "Hetzner, hel1"}
+```
+
+The answer is `machine_set` with `name` and `created`, which is false when the
+name was already there and the record replaced the old one.
+
+- `name` follows the machine key rule: 1 to 40 characters of `a-z`, `0-9` and
+  `-`, with no `-` at either end. A name that breaks the rule is
+  `invalid_machine_name`.
+- `ssh` holds `host` and optional `user` and `port`, as `open_terminal` takes
+  them, and nothing else. A route that breaks a rule is `invalid_ssh_route`.
+- `key` is the name of a machine key of this Horizon, as `machine_key` reports
+  it, and it must be there. A key name that breaks the rule is
+  `invalid_key_name`.
+- `session` is a tmux session name: 1 to 40 characters of `A-Z`, `a-z`, `0-9`,
+  `_` and `-`, and no `-` in front. The terminal of the machine runs
+  `tmux new -A -s <session>`, so the work survives the terminal. A name that
+  breaks the rule is `invalid_session_name`.
+- `provider` is one line of at most 60 characters, such as `Hetzner, hel1`. It
+  is your claim, not verified Horizon state, and Horizon draws it dimmed under
+  the machine name.
+- The record holds no command line. Horizon builds the `ssh` argv and the tmux
+  command from the record when a panel opens, so a record can never run a
+  command that you saved in it.
+- One Horizon keeps at most 64 machines. The 65th name is `too_many_machines`;
+  ask the person to forget one.
+
+```json
+{"operation": "machines"}
+```
+
+`machines` answers every record in name order, each with `name`, `host`,
+`user`, `port`, `key`, `session`, `provider`, `added_at_millis` and
+`terminal_open`. `terminal_open` says whether a terminal of that machine is open
+in this Horizon now. It is not a reachability check, and Horizon never polls a
+machine.
+
+```json
+{"operation": "machine_delete", "name": "build-1"}
+```
+
+`machine_delete` forgets one record and answers `name`. It never deletes the
+key: call `delete_machine_key` for that. An unknown name is
+`machine_unavailable`. A terminal that the machine opened keeps its own saved
+connection and still works after the record is gone.
+
+Connect a registered machine with `open_terminal` and `machine`, and pass no
+`ssh`, `key` or `remote_command`, because the record holds them. The panel that
+opens is the panel that a click on the machine row opens, so a second click
+focuses it instead of opening a second terminal.
+
+```json
+{"operation": "open_terminal", "machine": "build-1"}
+```
 
 ## Keep a key for a machine
 
@@ -412,6 +486,17 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
   run. Closing a terminal does not free its place; ask the person to open the
   next one.
 - `terminal_unavailable`: Horizon could not open the terminal panel.
+- `invalid_request`: `open_terminal` named both `ssh` and `machine`, neither, or
+  one of `ssh`, `key` and `remote_command` together with `machine`. Pass one
+  target and let the record hold the rest.
+- `invalid_machine_name`: the machine name breaks the key name rule. The message
+  names it.
+- `invalid_session_name`: the tmux session name breaks its rule. The message
+  names it.
+- `too_many_machines`: this Horizon keeps the 64 machines that it may keep. Ask
+  the person to forget one in the sidebar.
+- `machine_unavailable`: this Horizon has no machine of that name, or the record
+  is gone. Call `machines` to list the ones it has.
 - `invalid_key_name`: the key name breaks a rule. The message names it.
 - `too_many_keys`: this Horizon holds the 64 keys that it may hold. Delete one
   with `delete_machine_key`.

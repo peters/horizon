@@ -131,6 +131,14 @@ impl HorizonHome {
         self.root.join("machine-keys")
     }
 
+    /// The machine list that Horizon keeps for the person, with one record for
+    /// each machine that an agent registered. It belongs to this home, not to a
+    /// workspace or a session.
+    #[must_use]
+    pub fn machines_dir(&self) -> PathBuf {
+        self.root.join("machines")
+    }
+
     #[must_use]
     pub fn claude_plugin_dir(&self) -> PathBuf {
         self.plugins_dir().join("claude-code")

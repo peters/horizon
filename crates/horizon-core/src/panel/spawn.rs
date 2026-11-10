@@ -126,6 +126,7 @@ impl StaticPanelSeed {
             launch_cwd,
             ssh_connection: None,
             opened_by: None,
+            machine: None,
             ssh_status: None,
         }
     }

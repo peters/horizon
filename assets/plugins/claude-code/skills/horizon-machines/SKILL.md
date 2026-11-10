@@ -25,6 +25,10 @@ contract, and `open_terminal` gives the shell.
   machine, with the one form in step 5.
 - Every machine that is rented appears in one overview card, with one row for
   each machine. The overview rents nothing.
+- Every machine that you finish setting up is also a record of this Horizon,
+  written with `machine_set`: the person sees it in the Machines section of the
+  sidebar and connects with one click, without you. The same machines are in the
+  overview card and in the sidebar.
 
 ## The flow
 
@@ -47,6 +51,12 @@ A missing CLI and a CLI without a login are both `warn` rows, with the provider'
 own words in the subtitle. Tell the person which command to run, and wait.
 
 ### After step 1: the overview card
+
+A new session can find the machines that an earlier session registered with
+`{"operation": "machines"}`: each record has its name, route, key, tmux session
+and provider line, and `terminal_open` says whether a terminal of it is open now.
+Tell the person that the same machines are in the Machines section of the
+sidebar, where one click connects.
 
 "What is rented", "show my machines" and "overview" mean one overview card, not
 one card per machine. It is a list of every machine that the providers hold, in
@@ -168,6 +178,29 @@ the heading with a `warn` badge `No SSH yet`, one `text` component with the last
 error line that ssh printed, and the buttons `Try again` with tone `primary` and
 `Delete` with tone `danger`. Do not rent a second machine for the same card.
 
+### 5b. Register the machine
+
+After step 5 proves that SSH answers and tmux is there, write the record of this
+Horizon, so the person can connect without you:
+
+```
+operation:  machine_set
+name:       "build-1"
+ssh:        {"host": "<address>", "user": "<user from the reference>"}
+key:        "build-1"
+session:    "build-1"
+provider:   "<Provider>, <region>"
+```
+
+The answer is `machine_set` with `created`, which is false when the name was
+already there. `name` follows the machine key rule, `session` is 1 to 40
+characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, and `provider` is one line of at
+most 60 characters. The record belongs to the person's Horizon and not to your
+workspace, so every agent panel of this Horizon sees it and it survives a
+restart. The same name then appears in the Machines section of the sidebar, and
+a click on it opens the tmux session `build-1` with the machine key: the person
+never needs your agent panel for that.
+
 ### 6. Show the machine card
 
 Update the card. The heading is the name, the subtitle is the provider and the
@@ -196,6 +229,17 @@ A press on `Connect` gives a terminal. Call `open_terminal` with the machine key
 the user from the provider reference and the session command:
 
 ```
+operation: machine
+machine:   "build-1"
+title:     "build-1"
+```
+
+That is the record that `machine_set` wrote, so the panel it opens is the panel
+that a click on the machine row opens. Pass no `ssh`, `key` or `remote_command`
+with `machine`: the record holds them, and any of them is `invalid_request`.
+Without a record, the long form is still there:
+
+```
 operation:      open_terminal
 ssh:            {"host": "<address>", "user": "<user from the reference>"}
 key:            "build-1"
@@ -204,7 +248,8 @@ title:          "build-1"
 ```
 
 Pass `ssh.port` only when the reference names a port, as `references/runpod.md`
-does. Step 5 proved that tmux is there and installed it when it was missing, so
+does. In the long form the titlebar carries `opened by <agent>`, so the person
+knows that you opened it. Step 5 proved that tmux is there and installed it when it was missing, so
 pass the session command: Connect uses `remote_command`
 `tmux new -A -s <name>`. Horizon adds `-t` itself. You cannot read, write or
 close that terminal: the person owns it.
@@ -224,8 +269,10 @@ Delete needs a confirm step on the card before anything is deleted.
 2. A press on `Keep` returns to the machine card, and nothing is deleted.
 3. A press on `Delete it` runs the provider delete in the order of the reference.
 4. Prove that nothing tagged with this name is left, with the find-again command.
-5. Call `delete_machine_key` with the machine name; an answer of
-   `key_unavailable` means that the key is already gone.
+5. Call `machine_delete` with the machine name, so the record and its row in the
+   sidebar go; an answer of `machine_unavailable` means that the record is
+   already gone. Then call `delete_machine_key` with the machine name; an answer
+   of `key_unavailable` means that the key is already gone.
 6. Update the card to a `Deleted` badge with one `Close` button, or close it.
    Tell the person in the `text` component that the terminal that Connect opened
    now shows ssh's timeout, and that they can close it.

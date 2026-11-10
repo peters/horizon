@@ -102,8 +102,11 @@ pub enum Operation {
     /// from the route and adds `-t` for a remote command; the agent passes no
     /// other field, so it can add no ssh option and no argument.
     OpenTerminal {
-        /// The SSH host to reach: host, user and port only.
-        ssh: TerminalRoute,
+        /// The SSH host to reach: host, user and port only. Leave it out when
+        /// `machine` names a machine of this Horizon, because the record holds
+        /// the route.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh: Option<TerminalRoute>,
         /// One line to run on the host after login, such as
         /// `tmux new -A -s build`. Letters, digits, spaces and `. _ : / , = @ + -`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,7 +121,42 @@ pub enum Operation {
         /// person's own keys and ssh agent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
+        /// Name of a machine that an agent registered in this Horizon. Horizon
+        /// takes the route, the key and the tmux command from that record, so
+        /// `ssh`, `key` and `remote_command` must be left out. A click on the
+        /// machine row in the sidebar opens the same panel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
+    /// Add or replace one machine of this Horizon: its name, SSH route, key, tmux
+    /// session and the provider line that the caller read. The record belongs
+    /// to the person, so every agent panel of this Horizon sees it and a click on
+    /// its sidebar row opens a terminal without an agent.
+    MachineSet {
+        name: String,
+        /// The SSH host to reach: host, user and port only.
+        ssh: TerminalRoute,
+        /// Name of a machine key of this Horizon, as `machine_key` reports it.
+        /// Horizon then connects with that key alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        /// tmux session that the terminal attaches to, 1 to 40 characters of
+        /// `A-Z`, `a-z`, `0-9`, `_` and `-`. The terminal runs
+        /// `tmux new -A -s <session>`, so the work survives the terminal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
+        /// One line of at most 60 characters, such as `Hetzner, hel1`. It is the
+        /// caller's claim and Horizon draws it in a low-emphasis style.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+    },
+    /// Forget one machine of this Horizon. Does not delete its key: call
+    /// `delete_machine_key` for that. A terminal that the machine opened keeps
+    /// its own saved connection.
+    MachineDelete { name: String },
+    /// The machines of this Horizon, in name order, each with whether a terminal
+    /// of it is open.
+    Machines,
     /// Make or read the key pair that Horizon keeps for one machine name in the
     /// caller's workspace, and answer its public key with the paths of the
     /// pair. Horizon makes an ed25519 pair with no passphrase under its own
@@ -164,6 +202,31 @@ pub struct MachineKeySummary {
     /// The known-hosts file of this key alone, as an absolute path.
     pub known_hosts_path: String,
     pub created_at_millis: u64,
+}
+
+/// One machine of this Horizon as `machines` reports it.
+///
+/// `provider` is the agent's claim, not verified Horizon state. `terminal_open`
+/// is the state of the terminal that this machine opened now; it is not a
+/// reachability check.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[schemars(extend("type" = "object"))]
+pub struct MachineSummary {
+    pub name: String,
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    pub added_at_millis: u64,
+    /// Whether a terminal panel of this machine is open in this Horizon.
+    pub terminal_open: bool,
 }
 
 /// One card as `list` reports it.
@@ -245,6 +308,20 @@ pub enum Outcome {
     /// The machine key pairs of the caller's workspace.
     MachineKeys {
         keys: Vec<MachineKeySummary>,
+    },
+    /// One machine that the caller added or replaced, and whether the name is
+    /// new.
+    MachineSet {
+        name: String,
+        created: bool,
+    },
+    /// One machine that the caller forgot.
+    MachineDeleted {
+        name: String,
+    },
+    /// The machines of this Horizon, in name order.
+    Machines {
+        machines: Vec<MachineSummary>,
     },
     /// One machine key pair that the caller deleted.
     DeletedMachineKey {
@@ -497,6 +574,7 @@ pub fn take_result_at(root: &Path, request: &Request) -> io::Result<Option<Outco
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::block_machines;
 
     fn identity(actor: &str) -> AgentIdentity<'_> {
         AgentIdentity::new(actor, Some(super::super::host_instance()))
@@ -550,7 +628,14 @@ mod tests {
             schema.to_string().contains("open_terminal"),
             "the terminal operation is described"
         );
-        for operation in ["machine_key", "machine_keys", "delete_machine_key"] {
+        for operation in [
+            "machine_key",
+            "machine_keys",
+            "delete_machine_key",
+            "machine_set",
+            "machine_delete",
+            "machines",
+        ] {
             assert!(
                 schema.to_string().contains(operation),
                 "the key operation {operation} is described: {schema}"
@@ -569,18 +654,21 @@ mod tests {
             remote_command,
             title,
             key,
+            machine,
         } = serde_json::from_value::<BlockPanelInput>(sent)
             .expect("public input")
             .into_operation()
         else {
             panic!("open_terminal did not parse as OpenTerminal");
         };
+        let ssh = ssh.expect("the route of the request");
         assert_eq!(ssh.host, "lab-1");
         assert_eq!(ssh.user, None);
         assert_eq!(ssh.port, None);
         assert_eq!(remote_command, None);
         assert_eq!(title, None);
         assert_eq!(key, None, "a terminal without a key offers the person's own keys");
+        assert_eq!(machine, None, "a terminal without a machine takes its route from ssh");
 
         let opened = serde_json::to_value(Outcome::Opened {
             panel_id: "panel".into(),
@@ -622,15 +710,6 @@ mod tests {
                 }),
                 "open_terminal",
             ),
-            (
-                serde_json::json!({"operation": "machine_key", "name": "build-1"}),
-                "machine_key",
-            ),
-            (serde_json::json!({"operation": "machine_keys"}), "machine_keys"),
-            (
-                serde_json::json!({"operation": "delete_machine_key", "name": "build-1"}),
-                "delete_machine_key",
-            ),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
             let name = match parsed {
@@ -642,6 +721,9 @@ mod tests {
                 Operation::Visibility { .. } => "visibility",
                 Operation::Close { .. } => "close",
                 Operation::OpenTerminal { .. } => "open_terminal",
+                Operation::MachineSet { .. } => "machine_set",
+                Operation::MachineDelete { .. } => "machine_delete",
+                Operation::Machines => "machines",
                 Operation::MachineKey { .. } => "machine_key",
                 Operation::MachineKeys => "machine_keys",
                 Operation::DeleteMachineKey { .. } => "delete_machine_key",
@@ -681,6 +763,106 @@ mod tests {
             },
             "a wait without a panel_id covers every card of the caller"
         );
+    }
+
+    #[test]
+    fn a_terminal_of_a_machine_takes_its_route_from_the_record() {
+        let sent = serde_json::json!({"operation": "open_terminal", "machine": "build-1"});
+        let Operation::OpenTerminal {
+            ssh,
+            remote_command,
+            key,
+            machine,
+            ..
+        } = serde_json::from_value::<BlockPanelInput>(sent)
+            .expect("public input")
+            .into_operation()
+        else {
+            panic!("open_terminal did not parse as OpenTerminal");
+        };
+        assert_eq!(machine.as_deref(), Some("build-1"));
+        assert_eq!(ssh, None, "the record holds the route");
+        assert_eq!(remote_command, None, "the record holds the tmux session");
+        assert_eq!(key, None, "the record holds the key");
+
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "open_terminal",
+                "machine": "build-1",
+                "command": "tmux new -A -s build"
+            }))
+            .is_err(),
+            "a machine terminal takes no free-form field"
+        );
+        assert!(block_machines::check_single_target(true, true).is_err());
+        assert!(block_machines::check_single_target(true, false).is_ok());
+        assert!(block_machines::check_single_target(false, true).is_ok());
+    }
+
+    #[test]
+    fn the_machine_operations_answer_a_record_and_never_a_command_line() {
+        let set = serde_json::from_value::<Operation>(serde_json::json!({
+            "operation": "machine_set",
+            "name": "build-1",
+            "ssh": {"host": "203.0.113.10", "user": "root", "port": 2222},
+            "key": "build-1",
+            "session": "build-1",
+            "provider": "Hetzner, hel1"
+        }))
+        .expect("machine_set parses");
+        let Operation::MachineSet {
+            name,
+            ssh,
+            key,
+            session,
+            provider,
+        } = set
+        else {
+            panic!("machine_set did not parse as MachineSet");
+        };
+        assert_eq!(name, "build-1");
+        assert_eq!(ssh.host, "203.0.113.10");
+        assert_eq!(ssh.port, Some(2222));
+        assert_eq!(key.as_deref(), Some("build-1"));
+        assert_eq!(session.as_deref(), Some("build-1"));
+        assert_eq!(provider.as_deref(), Some("Hetzner, hel1"));
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "machine_set",
+                "name": "build-1",
+                "ssh": {"host": "203.0.113.10"},
+                "command": "tmux new -A -s build"
+            }))
+            .is_err(),
+            "a record holds no free-form command"
+        );
+        assert!(matches!(
+            serde_json::from_value::<Operation>(serde_json::json!({"operation": "machines"})).expect("list"),
+            Operation::Machines
+        ));
+        let answer = serde_json::to_value(Outcome::MachineSet {
+            name: "build-1".into(),
+            created: true,
+        })
+        .expect("serialize");
+        assert_eq!(answer["status"], serde_json::json!("machine_set"));
+        assert_eq!(answer["created"], serde_json::json!(true));
+        let listed = serde_json::to_value(Outcome::Machines {
+            machines: vec![MachineSummary {
+                name: "build-1".into(),
+                host: "203.0.113.10".into(),
+                user: Some("root".into()),
+                port: None,
+                key: Some("build-1".into()),
+                session: Some("build-1".into()),
+                provider: Some("Hetzner, hel1".into()),
+                added_at_millis: 7,
+                terminal_open: true,
+            }],
+        })
+        .expect("serialize");
+        assert_eq!(listed["status"], serde_json::json!("machines"));
+        assert_eq!(listed["machines"][0]["terminal_open"], serde_json::json!(true));
     }
 
     #[test]

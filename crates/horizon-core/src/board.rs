@@ -38,7 +38,11 @@ fn panel_restore_options(
 ) -> PanelOptions {
     let mut options = panel_state.to_panel_options(browser_config);
     options.transcript_root = transcript_root.map(Path::to_path_buf);
-    options.restore_as_disconnected_snapshot = transcript_root.is_some() && panel_state.kind == PanelKind::Ssh;
+    // A terminal of a machine reconnects by itself: its saved command attaches
+    // to the same tmux session, so the person finds the work where they left
+    // it instead of a frozen last screen.
+    options.restore_as_disconnected_snapshot =
+        transcript_root.is_some() && panel_state.kind == PanelKind::Ssh && panel_state.machine.is_none();
     options
 }
 

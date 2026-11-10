@@ -1,0 +1,344 @@
+//! The machine list, judged on a temporary Horizon home.
+
+use std::os::unix::fs::PermissionsExt;
+
+use super::*;
+
+fn registry(temp: &tempfile::TempDir) -> MachineRegistry {
+    MachineRegistry::new(temp.path().join("machines"))
+}
+
+fn route(host: &str) -> TerminalRoute {
+    TerminalRoute {
+        host: host.to_owned(),
+        user: Some("root".to_owned()),
+        port: None,
+    }
+}
+
+fn checked(name: &str, host: &str, session: Option<&str>) -> CheckedMachine {
+    check(name, &route(host), Some(name), session, Some("Hetzner, hel1")).expect("the machine is accepted")
+}
+
+fn code(error: &MachineError) -> &'static str {
+    error.code()
+}
+
+#[test]
+fn a_record_keeps_what_the_agent_sent_and_the_list_is_in_name_order() {
+    let temp = tempfile::tempdir().expect("home");
+    let machines = Machines::load(registry(&temp)).expect("an empty list");
+
+    let (machines, created) = machines
+        .with_record(checked("build-2", " 203.0.113.10 ", None).record(1))
+        .expect("add");
+    assert!(created, "a new name is created");
+    let (machines, created) = machines
+        .with_record(checked("build-1", "203.0.113.11", Some("work")).record(2))
+        .expect("add");
+    assert!(created);
+
+    assert_eq!(
+        machines
+            .records()
+            .iter()
+            .map(|machine| machine.name.as_str())
+            .collect::<Vec<_>>(),
+        ["build-1", "build-2"],
+        "the list is in name order whatever the order of the adds"
+    );
+    let first = machines.find("build-1").expect("the record");
+    assert_eq!(first.host, "203.0.113.11", "the route is normalised");
+    assert_eq!(first.user.as_deref(), Some("root"));
+    assert_eq!(first.key.as_deref(), Some("build-1"));
+    assert_eq!(first.session.as_deref(), Some("work"));
+    assert_eq!(first.provider.as_deref(), Some("Hetzner, hel1"));
+    assert_eq!(first.added_at_millis, 2);
+    assert_eq!(machines.find("build-9"), None);
+}
+
+#[test]
+fn a_second_set_of_one_name_replaces_it_and_keeps_the_day_it_was_added() {
+    let temp = tempfile::tempdir().expect("home");
+    let machines = Machines::load(registry(&temp)).expect("an empty list");
+    let (machines, _) = machines
+        .with_record(checked("build-1", "203.0.113.10", None).record(1))
+        .expect("add");
+
+    let (machines, created) = machines
+        .with_record(checked("build-1", "203.0.113.11", Some("work")).record(9))
+        .expect("replace");
+    assert!(!created, "a name that is there is replaced, not created");
+    assert_eq!(machines.records().len(), 1);
+    let record = machines.find("build-1").expect("the record");
+    assert_eq!(record.host, "203.0.113.11");
+    assert_eq!(record.session.as_deref(), Some("work"));
+    assert_eq!(record.added_at_millis, 1, "the day of the first record stays");
+}
+
+#[test]
+fn a_delete_forgets_one_record_and_leaves_the_rest() {
+    let temp = tempfile::tempdir().expect("home");
+    let machines = Machines::load(registry(&temp)).expect("an empty list");
+    let (machines, _) = machines
+        .with_record(checked("build-1", "203.0.113.10", None).record(1))
+        .expect("add");
+    let (machines, _) = machines
+        .with_record(checked("build-2", "203.0.113.11", None).record(2))
+        .expect("add");
+
+    let after = machines.without_record("build-1");
+    assert_eq!(after.records().len(), 1);
+    assert_eq!(
+        after.find("build-2").map(|machine| machine.name.as_str()),
+        Some("build-2")
+    );
+    assert_eq!(machines.records().len(), 2, "the old list is untouched");
+    assert_eq!(after.without_record("build-2").records().len(), 0);
+    assert_eq!(
+        after.without_record("build-9").records().len(),
+        1,
+        "an unknown name changes nothing"
+    );
+}
+
+#[test]
+fn a_save_and_a_load_read_the_same_list_back_from_a_temporary_home() {
+    let temp = tempfile::tempdir().expect("home");
+    let machines = Machines::load(registry(&temp)).expect("an empty list");
+    let (machines, _) = machines
+        .with_record(checked("build-1", "203.0.113.10", Some("work")).record(1))
+        .expect("add");
+    let (machines, _) = machines
+        .with_record(checked("build-2", "203.0.113.11", None).record(2))
+        .expect("add");
+    machines.save().expect("the list is written");
+
+    let path = machines.registry().path();
+    assert!(path.is_file(), "the registry file exists");
+    assert_eq!(
+        std::fs::metadata(&path).expect("the file").permissions().mode() & 0o777,
+        0o600,
+        "the list names hosts, so it stays private"
+    );
+    assert_eq!(
+        std::fs::metadata(path.parent().expect("the directory"))
+            .expect("the directory")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+        "the directory is private"
+    );
+    assert!(
+        !path.with_extension("json.tmp").exists(),
+        "the temporary file is renamed, not left behind"
+    );
+
+    let loaded = Machines::load(machines.registry().clone()).expect("the written list");
+    assert_eq!(loaded.records(), machines.records(), "the same records come back");
+}
+
+#[test]
+fn a_damaged_registry_file_answers_unavailable_instead_of_an_empty_list() {
+    let temp = tempfile::tempdir().expect("home");
+    let registry = registry(&temp);
+    std::fs::create_dir_all(registry.path().parent().expect("the directory")).expect("the directory");
+    std::fs::write(registry.path(), b"{not json").expect("a damaged file");
+
+    let refused = Machines::load(registry).expect_err("a damaged list");
+    assert_eq!(code(&refused), MACHINE_UNAVAILABLE);
+    assert!(refused.to_string().contains("registry.json"), "{refused}");
+}
+
+#[test]
+fn the_limit_counts_new_names_only_and_is_reported_with_its_own_code() {
+    let temp = tempfile::tempdir().expect("home");
+    let mut machines = Machines::load(registry(&temp)).expect("an empty list");
+    for index in 0..MAX_MACHINES {
+        let name = format!("build-{index}");
+        let (next, _) = machines
+            .with_record(checked(&name, "203.0.113.10", None).record(1))
+            .expect("a machine below the limit");
+        machines = next;
+    }
+    let refused = machines
+        .with_record(checked("build-last", "203.0.113.10", None).record(1))
+        .expect_err("the limit");
+    assert_eq!(code(&refused), TOO_MANY_MACHINES);
+    assert!(refused.to_string().contains("Forget one"), "{refused}");
+    let (replaced, created) = machines
+        .with_record(checked("build-3", "203.0.113.11", None).record(2))
+        .expect("a name that is there is not refused");
+    assert!(!created);
+    assert_eq!(replaced.records().len(), MAX_MACHINES);
+}
+
+#[test]
+fn every_refusal_names_its_field_and_its_code() {
+    let refused = |name: &str, route: TerminalRoute, key: Option<&str>, session: Option<&str>| {
+        let error = check(name, &route, key, session, None).expect_err("the record is refused");
+        (code(&error).to_owned(), error.to_string())
+    };
+
+    for name in ["", "Build", "build_1", "../build", "-build", &"a".repeat(41)] {
+        let (error_code, message) = refused(name, route("203.0.113.10"), None, None);
+        assert_eq!(error_code, INVALID_MACHINE_NAME, "{name:?}");
+        assert!(message.contains("name"), "{name:?} refuses without the rule: {message}");
+    }
+    for host in ["", "-oProxyCommand=id", "lab 1", "lab\t1"] {
+        let (error_code, message) = refused("build-1", route(host), None, None);
+        assert_eq!(error_code, block_terminal::INVALID_SSH_ROUTE, "{host:?}");
+        assert!(
+            message.contains("ssh.host"),
+            "{host:?} refuses without the field: {message}"
+        );
+    }
+    let mut port = route("203.0.113.10");
+    port.port = Some(0);
+    let (error_code, message) = refused("build-1", port, None, None);
+    assert_eq!(error_code, block_terminal::INVALID_SSH_ROUTE);
+    assert!(message.contains("ssh.port"), "{message}");
+    for key in ["", "Build", "build 1", "build-1.pub"] {
+        let (error_code, message) = refused("build-1", route("203.0.113.10"), Some(key), None);
+        assert_eq!(
+            error_code,
+            horizon_browser_control::manifest::block_keys::INVALID_KEY_NAME,
+            "{key:?}"
+        );
+        assert!(message.contains("name"), "{message}");
+    }
+    for session in ["", "-rf", "build session", "build-1:x", "$(id)", &"a".repeat(41)] {
+        let (error_code, message) = refused("build-1", route("203.0.113.10"), None, Some(session));
+        assert_eq!(error_code, INVALID_SESSION_NAME, "{session:?}");
+        assert!(message.contains("session"), "{message}");
+    }
+    let longest = "a".repeat(MAX_SESSION_CHARS);
+    let accepted =
+        check("build-1", &route("203.0.113.10"), None, Some(&longest), None).expect("a session at the bound");
+    assert_eq!(accepted.session.as_deref(), Some(longest.as_str()));
+    let named = check("build-1", &route("203.0.113.10"), None, Some("Build_1-x"), None).expect("a plain session");
+    assert_eq!(named.session.as_deref(), Some("Build_1-x"));
+}
+
+#[test]
+fn a_provider_line_is_one_short_line_that_the_record_cuts_to_the_bound() {
+    let record = check(
+        "build-1",
+        &route("203.0.113.10"),
+        None,
+        None,
+        Some("  Hetzner,\n hel1   running  "),
+    )
+    .expect("a record");
+    assert_eq!(record.provider.as_deref(), Some("Hetzner, hel1 running"));
+    let long = "a".repeat(MAX_PROVIDER_CHARS + 20);
+    let record = check("build-1", &route("203.0.113.10"), None, None, Some(&long)).expect("a record");
+    assert_eq!(
+        record.provider.as_deref().map(str::len),
+        Some(MAX_PROVIDER_CHARS),
+        "a long provider line is cut"
+    );
+    assert_eq!(
+        check("build-1", &route("203.0.113.10"), None, None, None)
+            .expect("a record")
+            .provider,
+        None,
+        "no provider line is a record without one"
+    );
+}
+
+/// The key of a panel, as the store resolves it.
+fn key(name: &str) -> MachineKeyRef {
+    MachineKeyRef {
+        directory: "/home/peters/.horizon/machine-keys".to_owned(),
+        name: name.to_owned(),
+    }
+}
+
+#[test]
+fn the_argv_of_a_machine_without_a_session_is_the_plain_login() {
+    let machine = checked("build-1", "203.0.113.10", None).record(1);
+    let args = machine.ssh_args(&key("build-1")).expect("the argv");
+    let directory = "/home/peters/.horizon/machine-keys";
+    assert_eq!(
+        args,
+        vec![
+            "-i".to_string(),
+            format!("{directory}/build-1"),
+            "-o".to_string(),
+            "IdentitiesOnly=yes".to_string(),
+            "-o".to_string(),
+            "IdentityAgent=none".to_string(),
+            "-o".to_string(),
+            format!("UserKnownHostsFile={directory}/build-1.known_hosts"),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+            "-o".to_string(),
+            "ServerAliveInterval=15".to_string(),
+            "-o".to_string(),
+            "ServerAliveCountMax=1".to_string(),
+            "root@203.0.113.10".to_string(),
+        ],
+        "a machine without a session opens a login shell"
+    );
+}
+
+#[test]
+fn the_argv_of_a_machine_with_a_session_attaches_that_tmux_session() {
+    let machine = checked("build-1", "203.0.113.10", Some("work")).record(1);
+    let args = machine.ssh_args(&key("build-1")).expect("the argv");
+    assert_eq!(args[args.len() - 3], "-t", "a remote command needs a terminal");
+    assert_eq!(args[args.len() - 2], "root@203.0.113.10");
+    assert_eq!(args[args.len() - 1], "tmux new -A -s work");
+    assert_eq!(machine.ssh_args(&key("build-1")).expect("argv"), args);
+}
+
+#[test]
+fn a_record_that_no_longer_passes_the_rule_builds_no_terminal() {
+    let mut machine = checked("build-1", "203.0.113.10", Some("work")).record(1);
+    machine.host = "-oProxyCommand=touch /var/tmp/hz-c7".to_owned();
+    let refused = machine.ssh_args(&key("build-1")).expect_err("an edited route");
+    assert_eq!(code(&refused), block_terminal::INVALID_SSH_ROUTE);
+
+    let mut machine = checked("build-1", "203.0.113.10", Some("work")).record(1);
+    machine.session = Some("work; id".to_owned());
+    let refused = machine.checked_terminal().expect_err("an edited session");
+    assert_eq!(code(&refused), INVALID_SESSION_NAME);
+    assert!(
+        machine.checked_terminal().is_err(),
+        "Horizon builds the tmux command itself, so a saved one cannot reach it"
+    );
+}
+
+#[test]
+fn a_machine_name_is_the_key_name_rule() {
+    for name in ["build-1", "a", "0", "rented-machine-17"] {
+        assert_eq!(machine_name(name).expect("a plain name"), name);
+        assert_eq!(
+            check(name, &route("203.0.113.10"), Some(name), None, None)
+                .expect("a record")
+                .key
+                .as_deref(),
+            Some(name),
+            "one name makes the record and its key"
+        );
+    }
+    for name in ["build-1.pub", "build-1.known_hosts"] {
+        assert_eq!(
+            code(&machine_name(name).expect_err("a file of the directory")),
+            INVALID_MACHINE_NAME
+        );
+    }
+}
+
+#[test]
+fn the_codes_are_the_ones_the_tool_reports() {
+    assert_eq!(INVALID_MACHINE_NAME, "invalid_machine_name");
+    assert_eq!(INVALID_SESSION_NAME, "invalid_session_name");
+    assert_eq!(MACHINE_UNAVAILABLE, "machine_unavailable");
+    assert_eq!(TOO_MANY_MACHINES, "too_many_machines");
+    assert_eq!(MAX_MACHINES, 64);
+    assert_eq!(MAX_PROVIDER_CHARS, 60);
+    assert_eq!(MAX_SESSION_CHARS, 40);
+}
