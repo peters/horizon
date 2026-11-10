@@ -35,4 +35,5 @@ documents that are not yet STE.
 | [device-type-multi-chunk](procedures/device-type-multi-chunk.md) | `horizon-device` text input in several `type` actions | none |
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |
 | [device-panel-ssh-trust](procedures/device-panel-ssh-trust.md) | Device panel ssh route: untrusted host refusal, fingerprint comparison, trust and changed key | none |
+| [machines-skill](procedures/machines-skill.md) | `horizon-machines` skill: rent, card, Connect, confirm delete and proof for each provider | rents compute |
 

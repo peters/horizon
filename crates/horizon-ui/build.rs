@@ -21,9 +21,21 @@ const ASSETS: &[&str] = &[
     "plugins/claude-code/skills/horizon-browser/SKILL.md",
     "plugins/claude-code/skills/horizon-block/SKILL.md",
     "plugins/claude-code/skills/horizon-device/SKILL.md",
+    "plugins/claude-code/skills/horizon-machines/SKILL.md",
+    "plugins/claude-code/skills/horizon-machines/references/aws.md",
+    "plugins/claude-code/skills/horizon-machines/references/azure.md",
+    "plugins/claude-code/skills/horizon-machines/references/gcp.md",
+    "plugins/claude-code/skills/horizon-machines/references/hetzner.md",
+    "plugins/claude-code/skills/horizon-machines/references/runpod.md",
     "plugins/codex/skills/horizon-browser/SKILL.md",
     "plugins/codex/skills/horizon-block/SKILL.md",
     "plugins/codex/skills/horizon-device/SKILL.md",
+    "plugins/codex/skills/horizon-machines/SKILL.md",
+    "plugins/codex/skills/horizon-machines/references/aws.md",
+    "plugins/codex/skills/horizon-machines/references/azure.md",
+    "plugins/codex/skills/horizon-machines/references/gcp.md",
+    "plugins/codex/skills/horizon-machines/references/hetzner.md",
+    "plugins/codex/skills/horizon-machines/references/runpod.md",
 ];
 
 fn main() -> io::Result<()> {

@@ -154,8 +154,15 @@ that key alone.
 Ask for a key, put its public line on the machine at rent time, then open the
 terminal with it:
 
+The request:
+
 ```json
 {"operation": "machine_key", "name": "build-1"}
+```
+
+The answer:
+
+```json
 {"status": "machine_key", "name": "build-1",
  "public_key": "ssh-ed25519 AAAA... horizon-machine-build-1",
  "private_key_path": "<Horizon home>/machine-keys/<workspace>/build-1",
@@ -181,6 +188,9 @@ terminal with it:
 
 ```json
 {"operation": "machine_keys"}
+```
+
+```json
 {"operation": "delete_machine_key", "name": "build-1"}
 ```
 
