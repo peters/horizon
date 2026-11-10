@@ -4,6 +4,7 @@ mod agent_integrations;
 mod agent_work_hook;
 mod app;
 mod badge;
+mod block_widget;
 mod branding;
 mod browser_widget;
 mod clipboard_image;

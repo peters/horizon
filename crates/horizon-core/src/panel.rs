@@ -60,6 +60,7 @@ pub enum PanelKind {
     Usage,
     Browser,
     Device,
+    Block,
 }
 
 impl PanelKind {
@@ -73,7 +74,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::GitChanges | Self::Usage | Self::Device)
+        !matches!(self, Self::GitChanges | Self::Usage | Self::Device | Self::Block)
     }
 
     #[must_use]
@@ -101,6 +102,7 @@ impl PanelKind {
             Self::Usage => "Usage",
             Self::Browser => "Browser",
             Self::Device => "Device",
+            Self::Block => "Card",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
                 unreachable!()
             }
@@ -137,6 +139,8 @@ impl Default for PanelLayout {
 pub struct PanelOptions {
     pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub device_input: crate::DeviceInput,
+    /// The card that a block panel holds; a block panel without one is empty.
+    pub block: Option<crate::BlockPanelState>,
     pub name: Option<String>,
     /// Whether `name` was explicitly chosen by the user. `None` preserves
     /// the legacy behavior of treating every supplied name as custom.
@@ -192,6 +196,7 @@ impl Default for PanelOptions {
         Self {
             device_identity: None,
             device_input: crate::DeviceInput::default(),
+            block: None,
             name: None,
             name_is_custom: None,
             command: None,
@@ -376,6 +381,17 @@ impl Panel {
     #[must_use]
     pub fn device(&self) -> Option<&crate::DevicePanelState> {
         self.content.device()
+    }
+
+    /// The card document and its host state, when this is a block panel.
+    #[must_use]
+    pub fn block(&self) -> Option<&crate::BlockPanelState> {
+        self.content.block()
+    }
+
+    /// Mutable accessor for the card that this panel holds.
+    pub fn block_mut(&mut self) -> Option<&mut crate::BlockPanelState> {
+        self.content.block_mut()
     }
 
     /// Supplied machine labels survive a restore that has no connection yet.
@@ -662,7 +678,8 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => {}
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {
+            }
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -686,7 +703,9 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {
+                true
+            }
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -699,7 +718,9 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {
+                true
+            }
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -1016,7 +1037,7 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::GitChanges, PanelKind::Usage] {
+        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::Block] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }

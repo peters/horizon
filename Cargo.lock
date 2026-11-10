@@ -2182,6 +2182,7 @@ dependencies = [
  "egui",
  "egui_commonmark",
  "horizon-browser",
+ "horizon-browser-control",
  "horizon-browser-mcp",
  "horizon-core",
  "horizon-cursor",

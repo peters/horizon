@@ -325,6 +325,7 @@ impl RuntimeState {
                                         .as_ref()
                                         .and(panel.launch_command.clone())
                                 }),
+                            block: panel.block().cloned(),
                         }
                     })
                     .collect();

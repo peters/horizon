@@ -177,6 +177,14 @@ fn show_panel_body_contents(
             }
             false
         }
+        PanelKind::Block => {
+            let Some(block) = panel.block() else {
+                ui.centered_and_justified(|ui| ui.label("Card state unavailable"));
+                return false;
+            };
+            crate::block_widget::show(ui, panel.id, &block.document);
+            false
+        }
         PanelKind::Browser => {
             let (Some(state), Some(shortcuts)) = (body_context.browser_ui_state, body_context.browser_shortcuts) else {
                 ui.centered_and_justified(|ui| ui.label("Browser state unavailable"));

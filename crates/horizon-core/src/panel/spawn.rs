@@ -1,3 +1,4 @@
+mod block;
 mod device;
 mod terminal;
 
@@ -23,7 +24,7 @@ use crate::ssh::SshConnection;
 use crate::transcript::PanelTranscript;
 use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
-use crate::{AgentIntegrationKind, AgentResumeMode, agent_definition};
+use crate::{AgentIntegrationKind, AgentResumeMode, BlockPanelState, agent_definition};
 
 use super::{
     AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind,
@@ -214,6 +215,14 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
                 opts.device_input,
                 opts.ssh_connection.take(),
             )
+        }
+        PanelKind::Block => {
+            let state = opts
+                .block
+                .take()
+                .unwrap_or_else(|| BlockPanelState::new(BlockPanelState::empty_document()));
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
+            Ok(block::spawn_block(seed, state))
         }
         PanelKind::Browser => {
             let command = opts.command.take();
@@ -517,9 +526,12 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => {
-            (String::new(), Vec::new())
-        }
+        PanelKind::Editor
+        | PanelKind::GitChanges
+        | PanelKind::Usage
+        | PanelKind::Browser
+        | PanelKind::Device
+        | PanelKind::Block => (String::new(), Vec::new()),
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -822,7 +834,12 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => 0,
+            PanelKind::Editor
+            | PanelKind::GitChanges
+            | PanelKind::Usage
+            | PanelKind::Browser
+            | PanelKind::Device
+            | PanelKind::Block => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode

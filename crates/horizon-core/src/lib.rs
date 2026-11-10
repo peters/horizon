@@ -2,6 +2,7 @@
 
 pub mod agent_work;
 mod agents;
+mod block_panel;
 mod board;
 pub mod browser;
 mod config;
@@ -42,6 +43,7 @@ pub use agents::{
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
+pub use block_panel::BlockPanelState;
 pub use board::{
     Board, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide,
     WorkspaceLayout,

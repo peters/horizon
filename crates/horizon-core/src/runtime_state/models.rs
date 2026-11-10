@@ -137,6 +137,10 @@ pub struct PanelState {
     /// Current URL of browser panels, restored as the navigation target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_url: Option<String>,
+    /// The card that a block panel holds: its document, the revision the host
+    /// assigned and the agent that owns it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<crate::BlockPanelState>,
 }
 
 impl PanelState {
@@ -231,6 +235,7 @@ impl PanelState {
             editor_content: None,
             browser_profile: None,
             browser_url: None,
+            block: None,
         }
     }
 
@@ -299,6 +304,7 @@ impl PanelState {
             restore_as_disconnected_snapshot: false,
             is_restore: true,
             launch_wrapper: Vec::new(),
+            block: self.block.clone(),
         }
     }
 }
@@ -326,6 +332,7 @@ impl Default for PanelState {
             editor_content: None,
             browser_profile: None,
             browser_url: None,
+            block: None,
         }
     }
 }

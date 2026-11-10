@@ -27,6 +27,7 @@ fn shell_panel_state(local_id: &str, cwd: Option<&std::path::Path>) -> PanelStat
         device_identity: None,
         browser_profile: None,
         browser_url: None,
+        block: None,
     }
 }
 

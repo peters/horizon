@@ -102,6 +102,7 @@ pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused
         PanelKind::Usage => ("US", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
         PanelKind::Browser => ("WEB", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
         PanelKind::Device => ("VNC", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
+        PanelKind::Block => ("CARD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::Codex
         | PanelKind::Claude
         | PanelKind::OpenCode

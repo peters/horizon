@@ -263,3 +263,18 @@ fn render_resume_combo(ui: &mut Ui, index: usize, resume: &mut PanelResume) -> b
         });
     changed
 }
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::PanelKind;
+
+    use super::ALL_KINDS;
+
+    #[test]
+    fn the_agent_only_card_kind_is_not_a_preset_choice() {
+        assert!(
+            !ALL_KINDS.contains(&PanelKind::Block),
+            "a person must not add a card preset: only an agent creates a card"
+        );
+    }
+}

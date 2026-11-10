@@ -406,3 +406,90 @@ fn a_saved_panel_without_a_browser_host_restores_no_host() {
     let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
     assert!(options.browser_host.is_none());
 }
+
+#[test]
+fn a_saved_card_panel_comes_back_with_its_document_revision_and_owner() {
+    use horizon_browser_control::block::{BlockDocument, Component, Tone};
+
+    let first = BlockDocument {
+        components: vec![Component::Heading {
+            text: "Cloud one".to_string(),
+        }],
+    };
+    let second = BlockDocument {
+        components: vec![
+            Component::Heading {
+                text: "Cloud two".to_string(),
+            },
+            Component::Badge {
+                text: "running".to_string(),
+                tone: Tone::Ok,
+            },
+        ],
+    };
+    let mut card = crate::BlockPanelState::new(first);
+    assert_eq!(card.replace_document(second.clone()), 2);
+    card.owner_actor = Some("horizon:agent-panel".to_string());
+
+    let mut board = Board::new();
+    let workspace = board.create_workspace("cards");
+    board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Block,
+                name: Some("Cloud card".to_string()),
+                block: Some(card),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("a card panel starts without a process");
+
+    let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    assert_eq!(state.workspaces[0].panels[0].kind, PanelKind::Block);
+    let yaml = state.to_yaml().expect("serialize runtime state");
+    assert!(yaml.contains("kind: block"), "the kind keeps its serde name: {yaml}");
+    let restored: RuntimeState = serde_yaml::from_str(&yaml).expect("deserialize runtime state");
+    let options = restored.workspaces[0].panels[0].to_panel_options(&crate::browser::BrowserConfig::default());
+
+    assert_eq!(options.kind, PanelKind::Block);
+    assert_eq!(options.name.as_deref(), Some("Cloud card"));
+    let block = options.block.expect("the card comes back");
+    assert_eq!(block.title, "Cloud card");
+    assert_eq!(block.revision, 2);
+    assert_eq!(block.document, second);
+    assert_eq!(block.owner_actor.as_deref(), Some("horizon:agent-panel"));
+    board.shutdown_terminal_panels();
+}
+
+#[test]
+fn a_saved_panel_without_a_card_field_still_loads() {
+    let legacy: PanelState = serde_yaml::from_str("name: Card\nkind: block\n").expect("an older snapshot loads");
+
+    assert!(legacy.block.is_none());
+    assert!(
+        legacy
+            .to_panel_options(&crate::browser::BrowserConfig::default())
+            .block
+            .is_none()
+    );
+}
+
+#[test]
+fn a_card_without_an_owner_or_title_loads_with_the_card_defaults() {
+    let yaml = "\
+kind: block
+block:
+  document:
+    components:
+    - type: heading
+      text: Cloud
+";
+    let panel: PanelState = serde_yaml::from_str(yaml).expect("a card without an owner loads");
+
+    let block = panel.block.expect("the card");
+    assert_eq!(block.owner_actor, None);
+    assert_eq!(block.title, crate::BlockPanelState::DEFAULT_TITLE);
+    assert_eq!(block.revision, 1);
+    assert_eq!(block.document.components.len(), 1);
+}
