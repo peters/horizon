@@ -200,23 +200,42 @@ fn a_name_that_breaks_the_rule_never_reaches_the_file_system() {
 #[test]
 fn a_panel_that_uses_a_key_offers_that_key_alone() {
     let binding = MachineKeyRef {
-        directory: "/home/peters/.horizon/machine-keys/%6669".to_string(),
+        directory: "/home/peters/.horizon/machine-keys/w6669".to_string(),
         name: "build-1".to_string(),
     };
     assert_eq!(
         binding.ssh_option_args(),
         vec![
             "-i".to_string(),
-            "/home/peters/.horizon/machine-keys/%6669/build-1".to_string(),
+            "/home/peters/.horizon/machine-keys/w6669/build-1".to_string(),
             "-o".to_string(),
             "IdentitiesOnly=yes".to_string(),
             "-o".to_string(),
             "IdentityAgent=none".to_string(),
             "-o".to_string(),
-            "UserKnownHostsFile=/home/peters/.horizon/machine-keys/%6669/build-1.known_hosts".to_string(),
+            "UserKnownHostsFile=/home/peters/.horizon/machine-keys/w6669/build-1.known_hosts".to_string(),
             "-o".to_string(),
             "StrictHostKeyChecking=accept-new".to_string(),
         ],
         "the person's agent is not offered and the host key is pinned for this key"
     );
+}
+
+#[test]
+fn a_key_path_holds_no_percent_sign_and_ssh_reads_one_literally() {
+    let keys = MachineKeys::new(PathBuf::from("/home/person/.horizon/machine-keys"));
+    let directory = keys.workspace_directory("Workspace 1");
+    assert!(
+        !directory.display().to_string().contains('%'),
+        "ssh would read a percent sign in the path as a token: {}",
+        directory.display()
+    );
+    let odd_home = MachineKeyRef {
+        directory: "/home/100%/keys".to_string(),
+        name: "build-1".to_string(),
+    };
+    let arguments = odd_home.ssh_option_args();
+    assert_eq!(arguments[0], "-o", "a path with a percent sign cannot be given to -i");
+    assert_eq!(arguments[1], "IdentityFile=/home/100%%/keys/build-1");
+    assert_eq!(arguments[7], "UserKnownHostsFile=/home/100%%/keys/build-1.known_hosts");
 }

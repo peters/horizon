@@ -73,10 +73,10 @@ impl MachineKeyRef {
     #[must_use]
     pub fn ssh_option_args(&self) -> Vec<String> {
         [
-            ("-i", self.private_key().display().to_string()),
+            identity_option(&self.private_key()),
             ("-o", "IdentitiesOnly=yes".to_string()),
             ("-o", "IdentityAgent=none".to_string()),
-            ("-o", format!("UserKnownHostsFile={}", self.known_hosts().display())),
+            ("-o", format!("UserKnownHostsFile={}", ssh_path(&self.known_hosts()))),
             ("-o", "StrictHostKeyChecking=accept-new".to_string()),
         ]
         .into_iter()
@@ -161,7 +161,11 @@ impl MachineKeys {
     /// id, so the same workspace finds its keys after a restart.
     #[must_use]
     pub fn workspace_directory(&self, workspace: &str) -> PathBuf {
-        self.root.join(safe_local_id(workspace))
+        // The directory name holds no '%': ssh reads '%' in a key path and in a
+        // known-hosts path as the start of a token, and an agent passes the path
+        // of its key to its own ssh as it is.
+        let encoded = safe_local_id(workspace);
+        self.root.join(format!("w{}", encoded.trim_start_matches('%')))
     }
 
     /// The connection of a panel that uses the key `name` of `workspace`.
@@ -374,6 +378,27 @@ fn created_at_millis(path: &Path) -> u64 {
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// A path as the value of an ssh configuration option. ssh expands `%` tokens
+/// in `IdentityFile` and in `UserKnownHostsFile`, and `%%` is its literal
+/// percent sign.
+fn ssh_path(path: &Path) -> String {
+    path.display().to_string().replace('%', "%%")
+}
+
+/// The option that names the key file.
+///
+/// `-i` is the plain form. ssh looks for the file of `-i` before it expands
+/// tokens and expands them afterwards, so a path with a percent sign works in
+/// neither spelling there; the `IdentityFile` option takes the doubled sign.
+fn identity_option(private_key: &Path) -> (&'static str, String) {
+    let plain = private_key.display().to_string();
+    if plain.contains('%') {
+        ("-o", format!("IdentityFile={}", ssh_path(private_key)))
+    } else {
+        ("-i", plain)
+    }
 }
 
 #[cfg(test)]

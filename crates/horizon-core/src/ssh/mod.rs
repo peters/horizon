@@ -179,7 +179,7 @@ mod tests {
 
     fn key() -> MachineKeyRef {
         MachineKeyRef {
-            directory: "/home/peters/.horizon/machine-keys/%666f6c64657231".to_string(),
+            directory: "/home/peters/.horizon/machine-keys/w666f6c64657231".to_string(),
             name: "build-1".to_string(),
         }
     }
@@ -207,13 +207,13 @@ mod tests {
             connection.to_command_args(),
             vec![
                 "-i".to_string(),
-                "/home/peters/.horizon/machine-keys/%666f6c64657231/build-1".to_string(),
+                "/home/peters/.horizon/machine-keys/w666f6c64657231/build-1".to_string(),
                 "-o".to_string(),
                 "IdentitiesOnly=yes".to_string(),
                 "-o".to_string(),
                 "IdentityAgent=none".to_string(),
                 "-o".to_string(),
-                "UserKnownHostsFile=/home/peters/.horizon/machine-keys/%666f6c64657231/build-1.known_hosts".to_string(),
+                "UserKnownHostsFile=/home/peters/.horizon/machine-keys/w666f6c64657231/build-1.known_hosts".to_string(),
                 "-o".to_string(),
                 "StrictHostKeyChecking=accept-new".to_string(),
                 "-o".to_string(),
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(saved["machine_key"]["name"], serde_json::json!("build-1"));
         assert_eq!(
             saved["machine_key"]["directory"],
-            serde_json::json!("/home/peters/.horizon/machine-keys/%666f6c64657231"),
+            serde_json::json!("/home/peters/.horizon/machine-keys/w666f6c64657231"),
             "the directory comes with the name, so a restored panel builds the same line"
         );
         let restored: SshConnection = serde_json::from_value(saved).expect("parse a saved connection");
