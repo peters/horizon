@@ -90,6 +90,22 @@ pub enum Operation {
     Close { panel_id: String },
 }
 
+/// Public card input. Model providers refuse a tool whose input schema has
+/// `oneOf`, `anyOf` or `allOf` at the top level, so the advertised schema is a
+/// plain object that refers to the operations below it. The JSON a caller
+/// sends is the operation itself, exactly as the host queue reads it.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(extend("type" = "object"))]
+pub struct BlockPanelInput(Operation);
+
+impl BlockPanelInput {
+    #[must_use]
+    pub fn into_operation(self) -> Operation {
+        self.0
+    }
+}
+
 /// One card as `list` reports it.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[schemars(extend("type" = "object"))]
@@ -409,6 +425,43 @@ mod tests {
                 {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "warn"}]}
             ]
         })
+    }
+
+    #[test]
+    fn the_public_input_is_an_object_schema_and_the_operation_itself() {
+        let sent = serde_json::json!({"operation": "create", "document": document()});
+        assert_eq!(
+            serde_json::from_value::<BlockPanelInput>(sent.clone())
+                .expect("public input")
+                .into_operation(),
+            serde_json::from_value::<Operation>(sent).expect("operation"),
+            "a caller sends the operation, not a wrapper field"
+        );
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(serde_json::json!({
+                "operation": "update", "panel_id": "p", "document": document(), "visible": true
+            }))
+            .is_err(),
+            "an unknown field is still refused"
+        );
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(serde_json::json!({"operation": "wait_for_click"})).is_err(),
+            "an unknown operation is still refused"
+        );
+        let schema = serde_json::to_value(schemars::schema_for!(BlockPanelInput)).expect("schema");
+        let object = schema.as_object().expect("a schema object");
+        assert_eq!(schema["type"], serde_json::json!("object"));
+        for combinator in ["oneOf", "anyOf", "allOf"] {
+            assert!(
+                !object.contains_key(combinator),
+                "providers refuse a top-level {combinator}: {schema}"
+            );
+        }
+        assert!(object.contains_key("$ref"), "the operations stay behind one reference");
+        assert!(
+            schema.to_string().contains("next_click"),
+            "the operations are described"
+        );
     }
 
     #[test]

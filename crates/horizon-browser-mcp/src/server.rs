@@ -89,9 +89,9 @@ impl HorizonBrowserMcp {
     )]
     async fn block_panel(
         &self,
-        Parameters(operation): Parameters<horizon_browser_control::manifest::block::Operation>,
+        Parameters(input): Parameters<horizon_browser_control::manifest::block::BlockPanelInput>,
     ) -> Result<Json<horizon_browser_control::manifest::block::Outcome>, String> {
-        self.controller.block_panel(operation).await.map(Json)
+        self.controller.block_panel(input.into_operation()).await.map(Json)
     }
 
     #[tool(
@@ -792,6 +792,57 @@ mod tests {
         assert_eq!(
             bounded_evaluation_timeout(Some(u64::MAX)),
             BrowserControlAction::MAX_EVALUATION_TIMEOUT_MILLIS
+        );
+    }
+
+    #[test]
+    fn every_advertised_input_schema_is_a_plain_object() {
+        // Model providers refuse a tool whose input schema has `oneOf`, `anyOf`
+        // or `allOf` at the top level, and the client then drops the tool from
+        // the agent's list. Every tool must describe one object.
+        let server = HorizonBrowserMcp::new(BrowserController::with_actor("agent"));
+        let mut tools = server.tool_router.list_all();
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        assert!(!tools.is_empty(), "the server advertises tools");
+        for tool in tools {
+            let schema = serde_json::to_value(tool.input_schema.as_ref()).expect("an input schema");
+            let keys = schema
+                .as_object()
+                .map(|object| object.keys().cloned().collect::<Vec<_>>());
+            assert_eq!(
+                schema["type"],
+                serde_json::json!("object"),
+                "{} must describe a JSON object, keys {keys:?}",
+                tool.name
+            );
+            for combinator in ["oneOf", "anyOf", "allOf"] {
+                assert!(
+                    schema.get(combinator).is_none_or(serde_json::Value::is_null),
+                    "{} has a top-level {combinator}, which providers refuse: keys {keys:?}",
+                    tool.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn block_panel_takes_the_operation_and_never_a_wrapper_field() {
+        let input = serde_json::json!({"operation": "next_click", "panel_id": "card", "timeout_millis": 5000});
+        let parsed = serde_json::from_value::<horizon_browser_control::manifest::block::BlockPanelInput>(input)
+            .expect("a card operation is the tool input");
+        assert!(matches!(
+            parsed.into_operation(),
+            horizon_browser_control::manifest::block::Operation::NextClick {
+                timeout_millis: Some(5000),
+                ..
+            }
+        ));
+        assert!(
+            serde_json::from_value::<horizon_browser_control::manifest::block::BlockPanelInput>(
+                serde_json::json!({"operation": "inspect", "panel_id": "card", "wrapped": {"operation": "list"}})
+            )
+            .is_err(),
+            "an unknown field beside an operation is still refused"
         );
     }
 

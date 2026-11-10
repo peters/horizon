@@ -189,6 +189,36 @@ fn assert_output_schemas_describe_objects(tools: &Value) {
     }
 }
 
+fn assert_input_schemas_describe_objects(tools: &Value) {
+    // Model providers refuse a tool whose inputSchema has `oneOf`, `anyOf` or
+    // `allOf` at the top level, and the client drops such a tool from the
+    // agent's list. Every advertised input schema must describe one object.
+    let mut seen = 0;
+    for tool in tools["result"]["tools"].as_array().expect("tools") {
+        seen += 1;
+        let schema = &tool["inputSchema"];
+        let keys = schema.as_object().map(|object| {
+            let mut keys = object.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            keys
+        });
+        assert_eq!(
+            schema["type"],
+            json!("object"),
+            "{} input schema must describe a JSON object, keys {keys:?}: {schema}",
+            tool["name"]
+        );
+        for combinator in ["oneOf", "anyOf", "allOf"] {
+            assert!(
+                schema.get(combinator).is_none_or(Value::is_null),
+                "{} has a top-level {combinator}, which providers refuse, keys {keys:?}: {schema}",
+                tool["name"]
+            );
+        }
+    }
+    assert!(seen > 0, "tools/list advertises tools");
+}
+
 fn assert_device_panel_contract(tools: &Value) {
     assert!(
         !listed_tool(tools, "device_panel")["inputSchema"]
@@ -336,6 +366,7 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(28));
     assert_download_fetch_contract(tools);
     assert_output_schemas_describe_objects(tools);
+    assert_input_schemas_describe_objects(tools);
     assert_catalog_contract(tools);
     assert_device_panel_contract(tools);
     assert_block_panel_contract(tools);
