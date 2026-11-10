@@ -157,13 +157,19 @@ terminal with it:
 ```json
 {"operation": "machine_key", "name": "build-1"}
 {"status": "machine_key", "name": "build-1",
- "public_key": "ssh-ed25519 AAAA... horizon-machine-build-1", "created": true}
+ "public_key": "ssh-ed25519 AAAA... horizon-machine-build-1",
+ "private_key_path": "<Horizon home>/machine-keys/<workspace>/build-1",
+ "known_hosts_path": "<Horizon home>/machine-keys/<workspace>/build-1.known_hosts",
+ "created": true}
 ```
 
 1. Call `machine_key` with a name such as `build-1`.
 2. Put `public_key` in the `authorized_keys` of the machine, at rent time, from
    the console or the cloud-init of the provider.
-3. Call `open_terminal` with `"key": "build-1"`:
+3. Run the few commands that the machine needs with your own `ssh`, as
+   [Your own commands on the machine](#your-own-commands-on-the-machine) says.
+   Wait until SSH answers before you show the person a Connect button.
+4. Call `open_terminal` with `"key": "build-1"`:
 
    ```json
    {"operation": "open_terminal", "key": "build-1",
@@ -171,7 +177,7 @@ terminal with it:
     "remote_command": "tmux new -A -s build"}
    ```
 
-4. Call `delete_machine_key` after you delete the machine.
+5. Call `delete_machine_key` after you delete the machine.
 
 ```json
 {"operation": "machine_keys"}
@@ -183,8 +189,9 @@ terminal with it:
 - One workspace holds at most 32 keys. The 33rd name is `too_many_keys`; delete
   a key that you no longer need.
 - Horizon makes an ed25519 pair with no passphrase, under its own home. The
-  answer holds the public line only. `created` is false when the pair was
-  already there, and the same public key comes back.
+  answer holds the public line and the absolute paths `private_key_path` and
+  `known_hosts_path`; it never holds the text of the private key. `created` is
+  false when the pair was already there, and the same public key comes back.
 - You pass no path, no passphrase, no key file and no ssh option. Horizon adds
   `-i`, `IdentitiesOnly=yes`, `IdentityAgent=none`, its own known-hosts file for
   that key, and `StrictHostKeyChecking=accept-new` to the command line that it
@@ -193,16 +200,49 @@ terminal with it:
 - Every agent panel of the workspace can use the workspace's keys, so an agent
   that starts later reaches a machine that you rented. An agent of another
   workspace gets `key_unavailable`.
-- `machine_keys` answers `keys`, each with `name`, `public_key` and
-  `created_at_millis`.
+- `machine_keys` answers `keys`, each with `name`, `public_key`,
+  `private_key_path`, `known_hosts_path` and `created_at_millis`.
 - `delete_machine_key` removes the pair and its known-hosts file, and answers
   `name`. An unknown or deleted key is `key_unavailable`. Call it after you
   delete the machine.
-- The private key never appears in an answer, a log line or a card.
+- The text of the private key never appears in an answer, a log line or a
+  card. The path does, because you run as the same local user as Horizon and can
+  read the file anyway.
 
 The key is trust on first use: the first login with a key pins the host key in
 the known-hosts file of that key, and a later change refuses the login. Horizon
 does not verify the machine.
+
+## Your own commands on the machine
+
+A rent leaves a few things to do on the machine: wait until SSH answers, check
+that a program is there, install one. Run those commands yourself, with the
+private key that `machine_key` named. Use this form for every connection of your
+own:
+
+```
+ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
+    -o BatchMode=yes -o ConnectTimeout=10 <user>@<address> '<command>'
+```
+
+- `IdentitiesOnly=yes` and `IdentityAgent=none` offer that one key only. A long
+  ssh agent of the person exhausts `MaxAuthTries` and the login fails without
+  them.
+- `UserKnownHostsFile` and `StrictHostKeyChecking=accept-new` use the known-hosts
+  file of that key, so the first host key is pinned there and the person's own
+  file is untouched.
+- `BatchMode=yes` fails at once instead of asking for a password, and
+  `ConnectTimeout=10` keeps a dead address from hanging.
+- Pass `<command>` as one argument. Never put a credential, a token or the
+  private key text in a command line, a log or a card.
+- A connection that fails is normal in the first minute: retry the same form
+  every 10 seconds, for at most 3 minutes, and tell the person what you wait for
+  on the card with a `progress` component. Change nothing about the machine's
+  own ssh configuration.
+
+The person's own ssh never needs this file: `open_terminal` with `key` builds
+the same options itself, and the person types in that panel.
 
 ## The document
 
@@ -395,5 +435,7 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - The key name is saved with the terminal. A key that you delete after you
   opened a terminal leaves that terminal with ssh's own error when it restores.
 - A local agent that runs as the same user as Horizon can read the private key
-  file from disk. The key is not a secret that Horizon can keep from the person
-  or from a process of the person.
+  file from disk, and its answer names the path. The key is not a secret that
+  Horizon can keep from the person or from a process of the person. What Horizon
+  keeps is the fixed command line of the panel that it opens, and that the
+  person's own keys and ssh agent are not offered to the machine.

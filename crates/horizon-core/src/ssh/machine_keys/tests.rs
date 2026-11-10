@@ -63,18 +63,37 @@ fn a_key_pair_is_private_and_a_second_call_returns_the_same_public_key() {
             .contains("horizon-machine-build-1"),
         "the private half is not the public line"
     );
+    assert_eq!(
+        made.private_key_path,
+        directory.join("build-1").display().to_string(),
+        "the answer names the private half, so the agent can run its own ssh"
+    );
+    assert_eq!(
+        made.known_hosts_path,
+        directory.join("build-1.known_hosts").display().to_string(),
+        "the answer names the known-hosts file of that key"
+    );
+    assert!(
+        !made.private_key_path.contains("BEGIN"),
+        "a path is a path, not key material: {}",
+        made.private_key_path
+    );
 
     let again = keys
         .ensure("first", "build-1", block_keys::MAX_MACHINE_KEYS_PER_WORKSPACE)
         .expect("the same key pair");
     assert!(!again.created, "a second call keeps the pair it finds");
     assert_eq!(again.public_key, made.public_key);
+    assert_eq!(again.private_key_path, made.private_key_path);
+    assert_eq!(again.known_hosts_path, made.known_hosts_path);
     assert_eq!(again.created_at_millis, made.created_at_millis);
 
     let listed = keys.list("first").expect("the keys of the workspace");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].name, "build-1");
     assert_eq!(listed[0].public_key, made.public_key);
+    assert_eq!(listed[0].private_key_path, made.private_key_path);
+    assert_eq!(listed[0].known_hosts_path, made.known_hosts_path);
     assert!(!listed[0].created);
 }
 

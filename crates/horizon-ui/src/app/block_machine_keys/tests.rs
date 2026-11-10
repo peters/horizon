@@ -235,6 +235,8 @@ fn the_key_operations_make_list_and_delete_one_key() {
     let Outcome::MachineKey {
         name,
         public_key,
+        private_key_path,
+        known_hosts_path,
         created,
     } = made
     else {
@@ -247,6 +249,18 @@ fn the_key_operations_make_list_and_delete_one_key() {
         public_key.contains("horizon-machine-build-1"),
         "the public key names the machine: {public_key}"
     );
+    let directory = workspace_directory(&app, 0);
+    assert_eq!(
+        Path::new(&private_key_path),
+        directory.join("build-1"),
+        "the answer names the private half as an absolute path"
+    );
+    assert!(Path::new(&private_key_path).is_file(), "{private_key_path}");
+    assert_eq!(
+        Path::new(&known_hosts_path),
+        directory.join("build-1.known_hosts"),
+        "the answer names the known-hosts file of that key"
+    );
 
     let listed = answered(&mut app, &ctx, &root, block::Operation::MachineKeys);
     let Outcome::MachineKeys { keys } = listed else {
@@ -255,6 +269,8 @@ fn the_key_operations_make_list_and_delete_one_key() {
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].name, "build-1");
     assert_eq!(keys[0].public_key, public_key);
+    assert_eq!(keys[0].private_key_path, private_key_path);
+    assert_eq!(keys[0].known_hosts_path, known_hosts_path);
     assert!(keys[0].created_at_millis > 0);
 
     // The terminal of the same workspace connects with the pair that the worker
@@ -389,4 +405,113 @@ fn a_key_name_that_breaks_the_rule_is_refused_before_any_file_work() {
             .exists(),
         "a refused name writes no key"
     );
+}
+
+#[test]
+fn no_key_answer_or_error_holds_the_text_of_the_private_key() {
+    if !ssh_keygen_available() {
+        return;
+    }
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    let made = answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::MachineKey { name: "build-1".into() },
+    );
+    let Outcome::MachineKey {
+        private_key_path,
+        known_hosts_path,
+        ..
+    } = &made
+    else {
+        panic!("expected a key pair: {made:?}");
+    };
+    assert!(
+        private_key_path.starts_with(&temp.path().display().to_string()),
+        "the pair is in the home of this test: {private_key_path}"
+    );
+    assert_eq!(
+        Path::new(private_key_path).with_file_name("build-1.known_hosts"),
+        Path::new(known_hosts_path),
+        "the known-hosts file sits beside the pair"
+    );
+    let private = fs::read_to_string(private_key_path).expect("the private key");
+    assert!(
+        private.contains("BEGIN OPENSSH PRIVATE KEY"),
+        "the answer names a real private key: {private_key_path}"
+    );
+    let body: Vec<&str> = private
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("-----"))
+        .collect();
+    assert!(!body.is_empty(), "the private key has a body");
+
+    let mut answers: Vec<String> = vec![serialized(&made)];
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::MachineKey { name: "build-1".into() },
+    )));
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::MachineKeys,
+    )));
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        open_terminal(Some("build-1")),
+    )));
+    // An incomplete pair answers a message of its own.
+    let directory = workspace_directory(&app, 0);
+    fs::remove_file(directory.join("build-1.pub")).expect("the public half");
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::MachineKey { name: "build-1".into() },
+    )));
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::DeleteMachineKey { name: "build-1".into() },
+    )));
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::DeleteMachineKey { name: "build-1".into() },
+    )));
+    answers.push(serialized(&answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::MachineKey {
+            name: "../id_ed25519".into(),
+        },
+    )));
+
+    for answer in &answers {
+        for line in &body {
+            assert!(
+                !answer.contains(line),
+                "no answer or error holds the private key text, but this one holds {line}"
+            );
+        }
+    }
+}
+
+/// One answer as the asking agent reads it: its debug form and its JSON.
+fn serialized(outcome: &Outcome) -> String {
+    format!(
+        "{outcome:?} {}",
+        serde_json::to_string(outcome).expect("serialize the answer")
+    )
 }

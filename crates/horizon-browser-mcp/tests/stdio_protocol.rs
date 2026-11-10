@@ -254,7 +254,15 @@ fn assert_block_panel_contract(tools: &Value) {
     ] {
         assert!(card.contains(operation), "missing card operation {operation}");
     }
-    for key_field in ["remote_command", "ssh", "key", "public_key", "created_at_millis"] {
+    for key_field in [
+        "remote_command",
+        "ssh",
+        "key",
+        "public_key",
+        "private_key_path",
+        "known_hosts_path",
+        "created_at_millis",
+    ] {
         assert!(card.contains(key_field), "missing terminal or key field {key_field}");
     }
     for document_field in ["components", "heading", "buttons", "selection"] {

@@ -120,9 +120,10 @@ pub enum Operation {
         key: Option<String>,
     },
     /// Make or read the key pair that Horizon keeps for one machine name in the
-    /// caller's workspace, and answer its public key. Horizon makes an ed25519
-    /// pair with no passphrase under its own home, so the private half never
-    /// leaves this computer and the person's own keys are not used.
+    /// caller's workspace, and answer its public key with the paths of the
+    /// pair. Horizon makes an ed25519 pair with no passphrase under its own
+    /// home, so the private half never leaves this computer and the person's own
+    /// keys are not used.
     MachineKey { name: String },
     /// The key pairs of the calling agent's workspace, by name.
     MachineKeys,
@@ -148,7 +149,8 @@ impl BlockPanelInput {
 }
 
 /// One machine key of a workspace as `machine_keys` reports it. The private
-/// half stays in the Horizon home and never appears in an answer.
+/// half stays in the Horizon home and never appears in an answer; the answer
+/// names its file, because the agent runs as the same user as Horizon.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[schemars(extend("type" = "object"))]
 pub struct MachineKeySummary {
@@ -156,6 +158,11 @@ pub struct MachineKeySummary {
     /// The public key as `ssh-keygen` wrote it, one line, ready for
     /// `authorized_keys` on the machine.
     pub public_key: String,
+    /// The private half, as an absolute path. The agent may run `ssh -i` with
+    /// it for its own commands; Horizon connects the panel itself.
+    pub private_key_path: String,
+    /// The known-hosts file of this key alone, as an absolute path.
+    pub known_hosts_path: String,
     pub created_at_millis: u64,
 }
 
@@ -228,6 +235,11 @@ pub enum Outcome {
     MachineKey {
         name: String,
         public_key: String,
+        /// The private half as an absolute path. The text of the key is in no
+        /// answer, log line or message.
+        private_key_path: String,
+        /// The known-hosts file of this key alone, as an absolute path.
+        known_hosts_path: String,
         created: bool,
     },
     /// The machine key pairs of the caller's workspace.
@@ -703,6 +715,8 @@ mod tests {
         let answer = serde_json::to_value(Outcome::MachineKey {
             name: "build-1".into(),
             public_key: "ssh-ed25519 AAAA horizon-machine-build-1".into(),
+            private_key_path: "/home/horizon/machine-keys/ws/build-1".into(),
+            known_hosts_path: "/home/horizon/machine-keys/ws/build-1.known_hosts".into(),
             created: true,
         })
         .expect("serialize");
@@ -711,6 +725,15 @@ mod tests {
         assert_eq!(
             answer["public_key"],
             serde_json::json!("ssh-ed25519 AAAA horizon-machine-build-1")
+        );
+        assert_eq!(
+            answer["private_key_path"],
+            serde_json::json!("/home/horizon/machine-keys/ws/build-1"),
+            "the answer names the file of the private half"
+        );
+        assert_eq!(
+            answer["known_hosts_path"],
+            serde_json::json!("/home/horizon/machine-keys/ws/build-1.known_hosts")
         );
         assert!(
             !answer.to_string().contains("PRIVATE"),
@@ -721,6 +744,8 @@ mod tests {
             keys: vec![MachineKeySummary {
                 name: "build-1".into(),
                 public_key: "ssh-ed25519 AAAA horizon-machine-build-1".into(),
+                private_key_path: "/home/horizon/machine-keys/ws/build-1".into(),
+                known_hosts_path: "/home/horizon/machine-keys/ws/build-1.known_hosts".into(),
                 created_at_millis: 1_700_000_000_000,
             }],
         })
@@ -730,6 +755,14 @@ mod tests {
         assert_eq!(
             list["keys"][0]["created_at_millis"],
             serde_json::json!(1_700_000_000_000u64)
+        );
+        assert_eq!(
+            list["keys"][0]["private_key_path"],
+            serde_json::json!("/home/horizon/machine-keys/ws/build-1")
+        );
+        assert_eq!(
+            list["keys"][0]["known_hosts_path"],
+            serde_json::json!("/home/horizon/machine-keys/ws/build-1.known_hosts")
         );
 
         let deleted = serde_json::to_value(Outcome::DeletedMachineKey { name: "build-1".into() }).expect("serialize");

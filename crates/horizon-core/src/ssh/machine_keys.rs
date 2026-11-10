@@ -8,8 +8,11 @@
 //!
 //! Every call here reads or writes files and starts `ssh-keygen`, so it runs on
 //! a coordination worker thread and never on the UI thread. The private half
-//! stays in this directory: it is written to no answer, log line, card or error
-//! message, and the only text that leaves the directory is the public line.
+//! stays in this directory: its text is written to no answer, log line, card or
+//! error message, and the only text that leaves the directory is the public
+//! line together with the names of the two files. An agent runs as the same user
+//! as Horizon and can read the files anyway, so it receives their paths and may
+//! run its own `ssh` with them.
 
 use std::{
     fs, io,
@@ -49,6 +52,12 @@ impl MachineKeyRef {
         Path::new(&self.directory).join(&self.name)
     }
 
+    /// The public half that the agent puts on the machine.
+    #[must_use]
+    pub fn public_key(&self) -> PathBuf {
+        Path::new(&self.directory).join(format!("{}.pub", self.name))
+    }
+
     /// The known-hosts file of this key alone, so a recycled address never
     /// collides with another key or with the person's own known hosts.
     #[must_use]
@@ -82,6 +91,12 @@ pub struct MachineKey {
     pub name: String,
     /// The public line only, ready for `authorized_keys` on the machine.
     pub public_key: String,
+    /// The private half, as an absolute path. The agent may read the file and
+    /// run its own `ssh -i` with it for the commands that set the machine up;
+    /// the text of the key is in no answer.
+    pub private_key_path: String,
+    /// The known-hosts file of this key alone, as an absolute path.
+    pub known_hosts_path: String,
     pub created_at_millis: u64,
     /// Whether this request made the pair.
     pub created: bool,
@@ -166,10 +181,10 @@ impl MachineKeys {
     /// `ssh-keygen`.
     pub fn ensure(&self, workspace: &str, name: &str, limit: usize) -> Result<MachineKey, MachineKeyError> {
         let name = block_keys::check_name(name)?;
-        let directory = self.workspace_directory(workspace);
-        let (private, public) = (directory.join(name), directory.join(format!("{name}.pub")));
+        let binding = self.binding(workspace, name);
+        let (private, public) = (binding.private_key(), binding.public_key());
         match (private.is_file(), public.is_file()) {
-            (true, true) => return read_key(name, &private, &public, false),
+            (true, true) => return read_key(&binding, &public, false),
             (false, false) => {}
             _ => {
                 return Err(not_usable(format!(
@@ -180,11 +195,11 @@ impl MachineKeys {
         if self.list(workspace)?.len() >= limit {
             return Err(MachineKeyError::TooMany { limit });
         }
-        private_directory(&directory)?;
+        private_directory(&self.workspace_directory(workspace))?;
         make_key_pair(&private, &public, name)?;
         fs::set_permissions(&private, fs::Permissions::from_mode(PRIVATE_KEY_MODE))
             .map_err(|error| not_usable(format!("Horizon could not make the key {name} private: {error}")))?;
-        read_key(name, &private, &public, true)
+        read_key(&binding, &public, true)
     }
 
     /// Every key pair of `workspace`, by name.
@@ -210,11 +225,11 @@ impl MachineKeys {
             if block_keys::check_name(name).is_err() {
                 continue;
             }
-            let private = directory.join(name);
-            if !private.is_file() {
+            let binding = self.binding(workspace, name);
+            if !binding.private_key().is_file() {
                 continue;
             }
-            if let Ok(key) = read_key(name, &private, &entry.path(), false) {
+            if let Ok(key) = read_key(&binding, &entry.path(), false) {
                 keys.push(key);
             }
         }
@@ -274,17 +289,22 @@ fn not_usable(reason: String) -> MachineKeyError {
     MachineKeyError::Unavailable { reason }
 }
 
-/// Read the public half of one pair. Only the public line leaves the directory.
-fn read_key(name: &str, private: &Path, public: &Path, created: bool) -> Result<MachineKey, MachineKeyError> {
+/// Read the public half of one pair. The public line and the two file names
+/// leave the directory; the private key text never does.
+fn read_key(binding: &MachineKeyRef, public: &Path, created: bool) -> Result<MachineKey, MachineKeyError> {
+    let name = binding.name.as_str();
     let public_key = fs::read_to_string(public).map_err(|error| {
         not_usable(format!(
             "Horizon could not read the public key of the machine key {name}: {error}"
         ))
     })?;
+    let private = binding.private_key();
     Ok(MachineKey {
         name: name.to_owned(),
         public_key: public_key.trim().to_owned(),
-        created_at_millis: created_at_millis(private),
+        private_key_path: private.display().to_string(),
+        known_hosts_path: binding.known_hosts().display().to_string(),
+        created_at_millis: created_at_millis(&private),
         created,
     })
 }

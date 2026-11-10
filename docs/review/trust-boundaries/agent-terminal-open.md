@@ -114,9 +114,11 @@ an optional `key` with the same rule. `machine_keys` takes no input.
   pinned for that key alone. A recycled address therefore cannot collide with
   the person's own `known_hosts`, and a changed host key refuses that key's
   login.
-- **The private half never leaves the Horizon home.** The answer, a log line, a
-  card and an error message hold the public line only. The key directory is
-  `0700` and the private key `0600`; `ssh-keygen` makes an ed25519 pair with no
+- **The private half stays in the Horizon home.** No answer, log line, card or
+  error message holds the text of the private key. The answer names the two
+  files, `private_key_path` and `known_hosts_path`, so an agent can run its own
+  `ssh` for the commands that set the machine up; the key directory is `0700`
+  and the private key `0600`, and `ssh-keygen` makes an ed25519 pair with no
   passphrase. One workspace holds at most 32 pairs (`too_many_keys`).
 - **Workspace scope, not agent scope.** Every agent panel of the workspace may
   use the workspace's keys, so an agent that starts later reaches a machine that
@@ -131,9 +133,16 @@ an optional `key` with the same rule. `machine_keys` takes no input.
 
 ### Does not guarantee (machine keys)
 
-- **A local agent that runs as the same user can read the key file from disk.**
-  The key is a file under the Horizon home; Horizon keeps it from an answer, a
-  log line and a card, not from a process of the person.
+- **The agent gets the path and may run its own connection with it.** An agent
+  panel runs as the same local user as Horizon, so the private key is a file that
+  it can read. `machine_key` and `machine_keys` therefore answer
+  `private_key_path` and `known_hosts_path`: the agent may run `ssh` and `scp`
+  with `-i <private_key_path>`, its own known-hosts file and its own command, and
+  the command it runs on the machine is then its own choice, outside the route
+  rule of `open_terminal`. Horizon still guarantees the fixed argv of the terminal
+  panel that it opens itself, and that the person's own keys and ssh agent are
+  not offered to the machine. Nothing here makes the key a secret from a process
+  of the person.
 - **First contact is trust on first use.** Horizon pins the host key that the
   first login sees. It does not verify that the machine is the one the agent
   meant, and the person's own known-hosts entries do not apply to that key.

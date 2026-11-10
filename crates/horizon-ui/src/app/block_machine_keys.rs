@@ -5,7 +5,8 @@
 //! frame makes, reads or deletes one: the frame resolves the caller and its
 //! workspace on the board, the coordination worker does the file work and the
 //! process, and the answer is written when that work is done. The private half
-//! stays in the Horizon home and reaches no answer, log line or card.
+//! stays in the Horizon home: an answer names the two files, and the text of the
+//! private key reaches no answer, log line or card.
 
 use std::path::Path;
 
@@ -79,6 +80,8 @@ impl HorizonApp {
                 Ok(key) => block::Outcome::MachineKey {
                     name: key.name,
                     public_key: key.public_key,
+                    private_key_path: key.private_key_path,
+                    known_hosts_path: key.known_hosts_path,
                     created: key.created,
                 },
                 Err(error) => refused(&error),
@@ -105,6 +108,8 @@ impl HorizonApp {
                     .map(|key| block::MachineKeySummary {
                         name: key.name,
                         public_key: key.public_key,
+                        private_key_path: key.private_key_path,
+                        known_hosts_path: key.known_hosts_path,
                         created_at_millis: key.created_at_millis,
                     })
                     .collect(),

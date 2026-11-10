@@ -789,7 +789,10 @@ caller's workspace:
 
 ```json
 {"operation":"machine_key","name":"build-1"}
-{"status":"machine_key","name":"build-1","public_key":"ssh-ed25519 AAAA... horizon-machine-build-1","created":true}
+{"status":"machine_key","name":"build-1","public_key":"ssh-ed25519 AAAA... horizon-machine-build-1",
+ "private_key_path":"/home/you/.horizon/machine-keys/<workspace>/build-1",
+ "known_hosts_path":"/home/you/.horizon/machine-keys/<workspace>/build-1.known_hosts",
+ "created":true}
 ```
 
 Put `public_key` in the `authorized_keys` of the machine at rent time, then open
@@ -809,18 +812,31 @@ key is pinned for that key on first contact and a changed key refuses the login.
 
 `name` is 1 to 40 characters of `a-z`, `0-9` and `-`, with no `-` at either end
 (`invalid_key_name`). Horizon makes an ed25519 pair with no passphrase under its
-own home, answers the public line only, and reports `created` false when the pair
-was already there. One workspace holds at most 32 keys (`too_many_keys`). An
-agent passes no path, no passphrase, no key file and no ssh option, and the
-private key never appears in an answer, a log line or a card.
+own home, answers the public line with the absolute paths of the pair, and
+reports `created` false when the pair was already there. One workspace holds at
+most 32 keys (`too_many_keys`). An agent passes no path, no passphrase, no key
+file and no ssh option, and the text of the private key never appears in an
+answer, a log line or a card.
+
+`private_key_path` and `known_hosts_path` name Horizon's files for that key, so
+an agent can run its own `ssh` for the commands that set the machine up. It runs
+as the same local user as Horizon and can read the file anyway; the paths save a
+guess, and Horizon's guarantee stays the fixed argv of the panel that it opens
+and that the person's own keys are not used. The login form of such a command is
+
+```
+ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
+    -o BatchMode=yes -o ConnectTimeout=10 <user>@<address> '<command>'
+```
 
 Every agent panel of the workspace may use the workspace's keys, so a later agent
 reaches a machine that an earlier agent rented; an agent of another workspace
 gets `key_unavailable`. `machine_keys` answers
-`{"keys":[{"name","public_key","created_at_millis"}]}` for the caller's
-workspace. `delete_machine_key` removes the pair and its known-hosts file, and an
-unknown or deleted key is `key_unavailable`; call it after the machine is
-deleted. The key name is saved with the panel, so a restored panel builds the
+`{"keys":[{"name","public_key","private_key_path","known_hosts_path","created_at_millis"}]}`
+for the caller's workspace. `delete_machine_key` removes the pair and its
+known-hosts file, and an unknown or deleted key is `key_unavailable`; call it
+after the machine is deleted. The key name is saved with the panel, so a restored panel builds the
 same command line and a restored panel whose key was deleted shows ssh's own
 error. A local agent that runs as the person can read the key file from disk, and
 first contact with a host is trust on first use.
