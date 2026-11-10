@@ -237,7 +237,7 @@ fn registration_extends_inline_server_tables_without_changing_existing_settings(
 }
 
 #[test]
-fn a_named_browser_host_becomes_the_arguments_of_the_grok_registration() {
+fn a_named_browser_host_keeps_the_local_arguments_of_the_grok_registration() {
     let local = registration(None);
     assert!(local.contains("args = [\"--browser-mcp\"]"), "{local}");
     assert!(!local.contains("--remote"), "the local registration names no host");
@@ -246,22 +246,24 @@ fn a_named_browser_host_becomes_the_arguments_of_the_grok_registration() {
         ssh_target: Some("browser-vm".to_string()),
         profile: Some("mail".to_string()),
     };
-    let remote = registration(Some(&browser_host));
-    assert!(
-        remote.contains("args = [\"--browser-mcp\", \"--remote\", \"browser-vm\", \"--profile\", \"mail\"]"),
-        "{remote}"
+    let named = registration(Some(&browser_host));
+    assert_eq!(
+        local, named,
+        "a panel that follows the browser host is the ordinary browser panel, so the agent serves every panel of this Horizon"
     );
-    let document = parse(&remote).expect("valid TOML");
+    assert!(!named.contains("--remote") && !named.contains("--profile"), "{named}");
+    let document = parse(&named).expect("valid TOML");
     assert_eq!(
         document["mcp_servers"]["horizon-browser"]["tool_timeout_sec"].as_integer(),
         Some(3660),
-        "the remote registration keeps the handoff timeout"
+        "the registration keeps the handoff timeout"
     );
 
     let home = tempfile::tempdir().expect("home");
     assert!(register(home.path(), Some(&browser_host)).expect("register"));
     let text = fs::read_to_string(home.path().join("config.toml")).expect("registered");
-    assert!(text.contains("\"--remote\", \"browser-vm\""), "{text}");
+    assert!(text.contains("args = [\"--browser-mcp\"]"), "{text}");
+    assert!(!text.contains("--remote"), "{text}");
 }
 
 fn args_of(text: &str) -> Vec<String> {

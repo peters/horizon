@@ -388,25 +388,24 @@ enum BrowserSpawnMode {
     /// A remote panel from a previous run; it comes back stopped.
     RestoredRemote(String),
     /// The browser host of another machine that the settings name.
-    RemoteHost(crate::browser::RemoteHostBackend),
+    AttachedHost(crate::browser::AttachedHost),
     /// The browser host and profile that served a panel in a previous run. It
     /// comes back on that host, as a page cannot move between machines.
-    RestoredHost(crate::browser::RemoteHostBackend),
+    RestoredHost(crate::browser::AttachedHost),
 }
 
 /// The backend of a new browser panel: the browser host that the settings name,
 /// or the browser of this computer.
 ///
-/// Only a panel that a person creates from the preset picker follows the entry,
-/// which its `PanelOptions` says. A page that an agent asks for stays on the
-/// browser of this computer, because the entry of that agent reaches the host
-/// over the bridge and a signed-in profile of the person takes no page that an
-/// agent asked for. A saved panel, and a page of a local profile that a panel
-/// duplicates, keep the backend that their caller chose.
+/// A panel that follows the entry carries the flag in its `PanelOptions`: the
+/// preset picker of a person, and a create that an agent asks for. Both open the
+/// ordinary browser panel, and only the machine that runs the Chromium differs.
+/// A saved panel, and a page of a local profile that a panel duplicates, keep
+/// the backend that their caller chose.
 ///
 /// # Errors
-/// Returns the reason that `RemoteHostBackend::new` gives for a target that `ssh`
-/// would take as an option or split, so no such value reaches a channel.
+/// Returns the reason that `AttachedHost::new` gives for a target that `ssh`
+/// would take as an option or split, so no such value reaches a forward.
 /// The mode of a browser panel that a previous run saved: the browser host and
 /// profile that served it, when the saved panel carries them, and otherwise the
 /// mode that its other saved fields give.
@@ -415,15 +414,15 @@ enum BrowserSpawnMode {
 /// that served it, and a live page cannot move between machines.
 ///
 /// # Errors
-/// Returns the reason that `RemoteHostBackend::new` gives for a saved target that
-/// `ssh` would take as an option or split, so no such value reaches a channel.
+/// Returns the reason that `AttachedHost::new` gives for a saved target that
+/// `ssh` would take as an option or split, so no such value reaches a forward.
 fn restored_browser_mode(
     mode: BrowserSpawnMode,
     browser_host: Option<crate::runtime_state::BrowserHostState>,
 ) -> Result<BrowserSpawnMode> {
     match (browser_host, mode) {
         (Some(host), BrowserSpawnMode::Local(None)) => Ok(BrowserSpawnMode::RestoredHost(
-            crate::browser::RemoteHostBackend::new(host.ssh_target, host.profile)?,
+            crate::browser::AttachedHost::new(host.ssh_target, host.profile.as_deref())?,
         )),
         (_, mode) => Ok(mode),
     }
@@ -443,11 +442,9 @@ fn browser_spawn_mode(
     if !matches!(mode, BrowserSpawnMode::Local(None)) {
         return Ok(mode);
     }
-    let backend = crate::browser::RemoteHostBackend::new(
-        browser_host.ssh_target().unwrap_or_default(),
-        browser_host.profile().map(str::to_string),
-    )?;
-    Ok(BrowserSpawnMode::RemoteHost(backend))
+    let host =
+        crate::browser::AttachedHost::new(browser_host.ssh_target().unwrap_or_default(), browser_host.profile())?;
+    Ok(BrowserSpawnMode::AttachedHost(host))
 }
 
 /// Spawn a browser panel. The generic `command` field carries the optional
@@ -485,15 +482,18 @@ fn spawn_browser(
             target,
             initial_url.clone(),
         ),
-        // A panel of a browser host returns at once: the channel of the host
-        // opens on its worker thread, and a host that never answers is a state
-        // of the panel.
-        BrowserSpawnMode::RemoteHost(backend) | BrowserSpawnMode::RestoredHost(backend) => {
-            crate::browser::BrowserPanelState::start_remote_host(
+        // A panel of a browser host returns at once: the forward to that machine
+        // opens on a worker thread of the panel, and a host that never answers is
+        // a state of the panel.
+        BrowserSpawnMode::AttachedHost(host) | BrowserSpawnMode::RestoredHost(host) => {
+            if let Some(reason) = crate::browser::attached_host_backend_refusal(browser_config.backend) {
+                return Err(crate::error::Error::Config(reason.to_string()));
+            }
+            crate::browser::BrowserPanelState::start_attached_host(
                 seed.local_id.clone(),
                 &browser_config,
                 initial_url.clone(),
-                &backend,
+                &host,
             )
         }
     };
@@ -983,16 +983,14 @@ mod tests {
             ssh_target: Some("browser-vm".to_string()),
             profile: Some("mail".to_string()),
         };
-        let remote = horizon_codex_mcp_args(Some(&browser_host)).join(" ");
-        assert!(
-            remote.contains(
-                "mcp_servers.horizon-browser.args=[\"--browser-mcp\",\"--remote\",\"browser-vm\",\"--profile\",\"mail\"]"
-            ),
-            "{remote}"
+        let named = horizon_codex_mcp_args(Some(&browser_host)).join(" ");
+        assert_eq!(
+            named, local,
+            "the tools of an agent drive the panels of this Horizon, on whatever machine they run"
         );
         assert!(
-            remote.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"),
-            "the entry keeps the handoff timeout: {remote}"
+            named.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"),
+            "the entry keeps the handoff timeout: {named}"
         );
     }
 
@@ -1281,52 +1279,33 @@ mod tests {
         }
     }
 
-    /// A browser panel of the mode that the route chose, with the profile root
-    /// of a temporary folder so the test leaves no browser state behind.
-    fn spawn_routed_browser(mode: BrowserSpawnMode, initial_url: Option<String>) -> Panel {
-        let root = tempfile::tempdir().expect("profile root");
-        let mut options = PanelOptions {
-            kind: PanelKind::Browser,
-            browser_config: Some(crate::browser::BrowserConfig {
-                command: Some(root.path().join("no-browser").to_string_lossy().into_owned()),
-                profile_root: Some(root.path().join("profiles")),
-                ..crate::browser::BrowserConfig::default()
-            }),
-            ..PanelOptions::default()
-        };
-        let seed = StaticPanelSeed::from_options(PanelId(1), WorkspaceId(1), "panel-mail".to_string(), &mut options);
-        spawn_browser(seed, initial_url, options.browser_config.take(), mode).expect("browser panel")
-    }
-
     #[test]
     fn a_named_browser_host_routes_a_new_panel_to_that_host_and_its_profile() {
         let host = browser_host("browser-vm", Some("mail"));
         let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), true).expect("one SSH name");
-        let started = std::time::Instant::now();
-        let panel = spawn_routed_browser(mode, Some("https://example.test/".to_string()));
-        let opened = started.elapsed();
-        assert!(
-            opened < std::time::Duration::from_millis(500),
-            "a host that never answers does not hold the caller: {opened:?}"
-        );
-        let browser = panel.browser().expect("a browser panel");
-        assert!(browser.is_remote_host(), "the panel uses the host of the settings");
-        assert_eq!(browser.remote_host_target(), Some("browser-vm"));
+        let BrowserSpawnMode::AttachedHost(attached) = mode else {
+            panic!("a named host routes the panel to that host");
+        };
+        assert_eq!(attached.ssh_target(), "browser-vm");
         assert_eq!(
-            browser.remote_host_profile(),
-            Some("mail"),
-            "the profile of the entry is the default target of the page"
+            attached.profile(),
+            "mail",
+            "the profile of the entry is the profile of the page"
         );
-        assert_eq!(browser.kept_host_note(), Some(crate::browser::KEPT_HOST_NOTE));
-        assert_eq!(
-            panel.launch_command.as_deref(),
-            Some("https://example.test/"),
-            "the requested page is the first page of the host"
-        );
-        assert_eq!(
-            panel.title, "example.test",
-            "the title of the panel comes from the requested page"
-        );
+
+        let unnamed = browser_spawn_mode(
+            BrowserSpawnMode::Local(None),
+            Some(&browser_host("browser-vm", None)),
+            true,
+        )
+        .expect("one SSH name");
+        let BrowserSpawnMode::AttachedHost(attached) = unnamed else {
+            panic!("a host without a profile still routes the panel to that host");
+        };
+        assert_eq!(attached.profile(), crate::browser::DEFAULT_HOST_PROFILE);
+
+        let title = crate::browser::panel_title_for_url("https://example.test/");
+        assert_eq!(title, "example.test", "the title comes from the requested page");
     }
 
     #[test]
@@ -1362,6 +1341,8 @@ mod tests {
         .expect("a local browser panel");
         let browser = panel.browser().expect("a browser panel");
         assert!(!browser.is_remote_host(), "a panel without a host stays local");
+        assert!(!browser.is_attached(), "a panel without a host runs on this computer");
+        assert_eq!(browser.attached_host_target(), None);
         assert_eq!(browser.remote_host_target(), None);
         assert_eq!(browser.remote_host_note(), None);
         assert_eq!(browser.kept_host_note(), None);
@@ -1437,7 +1418,7 @@ mod tests {
             panic!("a saved host restores the panel on that host");
         };
         assert_eq!(backend.ssh_target(), "browser-vm");
-        assert_eq!(backend.profile(), Some("signed-in"));
+        assert_eq!(backend.profile(), "signed-in");
     }
 
     #[test]
@@ -1468,46 +1449,15 @@ mod tests {
         );
     }
 
-    /// The options that `browser_requests` builds for a `browser_create` that
-    /// names no remote target: the page of an agent, not a page of the person.
-    fn agent_browser_create_options(root: &std::path::Path) -> PanelOptions {
-        PanelOptions {
-            command: Some("https://example.test/".to_string()),
-            kind: PanelKind::Browser,
-            visible: true,
-            browser_config: Some(crate::browser::BrowserConfig {
-                command: Some(root.join("no-browser").to_string_lossy().into_owned()),
-                profile_root: Some(root.join("profiles")),
-                ..crate::browser::BrowserConfig::default()
-            }),
-            ..PanelOptions::default()
-        }
-    }
-
     #[test]
-    fn an_agent_browser_create_stays_local_when_the_settings_name_a_host() {
+    fn an_agent_browser_create_follows_the_named_host() {
         let host = browser_host("browser-vm", Some("mail"));
-        let root = tempfile::tempdir().expect("profile root");
-        let options = agent_browser_create_options(root.path());
-        assert!(
-            !options.follows_browser_host,
-            "a create of an agent asks for no browser host"
-        );
-
-        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), options.follows_browser_host)
-            .expect("the agent path never refuses");
-        assert!(
-            matches!(mode, BrowserSpawnMode::Local(None)),
-            "the page of an agent stays on the browser of this computer"
-        );
-
-        let panel = spawn_panel(PanelId(3), WorkspaceId(1), options).expect("an agent browser panel");
-        let browser = panel.browser().expect("a browser panel");
-        assert!(
-            !browser.is_remote_host(),
-            "the panel of an agent takes no page of the person's host"
-        );
-        assert_eq!(browser.remote_host_target(), None);
+        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), true).expect("the agent route");
+        let BrowserSpawnMode::AttachedHost(attached) = mode else {
+            panic!("the page of an agent runs on the Chromium of the host");
+        };
+        assert_eq!(attached.ssh_target(), "browser-vm");
+        assert_eq!(attached.profile(), "mail");
     }
 
     #[test]
@@ -1517,40 +1467,5 @@ mod tests {
             .err()
             .expect("a target that ssh reads as an option is refused");
         assert!(error.to_string().contains("one SSH name"), "{error}");
-    }
-
-    #[test]
-    fn retry_and_restart_of_a_panel_of_a_browser_host_keep_that_host() {
-        let host = browser_host("browser-vm", Some("mail"));
-        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), true).expect("the route");
-        let mut panel = spawn_routed_browser(mode, Some("https://example.test/".to_string()));
-        let browser = panel.browser_mut().expect("a browser panel");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while browser.remote_host_failure().is_none() && std::time::Instant::now() < deadline {
-            browser.drain_events();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        browser.drain_events();
-        assert!(
-            browser.remote_host_failure().is_some(),
-            "a host that does not answer ends the first channel with a typed reason"
-        );
-
-        let started = std::time::Instant::now();
-        browser.relaunch();
-        let retried = started.elapsed();
-        assert!(
-            retried < std::time::Duration::from_millis(500),
-            "Retry never waits for ssh: {retried:?}"
-        );
-        assert_eq!(browser.status, crate::browser::BrowserStatus::Starting);
-        assert!(browser.is_remote_host(), "Retry keeps the backend of the panel");
-        assert_eq!(browser.remote_host_target(), Some("browser-vm"));
-        assert_eq!(browser.remote_host_profile(), Some("mail"));
-        assert_eq!(
-            browser.remote_host_failure(),
-            None,
-            "the new channel starts with no reason of the old one"
-        );
     }
 }

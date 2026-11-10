@@ -582,3 +582,24 @@ fn attached_host_panel_drives_a_real_ssh_target() {
         super::AttachOutcome::Cancelled => panic!("the check of the running browser was cancelled"),
     }
 }
+
+#[test]
+fn a_panel_of_a_browser_host_records_that_host_and_profile() {
+    let _serial = serial();
+    let directory = scratch();
+    let log = directory.path().join("commands.log");
+    let program = stand_in(directory.path(), &log, "exit 255");
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let panel = panel(test_ssh(&program, |_port| true), &host);
+
+    let record = crate::runtime_state::browser_profile_state(&panel, false);
+    let saved = record.host.expect("the saved panel names its browser host");
+    assert_eq!(saved.ssh_target, "browser-vm");
+    assert_eq!(saved.profile.as_deref(), Some("mail"));
+    assert_eq!(record.backend, Some(BackendKind::ChromiumCdp));
+    assert!(
+        record.root.is_none(),
+        "the Chromium of another machine owns its profile folder there"
+    );
+    assert!(record.session_id.is_none(), "no local profile group holds this page");
+}

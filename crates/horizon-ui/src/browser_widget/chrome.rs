@@ -149,15 +149,16 @@ fn remote_identity_header(
 
 /// The picker acts only for an interactive local panel that is not teaching.
 fn picker_enabled(browser: &BrowserPanelState, interactive: bool) -> bool {
-    interactive && browser.teach().is_none() && !browser.is_remote() && !browser.is_remote_host()
+    interactive
+        && browser.teach().is_none()
+        && !browser.is_remote()
+        && !browser.is_remote_host()
+        && !browser.is_attached()
 }
 
 /// The SSH target of the browser host of this panel. The target is the name that
 /// `ssh` resolves, never an endpoint of the host.
-fn remote_host_label(ui: &mut Ui, browser: &BrowserPanelState) {
-    let Some(target) = browser.remote_host_target() else {
-        return;
-    };
+fn remote_host_label(ui: &mut Ui, target: &str) {
     ui.add(egui::Label::new(
         RichText::new(target).size(10.0).color(theme::FG_SOFT()),
     ))
@@ -177,8 +178,8 @@ fn backend_picker(
     }
     // The engine of a page of a browser host is fixed by the profile of that
     // host, so the picker shows the host instead of offering another engine.
-    if browser.is_remote_host() {
-        remote_host_label(ui, browser);
+    if let Some(target) = browser.attached_host_target().or_else(|| browser.remote_host_target()) {
+        remote_host_label(ui, target);
         return false;
     }
     let previous = browser.backend();

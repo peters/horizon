@@ -83,6 +83,16 @@ impl BrowserHostConfig {
             .filter(|profile| !profile.is_empty())
     }
 
+    /// The reason that a create of `backend` is refused while this entry names a
+    /// host: that machine runs the Chromium of its profile, so it serves no
+    /// Firefox and no Safari page. An entry that names no host refuses nothing.
+    #[must_use]
+    pub fn backend_refusal(&self, backend: crate::browser::BackendKind) -> Option<&'static str> {
+        self.names_host()
+            .then(|| crate::browser::attached_host_backend_refusal(backend))
+            .flatten()
+    }
+
     /// # Errors
     /// Rejects an SSH target that `ssh` would read as an option or that holds a
     /// control character, a profile that the host file rule does not accept,
@@ -124,23 +134,16 @@ impl BrowserHostConfig {
 }
 
 /// The arguments that reach `horizon --browser-mcp` in the MCP entry of an
-/// agent: the local server of this computer, or the bridge to the named host.
+/// agent: the local server of this computer.
 ///
-/// No host gives `--browser-mcp` alone, so the entry of an agent is the entry
-/// that Horizon wrote before this setting existed.
+/// A browser panel that follows `browser_host` is the ordinary browser panel,
+/// whose Chromium runs on that machine over a tunnel, so the tools of an agent
+/// reach it exactly as they reach a panel of this computer. The entry no longer
+/// names the host, and the argument stays until the bridge to the old host
+/// server is removed.
 #[must_use]
-pub fn browser_mcp_args(browser_host: Option<&BrowserHostConfig>) -> Vec<String> {
-    let mut args = vec!["--browser-mcp".to_string()];
-    let Some(browser_host) = browser_host.filter(|browser_host| browser_host.names_host()) else {
-        return args;
-    };
-    if let Some(target) = browser_host.ssh_target() {
-        args.extend(["--remote".to_string(), target.to_string()]);
-    }
-    if let Some(profile) = browser_host.profile() {
-        args.extend(["--profile".to_string(), profile.to_string()]);
-    }
-    args
+pub fn browser_mcp_args(_browser_host: Option<&BrowserHostConfig>) -> Vec<String> {
+    vec!["--browser-mcp".to_string()]
 }
 
 /// The profile-name rule of the host file of `horizon-browser host`, shared
@@ -194,27 +197,43 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_without_a_host_keeps_the_arguments_of_the_local_server() {
-        assert_eq!(browser_mcp_args(None), vec!["--browser-mcp"]);
-        assert_eq!(
-            browser_mcp_args(Some(&BrowserHostConfig::default())),
-            vec!["--browser-mcp"],
-            "an empty entry is no host"
-        );
-        assert_eq!(
-            browser_mcp_args(Some(&entry(Some("  "), None))),
-            vec!["--browser-mcp"],
-            "an empty target is no host"
-        );
-        assert_eq!(
-            browser_mcp_args(Some(&entry(Some("browser-vm"), None))),
-            vec!["--browser-mcp", "--remote", "browser-vm"]
-        );
-        assert_eq!(
-            browser_mcp_args(Some(&entry(Some("browser-vm"), Some("mail")))),
-            vec!["--browser-mcp", "--remote", "browser-vm", "--profile", "mail"],
-            "the profile of the entry travels with the target"
-        );
+    fn every_entry_of_an_agent_names_the_local_server() {
+        for host in [
+            None,
+            Some(BrowserHostConfig::default()),
+            Some(entry(Some("  "), None)),
+            Some(entry(Some("browser-vm"), None)),
+            Some(entry(Some("browser-vm"), Some("mail"))),
+        ] {
+            assert_eq!(
+                browser_mcp_args(host.as_ref()),
+                vec!["--browser-mcp"],
+                "the tools of an agent drive the panels of this Horizon: {host:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_named_host_serves_chromium_and_refuses_the_other_engines() {
+        use crate::browser::BackendKind;
+        let named = entry(Some("browser-vm"), None);
+        assert_eq!(named.backend_refusal(BackendKind::ChromiumCdp), None);
+        for backend in [BackendKind::FirefoxBidi, BackendKind::SafariWebDriver] {
+            let reason = named.backend_refusal(backend).expect("a refusal");
+            assert!(reason.contains("Chromium only"), "{reason}");
+        }
+        let absent = BrowserHostConfig::default();
+        for backend in [
+            BackendKind::ChromiumCdp,
+            BackendKind::FirefoxBidi,
+            BackendKind::SafariWebDriver,
+        ] {
+            assert_eq!(
+                absent.backend_refusal(backend),
+                None,
+                "an entry that names no host refuses no engine"
+            );
+        }
     }
 
     #[test]

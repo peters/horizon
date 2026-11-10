@@ -95,6 +95,18 @@ impl HorizonApp {
             return;
         }
         let backend = request.backend.unwrap_or(self.template_config.browser.backend);
+        // A panel that follows the browser host runs in the Chromium of that
+        // machine, so an engine that the host does not have is refused here
+        // instead of opening a panel that never attaches.
+        if let Some(reason) = browser_host_backend_refusal(backend) {
+            fail_create(
+                &mut self.browser_create_host.io,
+                &request,
+                "unsupported_backend",
+                reason,
+            );
+            return;
+        }
         if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
             fail_create(
                 &mut self.browser_create_host.io,
@@ -116,14 +128,7 @@ impl HorizonApp {
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
-        let options = duplicate.unwrap_or_else(|| PanelOptions {
-            command: request.url.clone(),
-            kind: PanelKind::Browser,
-            visible: request.visible,
-            browser_config: Some(browser_config),
-            remote_session: None,
-            ..PanelOptions::default()
-        });
+        let options = duplicate.unwrap_or_else(|| browser_create_options(&request, browser_config));
         self.open_requested_browser_panel(request, actor_panel, options, started_at);
     }
 
@@ -321,6 +326,34 @@ pub(super) fn publish_requested_create(
     true
 }
 
+/// The options of a create that names no device target: the ordinary browser
+/// panel of this Horizon.
+///
+/// It follows the browser host of the settings, as a panel that a person creates
+/// does, because its Chromium then runs on that machine through a tunnel and the
+/// widget, the input and the frames stay the ones of a local panel. A duplicate
+/// instead keeps the backend and the profile of its source.
+fn browser_create_options(
+    request: &BrowserCreateRequest,
+    browser_config: horizon_core::browser::BrowserConfig,
+) -> PanelOptions {
+    PanelOptions {
+        command: request.url.clone(),
+        kind: PanelKind::Browser,
+        visible: request.visible,
+        browser_config: Some(browser_config),
+        remote_session: None,
+        follows_browser_host: true,
+        ..PanelOptions::default()
+    }
+}
+
+/// The reason that this Horizon refuses a create of `backend`, when its settings
+/// name a browser host that serves Chromium only.
+fn browser_host_backend_refusal(backend: BackendKind) -> Option<&'static str> {
+    horizon_core::browser_host().and_then(|host| host.backend_refusal(backend))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::channel;
@@ -360,6 +393,26 @@ mod tests {
         app.board.panels.push(panel);
         app.board.assign_panel_to_workspace(PanelId(id), workspace);
         local_id
+    }
+
+    #[test]
+    fn a_create_without_a_device_target_follows_the_browser_host() {
+        let request = BrowserCreateRequest::for_tests("agent");
+        let options = browser_create_options(&request, horizon_core::browser::BrowserConfig::default());
+        assert_eq!(options.kind, PanelKind::Browser);
+        assert!(
+            options.follows_browser_host,
+            "a create without a device target is the ordinary browser panel, which follows the settings"
+        );
+        assert!(
+            options.remote_session.is_none(),
+            "a create without a target is no provider session"
+        );
+        assert!(
+            options.browser_session_id.is_none(),
+            "no local profile group takes this page"
+        );
+        assert_eq!(options.command, request.url);
     }
 
     #[test]
