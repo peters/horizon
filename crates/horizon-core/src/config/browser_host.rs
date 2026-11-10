@@ -51,7 +51,7 @@ pub fn browser_host() -> Option<&'static BrowserHostConfig> {
 
 impl BrowserHostConfig {
     /// Longest profile name, as the host file of `horizon-browser host` allows.
-    pub const MAX_PROFILE_LEN: usize = 40;
+    pub const MAX_PROFILE_LEN: usize = horizon_browser::MAX_PROFILE_NAME_CHARS;
     /// Longest SSH target. It is one argument of `ssh`, so a short name is
     /// enough for an alias, a `user@host` and an address.
     pub const MAX_SSH_TARGET_LEN: usize = 255;
@@ -143,21 +143,10 @@ pub fn browser_mcp_args(browser_host: Option<&BrowserHostConfig>) -> Vec<String>
     args
 }
 
-/// The profile-name rule of the host file of `horizon-browser host`, which is
-/// `valid_name` in `crates/horizon-browser-cli/src/standalone/profile/config.rs`.
-/// It is repeated here because the base crate does not depend on the CLI crate.
+/// The profile-name rule of the host file of `horizon-browser host`, shared
+/// with the remote tunnel so that both accept the same names.
 fn valid_profile(profile: &str) -> bool {
-    let length = profile.chars().count();
-    let first_and_last_are_letters_or_digits = profile
-        .chars()
-        .next()
-        .zip(profile.chars().next_back())
-        .is_some_and(|(first, last)| first.is_ascii_alphanumeric() && last.is_ascii_alphanumeric());
-    (1..=BrowserHostConfig::MAX_PROFILE_LEN).contains(&length)
-        && first_and_last_are_letters_or_digits
-        && profile
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
+    horizon_browser::valid_profile_name(profile)
 }
 
 #[cfg(test)]

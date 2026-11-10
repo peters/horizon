@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 
 use crate::{BackendKind, BrowserConfig, paths};
 
+/// Longest profile name of a host file, as `horizon-browser host` allows it.
+pub const MAX_PROFILE_NAME_CHARS: usize = 40;
+
 pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<BrowserConfig> {
     let mut resolved = config.clone();
     resolved.quality = resolved.quality.clamp(1, 100);
@@ -147,6 +150,21 @@ fn snap_firefox_profile_root_with_resolver(
         .and_then(|resolved| snap_browser_profile_root_for_command(resolved, "firefox", home))
 }
 
+/// Whether `name` is one profile name that a host file of `horizon-browser
+/// host` accepts: 1 to 40 of `a-z`, `0-9` and `-`, with a letter or a digit at
+/// each end. The name is part of each page ID and of the profile folder, so it
+/// is never a path or a shell word of its own.
+#[must_use]
+pub fn valid_profile_name(name: &str) -> bool {
+    let edge = |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+    (1..=MAX_PROFILE_NAME_CHARS).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && edge(name.as_bytes().first())
+        && edge(name.as_bytes().last())
+}
+
 pub(crate) fn schedule_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
     let (completion_tx, completion_rx) = std::sync::mpsc::channel();
     let worker_tx = completion_tx.clone();
@@ -170,6 +188,26 @@ pub(crate) fn schedule_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receive
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_profile_name_is_one_folder_under_a_letter_or_a_digit() {
+        for accepted in ["mail", "a", "work-1", "1", &"a".repeat(MAX_PROFILE_NAME_CHARS)] {
+            assert!(valid_profile_name(accepted), "{accepted}");
+        }
+        for refused in [
+            "",
+            "Mail",
+            "mail_box",
+            "-mail",
+            "mail-",
+            "mail box",
+            "../mail",
+            "mail\n",
+            &"a".repeat(MAX_PROFILE_NAME_CHARS + 1),
+        ] {
+            assert!(!valid_profile_name(refused), "{refused:?}");
+        }
+    }
 
     #[test]
     fn snap_browser_profiles_live_in_a_cross_backend_writable_directory() {

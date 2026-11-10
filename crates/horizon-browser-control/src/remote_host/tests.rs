@@ -150,11 +150,10 @@ fn a_failed_call_that_wrote_nothing_carries_its_exit_status() {
         stderr: String::new(),
         too_large: false,
     };
-    let reason = super::failure_reason(&output);
+    let reason = super::failure_reason(output.code, &output.stderr);
     assert_eq!(reason, "ssh exited with status 255 and wrote no reason");
-    let ended = super::Output { code: None, ..output };
     assert_eq!(
-        super::failure_reason(&ended),
+        super::failure_reason(None, ""),
         "ssh ended on a signal and wrote no reason"
     );
 }

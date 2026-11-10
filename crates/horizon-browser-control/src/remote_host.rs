@@ -44,12 +44,12 @@ const READ_BUFFER: usize = 8 * 1024;
 /// Bound of the TCP connect of one `ssh`, in seconds. A host that drops packets
 /// fails here instead of holding the caller for the two minutes of a default
 /// connect.
-const CONNECT_TIMEOUT_SECONDS: u32 = 5;
+pub(crate) const CONNECT_TIMEOUT_SECONDS: u32 = 5;
 /// Keepalive interval of one `ssh`, in seconds, so a host that stops answering
 /// after the connect fails at the same order of time.
-const SERVER_ALIVE_INTERVAL_SECONDS: u32 = 5;
+pub(crate) const SERVER_ALIVE_INTERVAL_SECONDS: u32 = 5;
 /// Number of keepalives without an answer that end one `ssh`.
-const SERVER_ALIVE_COUNT_MAX: u32 = 2;
+pub(crate) const SERVER_ALIVE_COUNT_MAX: u32 = 2;
 /// Deadline of the probe of the record, which is the first call of every client.
 const PROBE_DEADLINE: Duration = Duration::from_secs(10);
 /// Deadline of one file call of the relay. A call that crosses this bound is
@@ -118,7 +118,7 @@ pub fn ssh_program() -> String {
 /// the fatal line as well: a target that `ssh` could not resolve then reported
 /// an empty reason, so a refusal said nothing that a person could act on.
 #[must_use]
-fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
+pub(crate) fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
     let mut command = Command::new(program);
     command.args([
         "-T".to_string(),
@@ -192,7 +192,7 @@ fn probe_with(
     if !output.succeeded() {
         return Err(RemoteChannelError::Transport {
             target: target.to_string(),
-            reason: failure_reason(&output),
+            reason: failure_reason(output.code, &output.stderr),
         });
     }
     parse_probe(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| RemoteChannelError::Transport {
@@ -204,11 +204,11 @@ fn probe_with(
 /// Why one `ssh` call of the channel failed: its own words, or its exit status
 /// when it wrote none. A refusal never ends in an empty reason, because an
 /// operator cannot act on one.
-fn failure_reason(output: &Output) -> String {
-    if !output.stderr.is_empty() {
-        return output.stderr.clone();
+pub(crate) fn failure_reason(code: Option<i32>, stderr: &str) -> String {
+    if !stderr.is_empty() {
+        return stderr.to_string();
     }
-    match output.code {
+    match code {
         Some(code) => format!("{SSH} exited with status {code} and wrote no reason"),
         None => format!("{SSH} ended on a signal and wrote no reason"),
     }
@@ -364,7 +364,7 @@ pub fn run(target: &str, remote_command: &str, limit: u64) -> io::Result<Output>
 /// deadline. The read runs on its own thread, so a call that never answers is
 /// killed when the deadline passes and the caller gets
 /// [`io::ErrorKind::TimedOut`] instead of a wait.
-fn run_bounded(mut command: Command, limit: u64, deadline: Duration) -> io::Result<Output> {
+pub(crate) fn run_bounded(mut command: Command, limit: u64, deadline: Duration) -> io::Result<Output> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
