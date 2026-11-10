@@ -1,10 +1,11 @@
 //! The clicks a person makes on a card, on their way to the agent that owns it.
 //!
 //! The widget records a click in the card's runtime state. This module settles
-//! it: a `next_click` that waits on the card is answered with the click, and a
-//! click that nobody waits for wakes its owner with one fixed line in the
-//! owner's terminal. Nothing here is saved, and no step touches the disk on the
-//! UI thread: an answer is written by the coordination worker.
+//! it: a `next_click` that waits on the card or on any card of its owner is
+//! answered with the click, and a click that nobody waits for wakes its owner
+//! with one fixed line in the owner's terminal. Nothing here is saved, and no
+//! step touches the disk on the UI thread: an answer is written by the
+//! coordination worker.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,16 +15,17 @@ use horizon_browser_control::block::ClickEvent;
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
 use horizon_core::{
-    AgentStatus, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict, browser_actor, wake_verdict,
+    AgentStatus, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict, WorkspaceId, browser_actor,
+    wake_verdict,
 };
 
 use crate::block_widget::CardChip;
 
 use super::HorizonApp;
-use super::block_requests::BlockAnswer;
+use super::block_requests::{BlockAnswer, card_owner};
+use super::browser_requests::{ActorPanel, actor_panel};
 
-/// A `next_click` that waits on one card until a click arrives or the person's
-/// wait ends.
+/// A `next_click` that waits until a click arrives or the person's wait ends.
 pub(in crate::app) struct ClickWaiter {
     root: Option<PathBuf>,
     request: Request,
@@ -31,19 +33,41 @@ pub(in crate::app) struct ClickWaiter {
     deadline_at_millis: i64,
 }
 
+impl ClickWaiter {
+    fn new(root: Option<&Path>, request: &Request) -> Self {
+        Self {
+            root: root.map(Path::to_path_buf),
+            request: request.clone(),
+            deadline_at_millis: request.deadline_at_millis.saturating_sub(host_apply_millis()),
+        }
+    }
+
+    /// Whether the wait ends at or before `now_millis`.
+    fn deadline_passed(&self, now_millis: i64) -> bool {
+        self.deadline_at_millis <= now_millis
+    }
+}
+
 /// What this host owes a card's owner: the open `next_click` waits, and the
 /// last wake line to each agent panel.
 #[derive(Default)]
 pub(in crate::app) struct BlockClickState {
-    waiters: HashMap<PanelId, ClickWaiter>,
+    /// The waits that name one card, by that card.
+    card_waiters: HashMap<PanelId, ClickWaiter>,
+    /// The waits that cover every card of an owner, by that owner's actor.
+    agent_waiters: HashMap<String, ClickWaiter>,
     last_wake: HashMap<PanelId, Instant>,
 }
 
 impl BlockClickState {
-    /// Whether a `next_click` waits on `panel_id`, so a click reaches its agent
-    /// at once.
-    fn listening(&self, panel_id: PanelId) -> bool {
-        self.waiters.contains_key(&panel_id)
+    /// Whether a `next_click` waits on `panel_id` alone.
+    fn listening_on_card(&self, panel_id: PanelId) -> bool {
+        self.card_waiters.contains_key(&panel_id)
+    }
+
+    /// Whether a `next_click` of `owner` waits on any of its cards.
+    fn listening_on_owner(&self, owner: &str) -> bool {
+        self.agent_waiters.contains_key(owner)
     }
 }
 
@@ -91,9 +115,16 @@ impl HorizonApp {
             .is_some_and(|panel| self.card_owner_panel(panel).is_some())
     }
 
-    /// Whether a `next_click` waits on a card.
+    /// Whether a `next_click` waits on a card, alone or on any card of its
+    /// owner, so a click reaches its agent at once.
     pub(in crate::app) fn block_listening(&self, panel_id: PanelId) -> bool {
-        self.block_clicks.listening(panel_id)
+        if self.block_clicks.listening_on_card(panel_id) {
+            return true;
+        }
+        self.board
+            .panel(panel_id)
+            .and_then(card_owner)
+            .is_some_and(|owner| self.block_clicks.listening_on_owner(owner))
     }
 
     /// Clicks that wait for a card's agent, after dropping the ones that aged
@@ -141,25 +172,44 @@ impl HorizonApp {
     /// once, and so does a caller that must not wait on this card. `None` means
     /// the host keeps the request until a click or the deadline: the request is
     /// still applied on the UI thread, only its answer is deferred.
+    ///
+    /// `panel_id` names one card. Without it, the wait covers every card that
+    /// the caller owns, because an agent makes one tool call at a time: the
+    /// oldest click of those cards answers it.
     pub(super) fn begin_click_wait(
         &mut self,
         root: Option<&Path>,
         request: &Request,
-        panel_id: &str,
+        panel_id: Option<&str>,
     ) -> Option<Outcome> {
         let Operation::NextClick { .. } = &request.operation else {
             return None;
         };
-        let card = match self
-            .request_caller(request)
-            .and_then(|caller| self.owned_card(panel_id, caller, &request.actor))
-        {
+        let caller = match self.request_caller(request) {
+            Ok(caller) => caller,
+            Err(refusal) => return Some(refusal),
+        };
+        match panel_id {
+            Some(panel_id) => self.begin_card_click_wait(root, request, caller, panel_id),
+            None => self.begin_any_card_click_wait(root, request, caller),
+        }
+    }
+
+    /// Starts a wait that names one card.
+    fn begin_card_click_wait(
+        &mut self,
+        root: Option<&Path>,
+        request: &Request,
+        caller: ActorPanel,
+        panel_id: &str,
+    ) -> Option<Outcome> {
+        let card = match self.owned_card(panel_id, caller, &request.actor) {
             Ok(card) => card,
             Err(refusal) => return Some(refusal),
         };
         // One wait per card: an older wait ends before this one starts, with the
         // click that already waits, or as a timeout.
-        if let Some(older) = self.block_clicks.waiters.remove(&card) {
+        if let Some(older) = self.block_clicks.card_waiters.remove(&card) {
             let outcome = self
                 .take_card_click(card)
                 .map_or(Outcome::TimedOut { timed_out: true }, |click| Outcome::Clicked {
@@ -171,15 +221,72 @@ impl HorizonApp {
             return Some(Outcome::Clicked { click });
         }
         self.reset_card_wake_streak(card);
-        self.block_clicks.waiters.insert(
-            card,
-            ClickWaiter {
-                root: root.map(Path::to_path_buf),
-                request: request.clone(),
-                deadline_at_millis: request.deadline_at_millis.saturating_sub(host_apply_millis()),
-            },
-        );
+        self.block_clicks
+            .card_waiters
+            .insert(card, ClickWaiter::new(root, request));
         None
+    }
+
+    /// Starts a wait that covers every card of the caller. A caller that owns
+    /// no card learns that at once, and a second wait of one agent ends the
+    /// older one first: one agent waits once.
+    fn begin_any_card_click_wait(
+        &mut self,
+        root: Option<&Path>,
+        request: &Request,
+        caller: ActorPanel,
+    ) -> Option<Outcome> {
+        let cards = self.owned_card_ids(caller.workspace_id, &request.actor);
+        if cards.is_empty() {
+            return Some(Outcome::failed(
+                "no_cards",
+                "This agent owns no card in its workspace yet; create one first",
+            ));
+        }
+        if let Some(older) = self.block_clicks.agent_waiters.remove(&request.actor) {
+            self.answer_waiter(older, Outcome::TimedOut { timed_out: true });
+        }
+        if let Some((card, click)) = self.oldest_card_click(&cards) {
+            self.reset_card_wake_streak(card);
+            return Some(Outcome::Clicked { click });
+        }
+        for card in cards {
+            self.reset_card_wake_streak(card);
+        }
+        self.block_clicks
+            .agent_waiters
+            .insert(request.actor.clone(), ClickWaiter::new(root, request));
+        None
+    }
+
+    /// The cards of one workspace that `owner` created, in board order.
+    fn owned_card_ids(&self, workspace: WorkspaceId, owner: &str) -> Vec<PanelId> {
+        self.workspace_cards(workspace)
+            .iter()
+            .filter(|panel| card_owner(panel) == Some(owner))
+            .map(|panel| panel.id)
+            .collect()
+    }
+
+    /// The oldest click that waits on any of `cards`, with its card. Cards are
+    /// visited in board order, so two clicks of the same millisecond keep that
+    /// order.
+    fn oldest_card_click(&mut self, cards: &[PanelId]) -> Option<(PanelId, ClickEvent)> {
+        let now_millis = manifest::now_millis();
+        let mut oldest: Option<(PanelId, i64)> = None;
+        for card in cards {
+            let Some(runtime) = self.panel_render_caches.card_runtime.get_mut(card) else {
+                continue;
+            };
+            let Some(at_millis) = runtime.oldest_click_at(now_millis) else {
+                continue;
+            };
+            if oldest.is_none_or(|(_, at)| at_millis < at) {
+                oldest = Some((*card, at_millis));
+            }
+        }
+        let (card, _) = oldest?;
+        self.take_card_click(card).map(|click| (card, click))
     }
 
     /// Answers each wait that has a click, a passed deadline or no card left,
@@ -192,34 +299,82 @@ impl HorizonApp {
     }
 
     /// Answers the waits a click, a deadline or a closed card ends.
+    ///
+    /// The waits that name a card settle first, so a click reaches the single
+    /// card waiter of that card when one exists; a wait that covers every card
+    /// of an agent takes what is left.
     fn settle_click_waiters(&mut self, now_millis: i64) -> bool {
-        let waiting: Vec<PanelId> = self.block_clicks.waiters.keys().copied().collect();
+        let waiting: Vec<PanelId> = self.block_clicks.card_waiters.keys().copied().collect();
         let mut answered = false;
         for panel_id in waiting {
             if self.board.panel(panel_id).is_none() {
-                answered |= self.close_click_wait(panel_id);
+                answered |= self.close_card_click_wait(panel_id);
             } else if let Some(click) = self.take_card_click(panel_id) {
-                answered |= self.answer_click(panel_id, Outcome::Clicked { click });
-            } else if self.wait_deadline_passed(panel_id, now_millis) {
-                answered |= self.answer_click(panel_id, Outcome::TimedOut { timed_out: true });
+                answered |= self.answer_card_click(panel_id, Outcome::Clicked { click });
+            } else if self.card_wait_deadline_passed(panel_id, now_millis) {
+                answered |= self.answer_card_click(panel_id, Outcome::TimedOut { timed_out: true });
             }
+        }
+        let owners: Vec<String> = self.block_clicks.agent_waiters.keys().cloned().collect();
+        for owner in owners {
+            answered |= self.settle_agent_wait(&owner, now_millis);
         }
         answered
     }
 
-    /// Whether a card's wait ends at or before `now_millis`.
-    fn wait_deadline_passed(&self, panel_id: PanelId, now_millis: i64) -> bool {
+    /// Answers one wait that covers every card of `owner`.
+    fn settle_agent_wait(&mut self, owner: &str, now_millis: i64) -> bool {
+        let Some(caller) = actor_panel(&self.board, owner) else {
+            let Some(waiter) = self.block_clicks.agent_waiters.remove(owner) else {
+                return false;
+            };
+            self.answer_waiter(
+                waiter,
+                Outcome::failed(
+                    "caller_unavailable",
+                    "The calling agent panel is no longer in this host",
+                ),
+            );
+            return true;
+        };
+        let cards = self.owned_card_ids(caller.workspace_id, owner);
+        let Some(waiter) = self.block_clicks.agent_waiters.remove(owner) else {
+            return false;
+        };
+        if cards.is_empty() {
+            self.answer_waiter(
+                waiter,
+                Outcome::failed("panel_unavailable", "The card is no longer in the workspace"),
+            );
+            return true;
+        }
+        if let Some((card, click)) = self.oldest_card_click(&cards) {
+            self.reset_card_wake_streak(card);
+            self.answer_waiter(waiter, Outcome::Clicked { click });
+            return true;
+        }
+        if waiter.deadline_passed(now_millis) {
+            self.answer_waiter(waiter, Outcome::TimedOut { timed_out: true });
+            return true;
+        }
+        // Nothing happened yet: the wait stays open.
+        self.block_clicks.agent_waiters.insert(owner.to_owned(), waiter);
+        false
+    }
+
+    /// Whether a card's own wait ends at or before `now_millis`.
+    fn card_wait_deadline_passed(&self, panel_id: PanelId, now_millis: i64) -> bool {
         self.block_clicks
-            .waiters
+            .card_waiters
             .get(&panel_id)
-            .is_some_and(|waiter| waiter.deadline_at_millis <= now_millis)
+            .is_some_and(|waiter| waiter.deadline_passed(now_millis))
     }
 
     /// Answers the wait on a card that is gone with `panel_unavailable`, and
     /// forgets the card's runtime state.
-    fn close_click_wait(&mut self, panel_id: PanelId) -> bool {
+    fn close_card_click_wait(&mut self, panel_id: PanelId) -> bool {
         self.panel_render_caches.card_runtime.remove(&panel_id);
-        let Some(waiter) = self.block_clicks.waiters.remove(&panel_id) else {
+        let Some(waiter) = self.block_clicks.card_waiters.remove(&panel_id) else {
             return false;
         };
         self.answer_waiter(
@@ -231,8 +386,8 @@ impl HorizonApp {
 
     /// Answers the wait on a card with one outcome, and starts a new wake
     /// streak: an agent that waited for a click listens again.
-    fn answer_click(&mut self, panel_id: PanelId, outcome: Outcome) -> bool {
-        let Some(waiter) = self.block_clicks.waiters.remove(&panel_id) else {
+    fn answer_card_click(&mut self, panel_id: PanelId, outcome: Outcome) -> bool {
+        let Some(waiter) = self.block_clicks.card_waiters.remove(&panel_id) else {
             return false;
         };
         self.reset_card_wake_streak(panel_id);
@@ -294,7 +449,7 @@ impl HorizonApp {
     fn planned_wakes(&self) -> Vec<(PanelId, PanelId)> {
         let mut wakes = Vec::new();
         for (panel_id, pending, wake_sent) in self.card_click_facts() {
-            if pending == 0 || self.block_clicks.listening(panel_id) {
+            if pending == 0 || self.block_listening(panel_id) {
                 continue;
             }
             let Some(panel) = self.board.panel(panel_id) else {
@@ -357,7 +512,7 @@ impl HorizonApp {
     /// Whether a `next_click` holds this host open. The request pump wakes
     /// slowly while one does, so a deadline passes also when no frame runs.
     pub(in crate::app) fn block_waiters_outstanding(&self) -> bool {
-        !self.block_clicks.waiters.is_empty()
+        !self.block_clicks.card_waiters.is_empty() || !self.block_clicks.agent_waiters.is_empty()
     }
 }
 

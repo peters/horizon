@@ -22,9 +22,10 @@ person's terminals.
   in the UI: at most 32 KiB, at most 64 components, at most 24 `kv` rows, 32
   `list` rows and 8 buttons, and at most 512 characters in one text. A text keeps
   no control character except the line break of a body text. An id is
-  `[a-z0-9_.-]{1,64}` and is unique in the document. An unknown field, component
-  or value is refused with `invalid_document`, and the message names the place,
-  such as `components[2].items[0].id`.
+  `[a-z0-9_.-]{1,64}` and is unique in the document. A row can be selected only
+  in a list with `selection: single`, at most one row of a list. An unknown
+  field, component or value is refused with `invalid_document`, and the message
+  names the place, such as `components[2].items[0].id`.
 - No field is a URL, a path, a file or a command. Horizon fetches nothing, opens
   nothing and runs nothing for a card. A card has no input, no image, no table
   and no link.
@@ -52,7 +53,10 @@ variables that Horizon injects into that panel.
 - `list` and `inspect` are read-only and workspace-scoped. A card of another
   workspace is invisible.
 - `next_click` requires the exact owner too. Another agent of the workspace gets
-  `not_owner`, and a card that leaves the board answers `panel_unavailable`.
+  `not_owner`, and a card that leaves the board answers `panel_unavailable`. A
+  `next_click` without `panel_id` covers only the cards that the caller owns in
+  its own workspace; a caller that owns none gets `no_cards`, so the wait never
+  reaches another agent's card.
 
 ## Horizon writes into an agent terminal
 
@@ -97,11 +101,15 @@ are written by Horizon and no document field can set them:
   which button is the primary one follow fixed rules. A later `primary` button is
   drawn neutral, and every control of a card without its agent is drawn
   disabled.
-- **The panel size and title** of a new card come from the host: 420 wide and as
-  tall as its content needs, and a title that the host trims to one line.
+- **The panel size and title** of a new card come from the host: 420 wide and
+  as tall as the host measured its content needs, between 220 and 900 points,
+  and a title that the host trims to one line. A card that the person resized by
+  hand keeps that size, and a card that is shorter than its content scrolls its
+  body above a footer that stays at the bottom.
 
-A document may still choose its own words, its own ids, its tones and its order
-of components. None of those carry host state.
+A document may still choose its own words, its own ids, its tones, its order of
+components and which row of a list starts selected. None of those carry host
+state: a default row is a row id that the person can change.
 
 ## Does not guarantee
 
@@ -124,7 +132,9 @@ of components. None of those carry host state.
   five minutes is dropped, a click on a full queue of 32 is dropped, and a click
   whose `next_click` ends at its deadline is answered with `timed_out`, not with
   the click. A card stage that is clicked after its document changed reports
-  `stale`, and Horizon does not decide whether the older intent still holds.
+  `stale`, and Horizon does not decide whether the older intent still holds. A
+  row that a document marks as selected is Horizon's runtime state: the person's
+  own selection wins while its row is still drawn.
 - **The wake line can be ignored.** Horizon proves that the line was written to
   the terminal of an idle agent panel, not that the agent read it or acts on it.
   An agent that ignores the line never reads the click, and the person sees only

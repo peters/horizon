@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use thiserror::Error;
 
-use super::model::{BlockDocument, Button, Component, KvRow, ListRow};
+use super::model::{BlockDocument, Button, Component, KvRow, ListRow, Selection};
 
 impl BlockDocument {
     /// Largest serialized document accepted, in bytes.
@@ -115,6 +115,21 @@ pub enum BlockDocumentError {
         /// Accepted maximum.
         limit: u8,
     },
+    /// A row is selected by default in a list that the person cannot select a
+    /// row of.
+    #[error("{path} is selected, but the list does not let the person select a row")]
+    RowSelectedInUnselectableList {
+        /// Offending place.
+        path: String,
+    },
+    /// More than one row of one list is selected by default.
+    #[error("{path} is the second selected row of its list; {first} is already selected")]
+    DuplicateSelectedRow {
+        /// Offending place.
+        path: String,
+        /// The row that is selected first.
+        first: String,
+    },
 }
 
 impl BlockDocumentError {
@@ -209,10 +224,26 @@ fn validate_component<'a>(
             Ok(())
         }
         Component::Divider => Ok(()),
-        Component::List { rows, .. } => {
+        Component::List { selection, rows } => {
             check_count(&field(&at, "rows"), rows.len(), BlockDocument::MAX_LIST_ROWS)?;
+            let mut selected: Option<String> = None;
             for (row_index, row) in rows.iter().enumerate() {
-                validate_list_row(&element(&at, "rows", row_index), row, ids)?;
+                let row_at = element(&at, "rows", row_index);
+                validate_list_row(&row_at, row, ids)?;
+                if !row.selected {
+                    continue;
+                }
+                let path = field(&row_at, "selected");
+                if *selection != Selection::Single {
+                    return Err(BlockDocumentError::RowSelectedInUnselectableList { path });
+                }
+                if let Some(first) = &selected {
+                    return Err(BlockDocumentError::DuplicateSelectedRow {
+                        path,
+                        first: first.clone(),
+                    });
+                }
+                selected = Some(path);
             }
             Ok(())
         }

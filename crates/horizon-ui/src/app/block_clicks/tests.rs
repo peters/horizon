@@ -91,7 +91,7 @@ fn next_click(app: &HorizonApp, panel: usize, panel_id: &str, wait: i64) -> Requ
         app,
         panel,
         Operation::NextClick {
-            panel_id: panel_id.to_owned(),
+            panel_id: Some(panel_id.to_owned()),
             timeout_millis: Some(u64::try_from(wait).unwrap_or_default()),
         },
     );
@@ -139,7 +139,7 @@ fn a_waiting_next_click_is_answered_with_the_click_that_arrives() {
     let request = next_click(&app, 0, &panel_id, 60_000);
     let root = temp.path();
     claim_request(&mut app, &ctx, root, &request);
-    assert!(app.block_clicks.waiters.contains_key(&id), "the wait is open");
+    assert!(app.block_clicks.card_waiters.contains_key(&id), "the wait is open");
     assert!(app.block_listening(id));
 
     // The person selects a row and presses a button.
@@ -163,7 +163,7 @@ fn a_waiting_next_click_is_answered_with_the_click_that_arrives() {
     );
     assert_eq!(click.event_id, 1);
     assert!(!click.stale);
-    assert!(app.block_clicks.waiters.is_empty(), "a wait is answered once");
+    assert!(app.block_clicks.card_waiters.is_empty(), "a wait is answered once");
     assert!(!app.block_listening(id));
 }
 
@@ -177,12 +177,16 @@ fn a_click_that_waits_before_the_call_answers_at_once() {
     let (panel_id, id) = card(&mut app, &ctx, 0);
     press(&mut app, id, "continue");
 
-    let held = app.begin_click_wait(Some(temp.path()), &next_click(&app, 0, &panel_id, 60_000), &panel_id);
+    let held = app.begin_click_wait(
+        Some(temp.path()),
+        &next_click(&app, 0, &panel_id, 60_000),
+        Some(&panel_id),
+    );
     let Some(Outcome::Clicked { click }) = held else {
         panic!("a waiting click answers at once: {held:?}");
     };
     assert_eq!(click.component_id, "continue");
-    assert!(app.block_clicks.waiters.is_empty());
+    assert!(app.block_clicks.card_waiters.is_empty());
 }
 
 #[test]
@@ -191,14 +195,14 @@ fn a_wait_that_no_click_ends_answers_timed_out() {
     let (panel_id, _id) = card(&mut app, &ctx, 0);
     let request = next_click(&app, 0, &panel_id, 20);
     claim_request(&mut app, &ctx, temp.path(), &request);
-    assert!(!app.block_clicks.waiters.is_empty(), "the wait starts open");
+    assert!(!app.block_clicks.card_waiters.is_empty(), "the wait starts open");
 
     let outcome = wait_answer(&mut app, &ctx, temp.path(), &request);
     assert!(
         matches!(outcome, Outcome::TimedOut { timed_out: true }),
         "a wait nobody answers times out: {outcome:?}"
     );
-    assert!(app.block_clicks.waiters.is_empty());
+    assert!(app.block_clicks.card_waiters.is_empty());
 }
 
 #[test]
@@ -207,18 +211,21 @@ fn a_second_wait_answers_the_older_one_with_timed_out() {
     let (panel_id, id) = card(&mut app, &ctx, 0);
     let older = next_click(&app, 0, &panel_id, 60_000);
     claim_request(&mut app, &ctx, temp.path(), &older);
-    assert!(app.block_clicks.waiters.contains_key(&id));
+    assert!(app.block_clicks.card_waiters.contains_key(&id));
 
     let newer = next_click(&app, 0, &panel_id, 60_000);
     claim_request(&mut app, &ctx, temp.path(), &newer);
-    assert_eq!(app.block_clicks.waiters.len(), 1, "one wait per card");
+    assert_eq!(app.block_clicks.card_waiters.len(), 1, "one wait per card");
 
     let answered = wait_answer(&mut app, &ctx, temp.path(), &older);
     assert!(
         matches!(answered, Outcome::TimedOut { timed_out: true }),
         "a replaced wait ends as a timeout: {answered:?}"
     );
-    assert!(app.block_clicks.waiters.contains_key(&id), "the newer wait stays open");
+    assert!(
+        app.block_clicks.card_waiters.contains_key(&id),
+        "the newer wait stays open"
+    );
 
     press(&mut app, id, "continue");
     let answered = wait_answer(&mut app, &ctx, temp.path(), &newer);
@@ -242,7 +249,7 @@ fn a_second_wait_leaves_the_click_to_the_wait_that_was_first() {
         "the wait that was first gets the click: {answered:?}"
     );
     assert!(
-        app.block_clicks.waiters.contains_key(&id),
+        app.block_clicks.card_waiters.contains_key(&id),
         "the newer wait replaces it and stays open"
     );
     press(&mut app, id, "continue");
@@ -256,7 +263,7 @@ fn closing_the_card_answers_its_wait_with_panel_unavailable() {
     let (panel_id, id) = card(&mut app, &ctx, 0);
     let request = next_click(&app, 0, &panel_id, 60_000);
     claim_request(&mut app, &ctx, temp.path(), &request);
-    assert!(app.block_clicks.waiters.contains_key(&id));
+    assert!(app.block_clicks.card_waiters.contains_key(&id));
 
     app.board.panels.retain(|panel| panel.id != id);
     let outcome = wait_answer(&mut app, &ctx, temp.path(), &request);
@@ -264,7 +271,7 @@ fn closing_the_card_answers_its_wait_with_panel_unavailable() {
         panic!("a closed card is a refusal: {outcome:?}");
     };
     assert_eq!(code, "panel_unavailable");
-    assert!(app.block_clicks.waiters.is_empty());
+    assert!(app.block_clicks.card_waiters.is_empty());
     assert!(
         !app.panel_render_caches.card_runtime.contains_key(&id),
         "the runtime state of a closed card is forgotten"
@@ -277,12 +284,16 @@ fn another_agent_of_the_workspace_cannot_wait_on_the_card() {
     let (panel_id, id) = card(&mut app, &ctx, 0);
     app.board.panels[1].workspace_id = app.board.panels[0].workspace_id;
 
-    let held = app.begin_click_wait(Some(temp.path()), &next_click(&app, 1, &panel_id, 60_000), &panel_id);
+    let held = app.begin_click_wait(
+        Some(temp.path()),
+        &next_click(&app, 1, &panel_id, 60_000),
+        Some(&panel_id),
+    );
     let Some(Outcome::Failed { code, .. }) = held else {
         panic!("another agent is refused: {held:?}");
     };
     assert_eq!(code, "not_owner");
-    assert!(app.block_clicks.waiters.is_empty());
+    assert!(app.block_clicks.card_waiters.is_empty());
     assert!(!app.block_listening(id));
 }
 
@@ -411,4 +422,129 @@ fn the_runtime_state_of_a_card_that_left_the_board_is_forgotten() {
     app.board.panels.retain(|panel| panel.id != id);
     let _ = app.settle_block_clicks();
     assert!(!app.panel_render_caches.card_runtime.contains_key(&id));
+}
+
+/// A `next_click` of an agent that names no card.
+fn next_click_any(app: &HorizonApp, panel: usize, wait: i64) -> Request {
+    let mut request = request_from(
+        app,
+        panel,
+        Operation::NextClick {
+            panel_id: None,
+            timeout_millis: Some(u64::try_from(wait).unwrap_or_default()),
+        },
+    );
+    request.deadline_at_millis = manifest::now_millis() + host_apply_millis() + wait;
+    request
+}
+
+#[test]
+fn one_wait_covers_every_card_of_an_agent_and_takes_the_oldest_click() {
+    let (temp, ctx, mut app) = app();
+    let (_, first) = card(&mut app, &ctx, 0);
+    let (_, second) = card(&mut app, &ctx, 0);
+    let request = next_click_any(&app, 0, 60_000);
+    claim_request(&mut app, &ctx, temp.path(), &request);
+    assert!(app.block_clicks.agent_waiters.contains_key(&app_actor(&app, 0)));
+    assert!(app.block_listening(first), "every card of the agent is listened to");
+    assert!(app.block_listening(second), "every card of the agent is listened to");
+
+    // The person presses the second card first, then the first card.
+    press(&mut app, second, "continue");
+    std::thread::sleep(Duration::from_millis(2));
+    press(&mut app, first, "continue");
+
+    let outcome = wait_answer(&mut app, &ctx, temp.path(), &request);
+    let Outcome::Clicked { click } = outcome else {
+        panic!("the wait is answered with the oldest click: {outcome:?}");
+    };
+    assert_eq!(
+        app.board.panel_id_by_local_id(&click.panel_id),
+        Some(second),
+        "the older click of the two cards wins"
+    );
+    assert!(!app.block_listening(first), "the wait is answered once");
+}
+
+#[test]
+fn a_second_any_card_wait_answers_the_older_one_with_timed_out() {
+    let (temp, ctx, mut app) = app();
+    let (_, id) = card(&mut app, &ctx, 0);
+    let older = next_click_any(&app, 0, 60_000);
+    claim_request(&mut app, &ctx, temp.path(), &older);
+    let newer = next_click_any(&app, 0, 60_000);
+    claim_request(&mut app, &ctx, temp.path(), &newer);
+    assert_eq!(app.block_clicks.agent_waiters.len(), 1, "one wait per agent");
+
+    let answered = wait_answer(&mut app, &ctx, temp.path(), &older);
+    assert!(
+        matches!(answered, Outcome::TimedOut { timed_out: true }),
+        "the replaced wait ends as a timeout: {answered:?}"
+    );
+    press(&mut app, id, "continue");
+    let answered = wait_answer(&mut app, &ctx, temp.path(), &newer);
+    assert!(matches!(answered, Outcome::Clicked { .. }), "{answered:?}");
+}
+
+#[test]
+fn a_card_wait_takes_its_own_click_before_the_any_card_wait_of_its_agent() {
+    let (temp, ctx, mut app) = app();
+    let (first_id, first) = card(&mut app, &ctx, 0);
+    let (second_id, second) = card(&mut app, &ctx, 0);
+    let any = next_click_any(&app, 0, 60_000);
+    claim_request(&mut app, &ctx, temp.path(), &any);
+    let one = next_click(&app, 0, &second_id, 60_000);
+    claim_request(&mut app, &ctx, temp.path(), &one);
+
+    press(&mut app, second, "continue");
+    let answered = wait_answer(&mut app, &ctx, temp.path(), &one);
+    let Outcome::Clicked { click } = answered else {
+        panic!("the wait that names the card answers first: {answered:?}");
+    };
+    assert_eq!(click.panel_id, second_id);
+
+    std::thread::sleep(Duration::from_millis(2));
+    press(&mut app, first, "continue");
+    let answered = wait_answer(&mut app, &ctx, temp.path(), &any);
+    let Outcome::Clicked { click } = answered else {
+        panic!("the any-card wait takes what is left: {answered:?}");
+    };
+    assert_eq!(click.panel_id, first_id);
+}
+
+#[test]
+fn an_any_card_wait_that_owns_no_card_is_refused_at_once() {
+    let (temp, _ctx, mut app) = app();
+    let held = app.begin_click_wait(Some(temp.path()), &next_click_any(&app, 0, 60_000), None);
+    let Some(Outcome::Failed { code, .. }) = held else {
+        panic!("an agent without a card learns it at once: {held:?}");
+    };
+    assert_eq!(code, "no_cards");
+    assert!(app.block_clicks.agent_waiters.is_empty());
+}
+
+#[test]
+fn an_any_card_wait_does_not_take_a_click_of_another_agents_card() {
+    let (temp, ctx, mut app) = app();
+    let (_, mine) = card(&mut app, &ctx, 0);
+    app.board.panels[1].workspace_id = app.board.panels[0].workspace_id;
+    let (_, theirs) = card(&mut app, &ctx, 1);
+    let request = next_click_any(&app, 0, 60_000);
+    claim_request(&mut app, &ctx, temp.path(), &request);
+    assert!(!app.block_listening(theirs), "another agent's card is not listened to");
+
+    press(&mut app, theirs, "continue");
+    assert!(app.block_clicks.agent_waiters.contains_key(&app_actor(&app, 0)));
+    press(&mut app, mine, "continue");
+
+    let answered = wait_answer(&mut app, &ctx, temp.path(), &request);
+    let Outcome::Clicked { click } = answered else {
+        panic!("the wait is answered: {answered:?}");
+    };
+    assert_eq!(app.board.panel_id_by_local_id(&click.panel_id), Some(mine));
+}
+
+/// The actor string of the agent panel at `panel`.
+fn app_actor(app: &HorizonApp, panel: usize) -> String {
+    format!("horizon:{}", app.board.panels[panel].local_id)
 }

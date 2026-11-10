@@ -147,6 +147,11 @@ pub struct ListRow {
     /// Colour of the second line; neutral when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tone: Option<Tone>,
+    /// Selected when the card draws this list, until the person selects
+    /// another row; false when omitted. Only a list with `selection: single`
+    /// may hold a selected row, and at most one row of a list.
+    #[serde(default)]
+    pub selected: bool,
 }
 
 /// One button.

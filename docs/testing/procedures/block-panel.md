@@ -17,9 +17,10 @@ workspace with the `block_panel` tool, change it, read it, hide it, show it and
 close it. It also makes sure that another agent cannot change the card, that an
 invalid document is refused, and that the card comes back after a restart of
 Horizon. It then makes sure that a click of the person reaches the agent that
-owns the card, with its selection and its time, and that Horizon wakes an idle
-agent for a click. The last task checks the drawn look of the card in both
-themes.
+owns the card, with its selection and its time, that one wait covers every card
+of an agent, and that Horizon wakes an idle agent for a click. The last task
+checks the drawn look of the card in both themes, its fitted height, and the
+scrolling of a card that is shorter than its content.
 
 ## 2. Applicability
 
@@ -122,7 +123,9 @@ themes.
 
    Result: The answer has `status: created`, `panel_id` `<card>` and
    `revision: 1`. The live view shows a new panel named `cloud-1` with the
-   heading, the badge and the address.
+   heading, the badge and the address. The card fits its content: the footer
+   sits below the address, and no part of the body is cut off. The card takes a
+   free place beside Agent A and covers no terminal and no other card.
 
 2. Examine the fixture desktop.
 
@@ -180,7 +183,25 @@ themes.
    message names `components[0].items[0].id`. No new panel appears in the live
    view.
 
-2. In client A, call `block_panel` with `{"operation":"list"}`.
+2. In client A, call `block_panel` with:
+
+   ```json
+   {"operation":"create","document":{"components":[
+     {"type":"list","selection":"single","rows":[
+       {"id":"size.cx22","title":"CX22","selected":true},
+       {"id":"size.cx32","title":"CX32","selected":true}]}]}}
+   ```
+
+   Result: The answer has `code: invalid_document`, and the message names
+   `components[0].rows[1].selected`. No new panel appears in the live view.
+
+3. In client A, call `block_panel` with a list that has `selection: none` and a
+   row with `selected: true`.
+
+   Result: The answer has `code: invalid_document`, and the message names the
+   `selected` field of that row.
+
+4. In client A, call `block_panel` with `{"operation":"list"}`.
 
    Result: The list still holds one card.
 
@@ -488,7 +509,88 @@ every step on the fixture display that the native VNC Device panel shows.
    The buttons stay inside the card and the destructive button keeps the right
    edge.
 
-7. Set the theme back to dark.
+7. Drag the bottom edge of the card up until the card is shorter than its
+   content.
+
+   Result: The body scrolls with the wheel, the footer stays at the bottom of
+   the card, and no button or row is drawn under the footer.
+
+8. Call `update` with a long document, then with a short one.
+
+   Result: The card grows and shrinks to the height of its content. The footer
+   clock changes, and the card does not resize again after it has settled.
+
+9. Set the theme back to dark.
+
+### 5.17 B17 — One wait covers every card of an agent
+
+1. In client A, create a second card with title `cloud-2` and one `Continue`
+   button.
+
+   Result: The answer has `status: created` and `revision: 1`. The second card
+   takes a free place beside the first card and covers no panel.
+
+2. In client A, call `block_panel` with
+   `{"operation":"next_click","timeout_millis":120000}`, without `panel_id`, and
+   keep the call open.
+
+   Result: The call does not answer yet. `list` reports `listening` true for
+   both cards of client A.
+
+3. Press the `Continue` button on the first card on the fixture display.
+
+   Result: The call answers `status: clicked`, and `click.panel_id` is the id of
+   the first card. `list` reports `listening` false and `pending_clicks` 0 for
+   both cards.
+
+4. In client A, call `next_click` without `panel_id` with a wait of 60000
+   milliseconds, then call it again the same way.
+
+   Result: The older call answers `timed_out` true first, and the newer call
+   stays open.
+
+5. Close both cards of client A with `close`. Then call `next_click` without
+   `panel_id`.
+
+   Result: The answer has `code: no_cards`, at once.
+
+6. In client B, call `next_click` without `panel_id` while client A owns a card.
+
+   Result: The answer has `code: no_cards`: a wait covers only the cards of the
+   caller.
+
+### 5.18 B18 — A row starts selected
+
+1. In client A, create a card with:
+
+   ```json
+   {"operation":"create","title":"choice","document":{"components":[
+     {"type":"list","selection":"single","rows":[
+       {"id":"size.cx22","title":"CX22 - 2 vCPU"},
+       {"id":"size.cx32","title":"CX32 - 4 vCPU","selected":true}]},
+     {"type":"buttons","items":[{"id":"continue","label":"Continue","tone":"primary"}]}]}}
+   ```
+
+   Result: The card opens with `CX32 - 4 vCPU` drawn as the selected row: the
+   accent outline, the tinted fill and the filled radio mark.
+
+2. Press `Continue` without touching a row, then call `next_click` with the
+   `panel_id` of the card.
+
+   Result: The answer is `clicked` with `selected` `["size.cx32"]`: the default
+   row travels with the click.
+
+3. Press the row `CX22 - 2 vCPU`, then call `next_click` with the `panel_id` of
+   the card.
+
+   Result: The answer has `component_id` `size.cx22` and `selected`
+   `["size.cx22"]`: the person's row wins over the default.
+
+4. Update the card with a document whose list keeps only `size.cx32`, without
+   `selected`, then update it with the document of step 1 and press `Continue`.
+
+   Result: The first update drops the selection of the row that is gone, and the
+   second update selects `size.cx32` again, so `selected` is `["size.cx32"]`.
 
 ## 6. Pass criteria
 
@@ -516,7 +618,14 @@ every step on the fixture display that the native VNC Device panel shows.
 - B15: A full queue drops the newest click and keeps the older ones in order.
 - B16: Every component, the chip and the footer are drawn as the design
   describes, in both themes, and a narrow card truncates or wraps without
-  overlap.
+  overlap. The card is as tall as its content needs, a card that is shorter than
+  its content scrolls above a fixed footer, and no part of the body is drawn
+  under the footer.
+- B17: One wait without `panel_id` covers every card of its agent, answers the
+  oldest click of those cards, and a caller without a card gets `no_cards`.
+- B18: A row that the document marks as selected draws as selected, travels with
+  the next click until the person selects another row, and comes back after an
+  update that keeps its row.
 
 ## 7. Cleanup
 

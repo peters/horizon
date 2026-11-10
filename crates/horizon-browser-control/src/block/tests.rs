@@ -150,6 +150,7 @@ fn a_hand_built_document_with_every_component_validates() {
                     title: "CX22 - 2 vCPU".to_owned(),
                     subtitle: None,
                     tone: Some(Tone::Warn),
+                    selected: false,
                 }],
             },
             Component::Buttons {
@@ -233,6 +234,46 @@ fn list_rows_at_the_limit_parse_and_one_over_is_rejected() {
             path: "components[0].rows".to_owned(),
             actual: 33,
             limit: 32
+        }
+    );
+}
+
+#[test]
+fn a_selected_row_is_allowed_once_in_a_selectable_list_only() {
+    let selected = json!({"type": "list", "selection": "single", "rows": [
+        {"id": "row.1", "title": "One"},
+        {"id": "row.2", "title": "Two", "selected": true}]})
+    .to_string();
+    let document = parse_document(&document_of(&[selected])).expect("a selected row parses");
+    let Some(Component::List { rows, .. }) = document.components.first() else {
+        panic!("the list parsed");
+    };
+    assert!(rows[1].selected);
+    assert!(!rows[0].selected, "a row without the field is not selected");
+
+    let two_selected = json!({"type": "list", "selection": "single", "rows": [
+        {"id": "row.1", "title": "One", "selected": true},
+        {"id": "row.2", "title": "Two", "selected": true}]})
+    .to_string();
+    let error = parse_document(&document_of(&[two_selected])).expect_err("one row per list selects");
+    assert_eq!(error.code(), "invalid_document");
+    assert_eq!(
+        error,
+        BlockDocumentError::DuplicateSelectedRow {
+            path: "components[0].rows[1].selected".to_owned(),
+            first: "components[0].rows[0].selected".to_owned()
+        }
+    );
+
+    let unselectable = json!({"type": "list", "selection": "none", "rows": [
+        {"id": "row.1", "title": "One", "selected": true}]})
+    .to_string();
+    let error = parse_document(&document_of(&[unselectable])).expect_err("a list without a selection takes none");
+    assert_eq!(error.code(), "invalid_document");
+    assert_eq!(
+        error,
+        BlockDocumentError::RowSelectedInUnselectableList {
+            path: "components[0].rows[0].selected".to_owned()
         }
     );
 }

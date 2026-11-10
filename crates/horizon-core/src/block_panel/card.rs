@@ -5,7 +5,7 @@
 //! person sees, so they live in the Horizon process; the document, its
 //! revision and the owner are what a restart keeps.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use horizon_browser_control::block::{BlockDocument, Component, Selection};
 
@@ -20,6 +20,9 @@ pub struct CardRuntime {
     clicks: ClickQueue,
     /// The selected row of a list, by its component index in the document.
     selection: BTreeMap<usize, String>,
+    /// The lists whose row the person selected, by component index. A row that
+    /// the document selects by default is not a choice of the person.
+    chosen: BTreeSet<usize>,
     /// A wake line already went to the owner for this streak of clicks.
     wake_sent: bool,
     /// The footer label of the revision it was formatted for. A frame reuses it
@@ -57,6 +60,7 @@ impl CardRuntime {
             return false;
         }
         self.selection.insert(component, row_id.to_owned());
+        self.chosen.insert(component);
         true
     }
 
@@ -139,6 +143,43 @@ impl CardRuntime {
             .collect()
     }
 
+    /// Gives every list that the person has not selected in the row its
+    /// document selects by default, so a click reports that row until the
+    /// person chooses another one.
+    ///
+    /// A selection the person made wins while its row is still drawn: a
+    /// document never moves the selection away from under the person's hand. A
+    /// default of an older document is not a choice of the person, so a new
+    /// document may select another row.
+    pub fn apply_default_selection(&mut self, document: &BlockDocument) {
+        for (index, component) in document.components.iter().enumerate() {
+            let Component::List {
+                selection: Selection::Single,
+                rows,
+            } = component
+            else {
+                continue;
+            };
+            let chosen = self.chosen.contains(&index)
+                && self
+                    .selection
+                    .get(&index)
+                    .is_some_and(|selected| rows.iter().any(|row| row.id == *selected));
+            if chosen {
+                continue;
+            }
+            match rows.iter().find(|row| row.selected) {
+                Some(row) => {
+                    self.selection.insert(index, row.id.clone());
+                }
+                None => {
+                    self.selection.remove(&index);
+                }
+            }
+        }
+        self.chosen.retain(|index| self.selection.contains_key(index));
+    }
+
     /// Drops the selections of rows that a new document no longer holds.
     pub fn retain_selection(&mut self, document: &BlockDocument) {
         self.selection.retain(|index, selected| {
@@ -151,12 +192,19 @@ impl CardRuntime {
             };
             rows.iter().any(|row| row.id == *selected)
         });
+        self.chosen.retain(|index| self.selection.contains_key(index));
     }
 
     /// The oldest click that still waits, removed: a click reaches an agent at
     /// most once.
     pub fn take_click(&mut self, now_millis: i64) -> Option<PendingClick> {
         self.clicks.take(now_millis)
+    }
+
+    /// The time of the oldest click that still waits, after dropping the ones
+    /// that aged out.
+    pub fn oldest_click_at(&mut self, now_millis: i64) -> Option<i64> {
+        self.clicks.oldest_at(now_millis)
     }
 
     /// How many clicks wait for the agent, after dropping the ones that aged
@@ -207,6 +255,7 @@ mod tests {
                 title: (*id).to_owned(),
                 subtitle: None,
                 tone: None,
+                selected: false,
             })
             .collect()
     }
@@ -307,6 +356,65 @@ mod tests {
         assert!(
             !runtime.needs_content_fit(3),
             "a card that the person resized by hand keeps its size"
+        );
+    }
+
+    #[test]
+    fn a_list_without_a_selection_takes_the_row_its_document_selects() {
+        let mut runtime = CardRuntime::default();
+        let mut card = document(&["size.cx22", "size.cx32"]);
+        if let Some(Component::List { rows, .. }) = card.components.get_mut(1) {
+            rows[1].selected = true;
+        }
+
+        runtime.apply_default_selection(&card);
+        assert_eq!(runtime.selected(1), Some("size.cx32"), "the document selects a row");
+
+        assert!(runtime.select(1, "size.cx22", &card), "the person selects another row");
+        runtime.apply_default_selection(&card);
+        assert_eq!(
+            runtime.selected(1),
+            Some("size.cx22"),
+            "the person's selection wins over the default"
+        );
+
+        // An update that drops the person's row falls back to the default.
+        let mut updated = card.clone();
+        if let Some(Component::List { rows, .. }) = updated.components.get_mut(1) {
+            rows.retain(|row| row.id != "size.cx22");
+        }
+        runtime.retain_selection(&updated);
+        runtime.apply_default_selection(&updated);
+        assert_eq!(runtime.selected(1), Some("size.cx32"));
+        assert!(runtime.press("continue", 1, &updated, 1_000));
+        let click = runtime.take_click(1_000).expect("a click");
+        assert_eq!(click.selected, vec!["size.cx32".to_owned()]);
+    }
+
+    #[test]
+    fn a_new_default_replaces_a_default_of_an_older_document() {
+        let mut runtime = CardRuntime::default();
+        runtime.apply_default_selection(&document(&["size.cx22", "size.cx32"]));
+        assert_eq!(runtime.selected(1), None, "no row is selected by default");
+
+        let mut card = document(&["size.cx22", "size.cx32"]);
+        if let Some(Component::List { rows, .. }) = card.components.get_mut(1) {
+            rows[0].selected = true;
+        }
+        runtime.apply_default_selection(&card);
+        assert_eq!(runtime.selected(1), Some("size.cx22"));
+
+        let mut next = card.clone();
+        if let Some(Component::List { rows, .. }) = next.components.get_mut(1) {
+            rows[0].selected = false;
+            rows[1].selected = true;
+        }
+        runtime.retain_selection(&next);
+        runtime.apply_default_selection(&next);
+        assert_eq!(
+            runtime.selected(1),
+            Some("size.cx32"),
+            "the person did not choose the old default, so the new document decides"
         );
     }
 

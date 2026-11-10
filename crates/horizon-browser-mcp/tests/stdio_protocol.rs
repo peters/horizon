@@ -243,6 +243,9 @@ fn assert_block_panel_contract(tools: &Value) {
     for stated in [
         "not_owner",
         "too_many_cards",
+        "no_cards",
+        "Without panel_id",
+        "selected true",
         "agent_present",
         "host_timeout",
         "at most once",
@@ -256,6 +259,10 @@ fn assert_block_panel_contract(tools: &Value) {
     assert!(
         next_click.contains("timeout_millis"),
         "next_click takes its own wait: {next_click}"
+    );
+    assert!(
+        next_click.contains("panel_id"),
+        "next_click names a card when the caller wants one: {next_click}"
     );
 }
 

@@ -78,6 +78,9 @@ pub(crate) struct CardView<'a> {
 /// under it. The body records the height its content needed, which the host
 /// uses to give the card the height that fits.
 pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
+    // A list that the person has not selected in takes the row its document
+    // selects, whatever brought the document here: create, update or a restart.
+    view.card.apply_default_selection(view.document);
     let enabled = view.agent_present && view.interactive;
     let full = ui.max_rect();
     let footer_top = (full.max.y - metrics::FOOTER_HEIGHT).max(full.min.y);

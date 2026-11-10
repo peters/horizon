@@ -76,7 +76,10 @@ pub enum Operation {
     /// Wait for the next click on a card the caller owns. Answers the oldest
     /// waiting click at once, or `timed_out` when `timeout_millis` passes.
     NextClick {
-        panel_id: String,
+        /// The card to wait on; every card of the caller when omitted, where
+        /// the oldest waiting click of those cards answers first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        panel_id: Option<String>,
         /// How long to wait, 1 000-3 600 000 ms; 300 000 when omitted.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_millis: Option<u64>,
@@ -459,12 +462,22 @@ mod tests {
         }
         let unknown_operation = serde_json::json!({"operation": "wait_for_click", "panel_id": "p"});
         assert!(serde_json::from_value::<Operation>(unknown_operation).is_err());
+        let any_card = serde_json::from_value::<Operation>(serde_json::json!({"operation": "next_click"}))
+            .expect("a wait without a card parses");
+        assert_eq!(
+            any_card,
+            Operation::NextClick {
+                panel_id: None,
+                timeout_millis: None
+            },
+            "a wait without a panel_id covers every card of the caller"
+        );
     }
 
     #[test]
     fn a_next_click_wait_is_bounded_and_widens_only_its_own_request_window() {
         let wait = |timeout_millis| Operation::NextClick {
-            panel_id: "card".into(),
+            panel_id: Some("card".into()),
             timeout_millis,
         };
         assert_eq!(

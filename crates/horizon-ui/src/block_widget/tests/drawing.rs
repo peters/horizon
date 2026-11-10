@@ -132,6 +132,7 @@ fn a_list_that_offers_no_selection_draws_its_rows_as_text() {
                 title: "A row".to_string(),
                 subtitle: None,
                 tone: Some(Tone::Warn),
+                selected: false,
             }],
         }],
     };

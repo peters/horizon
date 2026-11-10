@@ -70,6 +70,13 @@ impl ClickQueue {
         click
     }
 
+    /// The time of the oldest click that still waits, after dropping the ones
+    /// that expired.
+    pub fn oldest_at(&mut self, now_millis: i64) -> Option<i64> {
+        self.prune(now_millis);
+        self.clicks.front().map(|click| click.at_millis)
+    }
+
     /// How many clicks wait, after dropping the ones that expired.
     pub fn pending(&mut self, now_millis: i64) -> usize {
         self.prune(now_millis);
@@ -154,6 +161,17 @@ mod tests {
         assert!(queue.refused_notice(1_000), "the notice stays while clicks wait");
         while queue.take(1_000).is_some() {}
         assert!(!queue.refused_notice(1_000), "the notice clears when the queue drains");
+    }
+
+    #[test]
+    fn the_oldest_click_reports_its_time() {
+        let mut queue = ClickQueue::default();
+        assert_eq!(queue.oldest_at(1_000), None);
+        assert!(push(&mut queue, "stop", 1_000));
+        assert!(push(&mut queue, "start", 1_500));
+        assert_eq!(queue.oldest_at(1_600), Some(1_000));
+        let _ = queue.take(1_600);
+        assert_eq!(queue.oldest_at(1_600), Some(1_500));
     }
 
     #[test]

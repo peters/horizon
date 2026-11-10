@@ -559,6 +559,7 @@ standalone device CLI/MCP with an explicitly configured isolated target for inpu
 {"operation":"list"}
 {"operation":"inspect","panel_id":"<returned id>"}
 {"operation":"next_click","panel_id":"<returned id>","timeout_millis":300000}
+{"operation":"next_click","timeout_millis":300000}
 {"operation":"visibility","panel_id":"<returned id>","visible":false}
 {"operation":"reconnect","panel_id":"<returned id>"}
 {"operation":"close","panel_id":"<returned id>"}
@@ -691,8 +692,10 @@ agent panel of the owner is still in the workspace) and `owned_by_caller`.
 ## Clicks
 
 `next_click` answers the oldest click that waits, or `{timed_out: true}` when
-`timeout_millis` passes. The wait is 1 000-3 600 000 ms, 300 000 ms when it is
-omitted. A click names the component the person hit and the document revision
+`timeout_millis` passes. Without `panel_id` it waits on every card of the
+caller, oldest click first: that is the normal listen loop, because the person
+presses whichever card they see. The wait is 1 000-3 600 000 ms, 300 000 ms when
+it is omitted. A click names the component the person hit and the document revision
 they saw:
 
 ```json
@@ -703,7 +706,10 @@ they saw:
 
 `selected` holds the row ids the person had selected, in document order, so a
 `continue` button tells the agent which option was chosen. A press on a row of a
-`selection: single` list changes the selection and is also a click. `stale` is
+`selection: single` list changes the selection and is also a click. A row with
+`selected: true` is the row that its list starts with, and a click reports it
+until the person selects another row; only a `selection: single` list may hold
+one, and at most one row of a list. `stale` is
 true when the document changed after the person pressed; confirm the intent
 before acting on a stale click. A click reaches an agent at most once, so keep
 the loop: call `next_click`, act, `update` the card, call `next_click` again, and
@@ -712,9 +718,12 @@ call it again after `timed_out` while the card matters.
 Without a waiting `next_click`, a click is kept for 5 minutes, at most 32 per
 card in insertion order. A click on a full queue is dropped, an older click is
 never dropped for a newer one, and the card says that too many clicks wait until
-the queue drains. One `next_click` waits per card and owner: a second one answers
-the older wait with `timed_out` first. Closing the card answers a waiting
-`next_click` with `panel_unavailable`.
+the queue drains. One `next_click` waits per card, and one without `panel_id`
+waits per agent: a later wait of the same form answers the older one with
+`timed_out` first. A wait that names a card and an any-card wait of its agent can
+run together, and a click goes to the wait that names its card first. Closing a
+card answers a `next_click` that names it with `panel_unavailable`, and an
+any-card wait of an agent that owns no card answers `no_cards` at once.
 
 When a click waits and no `next_click` listens, Horizon types one fixed line into
 the owner's agent terminal:

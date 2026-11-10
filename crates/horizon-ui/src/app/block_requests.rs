@@ -147,7 +147,7 @@ impl HorizonApp {
                 panels: self.workspace_card_summaries(actor.workspace_id, &request.actor),
             }),
             Operation::Inspect { panel_id } => Some(self.inspect_card(panel_id, actor, &request.actor)),
-            Operation::NextClick { panel_id, .. } => self.begin_click_wait(root, request, panel_id),
+            Operation::NextClick { panel_id, .. } => self.begin_click_wait(root, request, panel_id.as_deref()),
             Operation::Visibility { panel_id, visible } => {
                 Some(self.change_card(panel_id, *visible, actor, &request.actor, ctx))
             }
@@ -373,7 +373,7 @@ impl HorizonApp {
     }
 
     /// The cards of one workspace, in board order.
-    fn workspace_cards(&self, workspace: WorkspaceId) -> Vec<&Panel> {
+    pub(in crate::app) fn workspace_cards(&self, workspace: WorkspaceId) -> Vec<&Panel> {
         self.board
             .panels
             .iter()
@@ -497,7 +497,7 @@ impl HorizonApp {
     }
 }
 
-fn card_owner(panel: &Panel) -> Option<&str> {
+pub(in crate::app) fn card_owner(panel: &Panel) -> Option<&str> {
     panel.block()?.owner_actor.as_deref()
 }
 
