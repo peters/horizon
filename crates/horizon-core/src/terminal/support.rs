@@ -293,9 +293,9 @@ mod tests {
         // The frame asks for the open and returns; the handler starts on a
         // thread, so no frame waits for `fork` and `exec`.
         let started = std::time::Instant::now();
-        let _frame = crate::ui_thread::FrameScope::enter();
+        let frame = crate::ui_thread::FrameScope::enter();
         let opened = open_url("https://example.invalid/");
-        drop(_frame);
+        drop(frame);
         assert!(opened.is_ok(), "a URL of the desktop starts its handler: {opened:?}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(1),
