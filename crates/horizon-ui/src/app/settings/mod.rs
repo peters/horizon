@@ -5,6 +5,7 @@ mod presets;
 mod remote_browsers;
 mod remote_recovery;
 mod remote_usage;
+mod secrets;
 mod shortcuts;
 #[cfg(test)]
 mod tests;
@@ -14,6 +15,7 @@ pub(super) use tests::{at, frame_of, texts_hold};
 
 use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
+use horizon_core::named_secrets::NamedSecretWorkbench;
 use horizon_core::remote_browser_credential::CredentialWorkbench;
 
 use super::settings_io::SettingsReply;
@@ -34,6 +36,7 @@ enum SettingsTab {
     Presets,
     Browser,
     RemoteBrowsers,
+    Secrets,
 }
 
 impl SettingsTab {
@@ -44,6 +47,7 @@ impl SettingsTab {
             Self::Presets => "Presets",
             Self::Browser => "Browser",
             Self::RemoteBrowsers => "Remote browsers",
+            Self::Secrets => "Secrets",
         }
     }
 
@@ -53,6 +57,7 @@ impl SettingsTab {
         Self::Presets,
         Self::Browser,
         Self::RemoteBrowsers,
+        Self::Secrets,
     ];
 }
 
@@ -77,6 +82,7 @@ pub(super) struct SettingsEditor {
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
+    secret_inputs: secrets::SecretInputs,
 }
 
 impl SettingsEditor {
@@ -87,6 +93,8 @@ impl SettingsEditor {
         self.original = config;
         self.dirty = false;
         self.status = SettingsStatus::Saved;
+        // A saved value is in the store, so the window keeps no copy of it.
+        self.secret_inputs.scrub();
     }
 
     #[cfg(test)]
@@ -121,6 +129,7 @@ impl HorizonApp {
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
+                secret_inputs: secrets::SecretInputs::default(),
             });
         }
     }
@@ -141,6 +150,7 @@ impl HorizonApp {
             editor,
             &mut self.remote_browser_credentials,
             &mut self.browser_create_host.remote_allocations,
+            &mut self.named_secrets,
         );
         if changed {
             if let Some(editor) = self.settings.as_mut() {
@@ -165,7 +175,8 @@ impl HorizonApp {
     }
 
     fn close_settings(&mut self) {
-        if let Some(editor) = self.settings.take() {
+        if let Some(mut editor) = self.settings.take() {
+            editor.secret_inputs.scrub();
             self.apply_live_preview(&editor.original);
         }
     }
@@ -335,6 +346,7 @@ fn render_settings_panel(
     editor: &mut SettingsEditor,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
+    named_secrets: &mut NamedSecretWorkbench,
 ) -> (SettingsAction, bool) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -369,7 +381,7 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let changed = render_tab(ui, editor, credentials, allocations, available);
+            let changed = render_tab(ui, editor, credentials, allocations, named_secrets, available);
             (action, changed)
         })
         .inner
@@ -381,6 +393,7 @@ fn render_tab(
     editor: &mut SettingsEditor,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
+    named_secrets: &mut NamedSecretWorkbench,
     available: Vec2,
 ) -> bool {
     let SettingsEditor {
@@ -388,6 +401,7 @@ fn render_tab(
         credential_inputs,
         portable_profile,
         provider_usage,
+        secret_inputs,
         active_tab,
         ..
     } = editor;
@@ -411,6 +425,7 @@ fn render_tab(
                     provider_usage,
                 )
             }
+            SettingsTab::Secrets => secrets::render(ui, config, named_secrets, secret_inputs),
         })
         .inner
 }

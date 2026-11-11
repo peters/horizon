@@ -236,3 +236,69 @@ fn render_general_tab(config: &mut Config) -> egui::FullOutput {
         });
     })
 }
+
+/// The Secrets tab draws one row per name, the state of the value on this computer,
+/// and the fields that add one. A value that a person typed is never drawn.
+#[test]
+fn the_secrets_tab_draws_the_names_the_hidden_field_and_the_missing_value() {
+    use std::sync::{Arc, Mutex};
+
+    use horizon_core::named_secrets::{NamedSecretVault, SecretName};
+    use horizon_core::remote_browser_credential::{FakeCredentialStore, RemoteCredentialStore, SharedCredentialStore};
+
+    let values = Arc::new(Mutex::new(FakeCredentialStore::new()));
+    let stored = SecretName::parse("HETZNER_TOKEN").expect("a name");
+    values
+        .lock()
+        .expect("the store")
+        .put(
+            &horizon_core::named_secrets::locator(&stored),
+            b"a-value-of-this-computer",
+        )
+        .expect("the value");
+    let vault = Arc::new(NamedSecretVault::new(Some(Box::new(SharedCredentialStore::new(
+        Arc::clone(&values),
+    )))));
+    let mut config = Config::default();
+    config.secrets.names = vec!["HETZNER_TOKEN".to_string(), "CLOUD_KEY".to_string()];
+    let names = config.secrets.secret_names();
+    vault.set_names(config.secrets.names.clone());
+    let mut bench = horizon_core::named_secrets::NamedSecretWorkbench::new(Some(vault), &names);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while bench.is_busy() && std::time::Instant::now() < deadline {
+        bench.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let mut inputs = super::secrets::SecretInputs::with_typed("NEW_KEY", "TYPED-VALUE-6f1c");
+    let (_changed, texts) = frame_of(|ui| super::secrets::render(ui, &mut config, &mut bench, &mut inputs));
+
+    for expected in [
+        "HETZNER_TOKEN",
+        "CLOUD_KEY",
+        "Secrets for agents",
+        "Replace value",
+        "Delete",
+        "Add",
+        "2 of 64 names",
+    ] {
+        assert!(texts_hold(&texts, expected), "the tab draws {expected}: {texts:?}");
+    }
+    assert!(
+        texts.iter().any(|text| text.contains("no value on this computer")),
+        "a name whose value this computer does not hold says so: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("TYPED-VALUE-6f1c")),
+        "a typed value is never drawn: {texts:?}"
+    );
+    assert_eq!(
+        inputs.typed(),
+        ("NEW_KEY".to_string(), "TYPED-VALUE-6f1c".to_string()),
+        "a frame that drew the fields keeps the draft of the person"
+    );
+    assert!(matches!(
+        bench.state(&stored),
+        horizon_core::named_secrets::NamedSecretState::Present
+    ));
+}

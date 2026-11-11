@@ -16,7 +16,10 @@
 use std::{
     collections::BTreeSet,
     fmt,
-    sync::{Mutex, PoisonError, RwLock},
+    sync::{
+        Mutex, PoisonError, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use horizon_browser::remote::CredentialReference;
@@ -63,6 +66,9 @@ pub struct NamedSecretVault {
     names: RwLock<BTreeSet<SecretName>>,
     /// The OS credential store, or nothing when this computer has none.
     store: Option<Mutex<Box<dyn RemoteCredentialStore + Send>>>,
+    /// Counts the changes of the name list, so a reader asks the store again only
+    /// when a name appeared or went, and never on every frame.
+    names_changed: AtomicU64,
 }
 
 impl fmt::Debug for NamedSecretVault {
@@ -71,6 +77,7 @@ impl fmt::Debug for NamedSecretVault {
             .debug_struct("NamedSecretVault")
             .field("names", &self.names())
             .field("store", &self.store.is_some())
+            .field("names_changed", &self.names_generation())
             .finish()
     }
 }
@@ -83,6 +90,7 @@ impl NamedSecretVault {
         Self {
             names: RwLock::new(BTreeSet::new()),
             store: store.map(Mutex::new),
+            names_changed: AtomicU64::new(1),
         }
     }
 
@@ -117,6 +125,14 @@ impl NamedSecretVault {
             }
         }
         *self.names.write().unwrap_or_else(PoisonError::into_inner) = set;
+        self.names_changed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A number that changes when a name appears or goes, so a caller can ask the
+    /// store again without building the list of names on every frame.
+    #[must_use]
+    pub fn names_generation(&self) -> u64 {
+        self.names_changed.load(Ordering::Relaxed)
     }
 
     /// The names of the named secrets of this computer, in name order.
@@ -134,8 +150,9 @@ impl NamedSecretVault {
     /// the settings: the caller that showed the name to the person saves them.
     pub fn learn(&self, name: &SecretName) {
         let mut names = self.names.write().unwrap_or_else(PoisonError::into_inner);
-        if names.len() < MAX_NAMED_SECRETS {
-            names.insert(name.clone());
+        if names.len() < MAX_NAMED_SECRETS && names.insert(name.clone()) {
+            drop(names);
+            self.names_changed.fetch_add(1, Ordering::Relaxed);
         }
     }
 

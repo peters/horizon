@@ -297,24 +297,15 @@ impl HorizonApp {
     }
 
     /// Runs the worker of the named secrets for this frame. A store that is still
-    /// being read keeps frames coming, and a list that changed is read again.
+    /// being read keeps frames coming, and a name that appeared or went is read
+    /// again. An idle frame reads no store and builds no list.
     pub(super) fn poll_named_secrets(&mut self, ctx: &egui::Context) {
         self.named_secrets.poll();
         if self.named_secrets.is_busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        let names = self.named_secret_names();
-        self.named_secrets.refresh_if_stale(&names);
+        self.named_secrets.refresh_if_stale();
         self.queue_named_secret_changes();
-    }
-
-    /// The names of the named secrets of this computer: the names that the link
-    /// learned, or the names of the settings before the link answered.
-    pub(super) fn named_secret_names(&self) -> Vec<horizon_core::named_secrets::SecretName> {
-        match self.named_secret_vault.as_ref() {
-            Some(vault) => vault.names(),
-            None => self.template_config.secrets.secret_names(),
-        }
     }
 
     /// Queues a named secret that the person stored or deleted on this computer, so

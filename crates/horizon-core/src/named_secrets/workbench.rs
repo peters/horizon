@@ -39,8 +39,14 @@ enum Event {
 pub struct NamedSecretWorkbench {
     commands: Option<Sender<Command>>,
     events: Option<Receiver<Event>>,
-    /// One state per name, as the last answer of the worker described it.
-    states: BTreeMap<SecretName, NamedSecretState>,
+    /// The vault of this computer, for the list of names and the number of its
+    /// changes. Reading them touches no store.
+    vault: Option<Arc<NamedSecretVault>>,
+    /// One state per name text, as the last answer of the worker described it, so a
+    /// row of the settings list costs one lookup and no parse.
+    states: BTreeMap<String, NamedSecretState>,
+    /// The number of changes of the name list that the last request described.
+    seen_names: u64,
     /// The names that the last request described, so an answer that holds a value
     /// for some of them says `NoValue` for the others.
     asked: Vec<SecretName>,
@@ -77,7 +83,9 @@ impl NamedSecretWorkbench {
             return Self {
                 commands: None,
                 events: None,
+                vault: None,
                 states: BTreeMap::new(),
+                seen_names: 0,
                 asked: names.to_vec(),
                 asked_at: None,
                 in_flight: 0,
@@ -96,7 +104,9 @@ impl NamedSecretWorkbench {
             return Self {
                 commands: None,
                 events: None,
+                vault: None,
                 states: BTreeMap::new(),
+                seen_names: 0,
                 asked: names.to_vec(),
                 asked_at: None,
                 in_flight: 0,
@@ -107,7 +117,9 @@ impl NamedSecretWorkbench {
         let mut bench = Self {
             commands: Some(commands),
             events: Some(events),
+            vault: Some(Arc::clone(&vault)),
             states: BTreeMap::new(),
+            seen_names: vault.names_generation(),
             asked: names.to_vec(),
             asked_at: None,
             in_flight: 0,
@@ -128,7 +140,7 @@ impl NamedSecretWorkbench {
     fn ask(&mut self, names: &[SecretName]) {
         self.asked = names.to_vec();
         for name in names {
-            self.states.insert(name.clone(), NamedSecretState::Checking);
+            self.states.insert(name.as_str().to_owned(), NamedSecretState::Checking);
         }
         self.in_flight += 1;
         self.asked_at = Some(Instant::now());
@@ -136,36 +148,48 @@ impl NamedSecretWorkbench {
     }
 
     /// Reads the store again when the answer that the window shows is old, or when
-    /// the list of names is new.
-    pub fn refresh_if_stale(&mut self, names: &[SecretName]) {
+    /// a name appeared or went. It builds no list of names unless it asks, so an
+    /// idle frame allocates nothing.
+    pub fn refresh_if_stale(&mut self) {
+        let generation = self.vault.as_ref().map_or(0, |vault| vault.names_generation());
         let stale = match self.asked_at {
             Some(asked_at) => asked_at.elapsed() >= REVALIDATE_AFTER,
             None => true,
         };
-        let unknown = names.iter().any(|name| !self.states.contains_key(name));
-        if stale || unknown {
-            self.ask(names);
+        if !stale && generation == self.seen_names {
+            return;
         }
+        let names = self.vault.as_ref().map(|vault| vault.names()).unwrap_or_default();
+        self.seen_names = generation;
+        self.ask(&names);
     }
 
     /// Stores `value` under `name` on the worker thread.
     pub fn store(&mut self, name: SecretName, value: Zeroizing<Vec<u8>>) {
         self.in_flight += 1;
-        self.states.insert(name.clone(), NamedSecretState::Checking);
+        self.states.insert(name.as_str().to_owned(), NamedSecretState::Checking);
         self.send(Command::Store(name, value));
     }
 
     /// Forgets the value and the name on the worker thread.
     pub fn delete(&mut self, name: SecretName) {
         self.in_flight += 1;
-        self.states.insert(name.clone(), NamedSecretState::Checking);
+        self.states.insert(name.as_str().to_owned(), NamedSecretState::Checking);
         self.send(Command::Delete(name));
+    }
+
+    /// The state of one name, as the last answer described it. The settings window
+    /// passes the text of the name, so a row of the list costs one lookup and no
+    /// parse.
+    #[must_use]
+    pub fn state_of(&self, name: &str) -> NamedSecretState {
+        self.states.get(name).copied().unwrap_or(NamedSecretState::Checking)
     }
 
     /// The state of one name, as the last answer described it.
     #[must_use]
     pub fn state(&self, name: &SecretName) -> NamedSecretState {
-        self.states.get(name).copied().unwrap_or(NamedSecretState::Checking)
+        self.state_of(name.as_str())
     }
 
     /// Why the last operation failed, for one line of the window.
@@ -220,7 +244,7 @@ impl NamedSecretWorkbench {
                         } else {
                             NamedSecretState::NoValue
                         };
-                        self.states.insert(name.clone(), state);
+                        self.states.insert(name.as_str().to_owned(), state);
                     }
                 }
                 Event::Refreshed(Err(error)) => {
@@ -255,18 +279,16 @@ impl NamedSecretWorkbench {
         match stored {
             Ok(stored) => {
                 self.failure = None;
-                self.states.insert(
-                    name.clone(),
-                    if stored {
-                        NamedSecretState::Present
-                    } else {
-                        NamedSecretState::NoValue
-                    },
-                );
+                let state = if stored {
+                    NamedSecretState::Present
+                } else {
+                    NamedSecretState::NoValue
+                };
+                self.states.insert(name.as_str().to_owned(), state);
                 self.changes.push(NamedSecretChange { name, stored });
             }
             Err(error) => {
-                self.states.insert(name, state_of_failure(&error));
+                self.states.insert(name.as_str().to_owned(), state_of_failure(&error));
                 self.failure = Some(error);
             }
         }
@@ -299,7 +321,7 @@ fn state_of_failure(error: &NamedSecretError) -> NamedSecretState {
 
 /// Describes every name by the failure of the store, so no row of the window keeps
 /// a state that the store cannot confirm.
-fn set_every_state(states: &mut BTreeMap<SecretName, NamedSecretState>, error: &NamedSecretError) {
+fn set_every_state(states: &mut BTreeMap<String, NamedSecretState>, error: &NamedSecretError) {
     let state = state_of_failure(error);
     for value in states.values_mut() {
         *value = state;
