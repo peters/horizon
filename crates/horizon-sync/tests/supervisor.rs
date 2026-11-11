@@ -18,7 +18,8 @@ use std::{
 use horizon_core::Machine;
 use horizon_core::machines::MachineStore;
 use horizon_sync::{
-    LinkState, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore, run_server_on_unix_socket,
+    LinkBounds, LinkState, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore,
+    run_server_on_unix_socket,
 };
 
 /// The time a test gives a change to travel through a link and a store.
@@ -88,6 +89,63 @@ fn stand_in(directory: &Path, socket: &Path) -> String {
     fs::write(&program, script).expect("the stand-in ssh");
     fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
     program.to_string_lossy().into_owned()
+}
+
+/// The relay of an `ssh` whose server stopped answering after its hello: it
+/// answers the hello and then keeps both pipes open without a frame. It adds one
+/// line to its `starts` file for every start, so a test sees that a lost link is
+/// ended and started again.
+const SILENT_RELAY: &str = "\
+import json
+import struct
+import sys
+import time
+
+with open(sys.argv[1], 'a') as starts:
+    starts.write('start\\n')
+
+
+def read_frame():
+    head = sys.stdin.buffer.read(4)
+    if len(head) < 4:
+        return None
+    size = struct.unpack('>I', head)[0]
+    body = sys.stdin.buffer.read(size)
+    if len(body) < size:
+        return None
+    return json.loads(body)
+
+
+hello = read_frame()
+if hello is None:
+    sys.exit(0)
+body = json.dumps({'hello_ok': {'protocol': 1, 'store': 'silent-store', 'now_millis': 0}}).encode()
+sys.stdout.buffer.write(struct.pack('>I', len(body)) + body)
+sys.stdout.buffer.flush()
+while True:
+    time.sleep(1)
+";
+
+/// A stand-in `ssh` that greets the computer and then says nothing, which is one
+/// shape of a lost link: the pipes stay open and no frame comes.
+fn silent_stand_in(directory: &Path, starts: &Path) -> String {
+    fs::create_dir_all(directory).expect("the directory of the stand-in");
+    let relay = directory.join("silent.py");
+    fs::write(&relay, SILENT_RELAY).expect("the silent relay of the stand-in");
+    let program = directory.join("ssh");
+    let script = format!(
+        "#!/bin/sh\nexec /usr/bin/env python3 '{}' '{}'\n",
+        relay.display(),
+        starts.display()
+    );
+    fs::write(&program, script).expect("the silent stand-in ssh");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
+    program.to_string_lossy().into_owned()
+}
+
+/// How many times the stand-in of a link started.
+fn start_count(starts: &Path) -> usize {
+    fs::read_to_string(starts).map_or(0, |text| text.lines().count())
 }
 
 /// The arguments of the last call of the stand-in, once it wrote them. The file
@@ -466,4 +524,112 @@ fn a_machine_list_without_a_server_starts_no_child() {
         !home.path().join("machines").join("ssh").exists(),
         "no child of a link is started without a server"
     );
+}
+
+/// A link that answers the hello and then nothing is lost at its bound: the
+/// supervisor ends and reaps the child, reports `away`, and starts the next
+/// attempt. The bounds of the test are short, so a link that no answer reached
+/// shows in a second instead of a minute.
+#[test]
+fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
+    let home = tempfile::tempdir().expect("a directory");
+    let machines_dir = home.path().join("machines");
+    fs::create_dir_all(&machines_dir).expect("the machine directory");
+    let starts_file = home.path().join("starts.txt");
+    let bounds = LinkBounds {
+        request: Duration::from_millis(400),
+        wait: Duration::from_millis(800),
+    };
+    let mut config = SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", &machines_dir)
+        .expect("the settings of the link");
+    config.program = silent_stand_in(&home.path().join("stand-in"), &starts_file);
+    config.bounds = bounds;
+    let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+
+    // The hello of the stand-in is answered, so the link is up before it goes
+    // silent. The state of a start is `away` at once, so this is what says that
+    // the next `away` is a lost link and not the state of a fresh supervisor.
+    eventually("the greeted link of the stand-in", || {
+        matches!(
+            supervisor.handle().state(),
+            LinkState::Behind | LinkState::InStep { .. }
+        )
+        .then_some(())
+    });
+    let started = Instant::now();
+    eventually("the link that is reported away", || {
+        matches!(supervisor.handle().state(), LinkState::Away { .. }).then_some(())
+    });
+    let lost = started.elapsed();
+    assert!(
+        lost >= bounds.request,
+        "a link is not lost before its bound of {:?}: {lost:?}",
+        bounds.request
+    );
+    assert!(
+        lost < Duration::from_secs(5),
+        "a silent link is lost at its bound of {:?}, and not later: {lost:?}",
+        bounds.request
+    );
+
+    // The child of the lost link is ended, and the next attempt starts another
+    // one: a child that nobody reaped would stay beside the zombie of the last.
+    eventually("the second start of the stand-in", || {
+        (start_count(&starts_file) >= 2).then_some(())
+    });
+    supervisor.stop();
+}
+
+/// The state of a computer that is idle when the server goes: it must learn that
+/// the server is away, and it must be in step again with the change that the
+/// other computer made while the server was away.
+#[test]
+fn a_computer_that_is_idle_learns_that_the_server_is_gone_and_catches_up() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    let mut b = Computer::start(&home.path().join("b"), &server.socket);
+    in_step(&a);
+    in_step(&b);
+    a.add("build-1", "203.0.113.10");
+    eventually("the first machine of both computers", || {
+        (b.names() == vec!["build-1".to_string()]).then_some(())
+    });
+    in_step(&b);
+
+    // B is idle: its wait is open, and nothing of this computer writes.
+    server.stop();
+    eventually("the idle computer that learns that the server is away", || {
+        matches!(b.state(), LinkState::Away { .. }).then_some(())
+    });
+    a.add("build-2", "203.0.113.11");
+    eventually("the change that waits for the server", || {
+        (a.pending() == BTreeSet::from(["build-2".to_string()])).then_some(())
+    });
+    assert_eq!(
+        b.names(),
+        vec!["build-1".to_string()],
+        "the idle computer keeps its last list while the server is away"
+    );
+
+    server.restart();
+    eventually("both computers in step with the server", || {
+        (matches!(a.state(), LinkState::InStep { .. }) && matches!(b.state(), LinkState::InStep { .. })).then_some(())
+    });
+    assert_eq!(
+        b.names(),
+        vec!["build-1".to_string(), "build-2".to_string()],
+        "the idle computer catches up with the change of the other one"
+    );
+    let mut server_names: Vec<String> = server.machines().into_iter().map(|machine| machine.name).collect();
+    server_names.sort();
+    assert_eq!(
+        b.names(),
+        server_names,
+        "the mirror of an idle computer equals the server"
+    );
+    assert!(a.pending().is_empty(), "the change that waited is settled");
+    a.stop();
+    b.stop();
+    server.stop();
 }

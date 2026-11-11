@@ -34,33 +34,74 @@ use std::{
 };
 
 use horizon_browser_control::ssh_forward::ssh_command;
-use horizon_core::machines::{LoadedMachines, MachineRegistry, MachineStore};
-use horizon_core::{AtomicFile, Machine, MachineError};
-use serde::{Deserialize, Serialize};
+use horizon_core::machines::{LoadedMachines, MachineStore};
+use horizon_core::{Machine, MachineError};
 
 use crate::client::{Client, LinkState, PullOutcome};
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
-use crate::intent::Op;
-use crate::protocol::{Frame, HelloOk, check_device_name};
+use crate::intent::{Op, PushReply};
+use crate::protocol::{Frame, HelloOk};
 use crate::store::Changes;
+use files::{
+    MIRROR_FILE, MIRROR_FORMAT, MirrorFile, MirroredMachine, QUEUE_FILE, device_name, read_mirror, seed_records,
+    write_mirror,
+};
 
-/// The file of the device name of this computer, in its machine directory.
-const DEVICE_FILE: &str = "server-device";
-/// The file of the queue, in the same directory.
-const QUEUE_FILE: &str = "server-queue.json";
-/// The file of the mirror, in the same directory.
-const MIRROR_FILE: &str = "server-mirror.json";
-/// The format of the mirror file. A build refuses a file of another format.
-const MIRROR_FORMAT: u32 = 1;
+mod files;
 
 /// How long one turn of the supervisor waits for a frame or for local work.
 const LINK_SLICE: Duration = Duration::from_millis(100);
 /// How long the hello of a start may take before the child is ended. It holds the
 /// SSH connect of a reachable server and one round trip.
 const HELLO_BOUND: Duration = Duration::from_secs(20);
+/// How long a push or a pull of this computer may wait for its answer. The server
+/// answers both at once: its store answers a push after the commit, and its pull
+/// is one read of the file. A frame that no answer reached after this time is a
+/// link that is lost, and not a slow server, so the child is ended and started
+/// again.
+pub const REQUEST_BOUND: Duration = Duration::from_secs(20);
+/// The margin that a wait may take over the bound of the server itself. A wait of
+/// the server stays open for [`crate::server::WAIT_BOUND`] (50 seconds) and then
+/// answers with the changes that it has, so its answer is not due at any shorter
+/// time.
+pub const WAIT_ANSWER_MARGIN: Duration = Duration::from_secs(15);
+/// How long a wait of this computer may stay open before the link is lost. It is
+/// the bound of the server plus [`WAIT_ANSWER_MARGIN`], and a test keeps the two
+/// in step.
+pub const WAIT_ANSWER_BOUND: Duration = Duration::from_secs(65);
 /// The longest line of the standard error of `ssh` that is logged.
 const MAX_STDERR_LINE: usize = 400;
+
+/// The bounds of one link of one computer: the longest time that its requests may
+/// wait for an answer before the supervisor treats the link as lost.
+///
+/// They are one value so a test needs no minute of patience to see a link that
+/// went silent: a test that gives shorter bounds runs the same code path as the
+/// bounds of a real link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkBounds {
+    /// The bound of a push and of a pull, and of the wait of a start. The server
+    /// answers each of them at once, so a longer wait is a dead link.
+    pub request: Duration,
+    /// The bound of a wait. The server keeps a wait open for its own bound and
+    /// then answers it, so this bound is longer than [`Self::request`].
+    pub wait: Duration,
+}
+
+impl LinkBounds {
+    /// The bounds of a real link: [`REQUEST_BOUND`] and [`WAIT_ANSWER_BOUND`].
+    pub const STANDARD: Self = Self {
+        request: REQUEST_BOUND,
+        wait: WAIT_ANSWER_BOUND,
+    };
+}
+
+impl Default for LinkBounds {
+    fn default() -> Self {
+        Self::STANDARD
+    }
+}
 
 /// The settings of one supervisor: where the server is, how to reach it and which
 /// files of this computer hold the queue and the mirror.
@@ -81,6 +122,9 @@ pub struct SupervisorConfig {
     /// The directory of the machine list that this computer kept before it
     /// followed a server, whose records seed the first link.
     pub machines_dir: PathBuf,
+    /// The bounds of the requests of the link. A test replaces them so it sees a
+    /// link that went silent within a second instead of a minute.
+    pub bounds: LinkBounds,
 }
 
 impl SupervisorConfig {
@@ -98,6 +142,7 @@ impl SupervisorConfig {
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
             machines_dir: directory.to_path_buf(),
+            bounds: LinkBounds::STANDARD,
         })
     }
 
@@ -133,29 +178,6 @@ impl std::fmt::Debug for SyncHandle {
             .field("machines", &state.mirror.len())
             .finish()
     }
-}
-
-/// One machine of the mirror of this computer.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct MirroredMachine {
-    record: Machine,
-    /// Whether this computer wrote the record itself at some time, so it is not
-    /// one that only arrived from the server.
-    mine: bool,
-}
-
-/// The mirror file: the records that the server last gave, and the names that
-/// this computer wrote.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-struct MirrorFile {
-    format: u32,
-    /// Whether this computer compared its own list with the server once, so no
-    /// record of the machine list that it kept before that is lost.
-    seeded: bool,
-    owned: BTreeSet<String>,
-    machines: Vec<Machine>,
 }
 
 /// The state behind the handle.
@@ -449,7 +471,7 @@ fn run(
         let started = Instant::now();
         match connect(config, handle, stop, child_slot, kicked) {
             Ok((mut input, answers)) => {
-                serve_link(handle, stop, &mut input, &answers, kicked);
+                serve_link(handle, stop, &config.bounds, &mut input, &answers, kicked);
                 kill(child_slot);
                 reap(child_slot);
                 if started.elapsed() >= horizon_core::RECONNECT_RESET_AFTER {
@@ -549,16 +571,24 @@ fn connect(
     }
 }
 
-/// Answers the frames of one open link until it ends or the stop flag is set.
+/// Answers the frames of one open link until it ends, the stop flag is set, or a
+/// request stays without an answer for its bound.
+///
+/// A bound is what an idle computer needs most: a server that dies leaves the
+/// socket of the child open for as long as the `ssh` of the link lives, so a wait
+/// that never answers is the only sign of a link that is over. The answer of a
+/// push and of a pull is due at once, and the answer of a wait is due at the
+/// bound of the server that holds it open.
 fn serve_link(
     handle: &SyncHandle,
     stop: &AtomicBool,
+    bounds: &LinkBounds,
     input: &mut ChildStdin,
     answers: &Receiver<Frame>,
     kicked: &Receiver<()>,
 ) {
-    let mut waiting = false;
-    let mut sending = false;
+    let mut waiting: Option<Instant> = None;
+    let mut sending: Option<Instant> = None;
     // The first request of a link is a pull: the server answers it at once, while
     // a wait stays open at its bound when nothing changed yet.
     let mut first = true;
@@ -567,7 +597,7 @@ fn serve_link(
             return;
         }
         // One push at a time, and no push while another one waits for its answer.
-        if !sending
+        if sending.is_none()
             && let Some(chunk) = {
                 let state = handle.lock();
                 state.client.next_push()
@@ -578,9 +608,9 @@ fn serve_link(
                 tracing::warn!(%error, "the link could not send a push");
                 return;
             }
-            sending = true;
+            sending = Some(Instant::now());
         }
-        if !waiting {
+        if waiting.is_none() {
             let frame = {
                 let state = handle.lock();
                 if first {
@@ -593,52 +623,21 @@ fn serve_link(
                 tracing::warn!(%error, "the link could not ask for changes");
                 return;
             }
-            waiting = true;
+            waiting = Some(Instant::now());
         }
         match answers.recv_timeout(LINK_SLICE) {
             Ok(Frame::Pushed(reply)) => {
-                sending = false;
-                let outcome = {
-                    let mut state = handle.lock();
-                    state.client.accept_push(&reply)
-                };
-                match outcome {
-                    Ok(outcome) => {
-                        for (id, refusal) in &outcome.refused {
-                            tracing::warn!(id, code = refusal.code(), reason = %refusal, "the server refused an intent");
-                        }
-                        let mut state = handle.lock();
-                        state.generation = state.generation.wrapping_add(1);
-                        let file = mirror_of(&state);
-                        if let Err(error) = write_mirror(&state.mirror_file, &file) {
-                            tracing::warn!(%error, "the mirror of the machine list was not written");
-                        }
-                        drop(state);
-                        (handle.wake)();
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "the answer of a push was not kept");
-                    }
-                }
+                sending = None;
+                accept_pushed(handle, &reply);
             }
             Ok(Frame::Changes(changes)) => {
-                waiting = false;
+                waiting = None;
                 first = false;
-                match apply_changes(handle, &changes) {
-                    Ok(applied) => {
-                        tracing::debug!(
-                            index = applied.index,
-                            rows = applied.rows,
-                            reset = applied.reset,
-                            "the machine list moved"
-                        );
-                        (handle.wake)();
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "the changes of the server were not applied");
-                        return;
-                    }
+                if let Err(error) = apply_changes(handle, &changes) {
+                    tracing::warn!(%error, "the changes of the server were not applied");
+                    return;
                 }
+                (handle.wake)();
             }
             Ok(Frame::Error(error)) => {
                 tracing::warn!(code = error.code.as_str(), reason = %error.message, "the server ended the link");
@@ -648,13 +647,68 @@ fn serve_link(
                 tracing::warn!("the server answered a frame that this computer did not ask for");
                 return;
             }
-            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                let answer_due = if first { bounds.request } else { bounds.wait };
+                if past_bound(sending, bounds.request) {
+                    tracing::warn!(
+                        bound_secs = bounds.request.as_secs(),
+                        "the link did not answer a push in time, so it is lost"
+                    );
+                    return;
+                }
+                if past_bound(waiting, answer_due) {
+                    tracing::warn!(
+                        bound_secs = answer_due.as_secs(),
+                        "the link did not answer a wait in time, so it is lost"
+                    );
+                    return;
+                }
+            }
             Err(RecvTimeoutError::Disconnected) => return,
         }
         // A local change is the only work of a turn that the server did not
         // answer; the links of both are read on the next pass of the loop.
         while kicked.try_recv().is_ok() {}
     }
+}
+
+/// Whether a request that was sent at `since` has waited for its answer longer
+/// than `bound`.
+fn past_bound(since: Option<Instant>, bound: Duration) -> bool {
+    since.is_some_and(|since| since.elapsed() >= bound)
+}
+
+/// Keeps one answer of a push in the queue and the mirror, and marks the records
+/// as changed for the UI.
+fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
+    let outcome = {
+        let mut state = handle.lock();
+        state.client.accept_push(reply)
+    };
+    match outcome {
+        Ok(outcome) => {
+            for (id, refusal) in &outcome.refused {
+                tracing::warn!(
+                    id,
+                    code = refusal.code(),
+                    reason = %refusal,
+                    "the server refused an intent"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the answer of a push was not kept");
+            return;
+        }
+    }
+    let mut state = handle.lock();
+    state.generation = state.generation.wrapping_add(1);
+    let file = mirror_of(&state);
+    if let Err(error) = write_mirror(&state.mirror_file, &file) {
+        tracing::warn!(%error, "the mirror of the machine list was not written");
+    }
+    drop(state);
+    (handle.wake)();
 }
 
 /// Applies one answer of changes to the mirror and moves the mark of this
@@ -667,6 +721,12 @@ fn apply_changes(handle: &SyncHandle, changes: &Changes) -> Result<PullOutcome, 
     state.generation = state.generation.wrapping_add(1);
     let file = mirror_of(&state);
     write_mirror(&state.mirror_file, &file)?;
+    tracing::debug!(
+        index = applied.index,
+        rows = applied.rows,
+        reset = applied.reset,
+        "the machine list moved"
+    );
     Ok(applied)
 }
 
@@ -808,85 +868,6 @@ fn reap(child_slot: &Arc<Mutex<Option<Child>>>) {
     }
 }
 
-/// The records of the machine list that this computer kept before it followed a
-/// server, from the file store of `machines_dir`. A key name that such a record
-/// still holds moves to the binding file of this computer, as a load of the file
-/// store moves it.
-fn seed_records(machines_dir: &Path) -> Result<Vec<Machine>, SyncError> {
-    let registry = MachineRegistry::new(machines_dir.to_path_buf());
-    let loaded = registry
-        .load()
-        .map_err(|error| SyncError::Queue(format!("the machine list of this computer: {error}")))?;
-    if !loaded.keys.is_empty() {
-        let mut bindings = registry
-            .bindings()
-            .load()
-            .map_err(|error| SyncError::Queue(format!("the machine keys of this computer: {error}")))?;
-        let moved = loaded.keys.iter().fold(false, |moved, (machine, key)| {
-            bindings.bind_if_absent(machine, key) || moved
-        });
-        if moved {
-            bindings
-                .save()
-                .map_err(|error| SyncError::Queue(format!("the machine keys of this computer: {error}")))?;
-        }
-    }
-    Ok(loaded.records)
-}
-
-/// The device name of this computer: the one that it wrote at its first link, or
-/// a name that it writes now. The name is 1 to 40 characters of `a-z`, `0-9` and
-/// `-`, and it stays the same across restarts, so the server sees one computer.
-fn device_name(directory: &Path) -> Result<String, SyncError> {
-    let file = AtomicFile::new(directory.join(DEVICE_FILE));
-    if let Some(text) = file
-        .read()
-        .map_err(|error| SyncError::Queue(format!("the device name at {}: {error}", file.path().display())))?
-    {
-        let name = text.trim().to_owned();
-        if check_device_name(&name) {
-            return Ok(name);
-        }
-        tracing::warn!(
-            name = %name,
-            "the stored device name breaks its rule, so this computer takes another one"
-        );
-    }
-    let unique = uuid::Uuid::new_v4().simple().to_string();
-    let name = format!("horizon-{}", &unique[..8]);
-    file.write(name.as_bytes())
-        .map_err(|error| SyncError::Queue(format!("the device name at {}: {error}", file.path().display())))?;
-    Ok(name)
-}
-
-fn read_mirror(path: &Path) -> Result<MirrorFile, SyncError> {
-    let file = AtomicFile::new(path.to_path_buf());
-    let Some(text) = file
-        .read()
-        .map_err(|error| SyncError::Queue(format!("the mirror at {}: {error}", path.display())))?
-    else {
-        return Ok(MirrorFile::default());
-    };
-    let mirror: MirrorFile = serde_json::from_str(&text)
-        .map_err(|error| SyncError::Queue(format!("the mirror at {}: {error}", path.display())))?;
-    if mirror.format != 0 && mirror.format != MIRROR_FORMAT {
-        return Err(SyncError::Queue(format!(
-            "the mirror at {} has format {}, and this Horizon writes format {MIRROR_FORMAT}",
-            path.display(),
-            mirror.format
-        )));
-    }
-    Ok(mirror)
-}
-
-fn write_mirror(path: &Path, file: &MirrorFile) -> Result<(), SyncError> {
-    let encoded = serde_json::to_vec_pretty(file)
-        .map_err(|error| SyncError::Queue(format!("the mirror at {}: {error}", path.display())))?;
-    AtomicFile::new(path.to_path_buf())
-        .write(&encoded)
-        .map_err(|error| SyncError::Queue(format!("the mirror at {}: {error}", path.display())))
-}
-
 fn queue_error(error: &SyncError) -> MachineError {
     MachineError::Unavailable {
         reason: error.to_string(),
@@ -932,7 +913,26 @@ impl MachineStore for SyncedMachineStore {
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
+    use crate::protocol::check_device_name;
+
+    use super::files::DEVICE_FILE;
     use super::*;
+
+    #[test]
+    fn a_wait_may_take_the_bound_of_the_server_and_its_margin() {
+        assert_eq!(WAIT_ANSWER_BOUND, crate::server::WAIT_BOUND + WAIT_ANSWER_MARGIN);
+        assert_eq!(LinkBounds::STANDARD.wait, WAIT_ANSWER_BOUND);
+        assert_eq!(LinkBounds::STANDARD.request, REQUEST_BOUND);
+        assert_eq!(LinkBounds::default(), LinkBounds::STANDARD);
+        assert!(
+            REQUEST_BOUND < WAIT_ANSWER_BOUND,
+            "a wait stays open at the server, and a push and a pull do not"
+        );
+        assert!(
+            HELLO_BOUND >= REQUEST_BOUND,
+            "the hello holds the connect of the SSH of the link"
+        );
+    }
 
     #[test]
     fn a_device_name_is_written_once_and_stays() {
