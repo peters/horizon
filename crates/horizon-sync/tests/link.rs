@@ -371,8 +371,10 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
         panic!("the server answers an error frame, not {answer:?}");
     };
     assert_eq!(error.code, LinkErrorCode::ProtocolVersion);
+    let spoken = PROTOCOL_VERSION;
+    let asked = PROTOCOL_VERSION + 1;
     assert!(
-        error.message.contains('2') && error.message.contains('1'),
+        error.message.contains(&asked.to_string()) && error.message.contains(&spoken.to_string()),
         "the message names both versions: {}",
         error.message
     );

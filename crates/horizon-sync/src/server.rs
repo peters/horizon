@@ -158,6 +158,7 @@ fn greet<R: Read>(reader: &mut R, frames: &mpsc::Sender<Frame>, store: &Store) -
         protocol: PROTOCOL_VERSION,
         store: store.store_id().to_owned(),
         now_millis: u64::try_from(crate::store::now_millis()).unwrap_or(0),
+        secrets_lost: store.secrets_lost(),
     };
     if frames.send(Frame::HelloOk(answer)).is_err() {
         return Ok(None);

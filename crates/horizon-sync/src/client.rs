@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Refusal, SyncError};
 use crate::frame::{read_frame, write_frame};
-use crate::intent::{Intent, MAX_INTENTS_PER_PUSH, Op, PushReply};
+use crate::intent::{Intent, MAX_INTENTS_PER_PUSH, MAX_SECRETS_PER_PUSH, Op, PushReply};
 use crate::protocol::{Frame, Hello, HelloOk, PROTOCOL_VERSION, Pull, Push, Wait, check_device_name};
 use crate::store::{Changes, Row};
 use crate::tip::tip;
@@ -228,6 +228,111 @@ impl Client {
         &self.state.pending
     }
 
+    /// Queues the value of the secret `id` for the server. The queue file holds
+    /// the id and the version that this computer saw, never the value: the
+    /// supervisor reads the value from the key folder or the credential store when
+    /// it pushes.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn enqueue_secret(&mut self, id: &str) -> Result<u64, SyncError> {
+        let seen = self.state.secret_versions.get(id).copied();
+        self.enqueue(
+            seen,
+            Op::SecretPut {
+                id: id.to_owned(),
+                body: None,
+            },
+        )
+    }
+
+    /// Queues the removal of the secret `id`.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn enqueue_secret_remove(&mut self, id: &str) -> Result<u64, SyncError> {
+        self.enqueue(None, Op::SecretRemove { id: id.to_owned() })
+    }
+
+    /// Queues the key that `machine` uses, or the removal of that binding when
+    /// `key` is `None`.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn enqueue_binding(&mut self, machine: &str, key: Option<&str>) -> Result<u64, SyncError> {
+        self.enqueue(
+            None,
+            Op::BindingPut {
+                machine: machine.to_owned(),
+                key: key.map(str::to_owned),
+            },
+        )
+    }
+
+    /// The version of the secret `id` that this computer saw, when it saw one.
+    #[must_use]
+    pub fn secret_version(&self, id: &str) -> Option<u64> {
+        self.state.secret_versions.get(id).copied()
+    }
+
+    /// Remembers the version of one secret of the server, so the next local
+    /// change of it is an intent on that version.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn remember_secret(&mut self, id: &str, version: u64) -> Result<(), SyncError> {
+        if self.state.secret_versions.insert(id.to_owned(), version) == Some(version) {
+            return Ok(());
+        }
+        self.save()
+    }
+
+    /// Forgets the version of one secret, because the server removed it.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn forget_secret(&mut self, id: &str) -> Result<(), SyncError> {
+        if self.state.secret_versions.remove(id).is_none() {
+            return Ok(());
+        }
+        self.save()
+    }
+
+    /// Forgets every version of the secrets, because the server cannot read what
+    /// it holds and every value that this computer has is new to it.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn forget_secrets(&mut self) -> Result<(), SyncError> {
+        if self.state.secret_versions.is_empty() {
+            return Ok(());
+        }
+        self.state.secret_versions.clear();
+        self.save()
+    }
+
+    /// Whether an intent on the secret `id` waits for the server.
+    #[must_use]
+    pub fn secret_is_pending(&self, id: &str) -> bool {
+        self.state
+            .pending
+            .iter()
+            .any(|intent| intent.op.is_secret() && intent.op.object_id() == id)
+    }
+
+    /// Drops the intents of these counters, which this computer could not send
+    /// and will not send: a secret whose local value is gone.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn forget_intents(&mut self, ids: &[u64]) -> Result<(), SyncError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.state.pending.retain(|intent| !ids.contains(&intent.id));
+        self.save()
+    }
+
     /// Queues one intent and answers its counter. The file holds it before this
     /// call returns.
     ///
@@ -325,12 +430,28 @@ impl Client {
     }
 
     /// The intents of the next push, or `None` when every intent is decided.
+    ///
+    /// One push holds at most [`MAX_INTENTS_PER_PUSH`] intents and at most
+    /// [`MAX_SECRETS_PER_PUSH`] secrets, because a secret body is the largest
+    /// value of the protocol and the frame has its own bound. The order of the
+    /// queue is kept, so a push never skips an intent that waits.
     #[must_use]
     pub fn next_push(&self) -> Option<Vec<Intent>> {
-        if self.state.pending.is_empty() {
-            return None;
+        let mut chunk = Vec::new();
+        let mut secrets = 0;
+        for intent in &self.state.pending {
+            if chunk.len() >= MAX_INTENTS_PER_PUSH {
+                break;
+            }
+            if intent.op.is_secret() {
+                if secrets >= MAX_SECRETS_PER_PUSH {
+                    break;
+                }
+                secrets += 1;
+            }
+            chunk.push(intent.clone());
         }
-        Some(self.state.pending.iter().take(MAX_INTENTS_PER_PUSH).cloned().collect())
+        (!chunk.is_empty()).then_some(chunk)
     }
 
     /// Removes the intents that one answer decided from the queue and writes the
@@ -608,6 +729,9 @@ struct ClientState {
     tip: String,
     store: Option<String>,
     pending: Vec<Intent>,
+    /// The version of each secret that this computer saw, by id. It holds no
+    /// value, so the queue file never holds the body of a secret.
+    secret_versions: BTreeMap<String, u64>,
 }
 
 impl Default for ClientState {
@@ -619,6 +743,7 @@ impl Default for ClientState {
             tip: String::new(),
             store: None,
             pending: Vec::new(),
+            secret_versions: BTreeMap::new(),
         }
     }
 }

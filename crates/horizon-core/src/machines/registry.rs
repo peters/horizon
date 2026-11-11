@@ -37,6 +37,17 @@ pub trait MachineStore: std::fmt::Debug + Send + Sync {
     /// # Errors
     /// Returns why the store cannot be written.
     fn save(&self, records: &[Machine]) -> Result<(), MachineError>;
+
+    /// Writes the key binding of this computer to where the store keeps it. The
+    /// file store already holds it beside the records, so it writes nothing here;
+    /// a store that a server holds turns the difference into intents.
+    ///
+    /// # Errors
+    /// Returns why the bindings cannot be written.
+    fn save_bindings(&self, bindings: &MachineBindings) -> Result<(), MachineError> {
+        let _ = bindings;
+        Ok(())
+    }
 }
 
 /// What a store returned: its records, and the key names that a record still
@@ -292,6 +303,7 @@ impl Machines {
     /// Returns why the binding file or the store cannot be written.
     pub fn save(&self) -> Result<(), MachineError> {
         self.bindings.save()?;
+        self.store.save_bindings(&self.bindings)?;
         self.store.save(&self.records)
     }
 }

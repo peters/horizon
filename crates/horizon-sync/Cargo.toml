@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+chacha20poly1305.workspace = true
 horizon-browser-control.workspace = true
 horizon-core.workspace = true
 rusqlite.workspace = true
@@ -22,6 +23,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true

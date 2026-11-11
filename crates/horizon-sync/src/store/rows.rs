@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::error::StoreError;
 use crate::store::schema::index_of;
+use crate::store::secrets::{self, SecretKey};
 
 /// One object of the server, as a pull reports it.
 ///
@@ -40,8 +41,8 @@ pub struct Changes {
 ///
 /// # Errors
 /// Returns why the objects cannot be read.
-pub(super) fn changes(connection: &Connection, since: u64) -> Result<Changes, StoreError> {
-    let rows = rows(connection, since)?;
+pub(super) fn changes(connection: &Connection, since: u64, key: &SecretKey) -> Result<Changes, StoreError> {
+    let rows = rows(connection, since, key)?;
     Ok(Changes {
         index: index_of(connection)?,
         reset: false,
@@ -53,16 +54,30 @@ pub(super) fn changes(connection: &Connection, since: u64) -> Result<Changes, St
 ///
 /// # Errors
 /// Returns why the objects cannot be read.
-pub(super) fn all(connection: &Connection) -> Result<Changes, StoreError> {
+pub(super) fn all(connection: &Connection, key: &SecretKey) -> Result<Changes, StoreError> {
     Ok(Changes {
         index: index_of(connection)?,
         reset: true,
-        rows: rows(connection, 0)?,
+        rows: rows(connection, 0, key)?,
     })
 }
 
-/// The rows whose version is above `since`.
-fn rows(connection: &Connection, since: u64) -> Result<Vec<Row>, StoreError> {
+/// The rows whose version is above `since`, of every kind, in version order.
+fn rows(connection: &Connection, since: u64, key: &SecretKey) -> Result<Vec<Row>, StoreError> {
+    let mut rows = object_rows(connection, since)?;
+    rows.extend(secrets::rows(connection, since, key)?);
+    rows.sort_by(|left, right| {
+        (left.version, left.kind.as_str(), left.id.as_str()).cmp(&(
+            right.version,
+            right.kind.as_str(),
+            right.id.as_str(),
+        ))
+    });
+    Ok(rows)
+}
+
+/// The rows of the objects table whose version is above `since`.
+fn object_rows(connection: &Connection, since: u64) -> Result<Vec<Row>, StoreError> {
     let mut statement = connection.prepare_cached(
         "SELECT kind, id, body_json, version, deleted FROM objects WHERE version > ?1 ORDER BY version, kind, id",
     )?;

@@ -18,7 +18,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use crate::error::StoreError;
 
 /// The schema version that this Horizon writes.
-pub(super) const SCHEMA_VERSION: i64 = 1;
+pub(super) const SCHEMA_VERSION: i64 = 2;
 
 /// The mode of the file of the store, which SQLite copies to its `-wal` and
 /// `-shm` files: the server user alone reads or writes the store.
@@ -76,9 +76,22 @@ CREATE TABLE devices (
 ";
 
 /// The changes from each schema version to the next, in order. Version 1 is the
-/// first file that this crate writes, so no change is listed yet. Never change an
-/// entry that has shipped; add a new one and increase [`SCHEMA_VERSION`].
-const MIGRATIONS: &[&str] = &[];
+/// first file that this crate writes. Version 2 adds the secrets, which are
+/// sealed with the key of the server home and are never part of the objects
+/// table. Never change an entry that has shipped; add a new one and increase
+/// [`SCHEMA_VERSION`].
+const SCHEMA_V2_SECRETS: &str = "
+CREATE TABLE secrets (
+    id TEXT PRIMARY KEY,
+    nonce BLOB NOT NULL,
+    sealed BLOB NOT NULL,
+    version INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX secrets_by_version ON secrets (version);
+";
+
+const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS];
 
 /// The key of the store id in the meta table.
 const META_STORE_ID: &str = "store_id";
@@ -155,6 +168,11 @@ pub(super) fn prepare(connection: &mut Connection) -> Result<String, StoreError>
     if !has_table(connection, "meta")? {
         let transaction = connection.transaction()?;
         transaction.execute_batch(SCHEMA_V1)?;
+        // A new file gets the first schema and then every change, so one list of
+        // changes is the only place that knows how a table arrives.
+        for change in MIGRATIONS {
+            transaction.execute_batch(change)?;
+        }
         let store_id = uuid::Uuid::new_v4().to_string();
         transaction.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2), (?3, ?4)",

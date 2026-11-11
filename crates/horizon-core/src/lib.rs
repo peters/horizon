@@ -28,6 +28,7 @@ mod remote_hosts;
 mod retired_panel_kinds;
 mod runtime_state;
 pub mod search;
+pub mod secret;
 mod session_store;
 mod shortcuts;
 mod ssh;
@@ -93,6 +94,7 @@ pub use runtime_state::{
     new_local_id, reserve_saved_session_deletions, saved_session_deletion_pending,
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
+pub use secret::{MachineKeyFiles, SecretError, SecretId, SecretKind, SecretTarget, SecretVault};
 pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,

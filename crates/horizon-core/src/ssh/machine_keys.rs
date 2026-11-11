@@ -18,7 +18,7 @@
 
 use std::{
     fs, io,
-    os::unix::fs::{DirBuilderExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
     time::UNIX_EPOCH,
@@ -26,6 +26,8 @@ use std::{
 
 use horizon_browser_control::manifest::block_keys;
 use serde::{Deserialize, Serialize};
+
+use crate::secret::MachineKeyFiles;
 
 /// The mode of the directory that holds the keys of this Horizon home.
 const DIRECTORY_MODE: u32 = 0o700;
@@ -259,6 +261,58 @@ impl MachineKeys {
         Ok(binding)
     }
 
+    /// The three files of the key `name`, or `None` when this home holds no
+    /// private key of that name.
+    ///
+    /// # Errors
+    /// Refuses a name that breaks the rule, and returns why a file cannot be
+    /// read.
+    pub fn files(&self, name: &str) -> Result<Option<MachineKeyFiles>, MachineKeyError> {
+        let name = block_keys::check_name(name)?;
+        let binding = self.binding(name);
+        let private = binding.private_key();
+        let private_key = match fs::read_to_string(&private) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(not_usable(format!(
+                    "Horizon could not read the machine key {name}: {error}"
+                )));
+            }
+        };
+        Ok(Some(MachineKeyFiles {
+            private_key,
+            public_key: read_or_empty(&binding.public_key(), name)?,
+            known_hosts: read_or_empty(&binding.known_hosts(), name)?,
+        }))
+    }
+
+    /// Writes the three files of the key `name` as `files` gives them, in a
+    /// private directory, with a private key at mode 0600 whatever mode a file of
+    /// that name had before.
+    ///
+    /// # Errors
+    /// Refuses a name that breaks the rule, and returns why the directory or a
+    /// file cannot be written.
+    pub fn write_files(&self, name: &str, files: &MachineKeyFiles) -> Result<(), MachineKeyError> {
+        let name = block_keys::check_name(name)?;
+        private_directory(&self.key_directory())?;
+        let binding = self.binding(name);
+        for (path, text) in [
+            (binding.private_key(), files.private_key.as_str()),
+            (binding.public_key(), files.public_key.as_str()),
+            (binding.known_hosts(), files.known_hosts.as_str()),
+        ] {
+            write_private(&path, text.as_bytes()).map_err(|error| {
+                not_usable(format!(
+                    "Horizon could not write {} of the machine key {name}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Delete the key pair of `name`, with its known-hosts file.
     ///
     /// # Errors
@@ -292,6 +346,44 @@ impl MachineKeys {
 
 fn not_usable(reason: String) -> MachineKeyError {
     MachineKeyError::Unavailable { reason }
+}
+
+/// The text of one optional file of a key. A file that is not there reads as
+/// empty, because a key that never logged in has no known-hosts line yet.
+fn read_or_empty(path: &Path, name: &str) -> Result<String, MachineKeyError> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(not_usable(format!(
+            "Horizon could not read {} of the machine key {name}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// Replaces one file of a key as a whole through a temporary file of its own
+/// name and a rename, at mode 0600.
+fn write_private(path: &Path, text: &[u8]) -> io::Result<()> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(PRIVATE_KEY_MODE)
+        .open(&temporary)
+        .and_then(|mut file| {
+            use std::io::Write as _;
+            file.write_all(text)?;
+            file.sync_all()
+        })
+        .and_then(|()| fs::set_permissions(&temporary, fs::Permissions::from_mode(PRIVATE_KEY_MODE)))
+        .and_then(|()| fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// Read the public half of one pair. The public line and the two file names

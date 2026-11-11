@@ -9,6 +9,7 @@
 mod apply;
 mod rows;
 mod schema;
+mod secrets;
 mod writer;
 
 use std::{
@@ -28,6 +29,8 @@ use writer::Job;
 
 pub use rows::{Changes, Row};
 
+use secrets::SecretKey;
+
 /// The most read connections that a store keeps for its next read.
 const MAX_IDLE_READERS: usize = 8;
 
@@ -42,6 +45,10 @@ struct Inner {
     /// The identifier that the server wrote when it made the file. A tip names it,
     /// so a computer that holds a log of another file learns to reset.
     store_id: String,
+    /// The key that seals every secret body of this file. It lives in a file of
+    /// the server home and never in the database, so a copy of the database alone
+    /// holds no readable secret.
+    key: Arc<SecretKey>,
     /// The channel to the writer, until the store is closed.
     writer: Mutex<Option<Sender<Job>>>,
     writer_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -60,21 +67,32 @@ impl Store {
         let mut connection = schema::open(path)?;
         let store_id = schema::prepare(&mut connection)?;
         let index = schema::index_of(&connection)?;
+        // The key file is made here, at the first start of a server home, and a
+        // file that a copy or a restore left readable is made private again.
+        let key = Arc::new(SecretKey::beside(path)?);
+        if secrets::lost(&connection, &key)? {
+            tracing::warn!(
+                key = %key.path().display(),
+                "a secret of this server is sealed with another key, so this server cannot read it; every computer that still holds a secret sends it again"
+            );
+        }
         drop(connection);
 
         let signal = Arc::new(Signal::new(index));
         let (sender, jobs) = mpsc::channel();
         let writer_path = path.to_path_buf();
         let writer_signal = Arc::clone(&signal);
+        let writer_key = Arc::clone(&key);
         let writer_thread = std::thread::Builder::new()
             .name("horizon-sync-writer".to_owned())
-            .spawn(move || writer::run(&writer_path, &writer_signal, &jobs))
+            .spawn(move || writer::run(&writer_path, &writer_signal, &writer_key, &jobs))
             .map_err(|error| StoreError::File(format!("the writer thread of the server store: {error}")))?;
 
         Ok(Self {
             inner: Arc::new(Inner {
                 path: path.to_path_buf(),
                 store_id,
+                key,
                 writer: Mutex::new(Some(sender)),
                 writer_thread: Mutex::new(Some(writer_thread)),
                 readers: Readers::new(path.to_path_buf()),
@@ -106,7 +124,8 @@ impl Store {
     /// # Errors
     /// Returns why the objects cannot be read.
     pub fn changes(&self, since: u64) -> Result<Changes, StoreError> {
-        self.inner.read(|connection| rows::changes(connection, since))
+        let key = &self.inner.key;
+        self.inner.read(|connection| rows::changes(connection, since, key))
     }
 
     /// Every object of the store, for a computer that must replace its mirror.
@@ -114,7 +133,19 @@ impl Store {
     /// # Errors
     /// Returns why the objects cannot be read.
     pub fn all(&self) -> Result<Changes, StoreError> {
-        self.inner.read(rows::all)
+        let key = &self.inner.key;
+        self.inner.read(|connection| rows::all(connection, key))
+    }
+
+    /// Whether a live secret of this store is sealed with a key that this server
+    /// does not have, so it cannot read it. The hello of a link says so, and every
+    /// computer that still holds a secret then sends it again.
+    #[must_use]
+    pub fn secrets_lost(&self) -> bool {
+        let key = &self.inner.key;
+        self.inner
+            .read(|connection| secrets::lost(connection, key))
+            .unwrap_or(true)
     }
 
     /// The changes after `since`, when the tip of the computer names this log at
@@ -125,13 +156,14 @@ impl Store {
     /// # Errors
     /// Returns why the objects cannot be read.
     pub fn pull(&self, since: u64, claimed: &str) -> Result<Changes, StoreError> {
+        let key = &self.inner.key;
         self.inner.read(|connection| {
             let index = schema::index_of(connection)?;
             let same_log = since == 0 || claimed == crate::tip(&self.inner.store_id, since);
             if since > index || !same_log {
-                return rows::all(connection);
+                return rows::all(connection, key);
             }
-            rows::changes(connection, since)
+            rows::changes(connection, since, key)
         })
     }
 

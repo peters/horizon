@@ -458,8 +458,8 @@ fn a_refusal_quotes_a_bounded_part_of_what_a_computer_sent() {
     };
     assert_eq!(
         kind.chars().count(),
-        67,
-        "a refusal quotes 64 characters and three dots, not a frame"
+        83,
+        "a refusal quotes 80 characters and three dots, not a frame"
     );
     assert!(kind.ends_with("..."));
 }
@@ -521,7 +521,7 @@ fn a_file_of_a_newer_horizon_is_refused_and_a_damaged_one_is_reported() {
             panic!("a file of a newer Horizon must be refused");
         }
         Err(refused) => assert!(
-            matches!(refused, StoreError::Newer { found: 99, expected: 1 }),
+            matches!(refused, StoreError::Newer { found: 99, expected: 2 }),
             "{refused}"
         ),
     }
@@ -568,4 +568,279 @@ fn the_store_and_its_write_ahead_files_are_private() {
     let store = Store::open(&loose).expect("the store of a loose file");
     assert_eq!(mode_of(&loose), 0o600, "a loose file is made private at the start");
     store.close();
+}
+
+/// One secret intent of a machine key, with a value.
+fn put_secret(device: &str, id: u64, seen: Option<u64>, secret: &str, body: &str) -> Intent {
+    Intent {
+        device: device.to_owned(),
+        id,
+        seen,
+        op: Op::SecretPut {
+            id: secret.to_owned(),
+            body: Some(horizon_sync::SecretBody::new(body.to_owned())),
+        },
+    }
+}
+
+fn remove_secret(device: &str, id: u64, secret: &str) -> Intent {
+    Intent {
+        device: device.to_owned(),
+        id,
+        seen: None,
+        op: Op::SecretRemove { id: secret.to_owned() },
+    }
+}
+
+/// A key pair as one secret body, taken from `private_key`.
+fn key_body(private_key: &str) -> String {
+    format!(
+        "{{\"private_key\":{},\"public_key\":\"ssh-ed25519 AAAA test\",\"known_hosts\":\"\"}}",
+        serde_json::to_string(private_key).expect("a string")
+    )
+}
+
+#[test]
+fn a_secret_travels_with_its_body_and_its_body_is_in_no_row_of_the_log() {
+    let temp = tempfile::tempdir().expect("a directory");
+    let path = temp.path().join("server.sqlite");
+    let store = Store::open(&path).expect("a new store");
+    let body = key_body("-----BEGIN OPENSSH PRIVATE KEY-----\nMARKER-7f3a-key-text\n-----END OPENSSH PRIVATE KEY-----");
+    let index = applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 1, None, "machine-key/build-1", &body),
+    );
+    let changes = store.pull(0, "").expect("the rows of the server");
+    let row = changes
+        .rows
+        .iter()
+        .find(|row| row.kind == horizon_sync::KIND_SECRET)
+        .expect("the secret row");
+    assert_eq!(row.id, "machine-key/build-1");
+    assert_eq!(row.version, index);
+    assert_eq!(row.body, Value::String(body.clone()), "the body of the secret travels");
+
+    // The log holds the kind, the id and the version of a secret change, and not
+    // its body. The database holds no plain body either.
+    store.close();
+    let connection = rusqlite::Connection::open(&path).expect("the file");
+    let mut statement = connection
+        .prepare("SELECT kind, object_id, result_json FROM log")
+        .expect("the log");
+    let rows: Vec<(String, String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .expect("the rows")
+        .collect::<Result<_, _>>()
+        .expect("the rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "secret");
+    assert_eq!(rows[0].1, "machine-key/build-1");
+    for text in [&rows[0].2, &rows[0].0, &rows[0].1] {
+        assert!(!text.contains("MARKER-7f3a"), "the log quotes no body: {text}");
+    }
+    let sealed: Vec<u8> = connection
+        .query_row(
+            "SELECT sealed FROM secrets WHERE id = 'machine-key/build-1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the sealed body");
+    assert!(
+        !String::from_utf8_lossy(&sealed).contains("MARKER-7f3a"),
+        "the table holds no plain body"
+    );
+    assert!(
+        std::fs::read(&path)
+            .expect("the file")
+            .windows(12)
+            .all(|window| window != b"MARKER-7f3a"),
+        "no part of the database holds the plain body"
+    );
+}
+
+#[test]
+fn the_key_of_the_secrets_is_a_private_file_beside_the_database() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("a directory");
+    let path = temp.path().join("server.sqlite");
+    let store = Store::open(&path).expect("a new store");
+    applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 1, None, "machine-key/build-1", &key_body("first")),
+    );
+    store.close();
+    let key = temp.path().join("secret.key");
+    let bytes = std::fs::read(&key).expect("the key file");
+    assert_eq!(bytes.len(), 32, "the key is 32 bytes");
+    assert_eq!(
+        std::fs::metadata(&key).expect("the key").permissions().mode() & 0o777,
+        0o600,
+        "the key file is private"
+    );
+    assert!(
+        !std::fs::read(&path)
+            .expect("the file")
+            .windows(32)
+            .any(|window| window == bytes.as_slice()),
+        "the database does not hold the key"
+    );
+
+    // A second store of the same home uses the same key, so the body opens.
+    let store = Store::open(&path).expect("the same store");
+    let row = store
+        .pull(0, "")
+        .expect("the rows")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == horizon_sync::KIND_SECRET)
+        .expect("the secret row");
+    assert_eq!(row.body, Value::String(key_body("first")));
+    assert!(!store.secrets_lost());
+    store.close();
+
+    // A file without its key is a server that cannot read what it holds: it keeps
+    // running, reports the loss, and a computer that holds the value sends it
+    // again.
+    std::fs::remove_file(&key).expect("the key is lost");
+    let store = Store::open(&path).expect("a store without its key keeps running");
+    assert!(store.secrets_lost(), "the loss of the key is reported");
+    assert!(
+        store.pull(0, "").expect("the rows").rows.is_empty(),
+        "a secret that this key cannot open is no row of a pull"
+    );
+    let row = store
+        .pull(0, "")
+        .expect("the rows")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == horizon_sync::KIND_SECRET);
+    assert!(row.is_none());
+    applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 2, None, "machine-key/build-1", &key_body("again")),
+    );
+    assert!(!store.secrets_lost(), "the value that was sent again opens");
+    store.close();
+}
+
+#[test]
+fn the_version_rule_of_a_secret_and_its_refusals() {
+    let (_temp, store) = store();
+    let body = key_body("one");
+    let first = applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 1, None, "machine-key/build-1", &body),
+    );
+    assert!(matches!(
+        refused(&store, "mbp-7c1", put_secret("mbp-7c1", 2, None, "machine-key/build-1", &body)),
+        Refusal::AlreadyAnswered { version } if version == first
+    ));
+    applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 3, Some(first), "machine-key/build-1", &body),
+    );
+    let now = store.index();
+    assert!(matches!(
+        refused(&store, "mbp-7c1", put_secret("mbp-7c1", 4, Some(first), "machine-key/build-1", &body)),
+        Refusal::ChangedSinceSeen { seen, version } if seen == first && version == now
+    ));
+    applied(&store, "mbp-7c1", remove_secret("mbp-7c1", 5, "machine-key/build-1"));
+    assert!(
+        store
+            .pull(0, "")
+            .expect("the rows")
+            .rows
+            .iter()
+            .find(|row| row.kind == horizon_sync::KIND_SECRET)
+            .is_some_and(|row| row.deleted),
+        "a removed secret stays as a tombstone"
+    );
+    // A secret that the server removed is no row that a computer can see, so the
+    // value that a computer still holds is created again: that is how a value of a
+    // server whose key was lost comes back.
+    applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 6, None, "machine-key/build-1", &body),
+    );
+}
+
+#[test]
+fn a_secret_without_a_value_a_bad_id_a_large_body_and_a_full_server_are_refused() {
+    let (_temp, store) = store();
+    let mut intent = put_secret("mbp-7c1", 1, None, "machine-key/build-1", &key_body("one"));
+    intent.op = Op::SecretPut {
+        id: "machine-key/build-1".to_owned(),
+        body: None,
+    };
+    assert!(matches!(
+        refused(&store, "mbp-7c1", intent),
+        Refusal::InvalidIntent { .. }
+    ));
+
+    for id in [
+        "machine-key/Build",
+        "machine-key/-build",
+        "machine-key/build-1/2",
+        "credential/a b",
+        "credential/",
+        "machine-key/",
+        "../machine-key/build-1",
+        "machine-key/build.1",
+        "secret/build-1",
+    ] {
+        let refused = refused(&store, "mbp-7c1", put_secret("mbp-7c1", 2, None, id, "value"));
+        assert!(
+            matches!(refused, Refusal::InvalidIntent { .. }),
+            "{id} is refused: {refused:?}"
+        );
+    }
+
+    let large = "v".repeat(horizon_sync::MAX_SECRET_BYTES + 1);
+    assert!(matches!(
+        refused(
+            &store,
+            "mbp-7c1",
+            put_secret("mbp-7c1", 3, None, "credential/key", &large)
+        ),
+        Refusal::InvalidIntent { .. }
+    ));
+
+    // The limit of the server: 256 secrets, and the 257th is a typed refusal.
+    for count in 0..horizon_sync::MAX_SECRETS {
+        let id = format!("credential/key-{count}");
+        applied(
+            &store,
+            "mbp-7c1",
+            put_secret("mbp-7c1", 100 + count, None, &id, "value"),
+        );
+    }
+    assert!(matches!(
+        refused(
+            &store,
+            "mbp-7c1",
+            put_secret("mbp-7c1", 999, None, "credential/one-more", "value")
+        ),
+        Refusal::TooMany { kind, limit } if kind == "secret" && limit == horizon_sync::MAX_SECRETS
+    ));
+    // A replace of a secret that is there is not a new one.
+    let version = store
+        .pull(0, "")
+        .expect("the rows")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == horizon_sync::KIND_SECRET && row.id == "credential/key-0")
+        .map(|row| row.version)
+        .expect("the version of a secret");
+    applied(
+        &store,
+        "mbp-7c1",
+        put_secret("mbp-7c1", 1000, Some(version), "credential/key-0", "another"),
+    );
 }

@@ -20,6 +20,15 @@ use crate::error::Refusal;
 /// The kind of object that holds one machine of the shared list.
 pub const KIND_MACHINE: &str = "machine";
 
+/// The kind of object that holds the key that a machine uses.
+pub const KIND_BINDING: &str = "binding";
+
+/// The kind of object that holds one secret. Its body is never in the objects
+/// table, never in the log and never in a line of the log: the table `secrets`
+/// holds it, sealed, and the log row of a secret holds the kind, the id and the
+/// version only.
+pub const KIND_SECRET: &str = "secret";
+
 /// An object that keeps nothing a person uses. It exists so that the version
 /// rule has an object to prove itself on before the cards of a later slice
 /// arrive, and it is bounded like every other kind.
@@ -30,6 +39,14 @@ pub const MAX_INTENTS_PER_PUSH: usize = 256;
 
 /// The most probe objects that the server keeps.
 pub const MAX_PROBES: u64 = 64;
+
+/// The most secrets of one push. A push also holds at most
+/// [`MAX_INTENTS_PER_PUSH`] intents, and the two bounds together keep the frame
+/// below [`crate::MAX_FRAME_BYTES`]: eight bodies of the largest size that
+/// [`horizon_core::secret::MAX_SECRET_BYTES`] allows are 128 KiB.
+pub const MAX_SECRETS_PER_PUSH: usize = 8;
+
+pub use horizon_core::secret::{MAX_SECRET_BYTES, MAX_SECRETS};
 
 /// One change that a computer asks the server to make.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -54,6 +71,16 @@ pub enum Op {
     MachinePut { record: horizon_core::Machine },
     /// Forgets a machine of that name.
     MachineRemove { name: String },
+    /// Sets the key that a machine uses, or forgets it when `key` is `None`.
+    /// The binding is last write wins, as the machine list is.
+    BindingPut { machine: String, key: Option<String> },
+    /// Writes one versioned secret of this id. `body` is `None` in the queue of
+    /// a computer, which holds the id only, and the computer fills it from its
+    /// own key folder or credential store when it pushes. A body never reaches a
+    /// queue file, a mirror file or a line of the log.
+    SecretPut { id: String, body: Option<SecretBody> },
+    /// Removes one secret. A removal is last write wins, as a machine removal is.
+    SecretRemove { id: String },
     /// Writes one versioned object of an internal kind.
     ObjectPut { kind: String, id: String, body: Value },
     /// Removes one versioned object of an internal kind.
@@ -66,6 +93,8 @@ impl Op {
     pub fn kind(&self) -> &str {
         match self {
             Self::MachinePut { .. } | Self::MachineRemove { .. } => KIND_MACHINE,
+            Self::BindingPut { .. } => KIND_BINDING,
+            Self::SecretPut { .. } | Self::SecretRemove { .. } => KIND_SECRET,
             Self::ObjectPut { kind, .. } | Self::ObjectRemove { kind, .. } => kind,
         }
     }
@@ -76,8 +105,57 @@ impl Op {
         match self {
             Self::MachinePut { record } => &record.name,
             Self::MachineRemove { name } => name,
-            Self::ObjectPut { id, .. } | Self::ObjectRemove { id, .. } => id,
+            Self::BindingPut { machine, .. } => machine,
+            Self::SecretPut { id, .. }
+            | Self::SecretRemove { id }
+            | Self::ObjectPut { id, .. }
+            | Self::ObjectRemove { id, .. } => id,
         }
+    }
+
+    /// Whether this intent changes a secret, whose body stays outside the queue
+    /// file, the mirror file and the log.
+    #[must_use]
+    pub fn is_secret(&self) -> bool {
+        matches!(self, Self::SecretPut { .. } | Self::SecretRemove { .. })
+    }
+
+    /// The body of a secret intent, when it carries one.
+    #[must_use]
+    pub fn secret_body(&self) -> Option<&SecretBody> {
+        match self {
+            Self::SecretPut { body, .. } => body.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+/// One secret body: the opaque text of one machine key or one credential value.
+///
+/// The server stores these bytes and never reads them. The [`std::fmt::Debug`]
+/// of this type is redacted, so an intent that a caller prints or logs shows the
+/// id of the secret and not its value.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct SecretBody(String);
+
+impl SecretBody {
+    /// The body of `text`.
+    #[must_use]
+    pub fn new(text: String) -> Self {
+        Self(text)
+    }
+
+    /// The body as the text that it is.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SecretBody(<redacted>)")
     }
 }
 

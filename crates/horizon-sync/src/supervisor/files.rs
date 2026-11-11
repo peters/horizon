@@ -8,11 +8,11 @@
 //! here: [`crate::client`] owns it, with the mark of the log.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
-use horizon_core::machines::{MachineRegistry, MachineStore};
+use horizon_core::machines::{MachineBindings, MachineRegistry, MachineStore};
 use horizon_core::{AtomicFile, Machine};
 use serde::{Deserialize, Serialize};
 
@@ -38,17 +38,22 @@ pub(super) struct MirroredMachine {
     pub(super) mine: bool,
 }
 
-/// The mirror file: the records that the server last gave, and the names that
-/// this computer wrote.
+/// The mirror file: the records that the server last gave, the key that each
+/// machine uses, and the names that this computer wrote.
+///
+/// The mirror holds no secret body: a value of the server is written where this
+/// computer reads it, in the key folder or the credential store.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct MirrorFile {
     pub(super) format: u32,
-    /// Whether this computer compared its own list with the server once, so no
-    /// record of the machine list that it kept before that is lost.
+    /// Whether this computer compared its own list and its own keys with the
+    /// server once, so nothing that it kept before that link is lost.
     pub(super) seeded: bool,
     pub(super) owned: BTreeSet<String>,
     pub(super) machines: Vec<Machine>,
+    /// The key that each machine uses, as the server gave it.
+    pub(super) bindings: BTreeMap<String, String>,
 }
 
 /// The records of the machine list that this computer kept before it followed a
@@ -75,6 +80,26 @@ pub(super) fn seed_records(machines_dir: &Path) -> Result<Vec<Machine>, SyncErro
         }
     }
     Ok(loaded.records)
+}
+
+/// The key bindings of this computer, from `machines/keys.json`.
+pub(super) fn read_bindings(machines_dir: &Path) -> Result<BTreeMap<String, String>, SyncError> {
+    let bindings = MachineBindings::in_directory(machines_dir)
+        .load()
+        .map_err(|error| SyncError::Queue(format!("the machine keys of this computer: {error}")))?;
+    Ok(bindings.names().clone())
+}
+
+/// Writes the key bindings of this computer into `machines/keys.json`, so the
+/// machine list of this computer reads the key that the server decided.
+pub(super) fn write_bindings(machines_dir: &Path, names: &BTreeMap<String, String>) -> Result<(), SyncError> {
+    let mut bindings = MachineBindings::in_directory(machines_dir);
+    for (machine, key) in names {
+        bindings.set(machine, Some(key));
+    }
+    bindings
+        .save()
+        .map_err(|error| SyncError::Queue(format!("the machine keys of this computer: {error}")))
 }
 
 /// The device name of this computer: the one that it wrote at its first link, or

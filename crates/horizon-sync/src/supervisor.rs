@@ -34,18 +34,20 @@ use std::{
 };
 
 use horizon_browser_control::ssh_forward::ssh_command;
-use horizon_core::machines::{LoadedMachines, MachineStore};
+use horizon_core::SecretTarget;
+use horizon_core::machines::{LoadedMachines, MachineBindings, MachineStore};
+use horizon_core::secret::{SecretId, SecretKind, SecretVault};
 use horizon_core::{Machine, MachineError};
 
 use crate::client::{Client, LinkState, PullOutcome};
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
-use crate::intent::{Op, PushReply};
+use crate::intent::{Intent, KIND_BINDING, KIND_MACHINE, KIND_SECRET, Op, PushReply, SecretBody};
 use crate::protocol::{Frame, HelloOk};
 use crate::store::Changes;
 use files::{
-    MIRROR_FILE, MIRROR_FORMAT, MirrorFile, MirroredMachine, QUEUE_FILE, device_name, read_mirror, seed_records,
-    write_mirror,
+    MIRROR_FILE, MIRROR_FORMAT, MirrorFile, MirroredMachine, QUEUE_FILE, device_name, read_bindings, read_mirror,
+    seed_records, write_bindings, write_mirror,
 };
 
 mod files;
@@ -105,7 +107,7 @@ impl Default for LinkBounds {
 
 /// The settings of one supervisor: where the server is, how to reach it and which
 /// files of this computer hold the queue and the mirror.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct SupervisorConfig {
     /// SSH target of the server, as the settings entry names it.
     pub target: String,
@@ -122,6 +124,11 @@ pub struct SupervisorConfig {
     /// The directory of the machine list that this computer kept before it
     /// followed a server, whose records seed the first link.
     pub machines_dir: PathBuf,
+    /// The places where this computer keeps its secrets: its machine keys and its
+    /// credential values. The link writes every value that the server decided
+    /// there, reads the value of a local change from there, and never sends a
+    /// value that is not a secret.
+    pub secrets: Arc<dyn SecretTarget>,
     /// The bounds of the requests of the link. A test replaces them so it sees a
     /// link that went silent within a second instead of a minute.
     pub bounds: LinkBounds,
@@ -129,11 +136,17 @@ pub struct SupervisorConfig {
 
 impl SupervisorConfig {
     /// The settings of the supervisor of `target` and `command`, with the queue,
-    /// the mirror and the device name of `directory`.
+    /// the mirror and the device name of `directory`, and the secrets of
+    /// `secrets`.
     ///
     /// # Errors
     /// Returns why the device name of this computer cannot be read or written.
-    pub fn for_server(target: &str, command: &str, directory: &Path) -> Result<Self, SyncError> {
+    pub fn for_server(
+        target: &str,
+        command: &str,
+        directory: &Path,
+        secrets: Arc<dyn SecretTarget>,
+    ) -> Result<Self, SyncError> {
         Ok(Self {
             target: target.to_owned(),
             command: command.to_owned(),
@@ -142,8 +155,16 @@ impl SupervisorConfig {
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
             machines_dir: directory.to_path_buf(),
+            secrets,
             bounds: LinkBounds::STANDARD,
         })
+    }
+
+    /// The machine keys of this Horizon home alone, for a caller that has no
+    /// credential store at hand, such as a test.
+    #[must_use]
+    pub fn keys_only(keys: horizon_core::MachineKeys) -> Arc<dyn SecretTarget> {
+        Arc::new(SecretVault::keys_only(keys))
     }
 
     /// The command of the child, with the program, the flags and the target.
@@ -184,8 +205,22 @@ impl std::fmt::Debug for SyncHandle {
 struct SyncState {
     client: Client,
     mirror_file: PathBuf,
+    /// The directory of `machines/keys.json`, which holds the key of each machine.
+    machines_dir: PathBuf,
     mirror: BTreeMap<String, MirroredMachine>,
     owned: BTreeSet<String>,
+    /// The key that each machine uses, as the server gave it.
+    bindings: BTreeMap<String, String>,
+    /// The bindings that the last save answered, so a save turns only what its
+    /// caller changed into an intent.
+    bindings_view: BTreeMap<String, String>,
+    /// The bindings that this computer kept before its first link.
+    local_bindings: BTreeMap<String, String>,
+    /// The machine keys that this computer holds now, so the machine section
+    /// knows whether a machine can connect here yet.
+    machine_keys: BTreeSet<String>,
+    /// The places where this computer keeps its secrets.
+    secrets: Arc<dyn SecretTarget>,
     /// The records of the file store of this computer, until the first pull of
     /// the server tells which of them the server does not have.
     pending_seed: Option<Vec<Machine>>,
@@ -195,6 +230,9 @@ struct SyncState {
     view: BTreeMap<String, Machine>,
     /// The number of changes of the records, for a UI that reads them again.
     generation: u64,
+    /// The lines for the person about a secret of this computer that the server
+    /// decided differently.
+    notices: Vec<String>,
 }
 
 impl SyncHandle {
@@ -211,11 +249,24 @@ impl SyncHandle {
         } else {
             Some(seed_records(&config.machines_dir)?)
         };
+        let local_bindings = if file.seeded {
+            BTreeMap::new()
+        } else {
+            read_bindings(&config.machines_dir)?
+        };
+        let machine_keys = config
+            .secrets
+            .local_ids(SecretKind::MachineKey)
+            .into_iter()
+            .filter_map(|id| SecretId::parse(&id).ok())
+            .map(|id| id.name().to_owned())
+            .collect();
         let (kick, _) = mpsc::channel();
         let handle = Self {
             inner: Arc::new(Mutex::new(SyncState {
                 client,
                 mirror_file: config.mirror_file.clone(),
+                machines_dir: config.machines_dir.clone(),
                 mirror: file
                     .machines
                     .into_iter()
@@ -225,10 +276,16 @@ impl SyncHandle {
                     })
                     .collect(),
                 owned: file.owned,
+                bindings: file.bindings,
+                bindings_view: BTreeMap::new(),
+                local_bindings,
+                machine_keys,
+                secrets: Arc::clone(&config.secrets),
                 pending_seed,
                 seeded: file.seeded,
                 view: BTreeMap::new(),
                 generation: 0,
+                notices: Vec::new(),
             })),
             kick,
             wake,
@@ -259,6 +316,100 @@ impl SyncHandle {
             .iter()
             .map(|intent| intent.op.object_id().to_owned())
             .collect()
+    }
+
+    /// The machine keys that this computer holds now, by name, so the machine
+    /// section knows whether a machine can connect here yet.
+    #[must_use]
+    pub fn has_machine_key(&self, name: &str) -> bool {
+        self.lock().machine_keys.contains(name)
+    }
+
+    /// The lines for the person about a secret that the server decided
+    /// differently, oldest first.
+    #[must_use]
+    pub fn take_secret_notices(&self) -> Vec<String> {
+        std::mem::take(&mut self.lock().notices)
+    }
+
+    /// Queues the value of the secret `id` for the server. The value itself stays
+    /// where this computer keeps it, and the supervisor reads it when it pushes.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn queue_secret(&self, id: &SecretId) -> Result<(), MachineError> {
+        let mut state = self.lock();
+        state
+            .client
+            .enqueue_secret(id.as_str())
+            .map_err(|error| queue_error(&error))?;
+        state.generation = state.generation.wrapping_add(1);
+        drop(state);
+        self.notify();
+        Ok(())
+    }
+
+    /// Queues the removal of the secret `id`.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn queue_secret_remove(&self, id: &SecretId) -> Result<(), MachineError> {
+        let mut state = self.lock();
+        state
+            .client
+            .enqueue_secret_remove(id.as_str())
+            .map_err(|error| queue_error(&error))?;
+        state.generation = state.generation.wrapping_add(1);
+        drop(state);
+        self.notify();
+        Ok(())
+    }
+
+    /// Turns the key bindings of this computer into intents, so the key that a
+    /// machine uses follows the person to the other computers, and writes the
+    /// mirror.
+    ///
+    /// # Errors
+    /// Returns why the queue file or the mirror cannot be written.
+    pub fn save_bindings(&self, bindings: &MachineBindings) -> Result<(), MachineError> {
+        let mut state = self.lock();
+        let next = bindings.names().clone();
+        let previous = state.bindings_view.clone();
+        let mut asked = Vec::new();
+        for (machine, key) in &next {
+            if previous.get(machine) != Some(key) {
+                asked.push((machine.clone(), Some(key.clone())));
+            }
+        }
+        for machine in previous.keys() {
+            if !next.contains_key(machine) {
+                asked.push((machine.clone(), None));
+            }
+        }
+        let mut written = false;
+        for (machine, key) in asked {
+            state
+                .client
+                .enqueue_binding(&machine, key.as_deref())
+                .map_err(|error| queue_error(&error))?;
+            written = true;
+        }
+        state.bindings_view = next;
+        if written {
+            state.generation = state.generation.wrapping_add(1);
+            let file = mirror_of(&state);
+            write_mirror(&state.mirror_file, &file).map_err(|error| queue_error(&error))?;
+        }
+        drop(state);
+        self.notify();
+        Ok(())
+    }
+
+    /// Reads the machine keys of this computer again, after a value of the server
+    /// arrived or a local key changed.
+    fn refresh_machine_keys(&self) {
+        let mut state = self.lock();
+        state.machine_keys = local_machine_keys(&state.secrets);
     }
 
     /// Whether this computer holds no key binding for `name` because the record
@@ -379,7 +530,11 @@ fn merged_records(state: &SyncState) -> Vec<Machine> {
             Op::MachineRemove { name } => {
                 merged.remove(name);
             }
-            Op::ObjectPut { .. } | Op::ObjectRemove { .. } => {}
+            Op::BindingPut { .. }
+            | Op::SecretPut { .. }
+            | Op::SecretRemove { .. }
+            | Op::ObjectPut { .. }
+            | Op::ObjectRemove { .. } => {}
         }
     }
     merged.into_values().collect()
@@ -603,12 +758,15 @@ fn serve_link(
                 state.client.next_push()
             }
         {
-            let frame = Frame::Push(crate::protocol::Push { intents: chunk });
-            if let Err(error) = write_frame(input, &frame) {
-                tracing::warn!(%error, "the link could not send a push");
-                return;
+            let intents = fill_secrets(handle, chunk);
+            if !intents.is_empty() {
+                let frame = Frame::Push(crate::protocol::Push { intents });
+                if let Err(error) = write_frame(input, &frame) {
+                    tracing::warn!(%error, "the link could not send a push");
+                    return;
+                }
+                sending = Some(Instant::now());
             }
-            sending = Some(Instant::now());
         }
         if waiting.is_none() {
             let frame = {
@@ -678,9 +836,91 @@ fn past_bound(since: Option<Instant>, bound: Duration) -> bool {
     since.is_some_and(|since| since.elapsed() >= bound)
 }
 
+/// Fills the bodies of the secret intents of one push from where this computer
+/// keeps them, and drops an intent whose local value is gone.
+///
+/// The queue of a computer holds the id of a secret and never the value, so the
+/// body comes into the frame here and nowhere else. A value that this computer no
+/// longer holds is dropped with one line, because the intent names a value that
+/// the server cannot be given; the local value itself is untouched.
+fn fill_secrets(handle: &SyncHandle, chunk: Vec<Intent>) -> Vec<Intent> {
+    let secrets = {
+        let state = handle.lock();
+        Arc::clone(&state.secrets)
+    };
+    let mut filled = Vec::with_capacity(chunk.len());
+    let mut dropped = Vec::new();
+    for mut intent in chunk {
+        let missing = match &intent.op {
+            Op::SecretPut { id, body: None } => Some(id.clone()),
+            _ => None,
+        };
+        if let Some(id) = missing {
+            let read = SecretId::parse(&id).and_then(|parsed| secrets.read(&parsed));
+            match read {
+                Ok(Some(body)) => {
+                    let Ok(text) = String::from_utf8(body.to_vec()) else {
+                        dropped.push(intent.id);
+                        tracing::warn!(%id, "a local secret is not text, so it is not sent");
+                        continue;
+                    };
+                    intent.op = Op::SecretPut {
+                        id,
+                        body: Some(SecretBody::new(text)),
+                    };
+                }
+                Ok(None) => {
+                    dropped.push(intent.id);
+                    tracing::warn!(
+                        %id,
+                        "the local value of a queued secret is gone, so it is not sent; the value of the server stays"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    dropped.push(intent.id);
+                    tracing::warn!(%id, code = error.code(), reason = %error, "a local secret was not read, so it is not sent");
+                    continue;
+                }
+            }
+        }
+        filled.push(intent);
+    }
+    if !dropped.is_empty() {
+        let mut state = handle.lock();
+        if let Err(error) = state.client.forget_intents(&dropped) {
+            tracing::warn!(%error, "an intent that could not be sent was not dropped");
+        }
+    }
+    filled
+}
+
 /// Keeps one answer of a push in the queue and the mirror, and marks the records
 /// as changed for the UI.
+///
+/// An intent on a secret that the server refused lost the version rule: the value
+/// of the server wins, and this computer either keeps its own value as
+/// `<name>.conflict-<time>` for a machine key or tells the person that a
+/// credential value was replaced. The pull that follows brings the value of the
+/// server.
 fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
+    // The queue loses the refused intent here, so the ids of the secrets that the
+    // server refused are read before the queue is settled.
+    let refused_secrets: Vec<String> = {
+        let state = handle.lock();
+        state
+            .client
+            .pending()
+            .iter()
+            .filter(|intent| intent.op.is_secret())
+            .filter(|intent| {
+                reply.results.iter().any(|result| {
+                    result.id == intent.id && matches!(result.outcome, crate::intent::Outcome::Refused(_))
+                })
+            })
+            .map(|intent| intent.op.object_id().to_owned())
+            .collect()
+    };
     let outcome = {
         let mut state = handle.lock();
         state.client.accept_push(reply)
@@ -701,6 +941,34 @@ fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
             return;
         }
     }
+    if !refused_secrets.is_empty() {
+        let (secrets, at_millis) = {
+            let state = handle.lock();
+            (Arc::clone(&state.secrets), now_millis())
+        };
+        let mut notices = Vec::new();
+        for id in refused_secrets {
+            let Ok(id) = SecretId::parse(&id) else {
+                continue;
+            };
+            let kept = secrets.read(&id).and_then(|local| match local {
+                Some(local) => secrets.keep_local(&id, &local, at_millis).map(Some),
+                None => Ok(None),
+            });
+            match kept {
+                Ok(Some(line)) => notices.push(line),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%id, code = error.code(), reason = %error, "a local secret that lost was not kept");
+                }
+            }
+        }
+        if !notices.is_empty() {
+            let mut state = handle.lock();
+            state.notices.extend(notices);
+        }
+    }
+    handle.refresh_machine_keys();
     let mut state = handle.lock();
     state.generation = state.generation.wrapping_add(1);
     let file = mirror_of(&state);
@@ -714,13 +982,28 @@ fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
 /// Applies one answer of changes to the mirror and moves the mark of this
 /// computer.
 fn apply_changes(handle: &SyncHandle, changes: &Changes) -> Result<PullOutcome, SyncError> {
+    let (applied, secret_rows) = {
+        let mut state = handle.lock();
+        let applied = apply_rows(&mut state, changes)?;
+        let bindings = apply_bindings(&mut state, changes);
+        let rows = secret_rows_of(&mut state, changes);
+        bindings?;
+        (applied, rows)
+    };
+    // A secret is written outside the lock of the state: a file, and above all a
+    // credential store, may take a while, and no frame of the UI waits for it.
+    write_secrets(handle, &secret_rows);
     let mut state = handle.lock();
-    let applied = apply_rows(&mut state, changes)?;
-    seed_local_records(&mut state)?;
+    seed_local(&mut state)?;
     state.client.accept_mark(changes.index)?;
+    state.machine_keys = local_machine_keys(&state.secrets);
     state.generation = state.generation.wrapping_add(1);
     let file = mirror_of(&state);
     write_mirror(&state.mirror_file, &file)?;
+    let names = merged_bindings(&state);
+    let machines_dir = state.machines_dir.clone();
+    drop(state);
+    write_bindings(&machines_dir, &names)?;
     tracing::debug!(
         index = applied.index,
         rows = applied.rows,
@@ -730,13 +1013,16 @@ fn apply_changes(handle: &SyncHandle, changes: &Changes) -> Result<PullOutcome, 
     Ok(applied)
 }
 
-/// Applies the rows of one answer to the mirror of the state.
+/// Applies the machine rows of one answer to the mirror of the state.
 fn apply_rows(state: &mut SyncState, changes: &Changes) -> Result<PullOutcome, SyncError> {
     if changes.reset {
         state.mirror.clear();
     }
     let mut applied = 0;
     for row in &changes.rows {
+        if row.kind != KIND_MACHINE {
+            continue;
+        }
         let name = row.id.clone();
         if row.deleted {
             state.mirror.remove(&name);
@@ -764,23 +1050,199 @@ fn apply_rows(state: &mut SyncState, changes: &Changes) -> Result<PullOutcome, S
     })
 }
 
-/// Keeps the records that this computer had before the server, once the first
-/// pull says which of them the server does not have.
-fn seed_local_records(state: &mut SyncState) -> Result<(), SyncError> {
-    let Some(records) = state.pending_seed.take() else {
-        return Ok(());
-    };
-    for record in records {
-        if state.mirror.contains_key(&record.name) {
-            // A name that both have keeps the record of the server.
+/// Applies the key bindings of one answer. A binding is last write wins, as the
+/// machine list is.
+fn apply_bindings(state: &mut SyncState, changes: &Changes) -> Result<(), SyncError> {
+    for row in &changes.rows {
+        if row.kind != KIND_BINDING {
             continue;
         }
-        let name = record.name.clone();
-        state.client.enqueue(None, Op::MachinePut { record })?;
-        state.owned.insert(name);
+        if row.deleted {
+            state.bindings.remove(&row.id);
+            continue;
+        }
+        let key = row.body.get("key").and_then(serde_json::Value::as_str).ok_or_else(|| {
+            SyncError::Queue(format!(
+                "the server sent a key binding of {} that this Horizon cannot read",
+                row.id
+            ))
+        })?;
+        state.bindings.insert(row.id.clone(), key.to_owned());
+    }
+    Ok(())
+}
+
+/// One secret of an answer of changes, with the decision that this computer made
+/// about its own value. It is read from the answer, so the body of the pull is
+/// written and then dropped and never reaches a file of this computer.
+struct SecretRow {
+    id: SecretId,
+    body: Option<Vec<u8>>,
+    keep_local: bool,
+}
+
+/// Reads the secret rows of one answer, remembers which versions this computer
+/// saw, and decides for each value whether a local value that differs is to be
+/// kept: a value that this computer never published, or one whose own intent
+/// still waits for the server, is kept beside the value of the server.
+fn secret_rows_of(state: &mut SyncState, changes: &Changes) -> Vec<SecretRow> {
+    let mut rows = Vec::new();
+    for row in &changes.rows {
+        if row.kind != KIND_SECRET {
+            continue;
+        }
+        let Ok(id) = SecretId::parse(&row.id) else {
+            tracing::warn!(id = %row.id, "the server sent a secret id that this Horizon does not read");
+            continue;
+        };
+        if row.deleted {
+            if let Err(error) = state.client.forget_secret(id.as_str()) {
+                tracing::warn!(%error, "the version of a removed secret was not forgotten");
+            }
+            rows.push(SecretRow {
+                id,
+                body: None,
+                keep_local: false,
+            });
+            continue;
+        }
+        let keep_local =
+            state.client.secret_version(id.as_str()).is_none() || state.client.secret_is_pending(id.as_str());
+        if let Err(error) = state.client.remember_secret(id.as_str(), row.version) {
+            tracing::warn!(%error, "the version of a secret was not kept");
+        }
+        let Some(text) = row.body.as_str() else {
+            tracing::warn!(id = %row.id, "the server sent a secret that is not text");
+            continue;
+        };
+        rows.push(SecretRow {
+            id,
+            body: Some(text.as_bytes().to_vec()),
+            keep_local,
+        });
+    }
+    rows
+}
+
+/// Writes the secrets of one answer where this computer reads them, and keeps a
+/// local value that lost. A value that this computer cannot write is one line of
+/// the log: the mark of the log does not move past it, so the next link tries
+/// again with the same row.
+fn write_secrets(handle: &SyncHandle, rows: &[SecretRow]) {
+    let (secrets, at_millis) = {
+        let state = handle.lock();
+        (Arc::clone(&state.secrets), now_millis())
+    };
+    let mut notices = Vec::new();
+    for row in rows {
+        let result = match &row.body {
+            Some(body) => secrets
+                .take_over(&row.id, body, row.keep_local, at_millis)
+                .map(Option::into_iter),
+            None => secrets.remove(&row.id).map(|()| None.into_iter()),
+        };
+        match result {
+            Ok(lines) => notices.extend(lines),
+            Err(error) => {
+                tracing::warn!(
+                    id = %row.id,
+                    code = error.code(),
+                    reason = %error,
+                    "a secret of the server was not written on this computer"
+                );
+            }
+        }
+    }
+    if !notices.is_empty() {
+        let mut state = handle.lock();
+        state.notices.extend(notices);
+    }
+}
+
+/// Keeps the records, the key bindings and the secrets that this computer had
+/// before the server, once the first pull says which of them the server does not
+/// have.
+fn seed_local(state: &mut SyncState) -> Result<(), SyncError> {
+    if let Some(records) = state.pending_seed.take() {
+        for record in records {
+            if state.mirror.contains_key(&record.name) {
+                // A name that both have keeps the record of the server.
+                continue;
+            }
+            let name = record.name.clone();
+            state.client.enqueue(None, Op::MachinePut { record })?;
+            state.owned.insert(name);
+        }
+    }
+    for (machine, key) in std::mem::take(&mut state.local_bindings) {
+        if state.bindings.contains_key(&machine) {
+            // A machine that both bind keeps the binding of the server.
+            continue;
+        }
+        state.client.enqueue_binding(&machine, Some(&key))?;
+    }
+    for id in local_ids(state) {
+        let Ok(id) = SecretId::parse(&id) else {
+            continue;
+        };
+        if state.client.secret_version(id.as_str()).is_some() {
+            // A secret that the server has keeps the value of the server.
+            continue;
+        }
+        state.client.enqueue_secret(id.as_str())?;
     }
     state.seeded = true;
     Ok(())
+}
+
+/// Queues every secret of this computer again, because the server cannot read
+/// what it holds and every value that this computer has is new to it.
+fn reseed_secrets(state: &mut SyncState) -> Result<(), SyncError> {
+    state.client.forget_secrets()?;
+    for id in local_ids(state) {
+        let Ok(id) = SecretId::parse(&id) else {
+            continue;
+        };
+        state.client.enqueue_secret(id.as_str())?;
+    }
+    Ok(())
+}
+
+/// The ids of every secret that this computer holds.
+fn local_ids(state: &SyncState) -> Vec<String> {
+    let mut ids = state.secrets.local_ids(SecretKind::MachineKey);
+    ids.extend(state.secrets.local_ids(SecretKind::Credential));
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// The machine keys that this computer holds, by name.
+fn local_machine_keys(secrets: &Arc<dyn SecretTarget>) -> BTreeSet<String> {
+    secrets
+        .local_ids(SecretKind::MachineKey)
+        .into_iter()
+        .filter_map(|id| SecretId::parse(&id).ok())
+        .map(|id| id.name().to_owned())
+        .collect()
+}
+
+/// The bindings of the state with its waiting intents applied, in name order.
+fn merged_bindings(state: &SyncState) -> BTreeMap<String, String> {
+    let mut merged = state.bindings.clone();
+    for intent in state.client.pending() {
+        if let Op::BindingPut { machine, key } = &intent.op {
+            match key {
+                Some(key) => {
+                    merged.insert(machine.clone(), key.clone());
+                }
+                None => {
+                    merged.remove(machine);
+                }
+            }
+        }
+    }
+    merged
 }
 
 /// The mirror file of the state.
@@ -790,20 +1252,37 @@ fn mirror_of(state: &SyncState) -> MirrorFile {
         seeded: state.seeded,
         owned: state.owned.clone(),
         machines: merged_records(state),
+        bindings: merged_bindings(state),
     }
 }
 
 /// Remembers the hello of the server.
+///
+/// A server that cannot read the secrets that it holds says so here, and every
+/// computer that still holds a value sends it again: the value of this computer is
+/// new to that server, so it goes as the first write of a secret.
 fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), String> {
     let mut state = handle.lock();
     state
         .client
         .accept_hello(answer)
         .map_err(|error| format!("the hello was not kept: {error}"))?;
+    if answer.secrets_lost {
+        tracing::warn!("the server cannot read the secrets that it holds, so this computer sends its own again");
+        reseed_secrets(&mut state).map_err(|error| format!("the secrets that this computer sends again: {error}"))?;
+    }
     state.generation = state.generation.wrapping_add(1);
     drop(state);
     (handle.wake)();
     Ok(())
+}
+
+/// The time of this computer, for the name of a file that lost the version rule.
+/// A time never reaches the server: an intent carries none.
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Reads the frames of the child into `answers` until the link ends.
@@ -906,6 +1385,10 @@ impl MachineStore for SyncedMachineStore {
 
     fn save(&self, records: &[Machine]) -> Result<(), MachineError> {
         self.handle.save(records)
+    }
+
+    fn save_bindings(&self, bindings: &MachineBindings) -> Result<(), MachineError> {
+        self.handle.save_bindings(bindings)
     }
 }
 

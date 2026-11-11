@@ -7,16 +7,21 @@
 //! and changes nothing. A refusal writes no object and no version: a computer
 //! drops a refused intent instead of sending it again.
 
-use horizon_core::{MAX_MACHINES, Machine};
+use horizon_core::MAX_MACHINES;
+use horizon_core::secret::{MAX_SECRET_BYTES as MAX_SECRET_BODY_BYTES, SecretId};
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::Value;
 
 use crate::error::{Refusal, StoreError};
-use crate::intent::{Intent, IntentResult, KIND_MACHINE, KIND_PROBE, MAX_PROBES, Op, Outcome, PushReply};
+use crate::intent::{
+    Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, MAX_PROBES, MAX_SECRET_BYTES,
+    MAX_SECRETS, Op, Outcome, PushReply,
+};
 use crate::store::rows::to_sql;
+use crate::store::secrets::{self, SecretKey};
 
 /// The most characters of a value of a frame that the log or a refusal quotes.
-const QUOTED_CHARS: usize = 64;
+const QUOTED_CHARS: usize = 80;
 
 /// Decides and writes the intents of one push. The caller commits the
 /// transaction and answers after the commit.
@@ -28,6 +33,7 @@ pub(super) fn push(
     transaction: &Transaction<'_>,
     device: &str,
     intents: &[Intent],
+    key: &SecretKey,
     now_millis: i64,
 ) -> Result<PushReply, StoreError> {
     let mut next_index = next_index(transaction)?;
@@ -37,7 +43,7 @@ pub(super) fn push(
         let outcome = if let Some(outcome) = remembered(transaction, device, intent.id)? {
             outcome
         } else {
-            let outcome = decide(transaction, device, intent, next_index)?;
+            let outcome = decide(transaction, device, intent, key, next_index)?;
             log(transaction, device, intent, next_index, now_millis, &outcome)?;
             next_index += 1;
             outcome
@@ -140,7 +146,13 @@ fn remember_device(
 }
 
 /// Applies one intent, or refuses it with the reason. Nothing is written here.
-fn decide(transaction: &Transaction<'_>, device: &str, intent: &Intent, index: u64) -> Result<Outcome, StoreError> {
+fn decide(
+    transaction: &Transaction<'_>,
+    device: &str,
+    intent: &Intent,
+    key: &SecretKey,
+    index: u64,
+) -> Result<Outcome, StoreError> {
     if intent.device != device {
         return Ok(refused(Refusal::InvalidIntent {
             message: format!(
@@ -153,6 +165,9 @@ fn decide(transaction: &Transaction<'_>, device: &str, intent: &Intent, index: u
     match &intent.op {
         Op::MachinePut { record } => machine_put(transaction, record, index),
         Op::MachineRemove { name } => machine_remove(transaction, name, index),
+        Op::BindingPut { machine, key } => binding_put(transaction, machine, key.as_deref(), index),
+        Op::SecretPut { id, body } => secret_put(transaction, key, intent.seen, id, body.as_ref(), index),
+        Op::SecretRemove { id } => secret_remove(transaction, key, id, index),
         Op::ObjectPut { kind, id, body } => object_put(transaction, intent.seen, kind, id, body, index),
         Op::ObjectRemove { kind, id } => object_remove(transaction, kind, id, index),
     }
@@ -160,7 +175,11 @@ fn decide(transaction: &Transaction<'_>, device: &str, intent: &Intent, index: u
 
 /// Adds or replaces one machine. The machine list is not versioned: the commit
 /// order of the server decides between two computers, and `seen` is not read.
-fn machine_put(transaction: &Transaction<'_>, record: &Machine, index: u64) -> Result<Outcome, StoreError> {
+fn machine_put(
+    transaction: &Transaction<'_>,
+    record: &horizon_core::Machine,
+    index: u64,
+) -> Result<Outcome, StoreError> {
     let record = match horizon_core::check_record(record) {
         Ok(record) => record,
         Err(error) => return Ok(invalid_record(error.code(), &error.to_string())),
@@ -186,6 +205,99 @@ fn machine_remove(transaction: &Transaction<'_>, name: &str, index: u64) -> Resu
     }
     put(transaction, KIND_MACHINE, name, &Value::Null, index, true)?;
     Ok(Outcome::Applied { index })
+}
+
+/// Sets the key that a machine uses, or forgets it. A binding is last write wins,
+/// as the machine list is, because two computers that bind a key decide by commit
+/// order and not by a version.
+fn binding_put(
+    transaction: &Transaction<'_>,
+    machine: &str,
+    key: Option<&str>,
+    index: u64,
+) -> Result<Outcome, StoreError> {
+    if let Err(error) = horizon_core::machines::machine_name(machine) {
+        return Ok(invalid_record(error.code(), &error.to_string()));
+    }
+    let body = match key {
+        Some(key) => {
+            if let Err(error) = horizon_core::machines::machine_key_name(key) {
+                return Ok(invalid_record(error.code(), &error.to_string()));
+            }
+            serde_json::json!({ "key": key })
+        }
+        None => Value::Null,
+    };
+    put(transaction, KIND_BINDING, machine, &body, index, key.is_none())?;
+    Ok(Outcome::Applied { index })
+}
+
+/// Writes one versioned secret, by the version rule: the first intent on a
+/// version wins, and a later one is refused with the version that the server has.
+/// The body is the only value that reaches the `secrets` table, and the log row of
+/// this change holds the id and the version and not the body.
+fn secret_put(
+    transaction: &Transaction<'_>,
+    key: &SecretKey,
+    seen: Option<u64>,
+    id: &str,
+    body: Option<&crate::intent::SecretBody>,
+    index: u64,
+) -> Result<Outcome, StoreError> {
+    if let Err(refusal) = check_secret_id(id) {
+        return Ok(refused(refusal));
+    }
+    let Some(body) = body else {
+        return Ok(refused(Refusal::InvalidIntent {
+            message: format!(
+                "The intent on the secret {:?} carries no value; a computer reads the value from its own record before it pushes",
+                quoted(id)
+            ),
+        }));
+    };
+    if body.as_str().len() > MAX_SECRET_BODY_BYTES {
+        return Ok(refused(Refusal::InvalidIntent {
+            message: format!("A secret holds at most {MAX_SECRET_BYTES} bytes, and this one is larger"),
+        }));
+    }
+    match (seen, secrets::version_of(transaction, key, id)?) {
+        (None, None) => {
+            if secrets::live_count(transaction)? >= MAX_SECRETS {
+                return Ok(refused(Refusal::TooMany {
+                    kind: KIND_SECRET.to_owned(),
+                    limit: MAX_SECRETS,
+                }));
+            }
+            secrets::put(transaction, key, id, Some(body.as_str().as_bytes()), index)?;
+            Ok(Outcome::Applied { index })
+        }
+        (None, Some(version)) => Ok(refused(Refusal::AlreadyAnswered { version })),
+        (Some(seen), Some(version)) if seen == version => {
+            secrets::put(transaction, key, id, Some(body.as_str().as_bytes()), index)?;
+            Ok(Outcome::Applied { index })
+        }
+        (Some(seen), Some(version)) => Ok(refused(Refusal::ChangedSinceSeen { seen, version })),
+        (Some(seen), None) => Ok(refused(Refusal::ChangedSinceSeen { seen, version: 0 })),
+    }
+}
+
+/// Removes one secret. A removal is last write wins, as a machine removal is, so
+/// a computer that was away removes its own copy at its next pull.
+fn secret_remove(transaction: &Transaction<'_>, key: &SecretKey, id: &str, index: u64) -> Result<Outcome, StoreError> {
+    if let Err(refusal) = check_secret_id(id) {
+        return Ok(refused(refusal));
+    }
+    secrets::put(transaction, key, id, None, index)?;
+    Ok(Outcome::Applied { index })
+}
+
+/// Whether `id` names one secret that Horizon keeps: a machine key of this name,
+/// or a credential of this reference. The server does not parse the body, but it
+/// does check the id, so no id is a path or a command.
+fn check_secret_id(id: &str) -> Result<SecretId, Refusal> {
+    SecretId::parse(id).map_err(|error| Refusal::InvalidIntent {
+        message: error.to_string(),
+    })
 }
 
 /// Writes one versioned object of an internal kind, by the version rule: the

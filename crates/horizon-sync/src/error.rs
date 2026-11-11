@@ -64,6 +64,26 @@ pub enum StoreError {
     /// A file of the server home could not be read or written.
     #[error("{0}")]
     File(String),
+    /// The key that seals the secrets of this server could not be read, made or
+    /// used. The key is one file of the server home, and a copy of the database
+    /// without it holds no readable secret.
+    #[error("the key of the secrets of the server at {path}: {reason}")]
+    SecretKey {
+        /// The path of the key file.
+        path: std::path::PathBuf,
+        /// The reason the system gave.
+        reason: String,
+    },
+    /// A secret of the server cannot be opened with the key that this server has,
+    /// because the key file is lost or another one replaced it. The server keeps
+    /// running: a computer that still holds the value sends it again.
+    #[error(
+        "the secret {id} of the server is sealed with another key, so this server cannot read it; a computer that holds it sends it again"
+    )]
+    SecretUnreadable {
+        /// The id of the secret.
+        id: String,
+    },
     /// The writer task ended before it answered.
     #[error("the server store stopped before it answered; start the server again")]
     Stopped,

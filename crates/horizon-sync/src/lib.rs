@@ -48,7 +48,8 @@ pub use host::{
     EXIT_NO_SERVER, HostError, ServerHome, ServerLock, link_stdio, link_streams, serve_until_stopped, terminate_flag,
 };
 pub use intent::{
-    Intent, IntentResult, KIND_MACHINE, KIND_PROBE, MAX_INTENTS_PER_PUSH, MAX_PROBES, Op, Outcome, PushReply,
+    Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, MAX_INTENTS_PER_PUSH, MAX_PROBES,
+    MAX_SECRET_BYTES, MAX_SECRETS, MAX_SECRETS_PER_PUSH, Op, Outcome, PushReply, SecretBody,
 };
 pub use link::{SocketError, SocketServer, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
 pub use protocol::{

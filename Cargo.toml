@@ -86,6 +86,10 @@ serde_json = "1.0.151"
 toml_edit = "0.25.15"
 url = "2.5.8"
 keyring-core = "1.0.0"
+# XChaCha20-Poly1305 seals every secret of the Horizon server. A secret body is
+# the only thing on the server that a copy of `server.sqlite` must not reveal, so
+# the server keeps its 32-byte key in a file beside the database and never in it.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "getrandom"] }
 zeroize = "1.9.0"
 zbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
 secret-service = { version = "5.2.0", default-features = false, features = ["rt-async-io-crypto-rust"] }

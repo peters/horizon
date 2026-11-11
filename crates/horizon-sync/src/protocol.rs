@@ -11,7 +11,12 @@ use crate::intent::{Intent, PushReply};
 pub use crate::store::{Changes, Row};
 
 /// The version of the frames that this Horizon speaks.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Version 1 is the machine list of a server. Version 2 adds the secrets, which
+/// are one kind of row, and the flag of the hello that says that a server cannot
+/// read the secrets that it holds. A version 1 computer does not read either, so
+/// the two sides of one link speak the same version.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;
@@ -39,6 +44,11 @@ pub struct HelloOk {
     pub store: String,
     /// The time of the server, in milliseconds since the Unix epoch.
     pub now_millis: u64,
+    /// Whether a live secret of the server is sealed with a key that the server
+    /// does not have, so this server cannot read it. A computer that still holds
+    /// a secret then sends it again, and the value is new to this server.
+    #[serde(default)]
+    pub secrets_lost: bool,
 }
 
 /// The intents of one computer.
@@ -188,6 +198,7 @@ mod tests {
                 protocol: PROTOCOL_VERSION,
                 store: "store-a".to_owned(),
                 now_millis: 1_760_000_000_000,
+                secrets_lost: true,
             }),
             Frame::Push(Push {
                 intents: vec![Intent {

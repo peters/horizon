@@ -13,6 +13,7 @@ use rusqlite::TransactionBehavior;
 
 use crate::error::StoreError;
 use crate::intent::{Intent, PushReply};
+use crate::store::secrets::SecretKey;
 use crate::store::{Signal, apply, now_millis, schema};
 
 /// One job of the writer.
@@ -28,7 +29,7 @@ pub(super) enum Job {
 }
 
 /// Runs the writer until the channel closes or a [`Job::Stop`] arrives.
-pub(super) fn run(path: &Path, signal: &Signal, jobs: &mpsc::Receiver<Job>) {
+pub(super) fn run(path: &Path, signal: &Signal, key: &SecretKey, jobs: &mpsc::Receiver<Job>) {
     let mut connection = match schema::open(path) {
         Ok(connection) => connection,
         Err(error) => {
@@ -39,7 +40,7 @@ pub(super) fn run(path: &Path, signal: &Signal, jobs: &mpsc::Receiver<Job>) {
     while let Ok(job) = jobs.recv() {
         match job {
             Job::Push { device, intents, reply } => {
-                let result = write(&mut connection, &device, &intents, signal);
+                let result = write(&mut connection, &device, &intents, key, signal);
                 if reply.send(result).is_err() {
                     tracing::debug!("the caller of a push stopped before the answer");
                 }
@@ -62,10 +63,11 @@ fn write(
     connection: &mut rusqlite::Connection,
     device: &str,
     intents: &[Intent],
+    key: &SecretKey,
     signal: &Signal,
 ) -> Result<PushReply, StoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let reply = apply::push(&transaction, device, intents, now_millis())?;
+    let reply = apply::push(&transaction, device, intents, key, now_millis())?;
     let index = schema::index_of(&transaction)?;
     transaction.commit()?;
     signal.publish(index);

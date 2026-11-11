@@ -64,6 +64,11 @@ except Exception:
     pass
 ";
 
+/// A computer of a test keeps machine keys and no credential value.
+fn keys_only(keys: horizon_core::MachineKeys) -> std::sync::Arc<dyn horizon_core::SecretTarget> {
+    SupervisorConfig::keys_only(keys)
+}
+
 fn machine(name: &str, host: &str) -> Machine {
     Machine {
         name: name.to_owned(),
@@ -219,8 +224,10 @@ impl Computer {
     fn start(machines_dir: &Path, socket: &Path) -> Self {
         let stand_in_dir = machines_dir.join("stand-in");
         fs::create_dir_all(machines_dir).expect("the machine directory");
-        let mut config = SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", machines_dir)
-            .expect("the settings of the link");
+        let keys = horizon_core::MachineKeys::new(stand_in_dir.join("machine-keys"));
+        let mut config =
+            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", machines_dir, keys_only(keys))
+                .expect("the settings of the link");
         config.program = stand_in(&stand_in_dir, socket);
         let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
         let store = SyncedMachineStore::new(supervisor.handle().clone());
@@ -540,8 +547,14 @@ fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
         request: Duration::from_millis(400),
         wait: Duration::from_millis(800),
     };
-    let mut config = SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", &machines_dir)
-        .expect("the settings of the link");
+    let keys = horizon_core::MachineKeys::new(machines_dir.join("machine-keys"));
+    let mut config = SupervisorConfig::for_server(
+        "server-vm",
+        "/opt/horizon --server-link",
+        &machines_dir,
+        keys_only(keys),
+    )
+    .expect("the settings of the link");
     config.program = silent_stand_in(&home.path().join("stand-in"), &starts_file);
     config.bounds = bounds;
     let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
