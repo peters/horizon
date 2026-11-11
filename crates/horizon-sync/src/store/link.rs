@@ -32,6 +32,12 @@ pub const MAX_WRONG_CODES: usize = 20;
 /// The window of the wrong codes, in milliseconds.
 pub const WRONG_CODE_WINDOW_MILLIS: i64 = 600_000;
 
+/// How long a computer that joined may take to greet the server before the server
+/// drops its row. A join writes the row and the token in the same second, and the
+/// computer greets the server as soon as the token reaches its secrets file, so a
+/// row that no hello reached inside this window is a row that no computer can use.
+pub const UNJOINED_GRACE_MILLIS: i64 = 60_000;
+
 /// What the server did with the code of a join.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinAnswer {
@@ -117,6 +123,10 @@ pub(super) fn clear_invites(transaction: &Transaction<'_>) -> Result<(), StoreEr
 /// Uses the invitation of `code_hash` for `device` and stores the hash of its
 /// token.
 ///
+/// The row starts ungreeted, so the server drops it when no hello of that computer
+/// followed the join. The transaction also drops every row that a join wrote and
+/// that no hello reached inside [`UNJOINED_GRACE_MILLIS`].
+///
 /// # Errors
 /// Returns why the invitation cannot be used.
 pub(super) fn join(
@@ -126,6 +136,7 @@ pub(super) fn join(
     token_hash: &str,
     now_millis: i64,
 ) -> Result<JoinAnswer, StoreError> {
+    prune_unjoined(transaction, now_millis)?;
     let expires: Option<i64> = transaction
         .query_row(
             "SELECT expires_millis FROM invitations WHERE code_hash = ?1",
@@ -152,13 +163,26 @@ pub(super) fn join(
     }
     transaction.execute("DELETE FROM invitations WHERE code_hash = ?1", [code_hash])?;
     transaction.execute(
-        "INSERT INTO devices (name, first_seen, last_seen, last_intent, token_hash, created_millis, login)
-         VALUES (?1, ?2, ?2, 0, ?3, ?2, 'token')
+        "INSERT INTO devices (name, first_seen, last_seen, last_intent, token_hash, created_millis, login, greeted)
+         VALUES (?1, ?2, ?2, 0, ?3, ?2, 'token', 0)
          ON CONFLICT (name) DO UPDATE SET token_hash = excluded.token_hash,
-             last_seen = excluded.last_seen, created_millis = excluded.created_millis, login = 'token'",
+             last_seen = excluded.last_seen, created_millis = excluded.created_millis, login = 'token',
+             greeted = 0",
         params![device, now_millis, token_hash],
     )?;
     Ok(JoinAnswer::Joined)
+}
+
+/// Drops every row that a join wrote and that no hello of that computer reached
+/// inside [`UNJOINED_GRACE_MILLIS`], and answers how many rows went.
+pub(super) fn prune_unjoined(transaction: &Transaction<'_>, now_millis: i64) -> Result<usize, StoreError> {
+    let oldest = now_millis.saturating_sub(UNJOINED_GRACE_MILLIS);
+    let removed = transaction.execute(
+        "DELETE FROM devices WHERE greeted = 0 AND login = 'token' AND created_millis > 0
+             AND created_millis <= ?1",
+        [oldest],
+    )?;
+    Ok(removed)
 }
 
 /// Writes the row of `device` and the time of this greeting, so the list of the
@@ -177,8 +201,9 @@ pub(super) fn touch(
     now_millis: i64,
 ) -> Result<(), StoreError> {
     transaction.execute(
-        "INSERT INTO devices (name, first_seen, last_seen, last_intent, login) VALUES (?1, ?2, ?2, 0, ?3)
-         ON CONFLICT (name) DO UPDATE SET last_seen = excluded.last_seen,
+        "INSERT INTO devices (name, first_seen, last_seen, last_intent, login, greeted)
+         VALUES (?1, ?2, ?2, 0, ?3, 1)
+         ON CONFLICT (name) DO UPDATE SET last_seen = excluded.last_seen, greeted = 1,
              login = CASE WHEN devices.login = 'token' THEN 'token' ELSE excluded.login END",
         params![device, now_millis, login],
     )?;
@@ -205,7 +230,7 @@ pub(super) fn present(
         return Ok(false);
     }
     transaction.execute(
-        "UPDATE devices SET last_seen = ?2 WHERE name = ?1",
+        "UPDATE devices SET last_seen = ?2, greeted = 1 WHERE name = ?1",
         params![device, now_millis],
     )?;
     Ok(true)

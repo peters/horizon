@@ -28,7 +28,10 @@ use crate::error::StoreError;
 use crate::intent::{Intent, PushReply};
 use writer::Job;
 
-pub use link::{INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, WRONG_CODE_WINDOW_MILLIS};
+pub use link::{
+    INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, UNJOINED_GRACE_MILLIS,
+    WRONG_CODE_WINDOW_MILLIS,
+};
 pub use rows::{Changes, Row};
 
 use link::WrongCodes;
@@ -322,6 +325,20 @@ impl Store {
     /// Returns why the rows cannot be read.
     pub fn open_invitations(&self, now_millis: i64) -> Result<usize, StoreError> {
         self.inner.read(|connection| link::open_invites(connection, now_millis))
+    }
+
+    /// Drops every row that a join wrote and that no hello of that computer reached
+    /// inside [`UNJOINED_GRACE_MILLIS`], and answers how many rows went.
+    ///
+    /// The list of the computers calls this, so a join whose token never reached
+    /// the computer that asked for it leaves no computer on the server.
+    ///
+    /// # Errors
+    /// Returns why the rows cannot be removed.
+    pub fn prune_unjoined(&self, now_millis: i64) -> Result<usize, StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.send(Job::PruneUnjoined { now_millis, reply })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
     }
 
     /// Stops the writer after the changes that are queued, and closes the file so

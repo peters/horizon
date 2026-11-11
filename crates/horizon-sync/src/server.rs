@@ -259,6 +259,18 @@ impl LinkRegistry {
         self.open.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
     }
 
+    /// The names of the computers that have an open link now, so the list of the
+    /// computers can say that the server sees them.
+    #[must_use]
+    pub fn devices(&self) -> std::collections::BTreeSet<String> {
+        self.open
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .map(|ticket| ticket.device.clone())
+            .collect()
+    }
+
     /// Ends every open link of `device`, except the link `except`, with one typed
     /// error.
     pub fn end_device(&self, device: &str, except: Option<u64>, code: LinkErrorCode, message: &str) {
@@ -533,16 +545,27 @@ fn invite(frames: &mpsc::Sender<Outgoing>, store: &Store, info: &ServerInfo) {
 }
 
 /// Answers the list of the computers of this server.
+///
+/// A computer that has an open link is a computer that the server sees now, so the
+/// list stamps the time of the answer on it instead of the time of its last hello.
 fn device_list(frames: &mpsc::Sender<Outgoing>, store: &Store, info: &ServerInfo, caller: &str) {
-    let now_millis = || info.now_millis();
+    let now = info.now_millis();
+    match store.prune_unjoined(now) {
+        Ok(0) => {}
+        Ok(pruned) => tracing::info!(pruned, "a join that no hello followed left the server"),
+        Err(error) => tracing::warn!(%error, "the server could not drop a join that no hello followed"),
+    }
+    let now_millis = u64::try_from(now).unwrap_or(0);
+    let open = info.registry.devices();
     match store.devices(caller) {
-        Ok(rows) => post(
-            frames,
-            Frame::DeviceList(DeviceList {
-                rows,
-                now_millis: u64::try_from(now_millis()).unwrap_or(0),
-            }),
-        ),
+        Ok(mut rows) => {
+            for row in &mut rows {
+                if open.contains(&row.name) {
+                    row.last_seen_millis = row.last_seen_millis.max(now_millis);
+                }
+            }
+            post(frames, Frame::DeviceList(DeviceList { rows, now_millis }));
+        }
         Err(error) => {
             tracing::warn!(%error, "the server could not read its computers");
             post(frames, error_frame(LinkErrorCode::StoreFailed, &error.to_string()));

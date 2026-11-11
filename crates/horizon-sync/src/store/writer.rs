@@ -62,6 +62,11 @@ pub(super) enum Job {
     ClearInvites {
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
+    /// Drops every row that a join wrote and that no hello reached in time.
+    PruneUnjoined {
+        now_millis: i64,
+        reply: mpsc::SyncSender<Result<usize, StoreError>>,
+    },
     /// Ends the writer, so the store file is whole when this call returns.
     Stop(mpsc::SyncSender<()>),
 }
@@ -133,6 +138,12 @@ pub(super) fn run(path: &Path, signal: &Signal, key: &SecretKey, jobs: &mpsc::Re
             }
             Job::ClearInvites { reply } => {
                 let result = in_transaction(&mut connection, link::clear_invites);
+                let _ = reply.send(result);
+            }
+            Job::PruneUnjoined { now_millis, reply } => {
+                let result = in_transaction(&mut connection, |transaction| {
+                    link::prune_unjoined(transaction, now_millis)
+                });
                 let _ = reply.send(result);
             }
             Job::Stop(reply) => {

@@ -601,7 +601,7 @@ fn a_file_of_a_newer_horizon_is_refused_and_a_damaged_one_is_reported() {
             panic!("a file of a newer Horizon must be refused");
         }
         Err(refused) => assert!(
-            matches!(refused, StoreError::Newer { found: 99, expected: 3 }),
+            matches!(refused, StoreError::Newer { found: 99, expected: 4 }),
             "{refused}"
         ),
     }
@@ -923,4 +923,59 @@ fn a_secret_without_a_value_a_bad_id_a_large_body_and_a_full_server_are_refused(
         "mbp-7c1",
         put_secret("mbp-7c1", 1000, Some(version), "credential/key-0", "another"),
     );
+}
+
+#[test]
+fn an_upgrade_from_the_older_schema_keeps_the_computers_that_it_already_had() {
+    // A server of the older schema, with one computer of the socket and one that
+    // joined with a token. The version that adds the greeting must keep both: a
+    // row that the older file held was greeted before that version existed.
+    let temp = tempfile::tempdir().expect("a directory");
+    let path = temp.path().join("server.sqlite");
+    let connection = rusqlite::Connection::open(&path).expect("the file");
+    connection
+        .execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+             CREATE TABLE log (idx INTEGER PRIMARY KEY, at_millis INTEGER NOT NULL,
+                 device TEXT NOT NULL, intent INTEGER NOT NULL, kind TEXT NOT NULL,
+                 object_id TEXT NOT NULL, result_json TEXT NOT NULL) STRICT;
+             CREATE TABLE applied (device TEXT NOT NULL, intent INTEGER NOT NULL,
+                 idx INTEGER NOT NULL, UNIQUE (device, intent)) STRICT;
+             CREATE TABLE objects (kind TEXT NOT NULL, id TEXT NOT NULL, body_json TEXT NOT NULL,
+                 version INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (kind, id)) STRICT;
+             CREATE INDEX objects_by_version ON objects (version);
+             CREATE TABLE devices (name TEXT PRIMARY KEY, first_seen INTEGER NOT NULL,
+                 last_seen INTEGER NOT NULL, last_intent INTEGER NOT NULL,
+                 token_hash TEXT, created_millis INTEGER NOT NULL DEFAULT 0,
+                 login TEXT NOT NULL DEFAULT 'ssh') STRICT;
+             CREATE UNIQUE INDEX devices_by_token ON devices (token_hash) WHERE token_hash IS NOT NULL;
+             CREATE TABLE invitations (code_hash TEXT PRIMARY KEY, created_millis INTEGER NOT NULL,
+                 expires_millis INTEGER NOT NULL) STRICT;
+             CREATE TABLE secrets (id TEXT PRIMARY KEY, nonce BLOB NOT NULL, sealed BLOB NOT NULL,
+                 version INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0) STRICT;
+             CREATE INDEX secrets_by_version ON secrets (version);
+             INSERT INTO meta (key, value) VALUES ('store_id', 'a-store-of-a-test'),
+                 ('schema_version', '3');
+             INSERT INTO devices (name, first_seen, last_seen, last_intent, login)
+                 VALUES ('laptop-a', 100, 200, 0, 'ssh');
+             INSERT INTO devices (name, first_seen, last_seen, last_intent, token_hash,
+                 created_millis, login)
+                 VALUES ('laptop-b', 300, 400, 0, 'a-hash-of-a-test', 300, 'token');",
+        )
+        .expect("the older schema");
+    drop(connection);
+
+    let store = Store::open(&path).expect("the upgrade of an older store");
+    let rows = store.devices("laptop-a").expect("the computers of the server");
+    let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, vec!["laptop-a", "laptop-b"], "the upgrade keeps every computer");
+    assert_eq!(
+        store
+            .prune_unjoined(i64::MAX)
+            .expect("the sweep of a version that joins"),
+        0,
+        "a computer that the older file held was greeted before this version"
+    );
+    store.close();
 }

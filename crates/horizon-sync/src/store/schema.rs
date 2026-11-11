@@ -19,7 +19,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use crate::error::StoreError;
 
 /// The schema version that this Horizon writes.
-pub(super) const SCHEMA_VERSION: i64 = 3;
+pub(super) const SCHEMA_VERSION: i64 = 4;
 
 /// The mode of the file of the store, which SQLite copies to its `-wal` and
 /// `-shm` files: the server user alone reads or writes the store.
@@ -108,7 +108,17 @@ CREATE TABLE invitations (
 ) STRICT;
 ";
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS, SCHEMA_V3_LINKS];
+/// Version 4 adds the greeting of a computer: a join writes a row that no hello has
+/// confirmed yet, and the server drops such a row after
+/// [`crate::UNJOINED_GRACE_MILLIS`], so a join that a computer could not keep leaves
+/// no computer on the server. A row that the older schema already held was greeted
+/// before this version, so the change keeps it.
+const SCHEMA_V4_GREETED: &str = "
+ALTER TABLE devices ADD COLUMN greeted INTEGER NOT NULL DEFAULT 0;
+UPDATE devices SET greeted = 1;
+";
+
+const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS, SCHEMA_V3_LINKS, SCHEMA_V4_GREETED];
 
 /// The key of the store id in the meta table.
 const META_STORE_ID: &str = "store_id";

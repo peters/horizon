@@ -722,3 +722,83 @@ fn a_question_of_the_window_travels_on_the_link_of_its_computer() {
     );
     assert!(matches!(ServerReply::Invited(again), ServerReply::Invited(_)));
 }
+
+#[test]
+fn a_join_that_no_hello_followed_leaves_no_computer_on_the_server() {
+    let server = Server::start();
+    let invited = server.invite();
+
+    // A computer joined and never came back with its token, so its row is one that
+    // no computer can use.
+    let answer = try_join(&server, &invited.code, "laptop-b");
+    assert!(matches!(answer, Frame::Joined(_)), "{answer:?}");
+    let rows = server.store.devices("server").expect("the rows");
+    assert!(rows.iter().any(|row| row.name == "laptop-b"), "{rows:?}");
+
+    // The row waits for the grace of the server, and then the list drops it.
+    server.clock.advance(horizon_sync::UNJOINED_GRACE_MILLIS - 1_000);
+    let mut a = server.ssh("laptop-a");
+    let rows = ask_devices(&mut a);
+    assert!(
+        rows.iter().any(|row| row.name == "laptop-b"),
+        "a row inside its grace stays: {rows:?}"
+    );
+    server.clock.advance(2_000);
+    let rows = ask_devices(&mut a);
+    assert!(
+        rows.iter().all(|row| row.name != "laptop-b"),
+        "a join that no hello followed leaves no row: {rows:?}"
+    );
+
+    // A computer that greeted the server keeps its row, whatever its age.
+    let invited = server.invite();
+    let directory = tempfile::tempdir().expect("a directory");
+    let joined = join(&invited.link, "laptop-b", &secrets(directory.path())).expect("the join");
+    let _open = server.tcp("laptop-b", &joined.token);
+    server.clock.advance(horizon_sync::UNJOINED_GRACE_MILLIS * 10);
+    let rows = ask_devices(&mut a);
+    assert!(
+        rows.iter().any(|row| row.name == "laptop-b"),
+        "a row that greeted the server stays: {rows:?}"
+    );
+}
+
+#[test]
+fn the_list_says_that_the_server_sees_a_computer_that_has_an_open_link() {
+    let server = Server::start();
+    let invited = server.invite();
+    let directory = tempfile::tempdir().expect("a directory");
+    let joined = join(&invited.link, "laptop-b", &secrets(directory.path())).expect("the join");
+
+    // B holds its link open and the clock moves on: its last hello is minutes old,
+    // but the server still sees the link.
+    let open = server.tcp("laptop-b", &joined.token);
+    server.clock.advance(4 * 60_000);
+    let mut a = server.ssh("laptop-a");
+    let rows = ask_devices(&mut a);
+    let b = rows.iter().find(|row| row.name == "laptop-b").expect("the row of B");
+    assert_eq!(
+        b.last_seen_millis,
+        u64::try_from(server.clock.now_millis()).expect("a time"),
+        "a computer with an open link reads as one that the server sees now"
+    );
+
+    // A link that ended leaves the time of its last hello, which is the truth.
+    drop(open);
+    let deadline = std::time::Instant::now() + PATIENCE;
+    let rows = loop {
+        let rows = ask_devices(&mut a);
+        let b = rows.iter().find(|row| row.name == "laptop-b").expect("the row of B");
+        if b.last_seen_millis < u64::try_from(server.clock.now_millis()).expect("a time")
+            || std::time::Instant::now() >= deadline
+        {
+            break rows;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let b = rows.iter().find(|row| row.name == "laptop-b").expect("the row of B");
+    assert!(
+        b.last_seen_millis < u64::try_from(server.clock.now_millis()).expect("a time"),
+        "a computer whose link ended reads as the time of its last hello"
+    );
+}

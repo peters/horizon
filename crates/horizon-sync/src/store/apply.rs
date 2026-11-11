@@ -137,7 +137,8 @@ fn remember_device(
     now_millis: i64,
 ) -> Result<(), StoreError> {
     transaction.execute(
-        "INSERT INTO devices (name, first_seen, last_seen, last_intent) VALUES (?1, ?2, ?2, ?3)
+        "INSERT INTO devices (name, first_seen, last_seen, last_intent, greeted)
+         VALUES (?1, ?2, ?2, ?3, 1)
          ON CONFLICT (name) DO UPDATE SET last_seen = excluded.last_seen,
              last_intent = MAX(devices.last_intent, excluded.last_intent)",
         params![device, now_millis, to_sql(last_intent)?],

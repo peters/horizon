@@ -79,7 +79,8 @@ pub use server::{
     serve, serve_ssh, serve_tcp,
 };
 pub use store::{
-    INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, Store, WRONG_CODE_WINDOW_MILLIS,
+    INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, Store, UNJOINED_GRACE_MILLIS,
+    WRONG_CODE_WINDOW_MILLIS,
 };
 pub use supervisor::{
     LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, Supervisor, SupervisorConfig, SyncHandle,
