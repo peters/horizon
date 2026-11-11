@@ -293,8 +293,8 @@ json.dump(document, open(path, "w"), indent=2)' <home>/.horizon/config.json dark
 
    Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd>.
 
-   Result: The window shows the tabs General, Shortcuts, Presets and Remote
-   browsers. There is no tab of a text format.
+   Result: The window shows the tabs General, Shortcuts, Presets, Browser and
+   Remote browsers. There is no tab of a text format.
 
 2. In General, select another theme, and press **Save**.
 
@@ -327,7 +327,20 @@ json.dump(document, open(path, "w"), indent=2)' <home>/.horizon/config.json dark
    (`browser_host.profile names a profile of a host, so browser_host.ssh_target is
    required`) in the status line, and the store keeps the value of the first save.
 
-5. Press **Save** again without a change.
+5. Set a value in **Remote hosts** and in **Browser**, and press **Save**.
+
+   ```sh
+   sqlite3 <home>/.horizon/settings.sqlite \
+     "SELECT data FROM settings WHERE section IN ('remote_hosts', 'browser');"
+   ```
+
+   Result: The store holds the workspace name, the VNC port and the per-host
+   port that you typed, and it holds the engine path, the picture quality, the
+   options of a recording and the passkey command that you typed. The tab
+   `Browser` has a field for each of them, and a value that a rule refuses, such
+   as an empty workspace name, shows that rule under its field.
+
+6. Press **Save** again without a change.
 
    Result: The status line shows `Saved` again. The store keeps the same values,
    and the window does not report an error.
@@ -347,7 +360,9 @@ json.dump(document, open(path, "w"), indent=2)' <home>/.horizon/config.json dark
 - The settings file and the migrated store agree in S06, and the migration writes
   no other file.
 - The window saves and shows `Saved` in S07; only the store holds the saved
-  value, and a refused entry reports its rule.
+  value, and a refused entry reports its rule. The tabs of the window hold a
+  field for every setting that a person changes: General, Shortcuts, Presets,
+  Browser and Remote browsers.
 
 ## 8. Cleanup
 

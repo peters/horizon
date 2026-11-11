@@ -69,7 +69,9 @@ applies the origin rules, and that the panel shows a waiting request.
    Result: The fake authenticator can keep its keys there.
 
 6. Add this `browser` section to `data/horizon.json` of the fixture. Use the
-   paths of step 2 and step 5.
+   paths of step 2 and step 5. The Settings window holds the same fields in its
+   `Browser` tab, under **Engines** and **Passkeys**, so a person sets them
+   there; a fixture seeds the file of the run instead.
 
    ```json
    {

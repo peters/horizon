@@ -91,6 +91,48 @@ A reload is pending from the moment it is asked for until its answer arrives, so
 the window never starts a second one. The bar at the bottom of the Settings
 panel shows `Saving` while a write runs and `Saved` when it ends.
 
+## What the Settings window changes
+
+The window has one tab for each group of settings, and every field writes the
+typed value of its section:
+
+| Tab | Sections |
+|---|---|
+| General | `window`, `appearance`, `features`, `overlays`, `browser_host`, `server`, `remote_hosts` |
+| Shortcuts | `shortcuts` |
+| Presets | `presets` |
+| Browser | `browser`: the engine programs, the live view, the recording defaults and the passkey command |
+| Remote browsers | `browser.remote`: the providers, the targets and their credential bindings |
+
+A numeric field does not clamp a value that the store already holds, so a value
+that a settings file or an older Horizon wrote stays exactly as it is until a
+person edits that field. A value that breaks a rule shows the rule under its
+field, and Save reports the same text. The rules are the validation of the
+sections, so the window and a start read one sentence per refusal.
+
+### The values that have no field
+
+Two sections hold values that no field of the window edits: `workspaces[*]` and
+`terminals[*]`. They are the places, sizes and working directories of the
+workspaces, and the terminals of a workspace that a start brings back. Horizon
+writes them, not a person: the canvas saves a layout that a person moved, and a
+workspace that a person placed on a machine saves its place. There is no editor
+for a list of them, because a list of positions is not a setting of an entry.
+
+A person who needs a value that the window does not offer today sets it in one
+of two ways:
+
+1. Write the section into the settings file of a new instance, and start that
+   instance before it has a store. See [the settings file of a run](#the-settings-file-of-a-run):
+   the first start imports the file.
+2. Edit the `settings` row of that section in the store with a SQLite client, and
+   restart Horizon. A save from the Settings window of that instance writes the
+   row whole, so a later save keeps the edited value of every field that the
+   window does not show.
+
+Both ways need the rules of the sections: an empty name, a zero port or a place
+that breaks the SSH route is refused at the next start.
+
 ## The portable profile
 
 `horizon --export-remote-profile <path>` writes the shareable half of

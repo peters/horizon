@@ -503,14 +503,8 @@ impl Config {
     ///
     /// Returns an error if a configured shortcut, feature, connection or provider profile is invalid.
     pub fn validate(&self) -> Result<()> {
-        if !(1..=100).contains(&self.browser.quality) {
-            return Err(Error::Config(format!(
-                "browser.quality must be between 1 and 100 (got {})",
-                self.browser.quality
-            )));
-        }
-        if let Err(message) = self.browser.video.validate() {
-            return Err(Error::Config(format!("browser.video: {message}")));
+        if let Err(message) = self.browser.validate() {
+            return Err(Error::Config(message));
         }
         // Bindings are checked at allocation time so a missing credential is a
         // readiness state rather than a configuration that refuses to load.

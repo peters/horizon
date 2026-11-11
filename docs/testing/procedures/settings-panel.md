@@ -68,7 +68,8 @@ None of the steps deletes data, rents compute or changes access.
 
 ### 6.2 S2 — Every tab keeps the panel width
 
-1. Select each tab in turn: General, Shortcuts, Presets and Remote browsers.
+1. Select each tab in turn: General, Shortcuts, Presets, Browser and Remote
+   browsers.
 
    Result: The panel keeps the width that it had on the General tab. The canvas
    stays visible on the left. There is no tab of a text format.
@@ -80,9 +81,9 @@ None of the steps deletes data, rents compute or changes access.
 
 ### 6.3 S3 — Long content scrolls inside the panel
 
-1. In General, write the long name of the synthetic settings into **Server** →
-   **SSH target**, and keep `Shift` down while you turn the wheel down three or
-   more times.
+1. In General, write the long name of the synthetic settings into **Remote
+   hosts** → **Workspace**, and keep `Shift` down while you turn the wheel down
+   three or more times.
 
    Result: The field shows the end of the long value, and the panel scrolls.
    The panel width does not change and the canvas stays visible. No field makes
@@ -118,6 +119,7 @@ None of the steps deletes data, rents compute or changes access.
 
 ## 8. Pass criteria
 
-- The panel keeps its width on every tab, with long lines in the editor.
+- The panel keeps its width on every tab, with long lines in the editor. The
+  tabs are General, Shortcuts, Presets, Browser and Remote browsers.
 - Wide content scrolls inside the panel in both directions.
 - The canvas stays visible beside the panel at every window size.

@@ -46,9 +46,11 @@ pub use horizon_browser::{
     BackendAvailability, BackendCapabilities, BackendKind, BrowserBounds, BrowserButton, BrowserCommand, BrowserConfig,
     BrowserEditCommand, BrowserEvent, BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession,
     BrowserShutdownSignal, BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState,
-    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, NativeSelectOption, NativeSelectPopup, NestedScrollbar,
-    PageScrollState, RemoteAllocation, RemoteRecoveryStatus, RemoteReleaseOutcome, RemoteSessionEvent,
-    RemoteSessionRequest, normalize_navigation_target,
+    DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY,
+    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES,
+    MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH,
+    MIN_VIDEO_QUALITY, NativeSelectOption, NativeSelectPopup, NestedScrollbar, PageScrollState, RemoteAllocation,
+    RemoteRecoveryStatus, RemoteReleaseOutcome, RemoteSessionEvent, RemoteSessionRequest, normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 

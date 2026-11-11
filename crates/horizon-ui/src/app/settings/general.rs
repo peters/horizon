@@ -12,7 +12,111 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
     changed |= render_appearance_section(ui, config);
     changed |= render_features_section(ui, config);
     changed |= render_machines_section(ui, config);
+    changed |= render_remote_hosts_section(ui, config);
     changed |= render_overlays_section(ui, config);
+    changed
+}
+
+/// Where a panel of the remote hosts chooser lands, and the port of the VNC
+/// server that `ssh -W` reaches on that host.
+///
+/// The per-host ports are rows: a host or an SSH alias, and its port. A row that
+/// a person clears goes, and the last row adds another one.
+fn render_remote_hosts_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    super::section_heading(ui, "Remote hosts");
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "A terminal or a VNC panel that the remote hosts chooser opens lands in this workspace. \
+             The VNC server of a host listens on its own loopback interface, and Horizon reaches it \
+             with ssh.",
+        );
+        ui.add_space(8.0);
+
+        egui::Grid::new("settings_remote_hosts_grid")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Workspace").color(theme::FG_SOFT()).size(12.0));
+                changed |= super::text_field(
+                    ui,
+                    &mut config.remote_hosts.default_workspace,
+                    "Remote Sessions",
+                    "settings_remote_hosts_workspace",
+                );
+                ui.end_row();
+
+                ui.label(egui::RichText::new("VNC port").color(theme::FG_SOFT()).size(12.0));
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut config.remote_hosts.vnc_port)
+                            .range(1..=u16::MAX)
+                            .clamp_existing_to_range(false)
+                            .speed(1.0),
+                    )
+                    .changed();
+                ui.end_row();
+            });
+
+        ui.add_space(10.0);
+        super::dim_label(ui, "A port for one host, by its label or its SSH host name:");
+        changed |= render_vnc_ports(ui, config);
+        super::validation_notice(ui, config.remote_hosts.validate());
+    });
+    changed
+}
+
+/// The per-host VNC ports, one row each, with an empty row to add one.
+fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    // The keys are read back after the rows are drawn, so a rename of a row is
+    // written whole instead of row by row.
+    let mut ports: Vec<(String, u16)> = config
+        .remote_hosts
+        .vnc_ports
+        .iter()
+        .map(|(host, port)| (host.clone(), *port))
+        .collect();
+    ports.push((String::new(), config.remote_hosts.vnc_port));
+
+    egui::Grid::new("settings_remote_hosts_ports_grid")
+        .num_columns(3)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            let mut remove = None;
+            for (index, (host, port)) in ports.iter_mut().enumerate() {
+                let host_id = format!("settings_remote_hosts_port_host_{index}");
+                changed |= super::text_field(ui, host, "", &host_id);
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(port)
+                            .range(1..=u16::MAX)
+                            .clamp_existing_to_range(false)
+                            .speed(1.0),
+                    )
+                    .changed();
+                // The empty row adds a host; a row with a name can go.
+                if host.trim().is_empty() {
+                    ui.label("");
+                } else if ui.button("Remove").clicked() {
+                    remove = Some(index);
+                }
+                ui.end_row();
+            }
+            if let Some(index) = remove {
+                ports.remove(index);
+                changed = true;
+            }
+        });
+
+    if changed {
+        config.remote_hosts.vnc_ports = ports
+            .into_iter()
+            .filter(|(host, _)| !host.trim().is_empty())
+            .map(|(host, port)| (host.trim().to_owned(), port))
+            .collect();
+    }
     changed
 }
 
@@ -34,7 +138,7 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("SSH target").color(theme::FG_SOFT()).size(12.0));
-                changed |= optional_text_field(
+                changed |= super::optional_text_field(
                     ui,
                     &mut config.browser_host.ssh_target,
                     "user@host or an SSH alias",
@@ -43,7 +147,7 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
                 ui.end_row();
 
                 ui.label(egui::RichText::new("Profile").color(theme::FG_SOFT()).size(12.0));
-                changed |= optional_text_field(
+                changed |= super::optional_text_field(
                     ui,
                     &mut config.browser_host.profile,
                     "profile name on that machine",
@@ -51,7 +155,7 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
                 );
                 ui.end_row();
             });
-        validation_notice(ui, config.browser_host.validate());
+        super::validation_notice(ui, config.browser_host.validate());
     });
 
     super::section_heading(ui, "Server");
@@ -69,7 +173,7 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("SSH target").color(theme::FG_SOFT()).size(12.0));
-                changed |= optional_text_field(
+                changed |= super::optional_text_field(
                     ui,
                     &mut config.server.ssh_target,
                     "user@host or an SSH alias",
@@ -78,7 +182,7 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
                 ui.end_row();
 
                 ui.label(egui::RichText::new("Command").color(theme::FG_SOFT()).size(12.0));
-                changed |= optional_text_field(
+                changed |= super::optional_text_field(
                     ui,
                     &mut config.server.command,
                     horizon_core::DEFAULT_LINK_COMMAND,
@@ -86,43 +190,15 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
                 );
                 ui.end_row();
             });
-        validation_notice(ui, config.server.validate());
+        super::validation_notice(ui, config.server.validate());
     });
     changed
 }
 
+/// One field that a person may leave blank, and writes back only when the text
 /// One field of an entry that a person may leave blank. The box edits a copy,
 /// so a blank box means the entry is not set; an entry that is not set gives an
 /// empty copy, so the common case allocates nothing. The value is written back
-/// only when the text changed, never on every frame.
-fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str, id: &str) -> bool {
-    let mut text = value.clone().unwrap_or_default();
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .hint_text(hint)
-            .desired_width((ui.available_width() - ui.spacing().item_spacing.x).max(120.0))
-            .id_salt(id),
-    );
-    if !response.changed() {
-        return false;
-    }
-    let trimmed = text.trim();
-    *value = (!trimmed.is_empty()).then(|| trimmed.to_string());
-    true
-}
-
-/// The refusal of an entry, in the words of its rule.
-fn validation_notice(ui: &mut Ui, result: horizon_core::Result<()>) {
-    if let Err(error) = result {
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(error.to_string())
-                .color(theme::PALETTE_RED())
-                .size(11.0),
-        );
-    }
-}
-
 fn render_window_section(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     super::section_heading(ui, "Window");

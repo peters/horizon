@@ -1,4 +1,5 @@
 use crate::layout::WS_COLLISION_GAP;
+use crate::panel::DEFAULT_PANEL_SIZE;
 
 use super::super::arrangement::rects_overlap;
 use super::super::*;
@@ -69,4 +70,55 @@ fn separating_overlapping_workspace_preserves_existing_freeform_layout() {
     assert!(!rects_overlap(reattached_frame, right_frame));
     assert!((reattached_frame[0] - (right_frame[2] + WS_COLLISION_GAP)).abs() <= f32::EPSILON);
     assert!(!board.separate_workspace_from_overlaps_in_scope(reattached, &[left, reattached, right]));
+}
+
+#[test]
+fn a_new_workspace_stands_beside_the_panels_of_a_wide_workspace() {
+    let mut board = Board::new();
+    let first = board.create_workspace("first");
+    let panel = board
+        .create_panel(editor_panel_options(), first)
+        .expect("the panel of the first workspace");
+    // A person drags the panel wide, past the slot of one workspace.
+    board.resize_panel(panel, [1600.0, DEFAULT_PANEL_SIZE[1]]);
+    let frame = board
+        .workspace_frame_rect(first)
+        .expect("the frame of the first workspace");
+
+    let second = board.create_workspace("Workspace 2");
+    let position = board.workspace(second).expect("the second workspace").position;
+    let second_frame = board
+        .workspace_frame_rect(second)
+        .expect("the frame of the second workspace");
+
+    assert!(
+        position[0] >= frame[2],
+        "the new workspace stands beside the panels of the wide workspace: {} and {frame:?}",
+        position[0]
+    );
+    assert!(
+        second_frame[0] >= frame[2] + WS_COLLISION_GAP,
+        "the name of the new workspace is not over a panel of the first one: {second_frame:?} and {frame:?}"
+    );
+}
+
+#[test]
+fn a_workspace_whose_panels_fill_their_slot_keeps_the_place_of_the_next_one() {
+    let mut board = Board::new();
+    let first = board.create_workspace("first");
+    for _ in 0..3 {
+        board
+            .create_panel(editor_panel_options(), first)
+            .expect("a panel of the first workspace");
+    }
+    let before = board.create_workspace("second");
+    let expected = board.workspace(before).expect("the second workspace").position;
+    board.remove_workspace(before);
+
+    let third = board.create_workspace("third");
+    assert_eq!(
+        board.workspace(third).expect("the third workspace").position,
+        expected,
+        "a workspace within its slot keeps the place of today"
+    );
 }

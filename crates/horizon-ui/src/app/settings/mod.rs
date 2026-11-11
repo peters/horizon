@@ -1,4 +1,5 @@
 mod bar;
+mod browser;
 mod general;
 mod presets;
 mod remote_browsers;
@@ -7,6 +8,9 @@ mod remote_usage;
 mod shortcuts;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(super) use tests::{at, frame_of, texts_hold};
 
 use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
@@ -28,6 +32,7 @@ enum SettingsTab {
     General,
     Shortcuts,
     Presets,
+    Browser,
     RemoteBrowsers,
 }
 
@@ -37,11 +42,18 @@ impl SettingsTab {
             Self::General => "General",
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
+            Self::Browser => "Browser",
             Self::RemoteBrowsers => "Remote browsers",
         }
     }
 
-    const ALL: &[Self] = &[Self::General, Self::Shortcuts, Self::Presets, Self::RemoteBrowsers];
+    const ALL: &[Self] = &[
+        Self::General,
+        Self::Shortcuts,
+        Self::Presets,
+        Self::Browser,
+        Self::RemoteBrowsers,
+    ];
 }
 
 pub(super) enum SettingsStatus {
@@ -387,6 +399,7 @@ fn render_tab(
             SettingsTab::General => general::render(ui, config),
             SettingsTab::Shortcuts => shortcuts::render(ui, config),
             SettingsTab::Presets => presets::render(ui, config),
+            SettingsTab::Browser => browser::render(ui, config),
             SettingsTab::RemoteBrowsers => {
                 remote_recovery::render(ui, allocations);
                 remote_browsers::render(
@@ -432,6 +445,58 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
 }
 
 // -- Shared section helpers used by tab modules --------------------------
+
+// -- Fields and their rules, shared by the tabs --------------------------
+
+/// One field that a person may leave blank, and writes back only when the text
+/// changed, so no frame writes a value that a person did not type.
+fn text_field(ui: &mut egui::Ui, value: &mut String, hint: &str, id: &str) -> bool {
+    let mut text = value.clone();
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text(hint)
+            .desired_width((ui.available_width() - ui.spacing().item_spacing.x).max(120.0))
+            .id_salt(id),
+    );
+    if !response.changed() {
+        return false;
+    }
+    *value = text;
+    true
+}
+
+/// One field of an entry that a person may leave blank. The box edits a copy,
+/// so a blank box means the entry is not set; an entry that is not set gives an
+/// empty copy, so the common case allocates nothing. The value is written back
+/// only when the text changed, never on every frame.
+fn optional_text_field(ui: &mut egui::Ui, value: &mut Option<String>, hint: &str, id: &str) -> bool {
+    let mut text = value.clone().unwrap_or_default();
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text(hint)
+            .desired_width((ui.available_width() - ui.spacing().item_spacing.x).max(120.0))
+            .id_salt(id),
+    );
+    if !response.changed() {
+        return false;
+    }
+    let trimmed = text.trim();
+    *value = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    true
+}
+
+/// The refusal of a value, in the words of its rule. A value that the engine
+/// refuses is shown under its section, and Save reports it as well.
+fn validation_notice(ui: &mut egui::Ui, result: Result<(), impl std::fmt::Display>) {
+    if let Err(error) = result {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(error.to_string())
+                .color(theme::PALETTE_RED())
+                .size(11.0),
+        );
+    }
+}
 
 fn section_heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(4.0);

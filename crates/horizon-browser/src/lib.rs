@@ -207,6 +207,24 @@ impl Default for BrowserConfig {
 }
 
 impl BrowserConfig {
+    /// Check the values of this section that the engine refuses: the quality of
+    /// the live view, and the options of a recording.
+    ///
+    /// # Errors
+    /// Returns the rule that the first refused value breaks, with the name of
+    /// the setting.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=100).contains(&self.quality) {
+            return Err(format!(
+                "browser.quality must be between 1 and 100 (got {})",
+                self.quality
+            ));
+        }
+        self.video
+            .validate()
+            .map_err(|message| format!("browser.video: {message}"))
+    }
+
     /// Check that this session applies the egress that it states.
     ///
     /// # Errors

@@ -57,6 +57,65 @@ fn every_section_round_trips() {
 }
 
 #[test]
+fn every_field_of_the_settings_window_round_trips() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let store = store_in(root.path());
+    let mut config = Config::default();
+    // The settings that a person changes in the window, one value each.
+    config.window.height = 900.0;
+    config.appearance.theme = crate::AppearanceTheme::Light;
+    config.features.sidebar_accordion = true;
+    config.overlays.minimap_width = 400.0;
+    config.browser_host.ssh_target = Some("browser-vm".to_string());
+    config.browser_host.profile = Some("work".to_string());
+    config.server.ssh_target = Some("server-vm".to_string());
+    config.server.command = Some("/opt/horizon --server-link".to_string());
+    config.remote_hosts.default_workspace = "Ops".to_string();
+    config.remote_hosts.vnc_port = 5997;
+    config.remote_hosts.vnc_ports.insert("smoke-node".to_string(), 5901);
+    config.browser.command = Some("/opt/chromium".to_string());
+    config.browser.firefox_command = Some("/opt/firefox".to_string());
+    config.browser.geckodriver_command = Some("/opt/geckodriver".to_string());
+    config.browser.safaridriver_command = Some("/opt/safaridriver".to_string());
+    config.browser.quality = 42;
+    config.browser.every_nth_frame = 3;
+    config.browser.video.quality = 77;
+    config.browser.video.fps = 7;
+    config.browser.video.compression_level = 6;
+    config.browser.video.max_width = Some(1280);
+    config.browser.video.max_file_bytes = 64 * 1024 * 1024;
+    config.browser.webauthn_command = vec![
+        "/opt/my authenticator".to_string(),
+        "--dir".to_string(),
+        "/var/tmp/auth".to_string(),
+    ];
+
+    store.save(&config).expect("save");
+    let stored = store.load().expect("load").expect("the store exists").config;
+
+    assert_eq!(stored.remote_hosts, config.remote_hosts, "every remote host entry");
+    assert_eq!(stored.browser.quality, 42, "the picture quality");
+    assert_eq!(stored.browser.every_nth_frame, 3, "the skipped frames");
+    assert_eq!(stored.browser.video, config.browser.video, "every recording option");
+    assert_eq!(
+        stored.browser.webauthn_command,
+        vec![
+            "/opt/my authenticator".to_string(),
+            "--dir".to_string(),
+            "/var/tmp/auth".to_string()
+        ],
+        "an argument with a space stays one argument"
+    );
+    assert_eq!(stored.browser.command.as_deref(), Some("/opt/chromium"));
+    assert_eq!(stored.browser.firefox_command.as_deref(), Some("/opt/firefox"));
+    assert_eq!(stored.browser.geckodriver_command.as_deref(), Some("/opt/geckodriver"));
+    assert_eq!(
+        stored.browser.safaridriver_command.as_deref(),
+        Some("/opt/safaridriver")
+    );
+}
+
+#[test]
 fn a_section_that_this_build_does_not_know_survives_a_save() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());

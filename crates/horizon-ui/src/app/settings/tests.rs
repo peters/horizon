@@ -3,6 +3,89 @@ use horizon_core::{Config, RuntimeState, StartupDecision};
 use super::SettingsStatus;
 use crate::app::test_support::test_app_with_startup;
 
+/// The texts that one headless frame of `render` draws, and whether that frame
+/// changed a value of the draft.
+pub(crate) fn frame_of(mut render: impl FnMut(&mut egui::Ui) -> bool) -> (bool, Vec<String>) {
+    use crate::test_egui::DiscardTextures;
+
+    let ctx = egui::Context::default();
+    let mut changed = None;
+    let output = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    changed = Some(render(ui));
+                });
+            });
+        })
+        .discard_textures();
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect_texts(&clipped.shape, &mut texts);
+    }
+    (changed.expect("the frame rendered the content"), texts)
+}
+
+/// Whether `text` is one of the drawn texts.
+pub(crate) fn texts_hold(texts: &[String], text: &str) -> bool {
+    texts.iter().any(|drawn| drawn == text)
+}
+
+/// Whether one of the drawn texts is `text`, which is what a number and its
+/// suffix draw as two texts.
+pub(crate) fn at(texts: &[String], text: &str) -> bool {
+    texts_hold(texts, text)
+}
+
+fn collect_texts(shape: &egui::Shape, texts: &mut Vec<String>) {
+    match shape {
+        egui::Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_texts(shape, texts);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn the_general_tab_draws_a_field_for_every_remote_host_setting() {
+    let mut config = Config::default();
+    let (changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+
+    assert!(!changed, "a frame that a person did not edit changes nothing");
+    for expected in ["Remote hosts", "Workspace", "VNC port", "Remote Sessions"] {
+        assert!(
+            texts_hold(&texts, expected),
+            "the section draws a field for {expected}: {texts:?}"
+        );
+    }
+
+    // A host with a port of its own is one row, with the button that removes it.
+    config.remote_hosts.vnc_ports.insert("smoke-node".to_owned(), 5997);
+    let (changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+    assert!(!changed);
+    assert!(texts_hold(&texts, "smoke-node"), "{texts:?}");
+    assert!(texts_hold(&texts, "Remove"), "{texts:?}");
+}
+
+#[test]
+fn the_remote_hosts_section_shows_the_rule_of_a_refused_entry() {
+    let mut config = Config::default();
+    config.remote_hosts.default_workspace = "  ".to_string();
+    config.remote_hosts.vnc_ports.insert("  ".to_string(), 5900);
+    let (changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+
+    assert!(!changed);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.ends_with("remote_hosts.default_workspace cannot be empty")),
+        "the rule of the workspace is under its field: {texts:?}"
+    );
+}
+
 fn ephemeral() -> StartupDecision {
     StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
