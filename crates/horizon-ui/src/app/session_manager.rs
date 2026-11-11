@@ -442,6 +442,7 @@ impl HorizonApp {
         self.panel_render_caches = PanelRenderCaches::default();
         self.panel_starts.clear();
         self.panel_restarts.clear();
+        self.cwd_reads.clear();
         self.session_jobs.clear();
         self.session_manager_reload = None;
         self.clear_workspace_rename();

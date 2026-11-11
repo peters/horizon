@@ -538,6 +538,7 @@ fn build_terminal_panel(
         launch_command,
         launch_args,
         launch_cwd,
+        cwd_read: None,
         ssh_connection,
         opened_by,
         machine,

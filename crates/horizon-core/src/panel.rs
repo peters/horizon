@@ -1,3 +1,4 @@
+mod cwd;
 mod lifecycle;
 pub(crate) mod spawn;
 mod work_resume;
@@ -303,8 +304,13 @@ pub struct Panel {
     pub launch_command: Option<String>,
     /// Original launch args (for persistence).
     pub launch_args: Vec<String>,
-    /// Working directory (for persistence).
+    /// Working directory (for persistence): the directory that its process
+    /// started in, or the last one that a worker read from it.
     pub launch_cwd: Option<PathBuf>,
+    /// The process whose working directory a worker reads next, recorded when
+    /// output may have changed it. A frame never reads the directory itself:
+    /// on macOS that read starts `pgrep` and `lsof`.
+    cwd_read: Option<u32>,
     /// Structured SSH connection metadata, when this is an SSH panel.
     pub ssh_connection: Option<SshConnection>,
     /// The agent that opened this panel for the person through
@@ -358,7 +364,6 @@ pub struct PanelProcessActivity {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PanelProcessOutput {
     pub activity: PanelProcessActivity,
-    pub cwd_changed: bool,
     pub persisted_state_changed: bool,
 }
 
@@ -609,6 +614,7 @@ impl Panel {
             launch_command: None,
             launch_args: Vec::new(),
             launch_cwd: None,
+            cwd_read: None,
             ssh_connection: None,
             opened_by: None,
             machine: None,
@@ -735,7 +741,6 @@ impl Panel {
                     browser: browser_output.had_output,
                     answered_query: false,
                 },
-                cwd_changed: false,
                 persisted_state_changed: browser_output.url_changed || browser_output.config_changed,
             };
         }
@@ -752,8 +757,8 @@ impl Panel {
         if title_changed {
             self.terminal_title = terminal.title().to_string();
         }
-        let current_cwd = if had_output && should_track_live_cwd {
-            terminal.current_cwd()
+        let child_pid = if had_output && should_track_live_cwd {
+            terminal.child_pid()
         } else {
             None
         };
@@ -765,15 +770,18 @@ impl Panel {
             self.track_ssh_connection(child_exited, had_output);
         }
 
-        let cwd_changed = self.update_tracked_cwd(current_cwd);
+        // The directory of the process is a read that can start a program, so
+        // the worker answers it and a later frame keeps the value.
+        if let Some(child_pid) = child_pid {
+            self.cwd_read = Some(child_pid);
+        }
         PanelProcessOutput {
             activity: PanelProcessActivity {
                 terminal: had_output,
                 browser: false,
                 answered_query,
             },
-            cwd_changed,
-            persisted_state_changed: cwd_changed,
+            persisted_state_changed: false,
         }
     }
 
@@ -969,32 +977,10 @@ impl Panel {
             AgentStatus::Idle
         }
     }
-
-    fn should_track_live_cwd(&self) -> bool {
-        matches!(self.kind, PanelKind::Shell | PanelKind::Command)
-    }
-
-    fn update_tracked_cwd(&mut self, current_cwd: Option<PathBuf>) -> bool {
-        if !self.should_track_live_cwd() {
-            return false;
-        }
-
-        let Some(current_cwd) = current_cwd else {
-            return false;
-        };
-        if self.launch_cwd.as_ref() == Some(&current_cwd) {
-            return false;
-        }
-
-        self.launch_cwd = Some(current_cwd);
-        true
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, AgentStatus,
         DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent, PanelId, PanelKind, PanelLayout, PanelResume,
@@ -1028,6 +1014,7 @@ mod tests {
             launch_command: None,
             launch_args: Vec::new(),
             launch_cwd: None,
+            cwd_read: None,
             ssh_connection: None,
             opened_by: None,
             machine: None,
@@ -1311,26 +1298,6 @@ mod tests {
         });
 
         assert_eq!(panel.display_title(), "Prod API (deploy@prod-api) — Connected");
-    }
-
-    #[test]
-    fn shell_panels_track_latest_live_cwd() {
-        let mut panel = test_panel("Shell", "", false);
-        panel.kind = PanelKind::Shell;
-        panel.launch_cwd = Some(PathBuf::from("/workspace"));
-
-        assert!(panel.update_tracked_cwd(Some(PathBuf::from("/workspace/subdir"))));
-        assert_eq!(panel.launch_cwd, Some(PathBuf::from("/workspace/subdir")));
-    }
-
-    #[test]
-    fn agent_panels_keep_original_launch_cwd() {
-        let mut panel = test_panel("Pi", "", false);
-        panel.kind = PanelKind::Pi;
-        panel.launch_cwd = Some(PathBuf::from("/workspace"));
-
-        assert!(!panel.update_tracked_cwd(Some(PathBuf::from("/workspace/subdir"))));
-        assert_eq!(panel.launch_cwd, Some(PathBuf::from("/workspace")));
     }
 
     #[test]

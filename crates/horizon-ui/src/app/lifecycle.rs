@@ -106,7 +106,7 @@ impl HorizonApp {
                 }
             }
         }
-        if panel_output.cwd_changed || panel_output.persisted_state_changed {
+        if panel_output.persisted_state_changed {
             self.mark_runtime_dirty();
         }
         on_screen_terminal_output || panel_output.activity.answered_query || panel_output.activity.browser
@@ -339,6 +339,9 @@ impl HorizonApp {
         // A panel that this frame created waits for the preparation of its
         // process on the coordination worker.
         self.queue_panel_starts();
+        // A panel whose process printed keeps no read of its working directory:
+        // the coordination worker reads it, and a later frame keeps the answer.
+        self.queue_panel_cwd_reads();
         // An editor buffer that the person saved and the start of a Device video
         // recording go to the coordination worker.
         self.queue_editor_saves();

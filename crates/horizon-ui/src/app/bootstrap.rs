@@ -207,7 +207,7 @@ impl HorizonApp {
             initial_pan_done: false, root_viewport_stabilizer: None,
             file_hover_positions: HashMap::new(), file_drop_highlight: None,
             pending_editor_drops: PendingEditorDrops::default(),
-            panel_starts: super::panel_starts::PanelStarts::default(),
+            panel_starts: super::panel_starts::PanelStarts::default(), cwd_reads: super::cwd_reads::CwdReads::default(),
             panel_restarts: super::panel_restarts::PanelRestarts::default(),
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),

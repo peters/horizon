@@ -163,6 +163,34 @@ prepares it, and gives those reads to the coordination worker.
   ([`app/panel_restarts.rs`](../../crates/horizon-ui/src/app/panel_restarts.rs))
   runs both, and a machine terminal keeps its attempt count and its delay.
 
+### A value of a process that a worker reads
+
+A shell panel follows the directory that its process is in, so a `cd` reaches the
+session save and the saved board. On Linux that question is one `readlink` of
+`/proc`. macOS has no such file: `pgrep -P` walks to the deepest child of the
+panel, and `lsof` reads the directory of that child. Those are two programs, and
+a frame must not start them.
+
+- `Panel::process_output` ([`panel.rs`](../../crates/horizon-core/src/panel.rs))
+  records the process whose directory may have changed in `cwd_read`, and
+  `Board::cwd_reads` hands the request out. The frame makes no read of its own.
+- `queue_panel_cwd_reads` ([`app/cwd_reads.rs`](../../crates/horizon-ui/src/app/cwd_reads.rs))
+  sends one read for each panel that has a request, on the coordination worker
+  thread. One read runs for a panel at a time and no panel is read more often than
+  its interval, so a terminal that prints on every frame sends no more than that.
+  The request stays in the panel until an answer comes back, so a directory that
+  changed while a read was in flight is read again.
+- `read_cwd` ([`terminal/cwd.rs`](../../crates/horizon-core/src/terminal/cwd.rs))
+  is the work. `CwdReader` is a value and not a condition of the build, so the
+  reader of macOS runs on any computer with stand-in programs on a private
+  `PATH`. The read starts no program on a computer without `pgrep` or `lsof`, and
+  each program is ended by its own process id when `PROGRAM_BOUND` (2 s) passes.
+  A program that hangs holds the worker for a bounded time only.
+- The frame that applies the answer keeps it with
+  `Board::record_working_directory`, and marks the board for the session save.
+  The saved board records the directory that the panel keeps, not a read of the
+  frame: a directory that a person changed is a moment old at most.
+
 ### A worker that owns the desktop clipboard
 
 `crate::clipboard`

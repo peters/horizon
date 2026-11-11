@@ -1,6 +1,7 @@
 //! Small shared helpers with no more specific module.
 
 use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 /// A program that ends at once with success, for a test that must start no
 /// shell, no ssh and no kill command.
@@ -15,6 +16,27 @@ pub fn stand_in_program() -> &'static str {
         .into_iter()
         .find(|candidate| std::path::Path::new(candidate).exists())
         .unwrap_or("/usr/bin/true")
+}
+
+/// Writes `body` as the program `name` of `folder`, for a test that answers with
+/// a stand-in program instead of a program of the system.
+///
+/// The file is a shell script with the permissions of a program, so the reader of
+/// either system runs it on the computer that runs the tests.
+///
+/// # Errors
+///
+/// Returns the error of the write or of the permissions of the file.
+#[doc(hidden)]
+pub fn stand_in_program_in(folder: &Path, name: &str, body: &str) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let path = folder.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n"))?;
+    let mut permissions = std::fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions)?;
+    Ok(path)
 }
 
 /// Caps `value` at `max_chars` characters, ending a truncated result with an
@@ -46,7 +68,7 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{stand_in_program, truncate_chars};
+    use super::{stand_in_program, stand_in_program_in, truncate_chars};
 
     #[test]
     fn stand_in_program_names_a_program_that_exists() {
@@ -54,6 +76,21 @@ mod tests {
             std::path::Path::new(stand_in_program()).exists(),
             "the stand-in program of a test exists on this system"
         );
+    }
+
+    #[test]
+    fn stand_in_program_in_writes_a_program_that_runs() {
+        let folder = tempfile::tempdir().expect("folder of a stand-in program");
+        let program =
+            stand_in_program_in(folder.path(), "answer", "printf 'yes\\n'").expect("the stand-in program of the test");
+
+        let output = std::process::Command::new(&program)
+            .env_clear()
+            .output()
+            .expect("the stand-in program runs");
+
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "yes\n");
     }
 
     #[test]

@@ -1,4 +1,5 @@
 mod content;
+mod cwd;
 mod events;
 mod lifecycle;
 mod replay;
@@ -27,6 +28,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::error::{Error, Result};
 
+pub use self::cwd::{CwdReader, PROGRAM_BOUND, read_cwd};
 use self::events::PendingClipboard;
 pub use self::events::{ClipboardTarget, ClipboardWrite};
 use self::replay::{ReplayRestoreState, drain_replay_events};
@@ -35,7 +37,7 @@ use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
-use self::support::{ColorLookup, current_cwd_for_pid, replay_terminal_bytes};
+use self::support::{ColorLookup, replay_terminal_bytes};
 
 type TerminalPty = tty::Pty;
 
@@ -219,8 +221,6 @@ mod tests {
 
     use std::collections::HashMap;
 
-    #[cfg(target_os = "linux")]
-    use super::current_cwd_for_pid;
     use super::{
         ClipboardTarget, ClipboardWrite, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions,
         TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, queue_debounced_pty_resize,
@@ -271,13 +271,6 @@ mod tests {
         .expect("terminal should spawn");
 
         assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn current_cwd_for_pid_reads_procfs_cwd() {
-        let cwd = current_cwd_for_pid(std::process::id()).expect("cwd");
-        assert_eq!(cwd, std::env::current_dir().expect("current dir"));
     }
 
     #[test]

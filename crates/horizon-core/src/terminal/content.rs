@@ -1,8 +1,7 @@
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 
 use super::{
-    Column, Dimensions, PathBuf, Point, RenderableContent, Scroll, Term, Terminal, TerminalEventProxy,
-    current_cwd_for_pid, viewport_to_point,
+    Column, Dimensions, Point, RenderableContent, Scroll, Term, Terminal, TerminalEventProxy, viewport_to_point,
 };
 
 impl Terminal {
@@ -192,11 +191,6 @@ impl Terminal {
     #[must_use]
     pub fn rows(&self) -> u16 {
         self.rows
-    }
-
-    #[must_use]
-    pub fn current_cwd(&self) -> Option<PathBuf> {
-        current_cwd_for_pid(self.child_pid?)
     }
 
     /// The process the terminal started, which leads its own process group.

@@ -10,7 +10,7 @@ use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
 pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
@@ -141,7 +141,6 @@ pub(crate) struct UnreleasedRemoteHold {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoardProcessOutput {
     pub activity: PanelProcessActivity,
-    pub cwd_changed: bool,
     pub persisted_state_changed: bool,
 }
 
@@ -598,7 +597,6 @@ impl Board {
             output.activity.terminal |= panel_output.activity.terminal;
             output.activity.browser |= panel.visible && panel_output.activity.browser;
             output.activity.answered_query |= panel_output.activity.answered_query;
-            output.cwd_changed |= panel_output.cwd_changed;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
             if let Some(terminal) = panel.terminal_mut() {
                 self.pending_clipboard_writes.extend(terminal.take_clipboard_writes());
@@ -609,6 +607,39 @@ impl Board {
         // happens for panels with new output this frame.
         self.update_agent_status();
         output
+    }
+
+    /// The panels whose process may have changed its working directory since a
+    /// worker last read it, with the process to read.
+    ///
+    /// A frame records the request and never reads the directory itself: on
+    /// macOS that read starts `pgrep` and `lsof`. A request stays until the app
+    /// takes it, so a directory that changed while a read was in flight is read
+    /// again.
+    #[must_use]
+    pub fn cwd_reads(&self) -> Vec<(PanelId, u32)> {
+        self.panels
+            .iter()
+            .filter_map(|panel| panel.cwd_read().map(|pid| (panel.id, pid)))
+            .collect()
+    }
+
+    /// Takes the request of a read of the panel `id`, after the app sent it to a
+    /// worker.
+    pub fn take_cwd_read(&mut self, id: PanelId) -> Option<u32> {
+        self.panels.iter_mut().find(|panel| panel.id == id)?.take_cwd_read()
+    }
+
+    /// Records the directory that a worker read for the process `pid` of the
+    /// panel `id`, and says whether the board changed.
+    ///
+    /// An answer that names a process that the panel no longer runs, or a panel
+    /// that no longer stands, changes nothing.
+    pub fn record_working_directory(&mut self, id: PanelId, pid: u32, directory: PathBuf) -> bool {
+        let Some(panel) = self.panels.iter_mut().find(|panel| panel.id == id) else {
+            return false;
+        };
+        panel.record_working_directory(pid, directory)
     }
 
     /// OSC 52 copy requests terminal panels made since the last call. Output

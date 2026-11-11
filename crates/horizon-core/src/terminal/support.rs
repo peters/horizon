@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use alacritty_terminal::sync::FairMutex;
@@ -90,128 +89,6 @@ fn replay_mode_reset_bytes(mode: TermMode) -> Vec<u8> {
     bytes
 }
 
-pub(super) fn current_cwd_for_pid(pid: u32) -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
-    {
-        let target_pid = shell_pid_behind_wrapper(pid);
-        std::fs::read_link(format!("/proc/{target_pid}/cwd"))
-            .or_else(|_| std::fs::read_link(format!("/proc/{pid}/cwd")))
-            .ok()
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        current_cwd_for_pid_via_lsof(pid)
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = pid;
-        None
-    }
-}
-
-/// The transcript wrapper (`script`) is the PTY's direct child but never changes
-/// its own working directory, so reading its cwd would always report the panel's
-/// original spawn directory. When `pid` is that wrapper, return the shell it
-/// launched so callers read the shell's live cwd (which tracks `cd`). Returns
-/// `pid` unchanged when it is not a `script` wrapper (transcript capture
-/// disabled), in which case the PTY child already is the shell.
-#[cfg(target_os = "linux")]
-fn shell_pid_behind_wrapper(pid: u32) -> u32 {
-    if proc_comm(pid).as_deref() != Some("script") {
-        return pid;
-    }
-    first_child_pid(pid).unwrap_or(pid)
-}
-
-#[cfg(target_os = "linux")]
-fn proc_comm(pid: u32) -> Option<String> {
-    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    Some(comm.trim_end().to_string())
-}
-
-#[cfg(target_os = "linux")]
-fn first_child_pid(pid: u32) -> Option<u32> {
-    let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
-    parse_first_child_pid(&children)
-}
-
-/// Parse the space-separated PID list from `/proc/<pid>/task/<pid>/children`,
-/// returning the first child (the shell launched by the wrapper).
-#[cfg(any(target_os = "linux", test))]
-fn parse_first_child_pid(children: &str) -> Option<u32> {
-    children.split_whitespace().find_map(|token| token.parse().ok())
-}
-
-#[cfg(target_os = "macos")]
-fn current_cwd_for_pid_via_lsof(pid: u32) -> Option<PathBuf> {
-    let target_pid = deepest_child_pid(pid).unwrap_or(pid);
-    lsof_cwd_for_pid(target_pid).or_else(|| lsof_cwd_for_pid(pid))
-}
-
-#[cfg(target_os = "macos")]
-fn deepest_child_pid(mut pid: u32) -> Option<u32> {
-    let mut saw_child = false;
-
-    while let Some(child_pid) = direct_child_pid(pid) {
-        saw_child = true;
-        pid = child_pid;
-    }
-
-    saw_child.then_some(pid)
-}
-
-#[cfg(target_os = "macos")]
-fn lsof_cwd_for_pid(pid: u32) -> Option<PathBuf> {
-    crate::ui_thread::blocking("`lsof` runs for the working directory of a panel");
-    let output = std::process::Command::new("lsof")
-        .args(["-a", "-d", "cwd", "-p", &pid.to_string(), "-Fn"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    parse_lsof_cwd(std::str::from_utf8(&output.stdout).ok()?)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn parse_lsof_cwd(output: &str) -> Option<PathBuf> {
-    let mut in_cwd_entry = false;
-
-    for line in output.lines() {
-        if let Some(descriptor) = line.strip_prefix('f') {
-            in_cwd_entry = descriptor == "cwd";
-            continue;
-        }
-        if in_cwd_entry && let Some(path) = line.strip_prefix('n') {
-            return Some(PathBuf::from(path));
-        }
-    }
-
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn direct_child_pid(pid: u32) -> Option<u32> {
-    crate::ui_thread::blocking("`pgrep` runs for the child of a panel");
-    let output = std::process::Command::new("pgrep")
-        .args(["-P", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    parse_pgrep_pid(std::str::from_utf8(&output.stdout).ok()?)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn parse_pgrep_pid(output: &str) -> Option<u32> {
-    output.lines().find_map(|line| line.trim().parse().ok())
-}
-
 const TERMINAL_BASE_COLORS: [Rgb; 16] = [
     rgb(0x1d, 0x1f, 0x21),
     rgb(0xcc, 0x66, 0x66),
@@ -275,9 +152,7 @@ fn url_opener_invocation(url: &str) -> (&'static str, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use super::{open_url, parse_lsof_cwd, url_opener_invocation};
+    use super::{open_url, url_opener_invocation};
 
     #[test]
     fn url_opener_uses_the_platform_default_handler() {
@@ -304,37 +179,5 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(1),
             "the frame that opens a URL waits for no program"
         );
-    }
-
-    #[test]
-    fn parse_lsof_cwd_extracts_working_directory() {
-        let output = "p1234\nfcwd\nn/tmp/project\n";
-
-        assert_eq!(parse_lsof_cwd(output), Some(PathBuf::from("/tmp/project")));
-    }
-
-    #[test]
-    fn parse_lsof_cwd_returns_none_without_cwd_entry() {
-        let output = "p1234\nf1\nn/tmp/project/file.txt\n";
-
-        assert_eq!(parse_lsof_cwd(output), None);
-    }
-
-    #[test]
-    fn parse_pgrep_pid_extracts_first_child_pid() {
-        let output = "12027\n12099\n";
-
-        assert_eq!(super::parse_pgrep_pid(output), Some(12027));
-    }
-
-    #[test]
-    fn parse_first_child_pid_extracts_first_child() {
-        assert_eq!(super::parse_first_child_pid("31219 31300\n"), Some(31219));
-    }
-
-    #[test]
-    fn parse_first_child_pid_returns_none_when_empty() {
-        assert_eq!(super::parse_first_child_pid(""), None);
-        assert_eq!(super::parse_first_child_pid("\n"), None);
     }
 }

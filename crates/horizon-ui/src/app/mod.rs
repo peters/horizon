@@ -34,6 +34,7 @@ mod canvas_gesture;
 mod canvas_scroll;
 mod card_fit;
 mod creation_notice;
+mod cwd_reads;
 mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;
@@ -414,6 +415,9 @@ pub struct HorizonApp {
     /// The panels whose process waits for the preparation that the coordination
     /// worker reads.
     panel_starts: panel_starts::PanelStarts,
+    /// The reads of the working directories of the panels, which the
+    /// coordination worker makes.
+    cwd_reads: cwd_reads::CwdReads,
     /// The panels whose restart runs, and why each one restarts.
     panel_restarts: panel_restarts::PanelRestarts,
     /// The job of the session store that runs, and the selection and the

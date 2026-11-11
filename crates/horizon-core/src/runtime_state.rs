@@ -296,14 +296,10 @@ impl RuntimeState {
                             kind: panel.kind,
                             command: panel.launch_command.clone(),
                             args: panel.launch_args.clone(),
-                            cwd: if panel.kind.is_agent() || panel.kind == PanelKind::Ssh {
-                                panel.launch_cwd.clone()
-                            } else {
-                                terminal
-                                    .and_then(Terminal::current_cwd)
-                                    .or_else(|| panel.launch_cwd.clone())
-                            }
-                            .map(|path| path.display().to_string()),
+                            // The directory that the panel keeps: the one that
+                            // its process started in, or the last one that a
+                            // worker read from it. A frame never reads it.
+                            cwd: panel.launch_cwd.as_ref().map(|path| path.display().to_string()),
                             rows: terminal.map_or(DEFAULT_ROWS, Terminal::rows),
                             cols: terminal.map_or(DEFAULT_COLS, Terminal::cols),
                             resume: panel.resume.clone(),

@@ -55,6 +55,7 @@ pub use board::{
     Board, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment,
     WorkspaceDockSide, WorkspaceLayout,
 };
+pub use bounded_program::ProgramEnvironment;
 pub use config::{
     AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, FeaturesConfig, OverlaysConfig,
     PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig,
@@ -102,9 +103,9 @@ pub use ssh::{
     DiscoveredSshHost, MachineKey, MachineKeyError, MachineKeyRef, MachineKeys, SshConnection, SshConnectionStatus,
     discover_ssh_hosts,
 };
-pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};
+pub use terminal::{ClipboardTarget, ClipboardWrite, CwdReader, PROGRAM_BOUND, Terminal, open_url, read_cwd};
 pub use transcript::PanelTranscript;
 pub use transcript::warm_script_support;
-pub use util::{stand_in_program, truncate_chars};
+pub use util::{stand_in_program, stand_in_program_in, truncate_chars};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
