@@ -172,14 +172,19 @@ impl HorizonApp {
         }
         // A reason that an action of the person opened nothing stays visible
         // after the row is forgotten, because it is the reason the person has to
-        // act on.
-        if self.machine_rows.rows().is_empty() && self.sidebar_notice.is_none() {
+        // act on. The section appears with its first machine, or with the line of
+        // a server that this Horizon follows: the line says that the list comes
+        // from there before the first machine arrives.
+        if self.machine_rows.rows().is_empty()
+            && self.machine_rows.server_line().is_none()
+            && self.sidebar_notice.is_none()
+        {
             return;
         }
         // The rows are borrowed out for the pass, because a press changes the
         // actions and the board; nothing in the pass reads the cache again.
         let rows = std::mem::take(&mut self.machine_rows);
-        if !rows.rows().is_empty() {
+        if !rows.rows().is_empty() || rows.server_line().is_some() {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
@@ -192,19 +197,19 @@ impl HorizonApp {
                     120.0,
                 ));
             });
-            if let Some(line) = rows.server_line() {
-                ui.horizontal(|ui| {
-                    ui.add_space(18.0);
-                    ui.label(text::line(
-                        ui,
-                        line,
-                        11.0,
-                        text::REGULAR,
-                        text::secondary(),
-                        ui.available_width() - 18.0,
-                    ));
-                });
-            }
+        }
+        if let Some(line) = rows.server_line() {
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                ui.label(text::line(
+                    ui,
+                    line,
+                    11.0,
+                    text::REGULAR,
+                    text::secondary(),
+                    ui.available_width() - 18.0,
+                ));
+            });
             ui.add_space(2.0);
         }
         for row in rows.rows() {

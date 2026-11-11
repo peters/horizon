@@ -85,9 +85,9 @@ in its settings behaves as before.
      --server-target server-computer
    ```
 
-   Result: the candidate opens in the isolated desktop, and the Machines section
-   shows the line `Server: in step` when the section has a machine. Before the
-   first machine, the section shows nothing and no line.
+   Result: the candidate opens in the isolated desktop. The Machines section of
+   the sidebar shows the line `Server: connecting` and then `Server: in step`,
+   also before the first machine arrives.
 
 4. Do step 3 again for client computer B, with `--state /path/to/b` and the same
    `--server-target`.

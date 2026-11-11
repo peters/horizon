@@ -164,4 +164,33 @@ fn the_section_draws_without_a_machine_and_with_one() {
 fn the_section_takes_no_room_without_a_machine() {
     let rows: MachineRows = MachineRows::default();
     assert!(rows.rows().is_empty(), "an empty cache has no row to draw");
+    assert!(
+        rows.server_line().is_none(),
+        "a list of one computer shows no line of a server"
+    );
+}
+
+#[test]
+fn the_line_of_the_server_draws_before_the_first_machine() {
+    use super::super::super::test_support::{run_app_frame, test_app};
+
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    crate::app::block_machines::settle_machine_load(&mut app);
+    // The line of a link that this test does not run: the fingerprint says that
+    // the rows were read from this list, so the frame draws them as they are.
+    app.machine_rows = MachineRows {
+        rows: Vec::new(),
+        server_line: Some("Server: in step".to_owned()),
+        read_from: Some(super::machine_fingerprint(&app)),
+    };
+
+    run_app_frame(&ctx, &mut app);
+
+    assert_eq!(
+        app.machine_rows.server_line(),
+        Some("Server: in step"),
+        "the section keeps the line of its server without a machine"
+    );
+    assert!(app.machine_rows.rows().is_empty());
 }
