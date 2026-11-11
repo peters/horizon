@@ -17,6 +17,7 @@ pub(crate) mod chip;
 mod footer;
 mod heading;
 mod kv;
+mod link;
 mod list;
 mod metrics;
 mod progress;
@@ -69,6 +70,21 @@ pub(crate) struct CardView<'a> {
     pub(crate) owner_name: Option<&'a str>,
     /// Wall-clock time of the last create or update, in milliseconds.
     pub(crate) updated_at_millis: i64,
+    /// The address of the link the person pressed this frame, while the card
+    /// shows a live link. The host reads it after the pass that drew the card,
+    /// opens the page in a browser panel and records no click.
+    pub(crate) opened_link: &'a mut Option<String>,
+}
+
+impl CardView<'_> {
+    /// Remembers that the person pressed the link of `url`. One press per frame
+    /// is enough: a second link of the same frame would open a second panel for
+    /// one gesture.
+    pub(crate) fn open(&mut self, url: &str) {
+        if self.opened_link.is_none() {
+            *self.opened_link = Some(url.to_owned());
+        }
+    }
 }
 
 /// Draw `view` in document order, above the footer of the card.
@@ -189,6 +205,13 @@ fn show_component(
         Component::Divider => show_divider(ui),
         Component::List { selection, rows } => list::show(ui, index, *selection, rows, view, enabled),
         Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled),
+        // A link opens a browser panel of Horizon itself, so it needs no agent:
+        // only a host dialog over the card keeps it from taking a press.
+        Component::Link { label, url } => {
+            // Only a host dialog over the card keeps a link from taking a press.
+            let live = view.interactive;
+            link::show(ui, index, label, url, view, live);
+        }
     }
 }
 
@@ -219,4 +242,4 @@ pub(super) fn primary_button(document: &BlockDocument) -> Option<(usize, usize)>
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

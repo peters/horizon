@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use horizon_browser_control::block::{BlockDocument, Component, Selection};
+use horizon_browser_control::block::{BlockDocument, Component, Selection, link_host};
 
 use super::clicks::{ClickQueue, PendingClick};
 use super::clock::updated_label;
@@ -42,6 +42,10 @@ pub struct CardRuntime {
     /// instead of formatting a clock time, so a card never builds the text it
     /// draws again.
     updated: Option<(u64, i64, String)>,
+    /// The host drawn under each link, by its component index, for the revision
+    /// it was read from. A frame reuses the host it resolved instead of reading
+    /// the URL again; a new document reads its links again.
+    link_hosts: Option<(u64, BTreeMap<usize, String>)>,
     /// The height the body content needed in the last pass, when one ran.
     measured_content_height: Option<f32>,
     /// The frames the last pass drew above the body.
@@ -92,6 +96,31 @@ impl CardRuntime {
             self.updated = Some((revision, updated_at_millis, updated_label(updated_at_millis)));
         }
         self.updated.as_ref().map_or("", |(_, _, label)| label.as_str())
+    }
+
+    /// The host that the card draws under the link of component `component`,
+    /// read from `document` at `revision`.
+    ///
+    /// The hosts of a document are read once, when it arrives, and not on every
+    /// frame: the address of a link is the agent's text, so the host a person
+    /// reads under it is a normalized address that costs a parse.
+    pub fn link_host(&mut self, revision: u64, component: usize, document: &BlockDocument) -> Option<&str> {
+        if self.link_hosts.as_ref().is_none_or(|(at, _)| *at != revision) {
+            let hosts = document
+                .components
+                .iter()
+                .enumerate()
+                .filter_map(|(index, component)| match component {
+                    Component::Link { url, .. } => link_host(url).map(|host| (index, host)),
+                    _ => None,
+                })
+                .collect();
+            self.link_hosts = Some((revision, hosts));
+        }
+        self.link_hosts
+            .as_ref()
+            .and_then(|(_, hosts)| hosts.get(&component))
+            .map(String::as_str)
     }
 
     /// Records the height the body of this card needed in the pass that drew

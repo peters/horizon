@@ -122,6 +122,15 @@ pub(super) const BUTTON_PAD_PRIMARY: f32 = 16.0;
 /// Space on both sides inside every other button.
 pub(super) const BUTTON_PAD: f32 = 14.0;
 
+/// Font of the label of a link.
+pub(super) const LINK_FONT: f32 = 13.0;
+/// Font of the host under the label of a link.
+pub(super) const LINK_HOST_FONT: f32 = 11.5;
+/// Space between the label of a link and the host under it.
+pub(super) const LINK_HOST_GAP: f32 = 2.0;
+/// Thickness of the line under the label of a link.
+pub(super) const LINK_UNDERLINE: f32 = 1.0;
+
 /// Corner radius of a status frame.
 pub(super) const STATUS_RADIUS: u8 = 8;
 /// Space on both sides inside a status frame.

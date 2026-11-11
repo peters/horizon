@@ -652,6 +652,13 @@ the rules from the modules beside it.
   `PANEL_BG_ALT` fill, `BORDER_SUBTLE` outline and `FG_DIM` text whatever the
   tone.
 - Divider: 1 px `BORDER_SUBTLE`, full width.
+- Link: the label is 13 `ACCENT` with a 1 px `ACCENT` line under it, cut with an
+  ellipsis; the host of the URL is 11.5 `FG_DIM` 2 below the label, cut with an
+  ellipsis too. A pointer on the label turns into a pointing hand and the hover
+  text shows the whole URL and `Opens in a browser panel` on a second line. A
+  link stays live while its agent is gone, because Horizon opens the page: only
+  a host dialog over the card dims it to `FG_DIM`. A press opens a browser panel
+  of the card's workspace beside the card and records no click.
 - State chip (titlebar, left of the close control): 20 high, radius 8,
   `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, 8 of horizontal inset, text 10.5
   monospace `FG_SOFT`, a 6 px dot 6 left of the text. `<agent> listens` with a

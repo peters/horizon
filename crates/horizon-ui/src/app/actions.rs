@@ -4,7 +4,7 @@ mod layout;
 mod panels;
 mod pickers;
 mod search;
-mod support;
+pub(in crate::app) mod support;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

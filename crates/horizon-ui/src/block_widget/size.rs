@@ -119,5 +119,6 @@ fn component_height(component: &Component) -> f32 {
                 BUTTON_HEIGHT
             }
         }
+        Component::Link { .. } => super::link::height(),
     }
 }

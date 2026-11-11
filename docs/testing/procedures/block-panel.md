@@ -49,6 +49,9 @@ with Claude Code and with a Codex panel.
   repository, `scripts/device-smoke/card_agent.py`, and Python 3. The script is
   deterministic: each click of the person makes one fixed change to its card, so
   a second run gives the same result.
+- The task B29 needs a browser engine on the candidate's browser host, as a
+  browser panel of the canvas picker does. The pages of B29 are synthetic pages
+  of a loopback HTTP fixture that the task owns.
 
 ## 3. Equipment and preconditions
 
@@ -1058,6 +1061,70 @@ its settings store, so this task needs a new state path.
    cards and the workspace stay light, because the settings store of
    `<state-light>` holds the theme that its first start imported.
 
+### 5.29 B29 — A link on a card opens its page in a browser panel
+
+CAUTION: This task starts a network server on the loopback interface of this
+computer. Use a synthetic page on a loopback port that no other task uses, and
+stop the server in step 8.
+
+1. Make a synthetic page in `<work>/link/page.html` with the text
+   `Synthetic session page`, and start a loopback server for it:
+
+   ```sh
+   cd <work>/link && python3 -m http.server 18099 --bind 127.0.0.1
+   ```
+
+2. In client A, call `block_panel` with a link to that page:
+
+   ```json
+   {"operation":"update","panel_id":"<card>","document":{"components":[
+     {"type":"heading","text":"cloud-1"},
+     {"type":"link","label":"Open session","url":"http://127.0.0.1:18099/page.html"}]}}
+   ```
+
+   Result: The card draws `Open session` in the accent colour with a line under
+   it, and `127.0.0.1:18099` under it in low-emphasis text. No browser panel
+   appears, and the server writes no request to its log: Horizon fetches
+   nothing before a press.
+
+3. Move the pointer over the label.
+
+   Result: The pointer becomes a pointing hand, and the hover text shows the
+   whole URL and `Opens in a browser panel` on a second line.
+
+4. Press `Open session` once.
+
+   Result: Exactly one browser panel opens in the workspace of the card, beside
+   the card, and it loads the page `Synthetic session page`. The card does not
+   report a click, and a `next_click` of client A stays open or answers
+   `timed_out`; `inspect` shows the same `pending_clicks` as before the press.
+
+5. Close the agent panel of client A in the live view, and press the link again.
+
+   Result: The card says that its agent is not here, its buttons and rows are
+   drawn disabled, and the link stays live: a second browser panel opens the same
+   page.
+
+6. In client A, call `block_panel` with a document whose link has credentials:
+
+   ```json
+   {"operation":"update","panel_id":"<card>","document":{"components":[
+     {"type":"link","label":"Open session","url":"https://user:pass@example.test/page"}]}}
+   ```
+
+   Result: The answer is a failure with code `invalid_document`, and the message
+   names `components[0].url`. The message does not repeat the address. The card
+   keeps the document of the last accepted revision.
+
+7. Call `block_panel` with nine `link` components.
+
+   Result: The answer is `invalid_document`, and the message names
+   `components[8]` and the limit of 8 links.
+
+8. Stop the loopback server. Close the browser panels that the task opened.
+
+   Result: The server exits.
+
 ## 6. With a real agent
 
 These steps check the same behaviour with a real AI agent. Do them in your own
@@ -1163,6 +1230,13 @@ Horizon, in a workspace of its own, with an agent panel that can call
   light surfaces, a panel without an SSH host refuses the Connect button on the
   card, and a later run in the same private home keeps the light theme even with
   `--theme dark`.
+- B29: A link draws its label in the accent colour and the host of its URL under
+  it, and the hover text shows the whole URL and `Opens in a browser panel`.
+  Nothing is fetched before a press. One press opens exactly one browser panel
+  beside the card, in the workspace of the card, at the page of the link, and it
+  records no click. The link stays live while the agent of the card is gone. A
+  URL with credentials and a ninth link are refused as `invalid_document`, and
+  the message names the place without repeating the address.
 
 ## 8. Cleanup
 

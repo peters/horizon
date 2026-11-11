@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
@@ -26,9 +26,9 @@ person's terminals.
   in a list with `selection: single`, at most one row of a list. An unknown
   field, component or value is refused with `invalid_document`, and the message
   names the place, such as `components[2].items[0].id`.
-- No field is a URL, a path, a file or a command. Horizon fetches nothing, opens
-  nothing and runs nothing for a card. A card has no input, no image, no table
-  and no link.
+- No field is a path, a file or a command. Horizon fetches nothing, opens
+  nothing and runs nothing for a card, and a `link` reaches a page only when the
+  person presses it. A card has no input, no image and no table.
 - The title is one line, trimmed, without control characters, at most 80
   characters.
 - The panel id of a card is the host's own id. A request names a panel id only to
@@ -36,6 +36,36 @@ person's terminals.
   `panel_unavailable`.
 - The host assigns the revision. An agent cannot write the revision, the owner
   or the visibility of a card that it does not own.
+
+## A link names one page, and a person opens it
+
+An agent writes the address of a link, and the person decides whether to open it.
+Horizon is the one that opens it, in a browser panel of its own.
+
+- **The agent chooses the URL and the label.** Both are its text. Horizon checks
+  the address when the document arrives, in the MCP server and again in the UI:
+  an absolute `http` or `https` URL with a host, without credentials
+  (`user:pass@`), without whitespace and without a control character, at most
+  2048 characters, and at most 8 links in one card. Anything else is
+  `invalid_document` and names the place, such as `components[3].url`. The
+  refusal does not repeat the address, because an agent can put a secret in it.
+- **The real host is always shown.** The card draws the host of the address under
+  the agent's label, normalized as the browser resolves it, with its port when the
+  URL states one that the scheme does not imply. A host that lookalike letters
+  spell is drawn with its own address, so the label cannot hide where the link
+  goes. The host is read once per document, not on every frame.
+- **Nothing is fetched before a press.** Horizon parses the address and draws it.
+  It sends no request, opens no socket and starts no browser engine until the
+  person presses the link.
+- **The press is Horizon's, not the agent's.** A press opens a browser panel of
+  the card's own workspace, beside the card, through the same internal path as a
+  person's new browser panel: the browser host and profile rules of the settings
+  apply, and the panel is an ordinary browser panel afterwards, which the person
+  drives and closes. The press records no click and reaches no agent, so a link
+  works while the agent that drew it is gone.
+- **A refused creation is Horizon's own line.** If the browser panel cannot be
+  created, the reason reaches the person through the log line that every refused
+  panel creation of a person uses. A card cannot draw it.
 
 ## Trusted: the caller identity
 
@@ -116,6 +146,17 @@ state: a default row is a row id that the person can change.
 - **The text can lie.** Horizon checks the shape and the bounds of the document,
   never its meaning. A card that says `Connected` or `Deleted` states what the
   agent claims, not what Horizon observed.
+- **A label can lie about its destination.** A link label is the agent's words;
+  only the host under it is the address that Horizon opens. The host is the
+  whole destination that Horizon shows, so a person must read it before a press.
+- **The page is whatever that host serves.** Horizon opens the URL in a browser
+  panel with the profile and browser host of the settings, and the page can be a
+  sign-in form, a redirect or an attack by that site. The page is not a card
+  claim and not a Horizon page.
+- **A link is not a secret channel.** The address is visible in the card, in the
+  browser panel and in the panel title, and another agent of the workspace reads
+  the whole document. An agent must not put a token, a password or a signed URL
+  in a link.
 - **The card can imitate Horizon.** A card is a panel with plain text and tones.
   An agent can write text that looks like a Horizon dialog, a banner or a system
   message, and can choose a panel title that looks like a real one. Its tone

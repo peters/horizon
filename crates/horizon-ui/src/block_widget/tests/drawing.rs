@@ -143,6 +143,7 @@ fn a_refused_click_draws_the_info_frame() {
 
 #[test]
 fn a_gone_owner_keeps_the_selected_row_in_a_dimmed_form() {
+    let _theme = super::theme_lock();
     let mut document = every_component();
     let Some(Component::List { rows, .. }) = document.components.get_mut(6) else {
         panic!("the fixture holds a list");

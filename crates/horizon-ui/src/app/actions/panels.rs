@@ -37,16 +37,34 @@ impl HorizonApp {
 
     pub(in crate::app) fn create_panel_with_options(
         &mut self,
+        options: PanelOptions,
+        workspace_id: WorkspaceId,
+    ) -> horizon_core::Result<PanelId> {
+        self.create_panel_with_options_beside(options, workspace_id, None)
+    }
+
+    /// Creates a panel of the person in `workspace_id`, beside the panel
+    /// `beside` when one is named.
+    ///
+    /// This is the path that a person's New buttons, the preset picker and the
+    /// canvas picker take. A card's link takes it too: Horizon opens the page in
+    /// the browser panel that the person gets from the canvas picker, next to the
+    /// card that named it.
+    pub(in crate::app) fn create_panel_with_options_beside(
+        &mut self,
         mut options: PanelOptions,
         workspace_id: WorkspaceId,
+        beside: Option<PanelId>,
     ) -> horizon_core::Result<PanelId> {
         let workspace_cwd = workspace_cwd(&self.board, workspace_id);
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
         let options = self.placed_options(options, workspace_id)?;
-        let id = self.board.create_panel(options, workspace_id)?;
-        Ok(id)
+        match beside.filter(|panel| self.board.panel(*panel).is_some()) {
+            Some(beside) => self.board.create_panel_beside(options, workspace_id, beside),
+            None => self.board.create_panel(options, workspace_id),
+        }
     }
 
     /// The options of a new panel of the person with the place of its workspace

@@ -2,8 +2,9 @@
 //!
 //! A document is a flat list of components in draw order. A component
 //! carries plain text only: no markup, no nesting and no field that Horizon
-//! fetches or opens. The agent sends the components; the host adds the
-//! revision it assigns and the identity of the owning agent.
+//! fetches or opens. A link carries an address, and Horizon opens it only when
+//! the person presses the link. The agent sends the components; the host adds
+//! the revision it assigns and the identity of the owning agent.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,14 @@ pub enum Component {
     Buttons {
         /// The buttons, in draw order.
         items: Vec<Button>,
+    },
+    /// A page a person can open in a browser panel.
+    Link {
+        /// The text of the link, one line.
+        label: String,
+        /// The absolute `http` or `https` URL that Horizon opens when the
+        /// person presses the link.
+        url: String,
     },
 }
 

@@ -24,6 +24,12 @@ impl BlockDocument {
     pub const MAX_LIST_ROWS: usize = 32;
     /// Most items one `buttons` component may hold.
     pub const MAX_BUTTONS: usize = 8;
+    /// Most `link` components one document may hold.
+    pub const MAX_LINKS: usize = 8;
+    /// Most characters the label of one `link` may hold.
+    pub const MAX_LINK_LABEL_CHARS: usize = 80;
+    /// Most characters the address of one `link` may hold.
+    pub const MAX_LINK_URL_CHARS: usize = 2048;
     /// Most characters one text may hold.
     pub const MAX_TEXT_CHARS: usize = 512;
     /// Most characters one id may hold.
@@ -122,6 +128,25 @@ pub enum BlockDocumentError {
         /// Offending place.
         path: String,
     },
+    /// A link address is not one that Horizon opens.
+    ///
+    /// The address itself is not repeated here: an agent can put a secret in
+    /// it, and this text reaches logs and answers.
+    #[error("{path} is not an absolute http or https URL with a host, without credentials or spaces")]
+    InvalidLinkUrl {
+        /// Offending place.
+        path: String,
+    },
+    /// A card holds more links than it may show.
+    #[error("{path} is link {actual} of the document, above the {limit} link limit")]
+    TooManyLinks {
+        /// Offending place.
+        path: String,
+        /// Measured count, the offending link included.
+        actual: usize,
+        /// Accepted count.
+        limit: usize,
+    },
     /// More than one row of one list is selected by default.
     #[error("{path} is the second selected row of its list; {first} is already selected")]
     DuplicateSelectedRow {
@@ -177,8 +202,19 @@ pub fn validate_document(document: &BlockDocument) -> Result<(), BlockDocumentEr
         });
     }
     let mut ids = HashSet::new();
+    let mut links = 0_usize;
     for (index, component) in document.components.iter().enumerate() {
         validate_component(index, component, &mut ids)?;
+        if matches!(component, Component::Link { .. }) {
+            links += 1;
+            if links > BlockDocument::MAX_LINKS {
+                return Err(BlockDocumentError::TooManyLinks {
+                    path: format!("components[{index}]"),
+                    actual: links,
+                    limit: BlockDocument::MAX_LINKS,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -254,12 +290,40 @@ fn validate_component<'a>(
             }
             Ok(())
         }
+        Component::Link { label, url } => validate_link(&at, label, url),
     }
 }
 
 fn validate_kv_row(at: &str, row: &KvRow) -> Result<(), BlockDocumentError> {
     filled_line(&field(at, "label"), &row.label)?;
     line(&field(at, "value"), &row.value)
+}
+
+/// A link: one line of label and an absolute `http` or `https` address without
+/// credentials, spaces or control characters.
+///
+/// Horizon opens the address in a browser panel when the person presses the
+/// link, so the rules of the address are the rules of a navigation: only the two
+/// schemes a page is served over, no `user:pass@`, and no character that a
+/// person could not see in the host that the card draws.
+fn validate_link(at: &str, label: &str, url: &str) -> Result<(), BlockDocumentError> {
+    let label_at = field(at, "label");
+    if label.trim().is_empty() {
+        return Err(BlockDocumentError::EmptyText { path: label_at });
+    }
+    check_length(&label_at, label, BlockDocument::MAX_LINK_LABEL_CHARS)?;
+    reject_controls(&label_at, label, false)?;
+
+    let url_at = field(at, "url");
+    if url.trim().is_empty() {
+        return Err(BlockDocumentError::EmptyText { path: url_at });
+    }
+    check_length(&url_at, url, BlockDocument::MAX_LINK_URL_CHARS)?;
+    reject_controls(&url_at, url, false)?;
+    match super::link::checked_link(url) {
+        Some(_) => Ok(()),
+        None => Err(BlockDocumentError::InvalidLinkUrl { path: url_at }),
+    }
 }
 
 fn validate_list_row<'a>(at: &str, row: &'a ListRow, ids: &mut HashSet<&'a str>) -> Result<(), BlockDocumentError> {
@@ -305,23 +369,23 @@ fn filled_line(path: &str, value: &str) -> Result<(), BlockDocumentError> {
 
 /// A single-line text that may be empty, such as a value or a badge.
 fn line(path: &str, value: &str) -> Result<(), BlockDocumentError> {
-    check_length(path, value)?;
+    check_length(path, value, BlockDocument::MAX_TEXT_CHARS)?;
     reject_controls(path, value, false)
 }
 
 /// Body text: single-line fields plus line breaks.
 fn body_text(path: &str, value: &str) -> Result<(), BlockDocumentError> {
-    check_length(path, value)?;
+    check_length(path, value, BlockDocument::MAX_TEXT_CHARS)?;
     reject_controls(path, value, true)
 }
 
-fn check_length(path: &str, value: &str) -> Result<(), BlockDocumentError> {
+fn check_length(path: &str, value: &str, limit: usize) -> Result<(), BlockDocumentError> {
     let actual = value.chars().count();
-    if actual > BlockDocument::MAX_TEXT_CHARS {
+    if actual > limit {
         return Err(BlockDocumentError::TextTooLong {
             path: path.to_owned(),
             actual,
-            limit: BlockDocument::MAX_TEXT_CHARS,
+            limit,
         });
     }
     Ok(())

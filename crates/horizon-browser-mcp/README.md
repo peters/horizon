@@ -658,8 +658,8 @@ bounded timeout and require a normal application upgrade to gain the capability.
 
 `block_panel` draws a card of plain text in the caller's Horizon workspace. A
 card holds a flat list of components in draw order: `heading`, `text`, `kv`,
-`badge`, `progress`, `divider`, `list` and `buttons`. The person's presses on a
-button or on a selectable row reach the agent that owns the card.
+`badge`, `progress`, `divider`, `list`, `buttons` and `link`. The person's
+presses on a button or on a selectable row reach the agent that owns the card.
 
 ```json
 {"operation":"create","title":"cloud-1","document":{"components":[
@@ -678,11 +678,33 @@ button or on a selectable row reach the agent that owns the card.
 ```
 
 The document is at most 32 KiB and 64 components, with 24 `kv` rows, 32 `list`
-rows, 8 buttons and 512 characters in one text per component. An id is
-`[a-z0-9_.-]{1,64}` and is unique in the document. No field is a URL, a path or
-a command, and Horizon fetches nothing and runs nothing for a card. An invalid
+rows, 8 buttons, 8 links and 512 characters in one text per component. An id is
+`[a-z0-9_.-]{1,64}` and is unique in the document. No field is a path or a
+command, and Horizon fetches nothing and runs nothing for a card. An invalid
 document is refused as `invalid_document` or `document_too_large`, and the
 message names the offending place, such as `components[2].items[0].id`.
+
+A `link` is the one field that Horizon opens, and it opens it only when the
+person presses the link:
+
+```json
+{"type":"link","label":"Open session","url":"https://cloud.example.test/sessions/7"}
+```
+
+A label is one line of 1 to 80 characters. A URL is an absolute `http` or
+`https` URL with a host, 1 to 2048 characters, without credentials
+(`user:pass@`), without a space and without a control character; anything else
+is `invalid_document` at `components[i].url`, and the refusal does not repeat
+the address. The card draws the label as a link in the accent colour and the
+host of the URL under it in low-emphasis text, normalized as the browser
+resolves it, so a label cannot hide where the link goes. A press opens the URL
+in a new browser panel of the card's workspace, beside the card, through the
+path of a person's browser panel from the canvas picker: the browser host and
+profile rules of the settings apply, and the panel is an ordinary browser panel
+afterwards. A press records no click and reaches no agent, so a link still works
+while the owner of the card is gone, and Horizon fetches nothing before the
+press. Use a link for a page the person should open; never put a token, a
+password or a signed URL in one.
 
 Create draws in the caller's workspace without taking keyboard focus and returns
 `panel_id` and `revision` 1. Update replaces the whole document and returns the

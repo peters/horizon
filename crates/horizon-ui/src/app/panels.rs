@@ -152,6 +152,8 @@ struct PanelBodyContext<'a> {
     device_ui_state: Option<&'a mut crate::device_widget::DeviceUiState>,
     /// The clicks and row selection of a card panel.
     card_runtime: Option<&'a mut horizon_core::CardRuntime>,
+    /// The address of the link a card's person pressed in this pass.
+    card_opened_link: &'a mut Option<String>,
     /// An agent panel of the card's owner is in its workspace.
     card_agent_present: bool,
     /// Display name of the agent that owns the card, while it is present.
@@ -189,6 +191,7 @@ fn show_panel_body_contents(
                 ui.centered_and_justified(|ui| ui.label("Card state unavailable"));
                 return false;
             };
+            let opened_link = body_context.card_opened_link;
             crate::block_widget::show(
                 ui,
                 panel.id,
@@ -201,6 +204,7 @@ fn show_panel_body_contents(
                     now_millis: horizon_browser_control::manifest::now_millis(),
                     owner_name: body_context.card_owner_name,
                     updated_at_millis: block.updated_at_millis,
+                    opened_link,
                 },
             );
             false
@@ -365,6 +369,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
+                        let mut card_opened_link = None;
                         let claim_editor_focus = true;
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         let card_agent_present = self.card_agent_present(panel_id);
@@ -408,6 +413,7 @@ impl HorizonApp {
                                     browser_ui_state: browser_state,
                                     device_ui_state: device_state,
                                     card_runtime,
+                                    card_opened_link: &mut card_opened_link,
                                     card_agent_present,
                                     card_owner_name,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
@@ -421,6 +427,9 @@ impl HorizonApp {
                         }
                         if reconnect_requested {
                             self.queue_panel_restart(panel_id);
+                        }
+                        if let Some(url) = card_opened_link {
+                            self.open_card_link(ui.ctx(), panel_id, &url);
                         }
                     },
                 );
@@ -705,6 +714,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
+                        let mut card_opened_link = None;
                         let claim_editor_focus = snapshot.is_focused;
                         let card_agent_present = self.card_agent_present(panel_id);
                         let card_owner_name = self.card_owner_name(panel_id);
@@ -754,6 +764,7 @@ impl HorizonApp {
                                     browser_ui_state: browser_state,
                                     device_ui_state: device_state,
                                     card_runtime,
+                                    card_opened_link: &mut card_opened_link,
                                     card_agent_present,
                                     card_owner_name,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
@@ -773,6 +784,9 @@ impl HorizonApp {
                         }
                         if reconnect_requested {
                             self.queue_panel_restart(panel_id);
+                        }
+                        if let Some(url) = card_opened_link {
+                            self.open_card_link(ctx, panel_id, &url);
                         }
                     },
                 );

@@ -13,7 +13,7 @@ use crate::app::DetachedWorkspaceViewportState;
 /// The options of a panel that a person creates from a preset. A browser panel
 /// of this path follows the browser host that the settings name; every other
 /// caller of `PresetConfig::to_panel_options` keeps the backend that it chose.
-pub(super) fn preset_panel_options(
+pub(in crate::app) fn preset_panel_options(
     preset: &PresetConfig,
     browser_config: &horizon_core::browser::BrowserConfig,
 ) -> horizon_core::PanelOptions {

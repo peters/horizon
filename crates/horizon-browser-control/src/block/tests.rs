@@ -25,7 +25,8 @@ const EXAMPLE: &str = r#"{
     {"type": "buttons", "items": [
       {"id": "connect", "label": "Connect", "tone": "primary"},
       {"id": "stop", "label": "Stop", "tone": "warn"},
-      {"id": "delete", "label": "Delete", "tone": "danger"}]}
+      {"id": "delete", "label": "Delete", "tone": "danger"}]},
+    {"type": "link", "label": "Open session", "url": "https://cloud.example.test/sessions/7"}
   ]
 }"#;
 
@@ -53,6 +54,10 @@ fn list_component(rows: usize) -> String {
         .map(|index| json!({"id": format!("row.{index}"), "title": "Row"}))
         .collect();
     json!({"type": "list", "selection": "single", "rows": rows}).to_string()
+}
+
+fn link_component(label: &str, url: &str) -> String {
+    json!({"type": "link", "label": label, "url": url}).to_string()
 }
 
 fn buttons_component(items: usize) -> String {
@@ -90,7 +95,7 @@ fn padded_document(target_len: usize) -> String {
 #[test]
 fn full_example_round_trips() {
     let document = parse_document(EXAMPLE).expect("the example is valid");
-    assert_eq!(document.components.len(), 8);
+    assert_eq!(document.components.len(), 9);
     assert_eq!(
         document.components[0],
         Component::Heading {
@@ -159,6 +164,10 @@ fn a_hand_built_document_with_every_component_validates() {
                     label: "Stop".to_owned(),
                     tone: Tone::Warn,
                 }],
+            },
+            Component::Link {
+                label: "Open session".to_owned(),
+                url: "https://cloud.example.test/sessions/7".to_owned(),
             },
         ],
     };
@@ -291,6 +300,143 @@ fn buttons_at_the_limit_parse_and_one_over_is_rejected() {
             path: "components[0].items".to_owned(),
             actual: 9,
             limit: 8
+        }
+    );
+}
+
+#[test]
+fn a_link_parses_into_its_label_and_address() {
+    let document = parse_document(&document_of(&[link_component(
+        "Open session",
+        "https://cloud.example.test/sessions/7",
+    )]))
+    .expect("a link parses");
+    assert_eq!(
+        document.components[0],
+        Component::Link {
+            label: "Open session".to_owned(),
+            url: "https://cloud.example.test/sessions/7".to_owned()
+        }
+    );
+}
+
+#[test]
+fn links_at_the_limit_parse_and_one_over_is_rejected() {
+    let links: Vec<String> = (0..BlockDocument::MAX_LINKS)
+        .map(|index| link_component("Open session", &format!("https://example.test/session/{index}")))
+        .collect();
+    assert!(parse_document(&document_of(&links)).is_ok());
+
+    let mut over = links;
+    over.push(link_component("Open session", "https://example.test/session/9"));
+    let error = parse_document(&document_of(&over)).expect_err("nine links are rejected");
+    assert_eq!(error.code(), "invalid_document");
+    assert_eq!(
+        error,
+        BlockDocumentError::TooManyLinks {
+            path: "components[8]".to_owned(),
+            actual: 9,
+            limit: 8
+        }
+    );
+}
+
+#[test]
+fn a_link_label_holds_80_characters_and_an_address_2048() {
+    let label = "a".repeat(BlockDocument::MAX_LINK_LABEL_CHARS);
+    let base = "https://example.test/";
+    let url = format!("{base}{}", "p".repeat(BlockDocument::MAX_LINK_URL_CHARS - base.len()));
+    assert_eq!(url.chars().count(), BlockDocument::MAX_LINK_URL_CHARS);
+    assert!(parse_document(&document_of(&[link_component(&label, &url)])).is_ok());
+
+    let long_label = "a".repeat(BlockDocument::MAX_LINK_LABEL_CHARS + 1);
+    let error = parse_document(&document_of(&[link_component(&long_label, &url)])).expect_err("81 characters");
+    assert_eq!(
+        error,
+        BlockDocumentError::TextTooLong {
+            path: "components[0].label".to_owned(),
+            actual: BlockDocument::MAX_LINK_LABEL_CHARS + 1,
+            limit: BlockDocument::MAX_LINK_LABEL_CHARS
+        }
+    );
+
+    let long_url = "u".repeat(BlockDocument::MAX_LINK_URL_CHARS + 1);
+    let error = parse_document(&document_of(&[link_component("Open session", &long_url)])).expect_err("2049");
+    assert_eq!(
+        error,
+        BlockDocumentError::TextTooLong {
+            path: "components[0].url".to_owned(),
+            actual: BlockDocument::MAX_LINK_URL_CHARS + 1,
+            limit: BlockDocument::MAX_LINK_URL_CHARS
+        }
+    );
+}
+
+#[test]
+fn a_link_needs_a_label_and_an_address() {
+    for (component, path) in [
+        (link_component("", "https://example.test/"), "components[0].label"),
+        (link_component("  ", "https://example.test/"), "components[0].label"),
+        (link_component("Open session", ""), "components[0].url"),
+        (link_component("Open session", " "), "components[0].url"),
+    ] {
+        let error = parse_document(&document_of(&[component])).expect_err("both fields are filled");
+        assert_eq!(error.code(), "invalid_document");
+        assert_eq!(error, BlockDocumentError::EmptyText { path: path.to_owned() });
+    }
+}
+
+#[test]
+fn a_link_address_that_horizon_would_not_open_names_its_field() {
+    for url in [
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,<b>x</b>",
+        "example.test/session/7",
+        "https://",
+        "https://user:pass@example.test/session/7",
+        "https://user@example.test/session/7",
+        "https://example.test/a b",
+        " https://example.test/session/7",
+    ] {
+        let error = parse_document(&document_of(&[link_component("Open session", url)]))
+            .expect_err("Horizon opens only a plain page address");
+        assert_eq!(error.code(), "invalid_document", "{url:?}");
+        assert_eq!(
+            error,
+            BlockDocumentError::InvalidLinkUrl {
+                path: "components[0].url".to_owned()
+            },
+            "{url:?}"
+        );
+        assert!(
+            !error.to_string().contains("pass"),
+            "the answer repeats no part of the address: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_link_rejects_a_control_character_with_its_place() {
+    let url = "https://example.test/session\u{7}7";
+    let error = parse_document(&document_of(&[link_component("Open session", url)])).expect_err("no control");
+    assert_eq!(
+        error,
+        BlockDocumentError::ControlCharacter {
+            path: "components[0].url".to_owned(),
+            code_point: 7
+        }
+    );
+    let error = parse_document(&document_of(&[link_component(
+        "Open\tsession",
+        "https://example.test/",
+    )]))
+    .expect_err("a label is one line");
+    assert_eq!(
+        error,
+        BlockDocumentError::ControlCharacter {
+            path: "components[0].label".to_owned(),
+            code_point: 9
         }
     );
 }

@@ -1,6 +1,6 @@
 ---
 name: horizon-block
-description: Draw a card of plain text in the calling agent's Horizon workspace with the block_panel MCP tool, and inspect, update, hide or close it. A person's click on a button or a selectable row reaches the agent that owns the card through next_click, which can wait on every card of the agent at once. Browser pages use horizon-browser and native desktops use horizon-device.
+description: Draw a card of plain text in the calling agent's Horizon workspace with the block_panel MCP tool, and inspect, update, hide or close it. A person's click on a button or a selectable row reaches the agent that owns the card through next_click, which can wait on every card of the agent at once. A link on a card opens a page in a browser panel of Horizon, and it sends no click. Browser pages use horizon-browser and native desktops use horizon-device.
 ---
 
 # Horizon cards
@@ -9,7 +9,8 @@ A card is a small surface of plain text that an agent composes in the person's
 Horizon workspace. Use a card to show the state of the work that the agent
 does: a machine that it holds, a plan, a list of results, a figure that it
 computed. A card is not a terminal, a browser page or a native desktop, and it
-takes no input.
+takes no text input. A link on a card opens a page in a browser panel of Horizon
+when the person presses it.
 
 The `block_panel` MCP tool manages cards. Every operation is scoped to the
 agent panel that Horizon launched and to its workspace. A caller without that
@@ -39,6 +40,7 @@ The card is drawn in the caller's workspace. It does not take keyboard focus.
      {"id": "size.cx22", "title": "CX22 - 2 vCPU", "subtitle": "4 GB memory"},
      {"id": "size.cx32", "title": "CX32 - 4 vCPU",
       "subtitle": "gcloud is not installed", "tone": "warn"}]},
+   {"type": "link", "label": "Open session", "url": "https://cloud.example.test/sessions/7"},
    {"type": "buttons", "items": [
      {"id": "connect", "label": "Connect", "tone": "primary"},
      {"id": "delete", "label": "Delete", "tone": "danger"}]}]}}
@@ -348,13 +350,20 @@ A document holds components in draw order, and only these components:
   list with `selection: single` may hold a selected row, and at most one row of
   a list.
 - `buttons`: `items` with `id`, `label` and optional `tone`.
+- `link`: `label` and `url`. The label is one line of 1 to 80 characters. The
+  URL is an absolute `http` or `https` URL with a host, 1 to 2048 characters,
+  with no credentials (`user:pass@`), no space and no control character. The card
+  draws the label as a link and the host of the URL under it, so the person sees
+  where it goes. A press opens the page in a browser panel of the card's
+  workspace, beside the card, and it sends no click to the agent. Use a link for
+  a page the person should open, and never put a token or a signed URL in it.
 
 The limits are:
 
 - 32 KiB for the whole serialized document.
 - 64 components.
 - 24 rows in one `kv` and 32 rows in one `list`.
-- 8 buttons in one `buttons`.
+- 8 buttons in one `buttons`, and 8 `link` components in one card.
 - 512 characters in one text, including `subtitle`, the `badge` text and
   `detail`.
 - Ids from `[a-z0-9_.-]`, at most 64 characters, unique in the whole document.
@@ -369,7 +378,8 @@ the right edge of its row. Horizon draws every badge in the neutral tone when
 the owner of the card is gone, with the prefix `Last seen: `.
 
 An unknown field, component or field value is refused. There are no inputs,
-images, tables or links, and no field that Horizon fetches or opens.
+images or tables, and Horizon fetches nothing and opens nothing until the person
+presses a link.
 
 A card is plain text that Horizon draws. It is not verified Horizon state: the
 person reads the agent's claim. Do not show a credential, a token or a private
@@ -512,8 +522,10 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 
 ## Limits of this version
 
-- A card holds buttons and selectable rows. It has no text input, no image, no
-  table and no link.
+- A card holds buttons, selectable rows and links. It has no text input, no
+  image and no table. A link is the only field that Horizon opens, and only a
+  press opens it: it carries no click, so an agent cannot wait on it with
+  `next_click`.
 - The selection of a row is Horizon state, not a click of its own: it reaches
   the agent with the next click, and it starts at the row the document marks
   `selected`.

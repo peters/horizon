@@ -8,6 +8,7 @@
 mod clicks;
 mod drawing;
 mod fit;
+mod link;
 mod rules;
 
 use egui::{Pos2, Rect, Vec2, accesskit};
@@ -49,10 +50,23 @@ impl Owner {
 
 /// Room for every component of the fixture document.
 fn card_input() -> egui::RawInput {
+    with_events(Vec::new())
+}
+
+/// Room for every component of the fixture document, with `events` in the pass.
+fn with_events(events: Vec<egui::Event>) -> egui::RawInput {
     egui::RawInput {
         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(720.0, 900.0))),
+        events,
         ..egui::RawInput::default()
     }
+}
+
+/// One pass of a card body: what it painted, and the address of the link the
+/// person pressed in it.
+struct Pass {
+    output: egui::FullOutput,
+    opened_link: Option<String>,
 }
 
 /// A card body drawn for several passes in one egui context, so a press and a
@@ -70,7 +84,7 @@ impl CardFrames {
 
     /// One pass, as the shapes it painted.
     pub(super) fn paint(&self, document: &BlockDocument, card: &mut CardRuntime, owner: Owner) -> egui::FullOutput {
-        self.run(document, card, owner, card_input())
+        self.run(document, card, owner, card_input()).output
     }
 
     /// One pass, as an accessibility tree, with the events of that pass.
@@ -83,7 +97,7 @@ impl CardFrames {
     ) -> Vec<(accesskit::NodeId, accesskit::Node)> {
         let mut input = card_input();
         input.events = events;
-        let output = self.run(document, card, owner, input);
+        let output = self.run(document, card, owner, input).output;
         let update = output
             .platform_output
             .accesskit_update
@@ -105,7 +119,7 @@ impl CardFrames {
     ) {
         let mut input = card_input();
         input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 900.0)));
-        let output = self.run(document, card, owner, input);
+        let output = self.run(document, card, owner, input).output;
         let update = output
             .platform_output
             .accesskit_update
@@ -113,14 +127,22 @@ impl CardFrames {
         (output.shapes, update.nodes)
     }
 
-    fn run(
+    fn run(&self, document: &BlockDocument, card: &mut CardRuntime, owner: Owner, input: egui::RawInput) -> Pass {
+        self.run_with_interactivity(document, card, owner, input, true)
+    }
+
+    /// One pass of a card that a host dialog does (`false`) or does not cover.
+    fn run_with_interactivity(
         &self,
         document: &BlockDocument,
         card: &mut CardRuntime,
         owner: Owner,
         input: egui::RawInput,
-    ) -> egui::FullOutput {
-        self.ctx
+        interactive: bool,
+    ) -> Pass {
+        let mut opened_link = None;
+        let output = self
+            .ctx
             .run_ui(input, |ui| {
                 show(
                     ui,
@@ -130,14 +152,68 @@ impl CardFrames {
                         card,
                         revision: 3,
                         agent_present: owner.present(),
-                        interactive: true,
+                        interactive,
                         now_millis: 1_000,
                         owner_name: owner.name(),
                         updated_at_millis: 1_790_883_960_000,
+                        opened_link: &mut opened_link,
                     },
                 );
             })
-            .discard_textures()
+            .discard_textures();
+        Pass { output, opened_link }
+    }
+
+    /// A press and a release on the widget labelled `label`, as the address it
+    /// asked Horizon to open.
+    pub(super) fn press_link(
+        &self,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        owner: Owner,
+        label: &str,
+    ) -> Option<String> {
+        self.press_link_with(document, card, owner, label, true)
+    }
+
+    /// A press and a release on the widget labelled `label` of a card that a
+    /// host dialog covers, as the address it asked Horizon to open.
+    pub(super) fn press_link_when_covered(
+        &self,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        label: &str,
+    ) -> Option<String> {
+        self.press_link_with(document, card, Owner::Listening, label, false)
+    }
+
+    fn press_link_with(
+        &self,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        owner: Owner,
+        label: &str,
+        interactive: bool,
+    ) -> Option<String> {
+        let nodes = self.pass(document, card, owner, Vec::new());
+        let position = center_of(&nodes, label);
+        let button = |pressed: bool| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let moved = self.run_with_interactivity(
+            document,
+            card,
+            owner,
+            with_events(vec![egui::Event::PointerMoved(position)]),
+            interactive,
+        );
+        let pressed = self.run_with_interactivity(document, card, owner, with_events(vec![button(true)]), interactive);
+        let released =
+            self.run_with_interactivity(document, card, owner, with_events(vec![button(false)]), interactive);
+        moved.opened_link.or(pressed.opened_link).or(released.opened_link)
     }
 
     /// A press and a release on the center of the widget labelled `label`.
@@ -186,9 +262,20 @@ fn card_nodes(document: &BlockDocument, owner: Owner) -> Vec<(String, bool)> {
         .collect()
 }
 
+/// The theme is one value for the whole test process, so a test that switches it
+/// and a test that judges a colour take this lock in turn. Without it, one pass
+/// can draw in the palette that another test just set.
+static THEME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds the theme of the process still for the caller.
+pub(crate) fn theme_lock() -> std::sync::MutexGuard<'static, ()> {
+    THEME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The text and disabled state of every widget in `document`, drawn in
 /// `resolved`'s palette.
 fn card_nodes_in(resolved: theme::ResolvedTheme, document: &BlockDocument, owner: Owner) -> Vec<(String, bool)> {
+    let _theme = theme_lock();
     let previous = theme::current_theme();
     theme::set_theme(resolved);
     let nodes = card_nodes(document, owner);
