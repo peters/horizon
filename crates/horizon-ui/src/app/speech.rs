@@ -58,9 +58,6 @@ pub(in crate::app) struct SpeechUi {
     /// The root of the Horizon home, where the takes live. It comes with the first
     /// take, because the home of the window is known after the window exists.
     home: Option<PathBuf>,
-    /// The named secrets of this computer. The worker reads the value of the key
-    /// from this one, on its own thread, at the moment of the request.
-    keys: Option<Arc<NamedSecretVault>>,
     /// The hotkey of the settings, or `None` while the settings name none.
     binding: Option<ShortcutBinding>,
     phase: Phase,
@@ -84,7 +81,6 @@ impl SpeechUi {
         Self {
             input: None,
             home: None,
-            keys: None,
             binding: None,
             phase: Phase::Idle,
             target: None,
@@ -96,9 +92,8 @@ impl SpeechUi {
         }
     }
 
-    /// The hotkey of `config`, and the named secrets that its key lives in.
-    pub(in crate::app) fn configure(&mut self, config: &horizon_core::Config, keys: Option<Arc<NamedSecretVault>>) {
-        self.keys = keys;
+    /// The hotkey of `config`.
+    pub(in crate::app) fn configure(&mut self, config: &horizon_core::Config) {
         let hotkey = config.speech.hotkey.trim();
         self.binding = (!hotkey.is_empty())
             .then(|| ShortcutBinding::parse(hotkey).ok())
@@ -157,13 +152,20 @@ impl SpeechUi {
     }
 
     /// Start one take of `plan` into `target`.
-    fn begin(&mut self, ctx: &Context, plan: TakePlan, target: PanelId, home: &Path) -> bool {
+    fn begin(
+        &mut self,
+        ctx: &Context,
+        plan: TakePlan,
+        target: PanelId,
+        home: &Path,
+        keys: Option<Arc<NamedSecretVault>>,
+    ) -> bool {
         if !self.is_idle() {
             return false;
         }
         let home = self.home.get_or_insert_with(|| home.to_path_buf()).clone();
         let wake_context = ctx.clone();
-        let keys = self.keys_reader();
+        let keys = keys_reader(keys);
         let input = self.input.get_or_insert_with(move || {
             SpeechInput::start(
                 SpeechWorker::new(home, keys).with_wake(Arc::new(move || wake_context.request_repaint())),
@@ -175,13 +177,6 @@ impl SpeechUi {
         self.started = Some(Instant::now());
         self.error = None;
         true
-    }
-
-    fn keys_reader(&self) -> Arc<dyn horizon_core::speech::SpeechKeyStore> {
-        match self.keys.clone() {
-            Some(keys) => keys,
-            None => Arc::new(()),
-        }
     }
 
     /// One event of the worker, or `None` while it has none.
@@ -214,9 +209,9 @@ impl SpeechUi {
     }
 
     /// Run one two-second take for the **Try** button of the Settings tab.
-    fn try_take(&mut self, ctx: &Context, plan: TakePlan, home: &Path) {
+    fn try_take(&mut self, ctx: &Context, plan: TakePlan, home: &Path, keys: Option<Arc<NamedSecretVault>>) {
         self.try_answer = None;
-        if self.begin(ctx, plan, SETTINGS_TRY, home) {
+        if self.begin(ctx, plan, SETTINGS_TRY, home, keys) {
             self.try_started = Some(Instant::now());
         }
     }
@@ -276,6 +271,15 @@ impl SpeechUi {
     }
 }
 
+/// The reader of the named secrets of this computer, or one that holds no value
+/// while this window has no secrets file.
+fn keys_reader(keys: Option<Arc<NamedSecretVault>>) -> Arc<dyn horizon_core::speech::SpeechKeyStore> {
+    match keys {
+        Some(keys) => keys,
+        None => Arc::new(()),
+    }
+}
+
 /// `elapsed` as the minutes and seconds of the mark, such as `0:03`.
 fn clock_text(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -307,15 +311,20 @@ impl HorizonApp {
             self.consume_navigation_key(ctx, ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape));
             return;
         }
+        if start {
+            // The press belongs to the take, whatever the take does with it.
+            self.consume_navigation_key(ctx, binding);
+            self.start_speech_take(ctx);
+        }
+        // A tap whose release is in the same frame ends the take of that frame: a
+        // take of a few milliseconds is dropped, as every short take is.
         if end && self.speech.is_listening() {
             self.speech.finish();
-            return;
         }
-        if !start {
-            return;
-        }
-        // The press belongs to the take, whatever the take does with it.
-        self.consume_navigation_key(ctx, binding);
+    }
+
+    /// Start the take of one press of the hotkey, or say why nothing started.
+    fn start_speech_take(&mut self, ctx: &Context) {
         let Some(plan) = self.template_config.speech.plan() else {
             self.speech.fail(NOT_SET);
             return;
@@ -324,14 +333,16 @@ impl HorizonApp {
             self.speech.fail(NO_TERMINAL);
             return;
         };
-        self.speech.begin(ctx, plan, target, self.session_store.home().root());
+        let home = self.session_store.home().root().to_path_buf();
+        let keys = self.named_secret_vault.clone();
+        self.speech.begin(ctx, plan, target, &home, keys);
     }
 
     /// The hotkey of the only section that speech input reads.
     pub(super) fn apply_speech_config(&mut self, config: &horizon_core::SpeechConfig) {
         let mut whole = self.template_config.clone();
         whole.speech = config.clone();
-        self.speech.configure(&whole, self.named_secret_vault.clone());
+        self.speech.configure(&whole);
     }
 
     /// The panel that a take records for: the focused panel, when it is one that a
@@ -377,7 +388,12 @@ impl HorizonApp {
             self.speech.try_answer = Some(Err(NOT_SET.to_owned()));
             return;
         };
-        self.speech.try_take(ctx, plan, self.session_store.home().root());
+        self.speech.try_take(
+            ctx,
+            plan,
+            self.session_store.home().root(),
+            self.named_secret_vault.clone(),
+        );
     }
 
     /// Draw the state mark of a take on the panel of that take, inside `rect`.

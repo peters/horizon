@@ -293,8 +293,8 @@ json.dump(document, open(path, "w"), indent=2)' <home>/.horizon/config.json dark
 
    Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd>.
 
-   Result: The window shows the tabs General, Shortcuts, Presets, Browser,
-   Remote and Secrets on one row. There is no tab of a text format.
+   Result: The window shows the tabs General, Keys, Presets, Browser, Remote,
+   Secrets, Server and Speech on one row. There is no tab of a text format.
 
 2. In General, select another theme, and press **Save**.
 
@@ -361,8 +361,8 @@ json.dump(document, open(path, "w"), indent=2)' <home>/.horizon/config.json dark
   no other file.
 - The window saves and shows `Saved` in S07; only the store holds the saved
   value, and a refused entry reports its rule. The tabs of the window hold a
-  field for every setting that a person changes: General, Shortcuts, Presets,
-  Browser, Remote and Secrets.
+  field for every setting that a person changes: General, Keys, Presets,
+  Browser, Remote, Secrets, Server and Speech.
 
 ## 8. Cleanup
 

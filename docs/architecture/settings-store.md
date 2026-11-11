@@ -177,14 +177,15 @@ typed value of its section:
 | Tab | Sections |
 |---|---|
 | General | `window`, `appearance`, `features`, `overlays`, `browser_host`, `remote_hosts` |
-| Shortcuts | `shortcuts` |
+| Keys | `shortcuts` |
 | Presets | `presets` |
 | Browser | `browser`: the engine programs, the live view, the recording defaults and the passkey command |
 | Remote | `browser.remote`: the providers, the targets and their credential bindings |
 | Secrets | `secrets`: the names of the named secrets, and no value |
 | Server | `server`: the SSH target, the command and the address of the listener, beside the join of this computer, the invitation of another one and the list of the computers. `<home>/secrets.sqlite` holds the token of a join under the row `server/token` |
+| Speech | `speech`: the hotkey, the recorder line, the transcriber and the name of the named secret of its key, and no value of a key |
 
-The seven tabs stay on one row at the default width of the panel, so no tab label
+The eight tabs stay on one row at the default width of the panel, so no tab label
 wraps onto a second line.
 
 A numeric field does not clamp a value that the store already holds, so a value

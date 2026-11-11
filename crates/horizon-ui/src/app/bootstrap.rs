@@ -93,6 +93,9 @@ impl HorizonApp {
             action_commands_cache,
         };
         let mut app = Self::initial_state(config, bootstrap);
+        // The hotkey of speech input comes with the settings of this start, so it
+        // works before the first save of the window.
+        app.speech.configure(config);
         app.restore_saved_session_deletion_notice();
         // The machines belong to the person and not to the session that the
         // startup decision opens, so they are read once, before any session. A

@@ -50,6 +50,27 @@ fn speech_on() -> Config {
 }
 
 #[test]
+fn a_hotkey_of_the_start_works_before_the_first_save() {
+    // The window of a test is built from its settings, as the start of a person is,
+    // so a hotkey works before any save of the window.
+    let (_temp, ctx, mut app) = crate::app::test_support::test_app_with_config_and_startup(
+        &speech_on(),
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let remaining = frame_with_keys(&ctx, &mut app, vec![key(Key::F9, true)]);
+    assert!(app.speech.input.is_none(), "no take runs without a terminal");
+    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    assert_eq!(message, NO_TERMINAL);
+    assert!(
+        !remaining
+            .iter()
+            .any(|event| matches!(event, Event::Key { key: Key::F9, .. }))
+    );
+}
+
+#[test]
 fn a_hotkey_with_no_terminal_starts_no_recording_and_says_so() {
     let (_temp, mut app) = test_app();
     let ctx = Context::default();
@@ -71,6 +92,26 @@ fn a_hotkey_with_no_terminal_starts_no_recording_and_says_so() {
             .iter()
             .any(|event| matches!(event, Event::Key { key: Key::F9, .. })),
         "the key of a take never reaches a program of a panel"
+    );
+}
+
+#[test]
+fn a_tap_whose_release_is_in_the_same_frame_starts_no_long_take() {
+    let (_temp, mut app) = test_app();
+    let ctx = Context::default();
+    app.apply_runtime_config(&speech_on());
+
+    // The press and the release of one frame: the take of that frame ends at once,
+    // so a tap never records until its bound.
+    let remaining = frame_with_keys(&ctx, &mut app, vec![key(Key::F9, true), key(Key::F9, false)]);
+
+    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    assert_eq!(message, NO_TERMINAL, "the tap of a key with no terminal starts nothing");
+    assert!(app.speech.input.is_none());
+    assert!(
+        !remaining
+            .iter()
+            .any(|event| matches!(event, Event::Key { key: Key::F9, .. }))
     );
 }
 

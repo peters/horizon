@@ -15,6 +15,8 @@
 use std::fmt;
 use std::time::Duration;
 
+use zeroize::Zeroizing;
+
 use crate::speech::endpoint::Endpoint;
 use crate::speech::text::clean_text;
 
@@ -125,7 +127,9 @@ pub fn transcribe(request: &ServiceRequest<'_>) -> Result<String, ServiceError> 
         .timeout_global(Some(request.bound))
         .build();
     let agent = ureq::Agent::new_with_config(config);
-    let authorization = format!("Bearer {}", request.key);
+    // The value of the key travels in this header and in no other byte, and the
+    // line is wiped when the request ends.
+    let authorization = Zeroizing::new(format!("Bearer {}", request.key));
     let url = request.endpoint.request_url();
     let mut response = agent
         .post(url.as_str())
@@ -243,6 +247,7 @@ mod tests {
     use super::{
         BoundaryFields, MAX_ANSWER_BYTES, ServiceError, ServiceRequest, boundary_for, multipart_body, transcribe,
     };
+
     use crate::speech::endpoint::Endpoint;
 
     const KEY: &str = "sk-the-value-of-the-key";

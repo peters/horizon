@@ -69,15 +69,15 @@ None of the steps deletes data, rents compute or changes access.
 
 ### 6.2 S2 — Every tab keeps the panel width
 
-1. Select each tab in turn: General, Shortcuts, Presets, Browser, Remote and
-   Secrets.
+1. Select each tab in turn: General, Keys, Presets, Browser, Remote, Secrets,
+   Server and Speech.
 
    Result: The panel keeps the width that it had on the General tab. The canvas
    stays visible on the left. There is no tab of a text format.
 
 2. Read the tab row.
 
-   Result: The six tabs are on one row. No tab label wraps onto a second line,
+   Result: The eight tabs are on one row. No tab label wraps onto a second line,
    and the panel does not push the tabs off its left edge.
 
 3. Read the left edge of the panel and the right edge of the canvas on each
@@ -177,7 +177,7 @@ None of the steps deletes data, rents compute or changes access.
 ## 8. Pass criteria
 
 - The panel keeps its width on every tab, with long lines in the editor. The
-  tabs are General, Shortcuts, Presets, Browser, Remote and Secrets.
+  tabs are General, Keys, Presets, Browser, Remote, Secrets, Server and Speech.
 - The canvas stops at the left edge of the panel on every tab. No strip of the
   canvas covers the tab row, a heading, a row of the Secrets tab, or a field.
 - Wide content scrolls inside the panel in both directions.
