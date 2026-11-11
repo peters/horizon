@@ -116,7 +116,10 @@ the network that carries it, because Horizon encrypts nothing on it.
   computer writes one sentence, deletes its own token row and stops until a person
   joins it again. It keeps every copy of every machine key and every credential
   value that it already had: the server rotates nothing. A person who loses a
-  computer removes it, then makes new machine keys and new credential values.
+  computer removes it, then makes new machine keys and new credential values. A
+  computer of the socket comes back at its next link whatever a removal did,
+  because `ssh` is the login of that transport, and a removal proves nothing about
+  a login that `ssh` grants.
 - **The server still starts no program and opens no other port.** The listener
   answers frames only. It reads no path and runs no command of a frame, and it
   starts no `ssh`.

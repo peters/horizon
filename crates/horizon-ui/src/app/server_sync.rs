@@ -304,11 +304,14 @@ impl HorizonApp {
         };
         let snapshot = sync.snapshot();
         let state = snapshot.state();
+        let logged_out = matches!(state, LinkState::Removed | LinkState::NotLoggedIn);
         ServerView {
             line: ServerLine::of(state).text(),
             device: snapshot.device().to_owned(),
-            linked: true,
-            logged_out: matches!(state, LinkState::Removed | LinkState::NotLoggedIn),
+            // A computer that the server removed has no link that could ask for an
+            // invitation or read the list, so the tab shows the join alone.
+            linked: !logged_out,
+            logged_out,
         }
     }
 
