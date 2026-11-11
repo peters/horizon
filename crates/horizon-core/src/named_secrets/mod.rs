@@ -39,9 +39,7 @@ pub use name::{MAX_NAME_CHARS, NamedSecretError, SecretName, check_value, is_res
 pub use store::{NAMED_PREFIX, NAMED_SECRET_ORIGIN, NamedSecretChange, NamedSecretVault, locator};
 pub use workbench::NamedSecretWorkbench;
 
-use crate::HorizonHome;
-use crate::remote_browser_credential::{RemoteCredentialError, RemoteCredentialStore};
-use crate::secret_store::{SecretStore, UnreadableStore};
+use crate::remote_browser_credential::RemoteCredentialError;
 
 /// The most named secrets that one computer keeps.
 pub const MAX_NAMED_SECRETS: usize = 64;
@@ -72,28 +70,6 @@ impl NamedSecretState {
             Self::NoValue => "no value on this computer",
             Self::Unavailable => "The secrets file of this computer cannot be read",
             Self::Checking => "Checking this computer",
-        }
-    }
-}
-
-/// The store of the named secrets of this computer: the one secrets file of its
-/// Horizon home.
-///
-/// A file that cannot be opened is a fault of this computer, and the store that
-/// answers it says so with the path of the file, so the window and the link keep
-/// one code path.
-///
-/// It opens a file, so it runs on a worker thread and never on the UI thread.
-#[must_use]
-pub fn open_store(home: &HorizonHome) -> Box<dyn RemoteCredentialStore + Send> {
-    match SecretStore::open(home.secrets_path()) {
-        Ok(store) => Box::new(store),
-        Err(error) => {
-            tracing::error!(
-                %error,
-                "the secrets file of this computer cannot be opened, so it holds no named secret"
-            );
-            Box::new(UnreadableStore::new(error))
         }
     }
 }

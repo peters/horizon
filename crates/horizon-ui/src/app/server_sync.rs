@@ -17,6 +17,7 @@ use horizon_core::HorizonHome;
 use horizon_core::machines::{MachineRegistry, MachineStore, Machines};
 use horizon_core::named_secrets::{self, NamedSecretVault};
 use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
+use horizon_core::secret_store;
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
 use horizon_sync::{LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
 
@@ -142,7 +143,7 @@ pub(in crate::app) fn secret_vault(
     remote: &RemoteBrowserConfig,
     names: &[String],
 ) -> SecretHandles {
-    let credentials = Arc::new(CredentialVault::new(named_secrets::open_store(home)));
+    let credentials = Arc::new(CredentialVault::new(secret_store::open(home)));
     credentials.register(remote);
     let secrets = named_secret_vault(home, names);
     let vault = SecretVault::new(keys, Arc::clone(&credentials), Arc::clone(&secrets));
@@ -161,7 +162,7 @@ pub(in crate::app) fn secret_vault(
 /// its settings and publishes no value, so its panels start without the variables
 /// and the Settings window says why.
 fn named_secret_vault(home: &HorizonHome, names: &[String]) -> Arc<NamedSecretVault> {
-    let vault = Arc::new(NamedSecretVault::new(named_secrets::open_store(home)));
+    let vault = Arc::new(NamedSecretVault::new(secret_store::open(home)));
     vault.set_names(names.iter().cloned());
     match vault.refresh() {
         Ok(present) => {

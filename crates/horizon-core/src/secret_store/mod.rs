@@ -34,6 +34,7 @@ use horizon_browser::remote::CredentialStoreKind;
 use rusqlite::{Connection, OptionalExtension, params};
 use zeroize::Zeroizing;
 
+use crate::HorizonHome;
 use crate::remote_browser_credential::{
     CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, validate_secret,
 };
@@ -257,6 +258,24 @@ impl RemoteCredentialStore for UnreadableStore {
 
     fn with_secret(&self, _: &CredentialLocator, _: &mut dyn SecretSink) -> Result<(), RemoteCredentialError> {
         Err(self.error.clone())
+    }
+}
+
+/// The place of the secret values of `home`: its file, or a place that answers the
+/// one typed error of a file that cannot be opened.
+///
+/// It opens a file, so it runs on a worker thread and never on the UI thread.
+#[must_use]
+pub fn open(home: &HorizonHome) -> Box<dyn RemoteCredentialStore + Send> {
+    match SecretStore::open(home.secrets_path()) {
+        Ok(store) => Box::new(store),
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "the secrets file of this computer cannot be opened, so it holds no value"
+            );
+            Box::new(UnreadableStore::new(error))
+        }
     }
 }
 
