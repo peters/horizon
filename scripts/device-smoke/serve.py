@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import re
 import sys
 import tempfile
@@ -46,11 +47,22 @@ with socket.socket() as listener:
 
 PRESET_RESUME_MODES = ('fresh', 'last')
 
-# The file that holds the named secret values of the fixture, in its private state.
-# Horizon reads it only when `HORIZON_TEST_NAMED_SECRETS_FILE` names it, which this
-# fixture sets for its own candidate and nothing else sets.
-NAMED_SECRETS_FILE_NAME = 'named-secrets.json'
-NAMED_SECRETS_ENV = 'HORIZON_TEST_NAMED_SECRETS_FILE'
+# The one file that holds every secret value of the private Horizon home of the
+# fixture, beside its `horizon.json`. The schema is the schema of
+# `crates/horizon-core/src/secret_store/schema.sql`, which the store of Horizon
+# includes, so a file that this fixture writes is a file that Horizon reads.
+SECRETS_FILE_NAME = 'secrets.sqlite'
+SECRETS_SCHEMA_FILE = (Path(__file__).resolve().parent.parent.parent
+                       / 'crates' / 'horizon-core' / 'src' / 'secret_store' / 'schema.sql')
+
+# The schema version that `crates/horizon-core/src/secret_store/schema.rs` writes. A
+# file of another version is refused by the store, which is what the crate test that
+# opens a file of this fixture proves.
+SECRETS_SCHEMA_VERSION = 1
+
+# The id rules of `crates/horizon-core/src/secret.rs`: one credential reference is
+# 1 to 64 characters of letters, digits, '.', '_' and '-'.
+MAX_CREDENTIAL_REFERENCE_CHARS = 64
 
 # The names that Horizon and the system own, from
 # `crates/horizon-core/src/named_secrets/name.rs`. A named secret of the fixture
@@ -87,38 +99,91 @@ def parse_named_secret(text):
     return name, value
 
 
-def named_secret_slot(name):
-    """The reference of one named secret in the credential store of the fixture."""
+def named_secret_id(name):
+    """The id of one named secret in the secrets file of the fixture."""
     return f'named/{name}'
 
 
-def seed_named_secrets(path, secrets, previous=None):
-    """Write the named secret values of the fixture into its private state, at 0600.
+def parse_secret_row(text):
+    """The id and the value of one `--secret-row ID=VALUE`, or ValueError.
 
-    A value of an earlier run of the same state stays unless the flag names it again,
-    so a procedure can add one secret to a private home that already holds another.
+    The id is a credential id of Horizon: `credential/<reference>`, where the
+    reference is 1 to 64 characters of letters, digits, '.', '_' and '-'. It is not a
+    named secret: use `--named-secret` for those.
     """
-    values = dict(previous or {})
-    values.update({named_secret_slot(name): value for name, value in secrets})
+    object_id, separator, value = text.partition('=')
+    if not separator:
+        raise ValueError(f'{text!r} is not ID=VALUE')
+    prefix = 'credential/'
+    if not object_id.startswith(prefix):
+        raise ValueError(f'{object_id!r} is not credential/<reference>')
+    reference = object_id[len(prefix):]
+    if (not 1 <= len(reference) <= MAX_CREDENTIAL_REFERENCE_CHARS
+            or not all(character.isascii() and (character.isalnum() or character in '._-')
+                       for character in reference)):
+        raise ValueError(f'{reference!r} is not 1 to {MAX_CREDENTIAL_REFERENCE_CHARS} characters '
+                         'of letters, digits, ".", "_" and "-"')
+    if not 1 <= len(value.encode()) <= MAX_NAMED_SECRET_BYTES:
+        raise ValueError(f'the value of {object_id!r} is empty or larger than {MAX_NAMED_SECRET_BYTES} bytes')
+    return object_id, value
+
+
+def seed_secret_rows(path, named=(), rows=()):
+    """Write secret values into the secrets file of the private Horizon home.
+
+    The file is `secrets.sqlite` of that home at 0600 in a 0700 directory, with the
+    schema that Horizon's own store includes. A named secret is `named/<NAME>`; a
+    credential row is a `credential/<reference>` id. A value of an earlier run of the
+    same state stays unless this call names the same id again, so a procedure can add
+    one secret to a private home that already holds another. Answers the ids that the
+    file holds.
+    """
+    path = Path(path)
+    values = {named_secret_id(name): value for name, value in named}
+    values.update({object_id: value for object_id, value in rows})
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.write_text(json.dumps(values, indent=2, sort_keys=True))
-    path.chmod(0o600)
-    return values
-
-
-def read_named_secrets(path):
-    """The named secret values of an earlier run of the fixture, or an empty map."""
+    connection = sqlite3.connect(path)
     try:
-        values = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    return values if isinstance(values, dict) else {}
+        present = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'secrets'").fetchone()
+        if present is None:
+            connection.executescript(SECRETS_SCHEMA_FILE.read_text())
+            connection.execute('INSERT INTO meta (key, value) VALUES (?, ?)',
+                               ('schema_version', str(SECRETS_SCHEMA_VERSION)))
+        now = int(time.time() * 1000)
+        for object_id, value in values.items():
+            connection.execute(
+                'INSERT INTO secrets (id, body, version, updated_millis) VALUES (?, ?, 1, ?) '
+                'ON CONFLICT (id) DO UPDATE SET body = excluded.body, '
+                'version = secrets.version + 1, updated_millis = excluded.updated_millis',
+                (object_id, value.encode(), now))
+        connection.commit()
+    finally:
+        connection.close()
+    path.chmod(0o600)
+    return read_secret_ids(path)
 
 
-def named_secret_names(values):
+def read_secret_ids(path):
+    """The ids of the values in a secrets file, or none when the file is not there."""
+    path = Path(path)
+    try:
+        connection = sqlite3.connect(path)
+    except sqlite3.Error:
+        return []
+    try:
+        rows = connection.execute('SELECT id FROM secrets ORDER BY id').fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        connection.close()
+    return [row[0] for row in rows]
+
+
+def named_secret_names(ids):
     """The names of the named secret values of the fixture, in name order."""
     prefix = 'named/'
-    return sorted(slot[len(prefix):] for slot in values if slot.startswith(prefix))
+    return sorted(object_id[len(prefix):] for object_id in ids if object_id.startswith(prefix))
 
 # The snake_case names of `PanelKind` (`crates/horizon-core/src/panel.rs`). A file that
 # names another kind makes Horizon refuse the whole config, which starts the default
@@ -383,9 +448,15 @@ def main():
              'run left in the private home. Use with --reuse-state and without --saved-session')
     parser.add_argument(
         '--named-secret', action='append', metavar='NAME=VALUE',
-        help='Seed one named secret into the private state of the fixture, so its agent '
-             'panels read NAME as an environment variable. Repeat for more than one. The '
-             'value is in clear text in that state, which is the private state of one run.')
+        help='Write one named secret into the secrets file of the private home of the '
+             'fixture, so its agent panels read NAME as an environment variable. Repeat '
+             'for more than one. The value is in clear text in that file, which belongs '
+             'to one private home.')
+    parser.add_argument(
+        '--secret-row', action='append', metavar='ID=VALUE',
+        help='Write one credential value into the secrets file of the private home of the '
+             'fixture, such as credential/HETZNER_API_TOKEN=a-value, so a remote browser '
+             'provider of the fixture reads it. Repeat for more than one.')
     parser.add_argument(
         '--presets',
         type=Path,
@@ -447,6 +518,10 @@ def main():
         named_secrets = [parse_named_secret(text) for text in args.named_secret or []]
     except ValueError as problem:
         parser.error(f'--named-secret {problem}')
+    try:
+        secret_rows = [parse_secret_row(text) for text in args.secret_row or []]
+    except ValueError as problem:
+        parser.error(f'--secret-row {problem}')
     args.state = sandbox.prepare_state(args.state, reuse=args.reuse_state).resolve()
     app = args.horizon.resolve(strict=True)
     extra_ro_binds = [app]
@@ -536,17 +611,16 @@ def main():
         config = data / 'horizon.json'
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
-        # A named secret of this run, and one that an earlier run of the same private
-        # home left, are both read by the candidate of this run.
-        named_file = data / NAMED_SECRETS_FILE_NAME
-        held = read_named_secrets(named_file) if args.reuse_state else {}
-        values = seed_named_secrets(named_file, named_secrets, held) if (named_secrets or held) else None
-        if values is not None:
-            env[NAMED_SECRETS_ENV] = str(named_file)
+        # The values of this run, and a value that an earlier run of the same private
+        # home wrote, are both rows of the secrets file that the candidate reads.
+        secrets_file = data / SECRETS_FILE_NAME
+        if named_secrets or secret_rows:
+            seed_secret_rows(secrets_file, named_secrets, secret_rows)
+        held = read_secret_ids(secrets_file) if secrets_file.is_file() else []
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
-            args.server_command, named_secret_names(values or {}))
+            args.server_command, named_secret_names(held))
         config.write_text(json.dumps(fixture, indent=2))
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))
