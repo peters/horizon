@@ -41,7 +41,8 @@ impl HorizonApp {
             return;
         };
         let keys = MachineKeys::from_home(self.session_store.home());
-        let (name, title, key) = (name.to_owned(), record.title(), record.key.clone());
+        let (name, title) = (name.to_owned(), record.title());
+        let key = self.machine_list.key(name.as_str()).map(str::to_owned);
         let opening = ctx.clone();
         self.browser_create_host.io.then(
             move || required_key(&keys, key.as_deref()),

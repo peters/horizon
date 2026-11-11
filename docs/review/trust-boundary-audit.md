@@ -167,7 +167,10 @@ boundary pages went away with their features.
     reaches an answer; a machine record passes the same route rule, a session
     name of `A-Z`, `a-z`, `0-9`, `_` and `-`, a key name and a 60-character
     provider line, holds no command line, is re-validated at click time, and its
-    click runs the argv that Horizon builds from the record.
+    click runs the argv that Horizon builds from the record; the record holds no
+    key name, so the binding of a key to a machine of this computer is a separate
+    `0600` file (`machines/keys.json`) that a record of an older Horizon fills on
+    the first load.
   - Does not guarantee: the agent chooses the host and the command, and it names
     the machine of a record, so a click reaches a host of its choice with the
     account in the record; any agent panel of this Horizon may use any machine

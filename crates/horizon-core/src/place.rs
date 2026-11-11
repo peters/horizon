@@ -192,7 +192,7 @@ pub fn place_command(
         port: route.port,
         remote_command: Some(session_command(&session)),
     };
-    let connection = match record.key.as_deref() {
+    let connection = match machines.key(&record.name) {
         Some(key) => SshConnection::for_agent_terminal_with_key(&terminal, &keys.binding(key)),
         None => SshConnection::for_agent_terminal(&terminal),
     };

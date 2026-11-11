@@ -21,7 +21,6 @@ fn record(name: &str) -> Machine {
         name: name.to_owned(),
         host: "203.0.113.10".to_owned(),
         user: Some("root".to_owned()),
-        key: Some("build-1".to_owned()),
         ..Machine::default()
     }
 }
@@ -45,7 +44,8 @@ fn app_on_a_machine() -> (tempfile::TempDir, Context, HorizonApp, WorkspaceId) {
     app.machine_list = Machines::with_records(
         MachineRegistry::from_home(app.session_store.home()),
         vec![record("build-1")],
-    );
+    )
+    .with_key("build-1", "build-1");
     let workspace = app.board.workspaces[0].id;
     (temp, ctx, app, workspace)
 }

@@ -70,7 +70,7 @@ impl HorizonApp {
         let (name, title) = (name.to_owned(), title.map_or_else(|| record.title(), str::to_owned));
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
         let (writing, owner, workspace) = (ctx.clone(), request.actor.clone(), actor.workspace_id);
-        let key = record.key.clone();
+        let key = self.machine_list.key(name.as_str()).map(str::to_owned);
         self.block_claim.key_job_started();
         self.browser_create_host.io.then(
             move || required_key(&keys, key.as_deref()),

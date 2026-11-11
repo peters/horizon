@@ -82,7 +82,11 @@ impl HorizonApp {
             session,
             provider,
         } = *asked;
-        let checked = match horizon_core::machines::check(name, ssh, key, session, provider) {
+        let checked = horizon_core::machines::check(name, ssh, session, provider).and_then(|checked| {
+            let key = key.map(horizon_core::machines::machine_key_name).transpose()?;
+            Ok((checked, key))
+        });
+        let (checked, key) = match checked {
             Ok(checked) => checked,
             Err(error) => {
                 self.write_block_answer(BlockAnswer::new(root, request.clone(), refused(&error)));
@@ -99,10 +103,10 @@ impl HorizonApp {
             root,
             ctx,
             move || {
-                if let Some(key) = record.key.as_deref() {
+                if let Some(key) = key.as_deref() {
                     keys.require(key)?;
                 }
-                let (next, created) = Machines::load(registry)?.with_record(record)?;
+                let (next, created) = Machines::load(registry)?.with_record(record, key.as_deref())?;
                 next.save()?;
                 Ok::<_, MachineError>((next, created))
             },
@@ -211,7 +215,7 @@ impl HorizonApp {
                 host: machine.host.clone(),
                 user: machine.user.clone(),
                 port: machine.port,
-                key: machine.key.clone(),
+                key: self.machine_list.key(&machine.name).map(str::to_owned),
                 session: machine.session.clone(),
                 provider: machine.provider.clone(),
                 added_at_millis: machine.added_at_millis,

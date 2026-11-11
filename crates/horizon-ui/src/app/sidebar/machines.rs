@@ -304,7 +304,7 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         machine.host.hash(&mut hasher);
         machine.user.hash(&mut hasher);
         machine.port.hash(&mut hasher);
-        machine.key.hash(&mut hasher);
+        app.machine_list.key(&machine.name).hash(&mut hasher);
         machine.session.hash(&mut hasher);
         machine.provider.hash(&mut hasher);
     }

@@ -12,12 +12,11 @@ use super::*;
 /// A workspace local id, as Horizon makes one.
 const WORKSPACE: &str = "c8dfe3af-0e07-4889-99ed-403b4a5a4c8a";
 
-fn record(name: &str, key: Option<&str>) -> Machine {
+fn record(name: &str) -> Machine {
     Machine {
         name: name.to_owned(),
         host: "203.0.113.10".to_owned(),
         user: Some("root".to_owned()),
-        key: key.map(str::to_owned),
         ..Machine::default()
     }
 }
@@ -27,10 +26,8 @@ fn record(name: &str, key: Option<&str>) -> Machine {
 fn home() -> (tempfile::TempDir, MachineKeys, Machines) {
     let temp = tempfile::tempdir().expect("a temporary home");
     let home = crate::horizon_home::HorizonHome::from_root(temp.path().join("horizon"));
-    let machines = Machines::with_records(
-        MachineRegistry::from_home(&home),
-        vec![record("build-1", Some("build-1"))],
-    );
+    let machines = Machines::with_records(MachineRegistry::from_home(&home), vec![record("build-1")])
+        .with_key("build-1", "build-1");
     (temp, MachineKeys::from_home(&home), machines)
 }
 
@@ -194,7 +191,7 @@ fn a_new_terminal_of_a_placed_workspace_runs_ssh_into_its_own_session() {
 fn a_machine_without_a_key_offers_the_keys_of_the_person() {
     let temp = tempfile::tempdir().expect("a temporary home");
     let home = crate::horizon_home::HorizonHome::from_root(temp.path().join("horizon"));
-    let machines = Machines::with_records(MachineRegistry::from_home(&home), vec![record("build-2", None)]);
+    let machines = Machines::with_records(MachineRegistry::from_home(&home), vec![record("build-2")]);
     let keys = MachineKeys::from_home(&home);
     let mut options = shell();
     place_command(
@@ -316,7 +313,7 @@ fn a_place_whose_machine_is_gone_is_machine_unavailable_and_makes_no_panel() {
 fn a_record_that_fails_its_rule_makes_no_panel() {
     let temp = tempfile::tempdir().expect("a temporary home");
     let home = crate::horizon_home::HorizonHome::from_root(temp.path().join("horizon"));
-    let mut broken = record("build-3", None);
+    let mut broken = record("build-3");
     broken.host = "-oProxyCommand=touch /var/tmp/hz-place".to_owned();
     let machines = Machines::with_records(MachineRegistry::from_home(&home), vec![broken]);
     let keys = MachineKeys::from_home(&home);

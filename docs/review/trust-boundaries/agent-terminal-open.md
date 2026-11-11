@@ -77,10 +77,17 @@ describe the same boundary. The key half is described by
 ## Machine records
 
 An agent also writes a **machine record** with `machine_set`: a name, a route, a
-key name, a tmux session and a provider line. The person then connects to that
-machine with one click in the sidebar, without an agent, so the record is the
-input of a click. It is stored as one file per Horizon home,
-`machines/registry.json`.
+tmux session and a provider line. The person then connects to that machine with
+one click in the sidebar, without an agent, so the record is the input of a
+click. It is stored as one file per Horizon home, `machines/registry.json`.
+
+The record is the part of a machine that another computer may see, so it holds no
+key name: a key name resolves only in the Horizon home that made it. The key that
+this computer uses for a machine is a **binding** in `machines/keys.json`, beside
+the registry, in the same private directory and under the same atomic write. A
+registry of an older Horizon that held the key name inside a record moves the name
+to the binding file on the first load, and the registry is then written once
+without the field.
 
 ### Untrusted: every field of a record
 
@@ -95,9 +102,10 @@ input of a click. It is stored as one file per Horizon home,
   `tmux new -A -s <session>` itself from that name, so a space, a quote, a `;`
   or a leading `-` never reaches the command. A violation is
   `invalid_session_name`.
-- **The key name is a key name.** It passes the key rule
+- **The key name is a key name.** The `key` of `machine_set` passes the key rule
   (`invalid_key_name`) and its file must be there (`key_unavailable` when it is
-  not).
+  not). It becomes the binding of this computer and it is not written into the
+  record.
 - **The provider line is a claim.** It is folded to one line and cut to 60
   characters. Horizon draws it in a low-emphasis style under the machine name. It
   is never read by a program and never becomes a command, a path or a title.
@@ -108,10 +116,11 @@ input of a click. It is stored as one file per Horizon home,
 
 - **The click re-validates.** At click time Horizon checks the record again with
   the same rules (`Machine::checked_terminal`) and re-derives the key path from
-  the key name on the coordination worker. A record that no longer passes a rule
+  the binding of this computer on the coordination worker. A record that no longer passes a rule
   opens nothing, and the sidebar says the typed reason.
 - **The argv is Horizon's.** A click runs `ssh` with the argv of
-  `SshConnection::for_agent_terminal_with_key`: the key of the record, the two
+  `SshConnection::for_agent_terminal_with_key`: the key that this computer binds
+  to the record, the two
   keepalive options, `-p` when the record has a port, `-t` when it has a session,
   `user@host` as one argument and `tmux new -A -s <session>` last. A hand-edited
   registry cannot add an ssh option, a proxy, an identity file or a second
@@ -177,7 +186,8 @@ holds the only code that decides which command a panel of a place runs.
   passes it through the agent rule; the `CheckedTerminal` that it fills carries
   a route that the rule did check.
 - **The panel keeps the machine key of the record.** The key name comes from the
-  record and the directory from the Horizon home, as in a machine terminal, so
+  binding of this computer and the directory from the Horizon home, as in a
+  machine terminal, so
   the argv holds the same `-i`, `IdentitiesOnly`, `IdentityAgent` and
   `UserKnownHostsFile` options and no other.
 
@@ -227,8 +237,8 @@ holds the only code that decides which command a panel of a place runs.
   the session that the panel named, and everything that runs in it. A restore of
   a panel whose session was ended elsewhere starts a new, empty session under
   the same name.
-- **A forgotten machine is not a forgotten key.** The key of the record stays in
-  the Horizon home, and the place keeps its name.
+- **A forgotten machine is not a forgotten key.** The key of the machine stays in
+  the Horizon home with its binding, and the place keeps its name.
 
 ## Machine keys
 

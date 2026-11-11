@@ -33,28 +33,36 @@ fn plant_key(app: &HorizonApp, name: &str) {
     fs::write(directory.join(format!("{name}.pub")), "ssh-ed25519 AAAA\n").expect("the public key");
 }
 
-fn record(name: &str, session: Option<&str>, key: Option<&str>) -> Machine {
+fn record(name: &str, session: Option<&str>) -> Machine {
     Machine {
         name: name.to_owned(),
         host: "203.0.113.10".to_owned(),
         user: Some("root".to_owned()),
         port: None,
-        key: key.map(str::to_owned),
         session: session.map(str::to_owned),
         provider: Some("Hetzner, hel1".to_owned()),
         added_at_millis: 1,
     }
 }
 
-fn keep(app: &mut HorizonApp, machines: Vec<Machine>) {
-    app.machine_list = Machines::with_records(MachineRegistry::from_home(app.session_store.home()), machines);
+/// Keeps `machines`, with the key that this computer uses for each of `keys`.
+fn keep(app: &mut HorizonApp, machines: Vec<Machine>, keys: &[(&str, &str)]) {
+    let mut list = Machines::with_records(MachineRegistry::from_home(app.session_store.home()), machines);
+    for (machine, key) in keys {
+        list = list.with_key(machine, key);
+    }
+    app.machine_list = list;
 }
 
 #[test]
 fn a_click_opens_one_terminal_and_the_second_click_focuses_it() {
     let (_temp, ctx, mut app) = app();
     plant_key(&app, "build-1");
-    keep(&mut app, vec![record("build-1", Some("work"), Some("build-1"))]);
+    keep(
+        &mut app,
+        vec![record("build-1", Some("work"))],
+        &[("build-1", "build-1")],
+    );
     let before = app.board.panels.len();
 
     app.connect_machine("build-1", &ctx);
@@ -94,7 +102,7 @@ fn a_click_opens_one_terminal_and_the_second_click_focuses_it() {
 #[test]
 fn a_click_on_a_machine_without_a_key_opens_the_plain_login() {
     let (_temp, ctx, mut app) = app();
-    keep(&mut app, vec![record("build-1", None, None)]);
+    keep(&mut app, vec![record("build-1", None)], &[]);
 
     app.connect_machine("build-1", &ctx);
     app.settle_browser_host_io();
@@ -115,9 +123,9 @@ fn a_click_on_a_machine_without_a_key_opens_the_plain_login() {
 #[test]
 fn a_record_that_fails_revalidation_opens_nothing_and_says_why() {
     let (_temp, ctx, mut app) = app();
-    let mut broken = record("build-1", Some("work"), None);
+    let mut broken = record("build-1", Some("work"));
     broken.host = "-oProxyCommand=touch /var/tmp/hz-c9".to_owned();
-    keep(&mut app, vec![broken]);
+    keep(&mut app, vec![broken], &[]);
     let before = app.board.panels.len();
 
     app.connect_machine("build-1", &ctx);
@@ -147,7 +155,11 @@ fn a_click_on_a_machine_that_is_gone_opens_nothing() {
 fn the_saved_panel_keeps_its_machine_and_its_session() {
     let (_temp, ctx, mut app) = app();
     plant_key(&app, "build-1");
-    keep(&mut app, vec![record("build-1", Some("work"), Some("build-1"))]);
+    keep(
+        &mut app,
+        vec![record("build-1", Some("work"))],
+        &[("build-1", "build-1")],
+    );
     app.connect_machine("build-1", &ctx);
     app.settle_browser_host_io();
 
