@@ -196,6 +196,11 @@ pub(crate) struct SyncState {
     /// link times the bound of that request from this instant, so a reader that
     /// measures the same bound measures it from the same instant.
     pub(crate) request_since: Option<Instant>,
+    /// The instant of the request that the link that ended last was waiting for,
+    /// published with the `Away` state of that link. A reader that measures the
+    /// bound of a lost link reads the instant that the link itself timed, and not
+    /// the instant of a later attempt.
+    pub(crate) lost_request_since: Option<Instant>,
 }
 
 impl SyncState {
@@ -334,6 +339,7 @@ impl SyncHandle {
                 mirror_dirty: true,
                 refused_secrets: BTreeSet::new(),
                 request_since: None,
+                lost_request_since: None,
             })),
             view: Arc::new(Mutex::new(Arc::new(LinkSnapshot::default()))),
             notices: Arc::new(Mutex::new(Vec::new())),
@@ -364,12 +370,20 @@ impl SyncHandle {
         self.snapshot().state.clone()
     }
 
-    /// When the request that the link waits for left, or `None` while it has
-    /// none. The link times the bound of that request from this instant, so a
-    /// test of the bound reads it here instead of guessing a later start.
+    /// When the request of the link that is away left, or `None` while this
+    /// computer holds no link that is away.
+    ///
+    /// The link times the bound of that request from this instant and publishes it
+    /// with the `Away` state, under one lock, so a test that measures the bound of a
+    /// lost link measures the instant that the link timed. It never reads a request
+    /// that has not left yet, and never one of a later attempt.
     #[must_use]
-    pub fn open_request_since(&self) -> Option<Instant> {
-        self.lock().request_since
+    pub fn lost_request_since(&self) -> Option<Instant> {
+        let state = self.lock();
+        if !matches!(state.client.state(), LinkState::Away { .. }) {
+            return None;
+        }
+        state.lost_request_since
     }
 
     /// The number of changes of the records, so a caller reads them again only

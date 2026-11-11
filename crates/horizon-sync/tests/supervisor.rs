@@ -729,16 +729,13 @@ fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
         )
         .then_some(())
     });
-    // The bound of the request runs from the instant that the request left, and
-    // not from the instant that this test read the state: the state turns `behind`
-    // at the greeting, and the first request leaves one turn later, so a test clock
-    // that started at the greeting reported a loss early and a test that read the
-    // start once missed it under load.
-    let sent = eventually("the request of the first turn of the link", || {
-        supervisor.handle().open_request_since()
-    });
-    eventually("the link that is reported away", || {
-        matches!(supervisor.handle().state(), LinkState::Away { .. }).then_some(())
+    // The link times the bound of its request from the instant that the request
+    // left, and it publishes that instant with the `Away` state. A test that read
+    // the start of an open request found none under load, because the request of the
+    // first turn leaves after the greeting, and it could also read the start of a
+    // request of a later attempt: this wait reads the pair that the link published.
+    let sent = eventually("the away state of the link with the request that it lost", || {
+        supervisor.handle().lost_request_since()
     });
     let lost = sent.elapsed();
     assert!(

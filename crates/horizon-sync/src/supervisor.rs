@@ -401,6 +401,11 @@ fn run(
         {
             let mut state = handle.lock();
             state.client.away();
+            // The request of the link that ended waits for no answer any more. Its
+            // start stays with the `Away` state, so a reader that measures the bound
+            // of this lost link measures the instant that this link timed.
+            let lost = state.request_since.take();
+            state.lost_request_since = lost;
             state.generation = state.generation.wrapping_add(1);
         }
         (handle.wake)();
