@@ -26,6 +26,10 @@ pub(super) fn test_app_with_config_and_startup(
     config: &Config,
     startup: StartupDecision,
 ) -> (TempDir, Context, HorizonApp) {
+    // The whole suite runs under the guard in strict mode, from the start of the
+    // window: a test that does work which can wait on the UI thread panics
+    // instead of freezing the window of a person.
+    horizon_core::ui_thread::use_strict_mode();
     let temp = tempfile::tempdir().expect("temp dir");
     let config_path = temp.path().join("config.json");
     let session_store = SessionStore::new(
@@ -49,9 +53,6 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
 }
 
 pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> egui::FullOutput {
-    // The whole suite runs under the guard: a frame that does work which can
-    // wait panics here instead of freezing the window of a person.
-    horizon_core::ui_thread::use_strict_mode();
     let _frame = horizon_core::ui_thread::FrameScope::enter();
     let mut frame = eframe::Frame::_new_kittest();
     ctx.run_ui(input, |ui| {
