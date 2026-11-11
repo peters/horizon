@@ -22,7 +22,9 @@ and the Remote Environments modal were removed in #693. Ordinary SSH terminals,
 Remote Hosts, Sessions, and remote browser settings remain. Runtime v3 references
 are retained only as inert compatibility data with command-replay guards until
 versioned migration; no remote-development controller consumes them. Config v11
-omits obsolete top-level provider profiles while preserving `browser.remote`.
+omits obsolete top-level provider profiles while preserving `browser.remote`. Config v12 drops
+the presets of the removed Usage and Git Changes panels, and a saved board keeps its other panels
+when it names one of those kinds.
 
 ### `horizon-device`
 

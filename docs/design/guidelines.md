@@ -399,7 +399,6 @@ Terminal and code fonts:
 |---|---|
 | Terminal grid | JetBrains Mono 13, line height 1.3 x font size |
 | Text editor panel | JetBrains Mono 14 |
-| Git changes / diff | JetBrains Mono 11 for file rows, summary and diff lines; 10 and 9.5 for meta |
 | Panel titlebar title | Inter 13; session badge JetBrains Mono 10.5 |
 | Key hints in overlays | JetBrains Mono 10 in a `BG_ELEVATED` chip |
 | Toolbar frame-rate readout | JetBrains Mono 11.5 |

@@ -83,6 +83,7 @@ settings, and it leaves that file exactly as it is.
 | A store that cannot be read is never replaced by the defaults. | Defaults must not replace the settings of a person. |
 | A store of another schema is refused, and no file is written. | The store may hold settings of a newer Horizon. |
 | A build of an older Horizon still reads the store. | `schema_version` decides, not the build date. |
+| A preset or a panel of a panel kind that a later release removed leaves the settings and the saved board. | The typed form has no variant for that kind, and the rest of the settings and of the board must still load. The configuration version records the change. |
 
 ## When a write happens
 

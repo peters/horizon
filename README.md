@@ -53,7 +53,7 @@ Horizon has five nouns. Everything else is a shortcut, a preset, or a panel kind
 |:-----|:-----------|:---------------|
 | **Canvas** | The infinite 2D surface | Drag empty canvas or swipe with two fingers to pan. Pinch or Ctrl+scroll to zoom. Minimap to jump. |
 | **Workspace** | A color-coded cluster with a shared working directory | Ctrl+double-click the canvas and pick a preset, or click **New** in the sidebar. Arrange with **Default** (free), **Rows**, **Cols**, or **Grid**. Detach it to its own window. |
-| **Panel** | One live surface inside a workspace | Shell, SSH, coding agent, browser, markdown, git, or usage. |
+| **Panel** | One live surface inside a workspace | Shell, SSH, coding agent, browser, markdown, or card. |
 | **Preset** | A named template for a new panel | Command palette, Ctrl+double-click, or **Ctrl+Shift+N** (first preset). |
 | **Session** | A saved board | Close Horizon and come back. **Ctrl+Shift+J** switches between saved boards. |
 
@@ -65,8 +65,7 @@ Session
     ├── Workspace "Backend"     cwd: ~/projects/api
     │     ├── Shell
     │     ├── Grok
-    │     ├── Browser  →  http://127.0.0.1:3000
-    │     └── Git Changes
+    │     └── Browser  →  http://127.0.0.1:3000
     └── Workspace "Frontend"    cwd: ~/projects/web
           ├── Shell
           └── Claude
@@ -83,8 +82,6 @@ Workspaces stay visible. There are no hidden tabs. If something is off-screen, p
 | `grok` · `claude` · `codex` · `open_code` · `gemini` · `kilo_code` · `pi` | First-class coding-agent TUIs, with session resume where the CLI supports it |
 | `browser` | Live Chromium, Firefox, or Safari on the canvas, shared with agents |
 | `editor` | Markdown split view (syntax + preview) |
-| `git_changes` | Changed files, diffs, and hunks for the workspace repo |
-| `usage` | Token spend across agent panels |
 | `command` | Run an arbitrary command as a panel |
 | `device` | Native VNC view of a loopback desktop, or of a remote desktop reached through an SSH tunnel (the host's key must already be trusted, for example by opening it over SSH once). Read-only until you turn **Interact** on, which sends your mouse and keyboard to that desktop |
 
@@ -147,7 +144,7 @@ Group related panels into **color-coded workspaces**. Auto-arrange with rows, co
 <td>
 
 ### AI Agent Panels
-First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, **KiloCode**, and **Pi** integration. Session persistence and resume work where the CLI supports it. Title bars show a **working** indicator and, when a session is bound, its id. A live **usage dashboard** tracks token spend.
+First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, **KiloCode**, and **Pi** integration. Session persistence and resume work where the CLI supports it. Title bars show a **working** indicator and, when a session is bound, its id.
 
 </td>
 <td>
@@ -160,18 +157,10 @@ Open any site in Chromium, Firefox, or Safari on this machine, or on a BrowserSt
 <tr>
 <td>
 
-### Git Integration
-A built-in **git status panel** watches the workspace repo. See changed files, inline diffs, and hunk-level detail without leaving the canvas.
-
-</td>
-<td>
-
 ### Smart Detection
 **Click** an OSC 8 hyperlink to open it. **Ctrl+click** a URL or file path under the cursor. Horizon sees what the terminal prints and makes it interactive.
 
 </td>
-</tr>
-<tr>
 <td>
 
 ### Remote Hosts
@@ -186,28 +175,28 @@ Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut
 The same viewer also watches loopback VNC servers on this computer, one port per copy of an app. See [Watch an app over VNC](#watch-an-app-over-vnc).
 
 </td>
+</tr>
+<tr>
 <td>
 
 ### Live Settings Editor
 **Ctrl+Shift+,** opens the settings as a side panel with live preview. Toggle **light / dark / auto** themes; changes apply to the canvas behind the panel.
 
 </td>
-</tr>
-<tr>
 <td>
 
 ### Session Persistence
 Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row in sidebar order after restore.
 
 </td>
+</tr>
+<tr>
 <td>
 
 ### Markdown Editor
 Drop a `.md` file onto the canvas or create one from the palette. **Split view** with syntax highlighting and live preview, saved with **Ctrl+Shift+S**.
 
 </td>
-</tr>
-<tr>
 <td>
 
 ### Audited Browser Automation
@@ -397,10 +386,6 @@ Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys a
           "name": "App",
           "kind": "browser",
           "command": "http://127.0.0.1:3000"
-        },
-        {
-          "name": "Git",
-          "kind": "git_changes"
         }
       ]
     },
@@ -473,19 +458,9 @@ Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys a
       "kind": "browser"
     },
     {
-      "name": "Git Changes",
-      "alias": "gc",
-      "kind": "git_changes"
-    },
-    {
       "name": "Markdown",
       "alias": "md",
       "kind": "editor"
-    },
-    {
-      "name": "Usage",
-      "alias": "u",
-      "kind": "usage"
     }
   ],
   "features": {
@@ -501,7 +476,7 @@ Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys a
 
 Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in a shortcut, not punctuation-only components such as `Ctrl++`.
 
-Fresh configs already ship the agent, browser, git, markdown, and usage presets above. Existing configs gain missing defaults through migration (Grok, Pi, Browser, and the others) without overwriting presets you renamed.
+Fresh configs already ship the agent, browser, and markdown presets above. Existing configs gain missing defaults through migration (Grok, Pi, Browser, and the others) without overwriting presets you renamed.
 
 ### Remote provider profiles
 
