@@ -129,6 +129,20 @@ class StandInServiceTests(unittest.TestCase):
             self.assertEqual(refused.exception.code, 404)
             refused.exception.close()
 
+    def test_a_refused_key_answers_its_status_and_its_message(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record = Path(folder) / 'received.json'
+            address, thread = speech_standin_service.serve(
+                ('127.0.0.1', 0), 'hei', record, 1, 401, 'Incorrect API key provided')
+            with self.assertRaises(urllib.error.HTTPError) as refused:
+                self.post(address)
+            thread.join(timeout=20)
+            self.assertEqual(refused.exception.code, 401)
+            self.assertEqual(json.loads(refused.exception.read()),
+                             {'error': {'message': 'Incorrect API key provided'}})
+            refused.exception.close()
+            self.assertNotIn('a-value', record.read_text())
+
     def test_the_fields_of_a_body_and_its_boundary_are_read(self):
         body = (b'--b\r\nContent-Disposition: form-data; name="model"\r\n\r\nm'
                 b'\r\n--b\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\n\r\nx\r\n--b--\r\n')

@@ -83,8 +83,11 @@ def describe(method, path, headers, body):
 class Handler(http.server.BaseHTTPRequestHandler):
     """One transcription request: record it, and answer the text."""
 
-    # The text that the service answers, and the record that it writes.
+    # The text that the service answers, the status, the message of a refusal,
+    # and the record that it writes.
     text = 'hei'
+    status = 200
+    error = ''
     record = None
 
     def do_POST(self):  # noqa: N802 - the name of the base class
@@ -96,8 +99,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path != TRANSCRIPTION_PATH:
             self.send_error(404, 'no transcription endpoint here')
             return
-        answer = json.dumps({'text': self.text}).encode()
-        self.send_response(200)
+        if self.status != 200:
+            answer = json.dumps({'error': {'message': self.error or 'refused'}}).encode()
+        else:
+            answer = json.dumps({'text': self.text}).encode()
+        self.send_response(self.status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(answer)))
         self.end_headers()
@@ -107,13 +113,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Say nothing: the record of the request is the evidence of a run."""
 
 
-def serve(address, text, record, requests=1):
+def serve(address, text, record, requests=1, status=200, error=''):
     """Serve `requests` requests on `address`, and answer the address that it took.
 
     The server runs on a thread, so a caller of a test keeps its own frame. An
     address with port 0 takes a free port of this computer, and the answer names it.
     """
-    handler = type('RecordedHandler', (Handler,), {'text': text, 'record': record})
+    handler = type('RecordedHandler', (Handler,), {
+        'text': text, 'record': record, 'status': status, 'error': error})
     server = http.server.HTTPServer(address, handler)
     served = []
 
@@ -133,6 +140,9 @@ def parse_arguments(argv):
     parser.add_argument('--bind', default='127.0.0.1', help='The address of this computer to listen on')
     parser.add_argument('--port', type=int, default=0, help='The port to listen on, or 0 for a free one')
     parser.add_argument('--text', default='hei', help='The text that the service answers')
+    parser.add_argument('--status', type=int, default=200,
+                        help='The status of the answer, such as 401 for a refused key')
+    parser.add_argument('--error', default='', help='The message of a refused answer')
     parser.add_argument('--record', type=Path, help='The file that holds what one request carried')
     parser.add_argument('--requests', type=int, default=1, help='The number of requests before the end')
     return parser.parse_args(argv)
@@ -140,7 +150,8 @@ def parse_arguments(argv):
 
 def main(argv):
     args = parse_arguments(argv)
-    address, thread = serve((args.bind, args.port), args.text, args.record, args.requests)
+    address, thread = serve((args.bind, args.port), args.text, args.record, args.requests,
+                            args.status, args.error)
     print(f'{address[0]}:{address[1]}', flush=True)
     try:
         thread.join()
