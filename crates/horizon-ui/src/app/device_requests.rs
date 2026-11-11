@@ -524,7 +524,7 @@ impl HorizonApp {
 }
 
 #[cfg(test)]
-pub(in crate::app) mod tests {
+mod tests {
     mod claimed_requests;
     mod reveal;
     mod reveal_wait;
@@ -549,27 +549,6 @@ pub(in crate::app) mod tests {
         app.board.panels[0].kind = PanelKind::Claude;
         app.board.panels[1].kind = PanelKind::Claude;
         (temp, ctx, app)
-    }
-
-    /// An app with one connected Device viewer, owned by the agent panel that
-    /// created it, for a test of another module that needs a viewer.
-    pub(in crate::app) fn app_with_a_viewer() -> (tempfile::TempDir, Context, HorizonApp, PanelId) {
-        let (temp, ctx, mut app) = app();
-        let create = request(
-            &app,
-            Operation::Create {
-                endpoint: "127.0.0.1:5900".into(),
-                identity: None,
-                ssh: None,
-            },
-        );
-        let created = one(app.apply_device_request(&create, &ctx));
-        let id = app.board.panel_id_by_local_id(&created.panel_id).unwrap();
-        app.panel_render_caches.device_ui_state.insert(
-            id,
-            crate::device_widget::DeviceUiState::connected_fixture(&create.actor),
-        );
-        (temp, ctx, app, id)
     }
 
     fn request(app: &HorizonApp, operation: Operation) -> Request {

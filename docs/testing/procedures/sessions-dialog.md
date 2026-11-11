@@ -112,7 +112,8 @@ says so in its question before it removes that session.
 1. Open **Menu** › **Sessions**.
 
    Result: The dialog shows two session cards. The dialog is bright and the
-   board around it is dim.
+   board around it is dim. While the dialog reads the sessions, it says
+   `Working on the saved sessions: List` and then shows the cards.
 
 2. Look at the heading **Sessions** and at the text of the two session cards.
 

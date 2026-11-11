@@ -134,6 +134,43 @@ times and does not apply an old result.
   a replaced board takes the board fence when the UI sends it, and it checks the
   fence before it writes.
 
+### A panel that waits for its preparation
+
+A panel needs reads of its own data before its process starts: the saved screen
+of its transcript, its working directory, the saved work of its agent and the
+text of its file. The frame creates the panel with a screen that says Horizon
+prepares it, and gives those reads to the coordination worker.
+
+- `Board::create_panel_waiting` and `Board::from_runtime_state_waiting`
+  ([`board/workspaces.rs`](../../crates/horizon-core/src/board/workspaces.rs))
+  record each panel that waits in `pending_starts`. A panel that runs no local
+  process starts at once.
+- `queue_panel_starts`
+  ([`app/panel_starts.rs`](../../crates/horizon-ui/src/app/panel_starts.rs))
+  sends one preparation for each of them, keeps the ones that wait, and asks
+  for no second preparation of the same panel. The frame that applies an answer
+  starts the process with `Board::start_panel`, or drops the answer when the
+  panel is gone.
+- `prepare_panel_start`
+  ([`panel/spawn/start.rs`](../../crates/horizon-core/src/panel/spawn/start.rs))
+  is the work: the transcript, the working directory, the `script` probe and the
+  saved work of an agent. `warm_script_support`
+  ([`transcript.rs`](../../crates/horizon-core/src/transcript.rs)) resolves the
+  probe once at the start of Horizon, on a worker.
+- `prepare_restart` and `finish_restart` prepare a restart the same way. The old
+  process ends between the two, so the check that its conversation is open
+  nowhere runs after that teardown. `request_panel_restart`
+  ([`app/panel_restarts.rs`](../../crates/horizon-ui/src/app/panel_restarts.rs))
+  runs both, and a machine terminal keeps its attempt count and its delay.
+
+### A worker that owns the desktop clipboard
+
+`crate::clipboard`
+([`clipboard.rs`](../../crates/horizon-ui/src/clipboard.rs)) owns the desktop
+clipboard on one thread, as `primary_selection` owns the PRIMARY selection. A
+frame sends it the text or the image of a copy; the thread encodes the image and
+writes it. A test build records the copies instead of publishing them.
+
 ### One ordered worker thread
 
 If writes must stay in order, use one worker thread with a job queue. Do not
@@ -403,8 +440,9 @@ line is one `ui_thread::exception` in the code. Do not copy it into new code.
 
 - `terminal spawn: a terminal panel is a process`: `Terminal::spawn`
   ([`terminal/lifecycle.rs`](../../crates/horizon-core/src/terminal/lifecycle.rs))
-  forks and starts the shell of a new panel. A panel is one process, so a frame
-  that creates a panel owns this start.
+  forks and starts the shell of a new panel, whichever path asked for it: a new
+  panel, a restored board and a restart all end here. A panel is one process, so
+  a frame that starts a panel owns this start.
 - `exit cleanup: the window closes`: `run_exit_cleanup`
   ([`lifecycle/shutdown.rs`](../../crates/horizon-ui/src/app/lifecycle/shutdown.rs))
   waits for panels, for browsers and for the session writer. The window closes,
@@ -425,38 +463,23 @@ line is one `ui_thread::exception` in the code. Do not copy it into new code.
   ([`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes and
   renames the session file, without a sync. While the session writer thread
   writes that session, the save is refused, and the startup prompt offers to try
-  again. The session auto-save queues the board for the session writer thread
+  again or to open the repaired board without saving it. The session auto-save
+  queues the board for the session writer thread
   ([`writer.rs`](../../crates/horizon-core/src/session_store/writer.rs)) and does
-  not write.
-- `part 2: F4 a panel reads its transcript and its directory on the frame`:
-  `spawn_terminal`
-  ([`panel/spawn/terminal.rs`](../../crates/horizon-core/src/panel/spawn/terminal.rs))
-  prepares the replay of the transcript, resolves the working directory and
-  probes `script` on the frame. The next change moves them to a worker.
-- `part 2: F5 a restart reads the saved work of its panel`: `Panel::restart`
-  ([`panel/lifecycle.rs`](../../crates/horizon-core/src/panel/lifecycle.rs))
-  resolves the working directory, the saved work of an agent and the key of its
-  machine on the frame. The next change moves that pre-flight to a worker.
-- `part 2: F11 a recording starts on the frame`: the Record control of a Device
-  panel and a `video` request start a recorder, which takes the manifest lock of
-  the capture and waits up to 2 s for another writer, and makes the folder of the
-  video ([`device_widget/recording.rs`](../../crates/horizon-ui/src/device_widget/recording.rs)).
-  The next change moves the start to the coordination worker.
-- `part 2: F8 the notice of a saved conversation is read on the frame`:
-  `restore_saved_session_deletion_notice`
-  ([`panels/session_deletion/worker.rs`](../../crates/horizon-ui/src/app/panels/session_deletion/worker.rs))
-  reads the recovery notices of this profile. They move to the session writer
-  with the lease.
+  not write. This scope stays until the session writer answers a failed board
+  write, because without that answer the two choices of the prompt cannot say
+  what happened.
+- `clipboard paste: the toolkit reads the desktop clipboard`: eframe and
+  egui-winit read the desktop clipboard for a paste inside their own event
+  handling, on the UI thread, before Horizon sees the text. Horizon asks for the
+  paste in `clipboard_paste::request`
+  ([`terminal_widget/clipboard_paste.rs`](../../crates/horizon-ui/src/terminal_widget/clipboard_paste.rs))
+  and does no clipboard work itself. The framework offers no way to read the
+  clipboard on a worker.
 
-This known work is not guarded yet, so no scope holds it:
-
-- The read of the content of an editor panel when the panel opens: `spawn_editor`
-  ([`panel/spawn.rs`](../../crates/horizon-core/src/panel/spawn.rs)) calls
-  `MarkdownEditor::open`, which reads the file. A dropped file is sized on the
-  coordination worker, but this read of its content still runs on the frame
-  that opens its panel.
-- A read of the machine list, of a session or of a directory entry that a
-  `horizon-ui` function calls outside the guarded functions of `horizon-core`.
+Horizon's own copies do not stay on the frame: the thread that owns the desktop
+clipboard writes the text and the image of every copy
+([`clipboard.rs`](../../crates/horizon-ui/src/clipboard.rs)).
 
 Two frame paths that this guide listed before do not read a file any more: the
 watch of the settings store and the refresh of the lease of a session. Both run

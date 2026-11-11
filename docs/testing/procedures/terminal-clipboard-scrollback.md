@@ -54,6 +54,21 @@ the scrollback chords do not take keys from the program in the terminal.
 
 ## 6. Tasks
 
+### 6.1 T0 — A copy leaves the window at once
+
+1. Type `echo CLIPBOARD-OWNER` and press Enter.
+
+   Result: the terminal shows the text two times.
+
+2. Select the text `echo CLIPBOARD-OWNER` with the pointer and press the copy
+   shortcut.
+
+   Result: the window keeps its frames and the selection stays visible.
+
+3. Open a text program of the isolated desktop and paste there.
+
+   Result: the text `echo CLIPBOARD-OWNER` appears in the text program.
+
 ### 6.1 T1 — Copy and paste text with the keyboard
 
 1. Type `echo COPIED-FROM-THE-SCREEN` and press Enter.

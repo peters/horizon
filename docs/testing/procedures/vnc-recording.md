@@ -61,7 +61,9 @@ capture-quality grade, file completion, and temporary storage.
 
 2. Click the record icon.
 
-   Result: The status says **Recording VNC desktop**. The stop icon is shown.
+   Result: The status says **Recording VNC desktop** within one second. The stop
+   icon is shown. The window keeps its frames while the recording starts: no
+   part of the window stops before the status appears.
 
 3. Put the pointer on the stop icon.
 

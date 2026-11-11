@@ -78,13 +78,35 @@ impl HorizonApp {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use horizon_core::browser::manifest::device::{Operation, VideoAction};
+    use horizon_core::browser::manifest::device::VideoAction;
 
-    use crate::app::device_requests::tests::app_with_a_viewer;
+    use crate::app::test_support::test_app;
+
+    /// An app with one connected Device viewer, without a VNC server.
+    fn app_with_a_viewer() -> (tempfile::TempDir, crate::app::HorizonApp, horizon_core::PanelId) {
+        let (temp, app) = test_app();
+        let mut app = app;
+        let workspace = app.board.ensure_workspace();
+        let panel_id = app
+            .create_panel_with_options(
+                horizon_core::PanelOptions {
+                    kind: horizon_core::PanelKind::Device,
+                    command: Some("127.0.0.1:5900".into()),
+                    ..horizon_core::PanelOptions::default()
+                },
+                workspace,
+            )
+            .expect("a Device panel");
+        app.panel_render_caches.device_ui_state.insert(
+            panel_id,
+            crate::device_widget::DeviceUiState::connected_fixture("agent"),
+        );
+        (temp, app, panel_id)
+    }
 
     #[test]
     fn a_recording_starts_on_the_coordination_worker_and_the_frame_does_not_wait() {
-        let (_temp, _ctx, mut app, panel_id) = app_with_a_viewer();
+        let (_temp, mut app, panel_id) = app_with_a_viewer();
 
         // The click of the person records a request; no frame starts an encoder.
         let started = Instant::now();
@@ -123,9 +145,5 @@ mod tests {
             std::path::Path::new(&status.capture.path).exists(),
             "the worker made the folder of the video"
         );
-        let _ = Operation::Video {
-            panel_id: String::new(),
-            action: VideoAction::Stop,
-        };
     }
 }
