@@ -95,6 +95,16 @@ impl SecretInputs {
         }
     }
 
+    /// The rows of one name that a person opened, for a test of their layout.
+    #[cfg(test)]
+    pub(super) fn with_open_rows(name: &SecretName) -> Self {
+        Self {
+            replacing: Some(name.clone()),
+            confirming: Some(name.clone()),
+            ..Self::default()
+        }
+    }
+
     /// The name and the value that the person typed, for a test that reads them back.
     #[cfg(test)]
     pub(super) fn typed(&self) -> (String, String) {

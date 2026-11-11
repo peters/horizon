@@ -6,7 +6,7 @@ use egui::{Context, Id, Pos2, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
 use crate::app::root_chrome::effective_sidebar_width;
-use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, SETTINGS_PANEL_ID, settings_panel_default_width};
+use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, settings_panel_default_width};
 use crate::app::util::{OverlayExclusion, viewport_local_rect};
 use crate::app::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, TOOLBAR_HEIGHT};
 
@@ -47,7 +47,7 @@ impl HorizonApp {
 
     pub(in crate::app) fn canvas_rect(&self, ctx: &Context) -> Rect {
         let viewport = viewport_local_rect(ctx);
-        let settings_panel_rect = self.settings_panel_rect(ctx, viewport);
+        let settings_panel_rect = self.settings_panel_rect_for_layout(viewport);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
         let sidebar_width = if self.sidebar_visible {
             effective_sidebar_width(viewport.width())
@@ -61,12 +61,12 @@ impl HorizonApp {
         self.settings.is_none()
     }
 
-    fn settings_panel_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
-        estimated_settings_panel_rect(
-            viewport,
-            self.settings.is_some(),
-            PanelState::load(ctx, Id::unique(SETTINGS_PANEL_ID)).map(|state| state.outer_rect),
-        )
+    fn settings_panel_rect_for_layout(&self, viewport: Rect) -> Option<Rect> {
+        // The rectangle that the panel took this frame comes from the panel
+        // itself: a rect that egui remembered of the panel is not that rect,
+        // because egui moves the left edge of a panel whose content overflows.
+        let taken = self.settings.as_ref().and_then(|editor| editor.panel_rect);
+        estimated_settings_panel_rect(viewport, self.settings.is_some(), taken)
     }
 
     fn settings_bar_rect(&self, ctx: &Context, viewport: Rect) -> Option<Rect> {
@@ -96,7 +96,7 @@ impl HorizonApp {
             ));
         }
 
-        if let Some(rect) = self.settings_panel_rect(ctx, viewport) {
+        if let Some(rect) = self.settings_panel_rect_for_layout(viewport) {
             zones.push(rect);
         }
         if let Some(rect) = self.settings_bar_rect(ctx, viewport) {

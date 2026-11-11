@@ -4,7 +4,7 @@ feature: Settings panel layout
 platforms: [linux, macos]
 cost: none
 destructive: no
-secrets: none
+secrets: [a marker value of the test only]
 owner: peters
 ---
 
@@ -14,7 +14,8 @@ owner: peters
 
 This procedure shows that the Settings panel keeps its width and stays beside
 the canvas. It also shows that wide content in the panel scrolls inside the
-panel and does not draw over the canvas.
+panel and does not draw over the canvas. It shows that no tab paints over the
+panel and that the canvas stops at the panel.
 
 ## 2. Applicability
 
@@ -79,6 +80,49 @@ None of the steps deletes data, rents compute or changes access.
    Result: The six tabs are on one row. No tab label wraps onto a second line,
    and the panel does not push the tabs off its left edge.
 
+3. Read the left edge of the panel and the right edge of the canvas on each
+   tab. Read the first character of the tab row, which is `General`.
+
+   Result: The left edge of the panel is at the same place on all six tabs. The
+   canvas stops at that edge. `General` shows in full, and no strip of the
+   canvas covers the panel.
+
+4. Select the `Secrets` tab. Read the heading.
+
+   Result: The heading reads `Secrets for agents` in full. No strip of the
+   canvas covers it.
+
+### 6.2b S2b — A row of the Secrets tab fits the panel
+
+> **CAUTION:** THIS TASK STORES TWO MARKER VALUES. Use the private home of this
+> run only, and use values that are not a key of a provider.
+
+1. In the `Secrets` tab, type `HZ_DEMO_TOKEN` in the `NAME` box and
+   `marker-value-not-a-key` in the value box. Click `Add`.
+
+   Result: One row appears, with the name on the left and `Stored on this
+   computer` on the same line. The two buttons `Replace value` and `Delete`
+   are on the line under the name and the state.
+
+2. Read the row that adds a name. Read the `Add` button.
+
+   Result: The `NAME` box, the value box and `Add` are on one line. All three
+   stay inside the panel, and `Add` is at the right end of the row.
+
+3. Add a second name of 64 characters: `AAAA` ten times, then `AAAA` six times.
+   Use the same marker value.
+
+   Result: The second row appears. Its name is cut with an ellipsis, and a
+   pointer on the name shows the whole name. The state text stays on its line,
+   and the two buttons stay on the line under it. The panel width does not
+   change, and the canvas stays visible on the left.
+
+4. Put the pointer on the state text of a row, then on the name of the second
+   row.
+
+   Result: A cut text shows its whole text. A text that the panel does not cut
+   shows no tooltip.
+
 ### 6.2a S2a — A port for one host names its field
 
 1. Select the `General` tab and read **Remote hosts** → the row under
@@ -134,5 +178,7 @@ None of the steps deletes data, rents compute or changes access.
 
 - The panel keeps its width on every tab, with long lines in the editor. The
   tabs are General, Shortcuts, Presets, Browser, Remote and Secrets.
+- The canvas stops at the left edge of the panel on every tab. No strip of the
+  canvas covers the tab row, a heading, a row of the Secrets tab, or a field.
 - Wide content scrolls inside the panel in both directions.
 - The canvas stays visible beside the panel at every window size.

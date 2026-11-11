@@ -13,7 +13,7 @@ mod tests;
 #[cfg(test)]
 pub(super) use tests::{at, frame_of, texts_hold};
 
-use egui::{Color32, Margin, Stroke, Vec2};
+use egui::{Color32, Margin, Rect, Stroke, Vec2};
 use horizon_core::Config;
 use horizon_core::named_secrets::NamedSecretWorkbench;
 use horizon_core::remote_browser_credential::{CredentialWorkbench, KeyringImport};
@@ -86,6 +86,9 @@ pub(super) struct SettingsEditor {
     /// Whether a tab changed `config` since it was adopted.
     pub(super) dirty: bool,
     pub(super) status: SettingsStatus,
+    /// The rectangle that the panel took in the last frame that drew it, so the
+    /// canvas paints only beside it. A closed panel has none.
+    pub(super) panel_rect: Option<Rect>,
     active_tab: SettingsTab,
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
@@ -133,6 +136,7 @@ impl HorizonApp {
                 config,
                 dirty: false,
                 status: SettingsStatus::None,
+                panel_rect: None,
                 active_tab: SettingsTab::General,
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
@@ -152,6 +156,9 @@ impl HorizonApp {
             status_color,
             has_changes: editor.dirty,
         };
+        // The canvas takes this rectangle from the editor, so it ends at the panel
+        // whatever the active tab asked for.
+        editor.panel_rect = Some(panel_rect(ui));
         let (action, changed) = render_settings_panel(
             ui,
             panel_state,
@@ -330,6 +337,21 @@ pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
     (viewport_width * 0.3).clamp(340.0, 900.0)
 }
 
+/// The rectangle that the Settings panel takes from `ui`, before any tab draws.
+/// The panel sizes itself from this rectangle and the canvas takes only what is
+/// left of `ui`, so one place decides the edge between them: no tab can paint
+/// over the canvas, and the canvas cannot paint over the panel, whatever the
+/// content of the tab asks for.
+///
+/// A right panel takes the width of its widest child, and egui moves the left
+/// edge of a panel that overflows instead of growing it, so a rectangle that a
+/// tab could widen would move the canvas into the panel.
+pub(super) fn panel_rect(ui: &egui::Ui) -> egui::Rect {
+    let available = ui.available_rect_before_wrap();
+    let width = settings_panel_default_width(util::viewport_local_rect(ui).width()).min(available.width());
+    egui::Rect::from_min_max(egui::Pos2::new(available.max.x - width, available.min.y), available.max)
+}
+
 fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     match status {
         SettingsStatus::None => (String::new(), theme::FG_DIM()),
@@ -358,16 +380,14 @@ fn render_settings_panel(
     named_secrets: &mut NamedSecretWorkbench,
     keyring: &mut KeyringImport,
 ) -> (SettingsAction, bool) {
-    let viewport_width = util::viewport_local_rect(ui).width();
-    let default_width = settings_panel_default_width(viewport_width);
-
+    let rect = panel_rect(ui);
     egui::Panel::right(SETTINGS_PANEL_ID)
         // One width for every tab, and the same width that the panel opens with.
-        // A right panel takes the width of its widest child, so a tab with a long
-        // path or a long secret name would widen the panel, and its own left edge
-        // would move as the person changes the tab. The content wraps, scrolls or
-        // is cut inside this width instead.
-        .exact_size(default_width)
+        // The rectangle comes from `panel_rect`, which the canvas reads as well,
+        // so a tab with a long path or a long secret name cannot move the edge
+        // between the panel and the canvas. The content wraps, scrolls or is cut
+        // inside this width instead.
+        .exact_size(rect.width())
         .frame(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())

@@ -619,6 +619,11 @@ outline).
   Disabled uses `FG_DIM` in place of `ACCENT`.
 - **Section card** (settings): `PANEL_BG`, 1 px `BORDER_SUBTLE`, radius 10,
   margin 16, followed by 12 of space; heading above it 13 strong `FG_SOFT`.
+- **Settings panel**: 30 percent of the window, between 340 and 900 points. It
+  keeps one rectangle on every tab, and the canvas ends at its left edge. A row
+  of a tab wraps or cuts its text inside the panel. A name or a path that a row
+  cuts shows the whole text in its hover text. When a row cannot keep its
+  actions beside the text, the actions take the line under the text.
 
 ### Card panel
 

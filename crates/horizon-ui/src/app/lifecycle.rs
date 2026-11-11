@@ -322,7 +322,10 @@ impl HorizonApp {
         self.render_toolbar(ui);
         self.render_work_resume_banner(ui);
         self.render_sidebar(ui);
-        self.render_canvas(ui);
+        // The rectangle that the panel took this frame, so the canvas paints
+        // only beside it.
+        let settings_panel_rect = self.settings.as_ref().and_then(|editor| editor.panel_rect);
+        self.render_canvas(ui, settings_panel_rect);
         let overlay_zones = self.overlay_exclusion_zones(ui);
         self.render_workspace_backgrounds(ui, workspace_bounds, &overlay_zones);
         self.render_browser_connector_lines(ui.ctx(), self.canvas_rect(ui.ctx()), None);

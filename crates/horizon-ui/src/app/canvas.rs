@@ -104,13 +104,20 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(theme::BG()))
-            .show(ui, |ui| {
-                paint_canvas_glow(ui);
-                paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
-            });
+    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui, beside: Option<Rect>) {
+        // The canvas paints only in the rectangle that the Settings panel leaves,
+        // whatever the panel's content asked for: the panel draws first and
+        // answers its rectangle, and no painting of the canvas starts inside it.
+        let rect = canvas_paint_rect(ui.available_rect_before_wrap(), beside);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.shrink_clip_rect(rect);
+            egui::CentralPanel::default()
+                .frame(egui::Frame::default().fill(theme::BG()))
+                .show(ui, |ui| {
+                    paint_canvas_glow(ui);
+                    paint_dot_grid(ui, self.canvas_view, &mut self.canvas_grid_cache);
+                });
+        });
     }
 
     pub(super) fn render_empty_state_card(&mut self, ctx: &Context) {
@@ -232,6 +239,18 @@ fn should_show_empty_state_card(workspace_count: usize, panel_count: usize, fixe
     fixed_overlays_visible && workspace_count == 0 && panel_count == 0
 }
 
+/// The rectangle that the canvas paints in: what `ui` has left, and never the
+/// rectangle of the panel beside it.
+fn canvas_paint_rect(available: Rect, beside: Option<Rect>) -> Rect {
+    match beside {
+        Some(panel) => Rect::from_min_max(
+            available.min,
+            Pos2::new(available.max.x.min(panel.min.x), available.max.y),
+        ),
+        None => available,
+    }
+}
+
 fn paint_dot_grid(ui: &mut egui::Ui, canvas_view: horizon_core::CanvasViewState, cache: &mut CanvasGridCache) {
     let rect = ui.max_rect();
     let layout = dot_grid_layout(canvas_view);
@@ -319,8 +338,8 @@ mod tests {
     use horizon_core::CanvasViewState;
 
     use super::{
-        CanvasGridCacheKey, GRID_SPACING, MIN_GRID_SCREEN_SPACING, dot_grid_axis_count, dot_grid_layout,
-        should_show_empty_state_card,
+        CanvasGridCacheKey, GRID_SPACING, MIN_GRID_SCREEN_SPACING, canvas_paint_rect, dot_grid_axis_count,
+        dot_grid_layout, should_show_empty_state_card,
     };
 
     #[test]
@@ -370,6 +389,36 @@ mod tests {
         let zoomed = CanvasGridCacheKey::new(rect, dot_grid_layout(CanvasViewState::new([24.0, -12.0], 1.5)));
 
         assert_ne!(base, zoomed);
+    }
+
+    /// The canvas takes the rectangle that the panel beside it leaves, and a
+    /// panel whose content asked for more than it reserved ends the canvas at
+    /// the edge it reserved, not at the edge that it reported.
+    #[test]
+    fn the_canvas_paints_only_beside_the_settings_panel() {
+        let available = Rect::from_min_max(Pos2::new(210.0, 46.0), Pos2::new(1480.0, 900.0));
+        let reserved = Rect::from_min_max(Pos2::new(1036.0, 0.0), Pos2::new(1480.0, 900.0));
+        let overflowing = Rect::from_min_max(Pos2::new(1036.0, 0.0), Pos2::new(1536.9, 900.0));
+
+        for panel in [reserved, overflowing] {
+            let painted = canvas_paint_rect(available, Some(panel));
+            assert!(
+                painted.max.x <= panel.min.x,
+                "the canvas {painted:?} ends at the left edge of {panel:?}"
+            );
+            assert!((painted.max.x - panel.min.x).abs() <= f32::EPSILON);
+            assert!((painted.min.x - available.min.x).abs() <= f32::EPSILON);
+        }
+        assert_eq!(canvas_paint_rect(available, None), available);
+
+        // A panel that is wider than the window leaves an empty canvas, and never
+        // a rectangle that runs backwards.
+        let wider_than_the_window = Rect::from_min_max(Pos2::new(-40.0, 0.0), Pos2::new(1600.0, 900.0));
+        let empty = canvas_paint_rect(available, Some(wider_than_the_window));
+        assert!(
+            empty.max.x <= available.min.x,
+            "a panel wider than the window leaves no canvas: {empty:?}"
+        );
     }
 
     #[test]
