@@ -32,6 +32,7 @@ const ASSETS: &[&str] = &[
     "plugins/claude-code/skills/horizon-machines/references/gcp.md",
     "plugins/claude-code/skills/horizon-machines/references/hetzner.md",
     "plugins/claude-code/skills/horizon-machines/references/runpod.md",
+    "plugins/claude-code/skills/horizon-speech/SKILL.md",
     "plugins/codex/skills/horizon-browser/SKILL.md",
     "plugins/codex/skills/horizon-block/SKILL.md",
     "plugins/codex/skills/horizon-device/SKILL.md",
@@ -46,6 +47,7 @@ const ASSETS: &[&str] = &[
     "plugins/codex/skills/horizon-machines/references/gcp.md",
     "plugins/codex/skills/horizon-machines/references/hetzner.md",
     "plugins/codex/skills/horizon-machines/references/runpod.md",
+    "plugins/codex/skills/horizon-speech/SKILL.md",
 ];
 
 fn main() -> io::Result<()> {

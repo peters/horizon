@@ -14,14 +14,14 @@ pub(super) const HORIZON_BLOCK_SKILL: &str = "horizon-block";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
 pub(super) const HORIZON_MACHINES_SKILL: &str = "horizon-machines";
+pub(super) const HORIZON_SPEECH_SKILL: &str = "horizon-speech";
 // Recognized only for migration cleanup; never installed by this version.
 pub(super) const RETIRED_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
 /// Skills removed from Horizon. Older installs wrote them to the Claude plugin
 /// tree, the private integrations cache and the codex/grok skill roots; each
 /// copy is removed once no older Horizon host that still serves it is running.
-pub(super) const RETIRED_MCP_SKILLS: &[&str] =
-    &["horizon-app-testing", "horizon-cast", "horizon-cloud", "horizon-speech"];
+pub(super) const RETIRED_MCP_SKILLS: &[&str] = &["horizon-app-testing", "horizon-cast", "horizon-cloud"];
 const LEASES_DIR: &str = ".horizon-leases";
 
 pub(super) type SkillOwnershipCheck = fn(&Path) -> io::Result<()>;
