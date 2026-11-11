@@ -27,6 +27,7 @@
 //! [`docs/review/trust-boundaries/named-secrets.md`](../../../../../docs/review/trust-boundaries/named-secrets.md)
 //! states what is untrusted here and what this import does not guarantee.
 
+mod click;
 mod import;
 mod outcome;
 mod plan;
@@ -34,6 +35,7 @@ mod program;
 mod readers;
 mod run;
 
+pub use click::{ImportLine, KeyringImport};
 pub use import::import_from_keyring;
 pub use outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 pub use plan::KeyringImportPlan;
