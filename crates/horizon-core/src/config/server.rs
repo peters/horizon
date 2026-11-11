@@ -26,7 +26,8 @@ pub const MAX_COMMAND_LEN: usize = 200;
 
 /// The characters that a command may hold. Every one of them passes the remote
 /// shell of `ssh` without a quote, so the entry needs no shell rule of its own
-/// and no value can start a second command.
+/// and no value can start a second command. The underscore is one of them
+/// because a path such as `/Users/x/my_tools/horizon` is a normal path.
 const COMMAND_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._:/=@+-";
 
 /// The server that the machines of this Horizon follow.
@@ -170,6 +171,22 @@ mod tests {
         assert_eq!(config.ssh_target(), Some("peters@10.0.0.5"));
         assert_eq!(config.command(), "/opt/horizon --server-link");
         assert!(config.validate().is_ok());
+    }
+
+    /// A path of a person can hold an underscore, and the remote shell reads it
+    /// as one word of the same program.
+    #[test]
+    fn a_command_holds_the_path_of_a_person_with_an_underscore() {
+        for command in [
+            "/Users/x/my_tools/horizon --server-link",
+            "/opt/horizon_candidate --server-link",
+            "horizon_2 --server-link",
+            "/home/x/tools/hz-prod_2/bin/horizon --server-link",
+        ] {
+            let config = entry(Some("server-vm"), Some(command));
+            assert!(config.validate().is_ok(), "{command} is one command");
+            assert_eq!(config.command(), command);
+        }
     }
 
     #[test]

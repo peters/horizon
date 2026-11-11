@@ -541,13 +541,13 @@ fn a_server_section_of_a_copy_reaches_the_store_and_a_bad_one_is_refused() {
 version: 11
 server:
   ssh_target: server-vm
-  command: /opt/horizon --server-link
+  command: /Users/x/my_tools/horizon --server-link
 ",
     );
 
     let loaded = home.load().expect("load");
     assert_eq!(loaded.server.ssh_target(), Some("server-vm"));
-    assert_eq!(loaded.server.command(), "/opt/horizon --server-link");
+    assert_eq!(loaded.server.command(), "/Users/x/my_tools/horizon --server-link");
     assert!(loaded.server.names_server());
     let stored = Config::read(&home.config_path())
         .expect("read the store")
