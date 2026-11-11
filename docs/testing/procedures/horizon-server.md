@@ -67,16 +67,27 @@ in its settings behaves as before.
    ```
 
    Result: the process stays in the foreground and writes one line about the
-   socket to the standard error. The directory has mode 0700, and
-   `server.sock` and `server.sqlite` are in it.
+   socket to the standard error.
 
-2. On the server computer, the process must write the socket line only. Start a
+2. In a second terminal on the server computer, look at the server home:
+
+   ```bash
+   export HORIZON_SERVER_HOME="$HOME/.horizon-server-test"
+   ls -l "$HORIZON_SERVER_HOME"
+   ```
+
+   Result: the directory has mode 0700. `server.sock`, `server.lock` and
+   `server.sqlite` have mode 0600. The `server.sqlite-wal` and
+   `server.sqlite-shm` files, when the server has written a change, have mode
+   0600 too.
+
+3. On the server computer, the process must write the socket line only. Start a
    second server in a second terminal with the same `HORIZON_SERVER_HOME`.
 
    Result: the second process writes `error: a Horizon server already runs for
    ...` and exits with code 1. The first process still answers.
 
-3. On client computer A, start the fixture with the server entry:
+4. On client computer A, start the fixture with the server entry:
 
    ```bash
    python3 scripts/device-smoke/serve.py --native-view --state /path/to/a \
@@ -89,7 +100,7 @@ in its settings behaves as before.
    the sidebar shows the line `Server: connecting` and then `Server: in step`,
    also before the first machine arrives.
 
-4. Do step 3 again for client computer B, with `--state /path/to/b` and the same
+5. Do step 4 again for client computer B, with `--state /path/to/b` and the same
    `--server-target`.
 
    Result: client computer B also reaches the server, and the server writes one
@@ -203,6 +214,41 @@ in its settings behaves as before.
    `Server` line, and no `ssh` process of the candidate runs. The machine list of
    that home is the file `machines/registry.json`.
 
+### 6.6 S6 — the server stops while a computer is idle
+
+This task proves that a computer that does nothing learns that the server is
+gone, and that it catches up when the server returns.
+
+1. On client computer B, do nothing. Its Machines section says `Server: in step`,
+   as at the end of step 6.1, and no click is needed.
+
+2. On the server computer, stop the server with Ctrl-C in its terminal.
+
+   Result: the section of client computer B says `Server away`. Its link ends at
+   once when the socket of the server closes, and at the bound of its open wait at
+   the latest: the server answers a wait at 50 seconds, and the link of a computer
+   ends at 65 seconds. Write down which of the two you saw, and how long it took.
+
+3. On client computer B, look for a child of the link that lives on:
+
+   ```bash
+   pgrep -fl -- '--server-link'
+   ```
+
+   Result: no process of `--server-link` stays. The attempt of a link whose
+   server answers nothing ends at once, and its child ends with it.
+
+4. On client computer A, add a machine `build-2` with the request of step 6.1.
+
+   Result: client computer A says `Server away · 1 pending`, and client computer
+   B still shows its last list without `build-2`.
+
+5. On the server computer, start the server again with the command of step 5.1.
+
+   Result: both client computers say `Server: in step` within a few seconds.
+   Client computer B shows `build-2`, its list is the list of the server, and the
+   `pending` mark of client computer A goes away.
+
 ## 7. Pass criteria
 
 - A machine that one computer adds appears on the other computer within a few
@@ -213,6 +259,11 @@ in its settings behaves as before.
 - A machine that only the server gave has no key on the other computer, and a
   click on it opens nothing and says why.
 - A second server of one home refuses with one typed line and code 1.
+- A server that stops while a computer is idle makes that computer say
+  `Server away` within 70 seconds, and the computer is in step with the change of
+  the other computer when the server returns.
+- `server.sqlite`, `server.sqlite-wal` and `server.sqlite-shm` have mode 0600,
+  and `server.lock` stays in the home after a stop of the server.
 - A computer without a server in its settings behaves as before, and it starts
   no child.
 

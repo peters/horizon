@@ -48,8 +48,10 @@ never on the UI thread.
   person's own SSH configuration for that name, as it does for a browser host.
 - **The command is one line that the remote shell reads.** `server.command` is at
   most 200 characters of letters, digits and `._:/=@+-`, with at most one space
-  between words, so it starts one program and no second command. It is empty by
-  default, and then the link runs `horizon --server-link`.
+  between words, so it starts one program and no second command. A path of the
+  person that holds an underscore, such as `/Users/x/my_tools/horizon`, is one
+  such command. It is empty by default, and then the link runs
+  `horizon --server-link`.
 - **Both values belong to the person.** A hand-edited setting runs the `ssh` that
   the person configured for that name. The boundary of this page starts at the
   bytes of the child, not at the setting.
@@ -103,6 +105,10 @@ never on the UI thread.
 - **The socket is private.** A Unix socket of the server is `0600` in a directory
   of the server user, a file that is not a socket is left alone, and a socket that
   a stopped server left is removed before the bind.
+- **The store is private.** The file of the server store is `0600` before SQLite
+  opens it, and SQLite gives its `-wal` and `-shm` files the mode of that file, so
+  the three are the server user's alone whatever the umask of the process is. A
+  file that an older Horizon made readable is made private at the start.
 - **The queue file is private.** The queue of a computer is `0600` in a `0700`
   directory, written as a whole through a temporary file and a rename. The mirror
   of the machine list and the device name are written the same way.
@@ -111,6 +117,17 @@ never on the UI thread.
   with two tries. It writes the frames to the standard input of that child and
   reads them from its standard output; the standard error of the child goes to
   the log, one bounded line at a time, and is never stored.
+- **Every request of the link has a bound.** The server answers a push and a pull
+  at once, and one that no answer reached after 20 seconds ends the link. A wait
+  stays open at the 50 seconds of the server, so its answer is due after 65
+  seconds. A link that reaches its bound is killed, reaped and reported `away`,
+  and the next attempt starts on the delays of a lost link. A byte stream that
+  stays open and answers nothing is therefore not a link that a computer keeps.
+- **The relay of a link ends with its socket.** `horizon --server-link` returns
+  as soon as the socket of the server ends or its read or write fails, and its
+  entry ends the process there. A server that stops therefore ends the mode of
+  every idle computer at once instead of leaving one process per computer with a
+  standard input that nothing closes.
 - **A stop of the server ends the links.** A stop of the server or of its
   process closes the socket of every open link, so a computer reads the end of
   the link and reaches the server again when it is back. It never opens a port

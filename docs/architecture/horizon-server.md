@@ -18,8 +18,8 @@ both modes run before Horizon prepares its home:
 
 | Mode | What it does |
 |---|---|
-| `horizon --server` | Holds one server home: `server.sqlite`, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. |
-| `horizon --server-link` | Relays its own standard input and output to the socket of that home, for one `ssh` child. It starts no server and creates no file. A home without a server answers one typed line and exit code 3. |
+| `horizon --server` | Holds one server home: `server.sqlite` at mode 0600, with its `-wal` and `-shm` files at the same mode, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. |
+| `horizon --server-link` | Relays its own standard input and output to the socket of that home, for one `ssh` child. It starts no server and creates no file. A home without a server answers one typed line and exit code 3. The mode ends as soon as the socket ends, which is the case when the server stops, and the entry of the mode ends the process at once: its standard input stays open, so a wait for it would leave one child of an idle computer alive while the server is away. |
 
 The server home is `HORIZON_SERVER_HOME`, or `~/.horizon-server`. It is a
 directory of its own, so neither mode reads or writes `~/.horizon` of the person:
@@ -27,6 +27,13 @@ they read no setting, open no window and install no agent integration. A second
 server of the same home finds the lock held and refuses with one typed line
 instead of removing the socket of the first one. The module comment of
 `crates/horizon-sync/src/host.rs` states the same rules.
+
+A stop leaves its files in the home on purpose. `server.lock` stays, because the
+lock is the open file of the running server and not the name of the file: a file
+that no process holds blocks nothing. A killed server also leaves `server.sqlite`
+with its `-wal` and `-shm` files, and SQLite recovers them at the next start. A
+start removes a socket file that no process listens on, takes the free lock and
+opens the store, so a home of a killed server starts again without a hand edit.
 
 ## The setting of a computer
 
@@ -42,9 +49,11 @@ server:
 no leading dash, no space and no control character. `command` is optional and is
 `horizon --server-link` without it; it holds at most 200 characters of letters,
 digits and `._:/=@+-`, with single spaces, so the remote shell reads it as one
-program. A person writes the whole path when the `PATH` of a non-interactive
-`ssh` does not hold the binary. Without `ssh_target` the entry names no server,
-and the machine list of the computer is one file as before.
+program. The underscore is one of these characters, so a path such as
+`/Users/x/my_tools/horizon` is one command. A person writes the whole path when
+the `PATH` of a non-interactive `ssh` does not hold the binary. Without
+`ssh_target` the entry names no server, and the machine list of the computer is
+one file as before.
 
 ## The supervisor of the link
 
@@ -62,6 +71,16 @@ answers the two frames separately. A local change wakes the thread at once
 instead of at the next answer. When the child ends, the thread starts it again
 on the delays of a lost machine terminal, 3, 6, 12 and 24 seconds and then every
 30 seconds, and a link that was up for 10 seconds starts the delays again.
+
+Every request has a bound, because a link over `ssh` does not always end: a
+server that dies can leave the socket of the child open while the child stays
+alive. A push and a pull are due at once, and the answer of either one after 20
+seconds is a link that is lost. A wait stays open at the bound of the server,
+which is 50 seconds, so its answer is due after 65 seconds: the bound of the
+server and a margin of 15 seconds. A link that reaches a bound is ended and
+started again at once: the supervisor kills and reaps the child, reports `away`
+and starts the delay of the next attempt. The bounds are the constants of
+`crates/horizon-sync/src/supervisor.rs`, and a test gives its link shorter ones.
 
 The thread publishes one state for the UI: `off`, `connecting`, `in_step`,
 `behind`, or `away` with the number of intents that wait. The sidebar shows it,
@@ -133,8 +152,13 @@ person never sees.
 
 ## The file
 
-One SQLite file. Its path is the choice of the caller; this slice does not name
-one. `PRAGMA journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000`.
+One SQLite file, at mode 0600 together with the `-wal` and `-shm` files that
+SQLite keeps beside it. Its path is the choice of the caller; this slice does not
+name one, and the server mode puts it in the server home. The file is made
+private before SQLite opens it, because a file that SQLite creates itself takes
+the mode of the umask of the process, and SQLite copies the mode of the database
+file to the two files that it makes. `PRAGMA journal_mode=WAL`,
+`synchronous=FULL`, `busy_timeout=5000`.
 
 | Table | Columns | What it holds |
 |---|---|---|
@@ -216,6 +240,13 @@ of intents that wait. The queue keeps its order and its counters across a restar
 of Horizon. When the link returns, the computer sends the same intents with the
 same identifiers and pulls the changes. There is no merge: the commit order of
 the server decides, and the version rule refuses an answer that is too late.
+
+A computer that is idle learns that the server is gone at the bound of its wait,
+and not later, because a wait that nothing answers is the sign of a link that is
+over. Its link then reports `away`, ends the child and starts the delays of a
+lost link. A server that returns in that time brings the computer into step with
+the changes that the other computers made while it was away, so its mirror and
+the server hold the same rows again.
 
 ## A continuous copy of the file
 
