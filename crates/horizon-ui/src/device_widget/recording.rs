@@ -76,13 +76,15 @@ impl Drop for Recording {
     fn drop(&mut self) {
         self.stop();
         // Unlink while the host still runs. Detached encoder threads are not
-        // guaranteed a destructor when the whole application exits.
-        for directory in &self.directories {
-            if let Err(error) = std::fs::remove_dir_all(directory.path())
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(%error, "could not remove private VNC recording directory");
-            }
+        // guaranteed a destructor when the whole application exits. A folder is
+        // a recursive delete, so it goes to the coordination worker and this
+        // drop only records it.
+        for directory in self.directories.drain(..) {
+            let Ok(directory) = Arc::try_unwrap(directory) else {
+                // The sampler still holds it, and removes it when it ends.
+                continue;
+            };
+            crate::app::queue_recording_directory_delete(directory.keep());
         }
     }
 }
@@ -441,6 +443,20 @@ mod tests {
                 let bytes = std::fs::read(&path).expect("webm");
                 assert_eq!(&bytes[..4], &[0x1a, 0x45, 0xdf, 0xa3]);
                 drop(recording);
+                // The drop queues the recursive delete of the folder for the
+                // coordination worker, which the exit flushes.
+                let queued = crate::app::take_queued_recording_directories();
+                let folder = std::path::Path::new(&path)
+                    .parent()
+                    .expect("the folder of the video")
+                    .to_path_buf();
+                assert!(
+                    queued.contains(&folder),
+                    "the drop queues the folder of the video: {queued:?}"
+                );
+                for queued in queued {
+                    let _ = std::fs::remove_dir_all(queued);
+                }
                 assert!(!std::path::Path::new(&path).exists());
                 break;
             }
@@ -467,9 +483,18 @@ mod tests {
         let directory = recording.directories[0].path().to_path_buf();
         assert!(directory.exists());
         drop(recording);
-        let removed = !directory.exists();
+        // The drop does not wait for the source: the sampler still holds the
+        // folder, so it is not queued, and the sampler removes it when it ends.
+        assert!(
+            crate::app::take_queued_recording_directories().is_empty(),
+            "a folder that the sampler still holds is not deleted beside it"
+        );
         let _ = release_tx.send(());
-        assert!(removed, "host shutdown must unlink private output before process exit");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while directory.exists() {
+            assert!(Instant::now() < deadline, "the folder of the ended recording stays");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

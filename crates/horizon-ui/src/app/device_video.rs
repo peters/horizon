@@ -5,9 +5,36 @@
 //! request and the coordination worker starts the encoder; the panel reports
 //! the recording state from the handle, as it does after a start on the frame.
 
+use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
+
 use horizon_core::PanelId;
 
 use super::HorizonApp;
+
+/// The folders of recordings that wait for the coordination worker. A drop
+/// records one and never removes a folder itself.
+static RECORDING_DIRECTORIES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Queues the recursive delete of a folder of a recording that ended.
+pub(crate) fn queue_recording_directory_delete(path: PathBuf) {
+    RECORDING_DIRECTORIES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(path);
+}
+
+/// The folders that wait for the coordination worker, for a test that judges a
+/// drop. The exit flushes that worker, so a queued folder is removed before
+/// Horizon ends.
+#[cfg(test)]
+pub(crate) fn take_queued_recording_directories() -> Vec<PathBuf> {
+    RECORDING_DIRECTORIES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .drain(..)
+        .collect()
+}
 
 impl HorizonApp {
     /// Queues the start of every recording whose control asked for it.
@@ -18,6 +45,21 @@ impl HorizonApp {
             .iter_mut()
             .filter_map(|(id, state)| state.take_video_start().map(|start| (*id, start)))
             .collect();
+        let directories: Vec<PathBuf> = RECORDING_DIRECTORIES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain(..)
+            .collect();
+        for path in directories {
+            self.browser_create_host.io.write(move || {
+                horizon_core::ui_thread::blocking("a folder of a recording is removed");
+                if let Err(error) = std::fs::remove_dir_all(&path)
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(%error, "could not remove private VNC recording directory");
+                }
+            });
+        }
         for (id, start) in starts {
             self.browser_create_host.io.then(
                 move || crate::device_widget::recording::start_video(start),

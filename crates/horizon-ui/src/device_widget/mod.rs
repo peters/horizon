@@ -374,6 +374,15 @@ impl DeviceUiState {
         }
     }
 
+    /// Ends the session of this viewer on a thread of its own: a frame never
+    /// joins a VNC worker, and the socket and tunnel of the viewer are released
+    /// when that thread ends.
+    fn end_session(&mut self) {
+        if let Some(session) = self.session.take() {
+            session.detach();
+        }
+    }
+
     fn upload_displayed(&mut self, ctx: &Context, image: ColorImage) -> bool {
         self.empty_desktop = picture::looks_empty(&image);
         let limit = ctx.input(|input| input.max_texture_side);
@@ -381,7 +390,7 @@ impl DeviceUiState {
             if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
                 self.source = Some(full);
             }
-            self.session = None;
+            self.end_session();
             self.texture = None;
             self.status = Status::disconnected("Desktop exceeds the renderer's texture limit");
             false
@@ -425,7 +434,7 @@ impl DeviceUiState {
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }
-        self.session = None;
+        self.end_session();
         match Session::start(device, ctx.clone(), ctx.viewport_id(), self.controls.options) {
             Ok(session) => {
                 self.session = Some(session);

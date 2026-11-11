@@ -529,3 +529,69 @@ fn each_image_bounds_what_changed_since_the_image_taken_before() -> Result<(), E
     );
     Ok(())
 }
+
+/// Whether the process `pid` is gone, including a child that waits as a zombie.
+fn process_exists(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Waits for `pid` to be gone, for a test that judges a release.
+fn waits_for_gone(pid: u32) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if !process_exists(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+#[test]
+fn a_detached_session_releases_its_tunnel_process() -> Result<(), Error> {
+    let home = std::env::temp_dir().join(format!("horizon-vnc-tunnel-{}", std::process::id()));
+    std::fs::create_dir_all(&home)?;
+    let marker = home.join("tunnel.pid");
+    let program = home.join("tunnel.sh");
+    std::fs::write(
+        &program,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\ncat\n", marker.display()),
+    )?;
+    std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+    let session = Session::start(
+        Config::new(Route::Tunnel {
+            program: program.display().to_string(),
+            args: Vec::new(),
+            host: "127.0.0.1".to_owned(),
+            port: Some(1),
+        }),
+        |_| {},
+    )?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let pid = loop {
+        if let Ok(text) = std::fs::read_to_string(&marker)
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            break pid;
+        }
+        assert!(std::time::Instant::now() < deadline, "the tunnel program did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(process_exists(pid), "the tunnel program runs before the close");
+
+    // Closing the viewer waits for nothing: the worker and its tunnel end on a
+    // thread of their own, and the program is still killed and reaped.
+    let started = std::time::Instant::now();
+    session.detach();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "the close of a viewer does not wait for its worker"
+    );
+    assert!(waits_for_gone(pid), "the tunnel program outlived the session");
+    let _ = std::fs::remove_dir_all(&home);
+    Ok(())
+}

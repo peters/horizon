@@ -39,7 +39,10 @@ mod device_presentation;
 mod device_request_pump;
 mod device_requests;
 mod device_reveal_wait;
-mod device_video;
+pub(crate) mod device_video;
+pub(crate) use device_video::queue_recording_directory_delete;
+#[cfg(test)]
+pub(crate) use device_video::take_queued_recording_directories;
 mod editor_saves;
 mod file_drop;
 mod file_drop_highlight;

@@ -415,6 +415,30 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Stops the worker and lets a thread of its own end it, so the thread that
+    /// closes a viewer waits for nothing. The socket and the tunnel program are
+    /// released when that thread ends.
+    pub fn detach(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let spawned = std::thread::Builder::new()
+            .name("vnc-session-reap".to_owned())
+            .spawn(move || {
+                if thread.join().is_err() {
+                    tracing::warn!("device viewer worker panicked during shutdown");
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "could not start the thread that ends a device viewer worker");
+        }
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {

@@ -25,7 +25,7 @@ pub(super) struct Updates {
 }
 
 pub(super) struct Session {
-    inner: horizon_vnc::Session,
+    inner: Option<horizon_vnc::Session>,
     /// The viewport whose pass uploads for this viewer, so a closed detached
     /// window cannot keep its wakes.
     viewport: Arc<Mutex<ViewportId>>,
@@ -61,7 +61,33 @@ fn wake_ui(ctx: &Context, wake: Wake, viewport: ViewportId) {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Closing a viewer must not wait for its worker or its tunnel: the wake
+        // of that worker reaches a viewport that no longer draws.
+        if let Some(session) = self.inner.take() {
+            session.detach();
+        }
+    }
+}
+
 impl Session {
+    /// The live session of this viewer. It is `Some` for the whole life of the
+    /// wrapper, and only the drop takes it.
+    fn inner(&self) -> &horizon_vnc::Session {
+        self.inner
+            .as_ref()
+            .unwrap_or_else(|| unreachable!("a viewer session is live until its drop"))
+    }
+
+    /// Ends the worker on a thread of its own, so the frame that closes a viewer
+    /// waits for nothing.
+    pub(super) fn detach(mut self) {
+        if let Some(session) = self.inner.take() {
+            session.detach();
+        }
+    }
+
     pub(super) fn start(
         device: &DevicePanelState,
         ctx: Context,
@@ -79,7 +105,10 @@ impl Session {
             let viewport = *target.lock().unwrap_or_else(PoisonError::into_inner);
             wake_ui(&ctx, wake, viewport);
         })?;
-        Ok(Self { inner, viewport })
+        Ok(Self {
+            inner: Some(inner),
+            viewport,
+        })
     }
 
     fn route_wakes_to(&self, viewport: ViewportId) {
@@ -88,46 +117,46 @@ impl Session {
 
     /// Queue input for the server. A worker that has already stopped drops it.
     pub(super) fn send_input(&self, events: impl IntoIterator<Item = InputEvent>) {
-        self.inner.send_input(events);
+        self.inner().send_input(events);
     }
 
     pub(super) fn set_options(&self, options: ViewOptions) {
-        self.inner.set_options(options);
+        self.inner().set_options(options);
     }
 
     pub(super) fn latest_full(&self) -> Option<ColorImage> {
-        self.inner
+        self.inner()
             .latest_full()
             .map(|frame| color_image(Arc::unwrap_or_clone(frame)))
     }
 
     pub(super) fn latest_frame(&self) -> Option<Arc<Frame>> {
-        self.inner.latest_full()
+        self.inner().latest_full()
     }
 
     /// True when this session has a full desktop. Does not copy the pixels.
     pub(super) fn has_latest_full(&self) -> bool {
-        self.inner.has_latest_full()
+        self.inner().has_latest_full()
     }
 
     pub(super) fn recording_source(&self) -> impl Fn() -> Option<Arc<Frame>> + Send + 'static {
-        self.inner.frame_source()
+        self.inner().frame_source()
     }
 
     /// Marks the viewer undrawn and routes its wakes to `viewport`, the pass
     /// that uploads for it. Returns whether an image or status change is waiting.
     pub(super) fn pending_in_background(&self, viewport: ViewportId) -> bool {
         self.route_wakes_to(viewport);
-        self.inner.pending_while_hidden()
+        self.inner().pending_while_hidden()
     }
 
     pub(super) fn set_visible(&self, visible: bool) {
-        self.inner.set_visible(visible);
+        self.inner().set_visible(visible);
     }
 
     pub(super) fn take_updates(&self, viewport: ViewportId) -> Updates {
         self.route_wakes_to(viewport);
-        let updates = self.inner.take_updates();
+        let updates = self.inner().take_updates();
         let (image, produced_with) = updates
             .image
             .map(|image| (color_image(image.frame), image.produced_with))
@@ -144,15 +173,15 @@ impl Session {
     }
 
     pub(super) fn take_server_details(&self) -> DeviceServerDetails {
-        server_details(&self.inner.take_server_details())
+        server_details(&self.inner().take_server_details())
     }
 
     pub(super) fn observation(&self) -> Observation {
-        self.inner.observation()
+        self.inner().observation()
     }
 
     pub(super) fn stream_evidence(&self) -> (StreamEvidence, bool) {
-        (self.inner.stream_evidence(), false)
+        (self.inner().stream_evidence(), false)
     }
 
     #[cfg(test)]
@@ -174,7 +203,7 @@ impl Session {
             is_native_metadata,
         );
         let session = Self {
-            inner,
+            inner: Some(inner),
             viewport: Arc::new(Mutex::new(ViewportId::ROOT)),
         };
         (session, input)
@@ -182,7 +211,7 @@ impl Session {
 
     #[cfg(test)]
     pub(super) fn native_text_for_test(&self, text: &str) -> bool {
-        self.inner.push_server_text(text)
+        self.inner().push_server_text(text)
     }
 }
 
