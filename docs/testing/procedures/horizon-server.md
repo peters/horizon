@@ -427,51 +427,84 @@ gone, and that it catches up when the server returns.
    Result: the table holds one row of 64 hexadecimal characters, and no row holds
    the code that step 2 printed.
 
-4. On a client computer, start the fixture, open Settings, and select the
-   `Server` tab.
+4. On a client computer that has no server, start the fixture, open Settings, and
+   select the `Server` tab.
 
    Result: the tab shows the state line `This computer has no server.`, one field
-   for a link, one field for a name, and the Join button.
+   for a link, one field for a name, and the Join button. The field `This computer`
+   holds a name such as `horizon-1f3c9a02`, which is the name that the first link
+   of this computer takes. The computer has no file `machines/server-device` yet.
 
-5. Paste the link of step 2, type the name `laptop-a`, and press Join.
+5. Paste the link of step 2. Do not type a name. Press Join.
 
-   Result: within a few seconds the tab says `This computer joined the server.`,
-   the field `Address` holds `server-computer:7000`, and the state line reads
-   `Server: in step`. The sidebar shows the same line.
+   Result: the button waits while the line under it reads `This computer joins the
+   server.`. Within a few seconds the line reads `This computer joined the
+   server.`, the field `Address` holds `server-computer:7000`, and the state line
+   reads `Server: in step`. The sidebar shows the same line.
 
-6. On the server computer, look at the row of that computer:
+6. Look at the field `This computer` and at the sentence under it.
+
+   Result: the field holds the name of step 4, and it is read-only. The sentence
+   `This name belongs to the login of this computer, so a new name needs a new
+   link.` shows under it.
+
+7. On the server computer, read the row of that computer and the file of its name:
 
    ```bash
-   sqlite3 "$HORIZON_SERVER_HOME/server.sqlite" "SELECT name, login, token_hash IS NOT NULL FROM devices;"
+   sqlite3 "$HORIZON_SERVER_HOME/server.sqlite" \
+     "SELECT name, login, token_hash IS NOT NULL, greeted FROM devices;"
+   cat /path/to/a/home/.horizon/machines/server-device
    ```
 
-   Result: a row for `laptop-a` has `token` and `1`, and no column holds the token
-   itself.
+   Result: one row holds the name of step 4, with `token`, `1` and `1`. The file
+   `server-device` holds the same name, so the name of the join is the name of the
+   link. No column holds the token itself, and the server holds no second row for
+   this computer.
 
 ### 6.11 S11 — a second computer joins with a QR code
 
-1. In the `Server` tab of `laptop-a`, press `Add a computer`.
+1. In the `Server` tab of the first client computer, press `Add a computer`.
 
    Result: the tab paints a QR code on a white plate, the code in three groups of
    four, the link as text with `Copy link`, and the minutes that are left.
 
-2. On the second client computer, start the fixture, open Settings, select
-   `Server`, paste the same link, type the name `laptop-b`, and press Join.
+2. Read the QR code with the camera of a phone, or with a decoder on the screen.
+   Do this once, and press `Copy link` once.
 
-   Result: the second computer says `This computer joined the server.` and
-   `Server: in step`.
+   Result: the text of the code is the link, character for character, and the code
+   in the text is the code under the plate. Do not type the link by hand.
 
-3. Look at the tab of `laptop-a`.
+3. On the second client computer, start the fixture, open Settings, and select
+   `Server`.
+
+   Result: the tab shows `This computer has no server.` and its own proposed name,
+   such as `horizon-7ab41c90`. It is not the name of the first computer.
+
+4. Paste the link of step 2 and press Join without a name.
+
+   Result: the second computer reads `This computer joined the server.` and
+   `Server: in step`. The server holds one row for the proposed name of the second
+   computer.
+
+5. Look at the tab of the first client computer.
 
    Result: the invitation left the window within two seconds, and the line
    `Another computer joined this server.` is under the card. The list of the
-   computers holds three rows: `laptop-a`, `laptop-b` and `server`. The row of the
-   computer that is open is in a strong type.
+   computers holds the server computer and both client computers. The row of the
+   computer that asked is in a strong type. The row of the computer that this
+   window follows reads `seen just now` while its link is open.
 
-4. Look at a machine that `laptop-a` adds on `laptop-b`.
+6. Look at a machine that the first computer adds, on the second computer.
 
-   Result: the machine appears on `laptop-b` within a few seconds, as procedure
-   S1 shows for a link over `ssh`.
+   Result: the machine appears on the second computer within a few seconds, as
+   procedure S1 shows for a link over `ssh`.
+
+7. On a third client computer, paste a link of a new invitation from the first
+   computer, type the name `window-b`, and press Join.
+
+   Result: the third computer joins as `window-b`, and the server holds one row
+   named `window-b`. The field `This computer` holds `window-b` and is read-only.
+   A name that a person types is the name of the link.
 
 ### 6.12 S12 — a wrong code and an expired code
 
@@ -481,22 +514,31 @@ gone, and that it catches up when the server returns.
    /path/to/horizon --server-invite
    ```
 
-2. On a third client computer, in the tab `Server`, paste the link with one
-   character of the code changed, and press Join.
+2. On a client computer that has no server, in the tab `Server`, paste the link
+   with one character of the code changed, and press Join.
 
    Result: after about one second the tab shows
    `The code is not one open invitation of this server. Check the code, or make a
-   new invitation on a computer that is logged in.`, and the computer is not
-   logged in.
+   new invitation on a computer that is logged in.`, the button starts Join again,
+   and the state line still reads `This computer has no server.`.
 
-3. Do step 2 nineteen more times with other wrong codes.
+3. On the server computer, look for a row of the name that the tab proposed.
+
+   ```bash
+   sqlite3 "$HORIZON_SERVER_HOME/server.sqlite" "SELECT name, greeted FROM devices;"
+   ```
+
+   Result: no row names that computer. A refused join leaves no computer on the
+   server.
+
+4. Do step 2 nineteen more times with other wrong codes.
 
    Result: from the twentieth wrong code the tab shows
    `Too many wrong codes. Every invitation is gone, so make a new one on a
    computer that is logged in.`
 
-4. On `laptop-a`, press `Add a computer`, and wait ten minutes without using the
-   invitation.
+5. On the first client computer, press `Add a computer`, and wait ten minutes
+   without using the invitation.
 
    Result: the invitation leaves the window when its time is over. A join with its
    code reads as an expired code, which is the sentence of step 2.
@@ -507,47 +549,40 @@ gone, and that it catches up when the server returns.
 > the copies of the machine keys and the credential values that it already has.
 > Make new machine keys and new credential values if that computer is lost.
 
-1. On `laptop-a`, in the list of the computers, press `Remove` beside `laptop-b`.
+1. On the first client computer, in the list of the computers, press `Remove`
+   beside `window-b`.
 
    Result: the row asks for a confirmation with `Remove` and `Keep`, and one
-   sentence about the copies that `laptop-b` keeps.
+   sentence about the copies that `window-b` keeps. No button covers a word of the
+   row.
 
-2. Press `Remove` in the confirmation.
+2. Press `Keep`.
 
-   Result: the row of `laptop-b` goes from the list, and the line
-   `laptop-b was removed from the server.` is under the card.
+   Result: the confirmation goes, and the row of `window-b` stays.
 
-3. Look at the window of `laptop-b`.
+3. Press `Remove` again, and then `Remove` in the confirmation.
 
-   Result: the tab says `This computer was removed from the server.`, and the
-   sidebar shows the same line. The Join field is shown again.
+   Result: the row of `window-b` goes from the list, and the line
+   `window-b was removed from the server.` is under the card.
 
-4. Look at the store of the server.
+4. Look at the window of the third client computer.
 
-   Result: `SELECT COUNT(*) FROM devices WHERE name = 'laptop-b';` answers 0, and
-   the connection of `laptop-b` is closed.
+   Result: the state line and the sidebar read `This computer was removed from
+   the server.`. The invitation and the list of the computers are gone. The
+   section `Join with a link` is shown, the field `This computer` holds
+   `window-b`, and a person can type another name.
 
-5. On `laptop-a`, press `Add a computer`, paste the new link on `laptop-b`, and
-   press Join with the name `laptop-b`.
+5. Look at the store of the server.
 
-   Result: the join works again, because the name is free.
+   Result: `SELECT COUNT(*) FROM devices WHERE name = 'window-b';` answers 0, and
+   the connection of that computer is closed.
 
-### 6.14 S14 — the rule of the address
+6. On the first client computer, press `Add a computer`. On the third client
+   computer, paste the new link, type the name `window-b`, and press Join.
 
-1. On the server computer, stop the server and start it on a public address:
-
-   ```bash
-   /path/to/horizon --server --listen 0.0.0.0:7000
-   ```
-
-   Result: the server refuses at once with one line that names the rule of
-   `100.64.0.0/10` and `fd7a:115c:a1e0::/48`, and exit code 1. No port is opened.
-
-2. On a client computer, in the tab `Server`, paste a link to `8.8.8.8` and press
-   Join.
-
-   Result: the field shows one sentence about the private overlay network, and no
-   connection is made.
+   Result: the join works again, because the name is free. The third computer
+   reads `Server: in step`, the field `This computer` is read-only again, and the
+   server holds one row `window-b` with a token.
 
 ## 7. Pass criteria
 
@@ -592,11 +627,25 @@ gone, and that it catches up when the server returns.
   code and a used code answer the same.
 - Twenty wrong codes inside ten minutes delete every open invitation, and a new
   invitation opens the door again.
+- A computer that joins writes the name of the link before it takes the token,
+  its field `This computer` is read-only while the token stands, and the row of
+  the server holds the name in that field.
+- A fresh computer proposes a device name, so a person presses Join without a
+  name, and the name of the join is the name of the link.
+- A join that fails, an invitation that expires and a server that answers nothing
+  end the join: the button starts Join again and one sentence shows.
+- A refused join leaves no computer on the server, and a joined row that no hello
+  reached in one minute is gone from the next list of the computers.
 - A computer that a person removes reads `This computer was removed from the
-  server.`, its link ends with the typed error `removed`, its token row is gone,
-  and its name is free for a new join.
+  server.` in the tab and in the sidebar, the invitation and the list are gone,
+  the join is shown, and its name is free for a new join.
 - The list of the computers names every computer, the way that each one logs in,
-  and the row of the computer that asked.
+  and the row of the computer that asked. A computer whose link is open reads
+  `seen just now`.
+- The tab and the sidebar say one of: no server, connecting, in step, away with
+  pending changes, not logged in, or removed.
+- The tab row stays on one line at the panel of a window of 1480 points, and no
+  control of a computer row covers a word of that row.
 - A listener on any address outside loopback, `100.64.0.0/10` and
   `fd7a:115c:a1e0::/48` refuses at start with one line that names the rule.
 

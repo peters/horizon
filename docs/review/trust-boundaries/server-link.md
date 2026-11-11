@@ -106,6 +106,17 @@ the network that carries it, because Horizon encrypts nothing on it.
   not 1 to 40 characters of `a-z`, `0-9` and `-` answers `bad_device`. A name that
   already holds a token answers `name_taken`, so the person removes the old entry
   first and no join takes over the token of another computer.
+- **The name of a join is the name of the link.** The joining computer writes that
+  name to `machines/server-device` of its own machine directory in the same worker
+  job and before it writes the token, and the supervisor that follows presents the
+  stored name and no other. A hello whose name differs from the name of the token
+  answers `not_logged_in`, so a computer that proposes a second name cannot use the
+  token of its join. The name is read-only in the window while the token stands.
+- **A row that no hello reached does not stay.** A `join` writes the row of its
+  computer and the token together, and the row starts ungreeted. The server drops a
+  row that no hello reached within one minute, so a join whose token never reached
+  the computer that asked for it leaves no computer that a person must remove by
+  hand.
 - **The computer keeps the token where its other secrets live.** The token is one
   row of its `secrets.sqlite` under the id `server/token`, at the mode of that
   file. The secret ids of the protocol are never that id: `SecretId::parse`
