@@ -1,6 +1,6 @@
 use crate::layout::{
-    TILE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD, ceil_sqrt_usize,
-    tiled_panel_position, usize_to_f32, workspace_slot_width,
+    TILE_GAP, WORKSPACE_GAP, WS_COLLISION_GAP, WS_EMPTY_FRAME_SIZE, WS_FRAME_PAD, WS_FRAME_TOP_EXTRA, WS_INNER_PAD,
+    ceil_sqrt_usize, tiled_panel_position, usize_to_f32, workspace_slot_width,
 };
 use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 use crate::workspace::{Workspace, WorkspaceId};
@@ -236,12 +236,21 @@ impl Board {
     }
 
     /// Compute the canvas position for the next workspace so it doesn't
-    /// overlap with existing ones. Uses fixed-width slots so workspaces
-    /// never collide even when fully populated (3 columns).
+    /// overlap with existing ones, nor with a panel of them.
+    ///
+    /// A workspace holds up to three columns of panels in the slot of one
+    /// workspace, and a slot width places the next workspace beside it. A
+    /// workspace whose panels reach past its slot, because a person made them
+    /// wide, keeps its own frame wider: the next workspace starts beside the
+    /// bounds of every workspace, so its name is never over a panel of another
+    /// one.
     pub(super) fn next_workspace_position(&self) -> [f32; 2] {
         let mut right_edge: f32 = 0.0;
         for ws in &self.workspaces {
             right_edge = right_edge.max(ws.position[0] + workspace_slot_width());
+            if let Some(frame) = self.workspace_frame_rect(ws.id) {
+                right_edge = right_edge.max(frame[2] + WORKSPACE_GAP);
+            }
         }
         [right_edge, 40.0]
     }
