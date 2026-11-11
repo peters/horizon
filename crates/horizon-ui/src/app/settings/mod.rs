@@ -28,6 +28,14 @@ pub(super) const SETTINGS_BAR_HEIGHT: f32 = 48.0;
 pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
 
 const TAB_CORNER_RADIUS: f32 = 8.0;
+/// The horizontal padding of one tab button.
+const TAB_BUTTON_PADDING: f32 = 6.0;
+/// The gap between two tab buttons.
+const TAB_ITEM_GAP: f32 = 4.0;
+/// The size of a tab label.
+const TAB_LABEL_SIZE: f32 = 12.0;
+/// The margin that the panel frame takes on each side.
+const SETTINGS_PANEL_MARGIN_X: i8 = 24;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
@@ -46,7 +54,7 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
             Self::Browser => "Browser",
-            Self::RemoteBrowsers => "Remote browsers",
+            Self::RemoteBrowsers => "Remote",
             Self::Secrets => "Secrets",
         }
     }
@@ -358,7 +366,7 @@ fn render_settings_panel(
         .frame(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())
-                .inner_margin(Margin::symmetric(24, 16))
+                .inner_margin(Margin::symmetric(SETTINGS_PANEL_MARGIN_X, 16))
                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
         )
         .show(ui, |ui| {
@@ -430,33 +438,51 @@ fn render_tab(
         .inner
 }
 
+/// The tab row. It is compact on purpose: one row of short labels at the default
+/// width of the panel, so the person never reads a tab on a second line.
 fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
-        for &tab in SettingsTab::ALL {
-            let selected = editor.active_tab == tab;
-            let (fill, text_color) = if selected {
-                (theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.2), theme::FG())
-            } else {
-                (Color32::TRANSPARENT, theme::FG_DIM())
-            };
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = Vec2::new(TAB_BUTTON_PADDING, 5.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(TAB_ITEM_GAP, 6.0);
+            for &tab in SettingsTab::ALL {
+                let selected = editor.active_tab == tab;
+                let (fill, text_color) = if selected {
+                    (theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.2), theme::FG())
+                } else {
+                    (Color32::TRANSPARENT, theme::FG_DIM())
+                };
 
-            let stroke = if selected {
-                Stroke::new(1.0_f32, theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5))
-            } else {
-                Stroke::NONE
-            };
+                let stroke = if selected {
+                    Stroke::new(1.0_f32, theme::blend(theme::BORDER_SUBTLE(), theme::ACCENT(), 0.5))
+                } else {
+                    Stroke::NONE
+                };
 
-            let btn = egui::Button::new(egui::RichText::new(tab.label()).size(12.0).color(text_color))
-                .fill(fill)
-                .stroke(stroke)
-                .corner_radius(TAB_CORNER_RADIUS);
+                let btn = egui::Button::new(egui::RichText::new(tab.label()).size(TAB_LABEL_SIZE).color(text_color))
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(TAB_CORNER_RADIUS);
 
-            if ui.add(btn).clicked() {
-                editor.active_tab = tab;
+                if ui.add(btn).clicked() {
+                    editor.active_tab = tab;
+                }
             }
-        }
+        });
     });
+}
+
+/// The width that the tab row needs: every label, the padding of its button and
+/// the gaps between the buttons. The tab row must fit the content of the default
+/// panel, so this is what the test of the layout measures.
+#[cfg(test)]
+fn tab_row_width(mut measure: impl FnMut(&str) -> f32, labels: &[&str]) -> f32 {
+    let buttons: f32 = labels
+        .iter()
+        .map(|label| measure(label) + 2.0 * TAB_BUTTON_PADDING)
+        .sum();
+    let gaps = u16::try_from(labels.len().saturating_sub(1)).unwrap_or(u16::MAX);
+    buttons + TAB_ITEM_GAP * f32::from(gaps)
 }
 
 // -- Shared section helpers used by tab modules --------------------------

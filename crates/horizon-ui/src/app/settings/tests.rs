@@ -71,6 +71,110 @@ fn the_general_tab_draws_a_field_for_every_remote_host_setting() {
 }
 
 #[test]
+fn the_tab_row_fits_one_line_at_the_default_panel_width() {
+    use crate::test_egui::DiscardTextures;
+
+    let labels: Vec<&str> = super::SettingsTab::ALL.iter().map(|tab| tab.label()).collect();
+    let ctx = egui::Context::default();
+    let mut needed = 0.0;
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |ui| {
+            needed = ui.ctx().fonts_mut(|fonts| {
+                super::tab_row_width(
+                    |label| {
+                        fonts
+                            .layout_no_wrap(
+                                label.to_owned(),
+                                egui::FontId::proportional(super::TAB_LABEL_SIZE),
+                                egui::Color32::WHITE,
+                            )
+                            .size()
+                            .x
+                    },
+                    &labels,
+                )
+            });
+        })
+        .discard_textures();
+
+    // The default window of this build, so the panel has its default width.
+    let panel = super::settings_panel_default_width(1600.0);
+    let content = panel - 2.0 * f32::from(super::SETTINGS_PANEL_MARGIN_X);
+    assert!(
+        needed <= content,
+        "the {labels:?} tabs need {needed} and the panel gives {content}"
+    );
+}
+
+#[test]
+fn every_tab_draws_on_one_line_at_the_default_panel_width() {
+    use crate::test_egui::DiscardTextures;
+
+    let panel = super::settings_panel_default_width(1600.0);
+    let content = panel - 2.0 * f32::from(super::SETTINGS_PANEL_MARGIN_X);
+    let mut editor = super::SettingsEditor {
+        config: Config::default(),
+        original: Config::default(),
+        dirty: false,
+        status: super::SettingsStatus::None,
+        active_tab: super::SettingsTab::General,
+        credential_inputs: super::remote_browsers::CredentialInputs::default(),
+        portable_profile: super::remote_browsers::PortableProfilePanel::new(std::path::Path::new("/s.json")),
+        provider_usage: super::remote_usage::UsagePanels::default(),
+        secret_inputs: super::secrets::SecretInputs::default(),
+    };
+    let ctx = egui::Context::default();
+    let mut measured = (0.0_f32, 0.0_f32);
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(content + 2.0 * f32::from(super::SETTINGS_PANEL_MARGIN_X), 600.0),
+                )),
+                ..egui::RawInput::default()
+            },
+            |ui| {
+                ui.set_width(content);
+                super::render_tab_bar(ui, &mut editor);
+                measured = (ui.min_rect().height(), content);
+            },
+        )
+        .discard_textures();
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect_texts(&clipped.shape, &mut texts);
+    }
+
+    // One row of a 12 px label with 5 px of vertical padding is under 30 points; a
+    // second row would be above 40.
+    assert!(
+        measured.0 <= 34.0,
+        "the tabs stay on one line in {} points: {texts:?}",
+        measured.1
+    );
+    for tab in ["General", "Shortcuts", "Presets", "Browser", "Remote", "Secrets"] {
+        assert!(texts_hold(&texts, tab), "the row draws {tab}: {texts:?}");
+    }
+}
+
+#[test]
+fn a_port_row_gives_the_host_box_a_useful_width_and_a_hint() {
+    let mut config = Config::default();
+    let (_changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+    assert!(
+        texts_hold(&texts, "Host label or SSH host name"),
+        "the empty host box says what belongs in it: {texts:?}"
+    );
+
+    // The box keeps the room that its row needs: it is never narrower than a host
+    // name and never wide enough to strand the port far from the host.
+    assert!((super::general::host_field_width(0.0) - 140.0).abs() < f32::EPSILON);
+    assert!((super::general::host_field_width(432.0) - 260.0).abs() < f32::EPSILON);
+    assert!((super::general::host_field_width(300.0) - 146.0).abs() < f32::EPSILON);
+}
+
+#[test]
 fn the_remote_hosts_section_shows_the_rule_of_a_refused_entry() {
     let mut config = Config::default();
     config.remote_hosts.default_workspace = "  ".to_string();

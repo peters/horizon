@@ -67,6 +67,42 @@ fn render_remote_hosts_section(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
+/// The width of the port box of one "port for one host" row.
+const PORT_FIELD_WIDTH: f32 = 64.0;
+/// The width of the button that removes a host from its row.
+const REMOVE_BUTTON_WIDTH: f32 = 74.0;
+/// The space between two widgets of a row.
+const ROW_GAP: f32 = 8.0;
+/// The narrowest host box that still shows a host name of a few characters.
+const HOST_FIELD_MIN_WIDTH: f32 = 140.0;
+/// The widest host box, so the port and the button stay near the host.
+const HOST_FIELD_MAX_WIDTH: f32 = 260.0;
+
+/// The width of the host box of one "port for one host" row, from the width that
+/// the settings panel gives the section: a host name needs more room than the
+/// port and the button of its row.
+pub(super) fn host_field_width(panel_width: f32) -> f32 {
+    (panel_width - PORT_FIELD_WIDTH - REMOVE_BUTTON_WIDTH - 2.0 * ROW_GAP)
+        .clamp(HOST_FIELD_MIN_WIDTH, HOST_FIELD_MAX_WIDTH)
+}
+
+/// One host box of a "port for one host" row. It is wide enough for an SSH host
+/// name or a label, and its hint says what belongs in it.
+fn host_field(ui: &mut Ui, host: &mut String, width: f32, id: &str) -> bool {
+    let mut text = host.clone();
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text("Host label or SSH host name")
+            .desired_width(width)
+            .id_salt(id),
+    );
+    if !response.changed() {
+        return false;
+    }
+    *host = text;
+    true
+}
+
 /// The per-host VNC ports, one row each, with an empty row to add one.
 fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
@@ -79,6 +115,7 @@ fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
         .map(|(host, port)| (host.clone(), *port))
         .collect();
     ports.push((String::new(), config.remote_hosts.vnc_port));
+    let host_width = host_field_width(ui.available_width());
 
     egui::Grid::new("settings_remote_hosts_ports_grid")
         .num_columns(3)
@@ -87,7 +124,7 @@ fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
             let mut remove = None;
             for (index, (host, port)) in ports.iter_mut().enumerate() {
                 let host_id = format!("settings_remote_hosts_port_host_{index}");
-                changed |= super::text_field(ui, host, "", &host_id);
+                changed |= host_field(ui, host, host_width, &host_id);
                 changed |= ui
                     .add(
                         egui::DragValue::new(port)
