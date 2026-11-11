@@ -50,7 +50,11 @@ impl HorizonApp {
             .server_sync
             .as_ref()
             .is_some_and(|sync| sync.handle().is_foreign(&name));
-        if let Some(notice) = missing_key_notice(&name, foreign, key.as_deref()) {
+        let link_has_key = self
+            .server_sync
+            .as_ref()
+            .map(|sync| key.as_deref().is_some_and(|key| sync.handle().has_machine_key(key)));
+        if let Some(notice) = missing_key_notice(&name, foreign, key.as_deref(), link_has_key) {
             self.set_sidebar_notice(notice);
             return;
         }
@@ -89,11 +93,25 @@ impl HorizonApp {
     }
 }
 
-/// The notice of a machine whose record arrived from the server and which has
-/// no key binding on this computer. A click on it opens nothing, because the only
+/// The notice of a machine that this computer cannot open yet: a record that
+/// arrived from the server with no key binding here, or a key that the server has
+/// not brought to this computer yet. A click on it opens nothing, because the only
 /// login it could try is the one of the keys of the person.
-pub(in crate::app) fn missing_key_notice(name: &str, foreign: bool, key: Option<&str>) -> Option<String> {
-    (foreign && key.is_none()).then(|| format!("This computer has no key for {name} yet"))
+///
+/// `link_has_key` is `None` when this computer follows no server, and then the
+/// key files themselves decide, with the error of the key that is not there.
+pub(in crate::app) fn missing_key_notice(
+    name: &str,
+    foreign: bool,
+    key: Option<&str>,
+    link_has_key: Option<bool>,
+) -> Option<String> {
+    let missing = match (key, link_has_key) {
+        (Some(_), Some(has_key)) => !has_key,
+        (Some(_), None) => false,
+        (None, _) => foreign,
+    };
+    missing.then(|| format!("This computer has no key for {name} yet"))
 }
 
 #[cfg(test)]

@@ -47,6 +47,18 @@ impl FakeCredentialStore {
         self.locked = false;
     }
 
+    /// The number of values that this store holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether this store holds no value.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     fn guard(&self) -> Result<(), RemoteCredentialError> {
         if self.locked
             || self

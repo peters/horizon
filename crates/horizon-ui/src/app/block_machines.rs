@@ -32,13 +32,14 @@ impl HorizonApp {
     pub(super) fn load_machines(&mut self, ctx: &Context) {
         let registry = self.machine_registry();
         let server = horizon_core::server().cloned();
+        let secrets = super::server_sync::secret_vault(self.session_store.home(), &self.template_config.browser.remote);
         let wake = {
             let ctx = ctx.clone();
             move || ctx.request_repaint()
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(super::server_sync::load(registry, server, wake));
+            let _ = tx.send(super::server_sync::load(registry, server, secrets, wake));
         });
         self.machine_load_rx = Some(rx);
     }

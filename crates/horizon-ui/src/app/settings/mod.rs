@@ -323,6 +323,9 @@ impl HorizonApp {
         if self.template_config.browser.remote != config.browser.remote {
             self.remote_browser_credentials
                 .load_environment_bindings(&config.browser.remote);
+            if let Some(sync) = self.server_sync.as_ref() {
+                sync.refresh_credentials(&config.browser.remote);
+            }
         }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);

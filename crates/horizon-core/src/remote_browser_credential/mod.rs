@@ -16,6 +16,7 @@ mod fake;
 mod keyring_store;
 mod resolved;
 mod session;
+mod shared;
 mod workbench;
 
 use std::fmt;
@@ -32,9 +33,10 @@ pub use fake::FakeCredentialStore;
 pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
 pub use resolved::ReadCredentialStore;
 pub use session::SessionCredentialStore;
+pub use shared::SharedCredentialStore;
 pub use workbench::{
-    CredentialValueReply, CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice,
-    credential_destination,
+    CredentialValueChange, CredentialValueReply, CredentialWorkbench, KeychainState, NoticeKind, SharedStore,
+    StoreOpener, WorkbenchNotice, credential_destination,
 };
 
 pub use horizon_browser_control::remote_authorization::MAX_SECRET_BYTES;

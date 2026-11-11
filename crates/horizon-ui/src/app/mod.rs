@@ -396,6 +396,7 @@ impl HorizonApp {
             // store has opened and every probe or write has reported.
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        self.queue_credential_secrets();
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
             ctx.request_repaint_after(delay);
         }

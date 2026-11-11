@@ -77,6 +77,17 @@ pub fn credential_destination(profile: &RemoteProviderProfile, reference: &Crede
     )
 }
 
+/// One OS-store value that this computer stored or removed, for a link to a
+/// server that holds the same values. It carries the reference and never the
+/// value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialValueChange {
+    /// The reference of the settings row whose value changed.
+    pub reference: CredentialReference,
+    /// Whether the value was stored (`true`) or removed.
+    pub stored: bool,
+}
+
 /// The operation a notice reports on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoticeKind {
@@ -190,6 +201,9 @@ pub struct CredentialWorkbench {
     /// Commands sent to the worker whose answers have not arrived.
     in_flight: usize,
     notices: Vec<WorkbenchNotice>,
+    /// The OS-store values that changed and wait for the next call, so a server
+    /// holds them too.
+    value_changes: Vec<CredentialValueChange>,
 }
 
 impl CredentialWorkbench {
@@ -238,7 +252,17 @@ impl CredentialWorkbench {
             session_rows: BTreeMap::new(),
             in_flight: 0,
             notices: Vec::new(),
+            value_changes: Vec::new(),
         }
+    }
+
+    /// The OS-store values that this computer stored or removed since the last
+    /// call, oldest first. A link to a server queues each of them as one secret,
+    /// so the other computers hold the same value; a computer without a server
+    /// drops the list and needs no other change.
+    #[must_use]
+    pub fn take_value_changes(&mut self) -> Vec<CredentialValueChange> {
+        std::mem::take(&mut self.value_changes)
     }
 
     /// Drain worker events. Call once per frame; cheap when idle.
@@ -269,6 +293,12 @@ impl CredentialWorkbench {
                     self.credentials_changed();
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| true)));
+                    if result.is_ok() {
+                        self.value_changes.push(CredentialValueChange {
+                            reference: row.reference.clone(),
+                            stored: true,
+                        });
+                    }
                     self.notices
                         .push(WorkbenchNotice::new(&row, NoticeKind::StoredInKeychain, result));
                 }
@@ -276,6 +306,12 @@ impl CredentialWorkbench {
                     self.credentials_changed();
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| false)));
+                    if result.is_ok() {
+                        self.value_changes.push(CredentialValueChange {
+                            reference: row.reference.clone(),
+                            stored: false,
+                        });
+                    }
                     self.notices
                         .push(WorkbenchNotice::new(&row, NoticeKind::DeletedFromKeychain, result));
                 }

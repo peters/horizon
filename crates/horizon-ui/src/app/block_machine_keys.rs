@@ -27,7 +27,9 @@ impl HorizonApp {
     }
 
     /// Answers `machine_key`: makes the pair when this Horizon home has no key
-    /// of that name, and answers the public line either way.
+    /// of that name, and answers the public line either way. A key that this
+    /// request made goes to the server, so a second computer can log in to the
+    /// same machine without another key.
     pub(super) fn answer_machine_key(
         &mut self,
         name: &str,
@@ -37,15 +39,21 @@ impl HorizonApp {
     ) {
         let keys = self.machine_keys();
         let name = name.to_owned();
+        let link = self.link();
         self.queue_key_answer(root, request, ctx, move || {
             match keys.ensure(&name, block_keys::MAX_MACHINE_KEYS) {
-                Ok(key) => block::Outcome::MachineKey {
-                    name: key.name,
-                    public_key: key.public_key,
-                    private_key_path: key.private_key_path,
-                    known_hosts_path: key.known_hosts_path,
-                    created: key.created,
-                },
+                Ok(key) => {
+                    if key.created {
+                        share_key(link.as_ref(), &key.name);
+                    }
+                    block::Outcome::MachineKey {
+                        name: key.name,
+                        public_key: key.public_key,
+                        private_key_path: key.private_key_path,
+                        known_hosts_path: key.known_hosts_path,
+                        created: key.created,
+                    }
+                }
                 Err(error) => refused(&error),
             }
         });
@@ -71,7 +79,9 @@ impl HorizonApp {
         });
     }
 
-    /// Answers `delete_machine_key`: removes the pair and its known-hosts file.
+    /// Answers `delete_machine_key`: removes the pair and its known-hosts file,
+    /// and removes the value from the server, so no computer keeps a login that
+    /// this person ended.
     pub(super) fn answer_deleted_machine_key(
         &mut self,
         name: &str,
@@ -81,10 +91,19 @@ impl HorizonApp {
     ) {
         let keys = self.machine_keys();
         let name = name.to_owned();
+        let link = self.link();
         self.queue_key_answer(root, request, ctx, move || match keys.delete(&name) {
-            Ok(()) => block::Outcome::DeletedMachineKey { name },
+            Ok(()) => {
+                remove_key(link.as_ref(), &name);
+                block::Outcome::DeletedMachineKey { name }
+            }
             Err(error) => refused(&error),
         });
+    }
+
+    /// The link of this Horizon to its server, for the worker that keeps a key.
+    fn link(&self) -> Option<horizon_sync::SyncHandle> {
+        self.server_sync.as_ref().map(|sync| sync.handle().clone())
     }
 
     /// Opens the terminal that an `open_terminal` with a `key` asks for. The key
@@ -151,6 +170,33 @@ pub(super) struct KeyTerminal<'a> {
     pub title: Option<&'a str>,
     /// The name of the key, checked by the caller.
     pub key: &'a str,
+}
+
+/// Queues the value of a key that this request made, so the other computers of
+/// the person use the same pair. The queue holds the name and never the value.
+fn share_key(link: Option<&horizon_sync::SyncHandle>, name: &str) {
+    let Some(link) = link else {
+        return;
+    };
+    let Ok(id) = horizon_core::SecretId::machine_key(name) else {
+        return;
+    };
+    if let Err(error) = link.queue_secret(&id) {
+        tracing::warn!(%error, id = %id, "a machine key of this computer did not enter the queue");
+    }
+}
+
+/// Queues the removal of a key that this request deleted.
+fn remove_key(link: Option<&horizon_sync::SyncHandle>, name: &str) {
+    let Some(link) = link else {
+        return;
+    };
+    let Ok(id) = horizon_core::SecretId::machine_key(name) else {
+        return;
+    };
+    if let Err(error) = link.queue_secret_remove(&id) {
+        tracing::warn!(%error, id = %id, "the removal of a machine key did not enter the queue");
+    }
 }
 
 /// The refusal of one key error, with the code that the tool reports.

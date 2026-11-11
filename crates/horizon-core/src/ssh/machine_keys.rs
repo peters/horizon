@@ -296,6 +296,35 @@ impl MachineKeys {
     /// file cannot be written.
     pub fn write_files(&self, name: &str, files: &MachineKeyFiles) -> Result<(), MachineKeyError> {
         let name = block_keys::check_name(name)?;
+        self.write_family(name, files)
+    }
+
+    /// Keeps `files` as one more pair of this home, named
+    /// `<name>.conflict-<at_millis>`, and answers that name.
+    ///
+    /// The copy holds a dot in its name, so it is not one key name and
+    /// [`Self::list`] never reports it as a key that an agent may use: it is the
+    /// value that lost the version rule, kept for the person to read.
+    ///
+    /// # Errors
+    /// Refuses a name that breaks the rule, and returns why the copy cannot be
+    /// written.
+    pub fn write_conflict(
+        &self,
+        name: &str,
+        files: &MachineKeyFiles,
+        at_millis: u64,
+    ) -> Result<String, MachineKeyError> {
+        let name = block_keys::check_name(name)?;
+        let conflict = format!("{name}.conflict-{at_millis}");
+        self.write_family(&conflict, files)?;
+        Ok(conflict)
+    }
+
+    /// Writes the three files of `name` as they are, without a check of the name:
+    /// the caller has one from [`block_keys::check_name`], or the name of a
+    /// conflict copy that it built itself.
+    fn write_family(&self, name: &str, files: &MachineKeyFiles) -> Result<(), MachineKeyError> {
         private_directory(&self.key_directory())?;
         let binding = self.binding(name);
         for (path, text) in [

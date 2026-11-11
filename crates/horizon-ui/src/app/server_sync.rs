@@ -12,8 +12,11 @@
 
 use std::sync::Arc;
 
+use horizon_browser::remote::RemoteBrowserConfig;
 use horizon_core::machines::{MachineRegistry, MachineStore, Machines};
-use horizon_core::{MachineError, ServerConfig};
+use horizon_core::remote_browser_credential::KeyringCredentialStore;
+use horizon_core::secret::{CredentialVault, SecretTarget, SecretVault};
+use horizon_core::{MachineError, MachineKeys, ServerConfig};
 use horizon_sync::{LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
 
 use super::HorizonApp;
@@ -49,6 +52,9 @@ impl ServerLine {
 /// The link of this Horizon to its server.
 pub(in crate::app) struct ServerSync {
     supervisor: Supervisor,
+    /// The credential values of this computer, when it has an OS store: the
+    /// addresses of their references follow the remote browser settings.
+    credentials: Option<Arc<CredentialVault>>,
     /// The generation of the records that the app read last.
     generation: u64,
     /// A read of the list is on the coordination worker.
@@ -56,12 +62,22 @@ pub(in crate::app) struct ServerSync {
 }
 
 impl ServerSync {
-    fn new(supervisor: Supervisor) -> Self {
+    fn new(supervisor: Supervisor, credentials: Option<Arc<CredentialVault>>) -> Self {
         let generation = supervisor.handle().generation();
         Self {
             supervisor,
+            credentials,
             generation,
             reloading: false,
+        }
+    }
+
+    /// Takes the addresses of the credential references that the remote browser
+    /// settings bind to the OS store of this computer, so a value that the server
+    /// holds is written where the settings of this computer read it.
+    pub(in crate::app) fn refresh_credentials(&self, remote: &RemoteBrowserConfig) {
+        if let Some(credentials) = &self.credentials {
+            credentials.register(remote);
         }
     }
 
@@ -96,11 +112,41 @@ pub(in crate::app) struct MachineLoad {
     pub(in crate::app) server_failure: Option<String>,
 }
 
+/// The secrets of this Horizon home that follow a server: its machine keys, and
+/// its credential values when this computer has an OS credential store. Both are
+/// written where the code of this computer already reads them.
+///
+/// A computer without an OS store keeps its machine keys alone; a credential
+/// value of the server then stays unread here, with one line of the log.
+pub(in crate::app) fn secret_vault(
+    home: &horizon_core::HorizonHome,
+    remote: &RemoteBrowserConfig,
+) -> (Arc<dyn SecretTarget>, Option<Arc<CredentialVault>>) {
+    let keys = MachineKeys::from_home(home);
+    let credentials = match KeyringCredentialStore::open() {
+        Ok(store) => {
+            let vault = Arc::new(CredentialVault::new(Box::new(store)));
+            vault.register(remote);
+            Some(vault)
+        }
+        Err(error) => {
+            tracing::info!(
+                %error,
+                "this computer has no OS credential store, so only its machine keys follow the server"
+            );
+            None
+        }
+    };
+    let vault = SecretVault::new(keys, credentials.clone());
+    (Arc::new(vault), credentials)
+}
+
 /// Reads the machine list of this start and starts its link. It runs on a worker
 /// thread, because it reads files and starts one process.
 pub(in crate::app) fn load(
     registry: MachineRegistry,
     server: Option<ServerConfig>,
+    secrets: (Arc<dyn SecretTarget>, Option<Arc<CredentialVault>>),
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<MachineLoad, MachineError> {
     let Some(server) = server.filter(ServerConfig::names_server) else {
@@ -114,13 +160,14 @@ pub(in crate::app) fn load(
         server.ssh_target().unwrap_or_default(),
         server.command(),
         registry.root(),
+        secrets.0,
     ) {
         Ok(config) => config,
         Err(error) => return file_list(registry, error.to_string()),
     };
     match Supervisor::start(config, wake) {
         Ok(supervisor) => {
-            let sync = ServerSync::new(supervisor);
+            let sync = ServerSync::new(supervisor, secrets.1);
             match Machines::from_store(&registry, sync.store()) {
                 Ok(machines) => Ok(MachineLoad {
                     machines,
@@ -157,9 +204,46 @@ impl HorizonApp {
         }
     }
 
+    /// Queues every credential value that this computer stored or removed for the
+    /// server, so the other computers of the person read the same value. The queue
+    /// holds the reference and never the value: the link reads it when it pushes.
+    pub(super) fn queue_credential_secrets(&mut self) {
+        let changes = self.remote_browser_credentials.take_value_changes();
+        if changes.is_empty() {
+            return;
+        }
+        let Some(sync) = self.server_sync.as_ref() else {
+            // Without a server the value is the value of this computer alone.
+            return;
+        };
+        for change in changes {
+            let Ok(id) = horizon_core::SecretId::credential(change.reference.as_str()) else {
+                continue;
+            };
+            let queued = if change.stored {
+                sync.handle().queue_secret(&id)
+            } else {
+                sync.handle().queue_secret_remove(&id)
+            };
+            if let Err(error) = queued {
+                tracing::warn!(%error, id = %id, "a credential value of this computer did not enter the queue");
+            }
+        }
+    }
+
     /// Reads the machine list again when the link brought a change, on the
     /// coordination worker, so no frame reads a file of this home.
     pub(super) fn poll_server_sync(&mut self) {
+        // A secret of this computer that lost the version rule is kept, and the
+        // person reads where it went in the sidebar.
+        let notices = self
+            .server_sync
+            .as_ref()
+            .map(|sync| sync.handle().take_secret_notices())
+            .unwrap_or_default();
+        if let Some(notice) = notices.into_iter().next_back() {
+            self.set_sidebar_notice(notice);
+        }
         let Some(sync) = self.server_sync.as_ref() else {
             return;
         };

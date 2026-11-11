@@ -87,7 +87,10 @@ impl SecretSink for ValueSink {
 /// The credential values of this computer: the addresses that its configuration
 /// gives to each reference, and the OS credential store that holds them.
 pub struct CredentialVault {
-    locators: BTreeMap<String, Vec<CredentialLocator>>,
+    /// The addresses of the references, taken from the remote browser
+    /// configuration of this computer. A save of the settings replaces them, and
+    /// the link reads them on its own thread.
+    locators: Mutex<BTreeMap<String, Vec<CredentialLocator>>>,
     store: Mutex<Box<dyn RemoteCredentialStore + Send>>,
 }
 
@@ -95,7 +98,7 @@ impl fmt::Debug for CredentialVault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CredentialVault")
-            .field("references", &self.locators.keys().collect::<Vec<_>>())
+            .field("references", &self.references())
             .finish_non_exhaustive()
     }
 }
@@ -105,21 +108,27 @@ impl CredentialVault {
     #[must_use]
     pub fn new(store: Box<dyn RemoteCredentialStore + Send>) -> Self {
         Self {
-            locators: BTreeMap::new(),
+            locators: Mutex::new(BTreeMap::new()),
             store: Mutex::new(store),
         }
     }
 
     /// Takes the addresses of the references that `remote` binds to the OS store.
     /// A provider that the person adds or removes applies at the next call.
-    pub fn register(&mut self, remote: &RemoteBrowserConfig) {
-        self.locators = os_locators(remote);
+    pub fn register(&self, remote: &RemoteBrowserConfig) {
+        let locators = os_locators(remote);
+        *self.locators.lock().unwrap_or_else(PoisonError::into_inner) = locators;
     }
 
     /// The references that this computer has an address for.
     #[must_use]
-    pub fn references(&self) -> Vec<&str> {
-        self.locators.keys().map(String::as_str).collect()
+    pub fn references(&self) -> Vec<String> {
+        self.locators
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// The value of `reference`, or `None` when no address of it holds one.
@@ -130,7 +139,7 @@ impl CredentialVault {
     pub fn value(&self, reference: &str) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
         let locators = self.locators(reference)?;
         let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
-        for locator in locators {
+        for locator in &locators {
             match read_secret_value(store.as_ref(), locator) {
                 Ok(value) => return Ok(Some(value)),
                 Err(RemoteCredentialError::Missing) => {}
@@ -148,7 +157,7 @@ impl CredentialVault {
     pub fn write(&self, reference: &str, value: &[u8]) -> Result<(), SecretError> {
         let locators = self.locators(reference)?;
         let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
-        for locator in locators {
+        for locator in &locators {
             store
                 .put(locator, value)
                 .map_err(|error| unavailable(reference, &error))?;
@@ -165,7 +174,7 @@ impl CredentialVault {
     pub fn remove(&self, reference: &str) -> Result<(), SecretError> {
         let locators = self.locators(reference)?;
         let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
-        for locator in locators {
+        for locator in &locators {
             store.delete(locator).map_err(|error| unavailable(reference, &error))?;
         }
         Ok(())
@@ -176,6 +185,8 @@ impl CredentialVault {
     pub fn present(&self) -> Vec<String> {
         let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
         self.locators
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .filter(|(_, locators)| {
                 locators
@@ -186,13 +197,14 @@ impl CredentialVault {
             .collect()
     }
 
-    fn locators(&self, reference: &str) -> Result<&[CredentialLocator], SecretError> {
-        self.locators.get(reference).map(Vec::as_slice).ok_or_else(|| {
-            SecretError::Unsupported {
-                reason: format!(
-                    "No provider of this computer binds the credential reference {reference:?} to the OS credential store"
-                ),
-            }
+    /// The addresses of `reference`, or the refusal of a reference that no
+    /// provider of this computer binds to the OS store.
+    fn locators(&self, reference: &str) -> Result<Vec<CredentialLocator>, SecretError> {
+        let locators = self.locators.lock().unwrap_or_else(PoisonError::into_inner);
+        locators.get(reference).cloned().ok_or_else(|| SecretError::Unsupported {
+            reason: format!(
+                "No provider of this computer binds the credential reference {reference:?} to the OS credential store"
+            ),
         })
     }
 }

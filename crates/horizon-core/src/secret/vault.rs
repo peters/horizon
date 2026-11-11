@@ -12,7 +12,7 @@
 //! for a credential value, because the OS store holds one value per reference and
 //! the person must decide which one is right.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use zeroize::Zeroizing;
 
@@ -22,7 +22,7 @@ use crate::MachineKeys;
 /// What this computer keeps of every secret.
 pub struct SecretVault {
     keys: MachineKeys,
-    credentials: Option<CredentialVault>,
+    credentials: Option<Arc<CredentialVault>>,
 }
 
 impl fmt::Debug for SecretVault {
@@ -39,7 +39,7 @@ impl SecretVault {
     /// The keys of `keys`, and the credential values of `credentials` when this
     /// computer has an OS credential store.
     #[must_use]
-    pub fn new(keys: MachineKeys, credentials: Option<CredentialVault>) -> Self {
+    pub fn new(keys: MachineKeys, credentials: Option<Arc<CredentialVault>>) -> Self {
         Self { keys, credentials }
     }
 
@@ -54,7 +54,7 @@ impl SecretVault {
 
     /// The credential values of this computer, when it has an OS store.
     #[must_use]
-    pub fn credentials(&self) -> Option<&CredentialVault> {
+    pub fn credentials(&self) -> Option<&Arc<CredentialVault>> {
         self.credentials.as_ref()
     }
 
@@ -77,7 +77,7 @@ impl SecretTarget for SecretVault {
                 }
                 None => Ok(None),
             },
-            SecretKind::Credential => match &self.credentials {
+            SecretKind::Credential => match self.credentials.as_deref() {
                 Some(credentials) => credentials.value(id.name()),
                 None => Err(SecretError::Unsupported {
                     reason: "This computer has no OS credential store, so it holds no credential value".to_owned(),
@@ -109,7 +109,7 @@ impl SecretTarget for SecretVault {
                         reason: error.to_string(),
                     })
             }
-            SecretKind::Credential => match &self.credentials {
+            SecretKind::Credential => match self.credentials.as_deref() {
                 Some(credentials) => credentials.write(id.name(), body),
                 None => Err(SecretError::Unsupported {
                     reason: "This computer has no OS credential store, so it keeps no credential value".to_owned(),
@@ -128,7 +128,7 @@ impl SecretTarget for SecretVault {
                     reason: error.to_string(),
                 })
             }
-            SecretKind::Credential => match &self.credentials {
+            SecretKind::Credential => match self.credentials.as_deref() {
                 Some(credentials) => credentials.remove(id.name()),
                 None => Ok(()),
             },
@@ -143,15 +143,15 @@ impl SecretTarget for SecretVault {
                 let files: MachineKeyFiles = serde_json::from_slice(body).map_err(|error| SecretError::Unreadable {
                     message: format!("the machine key {}: {error}", id.name()),
                 })?;
-                self.keys
-                    .write_files(&conflict_name(id.name(), at_millis), &files)
+                let conflict = self
+                    .keys
+                    .write_conflict(id.name(), &files, at_millis)
                     .map_err(|error| SecretError::Unavailable {
                         reason: error.to_string(),
                     })?;
                 Ok(format!(
-                    "The machine key {} of this computer was kept as {} because the server has another one",
-                    id.name(),
-                    conflict_name(id.name(), at_millis)
+                    "The machine key {} of this computer was kept as {conflict} because the server has another one",
+                    id.name()
                 ))
             }
             SecretKind::Credential => Ok(format!(
@@ -173,7 +173,7 @@ impl SecretTarget for SecretVault {
                         .collect()
                 })
                 .unwrap_or_default(),
-            SecretKind::Credential => match &self.credentials {
+            SecretKind::Credential => match self.credentials.as_deref() {
                 Some(credentials) => credentials
                     .present()
                     .into_iter()
@@ -184,11 +184,6 @@ impl SecretTarget for SecretVault {
             },
         }
     }
-}
-
-/// The name of the copy of a machine key that lost the version rule.
-fn conflict_name(name: &str, at_millis: u64) -> String {
-    format!("{name}.conflict-{at_millis}")
 }
 
 #[cfg(test)]

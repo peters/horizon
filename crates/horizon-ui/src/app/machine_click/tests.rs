@@ -57,18 +57,28 @@ fn keep(app: &mut HorizonApp, machines: Vec<Machine>, keys: &[(&str, &str)]) {
 #[test]
 fn a_machine_that_only_arrived_from_the_server_has_no_key_here() {
     assert_eq!(
-        missing_key_notice("build-1", true, None).as_deref(),
+        missing_key_notice("build-1", true, None, Some(false)).as_deref(),
         Some("This computer has no key for build-1 yet")
     );
     assert_eq!(
-        missing_key_notice("build-1", true, Some("build-1")),
-        None,
-        "a key binding of this computer opens the terminal"
+        missing_key_notice("build-1", true, Some("build-1"), Some(false)).as_deref(),
+        Some("This computer has no key for build-1 yet"),
+        "a key that the server has not brought here yet opens nothing"
     );
     assert_eq!(
-        missing_key_notice("build-1", false, None),
+        missing_key_notice("build-1", true, Some("build-1"), Some(true)),
+        None,
+        "the shared key of the server opens the terminal on this computer"
+    );
+    assert_eq!(
+        missing_key_notice("build-1", false, None, None),
         None,
         "a machine that this computer wrote may use its own keys"
+    );
+    assert_eq!(
+        missing_key_notice("build-1", false, Some("build-1"), None),
+        None,
+        "without a server the key file itself decides, with its own error"
     );
 }
 
