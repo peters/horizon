@@ -133,6 +133,14 @@ fn the_chip_names_the_agent_and_says_when_it_listens() {
         ("opened by ", "", "Claude"),
         "a person reads the mark as words, not as a raw field"
     );
+
+    let placed = CardChip::on_machine("build-1");
+    assert_eq!(placed.state, ChipState::OnMachine);
+    assert_eq!(
+        placed.spoken(),
+        ("on ", "", "build-1"),
+        "a terminal of a placed workspace says where it runs"
+    );
 }
 
 #[test]

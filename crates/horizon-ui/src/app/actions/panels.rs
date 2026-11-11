@@ -1,9 +1,19 @@
 use crate::app::HorizonApp;
 use crate::dir_picker::{DirPicker, DirPickerPurpose};
-use horizon_core::{PanelId, PanelOptions, PanelResume, PanelTranscript, PresetConfig, WorkspaceId};
+use horizon_core::{
+    MachineKeys, PanelId, PanelOptions, PanelResume, PanelTranscript, PlaceWorkspace, PresetConfig, WorkspaceId,
+};
 
 use super::support::preset_panel_options;
 use super::{add_panel_position, inherit_workspace_cwd, workspace_cwd};
+
+/// Whether a new panel of a preset asks where it runs before it opens: only on
+/// this computer, and only when the directory of the workspace is not there. A
+/// terminal of a workspace on a machine starts where the machine puts it, so the
+/// person chooses no local directory for it.
+fn asks_where_to_run(runs_here: bool, has_directory: bool, needs_directory: bool) -> bool {
+    runs_here && !has_directory && needs_directory
+}
 
 /// Newly added agent panels always start a new session. `resume: last` on a
 /// preset only governs how existing panels reconnect when they are restored.
@@ -34,8 +44,57 @@ impl HorizonApp {
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
+        let options = self.placed_options(options, workspace_id)?;
         let id = self.board.create_panel(options, workspace_id)?;
         Ok(id)
+    }
+
+    /// The options of a new panel of the person with the place of its workspace
+    /// applied.
+    ///
+    /// Every path that a person uses to make a terminal reaches this function:
+    /// the New buttons and the shortcut, the preset picker and the canvas
+    /// picker, and the directory picker that they open. A terminal of a
+    /// workspace that is placed on a machine becomes the SSH panel that runs the
+    /// place's own command there; every other panel keeps its own command.
+    /// [`horizon_core::place_command`] decides that, so another transport
+    /// changes nothing here.
+    ///
+    /// # Errors
+    /// `machine_unavailable` when the machine of the place is gone, and the
+    /// refusal of its record when it no longer passes its rule. The sidebar says
+    /// the reason where it says why a machine opened nothing.
+    pub(in crate::app) fn placed_options(
+        &mut self,
+        options: PanelOptions,
+        workspace_id: WorkspaceId,
+    ) -> horizon_core::Result<PanelOptions> {
+        let Some(workspace) = self.board.workspace(workspace_id) else {
+            return Ok(options);
+        };
+        let place = workspace.place.clone();
+        if place.is_local() {
+            return Ok(options);
+        }
+        let local_id = workspace.local_id.clone();
+        let sessions = self.board.workspace_sessions(workspace_id);
+        let sessions = sessions.iter().map(String::as_str).collect::<Vec<_>>();
+        let keys = MachineKeys::from_home(self.session_store.home());
+        let mut placed = options;
+        if let Err(error) = horizon_core::place_command(
+            &mut placed,
+            &place,
+            &self.machine_list,
+            &keys,
+            &PlaceWorkspace {
+                local_id: &local_id,
+                sessions: &sessions,
+            },
+        ) {
+            self.set_machine_notice(format!("{error} ({})", error.code()));
+            return Err(horizon_core::Error::Place(error));
+        }
+        Ok(placed)
     }
 
     /// Creates a panel that an agent asked for in its own workspace.
@@ -97,6 +156,8 @@ impl HorizonApp {
             let transcript = PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id)?;
             Some((panel.local_id.clone(), transcript))
         });
+        // The panel is gone after this call, so its session is asked for first.
+        self.end_machine_session(panel_id);
         let teardown = self.board.close_panel_returning_teardown(panel_id);
         self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
         self.panel_render_caches.editor_preview_cache.remove(&panel_id);
@@ -128,6 +189,14 @@ impl HorizonApp {
                     .collect()
             })
             .unwrap_or_default();
+
+        // The sessions are asked for while their panels still name them.
+        let machine_panels = self
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| workspace.panels.clone())
+            .unwrap_or_default();
+        self.end_machine_sessions(machine_panels);
 
         if panels_to_close.is_empty() {
             self.board.close_panels_in_workspace(workspace_id);
@@ -179,7 +248,13 @@ impl HorizonApp {
         // panel: ask where to run instead of starting it in Horizon's own
         // checkout. Picking one also repairs the workspace directory.
         let has_directory = workspace_cwd(&self.board, workspace_id).is_some_and(|path| path.is_dir());
-        if has_directory || !preset.requires_workspace_cwd() {
+        let runs_here = self
+            .board
+            .workspace(workspace_id)
+            .is_none_or(|workspace| workspace.place.is_local());
+        if asks_where_to_run(runs_here, has_directory, preset.requires_workspace_cwd()) {
+            self.open_panel_dir_picker(workspace_id, preset, canvas_pos);
+        } else {
             let mut options = preset_panel_options(&preset, &self.template_config.browser);
             options.position = add_panel_position(&self.board, workspace_id, canvas_pos);
             match self.create_panel_with_options(options, workspace_id) {
@@ -187,8 +262,6 @@ impl HorizonApp {
                 Err(error) => tracing::error!("failed to create panel: {error}"),
             }
             self.mark_runtime_dirty();
-        } else {
-            self.open_panel_dir_picker(workspace_id, preset, canvas_pos);
         }
     }
 
@@ -269,6 +342,8 @@ mod tests {
             }
         );
     }
+
+    mod placed;
 
     fn shell_preset() -> PresetConfig {
         PresetConfig {

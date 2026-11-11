@@ -129,6 +129,9 @@ fn the_section_draws_without_a_machine_and_with_one() {
     });
     app.settle_browser_host_io();
     run_app_frame(&ctx, &mut app);
+    // The startup read of the machine list answers before the test writes one,
+    // or the empty list of the home replaces the record it wrote.
+    crate::app::block_machines::settle_machine_load(&mut app);
     assert!(app.machine_rows.rows().is_empty(), "no machine draws no section");
 
     with_machines(&mut app, vec![record("build-1", Some("Hetzner, hel1"))]);

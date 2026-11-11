@@ -29,6 +29,8 @@ contract, and `open_terminal` gives the shell.
   written with `machine_set`: the person sees it in the Machines section of the
   sidebar and connects with one click, without you. The same machines are in the
   overview card and in the sidebar.
+- The person can put a workspace on a machine from the sidebar, and the new
+  terminals of that workspace then run there in tmux. You do nothing for it.
 
 ## The flow
 
@@ -263,7 +265,9 @@ Say what still costs in the `text` component.
 
 ### 10. Delete
 
-Delete needs a confirm step on the card before anything is deleted.
+Delete needs a confirm step on the card before anything is deleted. Say on the
+confirm card that a workspace the person put on this machine loses its terminals
+there, and that their tmux sessions end with the machine.
 
 1. A press on `Delete` updates the card to the confirm document.
 2. A press on `Keep` returns to the machine card, and nothing is deleted.

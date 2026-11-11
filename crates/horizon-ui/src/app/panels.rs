@@ -655,9 +655,11 @@ impl HorizonApp {
                     panel.map(|p| p.display_title())
                 };
                 let session_id = panel.and_then(|p| p.session_id());
-                // The mark of a terminal that an agent opened for the person.
-                // A card keeps its own state chip instead.
+                // The mark of a terminal that an agent opened for the person,
+                // or of a terminal that runs on the machine of its workspace's
+                // place. A card keeps its own state chip instead.
                 let opened_by = panel.and_then(Panel::opened_by);
+                let on_machine = panel.and_then(Panel::machine);
 
                 let chrome = PanelChrome {
                     panel_id,
@@ -676,7 +678,8 @@ impl HorizonApp {
                     session_id,
                     card: self
                         .card_titlebar_chip(panel_id)
-                        .or_else(|| opened_by.map(CardChip::opened_by)),
+                        .or_else(|| opened_by.map(CardChip::opened_by))
+                        .or_else(|| on_machine.map(CardChip::on_machine)),
                 };
                 paint_panel_chrome(ui, chrome);
 

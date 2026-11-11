@@ -139,27 +139,31 @@ impl HorizonApp {
     /// Draws the machine section below the workspaces, when this Horizon keeps a
     /// machine.
     pub(super) fn render_sidebar_machines(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
-        if self.machine_rows.rows().is_empty() {
-            self.machine_notice = None;
-            return;
-        }
         if self.machine_notice_until.is_some_and(|until| Instant::now() >= until) {
             self.machine_notice = None;
             self.machine_notice_until = None;
         }
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            ui.add_space(18.0);
-            ui.label(text::line(
-                ui,
-                "Machines",
-                13.0,
-                text::SEMIBOLD,
-                theme::FG_SOFT(),
-                120.0,
-            ));
-        });
-        ui.add_space(2.0);
+        // A reason that a machine action, or a new terminal of a placed
+        // workspace, opened nothing stays visible after the row is forgotten,
+        // because it is the reason the person has to act on.
+        if self.machine_rows.rows().is_empty() && self.machine_notice.is_none() {
+            return;
+        }
+        if !self.machine_rows.rows().is_empty() {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                ui.label(text::line(
+                    ui,
+                    "Machines",
+                    13.0,
+                    text::SEMIBOLD,
+                    theme::FG_SOFT(),
+                    120.0,
+                ));
+            });
+            ui.add_space(2.0);
+        }
 
         // The rows are borrowed out for the pass, because a press changes the
         // actions and the board; nothing in the pass reads the cache again.

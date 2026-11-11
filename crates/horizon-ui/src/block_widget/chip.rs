@@ -24,6 +24,8 @@ pub(crate) enum ChipState {
     Gone,
     /// The person's panel was opened for them by this agent.
     OpenedBy,
+    /// The person's panel runs on the machine of its workspace's place.
+    OnMachine,
 }
 
 /// The text the chip adds after the agent name while a wait is open.
@@ -32,6 +34,8 @@ const LISTENS: &str = " listens";
 const NO_AGENT: &str = "No agent";
 /// The words that mark a panel that an agent opened for the person.
 const OPENED: &str = "opened by ";
+/// The words that mark a terminal of a workspace that is placed on a machine.
+const ON: &str = "on ";
 
 /// Space the title keeps from the chip while both are drawn.
 pub(crate) const TITLE_GAP: f32 = CHIP_TITLE_GAP;
@@ -53,6 +57,17 @@ pub(crate) struct CardChip<'a> {
     pub(crate) name: &'a str,
     /// Whether the owner waits for a click.
     pub(crate) state: ChipState,
+}
+
+impl ChipState {
+    /// The words that the chip draws in front of the name, when it has any.
+    const fn prefix(self) -> Option<&'static str> {
+        match self {
+            Self::OpenedBy => Some(OPENED),
+            Self::OnMachine => Some(ON),
+            Self::Listening | Self::Present | Self::Gone => None,
+        }
+    }
 }
 
 impl<'a> CardChip<'a> {
@@ -81,6 +96,15 @@ impl<'a> CardChip<'a> {
         }
     }
 
+    /// The mark of a terminal that runs on the machine `name`, because its
+    /// workspace is placed there.
+    pub(crate) fn on_machine(name: &'a str) -> Self {
+        Self {
+            name,
+            state: ChipState::OnMachine,
+        }
+    }
+
     /// Width the chip needs, its dot and padding included.
     fn width(&self, ui: &Ui) -> f32 {
         let font = FontId::monospace(CHIP_FONT);
@@ -94,7 +118,7 @@ impl<'a> CardChip<'a> {
                     .size()
                     .x;
             }
-            ChipState::Present | ChipState::OpenedBy => {
+            ChipState::Present | ChipState::OpenedBy | ChipState::OnMachine => {
                 width += text::line(ui.painter(), self.name, &font, theme::FG_SOFT(), f32::INFINITY)
                     .size()
                     .x;
@@ -105,8 +129,8 @@ impl<'a> CardChip<'a> {
                     .x;
             }
         }
-        if self.state == ChipState::OpenedBy {
-            width += text::line(ui.painter(), OPENED, &font, theme::FG_SOFT(), f32::INFINITY)
+        if let Some(prefix) = self.state.prefix() {
+            width += text::line(ui.painter(), prefix, &font, theme::FG_SOFT(), f32::INFINITY)
                 .size()
                 .x;
         }
@@ -122,6 +146,7 @@ impl<'a> CardChip<'a> {
             ChipState::Present => ("", "", self.name),
             ChipState::Gone => ("", "", NO_AGENT),
             ChipState::OpenedBy => (OPENED, "", self.name),
+            ChipState::OnMachine => (ON, "", self.name),
         }
     }
 
@@ -142,7 +167,7 @@ impl<'a> CardChip<'a> {
             ChipState::Listening => {
                 painter.circle_filled(dot, CHIP_DOT * 0.5, theme::PALETTE_GREEN());
             }
-            ChipState::Present | ChipState::Gone | ChipState::OpenedBy => {
+            ChipState::Present | ChipState::Gone | ChipState::OpenedBy | ChipState::OnMachine => {
                 painter.circle_stroke(dot, CHIP_DOT * 0.5 - 0.75, Stroke::new(1.5, theme::FG_SOFT()));
             }
         }

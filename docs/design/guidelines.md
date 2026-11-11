@@ -733,6 +733,35 @@ the rules from the modules beside it.
   rows for ten seconds. The row menu holds `Focus` (or `Connect` when no
   terminal is open) and `Forget this machine`, whose confirm line is the
   menu's own text.
+- A workspace that lives on a machine shows the machine name in the workspace
+  row. The label is Inter 11 weight 400 in `FG_SOFT` blended 0.14 toward
+  `BG_ELEVATED` (the same low-emphasis color as the status line), 6 px right of
+  the name on the name's line, cut with an ellipsis when the badge or the count
+  needs the room, and left out when less than 28 px remain. A workspace on this
+  computer shows no label. The label is the name of the machine record, so an
+  idle frame builds no string for it; moving the pointer over it shows the name
+  in the hover text.
+- The workspace menu holds a `Place` section, between `Arrange Panels` and
+  `Move to Main Window`/`Open in New Window`: the group label `Place` in 11
+  `FG_DIM` with the hint "A new terminal of this workspace opens there. The
+  panels that are open stay where they are.", then `This computer` and one row
+  for each machine of the list. Rows are 12 pt `FG_SOFT`; the current place
+  carries the check mark U+2713 in front of its label. A place whose machine was
+  forgotten keeps its checked row, dimmed in `FG_DIM`, with `(gone)` after the
+  name and a hover text that says the machine is not in the list; the person can
+  pick another place from the same menu.
+- The row menu of a machine holds `Put the active workspace here` above the
+  connect action, with the hint "Its new terminals open on this machine. The
+  panels that are open stay where they are."
+- A terminal of a placed workspace carries the titlebar chip of the existing
+  card style with the words `on <machine>`: a hollow `FG_SOFT` dot, `BG_ELEVATED`
+  fill, `BORDER_SUBTLE` stroke, and the chromeless label in JetBrains Mono at
+  the card chip size. A panel that an agent opened for the person keeps its
+  `opened by <agent>` chip instead.
+- `Close All Panels` in the workspace menu asks first when the workspace holds a
+  panel of a machine: the confirm line says `End <n> tmux session(s) of this
+  workspace's machine?` in 11 `FG_DIM`, above the red `Close All Panels` action
+  and `Cancel`. A workspace with no panel of a machine closes at once.
 - Panel titlebar and sidebar "Move to Workspace" menus focus a search field
   once on open. Names filter case-insensitively; a bounded scroll list keeps
   other menu actions reachable as the workspace count grows. Rows use 12 pt

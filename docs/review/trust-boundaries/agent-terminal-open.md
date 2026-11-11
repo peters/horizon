@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**"
+applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-core/src/place.rs,crates/horizon-core/src/place/**,crates/horizon-core/src/workspace.rs,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/session_kill.rs,crates/horizon-ui/src/app/session_kill/**,crates/horizon-ui/src/app/actions/panels.rs,crates/horizon-ui/src/app/actions/panels/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**,crates/horizon-ui/src/app/sidebar/place.rs,crates/horizon-ui/src/app/sidebar/place/**,crates/horizon-ui/src/app/sidebar/menus.rs"
 ---
 
 # Trust boundary of an agent-opened SSH terminal and of a machine record
@@ -139,6 +139,84 @@ input of a click. It is stored as one file per Horizon home,
   belong to the Horizon home, so the workspace boundary is not a key boundary.
   An agent that the person runs in another workspace of the same Horizon reaches
   the same machines by name.
+
+## The place of a workspace
+
+A workspace saves a **place**: this computer, or the name of a machine of the
+list. A workspace on a machine opens its new terminals there, so a record that
+an agent wrote decides where a person's next terminal runs, at every terminal
+that the person makes, without an agent in the loop. The place is saved with the
+workspace as the machine name. [`place.rs`](../../../crates/horizon-core/src/place.rs)
+holds the only code that decides which command a panel of a place runs.
+
+### Untrusted: the name of a place, and the record that it names
+
+- **The place is a saved name, not a route.** A workspace holds a machine name or
+  nothing. A snapshot that names no machine of the list is still a place, and
+  every new terminal of that workspace fails with `machine_unavailable` until the
+  person picks another place. Horizon never falls back to a local shell for it,
+  because that would run a command in a place that the person did not choose.
+- **The record is re-validated at every new terminal.** `place_command` calls
+  `Machine::checked_terminal` again, so the route of the record passes the rule
+  of an SSH terminal, and it takes the key by name from the Horizon home, exactly
+  as a click on the machine row does. A record that no longer passes its rule
+  makes no panel, and the sidebar says the typed reason.
+- **The tmux session is Horizon's text.** The session is
+  `hz-<eight lower-case hexadecimal characters of the workspace local id>-<n>`,
+  with `n` the smallest positive number that no session of that workspace takes.
+  Eight hexadecimal characters and a number hold no character outside the
+  session rule, so the name reaches `tmux` as one word. `n` is read from the
+  sessions that the panels of the workspace saved, never from panel text.
+- **The remote command is Horizon's text, and it is not agent input.** A place
+  panel runs `tmux new-session -A -s <session> \; set-option status off`. That
+  line holds a backslash and a `;`, which the `remote_command` rule of
+  `open_terminal` refuses on purpose, because an agent could then send a second
+  command. The place builds the line in `place.rs` from its own pieces and never
+  passes it through the agent rule; the `CheckedTerminal` that it fills carries
+  a route that the rule did check.
+- **The panel keeps the machine key of the record.** The key name comes from the
+  record and the directory from the Horizon home, as in a machine terminal, so
+  the argv holds the same `-i`, `IdentitiesOnly`, `IdentityAgent` and
+  `UserKnownHostsFile` options and no other.
+
+### Guarantees of a place
+
+- **One function decides the command.** Every path that a person uses to make a
+  terminal reaches `HorizonApp::placed_options`, which calls
+  `horizon_core::place_command`. An agent's panel paths do not pass through it,
+  so an agent cannot move a panel of the person to a machine.
+- **Only a terminal moves.** `place_command` changes a `shell` or `command` panel
+  and leaves an agent, browser, device, card or editor panel exactly as its
+  caller made it.
+- **A restart re-attaches, and a close ends the session.** The session name is
+  saved with the panel, so a restored panel runs the same argv and attaches to
+  the same session. A close by the person ends it with
+  `ssh <the panel's own argv> tmux kill-session -t <session>`, on the
+  coordination worker, in at most ten seconds, and a failure is a line of the
+  log and not a dialog. A quit of Horizon runs none of these, so a session
+  outlives the window.
+- **The confirm for a close of a workspace.** A workspace that holds a panel of
+  a machine asks in its menu before it closes its panels, and the line says how
+  many sessions the close ends.
+- **No frame waits for a machine.** The place decision reads no file and starts
+  no process: the key path is a string of the Horizon home, and the kill runs on
+  a worker.
+
+### Does not guarantee
+
+- **The machine is the agent's machine.** A place connects to the host that the
+  record names, with the account in that record, and Horizon does not verify
+  that the host is the one a person expects. A person who puts a workspace on a
+  record puts every new terminal of it on an agent's claim about a host.
+- **The session name is visible.** Every person and agent that can run `tmux` on
+  the machine can see and attach to a session of a place; `tmux` is the
+  transport and Horizon does not lock a session.
+- **The session ends with the panel, not with the work it holds.** A close ends
+  the session that the panel named, and everything that runs in it. A restore of
+  a panel whose session was ended elsewhere starts a new, empty session under
+  the same name.
+- **A forgotten machine is not a forgotten key.** The key of the record stays in
+  the Horizon home, and the place keeps its name.
 
 ## Machine keys
 

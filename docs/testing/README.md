@@ -37,4 +37,5 @@ documents that are not yet STE.
 | [device-panel-ssh-trust](procedures/device-panel-ssh-trust.md) | Device panel ssh route: untrusted host refusal, fingerprint comparison, trust and changed key | none |
 | [machines-skill](procedures/machines-skill.md) | `horizon-machines` skill: rent, card, Connect, confirm delete and proof for each provider | rents compute |
 | [sidebar-machines](procedures/sidebar-machines.md) | The Machines section of the sidebar: records, click to connect, restart, forget and a refused record | none |
+| [workspace-place](procedures/workspace-place.md) | A workspace that lives on a machine: its new terminals run there, re-attach after a restart and end with a close | none |
 

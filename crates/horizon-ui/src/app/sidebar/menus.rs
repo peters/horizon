@@ -6,14 +6,112 @@ use crate::theme;
 
 use super::super::HorizonApp;
 use super::machines::MachineRow;
+use super::place;
+use super::place::PlaceEntry;
 use super::{SidebarActions, WorkspaceSidebarEntry};
+
+/// What the person chose in the close-all part of a workspace menu.
+enum CloseAllChoice {
+    /// Nothing.
+    None,
+    /// Close the panels now: no panel of a machine holds a session.
+    Close,
+    /// Ask first, because a panel of a machine holds a session that the close ends.
+    AskFirst,
+    /// The person read the line and chose to close.
+    Confirm,
+    /// The person dropped the ask.
+    Cancel,
+}
+
+/// The Place section of a workspace menu: the check mark of the current place,
+/// the machines of the list, and the reason of a machine that is gone. Returns
+/// the place the person chose.
+fn show_place_menu(ui: &mut egui::Ui, entries: &[PlaceEntry]) -> Option<horizon_core::WorkspacePlace> {
+    ui.label(egui::RichText::new("Place").size(11.0).color(theme::FG_DIM()))
+        .on_hover_text("A new terminal of this workspace opens there. The panels that are open stay where they are.");
+    let mut chosen = None;
+    for entry in entries {
+        // The check mark is Horizon's character, and a menu is open only while
+        // the person reads it, so the line is made then.
+        let label = if entry.current {
+            format!("\u{2713} {}", entry.label)
+        } else {
+            entry.label.clone()
+        };
+        let color = if entry.gone { theme::FG_DIM() } else { theme::FG_SOFT() };
+        let mut row = ui.add_enabled(
+            !entry.gone,
+            Button::new(egui::RichText::new(label).size(12.0).color(color)).frame(false),
+        );
+        if entry.gone {
+            row = row.on_disabled_hover_text("This machine is not in Horizon's machine list anymore.");
+        }
+        if row.clicked() {
+            chosen = Some(entry.place.clone());
+        }
+    }
+    chosen
+}
+
+/// The close-all part of a workspace menu, behind the line that says how many
+/// tmux sessions a close ends.
+fn show_close_all_menu(ui: &mut egui::Ui, machine_panels: usize, confirming: bool) -> CloseAllChoice {
+    let mut choice = CloseAllChoice::None;
+    let close = || {
+        Button::new(
+            egui::RichText::new("Close All Panels")
+                .size(12.0)
+                .color(theme::PALETTE_RED()),
+        )
+        .frame(false)
+    };
+    if confirming {
+        ui.label(
+            egui::RichText::new(format!(
+                "End {machine_panels} tmux session(s) of this workspace's machine?"
+            ))
+            .size(11.0)
+            .color(theme::FG_DIM()),
+        );
+        if ui
+            .add(close())
+            .on_hover_text("The work in the tmux sessions of this panel set ends with it.")
+            .clicked()
+        {
+            choice = CloseAllChoice::Confirm;
+            ui.close();
+        }
+        if ui
+            .add(Button::new(egui::RichText::new("Cancel").size(12.0).color(theme::FG_SOFT())).frame(false))
+            .clicked()
+        {
+            choice = CloseAllChoice::Cancel;
+            ui.close();
+        }
+        return choice;
+    }
+    if ui.add(close()).clicked() {
+        // A panel on a machine holds work that a close ends, so the menu asks
+        // first, as it does before it forgets a machine.
+        choice = if machine_panels > 0 {
+            CloseAllChoice::AskFirst
+        } else {
+            CloseAllChoice::Close
+        };
+    }
+    choice
+}
 
 impl HorizonApp {
     pub(super) fn show_workspace_context_menu(
+        &mut self,
         response: &egui::Response,
         workspace: &WorkspaceSidebarEntry,
         actions: &mut SidebarActions,
     ) {
+        let confirming_close = self.close_workspace_confirm == Some(workspace.id);
+        let mut open_close_confirm = false;
         // A tooltip layer, as the panel menu uses: the row lives in the sidebar's clipped
         // rectangle, so a menu drawn in the row's own layer is cut to a slice of its width.
         let popup = egui::Popup::context_menu(response)
@@ -66,6 +164,15 @@ impl HorizonApp {
             }
 
             ui.separator();
+            // The entries are made only while the menu is open: a frame that
+            // draws the row alone builds no line of a machine.
+            let entries = place::entries(&workspace.place, &self.machine_list);
+            if let Some(place) = show_place_menu(ui, &entries) {
+                actions.set_workspace_place = Some((workspace.id, place));
+                ui.close();
+            }
+
+            ui.separator();
             if ui
                 .add_enabled(
                     workspace.capabilities.can_remove_empty,
@@ -82,21 +189,23 @@ impl HorizonApp {
                 actions.remove_empty_workspace = Some(workspace.id);
                 ui.close();
             }
-            if ui
-                .add(
-                    Button::new(
-                        egui::RichText::new("Close All Panels")
-                            .size(12.0)
-                            .color(theme::PALETTE_RED()),
-                    )
-                    .frame(false),
-                )
-                .clicked()
-            {
-                actions.close_all_in_workspace = Some(workspace.id);
-                ui.close();
+            match show_close_all_menu(ui, workspace.machine_panels, confirming_close) {
+                CloseAllChoice::Close => {
+                    actions.close_all_in_workspace = Some(workspace.id);
+                    ui.close();
+                }
+                CloseAllChoice::AskFirst => open_close_confirm = true,
+                CloseAllChoice::Confirm => {
+                    actions.close_all_in_workspace = Some(workspace.id);
+                    self.close_workspace_confirm = None;
+                }
+                CloseAllChoice::Cancel => self.close_workspace_confirm = None,
+                CloseAllChoice::None => {}
             }
         });
+        if open_close_confirm {
+            self.close_workspace_confirm = Some(workspace.id);
+        }
         if shown.is_some() {
             response
                 .ctx
@@ -133,6 +242,25 @@ impl HorizonApp {
                 } else {
                     actions.connect_machine = Some(row.name.clone());
                 }
+                ui.close();
+            }
+            ui.separator();
+            if self.board.active_workspace.is_some()
+                && ui
+                    .add(
+                        Button::new(
+                            egui::RichText::new("Put the active workspace here")
+                                .size(12.0)
+                                .color(theme::FG_SOFT()),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text(
+                        "Its new terminals open on this machine. The panels that are open stay where they are.",
+                    )
+                    .clicked()
+            {
+                actions.put_active_workspace_here = Some(row.name.clone());
                 ui.close();
             }
             ui.separator();

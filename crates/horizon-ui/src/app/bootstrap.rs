@@ -132,7 +132,7 @@ impl HorizonApp {
             machine_notice: None,
             machine_notice_until: None,
             machine_rows: super::sidebar::machines::MachineRows::default(),
-            forget_machine: None,
+            session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
             machine_epoch: 0,
             machine_load_rx: None,
             canvas_grid_cache: CanvasGridCache::default(),

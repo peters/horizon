@@ -3,6 +3,7 @@ pub(in crate::app) mod machines;
 mod menus;
 mod new_workspace;
 mod panel_rows;
+mod place;
 mod rich_menu;
 mod rows;
 mod text;
@@ -26,6 +27,11 @@ use super::{HorizonApp, TOOLBAR_HEIGHT};
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
     name: String,
+    /// Where the new terminals of the workspace run.
+    place: horizon_core::WorkspacePlace,
+    /// How many panels of the workspace hold a tmux session of its machine, so
+    /// closing them asks before it ends that work.
+    machine_panels: usize,
     color: Color32,
     is_active: bool,
     detached: bool,
@@ -65,6 +71,10 @@ struct SidebarActions {
     /// A confirmed "Forget this machine" on the row of this machine.
     forget_machine: Option<String>,
     remove_empty_workspace: Option<WorkspaceId>,
+    /// Put a workspace on this computer, or on a machine of the list.
+    set_workspace_place: Option<(WorkspaceId, horizon_core::WorkspacePlace)>,
+    /// Put the active workspace on the machine whose row a person chose.
+    put_active_workspace_here: Option<String>,
     clear_layout: Option<WorkspaceId>,
     arrange_layout: Option<(WorkspaceId, WorkspaceLayout)>,
 }
@@ -150,6 +160,13 @@ impl HorizonApp {
                 WorkspaceSidebarEntry {
                     id: workspace.id,
                     name: workspace.name.clone(),
+                    place: workspace.place.clone(),
+                    machine_panels: workspace
+                        .panels
+                        .iter()
+                        .filter_map(|panel_id| panels_by_id.get(panel_id))
+                        .filter(|panel| panel.machine_session().is_some())
+                        .count(),
                     color: theme::workspace_accent(workspace.color_idx),
                     is_active,
                     detached: self.workspace_is_detached(workspace.id),
@@ -320,7 +337,7 @@ impl HorizonApp {
                 None => actions.pan_to_workspace = Some(workspace.id),
             }
         }
-        Self::show_workspace_context_menu(&row_response, workspace, actions);
+        self.show_workspace_context_menu(&row_response, workspace, actions);
 
         if sidebar_workspace_shows_panels(workspace.is_active, accordion) {
             ui.add_space(2.0);
@@ -495,6 +512,24 @@ impl HorizonApp {
         text::panel_label(panel.kind, own_name, display_title, &panel.terminal_title)
     }
 
+    /// Puts a workspace in the place that a menu chose, which its new terminals
+    /// follow and its open panels do not.
+    fn apply_workspace_place_actions(&mut self, actions: &SidebarActions) {
+        if let Some((workspace_id, place)) = actions.set_workspace_place.clone()
+            && self.board.set_workspace_place(workspace_id, place)
+        {
+            self.mark_runtime_dirty();
+        }
+        if let Some(name) = actions.put_active_workspace_here.clone()
+            && let Some(workspace_id) = self.board.active_workspace
+            && self
+                .board
+                .set_workspace_place(workspace_id, horizon_core::WorkspacePlace::Machine(name))
+        {
+            self.mark_runtime_dirty();
+        }
+    }
+
     fn apply_sidebar_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
         if actions.create_workspace {
             self.create_new_workspace(ctx, None);
@@ -527,6 +562,7 @@ impl HorizonApp {
             }
             drop.dragged_workspace_id
         });
+        self.apply_workspace_place_actions(actions);
         if let Some(name) = actions.forget_machine.clone() {
             self.forget_machine(&name, ctx);
         }

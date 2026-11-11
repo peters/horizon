@@ -157,6 +157,8 @@ fn workspace_entry(row: horizon_core::workspace_list::Row, detached: bool) -> su
     super::WorkspaceSidebarEntry {
         id: horizon_core::WorkspaceId(7),
         name: "sample".to_owned(),
+        place: horizon_core::WorkspacePlace::Local,
+        machine_panels: 0,
         color: egui::Color32::WHITE,
         is_active: false,
         detached,
@@ -309,6 +311,103 @@ fn the_snapshot_labels_only_the_panel_rows_that_show() {
 
     app.template_config.features.sidebar_accordion = false;
     assert_eq!(labels(&app, hidden), ["second"], "flat rows all show");
+}
+
+#[test]
+fn a_workspace_that_lives_on_a_machine_says_so_after_its_name() {
+    use crate::test_egui::DiscardTextures;
+    use egui::epaint::Shape;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let workspace = app.board.create_workspace("Build");
+    let local = app.board.create_workspace("Here");
+    app.board
+        .set_workspace_place(workspace, horizon_core::WorkspacePlace::Machine("build-1".to_owned()));
+    let ctx = egui::Context::default();
+    let render = |app: &mut crate::app::HorizonApp| {
+        let input = crate::app::test_support::raw_input([1400.0, 900.0], None);
+        ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures()
+    };
+    // An area shows from its second frame on.
+    let _ = render(&mut app);
+    let output = render(&mut app);
+    let texts = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => Some((
+                    text.galley.job.text.clone(),
+                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let painted = texts(&output);
+    let name = painted
+        .iter()
+        .find(|(text, _)| text == "Build")
+        .expect("the name of the workspace");
+    let machine = painted
+        .iter()
+        .find(|(text, _)| text == "build-1")
+        .expect("the machine of the place");
+    assert!(machine.1.min.x > name.1.max.x, "the machine follows the name");
+    assert!(
+        (machine.1.center().y - name.1.center().y).abs() < 2.0,
+        "the machine stands on the line of the name"
+    );
+    let entry = |app: &crate::app::HorizonApp, id| {
+        app.sidebar_workspace_data()
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .expect("the workspace row")
+    };
+    assert_eq!(
+        entry(&app, workspace).place.machine(),
+        Some("build-1"),
+        "the row reads the place of the workspace"
+    );
+    assert_eq!(entry(&app, local).place.machine(), None);
+    assert_eq!(entry(&app, workspace).machine_panels, 0, "no panel holds a session yet");
+}
+
+#[test]
+fn the_row_says_which_panels_hold_a_session_of_the_machine() {
+    use horizon_core::{Machine, MachineRegistry, Machines, PanelOptions, WorkspacePlace};
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let workspace = app.board.create_workspace("work");
+    app.board
+        .workspaces
+        .iter_mut()
+        .find(|candidate| candidate.id == workspace)
+        .expect("the workspace")
+        .local_id = "c8dfe3af-0e07-4889-99ed-403b4a5a4c8a".to_owned();
+    app.board
+        .set_workspace_place(workspace, WorkspacePlace::Machine("build-1".to_owned()));
+    app.machine_list = Machines::with_records(
+        MachineRegistry::from_home(app.session_store.home()),
+        vec![Machine {
+            name: "build-1".to_owned(),
+            host: "203.0.113.10".to_owned(),
+            ..Machine::default()
+        }],
+    );
+    // The panel runs `/bin/true` in place of ssh, so the test starts no ssh.
+    let options = PanelOptions {
+        launch_wrapper: vec!["/bin/true".to_owned()],
+        ..PanelOptions::default()
+    };
+    app.create_panel_with_options(options, workspace)
+        .expect("a terminal of the machine");
+    let entry = app
+        .sidebar_workspace_data()
+        .into_iter()
+        .find(|entry| entry.id == workspace)
+        .expect("the workspace row");
+    assert_eq!(entry.machine_panels, 1, "the row knows that a close ends one session");
 }
 
 #[test]
