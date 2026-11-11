@@ -372,7 +372,6 @@ impl SyncHandle {
         self.lock().request_since
     }
 
-
     /// The number of changes of the records, so a caller reads them again only
     /// when one of them changed.
     #[must_use]
