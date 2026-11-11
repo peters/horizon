@@ -29,19 +29,51 @@ const MAX_DEPTH: usize = 5;
 /// Maximum results before we stop searching.
 const MAX_RESULTS: usize = 200;
 
+/// One directory that a lookup answers, with the flag that its row draws.
+///
+/// The flag is what the row of the directory picker shows: a directory that
+/// looks like a project of its own. The lookup reads it on its own thread, so a
+/// frame of the picker reads no directory entry of a row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirRow {
+    /// The directory of the row.
+    pub path: PathBuf,
+    /// Whether this directory looks like a project of its own.
+    pub is_project: bool,
+}
+
 /// Spawn a background thread that searches for directories matching `query`.
 /// Returns a receiver that will eventually yield the results.
 ///
 /// When the query changes the caller simply drops the old receiver and calls
 /// this again — the orphaned thread finishes harmlessly.
 #[must_use]
-pub fn spawn_lookup(query: String) -> mpsc::Receiver<Vec<PathBuf>> {
+pub fn spawn_lookup(query: String) -> mpsc::Receiver<Vec<DirRow>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let results = search_directories(&query);
+        let results = rows_of(search_directories(&query));
         let _ = tx.send(results);
     });
     rx
+}
+
+/// Whether `path` looks like a project of its own: one of the markers of a
+/// project is there. This reads the directory, so only a worker calls it.
+#[must_use]
+pub fn is_project_directory(path: &Path) -> bool {
+    crate::ui_thread::blocking("the markers of a project directory are looked for");
+    path.join(".git").exists() || path.join("Cargo.toml").exists() || path.join("package.json").exists()
+}
+
+/// The rows of one answer of the search, with the flag of each one.
+fn rows_of(paths: Vec<PathBuf>) -> Vec<DirRow> {
+    paths
+        .into_iter()
+        .map(|path| DirRow {
+            is_project: is_project_directory(&path),
+            path,
+        })
+        .collect()
 }
 
 fn home_dir() -> PathBuf {
@@ -98,8 +130,8 @@ pub fn resolve_query_path(query: &str) -> Option<PathBuf> {
 /// What [`spawn_lookup`] answers, read on the calling thread: for a caller that already
 /// runs on a thread of its own.
 #[must_use]
-pub fn lookup(query: &str) -> Vec<PathBuf> {
-    search_directories(query)
+pub fn lookup(query: &str) -> Vec<DirRow> {
+    rows_of(search_directories(query))
 }
 
 fn search_directories(query: &str) -> Vec<PathBuf> {

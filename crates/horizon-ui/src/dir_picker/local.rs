@@ -26,9 +26,9 @@ pub enum DirPickerPurpose {
 
 pub struct DirPicker {
     modal: PickerModalState,
-    results: Vec<PathBuf>,
+    results: Vec<dir_search::DirRow>,
     selected_purpose: Option<DirPickerPurpose>,
-    search_rx: Option<mpsc::Receiver<Vec<PathBuf>>>,
+    search_rx: Option<mpsc::Receiver<Vec<dir_search::DirRow>>>,
     last_query_sent: String,
     last_query_time: Instant,
     initial_results_loaded: bool,
@@ -83,7 +83,7 @@ impl DirPicker {
                 footer_action_label: Some(Self::footer_action_label()),
             },
             &self.results,
-            |ui, width, index, path, is_selected| render_result_row(ui, width, index, path.as_path(), is_selected),
+            render_result_row,
         );
 
         match action {
@@ -94,7 +94,7 @@ impl DirPicker {
                 self.complete_selection();
                 DirPickerAction::None
             }
-            PickerModalAction::ClickedRow(index) => self.select(Some(self.results[index].clone())),
+            PickerModalAction::ClickedRow(index) => self.select(Some(self.results[index].path.clone())),
             PickerModalAction::FooterAction => self.select(None),
         }
     }
@@ -141,7 +141,8 @@ impl DirPicker {
             return;
         };
 
-        self.modal.set_query(format!("{}/", dir_search::abbreviate_home(path)));
+        self.modal
+            .set_query(format!("{}/", dir_search::abbreviate_home(&path.path)));
         self.last_query_time = Instant::now();
     }
 
@@ -150,7 +151,11 @@ impl DirPicker {
             return self.select(Some(typed));
         }
 
-        if let Some(path) = self.results.get(self.modal.selected_index()).cloned() {
+        if let Some(path) = self
+            .results
+            .get(self.modal.selected_index())
+            .map(|row| row.path.clone())
+        {
             return self.select(Some(path));
         }
 
@@ -173,10 +178,11 @@ impl DirPicker {
     }
 }
 
-fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, path: &Path, is_selected: bool) -> bool {
-    let display = dir_search::abbreviate_home(path);
-    let is_project =
-        path.join(".git").exists() || path.join("Cargo.toml").exists() || path.join("package.json").exists();
+fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, row: &dir_search::DirRow, is_selected: bool) -> bool {
+    let display = dir_search::abbreviate_home(&row.path);
+    // The flag comes from the lookup of the row, so the frame reads no entry of
+    // the directory: a home on a stalled mount does not freeze the picker.
+    let is_project = row.is_project;
 
     let row_rect = ui.allocate_space(Vec2::new(width, ROW_HEIGHT)).1;
     let mut clicked = false;
@@ -264,6 +270,45 @@ mod tests {
     use super::{DirPicker, DirPickerAction, DirPickerPurpose, PickerModalState, seed_query};
 
     #[test]
+    fn a_row_draws_without_reading_its_directory() {
+        use crate::test_egui::DiscardTextures;
+
+        // The frame of the picker runs under the guard in strict mode: a row
+        // that looked for the markers of a project again would panic here.
+        horizon_core::ui_thread::use_strict_mode();
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
+        let row = horizon_core::dir_search::DirRow {
+            path: std::path::PathBuf::from("/nonexistent/hz-slim-row"),
+            is_project: true,
+        };
+        let ctx = egui::Context::default();
+        let _output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                super::render_result_row(ui, 300.0, 0, &row, true);
+            })
+            .discard_textures();
+    }
+
+    #[test]
+    fn the_rows_of_a_lookup_carry_the_flag_of_their_directory() {
+        let temp = TempDir::new().expect("temporary directory");
+        let project = temp.path().join("project");
+        let other = temp.path().join("other");
+        fs::create_dir_all(project.join(".git")).expect("the markers of a project");
+        fs::create_dir_all(&other).expect("a directory that is no project");
+
+        let rows = horizon_core::dir_search::lookup(&format!("{}/", temp.path().display()));
+        let flag = |path: &std::path::Path| {
+            rows.iter()
+                .find(|row| row.path == path)
+                .map(|row| row.is_project)
+                .expect("the directory of the row")
+        };
+        assert!(flag(&project), "a directory with the markers of a project is one");
+        assert!(!flag(&other), "a plain directory is no project");
+    }
+
+    #[test]
     fn seed_query_appends_trailing_separator() {
         assert_eq!(seed_query(Some(std::path::Path::new("/repo"))), "/repo/");
     }
@@ -282,7 +327,10 @@ mod tests {
 
         let mut picker = DirPicker {
             modal: PickerModalState::new(format!("{}/", current_dir.display())),
-            results: vec![child_dir],
+            results: vec![horizon_core::dir_search::DirRow {
+                path: child_dir,
+                is_project: false,
+            }],
             selected_purpose: Some(DirPickerPurpose::AddPanel {
                 workspace_id: WorkspaceId(1),
                 preset: shell_preset(),
