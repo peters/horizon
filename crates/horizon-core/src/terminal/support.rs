@@ -241,22 +241,32 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 ///
 /// Returns the process spawn error when the platform handler cannot start.
 pub fn open_url(url: &str) -> std::io::Result<()> {
-    crate::ui_thread::blocking("a URL opens in a program of the desktop");
+    // The start of the handler is a `fork` and an `exec`, which a slow disk can
+    // stretch, so a small thread starts it and the frame returns at once.
     let (program, args) = url_opener_invocation(url);
-    std::process::Command::new(program)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    let url = url.to_owned();
+    std::thread::Builder::new()
+        .name("open-url".to_owned())
+        .spawn(move || {
+            crate::ui_thread::blocking("a URL opens in a program of the desktop");
+            if let Err(error) = std::process::Command::new(program)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                tracing::warn!(%error, %url, "could not open a URL");
+            }
+        })
         .map(|_| ())
 }
 
-fn url_opener_invocation(url: &str) -> (&'static str, Vec<&str>) {
+fn url_opener_invocation(url: &str) -> (&'static str, Vec<String>) {
     if cfg!(target_os = "macos") {
-        ("open", vec![url])
+        ("open", vec![url.to_owned()])
     } else {
-        ("xdg-open", vec![url])
+        ("xdg-open", vec![url.to_owned()])
     }
 }
 
@@ -264,7 +274,7 @@ fn url_opener_invocation(url: &str) -> (&'static str, Vec<&str>) {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{parse_lsof_cwd, url_opener_invocation};
+    use super::{open_url, parse_lsof_cwd, url_opener_invocation};
 
     #[test]
     fn url_opener_uses_the_platform_default_handler() {
@@ -276,6 +286,21 @@ mod tests {
             assert_eq!(program, "xdg-open");
             assert_eq!(args, ["https://example.com"]);
         }
+    }
+
+    #[test]
+    fn a_url_opens_on_a_thread_of_its_own() {
+        // The frame asks for the open and returns; the handler starts on a
+        // thread, so no frame waits for `fork` and `exec`.
+        let started = std::time::Instant::now();
+        let _frame = crate::ui_thread::FrameScope::enter();
+        let opened = open_url("https://example.invalid/");
+        drop(_frame);
+        assert!(opened.is_ok(), "a URL of the desktop starts its handler: {opened:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the frame that opens a URL waits for no program"
+        );
     }
 
     #[test]
