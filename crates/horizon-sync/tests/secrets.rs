@@ -21,6 +21,7 @@ use horizon_browser::remote::{
     RemoteAuthentication, RemoteBrowserConfig, RemoteProviderProfile, RemoteSessionLimits,
 };
 use horizon_core::machines::{MachineBindings, MachineRegistry, Machines};
+use horizon_core::named_secrets::{NamedSecretVault, SecretName, published_names};
 use horizon_core::remote_browser_credential::{
     CredentialLocator, CredentialStores, FakeCredentialStore, RemoteCredentialStore, SessionCredentialStore,
     SharedCredentialStore, resolve_authorization,
@@ -37,6 +38,9 @@ const PATIENCE: Duration = Duration::from_secs(30);
 
 /// The marker of the private text of a key in every test of this file.
 const MARKER: &str = "MARKER-7f3a-private-text";
+
+/// The marker of the value of a named secret in this file.
+const NAMED_MARKER: &str = "MARKER-58c2-named-secret-value";
 
 /// The relay of one stand-in `ssh`: the bytes of its standard input and output go
 /// to the socket of the server in both directions.
@@ -271,6 +275,9 @@ struct Computer {
     keys: MachineKeys,
     credentials: Arc<CredentialVault>,
     values: Arc<Mutex<FakeCredentialStore>>,
+    /// The credential store of the named secrets of this computer.
+    named_values: Arc<Mutex<FakeCredentialStore>>,
+    named: Arc<NamedSecretVault>,
     supervisor: Option<Supervisor>,
     server: PathBuf,
 }
@@ -285,7 +292,11 @@ impl Computer {
             &values,
         )))));
         credentials.register(&remote());
-        let vault = SecretVault::new(keys.clone(), Some(Arc::clone(&credentials)));
+        let named_values = Arc::new(Mutex::new(FakeCredentialStore::new()));
+        let named = Arc::new(NamedSecretVault::new(Some(Box::new(SharedCredentialStore::new(
+            Arc::clone(&named_values),
+        )))));
+        let vault = SecretVault::new(keys.clone(), Some(Arc::clone(&credentials))).with_named(Arc::clone(&named));
         let mut config = SupervisorConfig::for_server(
             "server-vm",
             "/opt/horizon --server-link",
@@ -301,13 +312,16 @@ impl Computer {
             keys,
             credentials,
             values,
+            named_values,
+            named,
             supervisor: Some(supervisor),
             server: socket.to_path_buf(),
         }
     }
 
     fn start_again(&mut self) {
-        let vault = SecretVault::new(self.keys.clone(), Some(Arc::clone(&self.credentials)));
+        let vault = SecretVault::new(self.keys.clone(), Some(Arc::clone(&self.credentials)))
+            .with_named(Arc::clone(&self.named));
         let mut config = SupervisorConfig::for_server(
             "server-vm",
             "/opt/horizon --server-link",
@@ -416,6 +430,42 @@ impl Computer {
 
     fn files(&self, name: &str) -> Option<MachineKeyFiles> {
         self.keys.files(name).expect("the files")
+    }
+
+    /// Stores a named secret as the Settings window does, and queues it.
+    fn set_named(&self, name: &str, value: &[u8]) {
+        let name = SecretName::parse(name).expect("a name of a named secret");
+        self.named.put(&name, value).expect("the value");
+        self.handle()
+            .queue_secret(&SecretId::named(name.as_str()).expect("an id"))
+            .expect("the queue");
+    }
+
+    /// The value of a named secret as this computer's credential store holds it.
+    fn named_in_store(&self, name: &str) -> Option<Vec<u8>> {
+        let name = SecretName::parse(name).ok()?;
+        let store = self.named_values.lock().expect("the store");
+        horizon_core::secret::read_secret_value(
+            &*store as &dyn RemoteCredentialStore,
+            &horizon_core::named_secrets::locator(&name),
+        )
+        .ok()
+        .map(|value| value.to_vec())
+    }
+
+    /// The value of a named secret of this computer, as an agent panel reads it.
+    fn named_value(&self, name: &str) -> Option<Vec<u8>> {
+        let name = SecretName::parse(name).expect("a name of a named secret");
+        self.named.value(&name).ok().flatten().map(|value| value.to_vec())
+    }
+
+    /// Deletes a named secret as the Settings window does, and queues the removal.
+    fn delete_named(&self, name: &str) {
+        let name = SecretName::parse(name).expect("a name of a named secret");
+        self.named.remove(&name).expect("the removal");
+        self.handle()
+            .queue_secret_remove(&SecretId::named(name.as_str()).expect("an id"))
+            .expect("the queue");
     }
 }
 
@@ -906,4 +956,78 @@ fn a_queued_secret_is_one_id_and_its_debug_redacts_the_body() {
     let debug = format!("{filled:?}");
     assert!(debug.contains("redacted") && !debug.contains(MARKER), "{debug}");
     assert!(!text.contains(MARKER));
+}
+
+#[test]
+fn a_named_secret_of_one_computer_is_the_environment_of_an_agent_panel_on_the_other() {
+    // The published environment is one map of the test process, so this test is the
+    // only one of this file that writes it.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    let mut b = Computer::start(&home.path().join("b"), &server.socket);
+    in_step(&a);
+    in_step(&b);
+    a.named.set_names(["HETZNER_TOKEN".to_owned()]);
+    b.named.set_names(["HETZNER_TOKEN".to_owned()]);
+    assert!(
+        b.named_value("HETZNER_TOKEN").is_none(),
+        "the second computer holds no value"
+    );
+
+    a.set_named("HETZNER_TOKEN", NAMED_MARKER.as_bytes());
+    // The value of the second computer arrives, and its agent panels read it: the
+    // vault of the second computer publishes it for the next panel.
+    eventually("the named secret at the second computer", || {
+        b.named_value("HETZNER_TOKEN")
+    });
+    assert_eq!(
+        b.named_value("HETZNER_TOKEN").as_deref(),
+        Some(NAMED_MARKER.as_bytes()),
+        "one value on both computers"
+    );
+    assert_eq!(
+        b.named_in_store("HETZNER_TOKEN").as_deref(),
+        Some(NAMED_MARKER.as_bytes()),
+        "the value is in the credential store of the second computer"
+    );
+    assert!(
+        b.named
+            .refresh()
+            .expect("the read of the second computer")
+            .iter()
+            .any(|name| name.as_str() == "HETZNER_TOKEN"),
+        "the names of the second computer hold the value"
+    );
+    assert!(
+        published_names().iter().any(|name| name.as_str() == "HETZNER_TOKEN"),
+        "the next agent panel of this process reads the value"
+    );
+    assert!(
+        server.secrets().contains_key("named/HETZNER_TOKEN"),
+        "the server holds the value under the name"
+    );
+    assert!(
+        !String::from_utf8_lossy(&fs::read(server.home.join("server.sqlite")).expect("the store file"))
+            .contains(NAMED_MARKER),
+        "the database of the server holds no value in clear"
+    );
+    assert!(
+        !server.log_text().contains(NAMED_MARKER),
+        "the log of the server holds no value"
+    );
+
+    // A delete on the second computer removes the value on the first one too.
+    b.delete_named("HETZNER_TOKEN");
+    eventually("the removal at the first computer", || {
+        a.named_value("HETZNER_TOKEN").is_none().then_some(())
+    });
+    eventually("the removal at the server", || {
+        (!server.secrets().contains_key("named/HETZNER_TOKEN")).then_some(())
+    });
+    settled(&a);
+    settled(&b);
+    a.stop();
+    b.stop();
+    server.stop();
 }

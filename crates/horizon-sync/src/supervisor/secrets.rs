@@ -197,6 +197,7 @@ pub(super) fn reseed_secrets(state: &mut SyncState) -> Result<(), SyncError> {
 pub(super) fn local_ids(state: &SyncState) -> Vec<String> {
     let mut ids = state.secrets.local_ids(SecretKind::MachineKey);
     ids.extend(state.secrets.local_ids(SecretKind::Credential));
+    ids.extend(state.secrets.local_ids(SecretKind::Named));
     ids.sort();
     ids.dedup();
     ids

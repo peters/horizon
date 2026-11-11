@@ -14,8 +14,9 @@ use std::sync::Arc;
 
 use horizon_browser::remote::RemoteBrowserConfig;
 use horizon_core::machines::{MachineRegistry, MachineStore, Machines};
+use horizon_core::named_secrets::{self, NamedSecretVault};
 use horizon_core::remote_browser_credential::KeyringCredentialStore;
-use horizon_core::secret::{CredentialVault, SecretTarget, SecretVault};
+use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
 use horizon_sync::{LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
 
@@ -113,6 +114,19 @@ pub(in crate::app) struct MachineLoad {
     /// Why the link did not start. The list is then the file store of this
     /// computer, so a damaged mirror costs the link and not the machines.
     pub(in crate::app) server_failure: Option<String>,
+    /// The named secrets of this computer: the names of its settings and the
+    /// values that its credential store holds. A start that names no server keeps
+    /// them too, because an agent panel reads them without any server.
+    pub(in crate::app) named_secrets: Option<Arc<NamedSecretVault>>,
+}
+
+/// What one computer keeps of the secrets that a server holds: its machine keys,
+/// the credential values of its remote browser providers, and the named secrets
+/// that its agent panels read.
+pub(in crate::app) struct SecretHandles {
+    pub(in crate::app) target: Arc<dyn SecretTarget>,
+    pub(in crate::app) credentials: Option<Arc<CredentialVault>>,
+    pub(in crate::app) named: Option<Arc<NamedSecretVault>>,
 }
 
 /// The secrets of this Horizon home that follow a server: its machine keys, and
@@ -123,10 +137,7 @@ pub(in crate::app) struct MachineLoad {
 /// the link and never on the UI thread. A computer without an OS store keeps its
 /// machine keys alone; a credential value of the server then stays unread here,
 /// with one line of the log.
-pub(in crate::app) fn secret_vault(
-    keys: MachineKeys,
-    remote: &RemoteBrowserConfig,
-) -> (Arc<dyn SecretTarget>, Option<Arc<CredentialVault>>) {
+pub(in crate::app) fn secret_vault(keys: MachineKeys, remote: &RemoteBrowserConfig, names: &[String]) -> SecretHandles {
     let credentials = match KeyringCredentialStore::open() {
         Ok(store) => {
             let vault = Arc::new(CredentialVault::new(Box::new(store)));
@@ -141,8 +152,40 @@ pub(in crate::app) fn secret_vault(
             None
         }
     };
-    let vault = SecretVault::new(keys, credentials.clone());
-    (Arc::new(vault), credentials)
+    let named_store = named_secret_vault(names);
+    let vault = SecretVault::new(keys, credentials.clone()).with_named(Arc::clone(&named_store));
+    SecretHandles {
+        target: Arc::new(vault),
+        credentials,
+        named: Some(named_store),
+    }
+}
+
+/// The named secrets of this computer, with the values that its credential store
+/// holds published for the next agent panel.
+///
+/// This opens a credential store and reads one value per name, so it runs on the
+/// worker thread that starts the link and never on the UI thread. A computer
+/// without a store keeps the names of its settings and publishes no value, so its
+/// panels start without the variables and the Settings window says that this
+/// computer holds no value.
+fn named_secret_vault(names: &[String]) -> Arc<NamedSecretVault> {
+    let store = named_secrets::open_store();
+    let vault = Arc::new(NamedSecretVault::new(store));
+    vault.set_names(names.iter().cloned());
+    match vault.refresh() {
+        Ok(present) => {
+            tracing::info!(count = present.len(), "the named secrets of this computer are ready");
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = error.code(),
+                reason = %error,
+                "the named secrets of this computer were not read, so the next agent panels get none"
+            );
+        }
+    }
+    vault
 }
 
 /// Reads the machine list of this start and starts its link. It runs on a worker
@@ -150,7 +193,7 @@ pub(in crate::app) fn secret_vault(
 pub(in crate::app) fn load(
     registry: MachineRegistry,
     server: Option<ServerConfig>,
-    secrets: (Arc<dyn SecretTarget>, Option<Arc<CredentialVault>>),
+    secrets: SecretHandles,
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<MachineLoad, MachineError> {
     let Some(server) = server.filter(ServerConfig::names_server) else {
@@ -158,43 +201,50 @@ pub(in crate::app) fn load(
             machines,
             server: None,
             server_failure: None,
+            named_secrets: secrets.named,
         });
     };
     let config = match SupervisorConfig::for_server(
         server.ssh_target().unwrap_or_default(),
         server.command(),
         registry.root(),
-        secrets.0,
+        secrets.target,
     ) {
         Ok(config) => config,
-        Err(error) => return file_list(registry, error.to_string()),
+        Err(error) => return file_list(registry, error.to_string(), secrets.named),
     };
     match Supervisor::start(config, wake) {
         Ok(supervisor) => {
-            let sync = ServerSync::new(supervisor, secrets.1);
+            let sync = ServerSync::new(supervisor, secrets.credentials);
             match Machines::from_store(&registry, sync.store()) {
                 Ok(machines) => Ok(MachineLoad {
                     machines,
                     server: Some(sync),
                     server_failure: None,
+                    named_secrets: secrets.named,
                 }),
                 // The list of the link cannot be read, so the file of this
                 // computer is used and the link stops with it.
-                Err(error) => file_list(registry, error.to_string()),
+                Err(error) => file_list(registry, error.to_string(), secrets.named),
             }
         }
-        Err(error) => file_list(registry, error.to_string()),
+        Err(error) => file_list(registry, error.to_string(), secrets.named),
     }
 }
 
 /// The machine list of this computer alone, and the reason that the link to the
 /// server did not start.
-fn file_list(registry: MachineRegistry, reason: String) -> Result<MachineLoad, MachineError> {
+fn file_list(
+    registry: MachineRegistry,
+    reason: String,
+    named_secrets: Option<Arc<NamedSecretVault>>,
+) -> Result<MachineLoad, MachineError> {
     tracing::error!(%reason, "the link to the Horizon server did not start");
     Machines::load(registry).map(|machines| MachineLoad {
         machines,
         server: None,
         server_failure: Some(reason),
+        named_secrets,
     })
 }
 
@@ -235,6 +285,92 @@ impl HorizonApp {
         }
     }
 
+    /// Takes the named secrets of the startup read: the worker of the window reads
+    /// the store again, and the settings of this run keep their names.
+    pub(super) fn adopt_named_secrets(&mut self, loaded: Option<Arc<NamedSecretVault>>) {
+        let names = match loaded.as_ref() {
+            Some(vault) => vault.names(),
+            None => self.template_config.secrets.secret_names(),
+        };
+        self.named_secrets = named_secrets::NamedSecretWorkbench::new(loaded.clone(), &names);
+        self.named_secret_vault = loaded;
+    }
+
+    /// Runs the worker of the named secrets for this frame. A store that is still
+    /// being read keeps frames coming, and a list that changed is read again.
+    pub(super) fn poll_named_secrets(&mut self, ctx: &egui::Context) {
+        self.named_secrets.poll();
+        if self.named_secrets.is_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        let names = self.named_secret_names();
+        self.named_secrets.refresh_if_stale(&names);
+        self.queue_named_secret_changes();
+    }
+
+    /// The names of the named secrets of this computer: the names that the link
+    /// learned, or the names of the settings before the link answered.
+    pub(super) fn named_secret_names(&self) -> Vec<horizon_core::named_secrets::SecretName> {
+        match self.named_secret_vault.as_ref() {
+            Some(vault) => vault.names(),
+            None => self.template_config.secrets.secret_names(),
+        }
+    }
+
+    /// Queues a named secret that the person stored or deleted on this computer, so
+    /// the other computers of the person give it to their agent panels too. The
+    /// queue holds the id `named/<NAME>` and never the value.
+    pub(super) fn queue_named_secret_changes(&mut self) {
+        let changes = self.named_secrets.take_changes();
+        if changes.is_empty() {
+            return;
+        }
+        let Some(sync) = self.server_sync.as_ref() else {
+            // Without a server the value is the value of this computer alone.
+            return;
+        };
+        for change in changes {
+            let Ok(id) = SecretId::named(change.name.as_str()) else {
+                continue;
+            };
+            let queued = if change.stored {
+                sync.handle().queue_secret(&id)
+            } else {
+                sync.handle().queue_secret_remove(&id)
+            };
+            if let Err(error) = queued {
+                tracing::warn!(%error, id = %id, "a named secret of this computer did not enter the queue");
+            }
+        }
+    }
+
+    /// Keeps the names of the named secrets of the settings in step with the names
+    /// that the link learned. It copies names and never a value, and the write of
+    /// the settings runs on the settings worker.
+    fn adopt_named_secret_names(&mut self) {
+        let Some(vault) = self.named_secret_vault.as_ref() else {
+            return;
+        };
+        let mut names: Vec<String> = vault.names().into_iter().map(|name| name.as_str().to_owned()).collect();
+        names.sort();
+        let mut stored = self.template_config.secrets.names.clone();
+        stored.sort();
+        if stored == names {
+            return;
+        }
+        let mut config = self.template_config.clone();
+        config.secrets.names = names;
+        if let Err(error) = config.secrets.validate() {
+            tracing::warn!(%error, "the names of the named secrets of the link cannot be kept");
+            return;
+        }
+        self.apply_runtime_config(&config);
+        if let Some(editor) = self.settings.as_mut() {
+            editor.config.secrets.names.clone_from(&config.secrets.names);
+        }
+        self.settings_io.save_config(self.config_path.clone(), config);
+    }
+
     /// Reads the machine list again when the link brought a change, on the
     /// coordination worker, so no frame reads a file of this home.
     pub(super) fn poll_server_sync(&mut self) {
@@ -255,6 +391,9 @@ impl HorizonApp {
         if generation == sync.generation || sync.reloading {
             return;
         }
+        // A value that arrived from the server also brought its name, and the
+        // settings of this computer now list it.
+        self.adopt_named_secret_names();
         let registry = self.machine_registry();
         let Some(sync) = self.server_sync.as_mut() else {
             return;

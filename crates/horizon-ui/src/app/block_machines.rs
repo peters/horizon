@@ -36,13 +36,14 @@ impl HorizonApp {
         // credential store opens on the worker, never on this thread.
         let keys = horizon_core::MachineKeys::from_home(self.session_store.home());
         let remote = self.template_config.browser.remote.clone();
+        let names = self.template_config.secrets.names.clone();
         let wake = {
             let ctx = ctx.clone();
             move || ctx.request_repaint()
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let secrets = super::server_sync::secret_vault(keys, &remote);
+            let secrets = super::server_sync::secret_vault(keys, &remote, &names);
             let _ = tx.send(super::server_sync::load(registry, server, secrets, wake));
         });
         self.machine_load_rx = Some(rx);
@@ -63,6 +64,7 @@ impl HorizonApp {
                     self.set_sidebar_notice(format!("The machine list: {reason}"));
                 }
                 self.server_sync = load.server;
+                self.adopt_named_secrets(load.named_secrets);
             }
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {

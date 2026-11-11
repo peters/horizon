@@ -341,6 +341,13 @@ pub struct HorizonApp {
     settings_reload_pending: bool,
     /// Session-only and OS-store provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
+    /// The named secrets of this computer: the names of the settings and the values
+    /// that its credential store holds, read on a worker thread.
+    named_secrets: horizon_core::named_secrets::NamedSecretWorkbench,
+    /// The same names and values, for the code that starts a panel and the code that
+    /// follows the server. It holds no copy of a value: the values live in the
+    /// published environment of this process.
+    named_secret_vault: Option<std::sync::Arc<horizon_core::named_secrets::NamedSecretVault>>,
     session_manager: Option<RuntimeSessionManagerState>,
     canvas_gesture: canvas_gesture::CanvasGesture,
     press_frame: press_frame::PressFrame,
@@ -389,6 +396,7 @@ impl HorizonApp {
         let ctx = &ui.ctx().clone();
         let now = Instant::now();
         self.frame_stats.record_frame(now, ctx.requested_repaint_last_pass());
+        self.poll_named_secrets(ctx);
         self.remote_browser_credentials.poll();
         if self.remote_browser_credentials.is_busy() {
             // Worker answers arrive off-thread; keep frames coming until the

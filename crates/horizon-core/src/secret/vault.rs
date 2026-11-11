@@ -149,7 +149,10 @@ impl SecretTarget for SecretVault {
             SecretKind::Named => match self.named.as_deref() {
                 Some(named) => {
                     let name = named_secret_name(id)?;
-                    named.put(&name, body).map(|_| ()).map_err(|error| named_failure(&error))
+                    named
+                        .put(&name, body)
+                        .map(|_| ())
+                        .map_err(|error| named_failure(&error))
                 }
                 None => Err(SecretError::Unsupported {
                     reason: "This computer has no OS credential store, so it keeps no named secret".to_owned(),

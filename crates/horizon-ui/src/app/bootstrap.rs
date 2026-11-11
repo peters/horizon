@@ -152,8 +152,7 @@ impl HorizonApp {
             session_store,
             active_session: None,
             startup_chooser: None,
-            config_path,
-            transcript_root: None,
+            config_path, transcript_root: None,
             template_config: config.clone(),
             shortcuts,
             presets: config.resolved_presets(),
@@ -176,6 +175,7 @@ impl HorizonApp {
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None, settings_io: super::settings_io::SettingsIo::new(), settings_reload_pending: false,
             remote_browser_credentials: spawn_remote_browser_credentials(config),
+            named_secrets: named_secret_workbench(config), named_secret_vault: None,
             session_manager: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             press_frame: super::press_frame::PressFrame::default(),
@@ -219,6 +219,13 @@ impl HorizonApp {
 /// The machine list before its read answers: this home keeps no machine yet.
 fn empty_machine_list(home: &horizon_core::HorizonHome) -> horizon_core::Machines {
     horizon_core::Machines::with_records(horizon_core::MachineRegistry::from_home(home), Vec::new())
+}
+
+/// The named secrets of this start. The startup read of the machine list opens the
+/// credential store on its worker thread and replaces this with the names that the
+/// store answered, so the window never waits for a keychain here.
+fn named_secret_workbench(config: &Config) -> horizon_core::named_secrets::NamedSecretWorkbench {
+    horizon_core::named_secrets::NamedSecretWorkbench::new(None, &config.secrets.secret_names())
 }
 
 fn spawn_remote_browser_credentials(config: &Config) -> CredentialWorkbench {
