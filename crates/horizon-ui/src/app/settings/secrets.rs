@@ -138,7 +138,7 @@ pub(super) fn render(
         if let Some(error) = workbench.take_failure() {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(format!("The credential store of this computer: {error}"))
+                egui::RichText::new(format!("The secrets file of this computer: {error}"))
                     .color(theme::PALETTE_RED())
                     .size(11.0),
             );
