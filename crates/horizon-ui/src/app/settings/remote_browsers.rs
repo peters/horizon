@@ -302,7 +302,11 @@ fn render_keyring_section(
             );
             ui.add_space(6.0);
             let busy = keyring.is_busy();
-            let button = egui::Button::new(if busy { "Importing…" } else { "Import from the keyring" });
+            let button = egui::Button::new(if busy {
+                "Importing…"
+            } else {
+                "Import from the keyring"
+            });
             // A value of the keyring can be imported only into the secrets file, so
             // the button waits for that file like the rows of the providers do.
             let store = workbench.store_handle();
@@ -714,6 +718,8 @@ mod tests {
     /// A stand-in for the program that reads the keyring of this system: one item on
     /// stdout, its account on stderr, in the format of `secret-tool` of libsecret.
     fn stand_in_secret_tool(folder: &std::path::Path, user: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let script = format!(
             "#!/bin/sh\n\
              printf '%s\\n' '[/org/freedesktop/secrets/collection/login/7]'\n\
@@ -726,7 +732,6 @@ mod tests {
         );
         let path = folder.join("secret-tool");
         std::fs::write(&path, script).expect("the stand-in");
-        use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("an executable stand-in");
     }
 

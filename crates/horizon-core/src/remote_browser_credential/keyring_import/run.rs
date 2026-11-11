@@ -71,9 +71,7 @@ fn check_references(plan: &KeyringImportPlan) -> Result<(), KeyringImportError> 
 /// Why the store refused the value of one entry, in the words of the rule.
 fn refusal(error: RemoteCredentialError) -> KeyringImportError {
     match error {
-        RemoteCredentialError::InvalidValue | RemoteCredentialError::NotHeaderSafe => {
-            KeyringImportError::RefusedValue
-        }
+        RemoteCredentialError::InvalidValue | RemoteCredentialError::NotHeaderSafe => KeyringImportError::RefusedValue,
         other => KeyringImportError::Store(other),
     }
 }

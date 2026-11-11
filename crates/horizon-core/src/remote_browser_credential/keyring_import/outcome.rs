@@ -46,7 +46,12 @@ impl KeyringImportReport {
 
 impl fmt::Display for KeyringImportReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Imported {} {}.", self.imported, plural(self.imported, "value", "values"))?;
+        write!(
+            formatter,
+            "Imported {} {}.",
+            self.imported,
+            plural(self.imported, "value", "values")
+        )?;
         if self.already_here > 0 {
             let verb = if self.already_here == 1 { "was" } else { "were" };
             write!(formatter, " {} {verb} already here.", self.already_here)?;
@@ -99,9 +104,7 @@ impl fmt::Debug for KeyringImportOutcome {
 pub enum KeyringImportError {
     /// No program of this computer reads the keyring, and the settings offer the
     /// package that holds one.
-    #[error(
-        "Install the package `libsecret-tools` to read the values that an older version stored in the keyring."
-    )]
+    #[error("Install the package `libsecret-tools` to read the values that an older version stored in the keyring.")]
     ToolMissing,
     /// The keyring is there and it is locked.
     #[error("The keyring is locked. Unlock it and try the import again.")]

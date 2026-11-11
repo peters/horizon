@@ -126,12 +126,10 @@ impl KeyringImport {
         let (sender, answers) = channel();
         let environment = self.environment.clone();
         let bound = self.bound;
-        let spawned = thread::Builder::new()
-            .name("keyring-import".into())
-            .spawn(move || {
-                let outcome = import_from_keyring(&plan, &environment, bound, store);
-                sender.send(outcome).ok();
-            });
+        let spawned = thread::Builder::new().name("keyring-import".into()).spawn(move || {
+            let outcome = import_from_keyring(&plan, &environment, bound, &store);
+            sender.send(outcome).ok();
+        });
         match spawned {
             Ok(_) => {
                 self.line = None;
@@ -167,4 +165,3 @@ impl KeyringImport {
         }
     }
 }
-

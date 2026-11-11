@@ -12,7 +12,7 @@ use horizon_core::{
 
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
-    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, util,
+    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, sidebar::machines::NoticeClock, util,
 };
 use crate::command_registry::{self, CommandEntry};
 use crate::input;
@@ -140,9 +140,8 @@ impl HorizonApp {
             agent_terminals: super::block_terminals::AgentTerminals::default(),
             machine_list: empty_machine_list(session_store.home()),
             sidebar_notice: None, sidebar_notice_until: None, sidebar_sticky_notice: None,
-            notice_clock: super::sidebar::machines::NoticeClock::default(),
             person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),
-            machine_rows: super::sidebar::machines::MachineRows::default(),
+            machine_rows: super::sidebar::machines::MachineRows::default(), notice_clock: NoticeClock::default(),
             reconnects: super::reconnect::ReconnectWaits::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
             machine_epoch: 0,

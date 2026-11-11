@@ -45,8 +45,8 @@ pub(crate) fn read(
     environment: &ProgramEnvironment,
     bound: Bound,
 ) -> Result<Vec<KeyringEntry>, KeyringImportError> {
-    let output = run(program, &arguments(), environment, bound.program())
-        .map_err(|failed| failure(PROGRAM, failed, bound))?;
+    let output =
+        run(program, &arguments(), environment, bound.program()).map_err(|failed| failure(PROGRAM, failed, bound))?;
     if !output.status.success() {
         return Err(refusal(&output));
     }
@@ -199,7 +199,9 @@ attribute.username = https://grid.example.net|remote-browser/grid/key\n";
     #[test]
     fn an_item_that_names_no_account_is_refused() {
         assert!(
-            users(b"attribute.service = horizon-remote-browser\n").unwrap_or_default().is_empty(),
+            users(b"attribute.service = horizon-remote-browser\n")
+                .unwrap_or_default()
+                .is_empty(),
             "an attribute that is not an account names no item"
         );
         assert!(

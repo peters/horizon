@@ -3,9 +3,9 @@
 
 use horizon_browser::remote::{CredentialReference, RemoteBrowserConfig};
 
-use super::fixtures::{account, entry, read, settings, store, write};
 use super::super::run::import;
 use super::super::{KeyringImportError, KeyringImportPlan, KeyringImportReport};
+use super::fixtures::{account, entry, read, settings, store, write};
 use crate::remote_browser_credential::CredentialValueChange;
 
 #[test]
@@ -14,8 +14,12 @@ fn an_entry_writes_the_row_of_a_reference_of_the_settings() {
     let plan = KeyringImportPlan::of(&remote);
     let mut store = store();
 
-    let outcome = import(vec![entry(&account("https://grid.example.net/wd/hub"), "synthetic-token")], &plan, &mut store)
-        .expect("one import");
+    let outcome = import(
+        vec![entry(&account("https://grid.example.net/wd/hub"), "synthetic-token")],
+        &plan,
+        &mut store,
+    )
+    .expect("one import");
 
     assert_eq!(
         outcome.report,
@@ -43,12 +47,19 @@ fn a_row_that_is_there_is_not_written_over() {
     let mut store = store();
     write(&store, "key", "the-value-that-the-person-typed");
 
-    let outcome = import(vec![entry(&account("https://grid.example.net/wd/hub"), "the-old-value")], &plan, &mut store)
-        .expect("one import");
+    let outcome = import(
+        vec![entry(&account("https://grid.example.net/wd/hub"), "the-old-value")],
+        &plan,
+        &mut store,
+    )
+    .expect("one import");
 
     assert_eq!(outcome.report.imported, 0);
     assert_eq!(outcome.report.already_here, 1);
-    assert!(outcome.changes.is_empty(), "nothing changed, so the link learns nothing");
+    assert!(
+        outcome.changes.is_empty(),
+        "nothing changed, so the link learns nothing"
+    );
     assert_eq!(
         read(&store, "key").as_deref(),
         Some("the-value-that-the-person-typed"),
@@ -83,10 +94,17 @@ fn two_references_that_share_a_slot_take_the_value() {
     let plan = KeyringImportPlan::of(&remote);
     let mut store = store();
 
-    let outcome = import(vec![entry(&account("https://grid.example.net/wd/hub"), "synthetic-token")], &plan, &mut store)
-        .expect("one import");
+    let outcome = import(
+        vec![entry(&account("https://grid.example.net/wd/hub"), "synthetic-token")],
+        &plan,
+        &mut store,
+    )
+    .expect("one import");
 
-    assert_eq!(outcome.report.imported, 2, "one entry names the one item of both references");
+    assert_eq!(
+        outcome.report.imported, 2,
+        "one entry names the one item of both references"
+    );
     assert_eq!(read(&store, "key").as_deref(), Some("synthetic-token"));
 }
 
@@ -96,8 +114,12 @@ fn a_reference_that_breaks_the_rule_is_refused_and_no_row_is_written() {
     let plan = KeyringImportPlan::of(&remote);
     let mut store = store();
 
-    let error = import(vec![entry(&account("https://grid.example.net/wd/hub"), "synthetic-token")], &plan, &mut store)
-        .expect_err("a refusal");
+    let error = import(
+        vec![entry(&account("https://grid.example.net/wd/hub"), "synthetic-token")],
+        &plan,
+        &mut store,
+    )
+    .expect_err("a refusal");
 
     assert_eq!(
         error,
@@ -118,12 +140,22 @@ fn an_empty_or_oversized_value_is_refused_by_the_rule_of_the_file() {
     let mut store = store();
 
     assert_eq!(
-        import(vec![entry(&account("https://grid.example.net/wd/hub"), "")], &plan, &mut store).err(),
+        import(
+            vec![entry(&account("https://grid.example.net/wd/hub"), "")],
+            &plan,
+            &mut store
+        )
+        .err(),
         Some(KeyringImportError::RefusedValue)
     );
     let oversized = "a".repeat(crate::remote_browser_credential::MAX_SECRET_BYTES + 1);
     assert_eq!(
-        import(vec![entry(&account("https://grid.example.net/wd/hub"), &oversized)], &plan, &mut store).err(),
+        import(
+            vec![entry(&account("https://grid.example.net/wd/hub"), &oversized)],
+            &plan,
+            &mut store
+        )
+        .err(),
         Some(KeyringImportError::RefusedValue)
     );
     assert!(read(&store, "key").is_none());
@@ -210,4 +242,3 @@ fn the_plan_names_the_account_of_the_older_horizon() {
     assert!(!plan.is_empty());
     assert!(KeyringImportPlan::of(&RemoteBrowserConfig::default()).is_empty());
 }
-

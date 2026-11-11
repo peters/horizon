@@ -67,15 +67,12 @@ fn arguments() -> Vec<OsString> {
 }
 
 /// The entries of the service, read through the binding of libsecret.
-pub(crate) fn read(
-    environment: &ProgramEnvironment,
-    bound: Bound,
-) -> Result<Vec<KeyringEntry>, KeyringImportError> {
+pub(crate) fn read(environment: &ProgramEnvironment, bound: Bound) -> Result<Vec<KeyringEntry>, KeyringImportError> {
     let Some(program) = environment.find(PROGRAM) else {
         return Err(KeyringImportError::ToolMissing);
     };
-    let output = run(&program, &arguments(), environment, bound.program())
-        .map_err(|failed| failure(PROGRAM, failed, bound))?;
+    let output =
+        run(&program, &arguments(), environment, bound.program()).map_err(|failed| failure(PROGRAM, failed, bound))?;
     if !output.status.success() {
         if lacks_binding(&output.stderr) {
             // The computer has Python and no binding of libsecret, so the package
@@ -153,10 +150,7 @@ mod tests {
         let document = br#"{"entries":[{"attributes":{"service":"horizon-remote-browser","username":"https://grid.example.net|remote-browser/grid/key"},"secret":"c3ludGhldGljLXZhbHVl"}]}"#;
         let entries = parse(document).expect("one entry");
         assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].user,
-            "https://grid.example.net|remote-browser/grid/key"
-        );
+        assert_eq!(entries[0].user, "https://grid.example.net|remote-browser/grid/key");
         assert_eq!(&*entries[0].value, b"synthetic-value");
     }
 
@@ -167,8 +161,6 @@ mod tests {
 
     #[test]
     fn a_value_that_is_not_base64_is_refused() {
-        assert!(
-            parse(br#"{"entries":[{"attributes":{"username":"a"},"secret":"not base64!"}]}"#).is_err()
-        );
+        assert!(parse(br#"{"entries":[{"attributes":{"username":"a"},"secret":"not base64!"}]}"#).is_err());
     }
 }

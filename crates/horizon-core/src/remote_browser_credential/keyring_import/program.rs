@@ -210,6 +210,9 @@ fn spawn(command: &mut Command) -> Result<Child, ProgramFailure> {
     }
 }
 
+/// The bytes of both streams of one child, wiped when they go.
+type Streams = (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>);
+
 /// The two readers of the pipes of one child. They read while the parent waits for
 /// the end of the child, so a program that prints more than one pipe buffer cannot
 /// stop before its end and hold the parent to the bound.
@@ -222,7 +225,7 @@ impl Reading {
     /// The bytes of both streams. A stream that could not be read, or a program
     /// that printed more than [`MAX_OUTPUT_BYTES`], is one failure, so a program
     /// cannot fill the memory of this process.
-    fn finish(self) -> Result<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>), ProgramFailure> {
+    fn finish(self) -> Result<Streams, ProgramFailure> {
         let stdout = self.stdout.join().unwrap_or(Err(ProgramFailure::Failed))?;
         let stderr = self.stderr.join().unwrap_or(Err(ProgramFailure::Failed))?;
         Ok((stdout, stderr))
@@ -233,13 +236,9 @@ fn reading(child: &mut Child) -> Reading {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     Reading {
-        stdout: thread::spawn(move || stdout.map_or_else(empty, read_capped)),
-        stderr: thread::spawn(move || stderr.map_or_else(empty, read_capped)),
+        stdout: thread::spawn(move || stdout.map_or_else(|| Ok(Zeroizing::new(Vec::new())), read_capped)),
+        stderr: thread::spawn(move || stderr.map_or_else(|| Ok(Zeroizing::new(Vec::new())), read_capped)),
     }
-}
-
-fn empty() -> Result<Zeroizing<Vec<u8>>, ProgramFailure> {
-    Ok(Zeroizing::new(Vec::new()))
 }
 
 fn read_capped(stream: impl Read) -> Result<Zeroizing<Vec<u8>>, ProgramFailure> {

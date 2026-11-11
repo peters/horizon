@@ -107,7 +107,10 @@ mod tests {
     fn one_newline_of_the_program_is_removed_and_a_line_break_inside_the_value_is_refused() {
         assert_eq!(&*value(b"synthetic-token\n").expect("a value"), b"synthetic-token");
         assert_eq!(&*value(b"synthetic-token").expect("a value"), b"synthetic-token");
-        assert!(value(b"two\nlines\n").is_err(), "a value with a line break does not parse");
+        assert!(
+            value(b"two\nlines\n").is_err(),
+            "a value with a line break does not parse"
+        );
         assert!(value(b"\n").is_err(), "an empty item is not a value");
     }
 }

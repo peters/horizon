@@ -78,7 +78,10 @@ fn an_imported_value_reaches_the_link_like_a_typed_one() {
     assert!(!format!("{changes:?}").contains("alice"), "a change carries no value");
     assert!(workbench.take_value_changes().is_empty(), "one change is reported once");
     workbench.adopt_imported_values(Vec::new());
-    assert!(workbench.take_value_changes().is_empty(), "an import of nothing changes nothing");
+    assert!(
+        workbench.take_value_changes().is_empty(),
+        "an import of nothing changes nothing"
+    );
 }
 
 /// The Settings tab offers the import of the keyring while a reference of the

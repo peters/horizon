@@ -12,11 +12,17 @@ use crate::remote_browser_credential::SharedStore;
 
 /// The work of one click: read every entry that the system can name, then write the
 /// rows that these settings name.
+///
+/// # Errors
+/// The typed refusal of the first rule that stops the import: a keyring that this
+/// computer cannot read, an entry that does not parse, a reference that breaks the
+/// reference rule, a value that the store refuses, or a secrets file that cannot be
+/// read or written.
 pub fn import_from_keyring(
     plan: &KeyringImportPlan,
     environment: &ProgramEnvironment,
     bound: Bound,
-    store: SharedStore,
+    store: &SharedStore,
 ) -> Result<KeyringImportOutcome, KeyringImportError> {
     if plan.is_empty() {
         return Err(KeyringImportError::NothingToDo);
@@ -30,4 +36,3 @@ pub fn import_from_keyring(
     let mut held = store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     run::import(entries, plan, held.as_mut())
 }
-

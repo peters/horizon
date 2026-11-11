@@ -502,9 +502,7 @@ fn sidebar_frame_texts(ctx: &egui::Context, app: &mut crate::app::HorizonApp) ->
     // A panel shows from its second frame on.
     for _ in 0..2 {
         let input = crate::app::test_support::raw_input([1200.0, 900.0], None);
-        let output = ctx
-            .run_ui(input, |ui| app.render_sidebar(ui.ctx()))
-            .discard_textures();
+        let output = ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures();
         let mut texts = Vec::new();
         for clipped in &output.shapes {
             collect_drawn_texts(&clipped.shape, &mut texts);
@@ -567,7 +565,9 @@ fn the_line_about_left_out_panels_stays_after_a_short_notice_ends() {
 
     let texts = sidebar_frame_texts(&ctx, &mut app);
     assert!(
-        texts.iter().any(|drawn| drawn.contains("panels of kinds that this Horizon removed")),
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("panels of kinds that this Horizon removed")),
         "the line that stays is drawn: {texts:?}"
     );
     assert!(
@@ -580,7 +580,9 @@ fn the_line_about_left_out_panels_stays_after_a_short_notice_ends() {
     app.notice_clock.ahead = super::machines::NOTICE + Duration::from_secs(1);
     let texts = sidebar_frame_texts(&ctx, &mut app);
     assert!(
-        texts.iter().any(|drawn| drawn.contains("panels of kinds that this Horizon removed")),
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("panels of kinds that this Horizon removed")),
         "the line that stays is still there: {texts:?}"
     );
     assert!(
@@ -622,9 +624,7 @@ fn the_line_about_left_out_panels_leaves_on_its_close_control() {
 /// line that stays, not the short notice of an action.
 #[test]
 fn a_session_that_left_panels_out_sets_the_line_that_stays() {
-    use horizon_core::{
-        Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision,
-    };
+    use horizon_core::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
 
     use crate::app::HorizonApp;
 

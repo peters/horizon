@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use horizon_browser::remote::{CredentialReference, RemoteBrowserConfig};
 
-use super::fixtures::{read, settings, store};
 use super::super::{Bound, KeyringImport, KeyringImportPlan, ProgramEnvironment};
+use super::fixtures::{read, settings, store};
 use super::stand_in::StandIns;
 use crate::remote_browser_credential::{CredentialValueChange, RemoteCredentialStore, SharedStore};
 
@@ -87,9 +87,10 @@ fn an_import_without_a_program_leaves_a_refusal_and_no_value() {
 
 #[test]
 fn an_import_of_settings_that_name_no_reference_does_nothing() {
-    let mut import = KeyringImport::with_programs(ProgramEnvironment::with_path(""), Bound::WholeImport(
-        std::time::Duration::from_millis(200),
-    ));
+    let mut import = KeyringImport::with_programs(
+        ProgramEnvironment::with_path(""),
+        Bound::WholeImport(std::time::Duration::from_millis(200)),
+    );
     let values = store();
     let shared: SharedStore = Arc::new(std::sync::Mutex::new(
         Box::new(Arc::clone(&values)) as Box<dyn RemoteCredentialStore + Send>

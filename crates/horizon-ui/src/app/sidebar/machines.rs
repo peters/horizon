@@ -34,33 +34,17 @@ const CLOSE_RADIUS: u8 = 5;
 
 /// The clock of the short notice of the section: the clock of the computer, or the
 /// clock of a test, which moves forward instead of waiting for ten seconds.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(in crate::app) struct NoticeClock {
-    /// How far ahead of the computer this clock reads, which only a test sets.
-    #[cfg(test)]
+    /// How far ahead of the computer this clock reads. A run leaves it at zero, and
+    /// a test moves it forward, so the ten seconds of a notice cost no second.
     pub(in crate::app) ahead: Duration,
-}
-
-impl Default for NoticeClock {
-    fn default() -> Self {
-        Self {
-            #[cfg(test)]
-            ahead: Duration::ZERO,
-        }
-    }
 }
 
 impl NoticeClock {
     /// What this clock reads now.
-    fn now(self) -> Instant {
-        #[cfg(test)]
-        {
-            Instant::now() + self.ahead
-        }
-        #[cfg(not(test))]
-        {
-            Instant::now()
-        }
+    fn now(&self) -> Instant {
+        Instant::now() + self.ahead
     }
 }
 /// The quiet mark of a machine whose last change the server has not decided.

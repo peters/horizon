@@ -109,7 +109,10 @@ fn a_value_with_a_line_break_is_one_typed_refusal() {
         "first",
         "https://grid.example.net|remote-browser/grid/key",
     )
-    .replace("printf 'secret = %s\\n' 'first'", "printf 'secret = %s\\nsecond\\n' 'first'");
+    .replace(
+        "printf 'secret = %s\\n' 'first'",
+        "printf 'secret = %s\\nsecond\\n' 'first'",
+    );
     let program = stand_ins.program("secret-tool", &script(&body));
 
     assert_eq!(
@@ -292,8 +295,7 @@ fn the_keychain_answers_a_failure_with_its_code() {
         &script("printf '%s\\n' 'security: SecKeychainSearchCopyNext: The user name or passphrase' >&2\nexit 51\n"),
     );
 
-    let error = security::read_with(&program, &stand_ins.environment(), "an-account", bound())
-        .expect_err("a refusal");
+    let error = security::read_with(&program, &stand_ins.environment(), "an-account", bound()).expect_err("a refusal");
 
     assert_eq!(
         error,

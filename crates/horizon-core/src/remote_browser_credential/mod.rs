@@ -29,8 +29,8 @@ use zeroize::Zeroizing;
 
 pub use environment::EnvironmentCredentialStore;
 pub use keyring_import::{
-    Bound, ImportLine, KeyringImport, KeyringImportError, KeyringImportOutcome, KeyringImportPlan,
-    KeyringImportReport, ProgramEnvironment, import_from_keyring,
+    Bound, ImportLine, KeyringImport, KeyringImportError, KeyringImportOutcome, KeyringImportPlan, KeyringImportReport,
+    ProgramEnvironment, import_from_keyring,
 };
 pub use resolved::ReadCredentialStore;
 pub use session::SessionCredentialStore;

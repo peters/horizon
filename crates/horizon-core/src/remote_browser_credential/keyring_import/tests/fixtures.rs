@@ -64,7 +64,10 @@ pub(super) fn settings(endpoint: &str, references: &[&str]) -> RemoteBrowserConf
 
 /// The account that an older Horizon gave the item of these settings.
 pub(super) fn account(endpoint: &str) -> String {
-    format!("{}|{KEY_SLOT}", ControlEndpoint::parse(endpoint).expect("the endpoint").origin())
+    format!(
+        "{}|{KEY_SLOT}",
+        ControlEndpoint::parse(endpoint).expect("the endpoint").origin()
+    )
 }
 
 /// One entry of the keyring of `user`.
@@ -92,4 +95,3 @@ pub(super) fn read(store: &SecretStore, reference: &str) -> Option<String> {
         .expect("the row")
         .map(|body| String::from_utf8(body.to_vec()).expect("text"))
 }
-

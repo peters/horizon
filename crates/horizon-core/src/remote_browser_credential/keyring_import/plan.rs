@@ -53,10 +53,7 @@ impl KeyringImportPlan {
                 let Some(slot) = binding.slot.as_deref() else {
                     continue;
                 };
-                if references
-                    .iter()
-                    .any(|planned| planned.locator.reference == *reference)
-                {
+                if references.iter().any(|planned| planned.locator.reference == *reference) {
                     continue;
                 }
                 references.push(PlannedReference {
@@ -95,9 +92,6 @@ impl KeyringImportPlan {
     /// when two references share a slot.
     #[must_use]
     pub fn references_of(&self, user: &str) -> Vec<&PlannedReference> {
-        self.references
-            .iter()
-            .filter(|planned| planned.user == user)
-            .collect()
+        self.references.iter().filter(|planned| planned.user == user).collect()
     }
 }
