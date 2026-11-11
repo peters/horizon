@@ -270,22 +270,43 @@ impl HorizonApp {
         if changes.is_empty() {
             return;
         }
-        let Some(sync) = self.server_sync.as_ref() else {
-            // Without a server the value is the value of this computer alone.
-            return;
-        };
+        let mut intents = Vec::new();
         for change in changes {
             let Ok(id) = horizon_core::SecretId::credential(change.reference.as_str()) else {
                 continue;
             };
-            let queued = if change.stored {
-                sync.handle().queue_secret(&id)
-            } else {
-                sync.handle().queue_secret_remove(&id)
-            };
-            if let Err(error) = queued {
-                tracing::warn!(%error, id = %id, "a credential value of this computer did not enter the queue");
-            }
+            intents.push((id, change.stored));
+        }
+        self.queue_secret_intents(intents);
+    }
+
+    /// Queues one intent of a secret on the coordination worker, in the order that
+    /// the frame asked for them.
+    ///
+    /// The queue of the link is a file that the writer syncs, so the frame copies
+    /// the ids and the worker writes them. A queue that cannot be written is one
+    /// warning, and the value of this computer still stands.
+    pub(super) fn queue_secret_intents(&mut self, intents: Vec<(SecretId, bool)>) {
+        if intents.is_empty() {
+            return;
+        }
+        let Some(sync) = self.server_sync.as_ref() else {
+            // Without a server the value is the value of this computer alone.
+            return;
+        };
+        let link = sync.handle().clone();
+        for (id, stored) in intents {
+            let link = link.clone();
+            self.browser_create_host.io.write(move || {
+                let queued = if stored {
+                    link.queue_secret(&id)
+                } else {
+                    link.queue_secret_remove(&id)
+                };
+                if let Err(error) = queued {
+                    tracing::warn!(%error, id = %id, "a secret of this computer did not enter the queue");
+                }
+            });
         }
     }
 
@@ -317,23 +338,14 @@ impl HorizonApp {
         if changes.is_empty() {
             return;
         }
-        let Some(sync) = self.server_sync.as_ref() else {
-            // Without a server the value is the value of this computer alone.
-            return;
-        };
+        let mut intents = Vec::new();
         for change in changes {
             let Ok(id) = SecretId::named(change.name.as_str()) else {
                 continue;
             };
-            let queued = if change.stored {
-                sync.handle().queue_secret(&id)
-            } else {
-                sync.handle().queue_secret_remove(&id)
-            };
-            if let Err(error) = queued {
-                tracing::warn!(%error, id = %id, "a named secret of this computer did not enter the queue");
-            }
+            intents.push((id, change.stored));
         }
+        self.queue_secret_intents(intents);
     }
 
     /// Keeps the names of the named secrets of the settings in step with the names
@@ -429,32 +441,8 @@ mod tests {
         // The frame path of the sidebar runs under the guard in strict mode: a
         // read of the link that waited for the lock of a write would panic here.
         horizon_core::ui_thread::use_strict_mode();
-        let (temp, mut app) = test_app();
-        let credentials = Arc::new(horizon_core::secret::CredentialVault::new(Box::new(
-            horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
-        )));
-        credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
-        let keys = horizon_core::MachineKeys::new(temp.path().join("keys"));
-        let secrets = super::SecretHandles {
-            target: test_secrets(keys),
-            credentials: Arc::clone(&credentials),
-            named: Arc::new(horizon_core::named_secrets::NamedSecretVault::new(Box::new(
-                horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
-            ))),
-        };
-        let mut config =
-            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", temp.path(), secrets.target)
-                .expect("the settings of the link");
-        // A stand-in child that ends at once, so the link is a link to an away
-        // server and the test starts no `ssh`.
-        config.program = "/bin/true".to_owned();
-        let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
-
+        let (_temp, mut app, _link_dir) = test_link_app();
         let ctx = Context::default();
-        // The frames of this test are the frames of the window after the start
-        // read the machine list, so the link of the test is the one they see.
-        app.machine_load_rx = None;
-        app.server_sync = Some(ServerSync::for_test(supervisor, credentials));
         run_app_frame(&ctx, &mut app);
         run_app_frame(&ctx, &mut app);
 
@@ -469,6 +457,54 @@ mod tests {
             ServerLine::of(sync.snapshot().state()).text(),
             "the sidebar line is the snapshot of the link"
         );
+    }
+
+    #[test]
+    fn the_secrets_of_a_frame_enter_the_queue_on_the_coordination_worker_in_order() {
+        // The frame path of a secret runs under the guard in strict mode: a
+        // queue write on the frame would panic here.
+        horizon_core::ui_thread::use_strict_mode();
+        let (temp, mut app, link_dir) = test_link_app();
+        let first = horizon_core::SecretId::named("FIRST").expect("a name");
+        let second = horizon_core::SecretId::named("SECOND").expect("a name");
+        app.queue_secret_intents(vec![(first.clone(), true), (second.clone(), true)]);
+        app.settle_browser_host_io();
+
+        let queue: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(link_dir.join("server-queue.json")).expect("the queue"))
+                .expect("the queue of the link");
+        let ids: Vec<&str> = queue["pending"]
+            .as_array()
+            .expect("the intents of the queue")
+            .iter()
+            .map(|intent| intent["op"]["secret_put"]["id"].as_str().expect("the id of the intent"))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![first.as_str(), second.as_str()],
+            "the queue holds the secrets in the order that the frame asked for them"
+        );
+        drop(temp);
+    }
+
+    /// A window with a link whose child ends at once, and the directory of its
+    /// queue and its mirror.
+    fn test_link_app() -> (tempfile::TempDir, crate::app::HorizonApp, std::path::PathBuf) {
+        let (temp, mut app) = test_app();
+        let link_dir = temp.path().join("link");
+        let credentials = Arc::new(horizon_core::secret::CredentialVault::new(Box::new(
+            horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
+        )));
+        credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
+        let keys = horizon_core::MachineKeys::new(temp.path().join("keys"));
+        let mut config =
+            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", &link_dir, test_secrets(keys))
+                .expect("the settings of the link");
+        config.program = "/bin/true".to_owned();
+        let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+        app.machine_load_rx = None;
+        app.server_sync = Some(ServerSync::for_test(supervisor, credentials));
+        (temp, app, link_dir)
     }
 
     /// The secrets of a computer whose key folder holds no value.
