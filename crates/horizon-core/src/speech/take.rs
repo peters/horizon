@@ -316,11 +316,13 @@ impl Worker {
     }
 
     fn take(&mut self, plan: &TakePlan, target: PanelId) {
+        // The clock is read before the file exists, so a file in the folder means
+        // that the length of the take is already running.
+        let started = self.settings.clock.now_ms();
         let Some(file) = self.new_take_file() else {
             self.failed(target, "The folder of the takes in the Horizon home cannot be made");
             return;
         };
-        let started = self.settings.clock.now_ms();
         let program = plan.recorder.program().to_owned();
         let args = plan.recorder.arguments_for(&file);
         let mut child = match StartedProgram::start(Path::new(&program), &args, &ProgramEnvironment::inherited()) {
@@ -362,7 +364,11 @@ impl Worker {
         }
         if bytes > self.settings.bounds.max_file_bytes {
             remove_take_file(&file);
-            self.failed(target, "The recording of the take is larger than 25 MB");
+            let megabytes = (self.settings.bounds.max_file_bytes / (1024 * 1024)).max(1);
+            self.failed(
+                target,
+                &format!("The recording of the take is larger than {megabytes} MB"),
+            );
             return;
         }
         self.send(target, SpeechEventKind::Writing);

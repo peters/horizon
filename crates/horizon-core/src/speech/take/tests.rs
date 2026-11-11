@@ -226,9 +226,21 @@ fn alive(pid: u32) -> bool {
         .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
 }
 
+/// The pid that a recorder of this test wrote, once the write of it is complete.
 fn pid_of(take: &Take, name: &str) -> u32 {
-    let text = fs::read_to_string(take.pid_file(name)).expect("the pid of the recorder");
-    text.trim().parse().expect("a pid")
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Ok(text) = fs::read_to_string(take.pid_file(name))
+            && let Ok(pid) = text.trim().parse()
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pid of the recorder {name} never arrived"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[test]
@@ -390,6 +402,8 @@ fn no_file_of_a_take_stays_after_a_success() {
 
 #[test]
 fn a_recording_above_the_bound_of_the_file_is_refused() {
+    // The bound of this test is one kilobyte, so the sentence names one megabyte:
+    // the production bound of 25 MB names 25.
     let take = Take::with_bounds(
         Arc::new(()),
         TakeBounds {
@@ -414,7 +428,7 @@ fn a_recording_above_the_bound_of_the_file_is_refused() {
     let SpeechEventKind::Failed(message) = &events[0] else {
         panic!("a failure: {events:?}");
     };
-    assert!(message.contains("larger than 25 MB"), "{message}");
+    assert!(message.contains("larger than 1 MB"), "{message}");
     assert!(!marker.exists(), "a refused file runs no transcriber");
     take.wait_for("the delete of the file", || take.files().is_empty());
 }
@@ -495,7 +509,9 @@ fn the_folder_and_the_file_of_a_take_are_private() {
     let (transcriber, _marker) = transcriber_script(&take, "kept");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the file of the take", || !take.files().is_empty());
+    // The recorder copies its file at its start, so the file holds the recording
+    // before the take ends and a take of this test is not an empty one.
+    take.wait_for("the recording of the take", || take.file_bytes() > 0);
     let folder = fs::metadata(take.folder()).expect("the folder of the takes");
     assert_eq!(
         folder.permissions().mode() & 0o777,
