@@ -12,6 +12,7 @@
 //! are read at capture; normal child-process environment inheritance is unchanged.
 
 mod environment;
+mod keyring_import;
 mod resolved;
 mod session;
 mod shared;
@@ -27,6 +28,10 @@ use horizon_browser_control::remote_authorization::{CredentialValueError, author
 use zeroize::Zeroizing;
 
 pub use environment::EnvironmentCredentialStore;
+pub use keyring_import::{
+    Bound, KeyringImportError, KeyringImportOutcome, KeyringImportPlan, KeyringImportReport, ProgramEnvironment,
+    import_from_keyring,
+};
 pub use resolved::ReadCredentialStore;
 pub use session::SessionCredentialStore;
 pub use shared::SharedCredentialStore;
