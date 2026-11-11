@@ -11,18 +11,19 @@ below runs over any pair of byte streams. The store and the frames reached the
 server through `horizon_sync::serve` before the two modes existed, and a test can
 still give them two in-memory sockets.
 
-## The two modes of the binary
+## The three modes of the binary
 
-The server and the link are the same `horizon` binary with one flag each, and
-both modes run before Horizon prepares its home:
+The server, the link and the first invitation are the same `horizon` binary with
+one flag each, and all three modes run before Horizon prepares its home:
 
 | Mode | What it does |
 |---|---|
-| `horizon --server` | Holds one server home: `server.sqlite` at mode 0600, with its `-wal` and `-shm` files at the same mode, `secret.key` at mode 0600, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. |
+| `horizon --server [--listen <ip>:<port>] [--name <dns-name>]` | Holds one server home: `server.sqlite` at mode 0600, with its `-wal` and `-shm` files at the same mode, `secret.key` at mode 0600, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. With `--listen` it also opens the TCP listener of [the listener](#the-listener-and-the-token), and `--name` gives the host that its links hold. |
+| `horizon --server-invite` | Asks the server of this home for one invitation over the socket, and prints the link, the code, the minutes that it lives and the QR code of the link as blocks of text. It starts no server and writes no file, and it ends with code 0. |
 | `horizon --server-link` | Relays its own standard input and output to the socket of that home, for one `ssh` child. It starts no server and creates no file. A home without a server answers one typed line and exit code 3. The mode ends as soon as the socket ends, which is the case when the server stops, and the entry of the mode ends the process at once: its standard input stays open, so a wait for it would leave one child of an idle computer alive while the server is away. |
 
 The server home is `HORIZON_SERVER_HOME`, or `~/.horizon-server`. It is a
-directory of its own, so neither mode reads or writes `~/.horizon` of the person:
+directory of its own, so no mode reads or writes `~/.horizon` of the person:
 they read no setting, open no window and install no agent integration. A second
 server of the same home finds the lock held and refuses with one typed line
 instead of removing the socket of the first one. The module comment of
@@ -43,10 +44,16 @@ The settings entry `server` names the computer that runs the server:
 {
   "server": {
     "ssh_target": "server-computer",
-    "command": "/opt/horizon --server-link"
+    "command": "/opt/horizon --server-link",
+    "address": "server-computer:7000"
   }
 }
 ```
+
+`address` is the `host:port` of the TCP listener of a server. A successful join
+writes it, and the link of that computer then runs over TCP. A computer with an
+address and no token uses `ssh`, so the `ssh` link stays as a second transport,
+and a person removes the address to go back to it.
 
 `ssh_target` follows the rule of the browser host target: one argument of `ssh`,
 no leading dash, no space and no control character. `command` is optional and is
@@ -60,7 +67,12 @@ one file as before.
 
 ## The supervisor of the link
 
-One worker thread of a computer owns one `ssh` child at a time. It starts
+One worker thread of a computer owns one transport at a time: one `ssh` child, or
+one socket to the listener of its server when its settings name an address and
+its secrets file holds the token of its join. The rest of this section names the
+`ssh` child, and the socket runs the same frames with the same bounds.
+
+It starts
 `ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5
 -o ServerAliveCountMax=2 <target> <command>` with the flags that the browser
 forward already builds, and it speaks the frames over the standard input and
@@ -85,8 +97,16 @@ started again at once: the supervisor kills and reaps the child, reports `away`
 and starts the delay of the next attempt. The bounds are the constants of
 `crates/horizon-sync/src/supervisor.rs`, and a test gives its link shorter ones.
 
+A question of the window travels on the same link, one at a time: `invite`,
+`devices` and `device_remove` reach the server over `ssh` as well as over the
+listener, and the answer comes back on a channel that the frame polls. A link
+that the server ends with `removed` or `not_logged_in` is the one end that does
+not retry: the supervisor forgets the token row of this computer and stops until
+a person joins it again.
+
 The thread publishes one state for the UI: `off`, `connecting`, `in_step`,
-`behind`, or `away` with the number of intents that wait. The sidebar shows it,
+`behind`, `away` with the number of intents that wait, `removed`, or
+`not_logged_in`. The sidebar shows it,
 and `machines` reports its code. `connecting` belongs to the first attempt of a
 link alone: an attempt that follows a link that failed keeps `away` with the
 number of intents that wait, until a hello answers. A server that does not answer
@@ -133,6 +153,63 @@ which records, bindings and secrets the server has:
 The mirror file records that this comparison happened, so a restart does not push
 the same values again. A server that returned after its `secret.key` was lost
 asks for the values again, whatever the mirror says.
+
+## The listener and the token
+
+`ssh` is the first transport of a server, and it stays the rule for a computer
+that is trusted by its login. A person who wants a second computer to join
+without an SSH key uses the second transport, which the owner asked for: a TCP
+listener that a person turns on, one code that a logged-in computer shows as a QR
+code, and one token for each computer after that.
+
+- **Opt-in and bounded.** The listener exists only with `--listen`. It refuses to
+  bind any address that is not loopback, inside `100.64.0.0/10`, or inside
+  `fd7a:115c:a1e0::/48`, because those are the addresses of a private overlay
+  network. Horizon encrypts nothing of its own on this link: the overlay does. A
+  wildcard address and every other address are one typed error at start, and a
+  computer refuses a link whose name resolves outside the same ranges before it
+  sends one byte.
+- **One invitation is one code.** A logged-in computer sends `invite` and gets
+  `invited { code, link, expires_millis, now_millis }`. The code is 12 characters
+  of Crockford base32 in three groups of four, which leaves out `I`, `L`, `O` and
+  `U`, so no character reads as another one and no group reads as a word. The
+  server keeps the SHA-256 of the code and never the code, for ten minutes and one
+  use, and it keeps at most four open invitations: a fifth replaces the oldest.
+- **A wrong code is slow and quiet.** A wrong code, an expired code and a used
+  code answer the same `wrong_code`, after one second, so the answer is no
+  oracle. Twenty wrong codes inside ten minutes delete every open invitation, and
+  `join` then answers `join_locked` until a person makes a new invitation. The
+  clock and the sleep of the server are values of `crates/horizon-sync/src/clock.rs`,
+  so a test sees both without waiting.
+- **The token is the login.** `join { code, device }` answers
+  `joined { device, token }` and ends the link; the computer then connects again
+  with `hello { ..., token }`. The token is 32 bytes from the OS random source as
+  base64url text, and the server keeps its SHA-256 in the row of that device. An
+  unknown hash, and a device that differs from the device of the token, answer
+  `not_logged_in` and end the link. The computer keeps the token as the row
+  `server/token` of its `secrets.sqlite`, outside the secret ids of the protocol,
+  so no server can send a token and no link sends one.
+- **The link of an invitation names the listener.** `--name` gives the host of
+  every link that the listener hands out; without it the host is the address. The
+  parser of a link and its rules live in
+  `crates/horizon-core/src/server_link.rs`, which is one place for the untrusted
+  text that a person pastes.
+- **The list of the computers is one frame.** `devices` answers
+  `device_list { rows, now_millis }`, one row for each computer with its name,
+  the time that it joined, the time that the server saw it last, and the way that
+  it logs in: `ssh` or `token`. The row of the computer that asked carries
+  `caller: true`.
+- **A removal ends the links of that computer.** `device_remove { device }`
+  deletes the row and the token of that computer and ends its open links with
+  `error { code: "removed" }`, after the error frame reached them. The removed
+  computer writes `This computer was removed from the server.`, deletes its own
+  token row and stops until a person joins it again. It keeps every copy of every
+  machine key and every credential value that it already had, because the server
+  rotates nothing: a person who loses a computer makes new keys and new values.
+
+The frame of the hello carries the token only on the listener. A link of the
+socket sends no token, because `ssh` let its computer in, and the server takes
+the device name of that hello as the claim that it always was.
 
 ## The rules
 
@@ -229,8 +306,17 @@ is `hello`; after that a computer pushes, pulls and waits. Each example below is
 one frame.
 
 ```json
-{"hello":{"protocol":1,"device":"mbp-7c1","store":"6f1c…"}}
-{"hello_ok":{"protocol":1,"store":"6f1c…","now_millis":1760000000000}}
+{"hello":{"protocol":3,"device":"mbp-7c1","store":"6f1c…"}}
+{"hello_ok":{"protocol":3,"store":"6f1c…","now_millis":1760000000000}}
+{"join":{"code":"ABCD-EFGH-JKMN","device":"laptop-b"}}
+{"joined":{"device":"laptop-b","token":"n7Qd…"}}
+{"hello":{"protocol":3,"device":"laptop-b","token":"n7Qd…"}}
+{"invite":{}}
+{"invited":{"code":"ABCD-EFGH-JKMN","link":"horizon://server-computer:7000/join#ABCD-EFGH-JKMN","expires_millis":600000,"now_millis":1760000000000}}
+{"devices":{}}
+{"device_list":{"rows":[{"name":"laptop-a","created_millis":1760000000000,"last_seen_millis":1760000000000,"login":"ssh","caller":false}],"now_millis":1760000000000}}
+{"device_remove":{"device":"laptop-b"}}
+{"device_removed":{"device":"laptop-b","removed":true}}
 {"push":{"intents":[{"device":"mbp-7c1","id":42,"seen":118,"op":{"machine_put":{"record":{"name":"build-1","host":"build-1.example","user":"peters","port":2222,"session":"work","provider":"Hetzner, hel1","added_at_millis":1760000000000}}}}]}}
 {"pushed":{"results":[{"id":42,"outcome":{"outcome":"applied","index":119}}],"next_expected":43}}
 {"pull":{"since":118,"tip":"9f2c1d…"}}
@@ -241,7 +327,7 @@ one frame.
 
 | Frame | From | What it says |
 |---|---|---|
-| `hello` | computer | The protocol version, the device name, and the store id that the computer saw last. |
+| `hello` | computer | The protocol version, the device name, the store id that the computer saw last, and the token of this computer on a link of the listener. |
 | `hello_ok` | server | The version of the server, its store id, its time, and whether it can read the secrets that it holds. |
 | `push` | computer | Up to 256 intents. |
 | `pushed` | server | One result for each intent, and the next counter that the server expects. |
@@ -249,7 +335,15 @@ one frame.
 | `changes` (row) | server | One machine, one key binding, or one secret: `{"kind":"secret","id":"machine-key/build-1","body":"<the value>","version":9,"deleted":false}`. |
 | `changes` | server | The index of the server, whether the computer must reset, and the rows. |
 | `wait` | computer | One pull that stays open until a change after the index, or 50 seconds. |
-| `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits` or `store_failed`. |
+| `join` | computer | One code of an invitation and the name that this computer takes. |
+| `joined` | server | The name and the token of that computer. The link ends after this frame. |
+| `invite` | computer | A request for one invitation. |
+| `invited` | server | The code, the link that holds it, the milliseconds that it lives, and the time of the server. |
+| `devices` | computer | A request for the list of the computers. |
+| `device_list` | server | The rows of the computers, and the time of the server. |
+| `device_remove` | computer | The name of the computer to remove. |
+| `device_removed` | server | That name, and whether the server held it. |
+| `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits`, `store_failed`, `no_listener`, `wrong_code`, `join_locked`, `name_taken`, `not_logged_in` or `removed`. |
 
 A refusal of one intent is not a link error. It is the `outcome` of that intent:
 `changed_since_seen`, `already_answered`, `too_many`, `invalid_record`,
@@ -260,8 +354,8 @@ could not answer keep the link.
 
 The limits are: 64 machines, 64 internal probe objects, 256 secrets, 16 KiB of one
 secret body, 256 intents and 8 secrets in one push, 256 KiB in one frame and 32
-open waits for each link. The protocol version is 2: version 1 has no secret row
-and no `secrets_lost`.
+open waits for each link. The protocol version is 3: version 1 has no secret row
+and no `secrets_lost`, and version 2 has no `join`, no token and no invitation.
 
 ## The secrets, and what the server holds
 

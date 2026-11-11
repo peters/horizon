@@ -9,6 +9,11 @@
   <array>
     <string>/Users/CHANGE-ME/bin/horizon</string>
     <string>--server</string>
+    <!-- The listener of a join is off by default. A person who wants it adds the
+         address of a private overlay network and the name that the other
+         computers resolve, as "Set the server on each computer" in README.md
+         shows. -->
+
   </array>
 
   <key>EnvironmentVariables</key>

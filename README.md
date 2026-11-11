@@ -174,6 +174,15 @@ Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut
 
 The same viewer also watches loopback VNC servers on this computer, one port per copy of an app. See [Watch an app over VNC](#watch-an-app-over-vnc).
 
+#### One machine list on more than one computer
+
+Two computers of yours can show the same machine list, use the same machine keys and the same provider credentials. One of them runs the Horizon server (`horizon --server`), and the others follow it. A computer joins in one of two ways:
+
+- Over the SSH login of the server computer, by naming it in **Settings → Server → SSH target**.
+- With a link that a logged-in computer shows as a QR code, for a computer that has no SSH key there. The server computer runs `horizon --server-invite` once and prints the first link, or a logged-in computer presses **Add a computer** in **Settings → Server** and shows the code.
+
+The QR code holds an address on your private overlay network. Horizon encrypts nothing on that link itself, so the server refuses to listen anywhere else: loopback, `100.64.0.0/10` and `fd7a:115c:a1e0::/48` are the only addresses it accepts, and a computer checks the same rule before it connects. An invitation works for one computer, for ten minutes, and for one use. **Remove** in the list of the computers deletes the login of a computer and ends its links; that computer keeps the copies of the keys and values it already has, so make new ones if it is lost. [The server package](packaging/horizon-server/README.md) has the setup steps and the test procedure is [the server procedure](docs/testing/procedures/horizon-server.md).
+
 </td>
 </tr>
 <tr>
@@ -517,6 +526,9 @@ Provider-backed overview controls and workspace setup remain separate integratio
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
 | `--export-remote-profile <path>` | Write the shareable remote browser profile (providers, targets, credential references; no credential values or bindings) and exit |
 | `--import-remote-profile <path>` | Merge a portable remote browser profile into the settings store and exit (one profile command per launch); credentials are entered afterwards in Settings > Remote, or bound in the settings to environment variable names for unattended launches |
+| `--server` | Run the Horizon server of this computer: one home, one machine list, and the keys and values that the computers share. `--listen <ip>:<port>` also opens the listener that a computer joins with a link, and `--name <dns-name>` gives that link its host. See [the server package](packaging/horizon-server/README.md) |
+| `--server-link` | Relay the standard input and output of one `ssh` child to the socket of that home; this is what a computer runs on the server over SSH |
+| `--server-invite` | Ask the server of this home for one invitation and print its link, its code and its QR code |
 
 Machine-local `credential_bindings` name a store, never a secret. `store:
 session` and `store: secrets_file` are entered in Settings > Remote.

@@ -21,10 +21,16 @@ that a credential value that one computer sets is used by the other computer, an
 that a server whose key file is lost keeps running and gets the values back. It
 also proves that a computer without a server in its settings behaves as before.
 
+The second part proves the link that a person joins with a QR code: the server
+listener, the first invitation on the server computer, the join of two computers,
+a wrong code, an expired code, the list of the computers, the removal of one
+computer, and the rule of the address.
+
 ## 2. Applicability
 
 - Candidate: a build of `horizon` that has the `--server` mode, the
-  `--server-link` mode and the `server` settings entry.
+  `--server-link` mode, the `--server-invite` mode and the `server` settings
+  entry.
 - Platforms: the server computer is Linux or macOS. A client computer is Linux
   or macOS.
 - This procedure does not test a rented machine, a card, a click that waits for an
@@ -384,6 +390,165 @@ gone, and that it catches up when the server returns.
    private key and the same public line, so the value that client computer B sent
    again is no conflict.
 
+### 6.10 S10 — the listener and the first invitation
+
+> **CAUTION: THE LISTENER OPENS A PORT ON THE SERVER COMPUTER.** This step gives
+> every computer that holds a code of an invitation the machine keys and the
+> credential values of the server. Use a private overlay network address, and
+> remove the test home after the run.
+
+1. On the server computer, stop the server and start it with a listener on the
+   address of your private overlay network:
+
+   ```bash
+   export HORIZON_SERVER_HOME="$HOME/.horizon-server-test"
+   /path/to/horizon --server --listen 100.64.0.1:7000 --name server-computer
+   ```
+
+   Result: the log names the socket and the listener at `100.64.0.1:7000`.
+
+2. In a second terminal on the server computer, ask for the first invitation:
+
+   ```bash
+   export HORIZON_SERVER_HOME="$HOME/.horizon-server-test"
+   /path/to/horizon --server-invite
+   ```
+
+   Result: the command prints the link `horizon://server-computer:7000/join#...`,
+   the code in three groups of four, the number of minutes, and a QR code as
+   blocks of text. The command ends with code 0.
+
+3. Look at the store of the server:
+
+   ```bash
+   sqlite3 "$HORIZON_SERVER_HOME/server.sqlite" "SELECT code_hash FROM invitations;"
+   ```
+
+   Result: the table holds one row of 64 hexadecimal characters, and no row holds
+   the code that step 2 printed.
+
+4. On a client computer, start the fixture, open Settings, and select the
+   `Server` tab.
+
+   Result: the tab shows the state line `This computer has no server.`, one field
+   for a link, one field for a name, and the Join button.
+
+5. Paste the link of step 2, type the name `laptop-a`, and press Join.
+
+   Result: within a few seconds the tab says `This computer joined the server.`,
+   the field `Address` holds `server-computer:7000`, and the state line reads
+   `Server: in step`. The sidebar shows the same line.
+
+6. On the server computer, look at the row of that computer:
+
+   ```bash
+   sqlite3 "$HORIZON_SERVER_HOME/server.sqlite" "SELECT name, login, token_hash IS NOT NULL FROM devices;"
+   ```
+
+   Result: a row for `laptop-a` has `token` and `1`, and no column holds the token
+   itself.
+
+### 6.11 S11 — a second computer joins with a QR code
+
+1. In the `Server` tab of `laptop-a`, press `Add a computer`.
+
+   Result: the tab paints a QR code on a white plate, the code in three groups of
+   four, the link as text with `Copy link`, and the minutes that are left.
+
+2. On the second client computer, start the fixture, open Settings, select
+   `Server`, paste the same link, type the name `laptop-b`, and press Join.
+
+   Result: the second computer says `This computer joined the server.` and
+   `Server: in step`.
+
+3. Look at the tab of `laptop-a`.
+
+   Result: the invitation left the window within two seconds, and the line
+   `Another computer joined this server.` is under the card. The list of the
+   computers holds three rows: `laptop-a`, `laptop-b` and `server`. The row of the
+   computer that is open is in a strong type.
+
+4. Look at a machine that `laptop-a` adds on `laptop-b`.
+
+   Result: the machine appears on `laptop-b` within a few seconds, as procedure
+   S1 shows for a link over `ssh`.
+
+### 6.12 S12 — a wrong code and an expired code
+
+1. On the server computer, ask for one invitation, and write down its code.
+
+   ```bash
+   /path/to/horizon --server-invite
+   ```
+
+2. On a third client computer, in the tab `Server`, paste the link with one
+   character of the code changed, and press Join.
+
+   Result: after about one second the tab shows
+   `The code is not one open invitation of this server. Check the code, or make a
+   new invitation on a computer that is logged in.`, and the computer is not
+   logged in.
+
+3. Do step 2 nineteen more times with other wrong codes.
+
+   Result: from the twentieth wrong code the tab shows
+   `Too many wrong codes. Every invitation is gone, so make a new one on a
+   computer that is logged in.`
+
+4. On `laptop-a`, press `Add a computer`, and wait ten minutes without using the
+   invitation.
+
+   Result: the invitation leaves the window when its time is over. A join with its
+   code reads as an expired code, which is the sentence of step 2.
+
+### 6.13 S13 — the removal of a computer
+
+> **CAUTION: THE REMOVAL DELETES THE LOGIN OF ONE COMPUTER.** The computer keeps
+> the copies of the machine keys and the credential values that it already has.
+> Make new machine keys and new credential values if that computer is lost.
+
+1. On `laptop-a`, in the list of the computers, press `Remove` beside `laptop-b`.
+
+   Result: the row asks for a confirmation with `Remove` and `Keep`, and one
+   sentence about the copies that `laptop-b` keeps.
+
+2. Press `Remove` in the confirmation.
+
+   Result: the row of `laptop-b` goes from the list, and the line
+   `laptop-b was removed from the server.` is under the card.
+
+3. Look at the window of `laptop-b`.
+
+   Result: the tab says `This computer was removed from the server.`, and the
+   sidebar shows the same line. The Join field is shown again.
+
+4. Look at the store of the server.
+
+   Result: `SELECT COUNT(*) FROM devices WHERE name = 'laptop-b';` answers 0, and
+   the connection of `laptop-b` is closed.
+
+5. On `laptop-a`, press `Add a computer`, paste the new link on `laptop-b`, and
+   press Join with the name `laptop-b`.
+
+   Result: the join works again, because the name is free.
+
+### 6.14 S14 — the rule of the address
+
+1. On the server computer, stop the server and start it on a public address:
+
+   ```bash
+   /path/to/horizon --server --listen 0.0.0.0:7000
+   ```
+
+   Result: the server refuses at once with one line that names the rule of
+   `100.64.0.0/10` and `fd7a:115c:a1e0::/48`, and exit code 1. No port is opened.
+
+2. On a client computer, in the tab `Server`, paste a link to `8.8.8.8` and press
+   Join.
+
+   Result: the field shows one sentence about the private overlay network, and no
+   connection is made.
+
 ## 7. Pass criteria
 
 - A machine that one computer adds appears on the other computer within a few
@@ -414,6 +579,26 @@ gone, and that it catches up when the server returns.
   and `server.lock` stays in the home after a stop of the server.
 - A computer without a server in its settings behaves as before, and it starts
   no child.
+- A server with `--listen` on a private overlay network address answers the join
+  of a computer, and a server without `--listen` answers `no_listener` to an
+  invitation.
+- `--server-invite` prints a link that the parser of a computer accepts, a code in
+  three groups of four, and a QR code as text, and it ends with code 0.
+- The store of the server holds the SHA-256 of the code and of the token, and no
+  row holds either value.
+- A computer that joins holds one row `server/token` in its `secrets.sqlite` at
+  mode 0600, and its settings hold the address of the listener.
+- A wrong code answers after about one second with one sentence, and an expired
+  code and a used code answer the same.
+- Twenty wrong codes inside ten minutes delete every open invitation, and a new
+  invitation opens the door again.
+- A computer that a person removes reads `This computer was removed from the
+  server.`, its link ends with the typed error `removed`, its token row is gone,
+  and its name is free for a new join.
+- The list of the computers names every computer, the way that each one logs in,
+  and the row of the computer that asked.
+- A listener on any address outside loopback, `100.64.0.0/10` and
+  `fd7a:115c:a1e0::/48` refuses at start with one line that names the rule.
 
 ## 8. Cleanup
 

@@ -105,6 +105,11 @@ the key in `<server home>/secret.key`.
 
 ## Set the server on each computer
 
+One computer reaches the server in one of two ways: through the SSH login of the
+server computer, or with a link that a logged-in computer shows as a QR code. The
+SSH link stays as the second transport, and a person who has no SSH key on a
+computer joins it with a code.
+
 1. In the settings of Horizon on each computer, set the entry `server`:
 
    ```yaml
@@ -125,6 +130,53 @@ the key in `<server home>/secret.key`.
    ```
 
 3. Start Horizon again. The Machines section shows the line `Server: in step`.
+
+## Join a computer with a QR code
+
+The second transport is a listener that you turn on, and one code per computer.
+Horizon encrypts nothing on it: the listener accepts only a loopback address, an
+address inside `100.64.0.0/10`, or an address inside `fd7a:115c:a1e0::/48`, which
+are the addresses of a private overlay network. The overlay carries the
+encryption.
+
+1. On the server computer, stop the server and start it with the address of the
+   overlay and the name that the other computers resolve:
+
+   ```sh
+   /Users/<user>/bin/horizon --server --listen 100.64.0.1:7000 --name server-computer
+   ```
+
+   Result: the log names the socket and the listener. Without `--listen` the
+   server opens no port, and an invitation answers `no_listener`.
+
+2. On the server computer, ask for the first invitation:
+
+   ```sh
+   HORIZON_SERVER_HOME="$HOME/.horizon-server" /Users/<user>/bin/horizon --server-invite
+   ```
+
+   Result: the command prints a link, a code in three groups of four, the minutes
+   that it lives, and a QR code as blocks of text.
+
+3. On the new computer, open **Settings** (**Ctrl+Shift+,**) and select the
+   **Server** tab. Paste the link, type a name for that computer, and press
+   **Join**.
+
+   Result: the tab says `This computer joined the server.`, the settings hold the
+   address of the listener, and the sidebar reads `Server: in step`.
+
+4. On a computer that is logged in, press **Add a computer** in the same tab.
+
+   Result: the tab paints a QR code on a white plate, the link, the code and the
+   minutes that are left. Another computer joins with the same link and the code.
+   One invitation works for one computer, for ten minutes, and for one use.
+
+5. To log a computer out, press **Remove** beside its row in the list of the
+   computers, and confirm.
+
+   Result: the login of that computer is gone and its open links end. That
+   computer keeps every copy of every machine key and every credential value that
+   it already had, so make new keys and new values if it is lost.
 
 ## Replace the binary and restart
 
@@ -198,11 +250,19 @@ never leaves the server home.
 
 ## The limits
 
-- **The boundary is the SSH login of the server user.** Every computer that can
-  log in as that user reads and writes the whole machine list, every machine key
-  and every credential value: `secret.key` is a file of that same login.
-- **The server does not prove which computer talks to it.** The device name of a
-  link is a claim.
+- **The boundary is the SSH login of the server user, or one token.** Every
+  computer that can log in as that user, and every computer that holds a token,
+  reads and writes the whole machine list, every machine key and every credential
+  value: `secret.key` is a file of that same login.
+- **The server does not prove which computer talks to it over SSH.** The device
+  name of such a link is a claim. A link of the listener proves the device with
+  its token, and a token is one device.
+- **The listener has no encryption of its own.** It accepts only the three
+  address ranges of a private overlay network, so the overlay must encrypt and
+  authenticate every byte. Do not forward its port to a public network.
+- **A code is a bearer value for ten minutes.** A person who reads the code of an
+  invitation can join that computer to the server, and the server then gives that
+  computer every machine key and every credential value.
 - **Every linked computer holds a copy of every secret.** A lost computer is a
   computer that holds all of them, so remove its login and replace the keys and
   the credentials.

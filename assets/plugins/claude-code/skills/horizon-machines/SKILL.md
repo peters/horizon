@@ -76,6 +76,17 @@ opens nothing here: ask the person before you call `machine_key` for a new key,
 then put the new public line in the `authorized_keys` of the machine. Do not work
 around a missing key with a key of the person for the second computer.
 
+A computer reaches the server over the SSH login of the server computer, or with a
+link that a logged-in computer shows as a QR code. The person joins it in
+**Settings → Server**: one field takes the whole link, one takes the name of the
+computer, and a successful join writes the address of the server. You cannot make
+an invitation yourself: the tab button **Add a computer** and the mode
+`horizon --server-invite` belong to the person. The state line of that tab and
+the sidebar say what the link does now, and `removed` or `not_logged_in` mean that
+the server no longer accepts this computer: it deleted its token and stops until
+the person joins it again. A computer that the person removed keeps the copies of
+the machine keys and the values that it already had.
+
 "What is rented", "show my machines" and "overview" mean one overview card, not
 one card per machine. It is a list of every machine that the providers hold, in
 the spirit of a machine list in a sidebar. It rents nothing and deletes nothing.
