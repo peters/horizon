@@ -68,16 +68,29 @@ None of the steps deletes data, rents compute or changes access.
 
 ### 6.2 S2 — Every tab keeps the panel width
 
-1. Select each tab in turn: General, Shortcuts, Presets, Browser and Remote
-   browsers.
+1. Select each tab in turn: General, Shortcuts, Presets, Browser, Remote and
+   Secrets.
 
    Result: The panel keeps the width that it had on the General tab. The canvas
    stays visible on the left. There is no tab of a text format.
 
 2. Read the tab row.
 
-   Result: Each tab is in the panel. The panel does not push the tabs off its
-   left edge.
+   Result: The six tabs are on one row. No tab label wraps onto a second line,
+   and the panel does not push the tabs off its left edge.
+
+### 6.2a S2a — A port for one host names its field
+
+1. Select the `General` tab and read **Remote hosts** → the row under
+   **A port for one host, by its label or its SSH host name:**.
+
+   Result: The host box of the empty row is about three times as wide as its
+   port box, and its hint says `Host label or SSH host name`.
+
+2. Type `smoke-node` in the host box and `5997` in its port box.
+
+   Result: The host name is readable in the box. `Remove` appears at the end of
+   the row, and the row stays inside the panel.
 
 ### 6.3 S3 — Long content scrolls inside the panel
 
