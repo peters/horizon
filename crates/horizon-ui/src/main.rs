@@ -642,6 +642,12 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
         };
         match arg.as_str() {
             "--config" | "-c" => config_path = Some(operand(&arg)?),
+            "--export-config" => {
+                return Err(
+                    "--export-config is gone: the settings live in settings.sqlite, and the Settings window writes them"
+                        .to_string(),
+                );
+            }
             "--export-remote-profile" | "--import-remote-profile" => {
                 let path = operand(&arg)?;
                 let profile = if arg == "--export-remote-profile" {
@@ -789,10 +795,8 @@ mod cli_args_tests {
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
-        assert!(
-            parse(&["--export-config"]).is_ok_and(|args| args.command.is_none()),
-            "a retired flag is not a command, so it falls through to an ordinary launch"
-        );
+        let error = parse(&["--export-config"]).err().expect("the removed export is refused");
+        assert!(error.contains("settings.sqlite"), "{error}");
     }
 }
 
