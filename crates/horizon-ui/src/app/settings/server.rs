@@ -168,6 +168,16 @@ pub(in crate::app) enum ServerAction {
 }
 
 impl ServerTabState {
+    /// Fills the field of the name with the name that the first link of this
+    /// computer would take, so a person pastes a link and presses Join without
+    /// typing one. A field that a person filled or cleared is left alone.
+    pub(in crate::app) fn propose_device(&mut self) {
+        if self.device.trim().is_empty() && !self.device_filled {
+            self.device = horizon_sync::proposed_device_name();
+            self.device_filled = true;
+        }
+    }
+
     /// Takes the answers that arrived, and clears an invitation that expired.
     ///
     /// The frame calls this before it draws, so a frame that has nothing to read
@@ -322,12 +332,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, state: &mut ServerTabStat
         state.device.clone_from(&view.device);
         state.device_filled = true;
     }
-    if state.device.trim().is_empty() && !view.name_locked && !state.device_filled {
-        // A computer without a name proposes the one that its first link would
-        // take, so a person pastes the link and presses Join without typing a name.
-        state.device = horizon_sync::proposed_device_name();
-        state.device_filled = true;
-    }
+    state.propose_device();
     render_state_line(ui, view);
     // The work of a logged-in computer comes first: the invitation of another
     // computer and the list of the computers. The join and the fields of the entry
@@ -608,6 +613,11 @@ fn render_invitation_section(ui: &mut Ui, state: &mut ServerTabState) {
 }
 
 /// The list of the computers of the server, with the removal of one of them.
+///
+/// One computer takes two lines: its name, and how it logs in with the times that
+/// the server gave. Both lines wrap inside the width that the buttons of the row
+/// leave, so a long name of a computer and a narrow panel never put a button over
+/// a word.
 fn render_devices_section(ui: &mut Ui, state: &mut ServerTabState) {
     super::section_heading(ui, "Computers");
     super::section_card(ui, |ui| {
@@ -625,6 +635,12 @@ fn render_devices_section(ui: &mut Ui, state: &mut ServerTabState) {
             let name = row.name.clone();
             let confirming = state.confirming.as_deref() == Some(name.as_str());
             let removing = state.removing.as_deref() == Some(name.as_str());
+            let detail = format!(
+                "{} · seen {} · joined {}",
+                if row.login == DeviceLogin::Token { "link" } else { "ssh" },
+                ago(state.devices_now_millis, row.last_seen_millis),
+                ago(state.devices_now_millis, row.created_millis)
+            );
             super::action_row(
                 ui,
                 |ui| {
@@ -632,17 +648,13 @@ fn render_devices_section(ui: &mut Ui, state: &mut ServerTabState) {
                     if row.caller {
                         label = label.strong();
                     }
-                    ui.label(label);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} · seen {} · joined {}",
-                            if row.login == DeviceLogin::Token { "link" } else { "ssh" },
-                            ago(state.devices_now_millis, row.last_seen_millis),
-                            ago(state.devices_now_millis, row.created_millis)
-                        ))
-                        .color(theme::FG_DIM())
-                        .size(SMALL_SIZE),
-                    );
+                    ui.vertical(|ui| {
+                        ui.add(egui::Label::new(label).wrap());
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(detail).color(theme::FG_DIM()).size(SMALL_SIZE))
+                                .wrap(),
+                        );
+                    });
                 },
                 |ui| {
                     if confirming {

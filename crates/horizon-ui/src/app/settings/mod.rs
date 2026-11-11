@@ -1,6 +1,8 @@
 mod bar;
 mod browser;
 mod general;
+#[cfg(test)]
+mod panel_tests;
 mod presets;
 mod remote_browsers;
 mod remote_recovery;
@@ -29,10 +31,12 @@ pub(super) const SETTINGS_BAR_HEIGHT: f32 = 48.0;
 pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
 
 const TAB_CORNER_RADIUS: f32 = 8.0;
-/// The horizontal padding of one tab button.
-const TAB_BUTTON_PADDING: f32 = 6.0;
+/// The horizontal padding of one tab button. The seven tabs must fit one row of
+/// the panel that a window of 1480 points opens, which is 396 points of content,
+/// so the padding and the gap stay small.
+const TAB_BUTTON_PADDING: f32 = 4.0;
 /// The gap between two tab buttons.
-const TAB_ITEM_GAP: f32 = 4.0;
+const TAB_ITEM_GAP: f32 = 3.0;
 /// The size of a tab label.
 const TAB_LABEL_SIZE: f32 = 12.0;
 /// The margin that the panel frame takes on each side.
@@ -136,6 +140,11 @@ impl HorizonApp {
             // The store is the only settings source: the editor shows the settings
             // of this run, never a file that a person exported and edited.
             let config = self.template_config.clone();
+            let mut server = server::ServerTabState::default();
+            // The tab offers the name that the first link of this computer would
+            // take, so a person presses Join without typing one, whether or not the
+            // tab was drawn before.
+            server.propose_device();
             self.settings = Some(SettingsEditor {
                 original: config.clone(),
                 config,
@@ -147,7 +156,7 @@ impl HorizonApp {
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
                 secret_inputs: secrets::SecretInputs::default(),
-                server: server::ServerTabState::default(),
+                server,
             });
         }
     }
@@ -524,7 +533,8 @@ fn render_tab(
 }
 
 /// The tab row. It is compact on purpose: one row of short labels at the default
-/// width of the panel, so the person never reads a tab on a second line.
+/// width of the panel of the smallest window that this build opens (1480 points
+/// gives 396 points of content), so the person never reads a tab on a second line.
 fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
     ui.scope(|ui| {
         ui.spacing_mut().button_padding = Vec2::new(TAB_BUTTON_PADDING, 5.0);

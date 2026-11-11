@@ -114,10 +114,6 @@ fn window_with_the_server_tab() -> (tempfile::TempDir, Context, HorizonApp) {
         runtime_state: Box::new(RuntimeState::default()),
     });
     app.toggle_settings();
-    app.settings
-        .as_mut()
-        .expect("the settings window of a test")
-        .show_server_tab();
     run_app_frame(&ctx, &mut app);
     (temp, ctx, app)
 }
@@ -141,8 +137,6 @@ fn press_join(app: &mut HorizonApp, ctx: &Context, link: &str) -> ServerAction {
         state.link = link.to_owned();
         state.join_error = None;
     }
-    // The frame is the one that fills the name that this computer proposes.
-    run_app_frame(ctx, app);
     let state = tab(app);
     let action = ServerAction::Join {
         link: state.link.trim().to_owned(),
