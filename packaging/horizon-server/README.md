@@ -1,9 +1,11 @@
 # Horizon server
 
-The Horizon server keeps the machine list that more than one computer of one
-person agrees on. Each computer names the same server in its settings, and a
-machine that an agent or the person adds on one computer shows on the other
-computers within a few seconds.
+The Horizon server keeps the state that more than one computer of one person
+agrees on: the machine list, the key that each machine uses, and every machine key
+and provider credential value that Horizon holds. Each computer names the same
+server in its settings, so a machine that an agent or the person adds on one
+computer shows on the other computers within a few seconds, and it opens with the
+same key.
 
 This folder holds one sample: a launchd user agent for macOS. The server is the
 same `horizon` binary that the person already runs, with `--server`. It needs no
@@ -16,6 +18,7 @@ second program and no account.
 | Program | `horizon --server`, the binary of this repository |
 | Server home | `HORIZON_SERVER_HOME`, or `~/.horizon-server` |
 | Store | `<server home>/server.sqlite`, mode 0600 |
+| Key of the secrets | `<server home>/secret.key`, mode 0600, made at the first start |
 | Socket | `<server home>/server.sock`, mode 0600 in a directory at mode 0700 |
 | Lock | `<server home>/server.lock`, so a second server of the same home refuses |
 | Log | The standard error of the process |
@@ -23,6 +26,25 @@ second program and no account.
 The server reads no setting and keeps no file of the person's desktop: its home
 is a directory of its own. It answers the links of the computers over the SSH
 login of its user. It opens no port.
+
+## The key of the secrets
+
+The server holds every machine key and every provider credential value of the
+person, because a second computer must work at once. Each value is sealed with
+the key in `<server home>/secret.key`.
+
+> **CAUTION: BACK UP `secret.key` SEPARATELY FROM `server.sqlite`.** A copy of the
+> database without the key holds no readable secret. Keep the key on another disk
+> or in another backup set, and give it the mode 0600.
+
+- The server makes the key at its first start. It never sends the key to a
+  computer and never writes it into the database.
+- If the key is lost, the secrets are lost. The server keeps running. Each
+  computer that still holds a value sends it again at its next link, so a lost
+  key is a lost key and not a lost value while one computer still holds it.
+- A lost computer is a computer that holds every key and every value. Remove its
+  ssh login at the server, and then replace the machine keys and the credentials:
+  removing the login does not rotate them.
 
 ## Build the binary
 
@@ -142,6 +164,10 @@ dbs:
       #   path: /Volumes/backup/horizon-server
 ```
 
+The copy excludes nothing, because the key of the secrets is not in the database:
+a copy of `server.sqlite` holds no readable secret. Copy `secret.key` with the
+same care, and separately, as the section above says.
+
 Rules of the copy:
 
 - Run one replicating process for one database.
@@ -156,20 +182,34 @@ the restored index then pulls the whole state of the restored store.
 
 [Litestream]: https://litestream.io
 
-## What the server never holds
+## What the server holds
 
-The server holds the machine list. It holds no private key, no token, no
-terminal content, no transcript, no browser profile, no session cookie and no
-setting of the person. The key of a machine is a local binding of each computer.
+The server holds the machine list, the key that each machine uses, every machine
+key of the person and every credential value that Horizon keeps in the OS
+credential store. Every value is sealed with `secret.key`, and every linked
+computer holds a copy. The key of a machine is one value under
+`machine-key/<name>`, and a credential value is one value under
+`credential/<reference>`.
+
+The server holds no ssh login key of the person, no provider CLI login (az,
+gcloud, hcloud, aws), no browser profile, no session cookie, no agent token, no
+terminal content, no transcript and no setting of the person. `secret.key` itself
+never leaves the server home.
 
 ## The limits
 
 - **The boundary is the SSH login of the server user.** Every computer that can
-  log in as that user reads and writes the whole machine list.
+  log in as that user reads and writes the whole machine list, every machine key
+  and every credential value: `secret.key` is a file of that same login.
 - **The server does not prove which computer talks to it.** The device name of a
   link is a claim.
-- **A machine that arrived from another computer has no key on this computer.**
-  A click on it opens nothing, and the section says `This computer has no key for
-  <name> yet`. The public lines of the keys are a later slice.
-- **A stopped computer keeps its last list.** A change that it made while the
-  server was away shows `pending` and settles when the link returns.
+- **Every linked computer holds a copy of every secret.** A lost computer is a
+  computer that holds all of them, so remove its login and replace the keys and
+  the credentials.
+- **A machine key is one value on every computer.** A key that one computer makes
+  is on the others within a few seconds, and a key that one computer deletes is
+  gone on all of them. Two computers that change one key at the same time keep the
+  first write, and the other computer keeps its own as `<name>.conflict-<time>`.
+- **A stopped computer keeps its last list and its last values.** A change that it
+  made while the server was away shows `pending` and settles when the link
+  returns.

@@ -68,8 +68,10 @@ sidebar, where one click connects.
 The same answer also says whether a change waits for the server of the person and
 what the link to that server does now: `pending` on a record and `server` on the
 answer, `off` when this Horizon keeps its machine list alone. A machine that
-another computer added is in this list too, and a click on it does nothing until
-this computer has its key. Tell the person that, and do not work around it.
+another computer added is in this list too, and its key arrives with the server, so
+a click on it connects as soon as the key is here. A machine that the server has no
+key for opens nothing here: tell the person that, and do not work around it with a
+key of your own for the second computer.
 
 "What is rented", "show my machines" and "overview" mean one overview card, not
 one card per machine. It is a list of every machine that the providers hold, in
@@ -143,8 +145,13 @@ Call `machine_key` with the name before you rent. The answer is `{name,
 public_key, private_key_path, known_hosts_path, created}`: Horizon keeps the key
 files and returns the public key line with the two paths, never the text of the
 private key. A later call returns the same answer with `created: false`. A name
-outside the rules answers `invalid_key_name`; a full workspace answers
-`too_many_keys`.
+outside the rules answers `invalid_key_name`; a home that holds the maximum
+answers `too_many_keys`.
+
+A name is one key on every computer of the person that follows the same server: a
+key that this call makes is on the server within a few seconds, and the other
+computers log in with it. Do not make a second key for a second computer, and do
+not copy the private key file to another computer yourself.
 
 Then run the rent of the provider reference with that public key. Tag every
 resource that the provider can tag with `horizon-managed=true` and
@@ -286,8 +293,9 @@ there, and that their tmux sessions end with the machine.
 4. Prove that nothing tagged with this name is left, with the find-again command.
 5. Call `machine_delete` with the machine name, so the record and its row in the
    sidebar go; an answer of `machine_unavailable` means that the record is
-   already gone. Then call `delete_machine_key` with the machine name; an answer
-   of `key_unavailable` means that the key is already gone.
+   already gone. Then call `delete_machine_key` with the machine name, which
+   removes the key on every computer of the same server; an answer of
+   `key_unavailable` means that the key is already gone.
 6. Update the card to a `Deleted` badge with one `Close` button, or close it.
    Tell the person in the `text` component that the terminal that Connect opened
    keeps trying to reach the machine that is gone, and that they can close it.

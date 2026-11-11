@@ -184,34 +184,45 @@ boundary pages went away with their features.
 
 - [`server-link`](trust-boundaries/server-link.md)
   - Untrusted: every byte of one link, the device name of its hello, the intents
-    and the records that a computer sends, the fields of a body of an internal
-    object, and the machine rows that a server sends back to a computer.
+    and the records that a computer sends, the id and the body of a secret, the
+    fields of a body of an internal object, and the machine, binding and secret
+    rows that a server sends back to a computer.
   - Guarantees: one writer holds the SQLite file and each push is one transaction
     with no network call inside it, the answer leaves after the commit, and a
     reader uses its own connection; each decided intent takes the next log index;
     the identifier of an intent makes a resend answer its first result; the first
-    intent on a version wins and a later one is refused with both numbers; a
-    machine record passes `horizon_core::machines::check_record` at the server; a
-    frame of at most 256 KiB, 256 intents in one push, 64 machines, 64 probe
-    objects and 32 open waits for one link; the server stamps every change with
-    its own clock; the server runs no path and no command of a computer, opens no
-    network connection, and holds no private key, token, terminal content or
-    setting; a link that the server ends stops writing first, so the computer
-    reads the typed error; the socket and the queue file are `0600` in a `0700`
-    directory; the computer checks every machine row of a pull again before it
-    reaches its mirror, the key of a machine stays a local binding, and a click on
-    a record that only arrived from the server opens no login with the keys of the
-    person; the two modes of the binary run before the Horizon home is prepared,
-    so they read no setting, open no window and install no agent integration; a
-    second server of one home refuses at its lock; a stop ends the links that are
-    open.
+    intent on a version of a secret wins and a later one is refused with both
+    numbers; a machine record passes `horizon_core::machines::check_record` at the
+    server; a secret id passes `SecretId::parse` at the server and at the computer,
+    so it is one machine key or one credential reference and never a path; every
+    body of the table `secrets` is sealed with XChaCha20-Poly1305, a random nonce
+    per write and the id as associated data, with a 32-byte key in
+    `<server home>/secret.key` at `0600` that is never in the database and never
+    sent; a live secret that the key cannot open is no row of a pull and the hello
+    says `secrets_lost`; a `binding` row passes the machine-name rule and the
+    key-name rule; a frame of at most 256 KiB, 256 intents and 8 secrets in one
+    push, 256 secrets, 16 KiB of one body, 64 machines, 64 probe objects and 32
+    open waits for one link; the server stamps every change with its own clock; the
+    server runs no path and no command of a computer, opens no network connection
+    and reads no secret body; a link that the server ends stops writing first, so
+    the computer reads the typed error; the socket, the queue file and the key file
+    are `0600` in a `0700` directory; the computer checks every machine row of a
+    pull again before it reaches its mirror, writes a secret only where a value of
+    that kind lives, keeps a local value that lost as
+    `<name>.conflict-<time>`, holds the id of a secret and not its body in its
+    queue, and holds no secret in its mirror; the two modes of the binary run
+    before the Horizon home is prepared, so they read no setting, open no window
+    and install no agent integration; a second server of one home refuses at its
+    lock; a stop ends the links that are open.
   - Does not guarantee: who the computer is, because the device name is a claim
     that the transport does not prove; availability, because a link holds a thread
     and another process of the same user can open the file; the content of a probe
     body, which is bounded JSON that the server does not read; the correctness of
-    the clock of the server; that a machine which arrived from another computer
-    has a key on this one, because the public lines of the keys are a later
-    slice.
+    the clock of the server; that a person or a process which can log in to the
+    server account cannot read every machine key and every credential value, since
+    the key file is beside the database under that same login; that a lost computer
+    is harmless, since every linked computer holds a copy of every secret; which of
+    two values of one secret is the correct one when two computers changed it.
 
 ## Follow-up work
 

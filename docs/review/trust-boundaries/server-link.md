@@ -1,12 +1,22 @@
 ---
-applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-ui/src/app/server_sync.rs,packaging/horizon-server/**"
+applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-core/src/secret/**,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,packaging/horizon-server/**"
 ---
 
 # Trust boundary of the server store and its link
 
 The Horizon server holds the state that more than one computer agrees on, and a
 computer reaches it over a link. Every byte on that link comes from another
-computer, and the server acts on it. The module comment of
+computer, and the server acts on it.
+
+**This boundary changed on purpose.** An earlier rule said that the server never
+holds a private key. The person decided that a second computer must work at once:
+it names the server, and it logs in to every machine and uses every provider
+credential of the person. The server therefore holds every machine key and every
+credential value, sealed with a key of its own home, and every linked computer
+holds a copy of all of them. That is the cost of the decision, and it is not a
+defect to report: a person or a process that can log in to the server account
+reads every machine key and every credential value, because the key file is
+beside the database, in the same home and under the same login. The module comment of
 [`crates/horizon-sync/src/lib.rs`](../../../crates/horizon-sync/src/lib.rs) and
 the design page [`docs/architecture/horizon-server.md`](../../architecture/horizon-server.md)
 describe the same boundary.
@@ -33,10 +43,17 @@ never on the UI thread.
   `horizon_core::machines::check_record`: the name rule, the route rule of an SSH
   terminal, the session rule and the provider line. A record that breaks a rule is
   `invalid_record` with the code of that rule, and nothing is written.
-- **The intents are bounded.** One push holds at most 256 intents, the store
-  keeps at most 64 machines and 64 internal probe objects, and one link holds at
-  most 32 open waits. A push above its limit and a wait above its limit get a
-  typed error.
+- **The intents are bounded.** One push holds at most 256 intents and 8 secrets,
+  the store keeps at most 64 machines, 64 internal probe objects and 256 secrets,
+  one secret body holds at most 16 KiB, and one link holds at most 32 open waits.
+  A push above its limit and a wait above its limit get a typed error.
+- **A secret id is checked at the server, and its body is not read.** An id is
+  `machine-key/<name>` with the key-name rule, or `credential/<reference>` with the
+  reference rule, so no id is a path, a command or a longer name than a name. The
+  server stores the body as opaque bytes and never parses it.
+- **A secret intent carries its value.** An intent of a secret without a body is
+  `invalid_intent`, and a body above 16 KiB is refused: the server never asks a
+  computer for a value.
 - **A clock of a computer is never read.** An intent carries no time. The server
   stamps every change with its own clock.
 
@@ -62,18 +79,28 @@ never on the UI thread.
   `horizon_core::machines::check_record` before it reaches the mirror or the
   sidebar, so a record that the server holds in a state that breaks a rule is
   refused and logged. The server checks the same record before it stores it.
-- **A restored or malicious server can change only the machine records.** It can
-  add, change or remove a machine row. It cannot make the computer run a command:
-  the only process is the `ssh` of the validated setting, and the tmux command of
-  a terminal is rebuilt from the record by Horizon's own text.
-- **It cannot make a computer use a key.** The key of a machine is a local
-  binding in `machines/keys.json`, and it is never sent. A machine that only
-  arrived from the server is marked in the mirror, so a click on it opens no
-  login with the keys of the person; the section says
-  `This computer has no key for <name> yet`.
+- **A binding is checked on the computer too.** A `binding` row names a machine
+  with the machine-name rule and a key with the key-name rule, and a row that
+  breaks one is a line of the log and no binding.
+- **A secret is checked twice, and written only where a value of that kind
+  lives.** A `secret` row of a pull passes `SecretId::parse`, so its id is one
+  machine key or one credential reference. A machine key body is JSON of a key
+  pair with a private key and a public line; a body that is not one is refused
+  with a line of the log and the local value stays. A credential body is written
+  at the address that the settings of this computer bind to that reference, and a
+  reference that no provider binds is refused with a line of the log.
+- **A restored or malicious server can change the machine records, the key
+  bindings and the values of the secrets.** That is what the person asked for,
+  and it is bounded: an id is never a path and a body of the wrong kind is
+  refused. A server cannot make the computer run a command: the only process is
+  the `ssh` of the validated setting, and the tmux command of a terminal is
+  rebuilt from the record by Horizon's own text.
 - **It cannot make a computer write outside its own files.** The mirror, the
   queue and the device name are three files of the machine directory of the
-  Horizon home, at 0600 in a 0700 directory, and an object id is never a path.
+  Horizon home, at 0600 in a 0700 directory, and an object id is never a path. A
+  machine key is the three files of `machine-keys/<name>`, and a conflict copy is
+  the same three files under `<name>.conflict-<time>`, a name that no key rule
+  accepts.
 - **A refused intent is dropped, not retried for ever.** The queue of a computer
   drops an intent that the server refused and logs the reason with its code.
 
@@ -93,10 +120,27 @@ never on the UI thread.
   its own, which the caller named when it opened the store. It starts no process,
   opens no network connection, and reads no path from a frame. An object id is 1
   to 64 characters of `a-z`, `0-9`, `-`, `_` and `.`, and it is never a path.
-- **The server holds no secret.** It stores the machine list and, in later
-  slices, public key lines, cards, clicks and waits. A machine record holds no key
-  name, and the server never holds a private key, a token, a terminal content, a
-  transcript, a browser profile or a setting of the person.
+- **A secret is sealed at rest.** The bodies of the table `secrets` are sealed
+  with XChaCha20-Poly1305, a random 24-byte nonce per write and the id as
+  associated data. The key is 32 bytes in `secret.key` in the server home, mode
+  0600, made at the first start. It is never part of the database, never sent to a
+  computer, and never in a copy of `server.sqlite`, so a copy of that file alone
+  holds no readable secret. A person must back up `secret.key` separately.
+- **A lost key is a reported loss, not a silent one.** A live secret row that the
+  key of the server cannot open is no row of a pull, the server logs the id, and
+  its hello says `secrets_lost`. Every computer that still holds a value sends it
+  again, so a server whose key file was lost is a server whose values come back
+  from the computers that kept them. If the key is lost and no computer holds a
+  value, that value is lost.
+- **No secret body reaches a file of a computer or a line of the log.** The queue
+  of a computer holds the id of a secret and the version that it saw; the mirror
+  holds no secret at all; the log row of a secret holds the kind, the id and the
+  version; and the `Debug` of a secret body is redacted, so a value is in no
+  `tracing` line, no error text and no refusal quote.
+- **The server holds no other secret.** It holds no ssh login key of the person,
+  no provider CLI login (az, gcloud, hcloud, aws), no browser profile, no session
+  cookie, no agent token, no terminal content, no transcript and no setting of the
+  person. A machine record holds no key name: the binding is an object of its own.
 - **A refusal quotes a bounded part of a frame.** A value that the server copies
   into the log or into a refusal is at most 64 characters and then three dots, so
   one intent writes about a line of log and not a frame.
@@ -149,9 +193,18 @@ never on the UI thread.
   server whose clock is wrong stamps wrong times, and a reader that compares two
   changes of two servers compares two clocks.
 - **Who may reach the server.** The boundary is the SSH login of the server
-  computer. Whatever `ssh` lets in may claim any device name and read and write
-  the whole machine list. A hardware key on that login and a list of the
-  computers that may reach it are not part of this slice.
-- **A key on the server.** A later slice gives the server the public lines of the
-  machine keys. Until then a machine that arrived from another computer has no
-  key here, and the person adds it on this computer.
+  computer. Whatever `ssh` lets in may claim any device name, read and write the
+  whole machine list, and read every machine key and every credential value: the
+  key of the secrets is a file of that same login. A hardware key on that login
+  and a list of the computers that may reach it are not part of this slice.
+- **A computer that is lost.** Every linked computer holds a copy of every secret.
+  A computer that a person loses is therefore a computer that holds every machine
+  key and every credential value: remove its ssh login at the server, then replace
+  the keys and the credentials, because removing the login does not rotate them.
+- **Which value is right.** Two computers that change one secret at the same time
+  decide by the version rule, and the loser keeps its value as a local copy or a
+  notice. Horizon does not tell the person which of the two values is the correct
+  one.
+- **A credential value that no provider of a computer binds.** It has no address
+  on that computer, so it is refused with a line of the log and the value of the
+  server stays unread there. The person binds the reference in the settings.

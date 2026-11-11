@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-core/src/place.rs,crates/horizon-core/src/place/**,crates/horizon-core/src/workspace.rs,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/session_kill.rs,crates/horizon-ui/src/app/session_kill/**,crates/horizon-ui/src/app/actions/panels.rs,crates/horizon-ui/src/app/actions/panels/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**,crates/horizon-ui/src/app/sidebar/place.rs,crates/horizon-ui/src/app/sidebar/place/**,crates/horizon-ui/src/app/sidebar/menus.rs"
+applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/secret/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-core/src/place.rs,crates/horizon-core/src/place/**,crates/horizon-core/src/workspace.rs,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/session_kill.rs,crates/horizon-ui/src/app/session_kill/**,crates/horizon-ui/src/app/actions/panels.rs,crates/horizon-ui/src/app/actions/panels/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**,crates/horizon-ui/src/app/sidebar/place.rs,crates/horizon-ui/src/app/sidebar/place/**,crates/horizon-ui/src/app/sidebar/menus.rs"
 ---
 
 # Trust boundary of an agent-opened SSH terminal and of a machine record
@@ -265,6 +265,14 @@ an optional `key` with the same rule. `machine_keys` takes no input.
   may list, use and delete any of them by name. A workspace boundary is
   therefore not a key boundary: an agent that a person runs in another
   workspace of the same Horizon reaches the same machines.
+- **A name is one key on every computer.** When the settings name a server, a key
+  is a secret of that server (see
+  [`server-link.md`](server-link.md)). A key that this computer makes, replaces or
+  deletes is queued for the server, and a key of the server is written here. Every
+  computer that follows the same server therefore holds the same pair under the
+  same name, and `machine_key` on one computer is a login on all of them. An agent
+  does not need a second key for its second computer, and a deleted key is gone on
+  every computer of the person.
 
 ### Guarantees for machine keys
 
@@ -301,6 +309,11 @@ an optional `key` with the same rule. `machine_keys` takes no input.
 
 ### Does not guarantee (machine keys)
 
+- **A key is no longer a secret of one computer.** A person or a process that can
+  log in to the server account reads every machine key, and every linked computer
+  holds a copy. A deleted key that the person or the agent does not remove from
+  `authorized_keys` of the machine still accepts a login on every computer that
+  held it.
 - **The agent gets the path and may run its own connection with it.** An agent
   panel runs as the same local user as Horizon, so the private key is a file that
   it can read. `machine_key` and `machine_keys` therefore answer

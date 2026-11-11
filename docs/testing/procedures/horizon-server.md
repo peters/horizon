@@ -4,7 +4,7 @@ feature: One machine list on two computers, kept by a Horizon server
 platforms: [linux, macos]
 cost: none
 destructive: no
-secrets: the SSH login of the server computer, and the private keys of the machine keys in the Horizon home of each computer
+secrets: the SSH login of the server computer, the machine keys of each Horizon home, and one test credential value (use a synthetic value such as `test-value-1`)
 owner: peters
 ---
 
@@ -12,11 +12,14 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that two computers show one machine list. It proves that a
-machine that one computer adds appears on the other computer, that a removal
-travels back, that a change waits while the server is away, and that the change
-settles when the server returns. It also proves that a computer without a server
-in its settings behaves as before.
+This procedure proves that two computers show one machine list and hold one set of
+keys and credential values. It proves that a machine that one computer adds
+appears on the other computer, that a removal travels back, that a change waits
+while the server is away, and that the change settles when the server returns. It
+proves that a machine key that one computer makes logs in from the other computer,
+that a credential value that one computer sets is used by the other computer, and
+that a server whose key file is lost keeps running and gets the values back. It
+also proves that a computer without a server in its settings behaves as before.
 
 ## 2. Applicability
 
@@ -24,8 +27,8 @@ in its settings behaves as before.
   `--server-link` mode and the `server` settings entry.
 - Platforms: the server computer is Linux or macOS. A client computer is Linux
   or macOS.
-- This procedure does not test a rented machine, a machine key on the server, a
-  card, a click that waits for an agent, or two servers.
+- This procedure does not test a rented machine, a card, a click that waits for an
+  agent, or two servers.
 - This procedure does not test a computer that is away for more than five
   minutes.
 
@@ -76,10 +79,10 @@ in its settings behaves as before.
    ls -l "$HORIZON_SERVER_HOME"
    ```
 
-   Result: the directory has mode 0700. `server.sock`, `server.lock` and
-   `server.sqlite` have mode 0600. The `server.sqlite-wal` and
+   Result: the directory has mode 0700. `server.sock`, `server.lock`,
+   `server.sqlite` and `secret.key` have mode 0600. The `server.sqlite-wal` and
    `server.sqlite-shm` files, when the server has written a change, have mode
-   0600 too.
+   0600 too. `secret.key` holds 32 bytes.
 
 3. On the server computer, the process must write the socket line only. Start a
    second server in a second terminal with the same `HORIZON_SERVER_HOME`.
@@ -127,8 +130,9 @@ in its settings behaves as before.
 
 3. On client computer B, click the row of `build-1`.
 
-   Result: no terminal opens. The section shows `This computer has no key for
-   build-1 yet`.
+   Result: the section shows `This computer has no key for build-1 yet` while the
+   server has no key for that machine, and no terminal opens. A key that the server
+   has arrives with the next task.
 
 4. On client computer B, forget the machine with the row menu, or with this
    request:
@@ -249,6 +253,96 @@ gone, and that it catches up when the server returns.
    Client computer B shows `build-2`, its list is the list of the server, and the
    `pending` mark of client computer A goes away.
 
+### 6.7 S7 — a key that one computer makes logs in from the other
+
+1. On client computer B, stay at the machine list of the server with `build-1`.
+
+2. On client computer A, ask for a machine key with this request:
+
+   ```json
+   {"operation": "machine_key", "name": "build-1"}
+   ```
+
+   Result: the answer holds `name`, `public_key`, `private_key_path`,
+   `known_hosts_path` and `created: true`. The text of the private key is in no
+   answer.
+
+3. On client computer B, look at the key folder:
+
+   ```bash
+   ls -l /path/to/b/data/home/.horizon/machine-keys
+   ```
+
+   Result: within a few seconds the folder holds `build-1`, `build-1.pub` and
+   `build-1.known_hosts`. The folder has mode 0700 and the three files have mode
+   0600.
+
+4. On client computer B, click the row of `build-1`.
+
+   Result: a terminal opens and runs `ssh` with
+   `-i <key folder>/build-1` and
+   `-o UserKnownHostsFile=<key folder>/build-1.known_hosts`. The section no longer
+   says `This computer has no key for build-1 yet`. The login reaches the machine
+   when its `authorized_keys` holds the public line of that key.
+
+5. On client computer B, delete the key with this request:
+
+   ```json
+   {"operation": "delete_machine_key", "name": "build-1"}
+   ```
+
+   Result: the three files go from client computer A within a few seconds.
+
+### 6.8 S8 — a credential value that one computer sets is used on the other
+
+> **CAUTION: THIS TASK WRITES A VALUE INTO THE OS CREDENTIAL STORE OF EACH
+> COMPUTER.** Use a synthetic value such as `test-value-1`, and delete it at the
+> end of the task.
+
+1. On client computer A, open the settings, the tab Remote browsers. Add a
+   provider with one endpoint, one reference and the store `OS credential store`,
+   or use a provider that the test configuration already holds.
+
+2. Save the value `test-value-1` for that reference, and press Save in the
+   settings.
+
+   Result: the row of the reference shows the state `Present`.
+
+3. On client computer B, open the same tab with the same provider configuration.
+
+   Result: within a few seconds the row of the same reference shows `Present`, and
+   Delete removes it on both computers after a few seconds. The providers that use
+   that reference read the value without another step.
+
+4. Delete the value on both computers, and remove the provider that this task
+   added.
+
+### 6.9 S9 — the key file of the server is lost
+
+> **CAUTION: THIS TASK DELETES `secret.key` OF THE TEST SERVER HOME.** Do it only
+> on the test server home of this procedure. The secrets of the test server are
+> then lost unless a client computer still holds them, which is what this task
+> proves.
+
+1. Stop both client computers and stop the server.
+
+2. On the server computer, delete the key file:
+
+   ```bash
+   rm "$HORIZON_SERVER_HOME/secret.key"
+   ```
+
+3. Start the server again with the command of step 5.1, and start client computer
+   A.
+
+   Result: the server keeps running and writes one warning line about a secret that
+   it cannot open. Client computer A sends its own values again, and the new
+   `secret.key` is at mode 0600.
+
+4. Start client computer B. Look at its key folder.
+
+   Result: client computer B holds `build-1` with its two files, as in step 6.6.
+
 ## 7. Pass criteria
 
 - A machine that one computer adds appears on the other computer within a few
@@ -256,8 +350,16 @@ gone, and that it catches up when the server returns.
 - With the server away, both computers keep their last list, a change shows
   `pending`, and the change settles when the server returns.
 - The queue of a computer survives its restart while the server is away.
-- A machine that only the server gave has no key on the other computer, and a
-  click on it opens nothing and says why.
+- A machine that only the server gave has no key on the other computer while the
+  server holds no key, and a click on it opens nothing and says why.
+- A machine key that one computer makes is on the other computer with mode 0700
+  for the folder and 0600 for the three files, and the `ssh` argv of the other
+  computer names that key and its known-hosts file.
+- A key that one computer deletes goes from the other computer.
+- A credential value that one computer sets shows `Present` on the other computer
+  and is read by the providers there.
+- A server whose `secret.key` is lost keeps running, reports the loss in its log,
+  and holds the values again after a computer that holds them links.
 - A second server of one home refuses with one typed line and code 1.
 - A server that stops while a computer is idle makes that computer say
   `Server away` within 70 seconds, and the computer is in step with the change of
@@ -281,7 +383,7 @@ gone, and that it catches up when the server returns.
    rm -rf "$HOME/.horizon-server-test"
    ```
 
-   Result: the directory and its store are gone.
+   Result: the directory, its store and `secret.key` are gone.
 
 3. Remove the state folders of the client computers.
 

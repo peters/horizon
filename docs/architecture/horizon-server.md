@@ -1,7 +1,7 @@
 # The Horizon server and its link
 
 This page gives the rules of the server that holds the state of more than one
-computer, the file that it keeps, the frames of its link, and what happens when
+computer, the files that it keeps, the frames of its link, and what happens when
 it is away. The crate is `crates/horizon-sync`. The trust boundary of the same
 code is [`docs/review/trust-boundaries/server-link.md`](../review/trust-boundaries/server-link.md).
 
@@ -18,7 +18,7 @@ both modes run before Horizon prepares its home:
 
 | Mode | What it does |
 |---|---|
-| `horizon --server` | Holds one server home: `server.sqlite` at mode 0600, with its `-wal` and `-shm` files at the same mode, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. |
+| `horizon --server` | Holds one server home: `server.sqlite` at mode 0600, with its `-wal` and `-shm` files at the same mode, `secret.key` at mode 0600, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. |
 | `horizon --server-link` | Relays its own standard input and output to the socket of that home, for one `ssh` child. It starts no server and creates no file. A home without a server answers one typed line and exit code 3. The mode ends as soon as the socket ends, which is the case when the server stops, and the entry of the mode ends the process at once: its standard input stays open, so a wait for it would leave one child of an idle computer alive while the server is away. |
 
 The server home is `HORIZON_SERVER_HOME`, or `~/.horizon-server`. It is a
@@ -98,24 +98,29 @@ the server and the queue of that computer in one view:
 3. A change that arrives from the server replaces the row of the mirror, which
    is `machines/server-mirror.json`. Both files are private, and both survive a
    restart.
-4. The key of a machine is a local binding of `machines/keys.json` and is never
-   sent. A record that only arrived from the server is marked in the mirror, so a
-   click on it opens nothing and the section says `This computer has no key for
-   <name> yet`.
+4. The key of a machine is a binding of `machines/keys.json`. The binding follows
+   the server too, and the key value with it, so a machine that another computer
+   added opens here as soon as the key arrived. Until then the section says
+   `This computer has no key for <name> yet`, and a server that has no key for
+   that machine keeps that notice.
 
-### The first link of a computer that has a list
+### The first link of a computer that has a list, keys and values
 
-A computer that kept its machine list in `machines/registry.json` before it
-followed a server keeps that list at its first link. The first pull of the server
-comes before any push, so the computer knows which records the server has:
+A computer that kept its machine list in `machines/registry.json`, its key
+bindings in `machines/keys.json`, its keys in `machine-keys/` and its credential
+values in the OS store before it followed a server keeps all of them at its first
+link. The first pull of the server comes before any push, so the computer knows
+which records, bindings and secrets the server has:
 
-- A local record whose name the server does not have is pushed.
-- A name that both have keeps the record of the server, and the local record is
-  dropped.
+- A local record, binding or secret whose name the server does not have is
+  pushed, so the server holds the union.
+- A name that both have keeps the value of the server. A local machine key that
+  differs is kept as `<name>.conflict-<time>`, and a local credential value that
+  differs is replaced with one notice for the person.
 
 The mirror file records that this comparison happened, so a restart does not push
-the same list again. Until that comparison, the file store of the computer stays
-the source of its records.
+the same values again. A server that returned after its `secret.key` was lost
+asks for the values again, whatever the mirror says.
 
 ## The rules
 
@@ -165,13 +170,29 @@ file to the two files that it makes. `PRAGMA journal_mode=WAL`,
 | `meta` | `key`, `value` | The store id, random at creation, and the schema version. |
 | `log` | `idx`, `at_millis`, `device`, `intent`, `kind`, `object_id`, `result_json` | One row for each decided intent, with its result. A refused intent has a row and no object. |
 | `applied` | `device`, `intent`, `idx`, unique on `(device, intent)` | The identifiers that the server decided, and the log row of each. |
-| `objects` | `kind`, `id`, `body_json`, `version`, `deleted`, primary key `(kind, id)` | The state that a computer pulls. A removed object is a row with `deleted = 1`. |
+| `objects` | `kind`, `id`, `body_json`, `version`, `deleted`, primary key `(kind, id)` | The state that a computer pulls: the `machine` rows, the `binding` rows and the internal `probe` rows. A removed object is a row with `deleted = 1`. |
+| `secrets` | `id`, `nonce`, `sealed`, `version`, `deleted`, primary key `id` | One secret: a sealed body, and the log index of its last change. The body is never in `objects`, because that table holds JSON that a person's server copy would show. |
 | `devices` | `name`, `first_seen`, `last_seen`, `last_intent` | One row for each computer that sent an intent, with the highest counter that it spent. |
 
 The schema version is one integer. A file of a newer Horizon is refused, never
-migrated down. Only version 1 exists, and `MIGRATIONS` in
+migrated down. Version 2 adds the `secrets` table, and `MIGRATIONS` in
 `crates/horizon-sync/src/store/schema.rs` is where a change from one version to
 the next goes.
+
+### The key of the secrets
+
+Every body of `secrets` is sealed with XChaCha20-Poly1305, a random 24-byte nonce
+per write and the id of the secret as associated data. The key is 32 bytes in
+`secret.key` in the server home, at mode 0600. The server makes it at the first
+start and makes a file that a copy left readable private again.
+
+The key is **never part of `server.sqlite`** and the server never sends it to a
+computer. A copy of the database alone therefore holds no readable secret, and a
+person must back up `secret.key` separately. If the key is lost, the secrets are
+lost: a live row that this key cannot open is reported as no row at all, the
+server logs the id, and every computer that still holds the value sends it again.
+The hello of a link says `secrets_lost` in that case, so the computers send their
+own values even when a pull would have shown them nothing.
 
 ### The tip
 
@@ -206,10 +227,11 @@ one frame.
 | Frame | From | What it says |
 |---|---|---|
 | `hello` | computer | The protocol version, the device name, and the store id that the computer saw last. |
-| `hello_ok` | server | The version of the server, its store id, and its time. |
+| `hello_ok` | server | The version of the server, its store id, its time, and whether it can read the secrets that it holds. |
 | `push` | computer | Up to 256 intents. |
 | `pushed` | server | One result for each intent, and the next counter that the server expects. |
 | `pull` | computer | The index and the tip of the computer. |
+| `changes` (row) | server | One machine, one key binding, or one secret: `{"kind":"secret","id":"machine-key/build-1","body":"<the value>","version":9,"deleted":false}`. |
 | `changes` | server | The index of the server, whether the computer must reset, and the rows. |
 | `wait` | computer | One pull that stays open until a change after the index, or 50 seconds. |
 | `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits` or `store_failed`. |
@@ -221,16 +243,46 @@ protocol version, a device name that breaks its rule, a second hello and a push 
 more than 256 intents end the link. A wait above the maximum and a store that
 could not answer keep the link.
 
-The limits are: 64 machines, 64 internal probe objects, 256 intents in one push,
-256 KiB in one frame and 32 open waits for each link.
+The limits are: 64 machines, 64 internal probe objects, 256 secrets, 16 KiB of one
+secret body, 256 intents and 8 secrets in one push, 256 KiB in one frame and 32
+open waits for each link. The protocol version is 2: version 1 has no secret row
+and no `secrets_lost`.
 
-## What the server never holds
+## The secrets, and what the server holds
 
-The server holds the machine list and, in later slices, the machine public lines,
-cards, clicks and waits. It holds no private key, no token, no terminal content,
-no transcript, no browser profile, no session cookie and no settings of the
-person. A machine record holds no key name: the binding of a key to a machine is
-local to a computer.
+The person decided that a second computer must work at once: it names the server,
+and it can log in to every machine and use every provider credential of the
+person. The server therefore holds, beside the machine list:
+
+- **One machine key per name**, as one secret of the id `machine-key/<name>`. The
+  body holds the private key, its public line and the known-hosts lines of that
+  key, so a login is the same on every computer.
+- **The key binding of each machine**, as one object of the kind `binding` with the
+  machine as its id. A machine record holds no key name, because a record is
+  checked by the same code on both sides and the binding is the value that the
+  server decides.
+- **Every credential value that Horizon keeps in the OS credential store**, as one
+  secret of the id `credential/<reference>` of the remote browser configuration.
+
+A computer writes such a value where its own code already reads it: a machine key
+into `machine-keys/<name>` with the modes of a private key, a credential value
+into the OS credential store at the address that its own settings bind to the
+reference. Both then work without the server afterwards.
+
+**One secret is one value, and the first write on a version wins.** A computer
+that loses keeps its local value: a machine key as `<name>.conflict-<time>`,
+which is not a key name and is never used by an agent, and a credential value as
+one notice for the person, because the OS store holds one value per reference.
+The queue of a computer holds the id of a secret and never its body.
+
+### What never goes to the server
+
+The server holds no ssh login key of the person, no provider CLI login (az, gcloud,
+hcloud, aws), no browser profile, no session cookie, no agent token, no terminal
+content, no transcript and no setting of the person. `secret.key` itself never
+leaves the server home. The push path accepts two ids and no other: a path, a
+command, a name that is not one key name and a reference that is not one
+reference are typed refusals, so no other value can arrive.
 
 ## When the server is away
 
