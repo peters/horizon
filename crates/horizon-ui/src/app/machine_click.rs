@@ -46,14 +46,13 @@ impl HorizonApp {
         // A machine that only the server gave has no key on this computer, and a
         // login with the keys of the person would reach a host that this computer
         // never agreed to. The server keeps the public lines in a later slice.
-        let foreign = self
-            .server_sync
+        // The snapshot of the link is the one the worker published, so the click
+        // of a person waits for no disk.
+        let link = self.server_sync.as_ref().map(super::server_sync::ServerSync::snapshot);
+        let foreign = link.as_ref().is_some_and(|link| link.is_foreign(&name));
+        let link_has_key = link
             .as_ref()
-            .is_some_and(|sync| sync.handle().is_foreign(&name));
-        let link_has_key = self
-            .server_sync
-            .as_ref()
-            .map(|sync| key.as_deref().is_some_and(|key| sync.handle().has_machine_key(key)));
+            .map(|link| key.as_deref().is_some_and(|key| link.has_machine_key(key)));
         if let Some(notice) = missing_key_notice(&name, foreign, key.as_deref(), link_has_key) {
             self.set_sidebar_notice(notice);
             return;

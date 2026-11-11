@@ -19,7 +19,7 @@ use horizon_core::named_secrets::{self, NamedSecretVault};
 use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
 use horizon_core::secret_store;
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
-use horizon_sync::{LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
+use horizon_sync::{LinkSnapshot, LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
 
 use super::HorizonApp;
 
@@ -67,6 +67,12 @@ pub(in crate::app) struct ServerSync {
 }
 
 impl ServerSync {
+    /// The link of a test, over a supervisor whose child is a stand-in.
+    #[cfg(test)]
+    pub(in crate::app) fn for_test(supervisor: Supervisor, credentials: Arc<CredentialVault>) -> Self {
+        Self::new(supervisor, credentials)
+    }
+
     fn new(supervisor: Supervisor, credentials: Arc<CredentialVault>) -> Self {
         let generation = supervisor.handle().generation();
         Self {
@@ -89,14 +95,21 @@ impl ServerSync {
         self.supervisor.handle()
     }
 
+    /// The snapshot of the link that a frame reads: the state, the names that
+    /// wait for the server and the generation of the records. The worker of the
+    /// link publishes it, so a frame takes no lock that a write of a file holds.
+    pub(in crate::app) fn snapshot(&self) -> Arc<LinkSnapshot> {
+        self.supervisor.handle().snapshot()
+    }
+
     /// The state line of the sidebar now.
     pub(in crate::app) fn line(&self) -> ServerLine {
-        ServerLine::of(&self.supervisor.handle().state())
+        ServerLine::of(self.snapshot().state())
     }
 
     /// The stable code of the state, for the answer of `machines`.
     pub(in crate::app) fn state_code(&self) -> &'static str {
-        self.supervisor.handle().state().code()
+        self.snapshot().state().code()
     }
 
     /// The machine store of this link: the mirror of the server and the queue.
@@ -366,7 +379,7 @@ impl HorizonApp {
         let Some(sync) = self.server_sync.as_ref() else {
             return;
         };
-        let generation = sync.handle().generation();
+        let generation = sync.snapshot().generation();
         if generation == sync.generation || sync.reloading {
             return;
         }
@@ -403,9 +416,72 @@ impl HorizonApp {
 
 #[cfg(test)]
 mod tests {
-    use horizon_sync::LinkState;
+    use std::sync::Arc;
 
-    use super::ServerLine;
+    use egui::Context;
+    use horizon_sync::{LinkState, Supervisor, SupervisorConfig};
+
+    use super::{ServerLine, ServerSync};
+    use crate::app::test_support::{run_app_frame, test_app};
+
+    #[test]
+    fn a_frame_reads_the_link_from_the_snapshot_of_its_worker() {
+        // The frame path of the sidebar runs under the guard in strict mode: a
+        // read of the link that waited for the lock of a write would panic here.
+        horizon_core::ui_thread::use_strict_mode();
+        let (temp, mut app) = test_app();
+        let credentials = Arc::new(horizon_core::secret::CredentialVault::new(Box::new(
+            horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
+        )));
+        credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
+        let keys = horizon_core::MachineKeys::new(temp.path().join("keys"));
+        let secrets = super::SecretHandles {
+            target: test_secrets(keys),
+            credentials: Arc::clone(&credentials),
+            named: Arc::new(horizon_core::named_secrets::NamedSecretVault::new(Box::new(
+                horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
+            ))),
+        };
+        let mut config =
+            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", temp.path(), secrets.target)
+                .expect("the settings of the link");
+        // A stand-in child that ends at once, so the link is a link to an away
+        // server and the test starts no `ssh`.
+        config.program = "/bin/true".to_owned();
+        let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+
+        let ctx = Context::default();
+        // The frames of this test are the frames of the window after the start
+        // read the machine list, so the link of the test is the one they see.
+        app.machine_load_rx = None;
+        app.server_sync = Some(ServerSync::for_test(supervisor, credentials));
+        run_app_frame(&ctx, &mut app);
+        run_app_frame(&ctx, &mut app);
+
+        let sync = app.server_sync.as_ref().expect("the link of this window");
+        assert!(
+            matches!(sync.snapshot().state(), LinkState::Away { .. } | LinkState::Connecting),
+            "the snapshot says what the link did: {:?}",
+            sync.snapshot().state()
+        );
+        assert_eq!(
+            sync.line().text(),
+            ServerLine::of(sync.snapshot().state()).text(),
+            "the sidebar line is the snapshot of the link"
+        );
+    }
+
+    /// The secrets of a computer whose key folder holds no value.
+    fn test_secrets(keys: horizon_core::MachineKeys) -> Arc<dyn horizon_core::SecretTarget> {
+        let credentials = Arc::new(horizon_core::secret::CredentialVault::new(Box::new(
+            horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
+        )));
+        credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
+        let named = Arc::new(horizon_core::named_secrets::NamedSecretVault::new(Box::new(
+            horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
+        )));
+        Arc::new(horizon_core::secret::SecretVault::new(keys, credentials, named))
+    }
 
     #[test]
     fn the_line_of_a_server_that_does_not_answer_is_away_after_the_first_attempt() {

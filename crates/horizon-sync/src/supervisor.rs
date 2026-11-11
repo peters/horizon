@@ -52,8 +52,8 @@ use crate::frame::{read_frame, write_frame};
 use crate::intent::Op;
 use crate::protocol::Frame;
 use files::{
-    MIRROR_FILE, MIRROR_FORMAT, MirroredMachine, QUEUE_FILE, device_name, read_bindings, read_mirror, seed_records,
-    write_mirror,
+    MIRROR_FILE, MIRROR_FORMAT, MirrorFile, MirroredMachine, QUEUE_FILE, device_name, read_bindings, read_mirror,
+    seed_records, write_mirror,
 };
 use pull::{accept_hello, accept_pushed, apply_changes, merged_bindings, mirror_of, now_millis};
 use secrets::{fill_secrets, local_machine_keys};
@@ -190,6 +190,14 @@ impl SupervisorConfig {
 #[derive(Clone)]
 pub struct SyncHandle {
     inner: Arc<Mutex<SyncState>>,
+    /// The snapshot that a frame reads, behind a lock that no thread ever holds
+    /// during a file or a process.
+    view: Arc<Mutex<Arc<LinkSnapshot>>>,
+    /// The lines for the person about a secret of this computer that the server
+    /// decided differently. The frame takes them without the lock of the state.
+    notices: Arc<Mutex<Vec<String>>>,
+    /// The order of the writes of the queue and the mirror.
+    writes: Arc<Mutex<WriteOrder>>,
     kick: Sender<()>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
@@ -206,9 +214,92 @@ impl std::fmt::Debug for SyncHandle {
     }
 }
 
+/// What a frame of the window reads about the link: the state, the names that
+/// wait for the server, the records that only the server gave, the key names of
+/// this computer and the generation of the records.
+///
+/// The supervisor thread publishes this value, and a frame reads the one that
+/// stands now without taking the lock of the state. That lock covers the writes
+/// of the queue and the mirror, so a frame that took it would wait for a disk.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkSnapshot {
+    state: LinkState,
+    pending: BTreeSet<String>,
+    foreign: BTreeSet<String>,
+    machine_keys: BTreeSet<String>,
+    generation: u64,
+}
+
+impl LinkSnapshot {
+    /// The state of the link.
+    #[must_use]
+    pub fn state(&self) -> &LinkState {
+        &self.state
+    }
+
+    /// The names of the machines that have an intent the server did not decide.
+    #[must_use]
+    pub fn pending(&self) -> &BTreeSet<String> {
+        &self.pending
+    }
+
+    /// Whether this computer holds no key binding for `name` because the record
+    /// arrived from the server alone.
+    #[must_use]
+    pub fn is_foreign(&self, name: &str) -> bool {
+        self.foreign.contains(name)
+    }
+
+    /// Whether this computer holds a machine key with that name now.
+    #[must_use]
+    pub fn has_machine_key(&self, name: &str) -> bool {
+        self.machine_keys.contains(name)
+    }
+
+    /// The number of changes of the records, so a UI reads them again only when
+    /// one of them changed.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// What one drop of the lock of the state must write: the files of the change,
+/// built under the lock so their writes run after it.
+#[derive(Default)]
+struct Pending {
+    /// The queue file of this computer, encoded under the lock.
+    queue: Option<(PathBuf, Vec<u8>)>,
+    /// The mirror of the machine list, built under the lock.
+    mirror: Option<(PathBuf, MirrorFile)>,
+    /// The number of the write of the queue, so a write that a later change
+    /// replaced does not land.
+    queue_version: u64,
+    mirror_version: u64,
+}
+
+impl Pending {
+    /// Whether a file waits for its write.
+    const fn waits(&self) -> bool {
+        self.queue.is_some() || self.mirror.is_some()
+    }
+}
+
+/// The writes of the queue and the mirror, and the newest version of each one
+/// that reached the disk. It covers no read of the state, and a frame never
+/// takes it: the workers of the link write the files of the person.
+#[derive(Default)]
+struct WriteOrder {
+    next: u64,
+    written_queue: u64,
+    written_mirror: u64,
+}
+
 /// The state behind the handle.
-struct SyncState {
+pub(crate) struct SyncState {
     client: Client,
+    /// The queue file of this computer.
+    client_path: PathBuf,
     mirror_file: PathBuf,
     mirror: BTreeMap<String, MirroredMachine>,
     owned: BTreeSet<String>,
@@ -230,13 +321,57 @@ struct SyncState {
     view: BTreeMap<String, Machine>,
     /// The number of changes of the records, for a UI that reads them again.
     generation: u64,
-    /// The lines for the person about a secret of this computer that the server
-    /// decided differently.
-    notices: Vec<String>,
+    /// The mirror of the machine list does not hold the records of the state yet.
+    mirror_dirty: bool,
     /// The secrets that the server refused and whose value no answer of changes
     /// covered yet. The value of the server that follows decides whether the local
     /// value differs at all.
     refused_secrets: BTreeSet<String>,
+}
+
+impl SyncState {
+    /// What a frame reads about this state now.
+    fn snapshot(&self) -> LinkSnapshot {
+        let pending: BTreeSet<String> = self
+            .client
+            .pending()
+            .iter()
+            .map(|intent| intent.op.object_id().to_owned())
+            .collect();
+        let foreign = self
+            .mirror
+            .iter()
+            .filter(|(name, machine)| {
+                !machine.mine
+                    && !self.client.pending().iter().any(|intent| {
+                        intent.op.object_id() == name.as_str() && matches!(intent.op, Op::MachinePut { .. })
+                    })
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        LinkSnapshot {
+            state: self.client.state().clone(),
+            pending,
+            foreign,
+            machine_keys: self.machine_keys.clone(),
+            generation: self.generation,
+        }
+    }
+
+    /// The files that a change of this state writes, built under the lock so the
+    /// caller writes them after it drops the lock.
+    fn pending_writes(&mut self) -> Pending {
+        let queue = self
+            .client
+            .take_queue_write()
+            .map(|encoded| (self.client_path.clone(), encoded));
+        let mirror = std::mem::take(&mut self.mirror_dirty).then(|| (self.mirror_file.clone(), mirror_of(self)));
+        Pending {
+            queue,
+            mirror,
+            ..Pending::default()
+        }
+    }
 }
 
 impl SyncHandle {
@@ -246,7 +381,10 @@ impl SyncHandle {
     /// Returns why the device name breaks its rule, or why the queue or the
     /// mirror file cannot be read.
     fn open(config: &SupervisorConfig, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, SyncError> {
-        let client = Client::open(config.queue_file.clone(), &config.device)?;
+        let mut client = Client::open(config.queue_file.clone(), &config.device)?;
+        // The writes of the queue run after the lock of the state, so a frame
+        // that reads the link never waits for that disk.
+        client.defer_writes();
         let file = read_mirror(&config.mirror_file)?;
         let pending_seed = if file.seeded {
             None
@@ -269,6 +407,7 @@ impl SyncHandle {
         let handle = Self {
             inner: Arc::new(Mutex::new(SyncState {
                 client,
+                client_path: config.queue_file.clone(),
                 mirror_file: config.mirror_file.clone(),
                 mirror: file
                     .machines
@@ -287,45 +426,55 @@ impl SyncHandle {
                 seeded: file.seeded,
                 view: BTreeMap::new(),
                 generation: 0,
-                notices: Vec::new(),
+                mirror_dirty: true,
                 refused_secrets: BTreeSet::new(),
             })),
+            view: Arc::new(Mutex::new(Arc::new(LinkSnapshot::default()))),
+            notices: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(WriteOrder::default())),
             kick,
             wake,
         };
-        handle.save_mirror()?;
+        {
+            // The first mirror of this computer, and the snapshot that a frame
+            // reads until the first answer of the server.
+            let mut state = handle.lock();
+            state.mirror_dirty = true;
+        }
         Ok(handle)
+    }
+
+    /// The snapshot of the link that a frame reads: no file, no process and no
+    /// lock that a worker holds during either of them.
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<LinkSnapshot> {
+        Arc::clone(&self.view.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// The state of the link, for the sidebar and a tool answer.
     #[must_use]
     pub fn state(&self) -> LinkState {
-        self.lock().client.state().clone()
+        self.snapshot().state.clone()
     }
 
     /// The number of changes of the records, so a caller reads them again only
     /// when one of them changed.
     #[must_use]
     pub fn generation(&self) -> u64 {
-        self.lock().generation
+        self.snapshot().generation
     }
 
     /// The names of the machines that have an intent the server did not decide.
     #[must_use]
     pub fn pending(&self) -> BTreeSet<String> {
-        self.lock()
-            .client
-            .pending()
-            .iter()
-            .map(|intent| intent.op.object_id().to_owned())
-            .collect()
+        self.snapshot().pending.clone()
     }
 
     /// The machine keys that this computer holds now, by name, so the machine
     /// section knows whether a machine can connect here yet.
     #[must_use]
     pub fn has_machine_key(&self, name: &str) -> bool {
-        self.lock().machine_keys.contains(name)
+        self.snapshot().has_machine_key(name)
     }
 
     /// The version of the secret `id` that this computer saw, when it saw one.
@@ -339,7 +488,14 @@ impl SyncHandle {
     /// differently, oldest first.
     #[must_use]
     pub fn take_secret_notices(&self) -> Vec<String> {
-        std::mem::take(&mut self.lock().notices)
+        let mut notices = self.notices.lock().unwrap_or_else(PoisonError::into_inner);
+        std::mem::take(&mut *notices)
+    }
+
+    /// Adds one line for the person about a secret of this computer. The worker
+    /// of the secrets calls it, and no frame waits for the lock it takes.
+    pub(super) fn push_secret_notice(&self, line: String) {
+        self.notices.lock().unwrap_or_else(PoisonError::into_inner).push(line);
     }
 
     /// Queues the value of the secret `id` for the server. The value itself stays
@@ -409,8 +565,8 @@ impl SyncHandle {
         }
         if written {
             state.generation = state.generation.wrapping_add(1);
-            let file = mirror_of(&state);
-            write_mirror(&state.mirror_file, &file).map_err(|error| queue_error(&error))?;
+            // The drop of the lock writes the mirror and the queue.
+            state.mirror_dirty = true;
         }
         drop(state);
         self.notify();
@@ -428,13 +584,7 @@ impl SyncHandle {
     /// arrived from the server alone.
     #[must_use]
     pub fn is_foreign(&self, name: &str) -> bool {
-        let state = self.lock();
-        state.mirror.get(name).is_some_and(|machine| !machine.mine)
-            && !state
-                .client
-                .pending()
-                .iter()
-                .any(|intent| intent.op.object_id() == name && matches!(intent.op, Op::MachinePut { .. }))
+        self.snapshot().is_foreign(name)
     }
 
     /// The records of this computer as the person sees them: the mirror of the
@@ -493,8 +643,8 @@ impl SyncHandle {
             .collect();
         if written {
             state.generation = state.generation.wrapping_add(1);
-            let file = mirror_of(&state);
-            write_mirror(&state.mirror_file, &file).map_err(|error| queue_error(&error))?;
+            // The drop of the lock writes the mirror and the queue.
+            state.mirror_dirty = true;
         }
         drop(state);
         self.notify();
@@ -510,16 +660,95 @@ impl SyncHandle {
         (self.wake)();
     }
 
-    fn lock(&self) -> MutexGuard<'_, SyncState> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The state of the link, with the publish and the writes of its change on
+    /// the drop of the guard.
+    ///
+    /// A worker writes the queue and the mirror of this computer, so the drop
+    /// runs the file writes after it releases the lock: a frame that reads the
+    /// link waits for no disk.
+    #[track_caller]
+    fn lock(&self) -> SyncGuard<'_> {
+        ui_thread::blocking("the lock of the link state is taken");
+        SyncGuard {
+            handle: self,
+            state: Some(self.inner.lock().unwrap_or_else(PoisonError::into_inner)),
+        }
     }
 
-    /// Writes the mirror file of the state, with the records that it holds now.
-    fn save_mirror(&self) -> Result<(), SyncError> {
-        ui_thread::blocking("the mirror of the link is written and synced");
-        let state = self.lock();
-        let file = mirror_of(&state);
-        write_mirror(&state.mirror_file, &file)
+    /// The snapshot of `state`, in the place that a frame reads.
+    fn publish(&self, snapshot: LinkSnapshot) {
+        let mut view = self.view.lock().unwrap_or_else(PoisonError::into_inner);
+        *view = Arc::new(snapshot);
+    }
+}
+
+/// The lock of the state of one link, released on the drop of this value.
+pub(crate) struct SyncGuard<'a> {
+    handle: &'a SyncHandle,
+    state: Option<MutexGuard<'a, SyncState>>,
+}
+
+impl std::fmt::Debug for SyncGuard<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("SyncGuard").finish_non_exhaustive()
+    }
+}
+
+impl std::ops::Deref for SyncGuard<'_> {
+    type Target = SyncState;
+
+    fn deref(&self) -> &SyncState {
+        match self.state.as_deref() {
+            Some(state) => state,
+            None => unreachable!("a guard holds the state until its drop"),
+        }
+    }
+}
+
+impl std::ops::DerefMut for SyncGuard<'_> {
+    fn deref_mut(&mut self) -> &mut SyncState {
+        match self.state.as_deref_mut() {
+            Some(state) => state,
+            None => unreachable!("a guard holds the state until its drop"),
+        }
+    }
+}
+
+impl Drop for SyncGuard<'_> {
+    fn drop(&mut self) {
+        let Some(mut state) = self.state.take() else {
+            return;
+        };
+        // The snapshot and the bytes of the files are built under the lock.
+        self.handle.publish(state.snapshot());
+        let mut pending = state.pending_writes();
+        if pending.queue.is_some() || pending.mirror.is_some() {
+            let mut order = self.handle.writes.lock().unwrap_or_else(PoisonError::into_inner);
+            order.next = order.next.wrapping_add(1);
+            if pending.queue.is_some() {
+                pending.queue_version = order.next;
+            }
+            if pending.mirror.is_some() {
+                pending.mirror_version = order.next;
+            }
+        }
+        drop(state);
+        if !pending.waits() {
+            return;
+        }
+        let mut order = self.handle.writes.lock().unwrap_or_else(PoisonError::into_inner);
+        if let (Some((path, encoded)), true) = (pending.queue.take(), pending.queue_version > order.written_queue) {
+            order.written_queue = pending.queue_version;
+            if let Err(error) = horizon_core::AtomicFile::new(path).write(&encoded) {
+                tracing::warn!(%error, "the queue of the link was not written");
+            }
+        }
+        if let (Some((path, file)), true) = (pending.mirror.take(), pending.mirror_version > order.written_mirror) {
+            order.written_mirror = pending.mirror_version;
+            if let Err(error) = write_mirror(&path, &file) {
+                tracing::warn!(%error, "the mirror of the machine list was not written");
+            }
+        }
     }
 }
 
@@ -967,6 +1196,45 @@ mod tests {
             HELLO_BOUND >= REQUEST_BOUND,
             "the hello holds the connect of the SSH of the link"
         );
+    }
+
+    #[test]
+    fn a_secret_notice_of_the_link_is_shown_once() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let keys = horizon_core::MachineKeys::new(directory.path().join("keys"));
+        let secrets = keys_of_a_test(keys);
+        let mut config =
+            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", directory.path(), secrets)
+                .expect("the settings of the link");
+        config.program = "/bin/true".to_owned();
+        let handle = SyncHandle::open(&config, Arc::new(|| {})).expect("the handle of a link");
+
+        // The worker of the secrets keeps the line for the person, and the frame
+        // takes it once: a frame that ran twice shows one line, not two.
+        handle.push_secret_notice("the server kept its value of studio".to_owned());
+        handle.push_secret_notice("the server kept its value of shop".to_owned());
+        assert_eq!(handle.take_secret_notices().len(), 2);
+        assert!(
+            handle.take_secret_notices().is_empty(),
+            "a taken line is not shown twice"
+        );
+    }
+
+    /// The secrets of a computer whose key folder holds no value, for a handle
+    /// that a test reads without a link.
+    fn keys_of_a_test(keys: horizon_core::MachineKeys) -> Arc<dyn SecretTarget> {
+        use horizon_core::named_secrets::NamedSecretVault;
+        use horizon_core::secret::{CredentialVault, SecretVault};
+        use horizon_core::secret_store::SecretStore;
+
+        let credentials = Arc::new(CredentialVault::new(Box::new(
+            SecretStore::in_memory().expect("a store in memory"),
+        )));
+        credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
+        let named = Arc::new(NamedSecretVault::new(Box::new(
+            SecretStore::in_memory().expect("a store in memory"),
+        )));
+        Arc::new(SecretVault::new(keys, credentials, named))
     }
 
     #[test]

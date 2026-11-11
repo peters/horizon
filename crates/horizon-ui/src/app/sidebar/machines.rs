@@ -491,7 +491,10 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         pending.contains(machine.name.as_str()).hash(&mut hasher);
     }
     if let Some(sync) = app.server_sync.as_ref() {
-        let state = sync.handle().state();
+        // One snapshot of the link for the whole fingerprint: the worker of the
+        // link published it, and no read of it waits for a disk.
+        let link = sync.snapshot();
+        let state = link.state();
         state.code().hash(&mut hasher);
         state.pending().hash(&mut hasher);
     }

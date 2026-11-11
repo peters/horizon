@@ -293,7 +293,7 @@ impl HorizonApp {
     pub(in crate::app) fn pending_machines(&self) -> std::collections::BTreeSet<String> {
         self.server_sync
             .as_ref()
-            .map(|sync| sync.handle().pending())
+            .map(|sync| sync.snapshot().pending().clone())
             .unwrap_or_default()
     }
 

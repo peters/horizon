@@ -273,6 +273,11 @@ impl Computer {
         self.handle().pending()
     }
 
+    /// The snapshot that a frame of the window reads.
+    fn snapshot(&self) -> std::sync::Arc<horizon_sync::LinkSnapshot> {
+        self.handle().snapshot()
+    }
+
     fn state(&self) -> LinkState {
         self.handle().state()
     }
@@ -407,6 +412,59 @@ fn a_change_that_waits_for_an_away_server_is_pending_and_settles_when_it_returns
     server.restart();
     eventually("the change that settles on both computers", || {
         (a.pending().is_empty() && b.names().contains(&"build-2".to_string())).then_some(())
+    });
+    a.stop();
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn the_snapshot_of_a_link_follows_a_push_a_pull_an_away_server_and_a_returned_one() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    let mut b = Computer::start(&home.path().join("b"), &server.socket);
+    in_step(&a);
+    in_step(&b);
+    eventually("a snapshot in step with the server", || {
+        matches!(a.snapshot().state(), LinkState::InStep { .. }).then_some(())
+    });
+    let generation_before = a.snapshot().generation();
+
+    // A push of this computer: the snapshot shows the intent until the server
+    // decides it, and then it shows the record that the server answered.
+    a.add("build-1", "203.0.113.10");
+    eventually("the machine of the first computer in the list of the second", || {
+        b.names().contains(&"build-1".to_string()).then_some(())
+    });
+    eventually("the settled queue in the snapshot", || {
+        (a.snapshot().pending().is_empty() && a.snapshot().generation() > generation_before).then_some(())
+    });
+    assert!(
+        a.snapshot().has_machine_key("studio") == a.handle().has_machine_key("studio"),
+        "the key names of the snapshot are the names of this computer"
+    );
+
+    // The server goes: the snapshot says that it is away, and then how many
+    // changes wait for it.
+    server.stop();
+    eventually("a snapshot that says the server is away", || {
+        matches!(a.snapshot().state(), LinkState::Away { .. }).then_some(())
+    });
+    a.add("build-2", "203.0.113.11");
+    eventually("the name that waits in the snapshot", || {
+        a.snapshot().pending().contains("build-2").then_some(())
+    });
+    assert_eq!(
+        a.snapshot().state(),
+        &LinkState::Away { pending: 1 },
+        "the snapshot says how many changes wait"
+    );
+
+    // The server returns, and the snapshot settles without a frame of the window.
+    server.restart();
+    eventually("the snapshot that settles", || {
+        (a.snapshot().pending().is_empty() && matches!(a.snapshot().state(), LinkState::InStep { .. })).then_some(())
     });
     a.stop();
     b.stop();

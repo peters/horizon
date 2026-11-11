@@ -66,7 +66,7 @@ pub use protocol::{
 pub use server::{MAX_OPEN_WAITS, WAIT_BOUND, serve};
 pub use store::Store;
 pub use supervisor::{
-    LinkBounds, REQUEST_BOUND, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore, WAIT_ANSWER_BOUND,
-    WAIT_ANSWER_MARGIN,
+    LinkBounds, LinkSnapshot, REQUEST_BOUND, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore,
+    WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN,
 };
 pub use tip::tip;

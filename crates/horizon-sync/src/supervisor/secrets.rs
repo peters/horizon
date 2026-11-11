@@ -149,9 +149,8 @@ pub(super) fn write_secrets(handle: &SyncHandle, rows: &[SecretRow]) {
             }
         }
     }
-    if !notices.is_empty() {
-        let mut state = handle.lock();
-        state.notices.extend(notices);
+    for line in notices {
+        handle.push_secret_notice(line);
     }
 }
 

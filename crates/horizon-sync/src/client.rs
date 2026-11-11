@@ -27,9 +27,10 @@ use crate::store::{Changes, Row};
 use crate::tip::tip;
 
 /// The state of the link to the server, for the UI of a later slice.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum LinkState {
     /// This computer has no server.
+    #[default]
     Off,
     /// The link is open and the hello is in flight.
     Connecting,
@@ -170,6 +171,12 @@ pub struct PullOutcome {
 pub struct Client {
     file: PathBuf,
     state: ClientState,
+    /// Whether a change of the queue waits for a caller that writes it. The
+    /// handle of the supervisor of the link defers the write, so it runs after
+    /// the lock of the state and no frame of the window waits for that disk.
+    deferred: bool,
+    /// Whether the queue file does not hold `state` yet.
+    unsaved: bool,
     link: LinkState,
     /// Whether this link already started an attempt. The first attempt of a link
     /// says that it connects; an attempt after one that failed keeps the state
@@ -212,6 +219,8 @@ impl Client {
         Ok(Self {
             file: path,
             state,
+            deferred: false,
+            unsaved: false,
             link: LinkState::Off,
             attempted: false,
             replay: None,
@@ -652,8 +661,29 @@ impl Client {
         })
     }
 
-    fn save(&self) -> Result<(), SyncError> {
+    fn save(&mut self) -> Result<(), SyncError> {
+        if self.deferred {
+            self.unsaved = true;
+            return Ok(());
+        }
         write_state(&self.file, &self.state)
+    }
+
+    /// Defers the writes of the queue file to a caller that holds the lock of the
+    /// state: it takes them with [`Self::take_queue_write`] and writes them after
+    /// it drops that lock.
+    pub(crate) fn defer_writes(&mut self) {
+        self.deferred = true;
+    }
+
+    /// The bytes of the queue file as this client stands now, for a caller that
+    /// writes them after it drops the lock of the state. It takes the change, so
+    /// a later call answers nothing.
+    pub(crate) fn take_queue_write(&mut self) -> Option<Vec<u8>> {
+        if !std::mem::take(&mut self.unsaved) {
+            return None;
+        }
+        serde_json::to_vec_pretty(&self.state).ok()
     }
 }
 

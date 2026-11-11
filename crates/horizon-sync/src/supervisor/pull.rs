@@ -11,7 +11,7 @@ use horizon_core::Machine;
 use horizon_core::secret::SecretId;
 
 use super::SyncHandle;
-use super::files::{MirrorFile, MirroredMachine, write_mirror};
+use super::files::{MirrorFile, MirroredMachine};
 use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
 use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState};
@@ -72,10 +72,8 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     handle.refresh_machine_keys();
     let mut state = handle.lock();
     state.generation = state.generation.wrapping_add(1);
-    let file = mirror_of(&state);
-    if let Err(error) = write_mirror(&state.mirror_file, &file) {
-        tracing::warn!(%error, "the mirror of the machine list was not written");
-    }
+    // The drop of the lock writes the mirror and the queue.
+    state.mirror_dirty = true;
     drop(state);
     (handle.wake)();
 }
@@ -100,8 +98,8 @@ pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: 
     state.client.accept_mark(changes.index)?;
     state.machine_keys = local_machine_keys(&state.secrets);
     state.generation = state.generation.wrapping_add(1);
-    let file = mirror_of(&state);
-    write_mirror(&state.mirror_file, &file)?;
+    // The drop of the lock writes the mirror and the queue.
+    state.mirror_dirty = true;
     drop(state);
     tracing::debug!(
         index = applied.index,
