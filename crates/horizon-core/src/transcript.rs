@@ -88,6 +88,7 @@ impl PanelTranscript {
     ///
     /// Returns an error if the transcript files cannot be read or compacted.
     pub fn prepare_replay_bytes(&self) -> Result<Vec<u8>> {
+        crate::ui_thread::blocking("the replay of a transcript is read and compacted");
         fs::create_dir_all(&self.root)?;
         self.finalize_live_session()?;
         let mut bytes = read_tail(&self.history_path(), TRANSCRIPT_MAX_BYTES)?;
@@ -292,6 +293,7 @@ fn script_program_candidates(path_env: Option<&OsStr>) -> Vec<PathBuf> {
 }
 
 fn probe_script_support(script_program: &Path, flavor: ScriptFlavor) -> std::result::Result<(), String> {
+    crate::ui_thread::blocking("the `script` probe starts a process and waits for it");
     let session_path = probe_session_path();
     let (_, args) = match flavor {
         ScriptFlavor::Bsd => build_bsd_script_command(

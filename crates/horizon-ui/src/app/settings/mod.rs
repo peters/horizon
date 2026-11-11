@@ -191,6 +191,8 @@ impl HorizonApp {
     }
 
     fn close_settings(&mut self) {
+        // The next open reads the hosts of the ssh config again.
+        self.settings_hosts_refreshed = false;
         if let Some(mut editor) = self.settings.take() {
             editor.secret_inputs.scrub();
             self.apply_live_preview(&editor.original);
@@ -325,7 +327,7 @@ impl HorizonApp {
         self.shortcuts = resolve_shortcuts(config);
         self.action_commands_cache =
             crate::command_registry::action_commands(&self.shortcuts, util::primary_shortcut_label());
-        self.presets = config.resolved_presets();
+        self.presets = config.ssh_presets(self.ssh_hosts.hosts());
         if self.appearance_theme != config.appearance.theme {
             self.appearance_theme = config.appearance.theme;
             self.theme_applied = false;

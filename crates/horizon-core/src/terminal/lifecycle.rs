@@ -29,6 +29,10 @@ impl Terminal {
     }
 
     fn spawn_guarded(options: TerminalSpawnOptions, trust: TerminalSshTrust, output: PtyOutput) -> Result<Self> {
+        // A terminal panel is a process, so its start is the one process that a
+        // frame owns: the fork and the exec are the panel that the person asked
+        // for, and no frame can exist without them.
+        let _accepted = crate::ui_thread::exception("terminal spawn: a terminal panel is a process");
         let rows = options.rows.max(1);
         let cols = options.cols.max(2);
         let scrollback_limit = options.scrollback_limit.max(1);

@@ -187,6 +187,7 @@ impl MachineKeys {
     /// Refuses a name that breaks the rule, a home that already holds `limit`
     /// keys, a pair with only one half, and a missing or failing `ssh-keygen`.
     pub fn ensure(&self, name: &str, limit: usize) -> Result<MachineKey, MachineKeyError> {
+        crate::ui_thread::blocking("a machine key is made in the key folder");
         let name = block_keys::check_name(name)?;
         let binding = self.binding(name);
         let (private, public) = (binding.private_key(), binding.public_key());
@@ -214,6 +215,7 @@ impl MachineKeys {
     /// # Errors
     /// Returns why the key directory cannot be read.
     pub fn list(&self) -> Result<Vec<MachineKey>, MachineKeyError> {
+        crate::ui_thread::blocking("the key folder of this computer is read");
         let directory = self.key_directory();
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
@@ -251,6 +253,7 @@ impl MachineKeys {
     /// Refuses a name that breaks the rule, and a key that this Horizon home
     /// does not hold.
     pub fn require(&self, name: &str) -> Result<MachineKeyRef, MachineKeyError> {
+        crate::ui_thread::blocking("a machine key is read from the key folder");
         let name = block_keys::check_name(name)?;
         let binding = self.binding(name);
         if !binding.private_key().is_file() {
@@ -268,6 +271,7 @@ impl MachineKeys {
     /// Refuses a name that breaks the rule, and returns why a file cannot be
     /// read.
     pub fn files(&self, name: &str) -> Result<Option<MachineKeyFiles>, MachineKeyError> {
+        crate::ui_thread::blocking("the files of a machine key are read");
         let name = block_keys::check_name(name)?;
         let binding = self.binding(name);
         let private = binding.private_key();
@@ -295,6 +299,7 @@ impl MachineKeys {
     /// Refuses a name that breaks the rule, and returns why the directory or a
     /// file cannot be written.
     pub fn write_files(&self, name: &str, files: &MachineKeyFiles) -> Result<(), MachineKeyError> {
+        crate::ui_thread::blocking("the files of a machine key are written");
         let name = block_keys::check_name(name)?;
         self.write_family(name, files)
     }
@@ -315,6 +320,7 @@ impl MachineKeys {
         files: &MachineKeyFiles,
         at_millis: u64,
     ) -> Result<String, MachineKeyError> {
+        crate::ui_thread::blocking("a machine key that lost the version rule is kept");
         let name = block_keys::check_name(name)?;
         let conflict = format!("{name}.conflict-{at_millis}");
         self.write_family(&conflict, files)?;
@@ -348,6 +354,7 @@ impl MachineKeys {
     /// Refuses a name that breaks the rule, a key that is not there, and a file
     /// that Horizon cannot remove.
     pub fn delete(&self, name: &str) -> Result<(), MachineKeyError> {
+        crate::ui_thread::blocking("a machine key is removed from the key folder");
         let name = block_keys::check_name(name)?;
         let directory = self.key_directory();
         let paths = [
@@ -453,6 +460,7 @@ fn private_directory(directory: &Path) -> Result<(), MachineKeyError> {
 
 /// Make an ed25519 pair with no passphrase, as Horizon's own key.
 fn make_key_pair(private: &Path, public: &Path, name: &str) -> Result<(), MachineKeyError> {
+    crate::ui_thread::blocking("ssh-keygen makes a machine key");
     let output = Command::new("ssh-keygen")
         .args([
             "-q",

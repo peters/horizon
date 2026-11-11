@@ -161,12 +161,20 @@ fn working_directory_failure(id: PanelId, opts: &PanelOptions) -> Option<super::
     Some(failure)
 }
 
+/// Accepts the reads that the restore of a panel still does on the frame: the
+/// replay of its transcript, its working directory, the probe of `script` and the
+/// saved work of its agent. Part 2 moves them to the coordination worker.
+fn restoring_on_the_frame() -> crate::ui_thread::ExceptionScope {
+    crate::ui_thread::exception("part 2: F4 a panel reads its transcript and its directory on the frame")
+}
+
 pub(super) fn spawn_terminal(
     id: PanelId,
     workspace_id: WorkspaceId,
     local_id: String,
     opts: PanelOptions,
 ) -> Result<Panel> {
+    let _restoring = restoring_on_the_frame();
     if let Some(failure) = working_directory_failure(id, &opts) {
         return placeholder_panel(id, workspace_id, opts, Placeholder::for_working_directory(&failure));
     }

@@ -10,6 +10,7 @@ use horizon_core::{
     AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, RemoteHostCatalog, SessionStore, StartupDecision,
 };
 
+use super::ssh_hosts::SshHostsRead;
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
     StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, sidebar::machines::NoticeClock, util,
@@ -63,6 +64,9 @@ impl HorizonApp {
         startup: StartupDecision,
         observed_keyboard_inputs: input::ObservedKeyboardInputs,
     ) -> Self {
+        // The window exists: everything below this line runs on the UI thread of
+        // the frame that the window draws.
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
         let shortcuts = resolve_shortcuts(config);
         let action_commands_cache = command_registry::action_commands(&shortcuts, util::primary_shortcut_label());
         pin_chrome_to_native_display_scale(egui_ctx);
@@ -166,8 +170,8 @@ impl HorizonApp {
             config_path, transcript_root: None,
             template_config: config.clone(),
             shortcuts,
-            presets: config.resolved_presets(),
-            window_config: config.window.clone(),
+            presets: config.ssh_presets(&[]), ssh_hosts: SshHostsRead::default(),
+            settings_hosts_refreshed: false, window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
             pending_detached_reattach: BTreeSet::new(),
             pending_detached_window_position_restore: BTreeSet::new(),

@@ -134,6 +134,9 @@ impl HorizonApp {
             return;
         }
 
+        // The window closes: the waits of this path have their own bounds, and
+        // the person reads the closing overlay until they end.
+        let _closing = horizon_core::ui_thread::exception("exit cleanup: the window closes");
         self.wait_for_saved_session_deletion();
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();

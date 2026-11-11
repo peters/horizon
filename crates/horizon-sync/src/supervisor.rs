@@ -43,6 +43,7 @@ use horizon_browser_control::ssh_forward::ssh_command;
 use horizon_core::SecretTarget;
 use horizon_core::machines::{LoadedMachines, MachineBindings, MachineStore};
 use horizon_core::secret::{SecretId, SecretKind};
+use horizon_core::ui_thread;
 use horizon_core::{Machine, MachineError};
 
 use crate::client::{Client, LinkState};
@@ -347,6 +348,7 @@ impl SyncHandle {
     /// # Errors
     /// Returns why the queue file cannot be written.
     pub fn queue_secret(&self, id: &SecretId) -> Result<(), MachineError> {
+        ui_thread::blocking("the queue of the link is written and synced");
         let mut state = self.lock();
         state
             .client
@@ -363,6 +365,7 @@ impl SyncHandle {
     /// # Errors
     /// Returns why the queue file cannot be written.
     pub fn queue_secret_remove(&self, id: &SecretId) -> Result<(), MachineError> {
+        ui_thread::blocking("the queue of the link is written and synced");
         let mut state = self.lock();
         state
             .client
@@ -381,6 +384,7 @@ impl SyncHandle {
     /// # Errors
     /// Returns why the queue file or the mirror cannot be written.
     pub fn save_bindings(&self, bindings: &MachineBindings) -> Result<(), MachineError> {
+        ui_thread::blocking("the queue and the mirror of the link are written and synced");
         let mut state = self.lock();
         let next = bindings.names().clone();
         let previous = merged_bindings(&state);
@@ -457,6 +461,7 @@ impl SyncHandle {
     /// # Errors
     /// Returns why the queue file cannot be written.
     pub fn save(&self, records: &[Machine]) -> Result<(), MachineError> {
+        ui_thread::blocking("the queue and the mirror of the link are written and synced");
         let mut state = self.lock();
         let previous = state.view.clone();
         let next: BTreeMap<&str, &Machine> = records.iter().map(|machine| (machine.name.as_str(), machine)).collect();
@@ -511,6 +516,7 @@ impl SyncHandle {
 
     /// Writes the mirror file of the state, with the records that it holds now.
     fn save_mirror(&self) -> Result<(), SyncError> {
+        ui_thread::blocking("the mirror of the link is written and synced");
         let state = self.lock();
         let file = mirror_of(&state);
         write_mirror(&state.mirror_file, &file)

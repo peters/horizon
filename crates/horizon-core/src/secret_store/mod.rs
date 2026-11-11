@@ -147,6 +147,7 @@ impl SecretStore {
     /// Returns the path and the reason when the folder or the file cannot be
     /// made, made private, read or written.
     pub fn open(path: PathBuf) -> Result<Arc<Self>, RemoteCredentialError> {
+        crate::ui_thread::blocking("the secrets file is opened");
         let key = file_key(&path);
         let slot = slot_of(&key);
         let mut held = slot.store.lock().unwrap_or_else(PoisonError::into_inner);
@@ -198,6 +199,7 @@ impl SecretStore {
     /// # Errors
     /// Returns the path and the reason when the row cannot be read.
     pub fn read(&self, id: &str) -> Result<Option<Zeroizing<Vec<u8>>>, RemoteCredentialError> {
+        crate::ui_thread::blocking("a secret value is read");
         let connection = self.lock();
         let stored: Option<Vec<u8>> = connection
             .query_row("SELECT body FROM secrets WHERE id = ?1", params![id], |row| row.get(0))
@@ -211,6 +213,7 @@ impl SecretStore {
     /// # Errors
     /// Returns the path and the reason when the row cannot be written.
     pub fn write(&self, id: &str, body: &[u8]) -> Result<(), RemoteCredentialError> {
+        crate::ui_thread::blocking("a secret value is written");
         let connection = self.lock();
         connection
             .execute(
@@ -228,6 +231,7 @@ impl SecretStore {
     /// # Errors
     /// Returns the path and the reason when the row cannot be removed.
     pub fn remove(&self, id: &str) -> Result<(), RemoteCredentialError> {
+        crate::ui_thread::blocking("a secret value is removed");
         let connection = self.lock();
         connection
             .execute("DELETE FROM secrets WHERE id = ?1", params![id])
@@ -240,6 +244,7 @@ impl SecretStore {
     /// # Errors
     /// Returns the path and the reason when the row cannot be read.
     pub fn exists(&self, id: &str) -> Result<bool, RemoteCredentialError> {
+        crate::ui_thread::blocking("a secret value is looked for");
         let connection = self.lock();
         let found: Option<i64> = connection
             .query_row("SELECT 1 FROM secrets WHERE id = ?1", params![id], |row| row.get(0))
@@ -253,6 +258,7 @@ impl SecretStore {
     /// # Errors
     /// Returns the path and the reason when the rows cannot be read.
     pub fn ids(&self) -> Result<Vec<String>, RemoteCredentialError> {
+        crate::ui_thread::blocking("the ids of the secrets are read");
         let connection = self.lock();
         let mut statement = connection
             .prepare("SELECT id FROM secrets ORDER BY id")

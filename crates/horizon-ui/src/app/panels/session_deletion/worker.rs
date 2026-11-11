@@ -28,6 +28,11 @@ impl SavedSessionDeletionState {
 
 impl HorizonApp {
     pub(in crate::app) fn restore_saved_session_deletion_notice(&mut self) {
+        // The read of the notices of this profile is the second half of F8: the
+        // notices move to the session writer with the lease, in the change that
+        // takes the frame off the session store.
+        let _accepted =
+            horizon_core::ui_thread::exception("part 2: F8 the notice of a saved conversation is read on the frame");
         match self.session_store.saved_session_deletion_notice() {
             Ok(notice) => {
                 self.saved_session_deletion.persisted_notice = notice;

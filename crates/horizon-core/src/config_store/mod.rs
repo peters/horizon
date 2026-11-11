@@ -96,6 +96,7 @@ impl ConfigStore {
     /// has no settings, because that would replace the settings of a person with
     /// defaults.
     pub fn load(&self) -> Result<Option<StoredSettings>> {
+        crate::ui_thread::blocking("the settings store is read");
         self.open().map_err(|fault| self.fault_error(&fault))
     }
 
@@ -108,6 +109,7 @@ impl ConfigStore {
     /// build can read, and [`StoreFault::OtherVersion`] when another Horizon
     /// version wrote it.
     pub fn open(&self) -> std::result::Result<Option<StoredSettings>, StoreFault> {
+        crate::ui_thread::blocking("the settings store is read");
         if !self.path.is_file() {
             return Ok(None);
         }
@@ -122,6 +124,7 @@ impl ConfigStore {
     ///
     /// Returns an error when the file cannot be moved.
     pub fn move_damaged_aside(&self) -> Result<PathBuf> {
+        crate::ui_thread::blocking("a damaged settings store is renamed");
         let name = self
             .path
             .file_name()
@@ -154,6 +157,7 @@ impl ConfigStore {
     /// Returns an error when the store cannot be written or a section cannot be
     /// encoded.
     pub fn save(&self, config: &Config) -> Result<()> {
+        crate::ui_thread::blocking("the settings store is committed");
         let rows = sections::encode(config)?;
         let mut connection = self.open_for_write()?;
         let transaction = connection

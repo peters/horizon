@@ -566,14 +566,29 @@ impl Config {
         Ok(())
     }
 
+    /// The presets of this configuration with the hosts of `~/.ssh/config` that
+    /// a worker read. The read itself is the caller's: a frame of the window
+    /// passes the hosts that its worker keeps, so no frame reads the file.
+    #[must_use]
+    pub fn ssh_presets(&self, discovered_hosts: &[DiscoveredSshHost]) -> Vec<PresetConfig> {
+        let mut presets = self.presets.clone();
+        merge_discovered_ssh_presets(&mut presets, discovered_hosts.to_vec());
+        presets
+    }
+
+    /// The presets of this configuration with the hosts of `~/.ssh/config`.
+    ///
+    /// This reads the file, so a caller on the UI thread uses
+    /// [`Self::ssh_presets`] with the hosts of a worker instead.
     #[must_use]
     pub fn resolved_presets(&self) -> Vec<PresetConfig> {
-        let mut presets = self.presets.clone();
         match discover_ssh_hosts(None) {
-            Ok(discovered_hosts) => merge_discovered_ssh_presets(&mut presets, discovered_hosts),
-            Err(error) => tracing::warn!(%error, "failed to discover ssh presets"),
+            Ok(discovered_hosts) => self.ssh_presets(&discovered_hosts),
+            Err(error) => {
+                tracing::warn!(%error, "failed to discover ssh presets");
+                self.ssh_presets(&[])
+            }
         }
-        presets
     }
 }
 

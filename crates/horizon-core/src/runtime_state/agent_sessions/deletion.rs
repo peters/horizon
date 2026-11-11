@@ -258,6 +258,7 @@ fn verify_claude_session_inactive(home: &Path, session: &AgentSessionBinding) ->
 }
 
 fn delete_codex_session(session_id: &str) -> Result<()> {
+    crate::ui_thread::blocking("the delete of a Codex conversation runs and is awaited");
     let stderr = tempfile::tempfile()?;
     let mut child = Command::new("codex")
         .args(["delete", "--force", session_id])

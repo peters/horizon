@@ -334,6 +334,7 @@ impl SessionKill {
 
     /// Start the kill and wait for its end, at most `limit`.
     fn spawn_and_wait(&self, limit: Duration) -> std::io::Result<ExitStatus> {
+        crate::ui_thread::blocking("the kill of a session runs and is awaited");
         let mut child = Command::new(&self.program)
             .args(&self.args)
             .stdin(Stdio::null())

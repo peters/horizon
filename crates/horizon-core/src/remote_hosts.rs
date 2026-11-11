@@ -300,6 +300,7 @@ struct TailscaleNode {
 }
 
 fn discover_tailscale_nodes() -> Result<Vec<TailscaleNode>> {
+    crate::ui_thread::blocking("`tailscale status` runs for the host catalog");
     let output = match Command::new("tailscale").args(["status", "--json"]).output() {
         Ok(output) => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),

@@ -148,6 +148,7 @@ pub fn run(
     environment: &ProgramEnvironment,
     bound: Duration,
 ) -> Result<ProgramOutput, ProgramFailure> {
+    crate::ui_thread::blocking("a program of the keyring runs and is awaited");
     let mut command = Command::new(program);
     command
         .args(args)

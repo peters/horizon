@@ -55,6 +55,7 @@ impl MarkdownEditor {
     ///
     /// Returns an error when the editor has no file path or the file write fails.
     pub fn save(&mut self) -> Result<()> {
+        crate::ui_thread::blocking("an editor panel writes its file");
         if let Some(path) = &self.file_path {
             std::fs::write(path, &self.text)?;
             self.dirty = false;
@@ -66,6 +67,7 @@ impl MarkdownEditor {
 
     /// Save only if dirty and a file path is set. Silently succeeds otherwise.
     pub fn save_if_dirty(&mut self) {
+        crate::ui_thread::blocking("an editor panel writes its file");
         if self.dirty
             && self.file_path.is_some()
             && let Err(e) = self.save()

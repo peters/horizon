@@ -98,6 +98,7 @@ impl DeviceRequestBridge {
     /// calls it until no claim or answer is outstanding. Returns whether a
     /// request applied.
     pub(crate) fn poll_on_ui_thread(&self) -> bool {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
         let mut installed = lock(&self.installed);
         let Some(installed) = installed.as_mut() else {
             return false;
@@ -220,6 +221,7 @@ impl BridgeApp {
 
 impl eframe::App for BridgeApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
         let mut installed = lock(&self.bridge.installed);
         if let Some(installed) = installed.as_mut() {
             eframe::App::ui(&mut installed.app, ui, frame);
@@ -238,6 +240,7 @@ impl eframe::App for BridgeApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
         let mut installed = lock(&self.bridge.installed);
         if let Some(installed) = installed.as_mut() {
             eframe::App::raw_input_hook(&mut installed.app, ctx, raw_input);
@@ -245,6 +248,7 @@ impl eframe::App for BridgeApp {
     }
 
     fn on_exit(&mut self) {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
         // `HorizonApp::on_exit` ends the process, which skips this bridge's
         // destructor. Stop the watcher first so it is not killed mid-claim.
         self.bridge.stop_watcher();

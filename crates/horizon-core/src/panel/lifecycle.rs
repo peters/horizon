@@ -38,6 +38,10 @@ impl Panel {
     /// also refuses stale authorization, unverifiable saved history or launch
     /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
+        // The restart resolves the working directory, the saved work of an agent
+        // and the key of its machine on this frame. Part 2 moves that pre-flight
+        // to the coordination worker.
+        let _restarting = crate::ui_thread::exception("part 2: F5 a restart reads the saved work of its panel");
         if let PanelContent::Browser(browser) = &mut self.content {
             browser.relaunch();
             return Ok(());

@@ -55,6 +55,7 @@ impl AtomicFile {
     /// # Errors
     /// Returns why the directory or the document cannot be written.
     pub fn write(&self, encoded: &[u8]) -> io::Result<()> {
+        crate::ui_thread::blocking("a private file is replaced and synced");
         let directory = self.path.parent().unwrap_or_else(|| Path::new("."));
         private_directory(directory)?;
         let temporary = self.path.with_extension("json.tmp");

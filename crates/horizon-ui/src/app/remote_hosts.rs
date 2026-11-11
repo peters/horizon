@@ -115,12 +115,15 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn poll_remote_hosts_refresh(&mut self) {
+    pub(super) fn poll_remote_hosts_refresh(&mut self, ctx: &egui::Context) {
         self.poll_inflight_refresh();
 
         // Auto-refresh while the overlay is open.
         if self.remote_hosts_overlay.is_some() {
             self.maybe_start_remote_hosts_refresh();
+            // The overlay names the same aliases as a preset, so a refresh of it
+            // reads the hosts of the ssh config again, on the same worker.
+            self.refresh_ssh_hosts(ctx);
         }
     }
 

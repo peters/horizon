@@ -13,6 +13,7 @@ impl SessionStore {
     /// Returns an error if the lease directory cannot be created or if the
     /// lease file cannot be serialized and written.
     pub fn acquire_lease(&self, session_id: &str) -> Result<SessionLease> {
+        crate::ui_thread::blocking("the lease of a session is written");
         let lease_path = self.home.session_lease_path(session_id);
         if let Some(parent) = lease_path.parent() {
             fs::create_dir_all(parent)?;
@@ -30,6 +31,7 @@ impl SessionStore {
     ///
     /// Returns an error if the refreshed lease cannot be serialized or written.
     pub fn refresh_lease(&self, lease: &mut SessionLease) -> Result<()> {
+        crate::ui_thread::blocking("the lease of a session is written");
         lease.last_heartbeat_at = current_unix_millis();
         let json = serde_json::to_vec_pretty(lease).map_err(|error| Error::State(error.to_string()))?;
         atomic_write(&self.home.session_lease_path(&lease.session_id), &json)?;
@@ -42,6 +44,7 @@ impl SessionStore {
     ///
     /// Returns an error if the lease file exists but cannot be removed.
     pub fn release_lease(&self, session_id: &str) -> Result<()> {
+        crate::ui_thread::blocking("the lease of a session is removed");
         let path = self.home.session_lease_path(session_id);
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
@@ -51,6 +54,7 @@ impl SessionStore {
     }
 
     pub(super) fn load_session_lease(&self, session_id: &str) -> Result<Option<SessionLease>> {
+        crate::ui_thread::blocking("the lease of a session is read");
         let path = self.home.session_lease_path(session_id);
         if !path.exists() {
             return Ok(None);

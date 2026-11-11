@@ -17,6 +17,7 @@ pub struct DiscoveredSshHost {
 ///
 /// Returns an error if the SSH config file exists but cannot be read.
 pub fn discover_ssh_hosts(home_dir: Option<&Path>) -> Result<Vec<DiscoveredSshHost>> {
+    crate::ui_thread::blocking("the ssh config of the person is read");
     let Some(config_path) = ssh_config_path(home_dir) else {
         return Ok(Vec::new());
     };

@@ -58,6 +58,7 @@ impl SessionStore {
     /// # Errors
     /// Returns an error if an existing notice cannot be read.
     pub fn saved_session_deletion_notice(&self) -> Result<Option<String>> {
+        crate::ui_thread::blocking("the saved conversation notices are read");
         let notices = self.deletion_notices()?;
         Ok((!notices.is_empty()).then(|| {
             notices
@@ -97,6 +98,7 @@ impl SessionStore {
     /// Returns an error if the notice cannot be durably saved or its identity
     /// already belongs to different contents.
     pub fn save_session_deletion_notice(&self, notice: &SessionDeletionNotice) -> Result<()> {
+        crate::ui_thread::blocking("a conversation notice is written and every folder is synced");
         self.save_deletion_notice_with_sync(notice, || self.sync_deletion_notice_directories())
     }
 
@@ -137,6 +139,7 @@ impl SessionStore {
     /// # Errors
     /// Returns an error if another notice replaced it or removal fails.
     pub fn acknowledge_session_deletion_notice(&self, expected: &str) -> Result<()> {
+        crate::ui_thread::blocking("an acknowledged conversation notice is removed and synced");
         self.acknowledge_deletion_notice_with_sync(expected, || self.sync_deletion_notice_directories())
     }
 

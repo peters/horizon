@@ -164,6 +164,7 @@ fn deepest_child_pid(mut pid: u32) -> Option<u32> {
 
 #[cfg(target_os = "macos")]
 fn lsof_cwd_for_pid(pid: u32) -> Option<PathBuf> {
+    crate::ui_thread::blocking("`lsof` runs for the working directory of a panel");
     let output = std::process::Command::new("lsof")
         .args(["-a", "-d", "cwd", "-p", &pid.to_string(), "-Fn"])
         .output()
@@ -194,6 +195,7 @@ fn parse_lsof_cwd(output: &str) -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn direct_child_pid(pid: u32) -> Option<u32> {
+    crate::ui_thread::blocking("`pgrep` runs for the child of a panel");
     let output = std::process::Command::new("pgrep")
         .args(["-P", &pid.to_string()])
         .output()
@@ -239,6 +241,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 ///
 /// Returns the process spawn error when the platform handler cannot start.
 pub fn open_url(url: &str) -> std::io::Result<()> {
+    crate::ui_thread::blocking("a URL opens in a program of the desktop");
     let (program, args) = url_opener_invocation(url);
     std::process::Command::new(program)
         .args(args)

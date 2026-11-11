@@ -154,6 +154,7 @@ pub(in crate::panel) struct UnusableWorkingDirectory {
 pub(in crate::panel) fn usable_working_directory(
     cwd: Option<&Path>,
 ) -> std::result::Result<(), UnusableWorkingDirectory> {
+    crate::ui_thread::blocking("the working directory of a panel is resolved");
     let Some(path) = cwd.filter(|path| !path.as_os_str().is_empty()) else {
         return Ok(());
     };

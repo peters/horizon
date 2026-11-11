@@ -64,6 +64,7 @@ mod settings_io;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
+mod ssh_hosts;
 mod ssh_upload;
 mod startup_session;
 #[cfg(test)]
@@ -324,7 +325,13 @@ pub struct HorizonApp {
     transcript_root: Option<PathBuf>,
     template_config: Config,
     shortcuts: AppShortcuts,
+    /// The presets of the window: the settings, with the hosts of the ssh config
+    /// that the worker of [`ssh_hosts`] read.
     presets: Vec<PresetConfig>,
+    /// The hosts of the ssh config of this computer, read on a worker.
+    ssh_hosts: ssh_hosts::SshHostsRead,
+    /// Whether the open Settings window asked for its one read of the hosts.
+    settings_hosts_refreshed: bool,
     window_config: WindowConfig,
     detached_workspaces: BTreeMap<String, DetachedWorkspaceViewportState>,
     pending_detached_reattach: BTreeSet<String>,
@@ -434,6 +441,7 @@ impl HorizonApp {
         self.apply_settings_io(ctx);
         self.poll_machine_load();
         self.poll_server_sync();
+        self.poll_ssh_hosts(ctx);
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);

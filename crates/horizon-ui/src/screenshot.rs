@@ -69,6 +69,7 @@ impl PrivatePngStore {
     /// Encode `image` into a new PNG and keep the file until the process exits
     /// or the store holds more than its capacity.
     pub(crate) fn write(&self, image: &ColorImage, file_prefix: &str) -> Result<PathBuf, String> {
+        horizon_core::ui_thread::blocking("a PNG of a panel is encoded and written");
         let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if files.directory.is_none() {
             files.directory = Some(private_directory(self.directory_prefix)?);
@@ -160,6 +161,7 @@ impl Screenshots {
         image: ColorImage,
         copy_to_clipboard: bool,
     ) -> Result<Screenshot, String> {
+        horizon_core::ui_thread::blocking("a screenshot of a panel is exported");
         let (width, height) = validate(&image)?;
         let files = self
             .files
