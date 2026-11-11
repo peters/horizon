@@ -400,7 +400,7 @@ impl SessionStore {
         if let Some(parent) = runtime_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        self.keep_the_board_before_this_build(session_id, &runtime_path)?;
+        self.keep_the_board_before_this_build(session_id, &runtime_path);
         let runtime_yaml = runtime_state.to_yaml()?;
         write(&runtime_path, runtime_yaml.as_bytes())?;
         self.index_runtime_state(session_id, runtime_state, &runtime_yaml);
@@ -422,7 +422,7 @@ impl SessionStore {
     /// when it came from an older build or lost the panels of a removed kind. The
     /// copy is made in the write that the caller already does, and never again: the
     /// file next to the board is for the person who goes back to the older build.
-    fn keep_the_board_before_this_build(&self, session_id: &str, runtime_path: &Path) -> Result<()> {
+    fn keep_the_board_before_this_build(&self, session_id: &str, runtime_path: &Path) {
         let waits_for_a_copy = {
             let mut waiting = self
                 .boards_of_older_builds
@@ -431,19 +431,28 @@ impl SessionStore {
             waiting.remove(session_id)
         };
         if !waits_for_a_copy || !runtime_path.is_file() {
-            return Ok(());
+            return;
         }
         let before = self.home.session_runtime_before_path(session_id, RUNTIME_STATE_VERSION);
         if before.exists() {
-            return Ok(());
+            return;
         }
-        fs::copy(runtime_path, &before)?;
-        tracing::info!(
-            session = session_id,
-            kept = %before.display(),
-            "the board of an older build stays beside the board of this build"
-        );
-        Ok(())
+        // The copy is what an older build would read again, and the save of this
+        // build must not fail because of it: a board that cannot be copied is
+        // written, and the log says which file stayed behind.
+        match fs::copy(runtime_path, &before) {
+            Ok(_) => tracing::info!(
+                session = session_id,
+                kept = %before.display(),
+                "the board of an older build stays beside the board of this build"
+            ),
+            Err(error) => tracing::warn!(
+                session = session_id,
+                kept = %before.display(),
+                %error,
+                "the board of an older build cannot be kept"
+            ),
+        }
     }
 
     /// Remembers that the next write of `session_id` keeps the board that it read.
