@@ -97,31 +97,26 @@ impl MarkdownEditor {
         self.error = None;
     }
 
-    /// Save the buffer to its file path.
+    /// The write that this buffer still owes its file, with the text that it
+    /// shows, for a panel that leaves the board. `None` when the file already
+    /// holds the text of the buffer.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the editor has no file path or the file write fails.
-    pub fn save(&mut self) -> Result<()> {
-        crate::ui_thread::blocking("an editor panel writes its file");
-        if let Some(path) = &self.file_path {
-            std::fs::write(path, &self.text)?;
-            self.dirty = false;
-            Ok(())
-        } else {
-            Err(Error::Editor("no file path set".to_string()))
+    /// The panel that leaves keeps nothing to clear, so the mark of a waiting
+    /// write goes with the text: the write that the caller queues runs after the
+    /// writes asked for before it, and the last one holds the newest text.
+    #[must_use]
+    pub fn take_pending_write(&mut self, panel_id: crate::PanelId) -> Option<crate::EditorSave> {
+        let path = self.file_path.clone()?;
+        if !self.dirty && !self.saving {
+            return None;
         }
-    }
-
-    /// Save only if dirty and a file path is set. Silently succeeds otherwise.
-    pub fn save_if_dirty(&mut self) {
-        crate::ui_thread::blocking("an editor panel writes its file");
-        if self.dirty
-            && self.file_path.is_some()
-            && let Err(e) = self.save()
-        {
-            tracing::warn!("failed to save editor buffer: {e}");
-        }
+        self.dirty = false;
+        self.saving = false;
+        Some(crate::EditorSave {
+            panel_id,
+            path,
+            text: self.text.clone(),
+        })
     }
 }
 

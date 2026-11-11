@@ -15,12 +15,13 @@ owner: peters
 This procedure proves that a restored panel says that Horizon prepares it
 before it shows its saved screen, and that an editor panel opens at once and
 shows its text when the read answers. It also proves that an editor save shows
-that it is in flight, and that a failed save keeps the dirty mark and says why.
+that it is in flight, that a failed save keeps the dirty mark and says why, and
+that a closed editor panel writes its text.
 
 ## 2. Applicability
 
 - Candidate: each candidate that changes the start of a panel, the restore of a
-  saved board, or the save and the open of an editor panel.
+  saved board, or the save, the open and the close of an editor panel.
 - Platforms: Linux, with the fixture.
 - This procedure does not test the content of the saved screen, the browser
   panels, or the Device panels.
@@ -126,6 +127,54 @@ that it is in flight, and that a failed save keeps the dirty mark and says why.
 
    Result: The red line goes away. The `*` mark goes away after the save ends.
 
+### 6.5 CLOSE — A closed editor panel writes its text
+
+1. Type `fourth line` at the end of the body of the editor panel.
+
+   Result: The mode bar shows `*` before the file name.
+
+2. Close the panel with its close control.
+
+   Result: The panel leaves at once. The window does not stop.
+
+3. Read the file in the private home of the fixture.
+
+   Result: The file holds `fourth line`.
+
+4. Drop the markdown file again, and type `fifth line` at the end of the body
+   of the new panel.
+
+   Result: The mode bar shows `*` before the file name.
+
+5. Close the window with the close button of the window manager.
+
+   Result: The candidate stops normally.
+
+6. Start the fixture again with the same arguments and the same state path.
+   Read the file in the private home of the fixture.
+
+   Result: The file holds `fifth line`.
+
+### 6.6 FAIL-CLOSE — A failed write of a closed panel leaves one line
+
+> **CAUTION:** REMOVE THE FILE OF THE EDITOR ONLY IN THE PRIVATE HOME OF THE
+> FIXTURE. The text of that file is not in Horizon after this task.
+
+1. Remove the file of the editor panel in the private home of the fixture, and
+   make a directory with the same name.
+
+   Result: The file is gone and a directory takes its name.
+
+2. Type `sixth line` in the body of the editor panel, and close the panel with
+   its close control.
+
+   Result: The panel leaves. The machine section of the sidebar shows one red
+   line that starts with `Could not save` and names the file.
+
+3. Remove the directory from step 1.
+
+   Result: The path of the file is free again.
+
 ## 7. Pass criteria
 
 - A restored panel says that Horizon prepares it, and then shows its saved
@@ -133,6 +182,8 @@ that it is in flight, and that a failed save keeps the dirty mark and says why.
 - An editor panel shows its text within one second of the drop.
 - A save shows `Saving...` and writes the text of the frame.
 - A failed save keeps the dirty mark and shows the reason in the panel.
+- A closed editor panel writes its text, and the panel leaves at once.
+- A failed write of a closed panel leaves one line that names the file.
 
 ## 8. Cleanup
 

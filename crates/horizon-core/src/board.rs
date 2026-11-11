@@ -108,6 +108,10 @@ pub struct Board {
     /// the options that the panel was created from. The UI takes them and asks
     /// for the preparation; a panel that they no longer name keeps its state.
     pending_starts: Vec<PendingPanelStart>,
+    /// The writes of editor buffers that left the board with their panels. The
+    /// UI takes them with the writes of the buffers that still stand, so the
+    /// text of a closed panel reaches its file on the coordination worker.
+    pending_editor_saves: Vec<EditorSave>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
     next_panel_id: u64,
@@ -155,6 +159,7 @@ impl Board {
             unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
             pending_starts: Vec::new(),
+            pending_editor_saves: Vec::new(),
             focused: None,
             active_workspace: None,
             next_panel_id: 1,
@@ -343,9 +348,11 @@ impl Board {
 
     /// The editor buffers that the person asked to save, with the copy of the
     /// text that the coordination worker writes. The dirty mark of each buffer
-    /// clears when the answer says that its file holds that text.
+    /// clears when the answer says that its file holds that text. A buffer
+    /// whose panel left the board comes first, because its write was asked for
+    /// before the writes of the buffers that still stand.
     pub fn take_editor_saves(&mut self) -> Vec<EditorSave> {
-        let mut saves = Vec::new();
+        let mut saves = std::mem::take(&mut self.pending_editor_saves);
         for panel in &mut self.panels {
             let Some(editor) = panel.content.editor_mut() else {
                 continue;
@@ -366,13 +373,20 @@ impl Board {
         saves
     }
 
-    /// Applies the answer of the write of an editor buffer.
-    pub fn finish_editor_save(&mut self, save: &EditorSave, result: Result<()>) {
-        let Some(panel) = self.panels.iter_mut().find(|panel| panel.id == save.panel_id) else {
-            return;
-        };
-        let Some(editor) = panel.content.editor_mut() else {
-            return;
+    /// Applies the answer of the write of an editor buffer. A buffer whose panel
+    /// left the board shows its failure nowhere, so the answer carries the line
+    /// that the person reads instead.
+    #[must_use]
+    pub fn finish_editor_save(&mut self, save: &EditorSave, result: Result<()>) -> Option<String> {
+        let Some(editor) = self
+            .panels
+            .iter_mut()
+            .find(|panel| panel.id == save.panel_id)
+            .and_then(|panel| panel.content.editor_mut())
+        else {
+            return result
+                .err()
+                .map(|error| format!("Could not save {}: {error}", save.path.display()));
         };
         editor.saving = false;
         match result {
@@ -382,8 +396,12 @@ impl Board {
                 if editor.text == save.text {
                     editor.dirty = false;
                 }
+                None
             }
-            Err(error) => editor.error = Some(format!("Could not save this file: {error}")),
+            Err(error) => {
+                editor.error = Some(format!("Could not save this file: {error}"));
+                None
+            }
         }
     }
 

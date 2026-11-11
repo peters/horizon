@@ -42,6 +42,10 @@ impl HorizonApp {
             .take()
             .map(|pending| pending.shutdown_progress)
             .unwrap_or_else(|| self.board.begin_async_shutdown());
+        // A dirty editor buffer of the board writes its text on the coordination
+        // worker, which the exit holds for within its bound. The frames of the
+        // exit run no write of their own.
+        self.queue_editor_saves();
         progress.restart_timeout_window();
         self.shutdown_progress = Some(progress);
     }
@@ -164,6 +168,11 @@ impl HorizonApp {
             }
         }
         self.board.shutdown_terminal_panels();
+        // The shutdown above marks every buffer that still owes its file a
+        // write; the worker writes them, and the exit waits for that write
+        // within the bound it already has.
+        self.queue_editor_saves();
+        self.flush_browser_host_io();
         if let Some(progress) = &self.shutdown_progress {
             if !progress.wait_for_browser_shutdown(MAX_SHUTDOWN_WAIT) {
                 tracing::warn!("failed to terminate every browser during asynchronous exit cleanup");

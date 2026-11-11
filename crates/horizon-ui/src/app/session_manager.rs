@@ -295,6 +295,9 @@ impl HorizonApp {
             shutdown_progress: self.board.begin_async_shutdown(),
             target: Some(session.clone()),
         });
+        // A dirty editor buffer of the old board writes its text on the
+        // coordination worker before the switch flushes that board.
+        self.queue_editor_saves();
     }
 
     /// Polls an in-flight switch without blocking egui's event thread.

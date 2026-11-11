@@ -350,6 +350,11 @@ impl Board {
         // This avoids blocking the UI thread — the child process is cleaned
         // up asynchronously in the background.
         let mut panel = removed_panel?;
+        // The buffer that leaves keeps no dirty mark to clear, so its text goes
+        // to the coordination worker with the panel that held it.
+        if let Some(save) = panel.take_pending_editor_write() {
+            self.pending_editor_saves.push(save);
+        }
         if let Some(browser) = panel.browser_mut() {
             return Some(browser.close_permanently());
         }

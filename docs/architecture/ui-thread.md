@@ -225,6 +225,16 @@ start one thread for each write.
   on the frame that applies its size, in the order the person dropped the
   files. A read that applies after a board replacement opens no panel. A file
   that is not there opens its panel with the default size.
+- An editor panel writes its file on that worker too. `queue_editor_saves`
+  ([`editor_saves.rs`](../../crates/horizon-ui/src/app/editor_saves.rs)) queues
+  the whole text of each buffer whose save the frame asked for, and of each
+  buffer whose panel leaves the board with text that its file does not hold. A
+  closed panel hands its text to the board before it leaves, so the write of a
+  close takes its turn after the writes asked for before it. The frame of a
+  close returns at once, and the exit waits for that write within `EXIT_FLUSH`.
+  A write that fails while its panel still stands says why in the mode bar of
+  the panel; a write that fails after its panel left says why in one line of the
+  machine section of the sidebar, because the text is then lost.
 
 ### One claim at a time, and one answer per request
 
@@ -335,7 +345,8 @@ not durable.
   for the panels and for the session writer.
   If the browsers did not stop in that time, it stops them by force, which
   can take 3 s more. Then it waits up to 2 s (`EXIT_FLUSH`) for the jobs of
-  the browser coordination worker thread. The window paints during these waits.
+  the browser coordination worker thread, which also write the text of the
+  editor buffers that the close asked for. The window paints during these waits.
 - Before that wait, the exit waits for saved session deletions, with no time
   limit. The window still paints.
 - A synchronous wait at exit, for example in `run_exit_cleanup`, must also

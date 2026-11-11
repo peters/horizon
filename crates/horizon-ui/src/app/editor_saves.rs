@@ -28,14 +28,27 @@ impl HorizonApp {
     }
 
     fn apply_editor_save(&mut self, save: &EditorSave, result: Result<(), String>) {
-        self.board
-            .finish_editor_save(save, result.map_err(horizon_core::Error::Editor));
+        let result = result.map_err(horizon_core::Error::Editor);
+        if self.browser_create_host.io.applying_stale() {
+            // The board that asked for this write is gone, and a panel of the
+            // board that stands now can carry the same id. The file keeps the
+            // text, and a failure still leaves its line.
+            if let Err(error) = result {
+                self.set_sidebar_sticky_notice(format!("Could not save {}: {error}", save.path.display()));
+            }
+            return;
+        }
+        if let Some(line) = self.board.finish_editor_save(save, result) {
+            self.set_sidebar_sticky_notice(line);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::{PanelKind, PanelOptions};
+    use std::path::Path;
+
+    use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, RuntimeState};
 
     use crate::app::test_support::{run_app_frame, test_app};
 
@@ -45,6 +58,201 @@ mod tests {
             command: Some(path.display().to_string()),
             ..PanelOptions::default()
         }
+    }
+
+    /// A panel of `file`, whose buffer holds `text` and is dirty, as a person
+    /// leaves it when they type and close the panel.
+    fn dirty_editor(app: &mut crate::app::HorizonApp, file: &Path, text: &str) -> PanelId {
+        let workspace = app.board.ensure_workspace();
+        let panel = app
+            .create_panel_with_options(editor_options(file), workspace)
+            .expect("an editor panel");
+        let ctx = egui::Context::default();
+        run_app_frame(&ctx, app);
+        app.settle_panel_starts();
+        let editor = app
+            .board
+            .panel_mut(panel)
+            .and_then(Panel::editor_mut)
+            .expect("the editor of the panel");
+        text.clone_into(&mut editor.text);
+        editor.dirty = true;
+        panel
+    }
+
+    fn closed_editor_text(app: &crate::app::HorizonApp, panel: PanelId) -> Option<(bool, bool)> {
+        app.board
+            .panel(panel)
+            .and_then(Panel::editor)
+            .map(|editor| (editor.saving, editor.dirty))
+    }
+
+    #[test]
+    fn closing_a_dirty_editor_panel_writes_its_text_on_the_coordination_worker() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let panel = dirty_editor(&mut app, &file, "the text of the person\n");
+
+        {
+            // The frame that closes the panel must hand its text to the worker.
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.close_panel(panel);
+            assert!(app.board.panel(panel).is_none(), "the panel left at once");
+        }
+        app.settle_browser_host_io();
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the test wrote the text of the closed panel to its file"
+        );
+    }
+
+    #[test]
+    fn closing_a_workspace_writes_the_text_of_its_dirty_editor() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let panel = dirty_editor(&mut app, &file, "the text of the person\n");
+        let workspace = app.board.panel(panel).expect("the panel").workspace_id;
+
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.close_workspace_panels(workspace);
+            assert!(app.board.panel(panel).is_none(), "the panel left at once");
+        }
+        app.settle_browser_host_io();
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the test wrote the text of the panel that its workspace closed"
+        );
+    }
+
+    #[test]
+    fn a_session_switch_writes_the_text_of_a_dirty_editor_before_the_board_leaves() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let panel = dirty_editor(&mut app, &file, "the text of the person\n");
+        let target = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .expect("target session");
+
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.activate_runtime_session(&egui::Context::default(), &target);
+            assert!(app.board.panel(panel).is_none(), "the old board left");
+        }
+        app.settle_browser_host_io();
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the switch wrote the text of the editor of the board it left"
+        );
+    }
+
+    #[test]
+    fn the_exit_writes_the_text_of_a_dirty_editor_before_the_window_leaves() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
+
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.begin_shutdown();
+        }
+        // No frame, no bound and no settle: the cleanup itself waits for the
+        // write that the closing window asked for, inside its own scope.
+        app.run_exit_cleanup();
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the exit wrote the text of the editor before it ended"
+        );
+    }
+
+    #[test]
+    fn an_exit_without_a_close_request_writes_the_text_of_a_dirty_editor() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
+
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.run_exit_cleanup();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the cleanup wrote the text that no frame handed to the worker"
+        );
+    }
+
+    #[test]
+    fn the_write_of_a_closed_panel_runs_after_the_writes_asked_for_before_it() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let panel = dirty_editor(&mut app, &file, "the first text\n");
+
+        // A job that waits holds the worker, so both writes of the file are
+        // asked for before either one runs.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            let editor = app
+                .board
+                .panel_mut(panel)
+                .and_then(Panel::editor_mut)
+                .expect("the editor of the panel");
+            editor.request_save();
+            app.queue_editor_saves();
+            let editor = app
+                .board
+                .panel_mut(panel)
+                .and_then(Panel::editor_mut)
+                .expect("the editor of the panel");
+            "the text of the person\n".clone_into(&mut editor.text);
+            editor.dirty = true;
+            app.close_panel(panel);
+        }
+        release.send(()).expect("the worker is released");
+        app.settle_browser_host_io();
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the write of the closed panel ran after the write asked for before it"
+        );
+    }
+
+    #[test]
+    fn a_write_that_fails_as_its_panel_leaves_leaves_one_line() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::create_dir(&file).expect("a directory where the file was");
+        let panel = dirty_editor(&mut app, &file, "the text that cannot be written\n");
+
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.close_panel(panel);
+        }
+        app.settle_browser_host_io();
+        assert!(closed_editor_text(&app, panel).is_none(), "the panel left");
+        let line = app
+            .sidebar_sticky_notice
+            .clone()
+            .expect("the person reads why the text of the closed panel is not in its file");
+        assert!(
+            line.contains("Could not save") && line.contains("notes.md"),
+            "the line names the failure and the file: {line}"
+        );
     }
 
     #[test]

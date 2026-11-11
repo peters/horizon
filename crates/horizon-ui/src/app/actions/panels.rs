@@ -214,6 +214,9 @@ impl HorizonApp {
         self.end_machine_session(panel_id);
         self.reconnects.cancel(panel_id);
         let teardown = self.board.close_panel_returning_teardown(panel_id);
+        // A buffer that the closed panel held writes its text on the
+        // coordination worker, in the order of the writes of that file.
+        self.queue_editor_saves();
         self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
         self.panel_render_caches.editor_preview_cache.remove(&panel_id);
         self.panel_render_caches.browser_ui_state.remove(&panel_id);
@@ -255,10 +258,14 @@ impl HorizonApp {
 
         if panels_to_close.is_empty() {
             self.board.close_panels_in_workspace(workspace_id);
+            self.queue_editor_saves();
             return;
         }
 
         let closed_panel_ids = self.board.close_panels_in_workspace(workspace_id);
+        // The buffers that the closed panels held write their text on the
+        // coordination worker, in the order of the writes of their files.
+        self.queue_editor_saves();
         for panel_id in &closed_panel_ids {
             self.panel_screen_rects.remove(panel_id);
             self.terminal_body_screen_rects.remove(panel_id);

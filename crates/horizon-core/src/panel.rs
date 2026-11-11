@@ -868,13 +868,27 @@ impl Panel {
         }
     }
 
+    /// Asks the content of this panel to stop. A dirty editor buffer only asks
+    /// for its write here: the caller takes the text with
+    /// [`Board::take_editor_saves`](crate::Board::take_editor_saves) and queues
+    /// the write on the coordination worker, so no frame writes the file.
     pub fn request_shutdown(&mut self) {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
-            PanelContent::Editor(editor) => editor.save_if_dirty(),
+            // The text of a dirty buffer goes to the coordination worker with
+            // the frame that folds this panel away, and nothing waits here.
+            PanelContent::Editor(editor) => editor.request_save(),
             PanelContent::Device(_) | PanelContent::Block(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
+    }
+
+    /// The write that this panel still owes its file, for a panel that leaves
+    /// the board: no frame writes the text of a buffer that the person closed.
+    #[must_use]
+    pub(crate) fn take_pending_editor_write(&mut self) -> Option<crate::EditorSave> {
+        let id = self.id;
+        self.content.editor_mut()?.take_pending_write(id)
     }
 
     /// Take this panel's browser teardown-completion signal, if the browser
@@ -893,7 +907,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.wait_for_shutdown(timeout),
             PanelContent::Editor(editor) => {
-                editor.save_if_dirty();
+                editor.request_save();
                 true
             }
             PanelContent::Device(_) | PanelContent::Block(_) => true,
@@ -906,7 +920,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.shutdown_with_timeout(timeout),
             PanelContent::Editor(editor) => {
-                editor.save_if_dirty();
+                editor.request_save();
                 true
             }
             PanelContent::Device(_) | PanelContent::Block(_) => true,
