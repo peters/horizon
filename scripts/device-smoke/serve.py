@@ -165,7 +165,8 @@ def extra_column(placed):
 
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
-                         browser_host=None, browser_host_profile=None, theme='dark'):
+                         browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
+                         server_command=None):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
     The theme is part of the config, so the first start at a state path imports it. A
@@ -212,6 +213,14 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         if browser_host_profile:
             entry['profile'] = browser_host_profile
         fixture['browser_host'] = entry
+    if server_target:
+        # The server that the machine list of the fixture follows, so a procedure
+        # proves two computers with one list without a hand edit of the private
+        # settings. The command is only there when the default does not fit.
+        entry = {'ssh_target': server_target}
+        if server_command:
+            entry['command'] = server_command
+        fixture['server'] = entry
     if presets is not None:
         # The New Workspace menu of the fixture, so a procedure can test an agent that
         # has several presets without changing the real menu of the person.
@@ -305,6 +314,14 @@ def main():
         '--browser-host-profile',
         help='Profile of that browser host whose pages the fixture opens; needs --browser-host')
     parser.add_argument(
+        '--server-target',
+        help='SSH target of the Horizon server that the machine list of the fixture follows, such as '
+             'an SSH config alias to a second computer')
+    parser.add_argument(
+        '--server-command',
+        help='Command of the link on that server, when the default `horizon --server-link` does not '
+             'fit, such as a full path; needs --server-target')
+    parser.add_argument(
         '--theme', choices=('auto', 'dark', 'light'), default='dark',
         help='Set appearance.theme in the fixture config, default dark. The first start at a '
              'state path imports the value; a run with --reuse-state keeps the theme that the '
@@ -331,6 +348,8 @@ def main():
         parser.error(str(problem))
     if args.browser_host_profile and not args.browser_host:
         parser.error('--browser-host-profile needs --browser-host')
+    if args.server_command and not args.server_target:
+        parser.error('--server-command needs --server-target')
     if args.resume_session and args.saved_session:
         parser.error('--resume-session starts the saved board; do not give --saved-session as well')
     try:
@@ -431,7 +450,8 @@ def main():
         extra_panels = load_panels(args.panels) if args.panels else None
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
-            args.browser_host, args.browser_host_profile, args.theme)
+            args.browser_host, args.browser_host_profile, args.theme, args.server_target,
+            args.server_command)
         config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))

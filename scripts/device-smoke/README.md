@@ -250,6 +250,17 @@ needs `--browser-host`. The target is one name that `ssh` resolves, such as an
 SSH config alias; the fixture does not start the host. Leave both out to keep
 the local browser.
 
+`--server-target TARGET` names the Horizon server that the machine list of the
+fixture follows, so two fixtures prove one machine list on two computers.
+`--server-command COMMAND` adds the command of the link on that server, when the
+default `horizon --server-link` does not fit, and it needs `--server-target`.
+The fixture starts no server: start one with `horizon --server` in the server
+home that the target reaches.
+
+Two fixtures run at the same time. Each one chooses its own display through
+Xvfb, binds every port at zero and keeps its own state, so give each run its own
+`--state` folder and give the two runs different server homes or targets.
+
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The
 agent must be launched inside a supporting Horizon host. Read the endpoint from
