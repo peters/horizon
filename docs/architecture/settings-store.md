@@ -123,7 +123,7 @@ A session of an older build opens: `sessions/index.yaml` names its profile, and
 | What a start finds in a session | What it becomes |
 |---|---|
 | A panel of a kind that this build still has | It comes back in its workspace at its place. |
-| A panel of a kind that this build removed | It is left out, and one line in the sidebar names the count of each removed kind. |
+| A panel of a kind that this build removed | It is left out, and one line in the sidebar names the count of each removed kind. The line stays until the person closes it, so a person who looks away at the start still reads it. |
 | A field that this build does not know | It is ignored. The rest of the session loads, and one field never stops a session. |
 | A board of an older board version, or one that lost a panel | The first write of this build copies the file to `runtime.yaml.before-<version>` beside it, so a person who goes back finds the board. The load itself writes nothing. |
 
@@ -138,7 +138,7 @@ A session of an older build opens: `sessions/index.yaml` names its profile, and
 | The attention feed and its `overlays.attention_feed_*` values | Nothing. An agent reports in its own panel. |
 | The cloud workspace profiles, `remote` | Nothing. A machine of the machine list and a browser host hold the remote work. |
 | The casting, native app testing and tailnet settings | Nothing. Their sections are ignored. |
-| A credential value of the OS credential store | `no value on this computer` under the name or the reference, and the Secrets tab says to type the value once more. The value is not read and does not move. |
+| A credential value of the OS credential store | The reference says that this computer has no value, and the tab "Remote" offers the one-time import below. A person who installs none of the programs of the keyring types the value once more. |
 
 ## No setting is lost
 
@@ -201,11 +201,38 @@ row of the store therefore holds no value, and a copy of the settings of a perso
 holds no value. See
 [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md).
 
-This build reads no credential store of the operating system. A value that an older
-build stored in the keyring or the Keychain is not read and does not move: the row
-of the reference or the name behaves as a value that this computer does not hold,
-the window shows `no value on this computer`, and the Secrets tab says that a value
-of an older Horizon must be typed once more. There is no migration step.
+### The values that an older build kept in the system keyring
+
+An earlier version kept the value of a remote browser provider in the Secret
+Service of Linux or in the Keychain of macOS. No start reads that keyring, and no
+crate of this workspace opens it. This build reads those values one time, when the
+person asks for it:
+
+1. The tab **Remote** holds one line and one button while a reference of these
+   settings has no value on this computer: **A value that an older version stored
+   in the system keyring can be imported.**
+2. A press on **Import from the keyring** reads the entries once, on a worker
+   thread, and writes a row of `secrets.sqlite` for each reference that these
+   settings name and that has no row yet. See
+   [the programs of each system](../platform-support.md#the-keyring-import).
+3. The tab then says what happened, in one line: **Imported 2 values. 1 was already
+   here. 3 entries of the keyring are not used by this version.**
+
+The rules of the import:
+
+| Rule | Reason |
+|---|---|
+| Only a press reads the keyring. | A start does not open a keyring, and no value moves without a person who asked for it. |
+| A reference comes from the settings, never from the keyring. | A row is `credential/<reference>`, so a value under an account that these settings do not name would be a row that nothing reads. |
+| A reference that already has a row keeps it. | A person who typed the value again after the upgrade does not lose it. |
+| The keyring entry stays as it is. | A person who goes back to the older version still finds its value. |
+| A written row reaches the link to a server like a typed value. | The other computers then hold the same value, and the row travels by id. |
+| A refusal names its rule and no value. | The output of the programs of the keyring is untrusted text. See [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md). |
+
+The button stays while a reference of these settings has no value, so a person can
+press it again after installing the program of the keyring. A name of a named
+secret has no keyring entry: no older version kept one, so the Secrets tab says
+that a person types such a value once more.
 
 ### The values that have no field
 

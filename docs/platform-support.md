@@ -96,6 +96,29 @@ credential. The file mode is the protection, as
 [the boundary of the named secrets](review/trust-boundaries/named-secrets.md)
 states.
 
+### The keyring import
+
+An older version kept the value of a remote browser provider in the system
+keyring. The tab **Remote** reads such a value one time, when a person presses
+**Import from the keyring**. No crate of this workspace opens the keyring: three
+programs of the system answer instead.
+
+| System | Program | Function | Install |
+|---|---|---|---|
+| Linux | `secret-tool` | Reads every entry of the service `horizon-remote-browser`. | The package `libsecret-tools`. |
+| Linux, without `secret-tool` | `python3` with the `gi` binding of libsecret | Reads the same entries and prints one JSON document. | The package of the binding, such as `python3-gi` with `gir1.2-secret-1`. |
+| macOS | `security` | Reads one entry for each account of the settings. | Part of macOS. |
+
+Both Linux programs read the Secret Service over the session bus, so an import
+needs a session bus, such as the one of a desktop session. A headless install
+without a keyring service therefore imports nothing: the tab says that this
+computer has no keyring service or that the program is missing, and the person
+types the value in the tab.
+
+On macOS the system can ask the person for permission for each value, because the
+Keychain belongs to that person. The import waits up to 60 seconds for one entry,
+and up to 20 seconds for the whole import on Linux.
+
 ## Agent skills
 
 Horizon installs the `horizon-browser` and `horizon-device` skills on both

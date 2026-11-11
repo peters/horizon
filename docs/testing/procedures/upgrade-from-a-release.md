@@ -22,9 +22,10 @@ that this build removed leave a notice and no error.
   procedure uses the release binary of v0.2.7 and the candidate.
 - Platforms: Linux. The isolated fixture of
   [`scripts/device-smoke`](../../../scripts/device-smoke/README.md) runs on Linux.
-- This procedure does not test: the migration of a home that no release made, the
-  secrets of the credential store of the operating system, and the panels
-  themselves. Use the other procedures for those.
+- This procedure does not test: the migration of a home that no release made, and
+  the panels themselves. Use the other procedures for those.
+- Step 6.8 tests the keyring import with a stand-in program that is first on the
+  `PATH` of the fixture. This procedure never opens the keyring of a person.
 
 ## 3. Safety
 
@@ -151,7 +152,16 @@ that this build removed leave a notice and no error.
    panel of a kind that this build removed is not there, and one line in the
    sidebar says how many panels were left out and of which kind.
 
-3. Read the store of the home.
+3. Read the line of the panels that were left out again after ten seconds.
+
+   Result: the line is still in the sidebar. It stays until a person closes it.
+
+4. Press the close control of that line, and press **Space** on it in a second run.
+
+   Result: the line goes, and it does not come back until a session with such a
+   panel opens again.
+
+5. Read the store of the home.
 
    ```sh
    python3 - "$state/data/home/.horizon/settings.sqlite" <<'PY'
@@ -208,6 +218,111 @@ that this build removed leave a notice and no error.
 
    Result: the row says `Stored on this computer`.
 
+### 6.7 U07 — Find the account of a reference
+
+1. Read the endpoint origin and the slot of a reference of the settings.
+
+   ```sh
+   python3 - "$state/data/home/.horizon/settings.sqlite" <<'PY'
+   import json, sqlite3, sys
+   rows = dict(sqlite3.connect(sys.argv[1]).execute(
+       "SELECT section, data FROM settings").fetchall())
+   print(json.dumps(json.loads(rows["browser"])["remote"], indent=2))
+   PY
+   ```
+
+   Result: the output names the `endpoint` of the provider and the `slot` of each
+   credential binding. An older version put the value of a reference into the
+   keyring under its origin, one `|`, and its slot.
+
+2. Write that account down, and the reference of the same binding.
+
+   Result: the account is, for example,
+   `https://grid.example.net|remote-browser/grid/key`, and the reference is `key`.
+
+### 6.8 U08 — Check the import of the keyring with a stand-in
+
+> **CAUTION:** THIS STEP NEVER OPENS THE REAL KEYRING OF A PERSON. IT RUNS A
+> STAND-IN PROGRAM THAT PRINTS A SYNTHETIC VALUE, AND IT KEEPS THAT PROGRAM FIRST
+> ON THE `PATH` OF THE FIXTURE ONLY. DO NOT RUN `secret-tool`, `security`,
+> `gdbus`, `busctl` OR `gnome-keyring-daemon` BY HAND FOR THIS STEP, AND DO NOT
+> PRESS THE BUTTON OF A RUN THAT READS THE REAL KEYRING.
+
+1. Make a stand-in `secret-tool` inside the state folder, which the sandbox
+   shows to the candidate.
+
+   ```sh
+   standin="$state/standin"
+   mkdir -p "$standin"
+   cat >"$standin/secret-tool" <<'SH'
+   #!/bin/sh
+   printf '%s\n' '[/org/freedesktop/secrets/collection/login/7]'
+   printf '%s\n' 'label = keyring@horizon-remote-browser'
+   printf '%s\n' 'secret = synthetic-token'
+   printf '%s\n' 'created = '
+   printf '%s\n' 'modified = '
+   printf '%s\n' 'attribute.service = horizon-remote-browser' >&2
+   printf '%s\n' 'attribute.username = https://grid.example.net|remote-browser/grid/key' >&2
+   SH
+   chmod 755 "$standin/secret-tool"
+   ```
+
+   Use the account of step 6.7 in the `attribute.username` line, and read the
+   format of the stand-in from
+   [the keyring import](../../architecture/settings-store.md#the-values-that-an-older-build-kept-in-the-system-keyring).
+
+   Result: `$state/standin/secret-tool` is one executable file.
+
+2. Start the candidate again with that folder first on its `PATH`.
+
+   ```sh
+   PATH="$standin:$PATH" python3 scripts/device-smoke/serve.py \
+     --horizon <candidate>/horizon \
+     --native-view --plain-start --reuse-state --state "$state"
+   ```
+
+   Result: the window comes up with the settings and the board of step 6.5. The
+   candidate still finds every other program of the host, because only one folder
+   comes in front of `PATH`.
+
+3. Open **Settings → Remote**, and read the rows of the references.
+
+   Result: the row of the reference of step 6.7 says `missing`, and one line
+   above the providers says **A value that an older version stored in the system
+   keyring can be imported.**
+
+4. Press **Import from the keyring**.
+
+   Result: the tab says `Imported 1 value.`, and the row of the reference says
+   `present`.
+
+5. Read the row that the import wrote.
+
+   ```sh
+   python3 - "$state/data/home/.horizon/secrets.sqlite" <<'PY'
+   import sqlite3, sys
+   print(dict(sqlite3.connect(sys.argv[1]).execute("SELECT id, body FROM secrets").fetchall()))
+   PY
+   ```
+
+   Result: the output holds `credential/<reference>` with `synthetic-token` as
+   its body.
+
+6. Type another value into the row of that reference, press **Save to the secrets
+   file**, and read the file again.
+
+   Result: the row holds the value that the person typed.
+
+7. Remove `$standin/secret-tool`, start the candidate again with the same `PATH`,
+   and press the button of a row that says `missing`.
+
+   Result: the tab says **Install the package `libsecret-tools` ...**, it writes
+   no value, and the row of step 6 still holds the value that the person typed.
+
+8. Close the run, and remove the stand-in folder.
+
+   Result: no file of the stand-in stays in the state folder.
+
 ## 7. Pass criteria
 
 - The candidate starts with the theme, the shortcuts, the presets and the
@@ -220,6 +335,11 @@ that this build removed leave a notice and no error.
 - The second start reads the store, and it reads no YAML file.
 - The Settings panel keeps one width on every tab, and the Secrets tab says that
   an old value is typed once more.
+- The line about the panels that were left out stays after ten seconds, and it
+  goes on its close control.
+- The import of the keyring writes one row from a stand-in program, writes no row
+  over a value that is there, and names the package of the program when that
+  program is missing.
 
 ## 8. Cleanup
 
@@ -232,7 +352,7 @@ that this build removed leave a notice and no error.
 
    Result: the display, the window manager and the VNC server stop.
 
-3. Remove the state folder of the run.
+3. Remove the state folder of the run, which holds the stand-in folder of step 6.8.
 
    Result: no file of the run stays in the evidence folder.
 
