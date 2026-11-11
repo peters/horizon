@@ -933,6 +933,29 @@ mod config_start_tests {
         assert!(error.contains("config.json"), "{error}");
     }
 
+    /// A YAML settings file of an older Horizon that cannot be read stops the
+    /// start, and the sentence names the file and the line.
+    #[test]
+    fn a_broken_yaml_settings_file_names_its_file_and_its_line() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path().join(".horizon");
+        std::fs::create_dir_all(&home).expect("the Horizon home");
+        let yaml = home.join("config.yaml");
+        std::fs::write(&yaml, "version: 8\nappearance:\n  theme: dark\n   theme: light\n").expect("write");
+
+        let error = load_config(&home.join("config.json"), false).expect_err("a broken file stops the start");
+
+        assert!(
+            error.contains(&yaml.display().to_string()),
+            "the sentence names the file: {error}"
+        );
+        assert!(error.contains("line"), "the sentence names the line: {error}");
+        assert!(
+            !home.join("settings.sqlite").exists(),
+            "a file that cannot be read writes no store"
+        );
+    }
+
     /// A run with no settings at all starts with the defaults, and writes
     /// nothing.
     #[test]
