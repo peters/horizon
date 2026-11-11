@@ -178,8 +178,9 @@ a frame must not start them.
   sends one read for each panel that has a request, on the coordination worker
   thread. One read runs for a panel at a time and no panel is read more often than
   its interval, so a terminal that prints on every frame sends no more than that.
-  The request stays in the panel until an answer comes back, so a directory that
-  changed while a read was in flight is read again.
+  The frame that sends a read takes the request of that panel, and output that
+  comes while the read runs records a request of its own, so a directory that
+  changed in between is read again.
 - `read_cwd` ([`terminal/cwd.rs`](../../crates/horizon-core/src/terminal/cwd.rs))
   is the work. `CwdReader` is a value and not a condition of the build, so the
   reader of macOS runs on any computer with stand-in programs on a private
