@@ -668,3 +668,32 @@ fn a_session_that_left_panels_out_sets_the_line_that_stays() {
         "the line that stays is not the short notice of an action"
     );
 }
+
+/// A keyboard reaches the close control, and Space presses it.
+#[test]
+fn the_close_control_of_the_line_answers_the_keyboard() {
+    use crate::app::test_support::run_app_frame_with_input;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let line = "This session had 1 panel of kinds that this Horizon removed, so it is left out: Usage 1.";
+    app.set_sidebar_sticky_notice(line.to_owned());
+    let ctx = egui::Context::default();
+    sidebar_frame_texts(&ctx, &mut app);
+
+    // The keyboard moves to the control, and Space presses what has the focus.
+    ctx.memory_mut(|memory| memory.request_focus(super::machines::sticky_close_id()));
+    let mut input = crate::app::test_support::raw_input([1200.0, 900.0], None);
+    input.events.push(egui::Event::Key {
+        key: egui::Key::Space,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    run_app_frame_with_input(&ctx, &mut app, input);
+
+    assert!(
+        app.sidebar_sticky_notice.is_none(),
+        "Space on the focused close control ended the line"
+    );
+}
