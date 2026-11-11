@@ -795,7 +795,9 @@ mod cli_args_tests {
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
-        let error = parse(&["--export-config"]).err().expect("the removed export is refused");
+        let error = parse(&["--export-config"])
+            .err()
+            .expect("the removed export is refused");
         assert!(error.contains("settings.sqlite"), "{error}");
     }
 }

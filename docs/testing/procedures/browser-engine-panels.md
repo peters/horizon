@@ -58,32 +58,32 @@ engine still needs `allow_additional`.
    keeps its bytes:
 
    ```json
-{
-  "version": 11,
-  "browser": {
-    "profile_root": "<home folder>/profiles",
-    "downloads_root": "<home folder>/downloads",
-    "firefox_command": "/usr/lib/firefox/firefox",
-    "geckodriver_command": "<path to geckodriver>"
-  },
-  "workspaces": [
-    {
-      "name": "Smoke",
-      "terminals": [
-        {
-          "name": "Agent",
-          "kind": "codex",
-          "command": "/usr/bin/python3",
-          "args": [
-            "<work>/probe.py",
-            "<work>/identity.json"
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
+   {
+     "version": 11,
+     "browser": {
+       "profile_root": "<home folder>/profiles",
+       "downloads_root": "<home folder>/downloads",
+       "firefox_command": "/usr/lib/firefox/firefox",
+       "geckodriver_command": "<path to geckodriver>"
+     },
+     "workspaces": [
+       {
+         "name": "Smoke",
+         "terminals": [
+           {
+             "name": "Agent",
+             "kind": "codex",
+             "command": "/usr/bin/python3",
+             "args": [
+               "<work>/probe.py",
+               "<work>/identity.json"
+             ]
+           }
+         ]
+       }
+     ]
+   }
+   ```
 
    Result: The file exists.
 
