@@ -132,7 +132,7 @@ impl HorizonApp {
         if let Some(beside) = beside {
             return self.create_machine_panel_beside(workspace, options, beside);
         }
-        let id = self.board.create_panel(options, workspace)?;
+        let id = self.board.create_panel_waiting(options, workspace)?;
         self.board.focus(id);
         self.mark_runtime_dirty();
         self.board
@@ -149,7 +149,7 @@ impl HorizonApp {
         options: PanelOptions,
         beside: PanelId,
     ) -> horizon_core::Result<String> {
-        let id = self.board.create_panel_beside(options, workspace, beside)?;
+        let id = self.board.create_panel_beside_waiting(options, workspace, beside)?;
         self.mark_runtime_dirty();
         self.board
             .panel(id)

@@ -1,7 +1,71 @@
+use std::path::PathBuf;
+
 use crate::agent_work::WorkContinuation;
 use crate::error::{Error, Result};
+use crate::runtime_state::AgentSessionBinding;
+use crate::ssh::SshConnection;
 
-use super::{Panel, PanelKind};
+use super::{Panel, PanelKind, PanelResume};
+
+/// The values that the pre-flight of a restart reads, copied from the panel so
+/// that a worker can do the reads while the panel stays on the frame.
+pub(in crate::panel) struct WorkPanel {
+    pub(in crate::panel) kind: PanelKind,
+    pub(in crate::panel) local_id: String,
+    pub(in crate::panel) resume: PanelResume,
+    pub(in crate::panel) session_binding: Option<AgentSessionBinding>,
+    pub(in crate::panel) launch_command: Option<String>,
+    pub(in crate::panel) launch_args: Vec<String>,
+    pub(in crate::panel) launch_cwd: Option<PathBuf>,
+    pub(in crate::panel) ssh_connection: Option<SshConnection>,
+    pub(in crate::panel) work_resume: crate::agent_work::ResumePolicy,
+    /// The pid of the process that this panel owns, so a competing session of
+    /// the same conversation is not this one.
+    pub(in crate::panel) owned_process_id: Option<u32>,
+    /// The file of an editor panel, which a restart reads again.
+    pub(in crate::panel) editor_file: Option<PathBuf>,
+}
+
+impl Panel {
+    /// The values that the pre-flight of a restart reads, copied for a worker.
+    pub(in crate::panel) fn work_panel(&self) -> Option<WorkPanel> {
+        Some(WorkPanel {
+            kind: self.kind,
+            local_id: self.local_id.clone(),
+            resume: self.resume.clone(),
+            session_binding: self.session_binding.clone(),
+            launch_command: self.launch_command.clone(),
+            launch_args: self.launch_args.clone(),
+            launch_cwd: self.launch_cwd.clone(),
+            ssh_connection: self.ssh_connection.clone(),
+            work_resume: self.work_resume.clone(),
+            owned_process_id: self.terminal().and_then(crate::terminal::Terminal::owned_process_id),
+            editor_file: self.content.editor().and_then(|editor| editor.file_path.clone()),
+        })
+    }
+}
+
+impl Panel {
+    pub(super) fn requested_work_brief(&mut self) -> Result<Option<String>> {
+        let Some(requested) = self
+            .terminal_mut()
+            .and_then(|terminal| terminal.work_continuation.requested_session.take())
+        else {
+            return Ok(None);
+        };
+        if self
+            .session_binding
+            .as_ref()
+            .is_none_or(|binding| binding.session_id != requested)
+        {
+            return Err(Error::State(
+                "The conversation changed after Resume work was selected.".into(),
+            ));
+        }
+        self.check_work_resume()?;
+        Ok(Some("The user selected Resume work in Horizon for this conversation. Re-read the latest user request and current conversation, then continue only the work already authorized. Re-verify the working tree, tool side effects, and background processes; interrupted tools may have partially completed. This does not answer pending questions or grant tool permissions. Ask the user if approval or a decision is still needed.".into()))
+    }
+}
 
 pub(super) struct RestartWork {
     pub(super) owner: Option<std::sync::Arc<crate::agent_work::WorkOwner>>,
@@ -76,6 +140,9 @@ impl Panel {
         terminal.work_continuation.requested_session.get_or_insert(session_id);
         Ok(())
     }
+}
+
+impl WorkPanel {
     pub(super) fn preflight_restart_work(
         &self,
         program: &str,
@@ -85,8 +152,7 @@ impl Panel {
     ) -> Result<Option<String>> {
         if brief.is_some() {
             self.check_saved_work_session()?;
-            let owned_pid = self.terminal().and_then(crate::terminal::Terminal::owned_process_id);
-            self.check_work_session_exit(owned_pid)?;
+            self.check_work_session_exit(self.owned_process_id)?;
         }
         let owned = self
             .launch_args
@@ -189,26 +255,6 @@ impl Panel {
         state
     }
 
-    pub(super) fn requested_work_brief(&mut self) -> Result<Option<String>> {
-        let Some(requested) = self
-            .terminal_mut()
-            .and_then(|terminal| terminal.work_continuation.requested_session.take())
-        else {
-            return Ok(None);
-        };
-        if self
-            .session_binding
-            .as_ref()
-            .is_none_or(|binding| binding.session_id != requested)
-        {
-            return Err(Error::State(
-                "The conversation changed after Resume work was selected.".into(),
-            ));
-        }
-        self.check_work_resume()?;
-        Ok(Some("The user selected Resume work in Horizon for this conversation. Re-read the latest user request and current conversation, then continue only the work already authorized. Re-verify the working tree, tool side effects, and background processes; interrupted tools may have partially completed. This does not answer pending questions or grant tool permissions. Ask the user if approval or a decision is still needed.".into()))
-    }
-
     fn check_work_session_exit(&self, owned_pid: Option<u32>) -> Result<()> {
         if self.kind == PanelKind::Claude
             && self
@@ -230,6 +276,22 @@ impl Panel {
             ));
         }
         Ok(())
+    }
+}
+
+/// Tests drive the checks of a restart through the panel that they built.
+#[cfg(test)]
+impl Panel {
+    pub(super) fn check_saved_work_session(&self) -> Result<()> {
+        self.work_panel()
+            .ok_or_else(|| Error::State("No terminal to restart".into()))?
+            .check_saved_work_session()
+    }
+
+    pub(super) fn check_work_session_exit(&self, owned_pid: Option<u32>) -> Result<()> {
+        self.work_panel()
+            .ok_or_else(|| Error::State("No terminal to restart".into()))?
+            .check_work_session_exit(owned_pid)
     }
 }
 

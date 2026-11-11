@@ -227,6 +227,21 @@ fn wrap_launch_command_with_support(
     }
 }
 
+/// Resolves whether `script` can capture the screen of a panel, on a worker, and
+/// keeps the answer for every panel of this process.
+///
+/// The probe starts `script` and waits for it, so no frame calls it: the start
+/// of Horizon asks for it here, and a panel that starts before the answer
+/// arrives resolves it with its own preparation on the coordination worker.
+pub fn warm_script_support() {
+    let spawned = std::thread::Builder::new().name("script-probe".to_owned()).spawn(|| {
+        let _ = script_support();
+    });
+    if let Err(error) = spawned {
+        tracing::debug!("could not start the probe of `script`: {error}");
+    }
+}
+
 fn script_support() -> &'static ScriptSupport {
     SCRIPT_SUPPORT.get_or_init(|| {
         let support = ScriptSupport::detect(std::env::var_os("PATH").as_deref(), current_script_flavor());

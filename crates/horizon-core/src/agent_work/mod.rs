@@ -36,5 +36,4 @@ pub(crate) const WORK_ENV_KEYS: [&str; 5] = [
     WORK_EXECUTABLE_ENV,
 ];
 
-#[cfg(all(test, unix))]
 pub(crate) use startup::StartupPlan;

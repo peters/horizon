@@ -61,8 +61,12 @@ fn ends_with(code: u8) -> PanelOptions {
 }
 
 fn terminal_of_the_machine(app: &mut HorizonApp, workspace: WorkspaceId, code: u8) -> PanelId {
-    app.create_panel_with_options(ends_with(code), workspace)
-        .expect("a terminal of the machine")
+    let panel = app
+        .create_panel_with_options(ends_with(code), workspace)
+        .expect("a terminal of the machine");
+    // The frame that creates a panel asks a worker for its preparation.
+    app.settle_panel_starts();
+    panel
 }
 
 /// Reads the panels until the stand-in command of `panel_id` ended, so the test
@@ -210,6 +214,7 @@ fn a_terminal_with_a_key_and_a_tmux_command_reconnects_without_a_record() {
     let panel_id = app
         .create_panel_with_options(options, workspace)
         .expect("the terminal that an agent opened with a machine key");
+    app.settle_panel_starts();
     wait_for_the_end(&mut app, panel_id);
     let now = Instant::now();
     let mut restarted = Vec::new();
@@ -361,6 +366,7 @@ fn a_key_press_ends_an_attempt_that_is_in_flight_and_starts_a_new_one() {
         ..PanelOptions::default()
     };
     let panel_id = app.create_panel_with_options(options, workspace).expect("the terminal");
+    app.settle_panel_starts();
     let first = wait_for_attempts(&marker, 1);
     assert_eq!(first.len(), 1, "one attempt runs");
     assert_eq!(

@@ -436,7 +436,7 @@ impl HorizonApp {
         self.startup_receiver = None;
     }
 
-    fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
+    pub(in crate::app) fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.reset_native_file_input();
         self.browser_create_host.io.replace_board();
         // Restore browser panels with the *current* browser config: a
@@ -444,11 +444,12 @@ impl HorizonApp {
         // `--config <path>` users' settings must always win.
         let mut runtime_state = (*runtime_state).clone();
         runtime_state.browser = self.template_config.browser.clone();
-        self.board = Board::from_runtime_state_with_transcripts(&runtime_state, self.transcript_root.as_deref())
-            .unwrap_or_else(|error| {
+        self.board = Board::from_runtime_state_waiting(&runtime_state, self.transcript_root.as_deref()).unwrap_or_else(
+            |error| {
                 tracing::error!("failed to restore runtime state: {error}");
                 Board::new()
-            });
+            },
+        );
         // The restored board carries the panels it saved again: a transcript
         // delete queued before the restore removes nothing.
         self.keep_restored_transcripts();

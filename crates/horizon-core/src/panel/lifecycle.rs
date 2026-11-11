@@ -1,12 +1,10 @@
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::{Error, Result};
-use crate::runtime_state::claude_session_transcript_exists;
 use crate::ssh::SshConnectionStatus;
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 
 use super::spawn::{
-    AgentLaunchContext, agent_env, current_unix_millis, kitty_keyboard_for_kind, resolve_launch_command,
-    scrollback_limit_for_kind,
+    PanelStart, PreparedLaunch, current_unix_millis, kitty_keyboard_for_kind, scrollback_limit_for_kind,
 };
 use super::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, Panel, PanelKind};
 
@@ -38,85 +36,66 @@ impl Panel {
     /// also refuses stale authorization, unverifiable saved history or launch
     /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
-        // The restart resolves the working directory, the saved work of an agent
-        // and the key of its machine on this frame. Part 2 moves that pre-flight
-        // to the coordination worker.
-        let _restarting = crate::ui_thread::exception("part 2: F5 a restart reads the saved work of its panel");
+        let Some(request) = self.restart_request()? else {
+            return Ok(());
+        };
+        let mut preflight = super::spawn::prepare_restart(request)?;
+        let wanted = preflight.work_brief_wanted();
+        if let Some(ready) = preflight.take_ready() {
+            return self.apply_restart(ready);
+        }
+        let Some(pending) = preflight.into_pending() else {
+            return Ok(());
+        };
+        super::work_resume::shutdown_for_restart(
+            self.terminal_mut()
+                .ok_or_else(|| Error::State("No terminal to restart".into()))?,
+            wanted,
+        )?;
+        self.apply_restart(super::spawn::finish_restart(pending)?)
+    }
+
+    /// Restarts the content of this panel with the answer that a worker read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal of the pre-flight, or the error of the process start.
+    pub fn apply_restart(&mut self, start: PanelStart) -> Result<()> {
         if let PanelContent::Browser(browser) = &mut self.content {
             browser.relaunch();
             return Ok(());
         }
-
-        let work_brief = self.requested_work_brief()?;
-        let Some(terminal) = self.content.terminal_mut() else {
-            // Editor panels don't restart — just reload from disk if file-backed.
-            if let Some(editor) = self.content.editor_mut()
+        if let Some(text) = start.editor_text {
+            let text = text.map_err(|error| Error::Editor(error.to_string()))?;
+            if let PanelContent::Editor(editor) = &mut self.content
                 && let Some(path) = editor.file_path.clone()
                 && path.exists()
             {
-                *editor = MarkdownEditor::open(path)?;
+                *editor = MarkdownEditor::from_file(path, text);
             }
             return Ok(());
-        };
-
-        let rows = terminal.rows();
-        let cols = terminal.cols();
-        let replay_bytes = self.restart_replay_bytes();
-
-        if let Some(failure) = self.working_directory_failure() {
-            self.show_working_directory_failure(&failure)?;
+        }
+        if let Some(failure) = &start.working_directory {
+            self.show_working_directory_failure(failure)?;
             return Ok(());
         }
-
-        // A pre-assigned Claude binding may not have a transcript yet (panel
-        // never received a message); resuming it would fail, so relaunch
-        // fresh under the same session id instead.
-        let should_resume = self.kind.supports_session_binding()
-            && self.session_binding.as_ref().is_some_and(|binding| {
-                self.kind != PanelKind::Claude || claude_session_transcript_exists(&binding.session_id)
-            });
-        let (program, mut launch_args) = resolve_launch_command(
-            self.launch_command.clone(),
-            self.launch_args.clone(),
-            self.ssh_connection.clone(),
-            self.kind,
-            AgentLaunchContext {
-                resume: &self.resume,
-                session_binding: self.session_binding.as_ref(),
-                should_resume_binding: should_resume,
-                is_restore: true,
-            },
-        );
-
-        if self.kind.is_agent() {
-            tracing::info!(
-                panel_id = self.id.0,
-                kind = ?self.kind,
-                resume = ?self.resume,
-                session_id = self.session_binding.as_ref().map(|b| b.session_id.as_str()),
-                should_resume,
-                cwd = self.launch_cwd.as_ref().map(|p| p.display().to_string()).as_deref(),
-                cmd = %format!("{program} {}", launch_args.join(" ")),
-                "restarting agent panel"
-            );
-        }
-
-        if work_brief.is_some() && !should_resume {
-            return Err(Error::State("The saved conversation is no longer available.".into()));
-        }
-        let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
-        let owned = self.preflight_restart_work(&program, &launch_args, &env, work_brief.as_deref())?;
-        // Refuse unusable continuation targets while the existing terminal is
-        // still available. Register the replacement owner only after teardown.
-        super::work_resume::shutdown_for_restart(
-            self.terminal_mut()
-                .ok_or_else(|| Error::State("No terminal to restart".into()))?,
-            work_brief.is_some(),
-        )?;
-        let work = self.prepare_restart_work(owned.as_deref(), &mut launch_args, &mut env, work_brief.as_deref())?;
+        let Some(terminal) = self.terminal() else {
+            return Err(Error::State("No terminal to restart".into()));
+        };
+        let (rows, cols) = (terminal.rows(), terminal.cols());
+        let Some(launch) = start.launch else {
+            return Ok(());
+        };
+        let PreparedLaunch {
+            session_binding,
+            program,
+            args,
+            env,
+            work,
+        } = launch;
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
-            args: launch_args,
+            args,
             cwd: self.launch_cwd.clone(),
             rows,
             cols,
@@ -124,11 +103,11 @@ impl Panel {
             cell_height: DEFAULT_CELL_HEIGHT,
             scrollback_limit: scrollback_limit_for_kind(self.kind),
             window_id: self.id.0,
-            replay_bytes,
+            replay_bytes: start.replay_bytes,
             env,
             kitty_keyboard: kitty_keyboard_for_kind(self.kind),
         })?);
-
+        self.session_binding = session_binding;
         if let Some(terminal) = self.terminal_mut() {
             terminal.work_owner = work.owner;
             terminal.work_continuation = work.state;

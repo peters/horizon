@@ -70,7 +70,8 @@ pub use machines::{
 };
 pub use panel::{
     DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
-    SshConnectionEnd, browser_actor,
+    PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
+    finish_restart, prepare_panel_start, prepare_restart,
 };
 pub use place::{
     AfterConnectionLoss, ConnectionLoss, PlaceError, PlaceWorkspace, RECONNECT_RESET_AFTER, SESSION_KILL_TIMEOUT,
@@ -102,6 +103,7 @@ pub use ssh::{
 };
 pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};
 pub use transcript::PanelTranscript;
+pub use transcript::warm_script_support;
 pub use util::{stand_in_program, truncate_chars};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};

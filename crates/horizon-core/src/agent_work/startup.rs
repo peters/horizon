@@ -131,6 +131,16 @@ impl StartupPlan {
         }
     }
 
+    /// The plan of a process whose work was attached already, for a restart
+    /// that a worker prepared.
+    pub(crate) fn settled(owner: Option<std::sync::Arc<super::WorkOwner>>, state: WorkContinuation) -> Self {
+        Self {
+            owner,
+            state,
+            seed: None,
+        }
+    }
+
     pub(crate) fn seed_if_attached(&mut self, attached: bool, args: &mut [String]) {
         if let Some(seed) = self.seed.take() {
             if attached && append_seed(PanelKind::Claude, args, &seed) {

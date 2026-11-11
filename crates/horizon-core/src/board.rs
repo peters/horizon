@@ -104,10 +104,22 @@ pub struct Board {
     /// handed out again on Horizon's own authority.
     unreleased_remote_holds: Vec<UnreleasedRemoteHold>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
+    /// The panels whose process waits for the preparation of a worker, with
+    /// the options that the panel was created from. The UI takes them and asks
+    /// for the preparation; a panel that they no longer name keeps its state.
+    pending_starts: Vec<PendingPanelStart>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
     next_panel_id: u64,
     next_workspace_id: u64,
+}
+
+/// A panel that the frame created and that waits for the preparation of its
+/// process, which a worker reads.
+#[derive(Clone)]
+pub struct PendingPanelStart {
+    pub id: PanelId,
+    pub options: PanelOptions,
 }
 
 /// A remote teardown that finished without an established release, kept so
@@ -136,6 +148,7 @@ impl Board {
             pending_clipboard_writes: Vec::new(),
             unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
+            pending_starts: Vec::new(),
             focused: None,
             active_workspace: None,
             next_panel_id: 1,
@@ -180,6 +193,27 @@ impl Board {
         transcript_root: Option<&Path>,
         maximum: usize,
     ) -> Result<Self> {
+        Self::restore(state, transcript_root, maximum, false)
+    }
+
+    /// Build a board from a persisted runtime state snapshot, with every panel
+    /// whose process waits for the preparation of a worker. The frame takes the
+    /// pending starts with [`Self::take_pending_starts`] and starts each process
+    /// when its answer arrives, so no frame reads a transcript.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime state cannot be restored.
+    pub fn from_runtime_state_waiting(state: &RuntimeState, transcript_root: Option<&Path>) -> Result<Self> {
+        Self::restore(
+            state,
+            transcript_root,
+            crate::agent_work::configured_resume_limit(),
+            true,
+        )
+    }
+
+    fn restore(state: &RuntimeState, transcript_root: Option<&Path>, maximum: usize, waiting: bool) -> Result<Self> {
         let _budget = crate::agent_work::RestoreBudget::new(maximum);
         let mut board = Self::new();
 
@@ -187,7 +221,12 @@ impl Board {
             let ws_id = board.create_workspace_record(workspace_state);
             for panel_state in &workspace_state.panels {
                 let options = panel_restore_options(panel_state, transcript_root, &state.browser);
-                if let Err(error) = board.create_panel(options, ws_id) {
+                let created = if waiting {
+                    board.create_panel_waiting(options, ws_id)
+                } else {
+                    board.create_panel(options, ws_id)
+                };
+                if let Err(error) = created {
                     board.handle_panel_restore_failure(
                         &workspace_state.name,
                         panel_state,

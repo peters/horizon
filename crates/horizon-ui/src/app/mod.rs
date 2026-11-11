@@ -48,6 +48,7 @@ mod machine_open;
 mod minimap;
 mod navigation_input;
 mod panel_chrome;
+mod panel_starts;
 mod panels;
 mod persistence;
 mod press_frame;
@@ -386,6 +387,9 @@ pub struct HorizonApp {
     file_drop_highlight: Option<file_drop::FileDropHighlight>,
     /// Dropped editor files whose size read runs on the coordination worker.
     pending_editor_drops: file_drop::PendingEditorDrops,
+    /// The panels whose process waits for the preparation that the coordination
+    /// worker reads.
+    panel_starts: panel_starts::PanelStarts,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     config_last_mtime: Option<std::time::SystemTime>,

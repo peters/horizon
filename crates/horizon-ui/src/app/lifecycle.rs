@@ -343,6 +343,9 @@ impl HorizonApp {
         workspace_count_before: usize,
         panel_count_before: usize,
     ) {
+        // A panel that this frame created waits for the preparation of its
+        // process on the coordination worker.
+        self.queue_panel_starts();
         // The pass that drew a card measured its content; the height that fits
         // it follows before the board is saved.
         self.fit_block_cards(ctx);

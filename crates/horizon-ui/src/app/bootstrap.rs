@@ -78,6 +78,9 @@ impl HorizonApp {
         // The time of the store comes from the settings worker on the first
         // frame, so the window opens without reading it.
         let config_last_mtime = None;
+        // The probe of `script` starts a process and waits for it, so a worker
+        // resolves it once for the panels of this process.
+        horizon_core::warm_script_support();
 
         let bootstrap = AppBootstrap {
             config_path,
@@ -206,6 +209,7 @@ impl HorizonApp {
             file_hover_positions: HashMap::new(),
             file_drop_highlight: None,
             pending_editor_drops: PendingEditorDrops::default(),
+            panel_starts: super::panel_starts::PanelStarts::default(),
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),

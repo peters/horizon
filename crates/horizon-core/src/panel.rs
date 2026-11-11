@@ -2,6 +2,12 @@ mod lifecycle;
 pub(crate) mod spawn;
 mod work_resume;
 
+pub(crate) use spawn::spawn_waiting_panel;
+pub use spawn::{
+    PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,
+    prepare_restart,
+};
+
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -129,6 +135,7 @@ impl Default for PanelLayout {
     }
 }
 
+#[derive(Clone)]
 pub struct PanelOptions {
     pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub device_input: crate::DeviceInput,
@@ -243,7 +250,24 @@ fn panel_runs_a_local_process(kind: PanelKind) -> bool {
     kind != PanelKind::Ssh
 }
 
+/// Whether a panel of `kind` starts a process of this computer, which the frame
+/// starts only after a worker read its transcript, its directory and its saved
+/// work.
+#[must_use]
+pub fn panel_waits_for_its_start(kind: PanelKind) -> bool {
+    !matches!(
+        kind,
+        PanelKind::Editor | PanelKind::Device | PanelKind::Block | PanelKind::Browser
+    )
+}
+
 impl PanelOptions {
+    /// Whether the process of this panel waits for the preparation of a worker.
+    #[must_use]
+    pub fn waits_for_its_start(&self) -> bool {
+        panel_waits_for_its_start(self.kind)
+    }
+
     #[must_use]
     pub(crate) fn runs_a_local_process(&self) -> bool {
         if !panel_runs_a_local_process(self.kind) {
@@ -643,21 +667,36 @@ impl Panel {
     }
 
     /// The directory this panel cannot start its process in, if any.
-    fn working_directory_failure(&self) -> Option<spawn::UnusableWorkingDirectory> {
-        if !panel_runs_a_local_process(self.kind) {
-            return None;
-        }
-        let failure = spawn::usable_working_directory(self.launch_cwd.as_deref()).err()?;
-        tracing::warn!(
-            panel_id = self.id.0,
-            directory = %failure.path,
-            reason = %failure.reason,
-            "panel cannot start in its working directory"
-        );
-        Some(failure)
+    /// Starts the process of a panel that waited for the preparation of a
+    /// worker, keeping its identity, its place and its visibility. A process
+    /// that cannot start leaves the panel that says so.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if even the placeholder of a failed start cannot be
+    /// created.
+    pub fn apply_start(&mut self, options: &PanelOptions, start: spawn::PanelStart) -> Result<()> {
+        let mut started = match spawn::spawn_started_panel(self.id, self.workspace_id, options.clone(), start) {
+            Ok(panel) => panel,
+            Err(error) => {
+                let message = error.to_string();
+                tracing::error!(panel_id = self.id.0, %error, "failed to start the restored panel");
+                spawn::placeholder_panel(
+                    self.id,
+                    self.workspace_id,
+                    options.clone(),
+                    spawn::Placeholder::RestoreFailure(&message),
+                )?
+            }
+        };
+        // The panel that waited keeps its place and its visibility: only its
+        // content and the launch of its process change.
+        started.visible = self.visible;
+        started.layout = self.layout;
+        std::mem::swap(self, &mut started);
+        Ok(())
     }
 
-    /// Replace the process this panel cannot start with what went wrong.
     fn show_working_directory_failure(&mut self, failure: &spawn::UnusableWorkingDirectory) -> Result<()> {
         let Some((rows, cols)) = self.terminal().map(|terminal| (terminal.rows(), terminal.cols())) else {
             return Ok(());

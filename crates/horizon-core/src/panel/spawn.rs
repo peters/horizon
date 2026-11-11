@@ -1,11 +1,19 @@
 mod block;
 mod device;
+mod start;
 mod terminal;
 
-use terminal::spawn_terminal;
+pub use start::{
+    PanelStart, PendingRestart, PreparedLaunch, RestartPreflight, StartRequest, finish_restart, prepare_panel_start,
+};
+pub use start::{RestartRequest, prepare_restart};
 pub(super) use terminal::{Placeholder, placeholder_panel, placeholder_terminal};
+use terminal::{spawn_started_terminal, spawn_terminal, waiting_terminal_panel};
+
+use super::work_resume::WorkPanel;
 #[cfg(test)]
-use terminal::{disconnected_snapshot_launch_command, prepare_transcript_restore};
+use terminal::disconnected_snapshot_launch_command;
+pub(crate) use terminal::{prepare_transcript_restore, resolve_spawn_launch};
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -29,6 +37,30 @@ use super::{
     PanelLayout, PanelOptions, PanelResume,
 };
 
+/// Starts a panel whose process waits for the preparation of a worker. A panel
+/// that runs no local process starts at once, as it has nothing to prepare.
+pub(crate) fn spawn_waiting_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
+    if opts.local_id.is_none() {
+        opts.local_id = Some(new_local_id());
+    }
+    if !opts.waits_for_its_start() {
+        return spawn_panel(id, workspace_id, opts);
+    }
+    let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
+    waiting_terminal_panel(id, workspace_id, local_id, opts)
+}
+
+/// Starts a panel with the preparation that a worker read.
+pub(crate) fn spawn_started_panel(
+    id: PanelId,
+    workspace_id: WorkspaceId,
+    opts: PanelOptions,
+    start: PanelStart,
+) -> Result<Panel> {
+    let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
+    spawn_started_terminal(id, workspace_id, local_id, opts, start)
+}
+
 struct StaticPanelSeed {
     id: PanelId,
     workspace_id: WorkspaceId,
@@ -49,7 +81,7 @@ struct TerminalLaunchTrace<'a> {
     cmd: String,
 }
 
-struct ResolvedTerminalLaunch {
+pub(crate) struct ResolvedTerminalLaunch {
     session_binding: Option<AgentSessionBinding>,
     program: String,
     launch_args: Vec<String>,

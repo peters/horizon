@@ -86,6 +86,68 @@ impl Board {
         self.create_panel_with(opts, workspace, Panel::spawn)
     }
 
+    /// Create a panel whose process waits for the preparation that a worker
+    /// reads: the frame that creates it reads no transcript and no directory,
+    /// and starts the process when the answer arrives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the panel cannot be created.
+    pub fn create_panel_waiting(&mut self, opts: PanelOptions, workspace: WorkspaceId) -> Result<PanelId> {
+        self.create_waiting_panel_with_layout(opts, workspace, None)
+    }
+
+    /// Create a panel that waits for its preparation, in a free place beside
+    /// the panel `beside`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the panel cannot be created.
+    pub fn create_panel_beside_waiting(
+        &mut self,
+        opts: PanelOptions,
+        workspace: WorkspaceId,
+        beside: PanelId,
+    ) -> Result<PanelId> {
+        self.create_waiting_panel_with_layout(opts, workspace, Some(beside))
+    }
+
+    fn create_waiting_panel_with_layout(
+        &mut self,
+        opts: PanelOptions,
+        workspace: WorkspaceId,
+        beside: Option<PanelId>,
+    ) -> Result<PanelId> {
+        let pending = opts.waits_for_its_start().then(|| opts.clone());
+        let id = self.create_panel_with_layout(opts, workspace, beside, crate::panel::spawn_waiting_panel)?;
+        if let Some(options) = pending {
+            self.pending_starts.push(super::PendingPanelStart { id, options });
+        }
+        Ok(id)
+    }
+
+    /// The panels that wait for the preparation of their process, so the UI can
+    /// ask a worker for it.
+    pub fn take_pending_starts(&mut self) -> Vec<super::PendingPanelStart> {
+        std::mem::take(&mut self.pending_starts)
+    }
+
+    /// Starts the process of a panel that waited for it.
+    ///
+    /// A panel that no longer stands, because the person closed it or another
+    /// session replaced the board, keeps nothing: the answer of the worker is
+    /// dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process of the panel cannot be started.
+    pub fn start_panel(&mut self, id: PanelId, options: &PanelOptions, start: crate::panel::PanelStart) -> Result<()> {
+        let Some(panel) = self.panels.iter_mut().find(|panel| panel.id == id) else {
+            return Ok(());
+        };
+        panel.apply_start(options, start)
+    }
+
     /// Create a panel inside a workspace that takes a free place beside the
     /// panel `beside`, such as the agent panel that a card belongs to.
     ///

@@ -68,8 +68,8 @@ impl HorizonApp {
         let kind = options.kind;
         let created = self.placed_options(options, workspace_id).and_then(|options| {
             match beside.filter(|panel| self.board.panel(*panel).is_some()) {
-                Some(beside) => self.board.create_panel_beside(options, workspace_id, beside),
-                None => self.board.create_panel(options, workspace_id),
+                Some(beside) => self.board.create_panel_beside_waiting(options, workspace_id, beside),
+                None => self.board.create_panel_waiting(options, workspace_id),
             }
         });
         if let Err(error) = &created {
@@ -161,7 +161,7 @@ impl HorizonApp {
         workspace: WorkspaceId,
         beside: PanelId,
     ) -> horizon_core::Result<PanelId> {
-        self.board.create_panel_beside(options, workspace, beside)
+        self.board.create_panel_beside_waiting(options, workspace, beside)
     }
 
     /// Reveal a panel the same way a sidebar panel-row click does: detached

@@ -38,6 +38,18 @@ impl MarkdownEditor {
         })
     }
 
+    /// An editor of `path` whose text a worker read, so the frame opens no
+    /// file.
+    #[must_use]
+    pub fn from_file(path: PathBuf, text: String) -> Self {
+        Self {
+            text,
+            file_path: Some(path),
+            dirty: false,
+            preview_mode: PreviewMode::Preview,
+        }
+    }
+
     /// Create an empty scratch buffer.
     #[must_use]
     pub fn scratch() -> Self {

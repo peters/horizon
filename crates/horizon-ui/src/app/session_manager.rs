@@ -434,6 +434,7 @@ impl HorizonApp {
         // per-panel cache so a same-id panel cannot inherit stale textures or
         // sequence numbers from the previous session.
         self.panel_render_caches = PanelRenderCaches::default();
+        self.panel_starts.clear();
         self.clear_workspace_rename();
         self.clear_panel_rename();
         self.command_palette = None;

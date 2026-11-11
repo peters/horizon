@@ -15,8 +15,8 @@ use super::super::{
     PanelResume,
 };
 use super::{
-    ResolvedTerminalLaunch, agent_env, current_unix_millis, default_shell, kitty_keyboard_for_kind,
-    resolve_terminal_launch, scrollback_limit_for_kind,
+    PanelStart, PreparedLaunch, ResolvedTerminalLaunch, current_unix_millis, default_shell, kitty_keyboard_for_kind,
+    resolve_terminal_launch, scrollback_limit_for_kind, start::StartRequest,
 };
 
 struct TerminalPanelBuildArgs {
@@ -143,44 +143,129 @@ pub(in crate::panel) fn placeholder_panel(
     Ok(panel)
 }
 
-/// The directory this panel cannot start its process in, if any.
-///
-/// A panel whose directory was renamed or deleted must not keep Horizon's own
-/// directory: its agent would work in another repository without a warning.
-fn working_directory_failure(id: PanelId, opts: &PanelOptions) -> Option<super::UnusableWorkingDirectory> {
-    if !opts.runs_a_local_process() {
-        return None;
-    }
-    let failure = super::usable_working_directory(opts.cwd.as_deref()).err()?;
-    tracing::warn!(
-        panel_id = id.0,
-        directory = %failure.path,
-        reason = %failure.reason,
-        "panel cannot start in its working directory"
-    );
-    Some(failure)
-}
-
-/// Accepts the reads that the restore of a panel still does on the frame: the
-/// replay of its transcript, its working directory, the probe of `script` and the
-/// saved work of its agent. Part 2 moves them to the coordination worker.
-fn restoring_on_the_frame() -> crate::ui_thread::ExceptionScope {
-    crate::ui_thread::exception("part 2: F4 a panel reads its transcript and its directory on the frame")
-}
-
+/// Starts a panel whose preparation ran on this thread. A frame uses
+/// [`waiting_terminal_panel`] and [`Panel::apply_start`] instead, because the
+/// three reads below must not run on the UI thread.
 pub(super) fn spawn_terminal(
     id: PanelId,
     workspace_id: WorkspaceId,
     local_id: String,
     opts: PanelOptions,
 ) -> Result<Panel> {
-    let _restoring = restoring_on_the_frame();
-    if let Some(failure) = working_directory_failure(id, &opts) {
-        return placeholder_panel(id, workspace_id, opts, Placeholder::for_working_directory(&failure));
+    let request = StartRequest {
+        id,
+        local_id: local_id.clone(),
+        opts: opts.clone(),
+    };
+    let start = super::start::prepare_panel_start(request);
+    spawn_started_terminal(id, workspace_id, local_id, opts, start)
+}
+
+/// The panel of a process that waits for its preparation. It says that Horizon
+/// prepares it, and the answer of the worker replaces that screen.
+pub(super) fn waiting_terminal_panel(
+    id: PanelId,
+    workspace_id: WorkspaceId,
+    local_id: String,
+    opts: PanelOptions,
+) -> Result<Panel> {
+    let rows = opts.rows;
+    let cols = opts.cols;
+    let kind = opts.kind;
+    let ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
+    let args = terminal_panel_args(id, workspace_id, local_id, opts);
+    // Short lines, so a panel of any width says why it is empty.
+    let replay_bytes = concat!(
+        "Its saved screen and the launch\r\n",
+        "of its process are read in the\r\n",
+        "background. Preparing this panel.\r\n",
+        "The first output of the panel\r\n",
+        "replaces this text.\r\n"
+    )
+    .as_bytes()
+    .to_vec();
+    let terminal = spawn_restore_failure_snapshot_terminal(id, kind, rows, cols, replay_bytes)?;
+    Ok(build_terminal_panel(args, terminal, ssh_status))
+}
+
+/// Builds the terminal fields of a panel from its options, without a read.
+fn terminal_panel_args(
+    id: PanelId,
+    workspace_id: WorkspaceId,
+    local_id: String,
+    opts: PanelOptions,
+) -> TerminalPanelBuildArgs {
+    let PanelOptions {
+        name,
+        name_is_custom,
+        rows: _,
+        cols: _,
+        kind,
+        resume,
+        work_resume,
+        position,
+        size,
+        template,
+        is_restore: _,
+        transcript_root: _,
+        launch_wrapper: _,
+        command,
+        args,
+        cwd,
+        session_binding,
+        ssh_connection,
+        opened_by,
+        machine,
+        machine_session,
+        ..
+    } = opts;
+    let (has_custom_name, title) = panel_title(name, name_is_custom, id, ssh_connection.as_ref());
+    TerminalPanelBuildArgs {
+        id,
+        local_id,
+        title,
+        kind,
+        resume,
+        work_resume,
+        position,
+        size,
+        workspace_id,
+        session_binding,
+        template,
+        has_custom_name,
+        launch_command: command,
+        launch_args: args,
+        launch_cwd: cwd,
+        ssh_connection,
+        opened_by,
+        machine,
+        machine_session,
     }
-    let (transcript, replay_bytes, had_persisted_transcript_state) =
-        prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);
-    let resolved_launch = resolve_spawn_launch(id, &opts, transcript.as_ref());
+}
+
+/// Starts the process of a panel with the preparation that a worker read. The
+/// process start is the one work of a panel that a frame does itself.
+pub(super) fn spawn_started_terminal(
+    id: PanelId,
+    workspace_id: WorkspaceId,
+    local_id: String,
+    opts: PanelOptions,
+    start: PanelStart,
+) -> Result<Panel> {
+    let PanelStart {
+        working_directory,
+        replay_bytes,
+        had_persisted_transcript_state,
+        launch,
+        editor_text: _,
+        work_brief_wanted: _,
+    } = start;
+    let Some(launch) = launch else {
+        return Err(crate::error::Error::State("This panel runs no process".into()));
+    };
+    if let Some(failure) = &working_directory {
+        return placeholder_panel(id, workspace_id, opts, Placeholder::for_working_directory(failure));
+    }
     let PanelOptions {
         name,
         name_is_custom,
@@ -197,33 +282,23 @@ pub(super) fn spawn_terminal(
         size,
         template,
         restore_as_disconnected_snapshot,
-        is_restore,
+        is_restore: _,
         launch_wrapper,
         opened_by,
         machine,
         machine_session,
         ..
     } = opts;
-
-    let (saved_command, saved_args) = (command.clone(), args.clone());
     let (saved_cwd, saved_ssh_connection) = (cwd.clone(), ssh_connection.clone());
-    let ResolvedTerminalLaunch {
+    let PreparedLaunch {
         session_binding,
         program,
-        mut launch_args,
-    } = resolved_launch;
+        args: launch_args,
+        env,
+        work,
+    } = launch;
     let (has_custom_name, title) = panel_title(name, name_is_custom, id, saved_ssh_connection.as_ref());
     let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
-    let mut env = agent_env(kind, &local_id, saved_command.is_none());
-    let work_plan = crate::agent_work::WorkLaunch {
-        panel: &local_id,
-        kind,
-        policy: &work_resume,
-        cwd: saved_cwd.as_deref(),
-        session_id: session_binding.as_ref().map(|binding| binding.session_id.as_str()),
-        default_command: saved_command.is_none(),
-    }
-    .start(&program, is_restore, saved_args.is_empty(), &mut launch_args, &mut env);
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
@@ -237,8 +312,8 @@ pub(super) fn spawn_terminal(
         session_binding,
         template,
         has_custom_name,
-        launch_command: saved_command,
-        launch_args: saved_args,
+        launch_command: command,
+        launch_args: args,
         launch_cwd: saved_cwd,
         ssh_connection: saved_ssh_connection,
         opened_by,
@@ -272,13 +347,13 @@ pub(super) fn spawn_terminal(
         env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
-    terminal.work_owner = work_plan.owner;
-    terminal.work_continuation = work_plan.state;
+    terminal.work_owner = work.owner;
+    terminal.work_continuation = work.state;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
     Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
 }
 
-fn resolve_spawn_launch(
+pub(crate) fn resolve_spawn_launch(
     id: PanelId,
     opts: &PanelOptions,
     transcript: Option<&PanelTranscript>,
@@ -495,7 +570,7 @@ fn default_terminal_title(id: PanelId, ssh_connection: Option<&SshConnection>) -
     )
 }
 
-pub(super) fn prepare_transcript_restore(
+pub(crate) fn prepare_transcript_restore(
     id: PanelId,
     kind: PanelKind,
     transcript_root: Option<PathBuf>,
