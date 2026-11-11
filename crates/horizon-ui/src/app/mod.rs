@@ -63,6 +63,8 @@ mod reconnect;
 mod remote_hosts;
 mod root_chrome;
 mod root_viewport;
+#[cfg(test)]
+mod server_join_tests;
 mod server_sync;
 mod session;
 mod session_jobs;

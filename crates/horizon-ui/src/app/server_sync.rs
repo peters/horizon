@@ -42,8 +42,9 @@ impl ServerLine {
         }
     }
 
-    /// The line that the sidebar shows. `None` would name no server, which is the
-    /// case where the section shows no line at all.
+    /// The line that the sidebar and the top of the Server tab show. A state that
+    /// no person can bring back reads as the reason that the join is the only way
+    /// on, and never as a link that is still trying.
     ///
     /// `connecting` is short: only the first attempt of a link reads it, and an
     /// attempt after one that failed reads `away` until a hello answers.
@@ -52,6 +53,8 @@ impl ServerLine {
             "away" if self.pending == 0 => "Server away".to_owned(),
             "away" => format!("Server away · {} pending", self.pending),
             "in_step" => "Server: in step".to_owned(),
+            "removed" => "This computer was removed from the server.".to_owned(),
+            "not_logged_in" => "This computer is not logged in to the server.".to_owned(),
             _ => "Server: connecting".to_owned(),
         }
     }
@@ -765,6 +768,28 @@ mod tests {
             ServerLine::of(&LinkState::Away { pending: 4 }).text(),
             "Server away · 4 pending"
         );
+        // A link that no attempt can bring back says what happened, and never that
+        // it is still connecting.
+        assert_eq!(
+            ServerLine::of(&LinkState::Removed).text(),
+            "This computer was removed from the server."
+        );
+        assert_eq!(
+            ServerLine::of(&LinkState::NotLoggedIn).text(),
+            "This computer is not logged in to the server."
+        );
+        for state in [
+            LinkState::Removed,
+            LinkState::NotLoggedIn,
+            LinkState::Away { pending: 3 },
+            LinkState::InStep { index: 1 },
+        ] {
+            assert_ne!(
+                ServerLine::of(&state).text(),
+                "Server: connecting",
+                "{state:?} is not a link that is still trying"
+            );
+        }
     }
 
     #[test]

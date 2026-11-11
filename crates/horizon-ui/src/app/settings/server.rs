@@ -336,9 +336,9 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, state: &mut ServerTabStat
         render_invitation_section(ui, state);
         render_devices_section(ui, state);
     }
-    if !view.logged_out {
-        render_join_section(ui, state, view);
-    }
+    // A computer that is not logged in, and one that the server removed, join
+    // again from this tab: the join is the only way back to a link.
+    render_join_section(ui, state, view);
     changed |= render_link_section(ui, config, state, view);
     super::validation_notice(ui, config.server.validate());
     changed
@@ -808,6 +808,90 @@ mod tests {
         );
         assert!(texts.iter().any(|text| text == "Computers"), "{texts:?}");
         assert!(texts.iter().any(|text| text == "Add a computer"), "{texts:?}");
+    }
+
+    #[test]
+    fn a_computer_that_is_not_logged_in_draws_the_join_and_says_why() {
+        // The two states that no attempt of the link can leave read as their
+        // reason, and both offer the join: it is the only way back to a link.
+        for line in [
+            "This computer is not logged in to the server.",
+            "This computer was removed from the server.",
+        ] {
+            let mut state = ServerTabState::default();
+            let view = ServerView {
+                line: line.to_owned(),
+                device: "window-b".to_owned(),
+                linked: false,
+                logged_out: true,
+                name_locked: false,
+            };
+            let mut config = Config::default();
+            let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));
+            assert!(texts.iter().any(|text| text == line), "{texts:?}");
+            assert!(texts_hold_join(&texts), "the join is shown for {line}: {texts:?}");
+            assert!(
+                !texts.iter().any(|text| text == "Computers"),
+                "the list of a link that ended is not drawn: {texts:?}"
+            );
+            assert!(
+                state.device == "window-b",
+                "the name of the removed computer stays in the field"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_computer_shows_the_name_that_its_join_would_take() {
+        let mut state = ServerTabState::default();
+        let view = ServerView {
+            line: "This computer has no server.".to_owned(),
+            ..ServerView::default()
+        };
+        let mut config = Config::default();
+        let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));
+        assert!(
+            texts.iter().any(|text| text == "This computer has no server."),
+            "{texts:?}"
+        );
+        assert!(texts_hold_join(&texts), "{texts:?}");
+        assert!(
+            state.device.starts_with("horizon-"),
+            "the field holds the name that a link would take: {:?}",
+            state.device
+        );
+        let proposed = state.device.clone();
+        let _ = tall_frame(|ui| render(ui, &mut config, &mut state, &view));
+        assert_eq!(state.device, proposed, "a second frame proposes the same name");
+    }
+
+    #[test]
+    fn the_name_of_a_login_is_read_only_and_says_that_it_belongs_to_the_login() {
+        let mut state = ServerTabState {
+            device: "window-b".to_owned(),
+            ..ServerTabState::default()
+        };
+        let view = ServerView {
+            line: "Server: in step".to_owned(),
+            device: "window-b".to_owned(),
+            linked: true,
+            logged_out: false,
+            name_locked: true,
+        };
+        let mut config = Config::default();
+        let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "This name belongs to the login of this computer, so a new name needs a new link."),
+            "the field of a login says why it is read-only: {texts:?}"
+        );
+        assert_eq!(state.device, "window-b", "a frame writes no other name");
+    }
+
+    /// Whether the tab draws the heading of the join.
+    fn texts_hold_join(texts: &[String]) -> bool {
+        texts.iter().any(|text| text == "Join with a link")
     }
 
     /// The texts of one frame of the tab at a height that holds the whole tab, so
