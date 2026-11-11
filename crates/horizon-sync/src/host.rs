@@ -482,5 +482,86 @@ mod tests {
         running.join().expect("the server thread").expect("a clean stop");
         let lock = home.lock().expect("a stopped server releases its lock");
         drop(lock);
+        assert!(
+            home.lock_path().exists(),
+            "the lock file stays after a stop; the lock itself is the descriptor of the running server"
+        );
+    }
+
+    /// A server that was killed leaves its lock file, its socket and the
+    /// write-ahead files of SQLite. The next start must serve a home in that state
+    /// instead of refusing it: the lock is the open file of the running process,
+    /// and a socket that no process listens on is stale.
+    #[test]
+    fn a_home_that_a_killed_server_left_starts_again() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let home = home(&directory);
+        home.prepare().expect("the home");
+        std::fs::write(home.lock_path(), b"").expect("a lock file of a killed server");
+        let stale = std::os::unix::net::UnixListener::bind(home.socket_path()).expect("a socket of a killed server");
+        drop(stale);
+        // A killed server leaves its store, its write-ahead log and its shared
+        // index behind. The three files of a store that was writing are copied
+        // here, because a store that closed cleanly checkpoints its log away.
+        let writing = directory.path().join("killed");
+        std::fs::create_dir(&writing).expect("the directory of the killed server");
+        let store = crate::Store::open(&writing.join("server.sqlite")).expect("the store of the killed server");
+        store
+            .push(
+                "test-device",
+                &[crate::Intent {
+                    device: "test-device".to_owned(),
+                    id: 1,
+                    seen: None,
+                    op: crate::Op::MachineRemove {
+                        name: "build-1".to_owned(),
+                    },
+                }],
+            )
+            .expect("one change of the killed server");
+        for name in ["server.sqlite", "server.sqlite-wal", "server.sqlite-shm"] {
+            let from = writing.join(name);
+            assert!(from.exists(), "the killed server left {name}");
+            std::fs::copy(&from, home.root().join(name)).expect("a file of the killed server");
+        }
+        store.close();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let running = {
+            let (home, stop) = (home.clone(), Arc::clone(&stop));
+            thread::spawn(move || serve_until_stopped(&home, &stop))
+        };
+        // The socket file of a killed server stays after its process is gone, so
+        // the test waits for a link that the new server answers and not for a name.
+        wait_for(|| answers_a_link(&home));
+
+        stop.store(true, Ordering::SeqCst);
+        running.join().expect("the server thread").expect("a clean stop");
+        assert!(!home.socket_path().exists(), "a stopped server removes its socket");
+        assert!(
+            home.lock_path().exists(),
+            "the lock file of the home stays, as after every stop"
+        );
+    }
+
+    /// Whether the server of `home` answers the hello of one link now.
+    fn answers_a_link(home: &ServerHome) -> bool {
+        let (requests, mut request) = std::io::pipe().expect("a pipe");
+        let (mut answer, answers) = std::io::pipe().expect("a pipe");
+        let relaying = {
+            let home = home.clone();
+            thread::spawn(move || link_streams(&home, requests, answers))
+        };
+        let hello = crate::Frame::Hello(crate::Hello {
+            protocol: crate::PROTOCOL_VERSION,
+            device: "test-device".to_owned(),
+            store: None,
+        });
+        let _ = crate::write_frame(&mut request, &hello);
+        let answered = crate::read_frame(&mut answer).ok().flatten();
+        drop(request);
+        drop(answer);
+        let _ = relaying.join();
+        matches!(answered, Some(crate::Frame::HelloOk(_)))
     }
 }
