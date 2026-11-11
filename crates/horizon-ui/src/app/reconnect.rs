@@ -193,26 +193,7 @@ impl HorizonApp {
     /// Starts the attempt that a wait saved, through the path of the
     /// "Reconnect" action.
     fn start_next_attempt(&mut self, panel_id: PanelId) {
-        match self.board.restart_panel(panel_id) {
-            Ok(()) => {
-                // The new process draws a new screen, so the grid of the lost
-                // one must not come back from the render cache.
-                self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
-                self.panel_render_caches.editor_preview_cache.remove(&panel_id);
-                self.panel_render_caches.browser_ui_state.remove(&panel_id);
-                self.panel_render_caches.device_ui_state.remove(&panel_id);
-                tracing::info!(panel_id = panel_id.0, "a machine terminal reconnects after a lost link");
-            }
-            Err(error) => {
-                // A command that does not start at all is not a lost link, so
-                // the panel stays disconnected until the person acts.
-                tracing::warn!(panel_id = panel_id.0, %error, "a machine terminal did not reconnect");
-                self.reconnects.cancel(panel_id);
-                if let Some(panel) = self.board.panel_mut(panel_id) {
-                    panel.show_disconnected();
-                }
-            }
-        }
+        self.request_panel_restart(panel_id, super::panel_restarts::RestartCause::Reconnect);
     }
 }
 

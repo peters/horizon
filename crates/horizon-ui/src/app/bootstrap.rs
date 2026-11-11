@@ -210,6 +210,7 @@ impl HorizonApp {
             file_drop_highlight: None,
             pending_editor_drops: PendingEditorDrops::default(),
             panel_starts: super::panel_starts::PanelStarts::default(),
+            panel_restarts: super::panel_restarts::PanelRestarts::default(),
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),

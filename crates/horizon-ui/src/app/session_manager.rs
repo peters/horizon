@@ -435,6 +435,7 @@ impl HorizonApp {
         // sequence numbers from the previous session.
         self.panel_render_caches = PanelRenderCaches::default();
         self.panel_starts.clear();
+        self.panel_restarts.clear();
         self.clear_workspace_rename();
         self.clear_panel_rename();
         self.command_palette = None;

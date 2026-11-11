@@ -11,6 +11,7 @@ pub(super) use terminal::{Placeholder, placeholder_panel, placeholder_terminal};
 use terminal::{spawn_started_terminal, spawn_terminal, waiting_terminal_panel};
 
 use super::work_resume::WorkPanel;
+pub(crate) use super::work_resume::shutdown_for_restart;
 #[cfg(test)]
 use terminal::disconnected_snapshot_launch_command;
 pub(crate) use terminal::{prepare_transcript_restore, resolve_spawn_launch};

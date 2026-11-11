@@ -28,6 +28,7 @@ impl PanelStarts {
     }
 
     /// How many panels wait for their preparation.
+    #[cfg(test)]
     pub(in crate::app) fn waiting_count(&self) -> usize {
         self.waiting.len()
     }

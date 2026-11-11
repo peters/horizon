@@ -379,6 +379,8 @@ fn a_key_press_ends_an_attempt_that_is_in_flight_and_starts_a_new_one() {
     // and not after the delay of the reconnect.
     app.reconnect_panel_now(panel_id);
     app.apply_panel_transitions();
+    // The restart reads its pre-flight on the coordination worker.
+    app.settle_panel_restarts();
     let both = wait_for_attempts(&marker, 2);
 
     assert_ne!(both[0], both[1], "a new process runs the attempt");

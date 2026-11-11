@@ -331,6 +331,53 @@ impl Board {
         panel.restart()
     }
 
+    /// The values that the pre-flight of a restart reads, for a worker. `None`
+    /// when the panel restarts nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal of a resume that the panel can no longer offer.
+    pub fn request_restart(&mut self, id: PanelId) -> Result<Option<crate::panel::RestartRequest>> {
+        let panel = self
+            .panels
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
+        panel.restart_request()
+    }
+
+    /// Ends the process of a panel that a restart replaces, so the new one starts
+    /// from a screen that no old output reaches.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of a process that does not end.
+    pub fn begin_restart(&mut self, id: PanelId, continuation: bool) -> Result<()> {
+        let panel = self
+            .panels
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
+        let terminal = panel
+            .terminal_mut()
+            .ok_or_else(|| Error::State("No terminal to restart".into()))?;
+        crate::panel::shutdown_for_restart(terminal, continuation)
+    }
+
+    /// Restarts the content of a panel with the answer of the worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the process that does not start.
+    pub fn apply_restart(&mut self, id: PanelId, start: crate::panel::PanelStart) -> Result<()> {
+        let panel = self
+            .panels
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
+        panel.apply_restart(start)
+    }
+
     pub fn shutdown_terminal_panels(&mut self) {
         let shutdown = self.begin_async_shutdown();
         if !shutdown.wait_for_completion(TERMINAL_PANEL_SHUTDOWN_TIMEOUT) {

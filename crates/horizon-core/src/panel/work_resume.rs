@@ -647,7 +647,7 @@ fn readable_session_header(path: &std::path::Path) -> Option<serde_json::Value> 
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(super) fn shutdown_for_restart(terminal: &mut crate::terminal::Terminal, continuation: bool) -> Result<()> {
+pub(crate) fn shutdown_for_restart(terminal: &mut crate::terminal::Terminal, continuation: bool) -> Result<()> {
     if !terminal.shutdown_with_timeout(std::time::Duration::from_secs(2)) && continuation {
         return Err(Error::State(
             "The previous process has not finished shutting down. No continuation was started.".into(),

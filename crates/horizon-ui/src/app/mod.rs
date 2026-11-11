@@ -48,6 +48,7 @@ mod machine_open;
 mod minimap;
 mod navigation_input;
 mod panel_chrome;
+mod panel_restarts;
 mod panel_starts;
 mod panels;
 mod persistence;
@@ -390,6 +391,8 @@ pub struct HorizonApp {
     /// The panels whose process waits for the preparation that the coordination
     /// worker reads.
     panel_starts: panel_starts::PanelStarts,
+    /// The panels whose restart runs, and why each one restarts.
+    panel_restarts: panel_restarts::PanelRestarts,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     config_last_mtime: Option<std::time::SystemTime>,

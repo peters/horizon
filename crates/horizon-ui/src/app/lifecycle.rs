@@ -212,14 +212,7 @@ impl HorizonApp {
         }
         let panels_to_restart = std::mem::take(&mut self.panels_to_restart);
         for panel_id in panels_to_restart {
-            if let Err(error) = self.board.restart_panel(panel_id) {
-                tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
-            } else {
-                self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
-                self.panel_render_caches.editor_preview_cache.remove(&panel_id);
-                self.panel_render_caches.browser_ui_state.remove(&panel_id);
-                self.panel_render_caches.device_ui_state.remove(&panel_id);
-            }
+            self.request_panel_restart(panel_id, super::panel_restarts::RestartCause::Panel);
         }
     }
 
