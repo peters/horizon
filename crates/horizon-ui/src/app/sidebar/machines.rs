@@ -134,23 +134,27 @@ impl HorizonApp {
         };
     }
 
-    /// Says why a machine action opened nothing, in the machine section.
-    pub(in crate::app) fn set_machine_notice(&mut self, line: String) {
-        self.machine_notice = Some(line);
-        self.machine_notice_until = Some(Instant::now() + NOTICE);
+    /// Says why an action of the person opened nothing, in the machine section.
+    ///
+    /// It is the one short notice of this window: a machine action, a panel
+    /// that cannot start and a browser engine that ends at once all say their
+    /// reason here, in the danger tone, for [`NOTICE`].
+    pub(in crate::app) fn set_sidebar_notice(&mut self, line: String) {
+        self.sidebar_notice = Some(line);
+        self.sidebar_notice_until = Some(Instant::now() + NOTICE);
     }
 
     /// Draws the machine section below the workspaces, when this Horizon keeps a
     /// machine.
     pub(super) fn render_sidebar_machines(&mut self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
-        if self.machine_notice_until.is_some_and(|until| Instant::now() >= until) {
-            self.machine_notice = None;
-            self.machine_notice_until = None;
+        if self.sidebar_notice_until.is_some_and(|until| Instant::now() >= until) {
+            self.sidebar_notice = None;
+            self.sidebar_notice_until = None;
         }
-        // A reason that a machine action, or a new terminal of a placed
-        // workspace, opened nothing stays visible after the row is forgotten,
-        // because it is the reason the person has to act on.
-        if self.machine_rows.rows().is_empty() && self.machine_notice.is_none() {
+        // A reason that an action of the person opened nothing stays visible
+        // after the row is forgotten, because it is the reason the person has to
+        // act on.
+        if self.machine_rows.rows().is_empty() && self.sidebar_notice.is_none() {
             return;
         }
         if !self.machine_rows.rows().is_empty() {
@@ -177,7 +181,7 @@ impl HorizonApp {
         }
         self.machine_rows = rows;
 
-        if let Some(notice) = self.machine_notice.clone() {
+        if let Some(notice) = self.sidebar_notice.clone() {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(18.0);

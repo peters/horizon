@@ -220,7 +220,11 @@ fn a_new_terminal_of_a_place_whose_machine_is_gone_says_so_and_makes_no_panel() 
     assert!(matches!(error, horizon_core::Error::Place(_)), "{error}");
     assert!(error.to_string().contains("build-1"), "{error}");
     assert_eq!(app.board.panels.len(), before, "no panel is made");
-    let notice = app.machine_notice.as_deref().unwrap_or_default();
+    let notice = app.sidebar_notice.as_deref().unwrap_or_default();
+    assert!(
+        notice.starts_with("Shell panel: "),
+        "the notice names the kind of panel that opened nothing: {notice}"
+    );
     assert!(
         notice.contains("machine_unavailable"),
         "the sidebar says the typed reason: {notice}"

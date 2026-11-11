@@ -173,6 +173,7 @@ fn a_gone_owner_keeps_the_selected_row_in_a_dimmed_form() {
         HostFrames {
             agent_gone: true,
             clicks_refused: false,
+            link_refused: false,
         },
         "the pass tells the host which frames the body needs room for"
     );

@@ -1121,9 +1121,24 @@ stop the server in step 8.
    Result: The answer is `invalid_document`, and the message names
    `components[8]` and the limit of 8 links.
 
-8. Stop the loopback server. Close the browser panels that the task opened.
+8. Set `browser.command` in the settings to a program that does not exist, and
+   press `Open session` again.
 
-   Result: The server exits.
+   Result: No browser panel stays on the board. Two lines say why, and both use
+   the words of the engine: the sidebar notice reads `Browser panel: <reason>`
+   for ten seconds, and the card draws `Could not open: <reason>` in the danger
+   colour under the host of the address. The log holds both lines.
+
+9. Call `block_panel` again with the document of step 2.
+
+   Result: The line under the link is gone, because a new document replaced the
+   one that the person pressed.
+
+10. Set `browser.command` back, press `Open session`, and stop the loopback
+    server. Close the browser panels that the task opened.
+
+   Result: The line under the link is gone after the press that opened the page,
+   and the server exits.
 
 ## 6. With a real agent
 
@@ -1235,8 +1250,11 @@ Horizon, in a workspace of its own, with an agent panel that can call
   Nothing is fetched before a press. One press opens exactly one browser panel
   beside the card, in the workspace of the card, at the page of the link, and it
   records no click. The link stays live while the agent of the card is gone. A
-  URL with credentials and a ninth link are refused as `invalid_document`, and
-  the message names the place without repeating the address.
+  press whose browser engine cannot start says its reason twice: in the sidebar
+  notice and in the line `Could not open: <reason>` under the link, which the
+  next press that opens the page or the next document removes. A URL with
+  credentials and a ninth link are refused as `invalid_document`, and the message
+  names the place without repeating the address.
 
 ## 8. Cleanup
 

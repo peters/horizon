@@ -31,6 +31,7 @@ mod canvas_drag;
 mod canvas_gesture;
 mod canvas_scroll;
 mod card_fit;
+mod creation_notice;
 mod detached_viewports;
 mod device_presentation;
 mod device_request_pump;
@@ -260,16 +261,21 @@ pub struct HorizonApp {
     /// on the coordination worker. The list belongs to the person, so it
     /// outlives a session and a workspace.
     pub(in crate::app) machine_list: horizon_core::Machines,
-    /// Why the last machine action opened nothing, as the sidebar says it, and
-    /// when the line goes away again.
-    pub(in crate::app) machine_notice: Option<String>,
-    pub(in crate::app) machine_notice_until: Option<Instant>,
+    /// Why the last action of the person opened nothing, as the sidebar says
+    /// it, and when the line goes away again. A panel that cannot start and a
+    /// machine action that opens nothing both use it.
+    pub(in crate::app) sidebar_notice: Option<String>,
+    pub(in crate::app) sidebar_notice_until: Option<Instant>,
     /// The rows of the sidebar's machine section, read when the list or a
     /// terminal of a machine changes.
     machine_rows: sidebar::machines::MachineRows,
     /// The machine terminals that wait for their next attempt after a lost
     /// link, with one wake at the due time and no thread of their own.
     reconnects: reconnect::ReconnectWaits,
+    /// The browser panels that an action of the person opened, with the card
+    /// link that opened each one, while an engine that cannot start can still
+    /// end them.
+    pub(in crate::app) person_browser_creates: creation_notice::PersonBrowserCreates,
     /// The tmux sessions that closes ended, waiting for the coordination
     /// worker. A test reads this list instead of running the jobs.
     pub(in crate::app) session_kills: Vec<horizon_core::SessionKill>,

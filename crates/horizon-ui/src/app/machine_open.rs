@@ -88,7 +88,7 @@ impl HorizonApp {
                         );
                         let focused = app.board.focused;
                         match app.create_machine_panel(workspace, options, Some(actor.panel_id)) {
-                            Some(panel_id) => {
+                            Ok(panel_id) => {
                                 // The person keeps the keyboard where it was.
                                 if let Some(focused) = focused {
                                     app.board.focus(focused);
@@ -96,10 +96,16 @@ impl HorizonApp {
                                 app.agent_terminals.record(&owner);
                                 block::Outcome::Opened { panel_id }
                             }
-                            None => block::Outcome::failed(
-                                "terminal_unavailable",
-                                "Horizon could not open the SSH terminal of this machine",
-                            ),
+                            Err(error) => {
+                                // The agent reads its own typed failure; the
+                                // reason stays in the log, because the agent's
+                                // path reports no notice to the person.
+                                tracing::error!(%error, "failed to open the terminal of a machine");
+                                block::Outcome::failed(
+                                    "terminal_unavailable",
+                                    "Horizon could not open the SSH terminal of this machine",
+                                )
+                            }
                         }
                     }
                 };
@@ -111,19 +117,28 @@ impl HorizonApp {
 
     /// Creates one terminal of a machine in `workspace` and returns its local id.
     /// `beside` puts the panel next to the calling agent panel.
+    ///
+    /// # Errors
+    ///
+    /// The reason of the terminal that did not start, in the words of the PTY or
+    /// of the system. A person's click says it in the sidebar; an agent reads it
+    /// in its own typed answer.
     pub(super) fn create_machine_panel(
         &mut self,
         workspace: WorkspaceId,
         options: PanelOptions,
         beside: Option<PanelId>,
-    ) -> Option<String> {
+    ) -> horizon_core::Result<String> {
         if let Some(beside) = beside {
             return self.create_machine_panel_beside(workspace, options, beside);
         }
-        let id = self.board.create_panel(options, workspace).ok()?;
+        let id = self.board.create_panel(options, workspace)?;
         self.board.focus(id);
         self.mark_runtime_dirty();
-        self.board.panel(id).map(|panel| panel.local_id.clone())
+        self.board
+            .panel(id)
+            .map(|panel| panel.local_id.clone())
+            .ok_or_else(|| horizon_core::Error::State("The new terminal is not on the board".into()))
     }
 
     /// Creates one terminal of a machine next to the calling agent panel, without
@@ -133,10 +148,13 @@ impl HorizonApp {
         workspace: WorkspaceId,
         options: PanelOptions,
         beside: PanelId,
-    ) -> Option<String> {
-        let id = self.board.create_panel_beside(options, workspace, beside).ok()?;
+    ) -> horizon_core::Result<String> {
+        let id = self.board.create_panel_beside(options, workspace, beside)?;
         self.mark_runtime_dirty();
-        self.board.panel(id).map(|panel| panel.local_id.clone())
+        self.board
+            .panel(id)
+            .map(|panel| panel.local_id.clone())
+            .ok_or_else(|| horizon_core::Error::State("The new terminal is not on the board".into()))
     }
 
     /// Writes one answer that the frame already knows, such as a refusal that

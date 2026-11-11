@@ -223,3 +223,31 @@ fn a_machine_terminal_with_another_field_is_refused_naming_the_field() {
     );
     assert_eq!(code(&unknown), "machine_unavailable");
 }
+
+#[test]
+fn an_agent_terminal_that_opens_nothing_says_nothing_to_the_person() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+
+    let answer = answered(
+        &mut app,
+        &ctx,
+        &root,
+        block::Operation::OpenTerminal {
+            ssh: None,
+            remote_command: None,
+            title: None,
+            key: None,
+            machine: Some("forgotten-machine".into()),
+        },
+    );
+
+    assert!(
+        matches!(&answer, Outcome::Failed { code, .. } if code == "machine_unavailable"),
+        "the agent reads its own typed failure: {answer:?}"
+    );
+    assert_eq!(
+        app.sidebar_notice, None,
+        "an agent's create answers the agent, so the person gets no notice of it"
+    );
+}

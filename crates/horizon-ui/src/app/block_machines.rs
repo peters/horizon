@@ -51,7 +51,7 @@ impl HorizonApp {
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
                 tracing::warn!(%error, "could not load the machine list");
-                self.set_machine_notice(error.to_string());
+                self.set_sidebar_notice(error.to_string());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => self.machine_load_rx = Some(rx),
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -194,7 +194,7 @@ impl HorizonApp {
                     app.machine_written();
                     tracing::info!(machine = %notice_name, "forgot a machine");
                 }
-                Some(Err(error)) => app.set_machine_notice(format!("{notice_name}: {error}")),
+                Some(Err(error)) => app.set_sidebar_notice(format!("{notice_name}: {error}")),
                 None => {}
             },
         );

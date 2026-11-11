@@ -131,12 +131,16 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
 
 fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
     let refused = view.card.refused_notice(view.now_millis);
+    // A refused link takes a line of its own in the body, and the host fits the
+    // card again when that set changes, exactly as it does for the frames above.
+    let link_refused = view.card.has_link_failure(view.revision);
     // The frames above the body are Horizon's, not the document's, and they take
     // room too: the host fits the card when this set changes, not only when the
     // document does.
     view.card.observe_frames(CardFrames {
         agent_gone: !view.agent_present,
         clicks_refused: refused,
+        link_refused,
     });
     let primary = primary_button(view.document);
     let mut first = true;

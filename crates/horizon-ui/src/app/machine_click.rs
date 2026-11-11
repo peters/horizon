@@ -37,7 +37,7 @@ impl HorizonApp {
             }
         };
         let Some(workspace) = self.board.active_workspace else {
-            self.set_machine_notice(format!("{name}: there is no workspace to open a terminal in"));
+            self.set_sidebar_notice(format!("{name}: there is no workspace to open a terminal in"));
             return;
         };
         let keys = MachineKeys::from_home(self.session_store.home());
@@ -61,8 +61,10 @@ impl HorizonApp {
                     connection_for(&terminal, key.as_ref()),
                     Some(OPENED_FROM_MACHINES.to_owned()),
                 );
-                if app.create_machine_panel(workspace, options, None).is_none() {
-                    app.set_machine_notice(format!("{name}: Horizon could not open its terminal"));
+                // The person pressed the row, so the reason of a terminal that
+                // did not start is theirs to read, not the log's only.
+                if let Err(error) = app.create_machine_panel(workspace, options, None) {
+                    app.set_sidebar_notice(format!("{name}: {error}"));
                 }
                 opening.request_repaint();
             },
@@ -71,7 +73,7 @@ impl HorizonApp {
 
     /// Says why a click on a machine opened nothing, in the sidebar.
     fn machine_refused(&mut self, name: &str, error: &MachineError) {
-        self.set_machine_notice(format!("{name}: {} ({})", error, error.code()));
+        self.set_sidebar_notice(format!("{name}: {} ({})", error, error.code()));
     }
 }
 

@@ -672,7 +672,11 @@ the rules from the modules beside it.
   text shows the whole URL and `Opens in a browser panel` on a second line. A
   link stays live while its agent is gone, because Horizon opens the page: only
   a host dialog over the card dims it to `FG_DIM`. A press opens a browser panel
-  of the card's workspace beside the card and records no click.
+  of the card's workspace beside the card and records no click. A press that
+  opens no page says why in a line of its own under the host of the address,
+  11.5 `PALETTE_RED`, cut with an ellipsis: `Could not open: <reason>`. The
+  card keeps that line until the next press that opens the page or the next
+  document, and the reason is also the line that the sidebar notice shows.
 - State chip (titlebar, left of the close control): 20 high, radius 8,
   `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, 8 of horizontal inset, text 10.5
   monospace `FG_SOFT`, a 6 px dot 6 left of the text. `<agent> listens` with a
@@ -752,7 +756,10 @@ the rules from the modules beside it.
   agent reported is Inter 11 `FG_SOFT` blended 0.14 toward `BG_ELEVATED` on the
   second line, cut with an ellipsis. A name that is cut shows the whole name in
   its hover text. A refused record shows one line 11 in `PALETTE_RED` under the
-  rows for ten seconds. The row menu holds `Focus` (or `Connect` when no
+  rows for ten seconds. That line is the one notice of this window for an action
+  of the person that opened nothing, so it also says why a panel that the person
+  started could not start, as `<kind> panel: <reason>`, and it stays visible when
+  this Horizon keeps no machine. The row menu holds `Focus` (or `Connect` when no
   terminal is open) and `Forget this machine`, whose confirm line is the
   menu's own text.
 - A workspace that lives on a machine says so on the second line of its row,

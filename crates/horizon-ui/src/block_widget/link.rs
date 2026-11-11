@@ -21,6 +21,9 @@ use super::text;
 /// What the pointer says while it is on a link.
 pub(crate) const OPENS_IN_BROWSER_PANEL: &str = "Opens in a browser panel";
 
+/// The first words of the line that a link says when its page did not open.
+pub(crate) const COULD_NOT_OPEN: &str = "Could not open";
+
 /// Height of one line of text, as a multiple of its font size.
 const LINE_FACTOR: f32 = 1.4;
 
@@ -28,7 +31,15 @@ const LINE_FACTOR: f32 = 1.4;
 /// ask the host for the browser panel of its address.
 pub(super) fn show(ui: &mut Ui, component: usize, label: &str, url: &str, view: &mut CardView<'_>, live: bool) {
     let color = if live { theme::ACCENT() } else { theme::FG_DIM() };
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height()), Sense::hover());
+    let refused = view
+        .card
+        .link_failure(view.revision, url)
+        .map(|reason| format!("{COULD_NOT_OPEN}: {reason}"));
+    let mut room = height();
+    if refused.is_some() {
+        room += LINK_FONT * LINE_FACTOR;
+    }
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), room), Sense::hover());
 
     let label_line = text::line(
         ui.painter(),
@@ -57,6 +68,9 @@ pub(super) fn show(ui: &mut Ui, component: usize, label: &str, url: &str, view: 
         Stroke::new(LINK_UNDERLINE, color),
     );
     draw_host(ui, rect, view.card.link_host(view.revision, component, view.document));
+    if let Some(refused) = &refused {
+        draw_refusal(ui, component, rect, refused);
+    }
 
     let response = if hovered {
         response.on_hover_text(hover_hint(url))
@@ -97,6 +111,27 @@ fn draw_host(ui: &Ui, link: Rect, host: Option<&str>) {
         Sense::hover(),
     );
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, host));
+}
+
+/// Draw why the page of `url` did not open, under the host of the address, in
+/// the danger tone. Horizon wrote this line: the document has no part in it.
+fn draw_refusal(ui: &Ui, component: usize, link: Rect, refused: &str) {
+    let top = link.min.y + LINK_FONT * LINE_FACTOR + LINK_HOST_GAP + LINK_HOST_FONT * LINE_FACTOR;
+    let rect = Rect::from_min_max(Pos2::new(link.min.x, top), Pos2::new(link.max.x, link.max.y));
+    let galley = text::line(
+        ui.painter(),
+        refused,
+        &FontId::proportional(LINK_HOST_FONT),
+        theme::PALETTE_RED(),
+        rect.width(),
+    );
+    ui.painter().galley(rect.min, galley, theme::PALETTE_RED());
+    let response = ui.interact(
+        rect,
+        ui.make_persistent_id(("block_link_refused", component)),
+        Sense::hover(),
+    );
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, refused));
 }
 
 /// The room one link takes: its label and the host under it.

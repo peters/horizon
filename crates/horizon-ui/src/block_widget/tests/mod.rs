@@ -283,6 +283,37 @@ fn card_nodes_in(resolved: theme::ResolvedTheme, document: &BlockDocument, owner
     nodes
 }
 
+/// Every text of a card that draws `document` with a runtime state of its own,
+/// in both themes.
+fn texts_of_card_with(document: &BlockDocument, card: &mut CardRuntime, owner: Owner) -> Vec<String> {
+    let mut texts = Vec::new();
+    for resolved in [theme::ResolvedTheme::Dark, theme::ResolvedTheme::Light] {
+        let _theme = theme_lock();
+        let previous = theme::current_theme();
+        theme::set_theme(resolved);
+        let mut card = card.clone();
+        texts.extend(
+            card_nodes_with(document, &mut card, owner)
+                .into_iter()
+                .map(|(text, _)| text),
+        );
+        theme::set_theme(previous);
+    }
+    texts
+}
+
+/// The text and disabled state of every widget that `card` draws.
+fn card_nodes_with(document: &BlockDocument, card: &mut CardRuntime, owner: Owner) -> Vec<(String, bool)> {
+    CardFrames::new()
+        .pass(document, card, owner, Vec::new())
+        .into_iter()
+        .filter_map(|(_, node)| {
+            let text = node.label().or_else(|| node.value())?;
+            Some((text.to_owned(), node.is_disabled()))
+        })
+        .collect()
+}
+
 fn disabled_state(nodes: &[(String, bool)], label: &str) -> Option<bool> {
     nodes
         .iter()

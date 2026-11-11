@@ -127,7 +127,7 @@ fn a_record_that_fails_revalidation_opens_nothing_and_says_why() {
         before,
         "a record that no longer validates opens nothing"
     );
-    let notice = app.machine_notice.clone().expect("the sidebar says why");
+    let notice = app.sidebar_notice.clone().expect("the sidebar says why");
     assert!(notice.contains("build-1"), "{notice}");
     assert!(notice.contains("invalid_ssh_route"), "{notice}");
 }
@@ -139,7 +139,7 @@ fn a_click_on_a_machine_that_is_gone_opens_nothing() {
     app.connect_machine("build-1", &ctx);
     app.settle_browser_host_io();
     assert_eq!(app.board.panels.len(), before);
-    let notice = app.machine_notice.clone().expect("the sidebar says why");
+    let notice = app.sidebar_notice.clone().expect("the sidebar says why");
     assert!(notice.contains("machine_unavailable"), "{notice}");
 }
 

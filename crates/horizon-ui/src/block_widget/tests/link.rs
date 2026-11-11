@@ -140,3 +140,42 @@ fn a_press_under_a_host_dialog_records_nothing() {
 
     assert_eq!(opened, None, "{OPENS_IN_BROWSER_PANEL} is a hint, not a press");
 }
+
+#[test]
+fn a_link_that_opened_nothing_draws_the_reason_under_it_in_the_danger_tone() {
+    let document = link("Open session", "https://cloud.example.test/sessions/7");
+    let mut card = horizon_core::CardRuntime::default();
+    card.fail_link(
+        3,
+        "https://cloud.example.test/sessions/7",
+        "no Chrome/Chromium binary found",
+    );
+
+    let texts = super::texts_of_card_with(&document, &mut card, Owner::Listening);
+
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "Could not open: no Chrome/Chromium binary found"),
+        "the card says why the page did not open: {texts:?}"
+    );
+}
+
+#[test]
+fn a_link_that_opened_its_page_draws_no_line_of_a_refused_press() {
+    let document = link("Open session", "https://cloud.example.test/sessions/7");
+    let mut card = horizon_core::CardRuntime::default();
+    card.fail_link(
+        3,
+        "https://cloud.example.test/sessions/7",
+        "no Chrome/Chromium binary found",
+    );
+    card.clear_link_failure("https://cloud.example.test/sessions/7");
+
+    let texts = super::texts_of_card_with(&document, &mut card, Owner::Listening);
+
+    assert!(
+        !texts.iter().any(|text| text.starts_with("Could not open")),
+        "a press that opened its page leaves no line: {texts:?}"
+    );
+}

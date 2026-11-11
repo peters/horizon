@@ -8,7 +8,7 @@
 use egui::Context;
 use horizon_browser_control::manifest::block::{Operation, Outcome, Request};
 use horizon_browser_control::manifest::{self};
-use horizon_core::browser::BrowserPanelState;
+use horizon_core::browser::{BrowserPanelState, BrowserStatus};
 use horizon_core::{
     Panel, PanelContent, PanelId, PanelKind, PanelOptions, RuntimeState, StartupDecision, WorkspaceId, stand_in_program,
 };
@@ -194,5 +194,104 @@ fn a_panel_created_beside_a_card_never_covers_it() {
     assert!(
         right_of_the_card || below_the_card,
         "the panel stands beside the card: {shell_bounds:?} against {card_bounds:?}"
+    );
+}
+
+#[test]
+fn a_link_whose_engine_cannot_start_says_so_under_the_link() {
+    let (_temp, ctx, mut app, card, _) = app();
+
+    app.open_card_link(&ctx, card, PAGE);
+    let opened = app.board.panels.last().expect("the browser panel of the press").id;
+    app.board
+        .panel_mut(opened)
+        .and_then(horizon_core::Panel::browser_mut)
+        .expect("the browser state")
+        .status = BrowserStatus::Error {
+        message: "no Chrome/Chromium binary found".into(),
+    };
+
+    assert!(app.close_ended_browser_panels());
+
+    let revision = app.card_revision(card).expect("the document of the card");
+    let failure = app
+        .panel_render_caches
+        .card_runtime
+        .entry(card)
+        .or_default()
+        .link_failure(revision, PAGE)
+        .map(str::to_owned);
+    assert_eq!(
+        failure.as_deref(),
+        Some("no Chrome/Chromium binary found"),
+        "the card says why the page of its link did not open"
+    );
+    assert_eq!(
+        app.sidebar_notice.as_deref(),
+        Some("Browser panel: no Chrome/Chromium binary found"),
+        "and the sidebar says it once"
+    );
+}
+
+#[test]
+fn a_new_document_of_the_card_clears_the_line_of_a_failed_link() {
+    use horizon_browser_control::manifest;
+    use horizon_browser_control::manifest::block::{Operation, Outcome, Request};
+
+    let (_temp, ctx, mut app, card, _) = app();
+    app.open_card_link(&ctx, card, PAGE);
+    let opened = app.board.panels.last().expect("the browser panel of the press").id;
+    app.board
+        .panel_mut(opened)
+        .and_then(horizon_core::Panel::browser_mut)
+        .expect("the browser state")
+        .status = BrowserStatus::Error {
+        message: "no Chrome/Chromium binary found".into(),
+    };
+    assert!(app.close_ended_browser_panels());
+    let before = app.card_revision(card).expect("the document of the card");
+    assert!(
+        app.panel_render_caches
+            .card_runtime
+            .entry(card)
+            .or_default()
+            .link_failure(before, PAGE)
+            .is_some(),
+        "the line of the failed press is there first"
+    );
+
+    let local_id = app.board.panel(card).expect("the card").local_id.clone();
+    let request = Request {
+        request_id: "test-link-update".into(),
+        actor: format!("horizon:{}", app.board.panels[0].local_id),
+        host_instance: manifest::host_instance().into(),
+        deadline_at_millis: manifest::now_millis() + 10_000,
+        operation: Operation::Update {
+            panel_id: local_id,
+            document: serde_json::from_value(serde_json::json!({
+                "components": [
+                    {"type": "heading", "text": "cloud-1"},
+                    {"type": "link", "label": "Open session", "url": PAGE}
+                ]
+            }))
+            .expect("a card document"),
+        },
+    };
+    let outcome = app.apply_block_request(&request, &ctx);
+    assert!(
+        matches!(outcome, Outcome::Updated { .. }),
+        "the card takes the update: {outcome:?}"
+    );
+
+    let after = app.card_revision(card).expect("the document of the card");
+    assert_ne!(after, before, "the card shows a new revision");
+    assert_eq!(
+        app.panel_render_caches
+            .card_runtime
+            .entry(card)
+            .or_default()
+            .link_failure(after, PAGE),
+        None,
+        "the next document of the card says nothing about the press on the old one"
     );
 }

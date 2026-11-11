@@ -50,6 +50,11 @@ impl HorizonApp {
     /// canvas picker take. A card's link takes it too: Horizon opens the page in
     /// the browser panel that the person gets from the canvas picker, next to the
     /// card that named it.
+    ///
+    /// A creation that fails says why in the sidebar, in the words of the tool
+    /// or the system that refused it: the person pressed the button and has to
+    /// act on that reason. An agent's own panel creates answer the agent
+    /// instead, so they do not pass here.
     pub(in crate::app) fn create_panel_with_options_beside(
         &mut self,
         mut options: PanelOptions,
@@ -60,11 +65,42 @@ impl HorizonApp {
         inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
-        let options = self.placed_options(options, workspace_id)?;
-        match beside.filter(|panel| self.board.panel(*panel).is_some()) {
-            Some(beside) => self.board.create_panel_beside(options, workspace_id, beside),
-            None => self.board.create_panel(options, workspace_id),
+        let kind = options.kind;
+        let created = self.placed_options(options, workspace_id).and_then(|options| {
+            match beside.filter(|panel| self.board.panel(*panel).is_some()) {
+                Some(beside) => self.board.create_panel_beside(options, workspace_id, beside),
+                None => self.board.create_panel(options, workspace_id),
+            }
+        });
+        if let Err(error) = &created {
+            self.notice_panel_creation_failure(kind, error);
         }
+        if let Ok(panel_id) = created
+            && kind == horizon_core::PanelKind::Browser
+        {
+            // An engine that cannot start ends its panel at once, and the
+            // cleanup then says why this press opened no page.
+            self.person_browser_creates
+                .note(panel_id, std::time::Instant::now(), None);
+        }
+        created
+    }
+
+    /// Says why a panel of `kind` that the person asked for opened nothing.
+    ///
+    /// A refusal of the place of a workspace names its machine code too, because
+    /// that code is what the person reports to the agent that registered the
+    /// machine.
+    pub(in crate::app) fn notice_panel_creation_failure(
+        &mut self,
+        kind: horizon_core::PanelKind,
+        error: &horizon_core::Error,
+    ) {
+        let reason = match error {
+            horizon_core::Error::Place(machine) => format!("{machine} ({})", machine.code()),
+            other => other.to_string(),
+        };
+        self.set_sidebar_notice(crate::app::creation_notice::panel_creation_notice(kind, &reason));
     }
 
     /// The options of a new panel of the person with the place of its workspace
@@ -80,8 +116,8 @@ impl HorizonApp {
     ///
     /// # Errors
     /// `machine_unavailable` when the machine of the place is gone, and the
-    /// refusal of its record when it no longer passes its rule. The sidebar says
-    /// the reason where it says why a machine opened nothing.
+    /// refusal of its record when it no longer passes its rule. The creation
+    /// that asked says that reason in the sidebar.
     pub(in crate::app) fn placed_options(
         &mut self,
         options: PanelOptions,
@@ -109,7 +145,8 @@ impl HorizonApp {
                 sessions: &sessions,
             },
         ) {
-            self.set_machine_notice(format!("{error} ({})", error.code()));
+            // The creation that the person started says this reason in the
+            // sidebar, once, with the kind of the panel.
             return Err(horizon_core::Error::Place(error));
         }
         Ok(placed)

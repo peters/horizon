@@ -165,3 +165,53 @@ fn restored_remote_sessions_are_removed_before_rendering_and_stay_out_of_saved_s
     assert!(!saved.contains("ended-remote-browser"));
     assert!(!app.close_ended_browser_panels(), "cleanup is idempotent");
 }
+
+#[test]
+fn a_person_engine_that_cannot_start_says_why_before_its_panel_goes() {
+    use std::time::Instant;
+
+    let (_temp, mut app) = test_support::test_app();
+    let workspace = app.board.create_workspace("Synthetic workspace");
+    let failed = browser(
+        &mut app,
+        workspace,
+        100,
+        BrowserStatus::Error {
+            message: "no Chrome/Chromium binary found (set browser.command in the config)".into(),
+        },
+        true,
+    );
+    app.person_browser_creates.note(failed, Instant::now(), None);
+
+    assert!(app.close_ended_browser_panels());
+
+    assert!(app.board.panel(failed).is_none(), "the ended panel goes");
+    assert_eq!(
+        app.sidebar_notice.as_deref(),
+        Some("Browser panel: no Chrome/Chromium binary found (set browser.command in the config)"),
+        "the person reads the reason of the engine"
+    );
+}
+
+#[test]
+fn an_agent_engine_that_cannot_start_says_nothing_to_the_person() {
+    let (_temp, mut app) = test_support::test_app();
+    let workspace = app.board.create_workspace("Synthetic workspace");
+    let failed = browser(
+        &mut app,
+        workspace,
+        100,
+        BrowserStatus::Error {
+            message: "the selected browser backend did not start".into(),
+        },
+        true,
+    );
+
+    assert!(app.close_ended_browser_panels());
+
+    assert!(app.board.panel(failed).is_none());
+    assert_eq!(
+        app.sidebar_notice, None,
+        "the agent's create answers the agent with its typed failure, not the person"
+    );
+}

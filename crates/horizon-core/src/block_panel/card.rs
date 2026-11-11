@@ -23,6 +23,8 @@ pub struct CardFrames {
     pub agent_gone: bool,
     /// The card says that a click was refused while the queue stayed full.
     pub clicks_refused: bool,
+    /// A link of the card says that its page did not open.
+    pub link_refused: bool,
 }
 
 /// A card's runtime state: the clicks it holds for its agent, the row each
@@ -46,6 +48,10 @@ pub struct CardRuntime {
     /// it was read from. A frame reuses the host it resolved instead of reading
     /// the URL again; a new document reads its links again.
     link_hosts: Option<(u64, BTreeMap<usize, String>)>,
+    /// Why the page of a link did not open, by the address of that link, for the
+    /// revision that the person pressed. A new document drops them, because the
+    /// person reads the document that replaced the one they pressed.
+    link_failures: Option<(u64, BTreeMap<String, String>)>,
     /// The height the body content needed in the last pass, when one ran.
     measured_content_height: Option<f32>,
     /// The frames the last pass drew above the body.
@@ -121,6 +127,43 @@ impl CardRuntime {
             .as_ref()
             .and_then(|(_, hosts)| hosts.get(&component))
             .map(String::as_str)
+    }
+
+    /// Records that the press on the link of `url` opened nothing, and why, for
+    /// the document at `revision`. The card draws the reason under that link
+    /// until the person opens it or a new document arrives.
+    pub fn fail_link(&mut self, revision: u64, url: &str, reason: &str) {
+        let failures = match &mut self.link_failures {
+            Some((at, failures)) if *at == revision => failures,
+            slot => &mut slot.insert((revision, BTreeMap::new())).1,
+        };
+        failures.insert(url.to_owned(), reason.to_owned());
+    }
+
+    /// Why the page of the link of `url` did not open, as the card at `revision`
+    /// says it. A newer document says nothing about the press of an older one.
+    #[must_use]
+    pub fn link_failure(&self, revision: u64, url: &str) -> Option<&str> {
+        self.link_failures
+            .as_ref()
+            .filter(|(at, _)| *at == revision)
+            .and_then(|(_, failures)| failures.get(url))
+            .map(String::as_str)
+    }
+
+    /// Forgets the reason of `url`: its next press opened the page.
+    pub fn clear_link_failure(&mut self, url: &str) {
+        if let Some((_, failures)) = &mut self.link_failures {
+            failures.remove(url);
+        }
+    }
+
+    /// Whether the card at `revision` says that a link did not open.
+    #[must_use]
+    pub fn has_link_failure(&self, revision: u64) -> bool {
+        self.link_failures
+            .as_ref()
+            .is_some_and(|(at, failures)| *at == revision && !failures.is_empty())
     }
 
     /// Records the height the body of this card needed in the pass that drew
@@ -427,6 +470,7 @@ mod tests {
         let gone = CardFrames {
             agent_gone: true,
             clicks_refused: false,
+            link_refused: false,
         };
         runtime.observe_frames(gone);
         assert!(
@@ -442,6 +486,7 @@ mod tests {
         runtime.observe_frames(CardFrames {
             agent_gone: true,
             clicks_refused: true,
+            link_refused: false,
         });
         assert!(
             runtime.needs_content_fit(1),

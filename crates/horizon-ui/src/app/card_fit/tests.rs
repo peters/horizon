@@ -144,6 +144,7 @@ fn a_card_fits_again_when_a_frame_of_the_host_appears_or_goes() {
     card.observe_frames(CardFrames {
         agent_gone: true,
         clicks_refused: false,
+        link_refused: false,
     });
     card.observe_content_height(700.0);
     app.fit_block_cards(&ctx);
@@ -176,6 +177,7 @@ fn a_card_that_the_person_resized_keeps_its_size_when_a_frame_appears() {
     card.observe_frames(CardFrames {
         agent_gone: true,
         clicks_refused: false,
+        link_refused: false,
     });
 
     app.fit_block_cards(&ctx);
