@@ -445,14 +445,14 @@ def main():
         spawn('dbus', sandbox.dbus_daemon_command(box.bus_address))
         sandbox.wait_for_unix_socket(box.host_socket, children[-1])
         spawn('openbox', ['openbox'])
-        config = data / 'horizon.yaml'
+        config = data / 'horizon.json'
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
             args.server_command)
-        config.write_text(json.dumps(fixture))  # JSON is a YAML subset.
+        config.write_text(json.dumps(fixture, indent=2))
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))
         vnc_log = log_path('vnc').open('wb')
