@@ -255,10 +255,7 @@ fn panel_runs_a_local_process(kind: PanelKind) -> bool {
 /// work.
 #[must_use]
 pub fn panel_waits_for_its_start(kind: PanelKind) -> bool {
-    !matches!(
-        kind,
-        PanelKind::Editor | PanelKind::Device | PanelKind::Block | PanelKind::Browser
-    )
+    !matches!(kind, PanelKind::Device | PanelKind::Block | PanelKind::Browser)
 }
 
 impl PanelOptions {
@@ -676,6 +673,15 @@ impl Panel {
     /// Returns an error if even the placeholder of a failed start cannot be
     /// created.
     pub fn apply_start(&mut self, options: &PanelOptions, start: spawn::PanelStart) -> Result<()> {
+        if let Some(text) = start.editor_text {
+            let text = text.map_err(crate::error::Error::Editor)?;
+            if let Some(editor) = self.content.editor_mut() {
+                editor.text = text;
+                editor.dirty = false;
+                editor.error = None;
+            }
+            return Ok(());
+        }
         let mut started = match spawn::spawn_started_panel(self.id, self.workspace_id, options.clone(), start) {
             Ok(panel) => panel,
             Err(error) => {

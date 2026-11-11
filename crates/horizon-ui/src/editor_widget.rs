@@ -37,7 +37,8 @@ impl<'a> MarkdownEditorView<'a> {
         if ui.input(|input| shortcut_pressed(input, save_shortcut))
             && let Some(ed) = self.panel.content.editor_mut()
         {
-            ed.save_if_dirty();
+            // The frame of the app writes the file on the coordination worker.
+            ed.request_save();
         }
 
         let mode = self
@@ -84,6 +85,12 @@ fn render_mode_bar(ui: &mut egui::Ui, editor: &mut MarkdownEditor) -> Rect {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(4.0);
+                if editor.saving {
+                    ui.label(RichText::new("Saving...").size(11.0).color(theme::FG_DIM()));
+                }
+                if let Some(error) = &editor.error {
+                    ui.label(RichText::new(error).size(11.0).color(theme::PALETTE_RED()));
+                }
                 if let Some(path) = &editor.file_path {
                     let label = path
                         .file_name()
@@ -199,7 +206,7 @@ fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Opti
             let response = CommonMarkViewer::new().show_mut(ui, cache, &mut editor.text);
             if response.response.changed() {
                 editor.dirty = true;
-                editor.save_if_dirty();
+                editor.request_save();
                 ui.ctx().request_repaint();
             }
             ui.add_space(8.0);

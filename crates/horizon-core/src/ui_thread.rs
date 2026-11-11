@@ -223,7 +223,7 @@ mod tests {
         use_strict_mode();
         let _frame = FrameScope::enter();
         {
-            let _accepted = exception("part 2: F9 an editor saves its file");
+            let _accepted = exception("terminal spawn: a terminal panel is a process");
             blocking("a save of an editor panel");
         }
         let message = panics_with("a save after the scope", || blocking("a save of an editor panel"));

@@ -44,11 +44,48 @@ pub(crate) fn spawn_waiting_panel(id: PanelId, workspace_id: WorkspaceId, mut op
     if opts.local_id.is_none() {
         opts.local_id = Some(new_local_id());
     }
+    if opts.kind == PanelKind::Editor {
+        return waiting_editor_panel(id, workspace_id, opts);
+    }
     if !opts.waits_for_its_start() {
         return spawn_panel(id, workspace_id, opts);
     }
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
     waiting_terminal_panel(id, workspace_id, local_id, opts)
+}
+
+/// The panel of a file whose text a worker reads. The panel opens at once with
+/// an empty buffer and shows the text when the answer arrives.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a waiting panel answers the same result as the panel it stands for"
+)]
+fn waiting_editor_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
+    let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
+    let command = opts.command.take();
+    let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
+    let mut seed = seed;
+    let (title, has_custom_name) = seed.take_title(|| {
+        command
+            .as_deref()
+            .and_then(|path| {
+                PathBuf::from(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+            })
+            .unwrap_or_else(|| "Markdown".to_string())
+    });
+    let editor = command.as_deref().map_or_else(MarkdownEditor::scratch, |path| {
+        MarkdownEditor::waiting_for(PathBuf::from(path))
+    });
+    Ok(seed.into_panel(
+        title,
+        PanelKind::Editor,
+        crate::editor::PanelContent::Editor(editor),
+        command,
+        None,
+        has_custom_name,
+    ))
 }
 
 /// Starts a panel with the preparation that a worker read.

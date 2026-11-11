@@ -51,8 +51,8 @@ pub use block_panel::{
     WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
 };
 pub use board::{
-    Board, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide,
-    WorkspaceLayout,
+    Board, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment,
+    WorkspaceDockSide, WorkspaceLayout,
 };
 pub use config::{
     AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, FeaturesConfig, OverlaysConfig,

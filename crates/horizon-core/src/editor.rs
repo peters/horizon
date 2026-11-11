@@ -20,6 +20,11 @@ pub struct MarkdownEditor {
     pub file_path: Option<PathBuf>,
     pub dirty: bool,
     pub preview_mode: PreviewMode,
+    /// Whether the text of this buffer waits for its write to its file.
+    pub saving: bool,
+    /// Why the file of this buffer could not be read or written, until the next
+    /// attempt.
+    pub error: Option<String>,
 }
 
 impl MarkdownEditor {
@@ -35,6 +40,8 @@ impl MarkdownEditor {
             file_path: Some(path),
             dirty: false,
             preview_mode: PreviewMode::Preview,
+            saving: false,
+            error: None,
         })
     }
 
@@ -47,6 +54,8 @@ impl MarkdownEditor {
             file_path: Some(path),
             dirty: false,
             preview_mode: PreviewMode::Preview,
+            saving: false,
+            error: None,
         }
     }
 
@@ -58,7 +67,34 @@ impl MarkdownEditor {
             file_path: None,
             dirty: false,
             preview_mode: PreviewMode::Edit,
+            saving: false,
+            error: None,
         }
+    }
+
+    /// The empty buffer of `path`, whose text a worker reads. The panel of a
+    /// file opens at once and shows the text when the read answers.
+    #[must_use]
+    pub fn waiting_for(path: PathBuf) -> Self {
+        Self {
+            text: String::new(),
+            file_path: Some(path),
+            dirty: false,
+            preview_mode: PreviewMode::Preview,
+            saving: false,
+            error: None,
+        }
+    }
+
+    /// Asks for the write of this buffer to its file. The frame of the editor
+    /// queues it on the coordination worker and clears `saving` and `dirty` with
+    /// the answer, so no frame writes the file.
+    pub fn request_save(&mut self) {
+        if !self.dirty || self.file_path.is_none() || self.saving {
+            return;
+        }
+        self.saving = true;
+        self.error = None;
     }
 
     /// Save the buffer to its file path.

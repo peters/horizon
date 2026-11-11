@@ -60,6 +60,27 @@ pub struct StartRequest {
 #[must_use]
 pub fn prepare_panel_start(request: StartRequest) -> PanelStart {
     let StartRequest { id, opts, local_id } = request;
+    if opts.kind == PanelKind::Editor {
+        // The panel opens at once; its text comes from its file on this worker.
+        // A scratch buffer reads nothing and answers empty text.
+        let editor_text = Some(
+            opts.command
+                .as_deref()
+                .filter(|path| std::path::Path::new(path).exists())
+                .map_or_else(
+                    || Ok(String::new()),
+                    |path| std::fs::read_to_string(path).map_err(|error| error.to_string()),
+                ),
+        );
+        return PanelStart {
+            working_directory: None,
+            replay_bytes: Vec::new(),
+            had_persisted_transcript_state: false,
+            launch: None,
+            editor_text,
+            work_brief_wanted: false,
+        };
+    }
     let working_directory = working_directory_failure(&opts);
     let (transcript, replay_bytes, had_persisted_transcript_state) =
         prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);

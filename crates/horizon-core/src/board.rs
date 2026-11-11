@@ -114,6 +114,13 @@ pub struct Board {
     next_workspace_id: u64,
 }
 
+/// The write of one editor buffer, which the coordination worker runs.
+pub struct EditorSave {
+    pub panel_id: PanelId,
+    pub path: std::path::PathBuf,
+    pub text: String,
+}
+
 /// A panel that the frame created and that waits for the preparation of its
 /// process, which a worker reads.
 #[derive(Clone)]
@@ -333,6 +340,52 @@ impl Board {
             .find(|p| p.id == id)
             .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
         panel.restart()
+    }
+
+    /// The editor buffers that the person asked to save, with the copy of the
+    /// text that the coordination worker writes. The dirty mark of each buffer
+    /// clears when the answer says that its file holds that text.
+    pub fn take_editor_saves(&mut self) -> Vec<EditorSave> {
+        let mut saves = Vec::new();
+        for panel in &mut self.panels {
+            let Some(editor) = panel.content.editor_mut() else {
+                continue;
+            };
+            let Some(path) = editor.file_path.clone() else {
+                editor.saving = false;
+                continue;
+            };
+            if !editor.saving {
+                continue;
+            }
+            saves.push(EditorSave {
+                panel_id: panel.id,
+                path,
+                text: editor.text.clone(),
+            });
+        }
+        saves
+    }
+
+    /// Applies the answer of the write of an editor buffer.
+    pub fn finish_editor_save(&mut self, save: &EditorSave, result: Result<()>) {
+        let Some(panel) = self.panels.iter_mut().find(|panel| panel.id == save.panel_id) else {
+            return;
+        };
+        let Some(editor) = panel.content.editor_mut() else {
+            return;
+        };
+        editor.saving = false;
+        match result {
+            Ok(()) => {
+                // The person may have typed while the write ran, so only the text
+                // that the file holds leaves the buffer clean.
+                if editor.text == save.text {
+                    editor.dirty = false;
+                }
+            }
+            Err(error) => editor.error = Some(format!("Could not save this file: {error}")),
+        }
     }
 
     /// The values that the pre-flight of a restart reads, for a worker. `None`

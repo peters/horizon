@@ -88,7 +88,6 @@ impl HorizonApp {
         if let Err(error) = self.board.start_panel(id, &options, start) {
             tracing::error!(panel_id = id.0, %error, "could not start a panel that waited for its preparation");
         }
-        self.mark_runtime_dirty();
     }
 }
 
