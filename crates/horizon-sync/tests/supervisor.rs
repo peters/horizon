@@ -321,8 +321,8 @@ fn a_machine_of_one_computer_arrives_at_the_other_and_a_removal_comes_back() {
     assert_eq!(server.machines().len(), 1, "the server holds the machine once");
     assert!(a.pending().is_empty(), "a committed intent is not pending");
     assert!(
-        server.machines()[0].added_at_millis == 1,
-        "the server keeps the record that the agent made"
+        server.machines()[0].added_at_millis > 1,
+        "the server stamps the record with its own clock, not the clock of the computer"
     );
 
     b.remove("build-1");

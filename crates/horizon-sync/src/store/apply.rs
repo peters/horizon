@@ -43,7 +43,7 @@ pub(super) fn push(
         let outcome = if let Some(outcome) = remembered(transaction, device, intent.id)? {
             outcome
         } else {
-            let outcome = decide(transaction, device, intent, key, next_index)?;
+            let outcome = decide(transaction, device, intent, key, next_index, now_millis)?;
             log(transaction, device, intent, next_index, now_millis, &outcome)?;
             next_index += 1;
             outcome
@@ -152,6 +152,7 @@ fn decide(
     intent: &Intent,
     key: &SecretKey,
     index: u64,
+    now_millis: i64,
 ) -> Result<Outcome, StoreError> {
     if intent.device != device {
         return Ok(refused(Refusal::InvalidIntent {
@@ -163,7 +164,7 @@ fn decide(
         }));
     }
     match &intent.op {
-        Op::MachinePut { record } => machine_put(transaction, record, index),
+        Op::MachinePut { record } => machine_put(transaction, record, index, now_millis),
         Op::MachineRemove { name } => machine_remove(transaction, name, index),
         Op::BindingPut { machine, key } => binding_put(transaction, machine, key.as_deref(), index),
         Op::SecretPut { id, body } => secret_put(transaction, key, intent.seen, id, body.as_ref(), index),
@@ -175,26 +176,54 @@ fn decide(
 
 /// Adds or replaces one machine. The machine list is not versioned: the commit
 /// order of the server decides between two computers, and `seen` is not read.
+///
+/// The time that the record says it was added is the time of this server, never
+/// the clock of the computer that sent it: the first store of a name stamps the
+/// time of that store, and a later change of the same name keeps the time that
+/// the server already holds, so two computers read one day for one machine.
 fn machine_put(
     transaction: &Transaction<'_>,
     record: &horizon_core::Machine,
     index: u64,
+    now_millis: i64,
 ) -> Result<Outcome, StoreError> {
-    let record = match horizon_core::check_record(record) {
+    let mut record = match horizon_core::check_record(record) {
         Ok(record) => record,
         Err(error) => return Ok(invalid_record(error.code(), &error.to_string())),
     };
-    let live = version_of(transaction, KIND_MACHINE, &record.name)?.is_some();
-    if !live && live_count(transaction, KIND_MACHINE)? >= count_of(MAX_MACHINES) {
+    let stored = stored_machine(transaction, &record.name)?;
+    if !stored.is_some() && live_count(transaction, KIND_MACHINE)? >= count_of(MAX_MACHINES) {
         return Ok(refused(Refusal::TooMany {
             kind: KIND_MACHINE.to_owned(),
             limit: count_of(MAX_MACHINES),
         }));
     }
+    record.added_at_millis = stored.map_or_else(
+        || u64::try_from(now_millis).unwrap_or(0),
+        |stored| stored.added_at_millis,
+    );
     let body = serde_json::to_value(&record)
         .map_err(|error| StoreError::Damaged(format!("the server could not encode a machine: {error}")))?;
     put(transaction, KIND_MACHINE, &record.name, &body, index, false)?;
     Ok(Outcome::Applied { index })
+}
+
+/// The record that the server holds for `name`, when it holds a live one. Its
+/// time is the one that a later change keeps.
+fn stored_machine(transaction: &Transaction<'_>, name: &str) -> Result<Option<horizon_core::Machine>, StoreError> {
+    let body: Option<String> = transaction
+        .query_row(
+            "SELECT body_json FROM objects WHERE kind = ?1 AND id = ?2 AND deleted = 0",
+            params![KIND_MACHINE, name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(body) = body else {
+        return Ok(None);
+    };
+    serde_json::from_str(&body)
+        .map(Some)
+        .map_err(|error| StoreError::Damaged(format!("the record of the machine {name} is not JSON: {error}")))
 }
 
 /// Forgets one machine. The row stays as a tombstone, so a computer that was away

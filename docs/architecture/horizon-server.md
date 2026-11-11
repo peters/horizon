@@ -150,7 +150,10 @@ asks for the values again, whatever the mirror says.
    does not match answers `reset: true` with every object, and the mirror of the
    computer equals the server afterwards.
 8. **The server stamps the time.** Every change carries the time of the server. An
-   intent carries no time, so no clock of a computer is read.
+   intent carries no time, so no clock of a computer is read. The time that a
+   machine record says it was added is the time of the first store of that name
+   on the server, and a later change of the same machine keeps it. A computer
+   that sends its own time changes nothing.
 
 The machine list is **last write wins**: two computers that add and remove
 machines decide by the commit order of the server, and the version rule is not

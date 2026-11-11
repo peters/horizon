@@ -209,6 +209,86 @@ fn every_decided_intent_takes_the_next_index_so_the_log_has_no_gap() {
 }
 
 #[test]
+fn the_time_of_a_machine_is_the_time_of_the_server_and_it_stays() {
+    let (_temp, store) = store();
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the test clock")
+        .as_millis();
+    // A computer that sends 1 as the time of its record: the clock of a computer
+    // never reaches the list of another computer.
+    let mut sent = machine("build-1");
+    sent.added_at_millis = 1;
+    applied(
+        &store,
+        "mbp-7c1",
+        Intent {
+            device: "mbp-7c1".to_owned(),
+            id: 1,
+            seen: None,
+            op: Op::MachinePut { record: sent.clone() },
+        },
+    );
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the test clock")
+        .as_millis();
+    let stored = store
+        .all()
+        .expect("the objects")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == KIND_MACHINE && row.id == "build-1")
+        .expect("the row of the machine");
+    let stamped = stored
+        .body
+        .get("added_at_millis")
+        .and_then(Value::as_u64)
+        .expect("a time");
+    assert!(
+        stamped >= u64::try_from(before).expect("one time"),
+        "the server stamps the record with its own clock"
+    );
+    assert!(
+        stamped <= u64::try_from(after).expect("one time"),
+        "the stamp is not after the push"
+    );
+
+    // A later change of the same machine, from another computer and with another
+    // time, keeps the time of the first store.
+    let mut changed = sent;
+    changed.provider = Some("Hetzner, hel1".to_owned());
+    changed.added_at_millis = 99;
+    applied(
+        &store,
+        "other-2a",
+        Intent {
+            device: "other-2a".to_owned(),
+            id: 1,
+            seen: None,
+            op: Op::MachinePut { record: changed },
+        },
+    );
+    let again = store
+        .all()
+        .expect("the objects")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == KIND_MACHINE && row.id == "build-1")
+        .expect("the row of the machine");
+    assert_eq!(
+        again.body.get("added_at_millis").and_then(Value::as_u64),
+        Some(stamped),
+        "a change keeps the time that the server stamped"
+    );
+    assert_eq!(
+        again.body.get("provider").and_then(Value::as_str),
+        Some("Hetzner, hel1"),
+        "the rest of the record is the change"
+    );
+}
+
+#[test]
 fn ten_computers_push_at_once_and_the_log_stays_one_run() {
     let temp = tempfile::tempdir().expect("a temporary directory");
     let path = temp.path().join("server.sqlite");
