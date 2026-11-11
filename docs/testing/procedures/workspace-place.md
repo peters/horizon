@@ -16,7 +16,8 @@ This procedure tests the place of a workspace. It proves that the person puts a
 workspace on a machine, that the row of that workspace says where it lives, that
 the canvas picker says where its agents and its terminals start, that each new
 terminal of that workspace runs on the machine in its own tmux session, that the
-work in it survives a restart of Horizon, that a close ends the session, that two
+work in it survives a restart of Horizon, that a terminal reconnects by itself
+after a lost link and keeps its session, that a close ends the session, that two
 workspaces on one machine do not collide, and that a forgotten machine is
 reported.
 
@@ -39,6 +40,10 @@ reported.
 > **CAUTION: DO NOT RUN THIS PROCEDURE AGAINST A REAL MACHINE.** A close in task
 > P5 ends a tmux session with `tmux kill-session`, and the work in that session
 > stops.
+
+> **CAUTION: A FIREWALL RULE CHANGES THE NETWORK OF THIS COMPUTER.** Task P9 cuts
+> a link. Stop the loopback SSH server instead of adding a rule when this
+> computer has no test-only rule set.
 
 ## 4. Equipment and preconditions
 
@@ -294,6 +299,66 @@ reported.
 
    Result: The session of the panel that is still open is in the list.
 
+### 6.10 P9 — A lost link reconnects by itself
+
+1. Run `printf 'lost-%s\n' link` in the terminal of the machine.
+
+   Result: `lost-link` is the last output of the panel.
+
+2. Cut the link for 60 seconds: stop the loopback SSH server, or add a rule to
+   the firewall of this computer that drops TCP port 2222.
+
+   Result: The panel shows `Disconnected` in red within 30 seconds, and its last
+   lines hold the reason that ssh printed.
+
+3. Watch the panel and the row `build-1` of the `Machines` section.
+
+   Result: The mark of the panel reads `Reconnecting` in the warning colour, the
+   body keeps the last screen, and the dot of the machine row is filled in the
+   same colour. The mark changes to `Connecting...` while an attempt runs, and
+   back to `Reconnecting` when that attempt fails.
+
+4. Wait 30 seconds without a key press.
+
+   Result: The panel tries again by itself, and Horizon shows no dialog and no
+   error line.
+
+5. Press one key in the panel while the mark reads `Reconnecting`.
+
+   Result: The panel shows `Connecting...` at once, before the delay that was
+   due, and the next loss of the link waits 3 seconds again.
+
+6. Restore the link: start the loopback SSH server again, or remove the firewall
+   rule of step 2.
+
+   Result: Within 30 seconds the mark reads `Connected` in green, and the last
+   output is still `lost-link`. No output of the session was lost.
+
+7. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
+   ls` in the second terminal.
+
+   Result: The command runs on the machine, and the session of the panel is the
+   one before the cut. No second session exists.
+
+8. Type `exit` in the shell of the panel.
+
+   Result: The tmux session ends, the mark reads `Disconnected` in red, and it
+   stays `Disconnected` for at least 30 seconds. Horizon does not start the
+   command again, because a new `tmux new-session -A` would make an empty
+   session without the person.
+
+9. Press the shortcut for a new terminal in the workspace, run one command in
+   it, and cut the link again as in step 2. When the mark reads `Reconnecting`,
+   close the panel with its titlebar close button.
+
+   Result: The panel goes away, Horizon shows no error dialog, and Horizon
+   starts no further attempt.
+
+10. Restore the link as in step 6.
+
+   Result: The machine answers again, and the `tmux ls` command of step 7 lists
+   no session of the two panels that ended.
+
 ## 7. Known behaviour
 
 ### KB1 — The status line of tmux is off
@@ -324,7 +389,19 @@ remote shell starts in the home directory of the machine. A shell of a workspace
 on this computer asks the question only when the directory of the workspace is
 gone.
 
-### KB5 — A known list of panels follows the place
+### KB5 — A lost link of a machine terminal reconnects by itself
+
+A panel whose saved command attaches a tmux session runs its command again when
+ssh ends with its own connection-failure status 255: after 3, 6, 12 and 24
+seconds, and then every 30 seconds, with no limit. The delays start again after
+a connection that lasted 10 seconds, and a key press in the panel or the
+`Reconnect` action connects at once and starts the delays again. Any other exit
+status, a plain SSH panel of the remote hosts chooser, an agent panel and a
+local shell never reconnect. A panel that the person closed tries nothing, and
+the attempts of a panel that a machine record opened stop when that record is
+forgotten. Quitting Horizon starts the delays again in the next run.
+
+### KB6 — A known list of panels follows the place
 
 Only a shell or a command panel moves to the machine. An agent, browser, Device,
 card or editor panel of the same workspace starts on this computer, as it did
@@ -342,6 +419,10 @@ before the workspace had a place.
   session, with the chip `on <machine>`.
 - A restart of Horizon attaches the panel to the same session, and the output of
   the session is still there.
+- A lost link of a terminal of the machine reconnects by itself, without a key
+  press, and the panel attaches to the same session with its output.
+- A session that ended does not reconnect, and a panel that a person closed
+  starts no attempt.
 - Two workspaces on one machine hold two sessions.
 - A close of a panel ends its session, and a quit of Horizon ends none.
 - A workspace that holds a panel of a machine asks before it closes its panels.

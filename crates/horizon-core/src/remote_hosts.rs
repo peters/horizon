@@ -468,7 +468,7 @@ where
             let summary = &mut summaries[*index];
             match session.status {
                 SshConnectionStatus::Connected => summary.connected_count += 1,
-                SshConnectionStatus::Connecting => summary.connecting_count += 1,
+                SshConnectionStatus::Connecting | SshConnectionStatus::Reconnecting => summary.connecting_count += 1,
                 SshConnectionStatus::Disconnected => summary.disconnected_count += 1,
             }
             summary.history.push(RemoteHostConnectionHistoryEntry {

@@ -25,6 +25,13 @@ use crate::machines::{MACHINE_UNAVAILABLE, MachineError, Machines};
 use crate::panel::{PanelKind, PanelOptions};
 use crate::ssh::{MachineKeys, SshConnection};
 
+mod reconnect;
+
+pub use reconnect::{
+    AfterConnectionLoss, ConnectionLoss, RECONNECT_RESET_AFTER, SSH_CONNECTION_FAILURE, after_connection_loss,
+    attaches_a_tmux_session, reconnect_delay,
+};
+
 /// How many characters of a workspace local id name the tmux sessions of its
 /// panels.
 const SESSION_ID_CHARS: usize = 8;

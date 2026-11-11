@@ -31,6 +31,11 @@ contract, and `open_terminal` gives the shell.
   overview card and in the sidebar.
 - The person can put a workspace on a machine from the sidebar, and the new
   terminals of that workspace then run there in tmux. You do nothing for it.
+- A terminal that attaches a tmux session reconnects by itself when its link was
+  lost: its titlebar says `Reconnecting`, it keeps its last screen, and it runs
+  its command again after 3, 6, 12 and 24 seconds, then every 30 seconds, until
+  it reaches the session again. You do nothing for it, and a terminal that the
+  person closed tries nothing.
 
 ## The flow
 
@@ -279,7 +284,7 @@ there, and that their tmux sessions end with the machine.
    of `key_unavailable` means that the key is already gone.
 6. Update the card to a `Deleted` badge with one `Close` button, or close it.
    Tell the person in the `text` component that the terminal that Connect opened
-   now shows ssh's timeout, and that they can close it.
+   keeps trying to reach the machine that is gone, and that they can close it.
 
 A leftover resource means the delete did not finish. Show the provider's own
 words on the card and keep `Delete it`, so the person can try again.
@@ -371,7 +376,7 @@ After the delete and the key removal, update the card to this document:
 ```json
 {"components": [
   {"type": "badge", "text": "Deleted", "tone": "ok"},
-  {"type": "text", "text": "The machine and its key are gone. The terminal that Connect opened now shows ssh's timeout; close it."},
+  {"type": "text", "text": "The machine and its key are gone. The terminal that Connect opened keeps trying to reach it; close it."},
   {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}]}
 ```
 

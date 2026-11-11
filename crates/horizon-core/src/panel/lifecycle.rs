@@ -134,6 +134,9 @@ impl Panel {
             terminal.work_continuation = work.state;
         }
         self.launched_at_millis = current_unix_millis();
+        self.ssh_connected_at_millis = None;
+        self.ssh_exit_recorded = false;
+        self.ssh_end = None;
         self.ssh_status = if self.kind == PanelKind::Ssh {
             Some(SshConnectionStatus::Connecting)
         } else {

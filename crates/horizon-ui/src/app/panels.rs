@@ -426,7 +426,7 @@ impl HorizonApp {
                             );
                         }
                         if reconnect_requested {
-                            self.queue_panel_restart(panel_id);
+                            self.reconnect_panel_now(panel_id);
                         }
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ui.ctx(), panel_id, &url);
@@ -783,7 +783,7 @@ impl HorizonApp {
                             }
                         }
                         if reconnect_requested {
-                            self.queue_panel_restart(panel_id);
+                            self.reconnect_panel_now(panel_id);
                         }
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ctx, panel_id, &url);

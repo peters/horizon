@@ -161,18 +161,34 @@ fn disconnected_ssh_reconnect_requested(
     ssh_status: Option<SshConnectionStatus>,
     events: &[TerminalInputEvent],
 ) -> bool {
-    kind == PanelKind::Ssh
-        && matches!(ssh_status, Some(SshConnectionStatus::Disconnected))
-        && events.iter().any(|input_event| {
-            matches!(
-                &input_event.event,
-                egui::Event::Key {
-                    pressed: true,
-                    repeat: false,
-                    ..
-                }
-            ) && shortcut_event_matches(&input_event.event, SSH_RECONNECT_SHORTCUT)
-        })
+    if kind != PanelKind::Ssh {
+        return false;
+    }
+    match ssh_status {
+        // A disconnected panel keeps its last screen, so the shortcut asks for
+        // a connection.
+        Some(SshConnectionStatus::Disconnected) => {
+            pressed_keys(events).any(|input_event| shortcut_event_matches(&input_event.event, SSH_RECONNECT_SHORTCUT))
+        }
+        // A panel that waits for its next attempt has no shell to type into, so
+        // any key asks for the connection now instead of waiting.
+        Some(SshConnectionStatus::Reconnecting) => pressed_keys(events).next().is_some(),
+        Some(SshConnectionStatus::Connecting | SshConnectionStatus::Connected) | None => false,
+    }
+}
+
+/// The key presses of one pass that are not a repeat of a held key.
+fn pressed_keys(events: &[TerminalInputEvent]) -> impl Iterator<Item = &TerminalInputEvent> {
+    events.iter().filter(|input_event| {
+        matches!(
+            &input_event.event,
+            egui::Event::Key {
+                pressed: true,
+                repeat: false,
+                ..
+            }
+        )
+    })
 }
 
 #[derive(Default)]
@@ -456,6 +472,24 @@ mod tests {
                 false,
                 Modifiers::COMMAND | Modifiers::SHIFT,
             )],
+        ));
+    }
+
+    #[test]
+    fn a_terminal_that_waits_for_its_attempt_reconnects_on_any_key() {
+        assert!(disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Reconnecting),
+            &[key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::NONE)],
+        ));
+    }
+
+    #[test]
+    fn a_repeated_key_of_a_waiting_terminal_starts_nothing() {
+        assert!(!disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Reconnecting),
+            &[key_event(Key::A, Some(Key::A), Some("a"), true, true, Modifiers::NONE)],
         ));
     }
 

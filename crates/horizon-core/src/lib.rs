@@ -72,11 +72,12 @@ pub use machines::{
 };
 pub use panel::{
     DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
-    browser_actor,
+    SshConnectionEnd, browser_actor,
 };
 pub use place::{
-    PlaceError, PlaceWorkspace, SESSION_KILL_TIMEOUT, SessionKill, WorkspacePlace, kill_command, moves_to_the_machine,
-    place_command, session_command, session_prefix,
+    AfterConnectionLoss, ConnectionLoss, PlaceError, PlaceWorkspace, RECONNECT_RESET_AFTER, SESSION_KILL_TIMEOUT,
+    SSH_CONNECTION_FAILURE, SessionKill, WorkspacePlace, after_connection_loss, attaches_a_tmux_session, kill_command,
+    moves_to_the_machine, place_command, reconnect_delay, session_command, session_prefix,
 };
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,

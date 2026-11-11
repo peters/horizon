@@ -48,6 +48,7 @@ mod panel_chrome;
 mod panels;
 mod persistence;
 mod press_frame;
+mod reconnect;
 mod remote_hosts;
 mod root_chrome;
 mod root_viewport;
@@ -266,6 +267,9 @@ pub struct HorizonApp {
     /// The rows of the sidebar's machine section, read when the list or a
     /// terminal of a machine changes.
     machine_rows: sidebar::machines::MachineRows,
+    /// The machine terminals that wait for their next attempt after a lost
+    /// link, with one wake at the due time and no thread of their own.
+    reconnects: reconnect::ReconnectWaits,
     /// The tmux sessions that closes ended, waiting for the coordination
     /// worker. A test reads this list instead of running the jobs.
     pub(in crate::app) session_kills: Vec<horizon_core::SessionKill>,

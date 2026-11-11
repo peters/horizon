@@ -71,6 +71,7 @@ impl HorizonApp {
             self.poll_primary_selection_paste();
         }
         let had_panel_output = self.drain_panel_output();
+        self.poll_reconnects(ctx, Instant::now());
         self.forward_terminal_clipboard_writes(ctx);
         let browser_create_activity = self.poll_browser_create_requests(ctx);
         let device_activity = self.poll_device_panel_requests(ctx);
@@ -234,6 +235,13 @@ impl HorizonApp {
         // The read waits on the settings thread, and its reply applies the
         // settings in a later frame.
         self.settings_io.reload(self.config_path.clone());
+    }
+
+    /// Restarts a panel now, because the person picked its "Reconnect" action
+    /// or pressed a key in a terminal that waits for its next attempt.
+    pub(super) fn reconnect_panel_now(&mut self, panel_id: PanelId) {
+        self.reconnects.cancel(panel_id);
+        self.queue_panel_restart(panel_id);
     }
 
     pub(super) fn queue_panel_restart(&mut self, panel_id: PanelId) {

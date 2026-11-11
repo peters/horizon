@@ -15,7 +15,8 @@ owner: peters
 This procedure tests the Machines section of the sidebar and the machine
 records that agents write. It proves that an agent registers a machine, that the
 person sees one row for it, that one click connects without an agent, that the
-list survives a restart, and that a forgotten record leaves its key.
+row says the state of that terminal, that the list survives a restart, and that
+a forgotten record leaves its key.
 
 ## 2. Applicability
 
@@ -217,7 +218,33 @@ list survives a restart, and that a forgotten record leaves its key.
 
    Result: The answer is `code: machine_unavailable`.
 
-### 6.8 M7 — Visual regression
+### 6.8 M7 — The row says that the terminal reconnects by itself
+
+1. Click the row `build-1`, then run `printf 'row-%s\n' state` in its terminal.
+
+   Result: `row-state` is the last output, and the dot of the row is filled in
+   green.
+
+2. Cut the link of the machine for 60 seconds: stop the loopback SSH server, or
+   add a rule to the firewall of this computer that drops TCP port 2222.
+
+   > **CAUTION: A FIREWALL RULE CHANGES THE NETWORK OF THIS COMPUTER.** Stop the
+   > loopback SSH server instead when this computer has no test-only rule set.
+
+   Result: The dot turns red within 30 seconds, and the hover text of the row
+   says `disconnected`.
+
+3. Watch the row for 10 seconds.
+
+   Result: The dot is filled in the warning colour, and the hover text says
+   `reconnecting`. The mark of the panel reads `Reconnecting` too.
+
+4. Restore the link: start the loopback SSH server again, or remove the rule.
+
+   Result: Within 30 seconds the dot is filled in green again, the hover text
+   says `connected`, and the last output of the panel is still `row-state`.
+
+### 6.9 M8 — Visual regression
 
 1. Look at the section at the default sidebar width, then drag the window narrow
    and wide.
@@ -245,5 +272,8 @@ list survives a restart, and that a forgotten record leaves its key.
 
 - The loopback server answers in milliseconds, so the procedure does not test a
   slow first contact or a host that disappears.
+- The procedure cut the link by stopping the loopback server, so the first
+  attempt of a panel that waits meets a refused connection instead of a host
+  that does not answer.
 - The procedure does not test a machine without `tmux`.
 - The procedure does not test more than two machines in the section.

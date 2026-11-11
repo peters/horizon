@@ -336,6 +336,7 @@ fn paint_row_columns(painter: &egui::Painter, x: f32, y: f32, mono_sm: &FontId, 
 fn render_status_badge(ui: &mut Ui, status: Option<SshConnectionStatus>) {
     let (label, color) = match status {
         Some(SshConnectionStatus::Connecting) => ("Connecting", theme::PALETTE_YELLOW()),
+        Some(SshConnectionStatus::Reconnecting) => ("Reconnecting", theme::PALETTE_YELLOW()),
         Some(SshConnectionStatus::Connected) => ("Connected", theme::PALETTE_GREEN()),
         Some(SshConnectionStatus::Disconnected) => ("Disconnected", theme::PALETTE_RED()),
         None => ("No live session", theme::FG_DIM()),
@@ -365,7 +366,7 @@ fn render_meta_badge(ui: &mut Ui, text: String, color: Color32) {
 fn render_history_entry(ui: &mut Ui, entry: &RemoteHostConnectionHistoryEntry, now_secs: i64) {
     ui.horizontal(|ui| {
         let status_color = match entry.status {
-            SshConnectionStatus::Connecting => theme::PALETTE_YELLOW(),
+            SshConnectionStatus::Connecting | SshConnectionStatus::Reconnecting => theme::PALETTE_YELLOW(),
             SshConnectionStatus::Connected => theme::PALETTE_GREEN(),
             SshConnectionStatus::Disconnected => theme::PALETTE_RED(),
         };

@@ -586,7 +586,7 @@ fn paint_ssh_status_badge(
 
 fn ssh_status_color(status: SshConnectionStatus) -> Color32 {
     match status {
-        SshConnectionStatus::Connecting => theme::PALETTE_YELLOW(),
+        SshConnectionStatus::Connecting | SshConnectionStatus::Reconnecting => theme::PALETTE_YELLOW(),
         SshConnectionStatus::Connected => theme::PALETTE_GREEN(),
         SshConnectionStatus::Disconnected => theme::PALETTE_RED(),
     }
@@ -665,8 +665,8 @@ mod tests {
     use super::{
         AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
         WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
-        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, title_focus_indicator_rect,
-        title_right_boundary, working_indicator_reserve, working_indicator_width,
+        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, ssh_status_color,
+        title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -713,6 +713,22 @@ mod tests {
         chrome.titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(right, 54.0));
         chrome.close_rect = Rect::from_center_size(Pos2::new(right - 18.0, 37.0), egui::Vec2::splat(16.0));
         chrome
+    }
+
+    #[test]
+    fn a_waiting_terminal_wears_the_warning_colour_of_a_connecting_one() {
+        use horizon_core::SshConnectionStatus;
+
+        assert_eq!(
+            ssh_status_color(SshConnectionStatus::Reconnecting),
+            ssh_status_color(SshConnectionStatus::Connecting),
+            "both states wait on the link, so both read as a warning"
+        );
+        assert_ne!(
+            ssh_status_color(SshConnectionStatus::Reconnecting),
+            ssh_status_color(SshConnectionStatus::Disconnected),
+            "a panel that works on its link is not a failure"
+        );
     }
 
     #[test]

@@ -597,6 +597,15 @@ outline).
   11 strong text in the same color (`color` is a state color).
 - **Status frame**: radius 8, margin 10, fill `alpha(color, 24)`, 1 px outline
   `alpha(color, 90)`, title 13.5 strong in the state color, body 12.5 `FG_SOFT`.
+- **Connection mark** (SSH panel titlebar, left of the history meter and the
+  close control): pill of the state color, 10 proportional text, a fill of
+  `alpha(color, 72)` on a sixth of the color and a 1 px outline `alpha(color, 140)`.
+  The word carries the state, so the color is never the only signal:
+  `Connecting...` in `PALETTE_YELLOW`, `Connected` in `PALETTE_GREEN`,
+  `Reconnecting` in `PALETTE_YELLOW` while the panel waits to run its command
+  again after a lost link, and `Disconnected` in `PALETTE_RED`. A panel that
+  waits keeps the last screen in its body until the command starts again. The
+  Machines row of that machine shows the same state.
 - **Selectable card**: radius 10, margin 12, `PANEL_BG_ALT` fill with 1 px
   `BORDER_SUBTLE`. Hover: outline `FG_DIM`. Selected: fill
   `blend(PANEL_BG_ALT, ACCENT, 0.14)` and a 2 px `ACCENT` outline. Keyboard
@@ -736,8 +745,9 @@ the rules from the modules beside it.
   inset for the hover card (radius 10, `alpha(PANEL_BG_ALT, 170)`), and the
   pointing hand cursor. The state dot is 9 px in diameter at 8 px from the
   card's left edge: hollow `FG_DIM` when no terminal of the machine is open,
-  hollow `FG_SOFT` while one connects, filled `PALETTE_GREEN` when it is
-  connected, and filled `PALETTE_RED` when it is disconnected. The name is
+  hollow `FG_SOFT` while one connects, filled `PALETTE_YELLOW` while it waits
+  to reach the machine again after a lost link, filled `PALETTE_GREEN` when it
+  is connected, and filled `PALETTE_RED` when it is disconnected. The name is
   Inter 13 at weight 500 `FG` on the first line; the provider line that the
   agent reported is Inter 11 `FG_SOFT` blended 0.14 toward `BG_ELEVATED` on the
   second line, cut with an ellipsis. A name that is cut shows the whole name in

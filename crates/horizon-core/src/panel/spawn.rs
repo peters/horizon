@@ -129,6 +129,9 @@ impl StaticPanelSeed {
             machine: None,
             machine_session: None,
             ssh_status: None,
+            ssh_connected_at_millis: None,
+            ssh_exit_recorded: false,
+            ssh_end: None,
         }
     }
 }

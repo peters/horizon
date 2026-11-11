@@ -346,7 +346,7 @@ impl HorizonApp {
                     )
                     .clicked()
             {
-                self.queue_panel_restart(panel_id);
+                self.reconnect_panel_now(panel_id);
                 ui.close();
             }
             if ui

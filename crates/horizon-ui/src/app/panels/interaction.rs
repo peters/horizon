@@ -184,7 +184,7 @@ impl HorizonApp {
                 ui.separator();
                 let restart_label = if kind == PanelKind::Ssh { "Reconnect" } else { "Restart" };
                 if ui.button(restart_label).clicked() {
-                    self.queue_panel_restart(panel_id);
+                    self.reconnect_panel_now(panel_id);
                     ui.close();
                 }
             }

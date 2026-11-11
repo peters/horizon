@@ -304,6 +304,26 @@ pub struct Panel {
     pub(crate) machine_session: Option<String>,
     /// UI-facing SSH connection status for panels that remain visible after exit.
     pub ssh_status: Option<SshConnectionStatus>,
+    /// When the ssh connection of this panel came up, in milliseconds since the
+    /// epoch, so a lost link reports how long it lasted.
+    ssh_connected_at_millis: Option<i64>,
+    /// Whether the end of the last ssh process was already recorded, so one end
+    /// arms one attempt only.
+    ssh_exit_recorded: bool,
+    /// The end of the last ssh process, until the app reads it.
+    ssh_end: Option<SshConnectionEnd>,
+}
+
+/// The end of one ssh process of a panel, as the app reads it once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SshConnectionEnd {
+    /// The exit status of the process, when the system reported one.
+    pub exit_code: Option<i32>,
+    /// How long the connection was up before it ended; `None` when it never
+    /// reached the machine.
+    pub connected_for: Option<Duration>,
+    /// The panel's saved command attaches a tmux session on a machine.
+    pub machine_tied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -340,6 +360,70 @@ impl Panel {
     #[must_use]
     pub fn ssh_status(&self) -> Option<SshConnectionStatus> {
         self.ssh_status
+    }
+
+    /// Keep the connection status of an SSH panel, and record the end of its
+    /// ssh process once, so the app can decide whether to connect again.
+    fn track_ssh_connection(&mut self, child_exited: bool, had_output: bool) {
+        if child_exited {
+            // The status of a panel whose process ended more than once is the
+            // app's: it waits for an attempt, or it stays disconnected.
+            if self.ssh_exit_recorded {
+                return;
+            }
+            self.ssh_exit_recorded = true;
+            let now = current_unix_millis();
+            self.ssh_end = Some(SshConnectionEnd {
+                exit_code: self
+                    .content
+                    .terminal()
+                    .and_then(Terminal::child_exit_status)
+                    .and_then(|status| status.code()),
+                connected_for: self
+                    .ssh_connected_at_millis
+                    .map(|up| Duration::from_millis(u64::try_from(now.saturating_sub(up)).unwrap_or_default())),
+                machine_tied: self.attaches_a_tmux_session(),
+            });
+            self.ssh_status = Some(SshConnectionStatus::Disconnected);
+        } else if had_output && matches!(self.ssh_status, Some(SshConnectionStatus::Connecting)) {
+            self.ssh_status = Some(SshConnectionStatus::Connected);
+            self.ssh_connected_at_millis = Some(current_unix_millis());
+        }
+    }
+
+    /// The end of this panel's ssh process, read once. `None` while its process
+    /// runs, and after the app made its decision.
+    #[must_use]
+    pub fn take_ssh_end(&mut self) -> Option<SshConnectionEnd> {
+        self.ssh_end.take()
+    }
+
+    /// Whether the saved command of this panel attaches to a tmux session on a
+    /// machine, so Horizon can reach the same work again by itself.
+    #[must_use]
+    pub fn attaches_a_tmux_session(&self) -> bool {
+        self.kind == PanelKind::Ssh
+            && crate::place::attaches_a_tmux_session(
+                self.ssh_connection
+                    .as_ref()
+                    .and_then(|connection| connection.remote_command.as_deref()),
+            )
+    }
+
+    /// Marks this panel as waiting for its next attempt after a lost link. The
+    /// body keeps the last screen until the command starts again.
+    pub fn show_reconnecting(&mut self) {
+        if self.kind == PanelKind::Ssh {
+            self.ssh_status = Some(SshConnectionStatus::Reconnecting);
+        }
+    }
+
+    /// Marks this panel as disconnected, after Horizon did not start its command
+    /// again.
+    pub fn show_disconnected(&mut self) {
+        if self.kind == PanelKind::Ssh {
+            self.ssh_status = Some(SshConnectionStatus::Disconnected);
+        }
     }
 
     /// The agent that opened this panel for the person, as Horizon names it, or
@@ -510,6 +594,9 @@ impl Panel {
             machine: None,
             machine_session: None,
             ssh_status: None,
+            ssh_connected_at_millis: None,
+            ssh_exit_recorded: false,
+            ssh_end: None,
         }
     }
 
@@ -614,6 +701,7 @@ impl Panel {
             return PanelProcessOutput::default();
         };
         let had_output = terminal.process_events();
+        let child_exited = terminal.child_exited();
         let answered_query = terminal.take_answered_query();
         let title_changed = self.terminal_title != terminal.title();
         if title_changed {
@@ -629,11 +717,7 @@ impl Panel {
             self.last_output_at_millis = Some(current_unix_millis());
         }
         if self.kind == PanelKind::Ssh {
-            if terminal.child_exited() {
-                self.ssh_status = Some(SshConnectionStatus::Disconnected);
-            } else if had_output && matches!(self.ssh_status, Some(SshConnectionStatus::Connecting)) {
-                self.ssh_status = Some(SshConnectionStatus::Connected);
-            }
+            self.track_ssh_connection(child_exited, had_output);
         }
 
         let cwd_changed = self.update_tracked_cwd(current_cwd);
@@ -874,8 +958,8 @@ mod tests {
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, AgentStatus,
         DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent, PanelId, PanelKind, PanelLayout, PanelResume,
-        UsageDashboard, WorkspaceId, kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command,
-        scrollback_limit_for_kind,
+        SshConnectionStatus, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind, platform_default_shell,
+        resolve_launch_command, scrollback_limit_for_kind,
     };
     use crate::ssh::SshConnection;
 
@@ -909,7 +993,52 @@ mod tests {
             machine: None,
             machine_session: None,
             ssh_status: None,
+            ssh_connected_at_millis: None,
+            ssh_exit_recorded: false,
+            ssh_end: None,
         }
+    }
+
+    #[test]
+    fn a_panel_attaches_a_tmux_session_only_when_its_command_says_so() {
+        let mut panel = test_panel("Pi", "", false);
+        assert!(
+            !panel.attaches_a_tmux_session(),
+            "a panel that runs on this computer attaches no session"
+        );
+
+        panel.kind = PanelKind::Ssh;
+        panel.ssh_connection = Some(SshConnection {
+            host: "203.0.113.10".to_string(),
+            remote_command: Some("bash -l".to_string()),
+            ..SshConnection::default()
+        });
+        assert!(
+            !panel.attaches_a_tmux_session(),
+            "a remote shell is not a session of a machine"
+        );
+
+        panel.ssh_connection = Some(SshConnection {
+            remote_command: Some(crate::place::session_command("hz-c8dfe3af-1")),
+            ..SshConnection::default()
+        });
+        assert!(
+            panel.attaches_a_tmux_session(),
+            "a place terminal reaches the same session again"
+        );
+    }
+
+    #[test]
+    fn a_waiting_terminal_says_that_it_reconnects_and_a_closed_one_does_not() {
+        let mut panel = test_panel("Pi", "", false);
+        panel.show_reconnecting();
+        assert_eq!(panel.ssh_status(), None, "a panel of this computer shows no link");
+
+        panel.kind = PanelKind::Ssh;
+        panel.show_reconnecting();
+        assert_eq!(panel.ssh_status(), Some(SshConnectionStatus::Reconnecting));
+        panel.show_disconnected();
+        assert_eq!(panel.ssh_status(), Some(SshConnectionStatus::Disconnected));
     }
 
     #[test]

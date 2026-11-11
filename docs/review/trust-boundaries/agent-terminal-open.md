@@ -135,6 +135,8 @@ input of a click. It is stored as one file per Horizon home,
 - **A forgotten record does not close a terminal.** `machine_delete` forgets the
   record and keeps the key. A terminal that the machine opened keeps its own saved
   connection, reconnects after a restart and is not tied to the record any more.
+  A forgotten record does stop the automatic attempts of the panels that it
+  opened, because Horizon no longer knows the route that the person chose.
 - **Every agent panel of this Horizon reaches every machine key.** The keys
   belong to the Horizon home, so the workspace boundary is not a key boundary.
   An agent that the person runs in another workspace of the same Horizon reaches
@@ -188,6 +190,16 @@ holds the only code that decides which command a panel of a place runs.
 - **Only a terminal moves.** `place_command` changes a `shell` or `command` panel
   and leaves an agent, browser, device, card or editor panel exactly as its
   caller made it.
+- **A lost link starts the same argv again, with no new input.** When the ssh
+  process of a panel that attaches a tmux session ends with ssh's own
+  connection-failure status 255, and the panel is still open, Horizon runs the
+  panel's saved command again after 3, 6, 12 and 24 seconds and then every 30
+  seconds, through the path of the "Reconnect" menu action. The argv is the one
+  that the panel already saved, so an attempt adds no field, no option and no
+  command, and it runs while the panel is open and no longer. A command that
+  ends with any other status, a plain SSH panel of the remote hosts chooser, an
+  agent panel and a local shell start nothing, and a panel that no longer has
+  its machine record stays disconnected with the last words of ssh.
 - **A restart re-attaches, and a close ends the session.** The session name is
   saved with the panel, so a restored panel runs the same argv and attaches to
   the same session. A close by the person ends it with

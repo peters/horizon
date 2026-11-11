@@ -35,6 +35,8 @@ pub(in crate::app) enum MachineState {
     #[default]
     Closed,
     Connecting,
+    /// The link was lost, and Horizon waits to reach the machine again.
+    Reconnecting,
     Connected,
     Disconnected,
 }
@@ -45,6 +47,7 @@ impl MachineState {
         match status {
             None => Self::Closed,
             Some(SshConnectionStatus::Connecting) => Self::Connecting,
+            Some(SshConnectionStatus::Reconnecting) => Self::Reconnecting,
             Some(SshConnectionStatus::Connected) => Self::Connected,
             Some(SshConnectionStatus::Disconnected) => Self::Disconnected,
         }
@@ -56,6 +59,7 @@ impl MachineState {
         match self {
             Self::Closed => "no terminal open",
             Self::Connecting => "connecting",
+            Self::Reconnecting => "reconnecting",
             Self::Connected => "connected",
             Self::Disconnected => "disconnected",
         }
@@ -275,6 +279,9 @@ pub(super) fn paint_machine_dot(painter: &egui::Painter, center: egui::Pos2, sta
         MachineState::Connecting => {
             painter.circle_stroke(center, radius, Stroke::new(1.0_f32, theme::FG_SOFT()));
         }
+        MachineState::Reconnecting => {
+            painter.circle_filled(center, radius, theme::PALETTE_YELLOW());
+        }
         MachineState::Connected => {
             painter.circle_filled(center, radius, theme::PALETTE_GREEN());
         }
@@ -310,6 +317,7 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
 const fn status_code(status: SshConnectionStatus) -> u8 {
     match status {
         SshConnectionStatus::Connecting => 1,
+        SshConnectionStatus::Reconnecting => 4,
         SshConnectionStatus::Connected => 2,
         SshConnectionStatus::Disconnected => 3,
     }

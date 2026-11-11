@@ -176,6 +176,7 @@ impl HorizonApp {
         });
         // The panel is gone after this call, so its session is asked for first.
         self.end_machine_session(panel_id);
+        self.reconnects.cancel(panel_id);
         let teardown = self.board.close_panel_returning_teardown(panel_id);
         self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
         self.panel_render_caches.editor_preview_cache.remove(&panel_id);

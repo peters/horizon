@@ -77,6 +77,7 @@ fn a_row_says_the_state_of_its_own_terminal() {
     for (status, state) in [
         (None, MachineState::Closed),
         (Some(SshConnectionStatus::Connecting), MachineState::Connecting),
+        (Some(SshConnectionStatus::Reconnecting), MachineState::Reconnecting),
         (Some(SshConnectionStatus::Connected), MachineState::Connected),
         (Some(SshConnectionStatus::Disconnected), MachineState::Disconnected),
     ] {
