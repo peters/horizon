@@ -46,6 +46,80 @@ with socket.socket() as listener:
 
 PRESET_RESUME_MODES = ('fresh', 'last')
 
+# The file that holds the named secret values of the fixture, in its private state.
+# Horizon reads it only when `HORIZON_TEST_NAMED_SECRETS_FILE` names it, which this
+# fixture sets for its own candidate and nothing else sets.
+NAMED_SECRETS_FILE_NAME = 'named-secrets.json'
+NAMED_SECRETS_ENV = 'HORIZON_TEST_NAMED_SECRETS_FILE'
+
+# The names that Horizon and the system own, from
+# `crates/horizon-core/src/named_secrets/name.rs`. A named secret of the fixture
+# uses none of them.
+RESERVED_SECRET_NAMES = frozenset({
+    'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'DISPLAY', 'WAYLAND_DISPLAY', 'TMPDIR',
+})
+RESERVED_SECRET_PREFIXES = (
+    'LD_', 'DYLD_', 'SSH_', 'HORIZON', 'CLAUDE', 'CODEX', 'ANTHROPIC', 'OPENAI', 'XDG_', 'DBUS_',
+)
+MAX_NAMED_SECRET_BYTES = 16 * 1024
+
+
+def parse_named_secret(text):
+    """The name and the value of one `--named-secret NAME=VALUE`, or ValueError.
+
+    The rule is the rule of a named secret in Horizon: an environment variable name of
+    1 to 64 characters of A-Z, 0-9 and _ that starts with a letter, no name that
+    Horizon or the system own, and 1 to 16 KiB of text with no line break.
+    """
+    name, separator, value = text.partition('=')
+    if not separator:
+        raise ValueError(f'{text!r} is not NAME=VALUE')
+    if (not 1 <= len(name) <= 64 or not name[0].isascii() or not name[0].isupper()
+            or not all(character.isascii() and (character.isupper() or character.isdigit() or character == '_')
+                        for character in name)):
+        raise ValueError(f'{name!r} is not 1 to 64 characters of A-Z, 0-9 and _ that starts with A-Z')
+    if name in RESERVED_SECRET_NAMES or name.startswith(RESERVED_SECRET_PREFIXES):
+        raise ValueError(f'{name!r} belongs to Horizon or to the system')
+    if not 1 <= len(value.encode()) <= MAX_NAMED_SECRET_BYTES:
+        raise ValueError(f'the value of {name!r} is empty or larger than {MAX_NAMED_SECRET_BYTES} bytes')
+    if '\n' in value or '\r' in value or '\0' in value:
+        raise ValueError(f'the value of {name!r} holds a line break or a NUL byte')
+    return name, value
+
+
+def named_secret_slot(name):
+    """The reference of one named secret in the credential store of the fixture."""
+    return f'named/{name}'
+
+
+def seed_named_secrets(path, secrets, previous=None):
+    """Write the named secret values of the fixture into its private state, at 0600.
+
+    A value of an earlier run of the same state stays unless the flag names it again,
+    so a procedure can add one secret to a private home that already holds another.
+    """
+    values = dict(previous or {})
+    values.update({named_secret_slot(name): value for name, value in secrets})
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.write_text(json.dumps(values, indent=2, sort_keys=True))
+    path.chmod(0o600)
+    return values
+
+
+def read_named_secrets(path):
+    """The named secret values of an earlier run of the fixture, or an empty map."""
+    try:
+        values = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def named_secret_names(values):
+    """The names of the named secret values of the fixture, in name order."""
+    prefix = 'named/'
+    return sorted(slot[len(prefix):] for slot in values if slot.startswith(prefix))
+
 # The snake_case names of `PanelKind` (`crates/horizon-core/src/panel.rs`). A file that
 # names another kind makes Horizon refuse the whole config, which starts the default
 # board instead of the board the procedure tests.
@@ -166,7 +240,7 @@ def extra_column(placed):
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
                          browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
-                         server_command=None):
+                         server_command=None, secret_names=None):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
     The theme is part of the config, so the first start at a state path imports it. A
@@ -221,6 +295,11 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         if server_command:
             entry['command'] = server_command
         fixture['server'] = entry
+    if secret_names:
+        # The named secrets that the candidate reads as the environment of an agent
+        # panel. The section holds the names: the values are in the private state of
+        # the fixture, at 0600, and never in its settings.
+        fixture['secrets'] = {'names': list(secret_names)}
     if presets is not None:
         # The New Workspace menu of the fixture, so a procedure can test an agent that
         # has several presets without changing the real menu of the person.
@@ -303,6 +382,11 @@ def main():
         help='Start with no session argument, so the candidate resumes the board that an earlier '
              'run left in the private home. Use with --reuse-state and without --saved-session')
     parser.add_argument(
+        '--named-secret', action='append', metavar='NAME=VALUE',
+        help='Seed one named secret into the private state of the fixture, so its agent '
+             'panels read NAME as an environment variable. Repeat for more than one. The '
+             'value is in clear text in that state, which is the private state of one run.')
+    parser.add_argument(
         '--presets',
         type=Path,
         help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
@@ -359,6 +443,10 @@ def main():
     if not 640 <= width <= 8192 or not 480 <= height <= 8192:
         parser.error('--screen takes 640-8192 by 480-8192 pixels')
     args.screen = f'{width}x{height}'
+    try:
+        named_secrets = [parse_named_secret(text) for text in args.named_secret or []]
+    except ValueError as problem:
+        parser.error(f'--named-secret {problem}')
     args.state = sandbox.prepare_state(args.state, reuse=args.reuse_state).resolve()
     app = args.horizon.resolve(strict=True)
     extra_ro_binds = [app]
@@ -448,10 +536,17 @@ def main():
         config = data / 'horizon.json'
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
+        # A named secret of this run, and one that an earlier run of the same private
+        # home left, are both read by the candidate of this run.
+        named_file = data / NAMED_SECRETS_FILE_NAME
+        held = read_named_secrets(named_file) if args.reuse_state else {}
+        values = seed_named_secrets(named_file, named_secrets, held) if (named_secrets or held) else None
+        if values is not None:
+            env[NAMED_SECRETS_ENV] = str(named_file)
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
-            args.server_command)
+            args.server_command, named_secret_names(values or {}))
         config.write_text(json.dumps(fixture, indent=2))
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))
