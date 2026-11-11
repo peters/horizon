@@ -41,7 +41,7 @@ impl TerminalInteraction {
     /// Clip-aware hit target for pointer events.
     ///
     /// `layout.body` is the full terminal grid and can extend under fixed
-    /// overlays such as the settings YAML panel. Widget `interact_rect` is
+    /// overlays such as the settings panel. Widget `interact_rect` is
     /// already intersected with the canvas clip.
     pub(super) fn body_hit_rect(&self) -> Rect {
         self.body.interact_rect

@@ -203,7 +203,10 @@ fn setting_the_default_workspace_rewrites_the_config_and_applies_it() {
         "  Ops  ",
         "the store holds the default workspace"
     );
-    assert!(!app.config_path.exists(), "no YAML copy is written next to the store");
+    assert!(
+        !app.config_path.exists(),
+        "no settings file is written next to the store"
+    );
     assert_eq!(
         app.template_config.remote_hosts.default_workspace_name(),
         "  Ops  ",

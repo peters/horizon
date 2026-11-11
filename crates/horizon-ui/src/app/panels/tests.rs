@@ -60,7 +60,7 @@ fn overlay_click_frame(ctx: &Context, events: Vec<Event>, panel_clip: Rect) -> b
             clicked = ui
                 .put(
                     Rect::from_min_size(Pos2::new(300.0, 80.0), Vec2::new(100.0, 30.0)),
-                    egui::Button::new("YAML"),
+                    egui::Button::new("Settings"),
                 )
                 .clicked();
             egui::Area::new(Id::unique("panel-overlap-test"))

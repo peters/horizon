@@ -202,11 +202,10 @@ pub(crate) fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
-/// The newest write time of the settings of `config_path`: the exported copy or
-/// the store, because a save writes the copy first and the store second.
-/// The time of the last write of the settings, which is the store.
+/// The time of the last write of the settings of `config_path`, which is the
+/// store.
 ///
-/// A YAML copy is not a settings file, so an edit of one does not reload the
+/// A settings file is not the store, so an edit of one does not reload the
 /// window.
 pub(super) fn settings_mtime(config_path: &std::path::Path) -> Option<std::time::SystemTime> {
     let store_path = horizon_core::config_store::ConfigStore::resolve(config_path)
