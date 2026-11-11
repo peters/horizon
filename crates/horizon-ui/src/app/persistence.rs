@@ -6,6 +6,11 @@ use super::HorizonApp;
 
 impl HorizonApp {
     pub(super) fn save_recovered_startup_runtime_state(&self, runtime_state: &RuntimeState) -> Result<(), String> {
+        // A recovered start writes its board before the board opens, so a retry
+        // of the person reads the same file it wrote. The session writer refuses
+        // the write while it saves that session, and the prompt offers the retry.
+        let _writing =
+            horizon_core::ui_thread::exception("startup recovery: the repaired board is written before it opens");
         let Some(active_session) = self.active_session.as_ref().filter(|session| session.persistent) else {
             return Ok(());
         };

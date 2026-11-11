@@ -61,6 +61,10 @@ impl Default for HostIo {
 
 impl Drop for HostIo {
     fn drop(&mut self) {
+        // A board that goes waits for the coordination jobs that were asked for
+        // with it, for at most the bound of an exit.
+        let _flushing = horizon_core::ui_thread::exception("board drop: a replaced board waits for its jobs");
+        horizon_core::ui_thread::blocking("the drop of a board waits for its coordination jobs");
         self.jobs = None;
         // An exit that already waited waits only for what is left of its bound.
         let wait = self.exit_deadline.map_or(EXIT_FLUSH, |deadline| {
@@ -280,6 +284,7 @@ impl HorizonApp {
     /// coordination job ran and its outcome applied. The exit that runs
     /// without further frames uses it.
     pub(super) fn flush_browser_host_io(&mut self) {
+        horizon_core::ui_thread::blocking("a session switch waits for the coordination jobs of the old board");
         while self.browser_host_io_holds_exit() {
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -291,6 +296,10 @@ impl HorizonApp {
     /// old board then take no request of the new one. A later exit waits for
     /// its own bound.
     pub(super) fn finish_browser_host_io_before_replacement(&mut self) {
+        // A session switch waits on this thread for the old board, so no claim
+        // of it can reach the board that stands after it. The wait has a bound,
+        // and the window does not paint during it.
+        let _flushing = horizon_core::ui_thread::exception("session switch: the old board is flushed for up to 2 s");
         self.flush_browser_host_io();
         self.browser_create_host.io.exit_deadline = None;
     }
