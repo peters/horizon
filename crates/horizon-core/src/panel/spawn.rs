@@ -750,7 +750,7 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 
-pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
+pub(crate) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
     let mut env = HashMap::new();
     // Nested launches must not inherit another panel's work-hook identity.
     for key in crate::agent_work::WORK_ENV_KEYS {
@@ -763,6 +763,14 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: b
             crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
             crate::browser::manifest::host_instance().to_string(),
         );
+        // Every named secret whose value this computer holds, as one environment
+        // variable each, so a tool that the agent starts reads its key without an
+        // export in the shell of this computer. A terminal panel, and a terminal on
+        // a machine over ssh, gets none: a value never reaches a command line and
+        // never leaves this computer with a login. The names that Horizon or an
+        // agent own are refused when a person adds them, so this never replaces a
+        // variable that the lines above set.
+        crate::named_secrets::apply(&mut env);
     }
     if kind == PanelKind::Grok {
         let command = uses_default_command

@@ -1,5 +1,5 @@
 mod lifecycle;
-mod spawn;
+pub(crate) mod spawn;
 mod work_resume;
 
 use std::borrow::Cow;

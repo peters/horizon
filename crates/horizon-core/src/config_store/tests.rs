@@ -70,6 +70,7 @@ fn every_field_of_the_settings_window_round_trips() {
     config.browser_host.profile = Some("work".to_string());
     config.server.ssh_target = Some("server-vm".to_string());
     config.server.command = Some("/opt/horizon --server-link".to_string());
+    config.secrets.names = vec!["HETZNER_TOKEN".to_string(), "CLOUD_KEY".to_string()];
     config.remote_hosts.default_workspace = "Ops".to_string();
     config.remote_hosts.vnc_port = 5997;
     config.remote_hosts.vnc_ports.insert("smoke-node".to_string(), 5901);
@@ -94,6 +95,7 @@ fn every_field_of_the_settings_window_round_trips() {
     let stored = store.load().expect("load").expect("the store exists").config;
 
     assert_eq!(stored.remote_hosts, config.remote_hosts, "every remote host entry");
+    assert_eq!(stored.secrets, config.secrets, "the names of the named secrets");
     assert_eq!(stored.browser.quality, 42, "the picture quality");
     assert_eq!(stored.browser.every_nth_frame, 3, "the skipped frames");
     assert_eq!(stored.browser.video, config.browser.video, "every recording option");

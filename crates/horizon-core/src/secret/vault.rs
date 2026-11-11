@@ -1,10 +1,12 @@
-//! The secrets of one computer, of both kinds, behind the one trait that the link
+//! The secrets of one computer, of every kind, behind the one trait that the link
 //! uses.
 //!
-//! A machine key is a file family under `machine-keys/` of the Horizon home, and a
-//! credential value is an item of the OS credential store. Both are reached here,
-//! so the link has one place that reads the value of an id, writes the value that
-//! the server decided, and keeps a local value that lost.
+//! A machine key is a file family under `machine-keys/` of the Horizon home, a
+//! credential value is an item of the OS credential store, and a named secret is one
+//! item of that store under the reference `named/<NAME>` that the agent panels of
+//! this computer read as an environment variable. All are reached here, so the link
+//! has one place that reads the value of an id, writes the value that the server
+//! decided, and keeps a local value that lost.
 //!
 //! The version rule of the server decides between two computers that changed one
 //! secret: the first write on a version wins. The loser keeps its own value as
@@ -18,11 +20,13 @@ use zeroize::Zeroizing;
 
 use super::{CredentialVault, MachineKeyFiles, SecretError, SecretId, SecretKind, SecretTarget};
 use crate::MachineKeys;
+use crate::named_secrets::{NamedSecretVault, SecretName};
 
 /// What this computer keeps of every secret.
 pub struct SecretVault {
     keys: MachineKeys,
     credentials: Option<Arc<CredentialVault>>,
+    named: Option<Arc<NamedSecretVault>>,
 }
 
 impl fmt::Debug for SecretVault {
@@ -31,6 +35,7 @@ impl fmt::Debug for SecretVault {
             .debug_struct("SecretVault")
             .field("keys", &self.keys.key_directory())
             .field("credentials", &self.credentials.is_some())
+            .field("named_secrets", &self.named.is_some())
             .finish()
     }
 }
@@ -40,7 +45,20 @@ impl SecretVault {
     /// computer has an OS credential store.
     #[must_use]
     pub fn new(keys: MachineKeys, credentials: Option<Arc<CredentialVault>>) -> Self {
-        Self { keys, credentials }
+        Self {
+            keys,
+            credentials,
+            named: None,
+        }
+    }
+
+    /// The same secrets, with the named secrets of this computer's credential
+    /// store, so a value that a server holds becomes the environment of an agent
+    /// panel here.
+    #[must_use]
+    pub fn with_named(mut self, named: Arc<NamedSecretVault>) -> Self {
+        self.named = Some(named);
+        self
     }
 
     /// The keys of `keys` alone, for a computer without an OS credential store.
@@ -49,6 +67,7 @@ impl SecretVault {
         Self {
             keys,
             credentials: None,
+            named: None,
         }
     }
 
@@ -89,6 +108,12 @@ impl SecretTarget for SecretVault {
                     reason: "This computer has no OS credential store, so it holds no credential value".to_owned(),
                 }),
             },
+            SecretKind::Named => match self.named.as_deref() {
+                Some(named) => named
+                    .value(&named_secret_name(id)?)
+                    .map_err(|error| named_failure(&error)),
+                None => Ok(None),
+            },
         }
     }
 
@@ -121,6 +146,15 @@ impl SecretTarget for SecretVault {
                     reason: "This computer has no OS credential store, so it keeps no credential value".to_owned(),
                 }),
             },
+            SecretKind::Named => match self.named.as_deref() {
+                Some(named) => {
+                    let name = named_secret_name(id)?;
+                    named.put(&name, body).map(|_| ()).map_err(|error| named_failure(&error))
+                }
+                None => Err(SecretError::Unsupported {
+                    reason: "This computer has no OS credential store, so it keeps no named secret".to_owned(),
+                }),
+            },
         }
     }
 
@@ -136,6 +170,13 @@ impl SecretTarget for SecretVault {
             }
             SecretKind::Credential => match self.credentials.as_deref() {
                 Some(credentials) => credentials.remove(id.name()),
+                None => Ok(()),
+            },
+            SecretKind::Named => match self.named.as_deref() {
+                Some(named) => {
+                    let name = named_secret_name(id)?;
+                    named.remove(&name).map(|_| ()).map_err(|error| named_failure(&error))
+                }
                 None => Ok(()),
             },
         }
@@ -162,6 +203,10 @@ impl SecretTarget for SecretVault {
             }
             SecretKind::Credential => Ok(format!(
                 "The value of the credential {} of this computer was replaced by the value of the server",
+                id.name()
+            )),
+            SecretKind::Named => Ok(format!(
+                "The value of the named secret {} of this computer was replaced by the value of the server",
                 id.name()
             )),
         }
@@ -202,7 +247,26 @@ impl SecretTarget for SecretVault {
                     .collect(),
                 None => Vec::new(),
             },
+            SecretKind::Named => match self.named.as_deref() {
+                Some(named) => named.local_ids(),
+                None => Vec::new(),
+            },
         }
+    }
+}
+
+/// The name of the named secret that `id` holds, or the refusal of an id that is
+/// not one.
+fn named_secret_name(id: &SecretId) -> Result<SecretName, SecretError> {
+    SecretName::parse(id.name()).map_err(|error| SecretError::InvalidId {
+        message: error.to_string(),
+    })
+}
+
+/// One refusal of the credential store of this computer, as the link reports it.
+fn named_failure(error: &crate::named_secrets::NamedSecretError) -> SecretError {
+    SecretError::Unavailable {
+        reason: error.to_string(),
     }
 }
 

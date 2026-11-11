@@ -14,6 +14,7 @@ use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 mod browser_host;
 mod presets;
 mod remote_hosts;
+mod secrets;
 mod server;
 
 pub use browser_host::{BrowserHostConfig, browser_host, browser_mcp_args, configure_browser_host};
@@ -25,6 +26,7 @@ pub(crate) use presets::{
     insert_missing_kilo_presets, insert_missing_opencode_presets, insert_missing_pi_presets,
 };
 pub use remote_hosts::RemoteHostsConfig;
+pub use secrets::SecretsConfig;
 pub use server::{DEFAULT_LINK_COMMAND, ServerConfig, configure_server, server};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -49,6 +51,8 @@ pub struct Config {
     pub browser_host: BrowserHostConfig,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
+    pub secrets: SecretsConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -75,6 +79,7 @@ impl Default for Config {
             remote_hosts: RemoteHostsConfig::default(),
             browser_host: BrowserHostConfig::default(),
             server: ServerConfig::default(),
+            secrets: SecretsConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -516,6 +521,7 @@ impl Config {
         self.remote_hosts.validate()?;
         self.browser_host.validate()?;
         self.server.validate()?;
+        self.secrets.validate().map_err(Error::Config)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }

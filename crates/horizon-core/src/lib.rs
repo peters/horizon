@@ -20,6 +20,7 @@ mod horizon_home;
 mod layout;
 mod local_store;
 pub mod machines;
+pub mod named_secrets;
 mod opencode_paths;
 mod panel;
 pub mod place;

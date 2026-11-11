@@ -7,9 +7,10 @@
 //! and works without the server afterwards.
 //!
 //! An id names the kind of value and the name that Horizon uses for it:
-//! `machine-key/<name>` for one pair of [`crate::MachineKeys`] and
+//! `machine-key/<name>` for one pair of [`crate::MachineKeys`],
 //! `credential/<reference>` for the value under one credential reference of a
-//! remote browser provider. The id is checked here, before a value reaches any
+//! remote browser provider, and `named/<NAME>` for the value of one named secret
+//! that every agent panel of a computer gets as an environment variable. The id is checked here, before a value reaches any
 //! file, so an id from a server is never a path and never a command.
 //!
 //! The body of a secret is opaque text to the server. This crate decides what the
@@ -40,6 +41,10 @@ pub const MACHINE_KEY_PREFIX: &str = "machine-key/";
 /// The prefix of the id of a credential value.
 pub const CREDENTIAL_PREFIX: &str = "credential/";
 
+/// The prefix of the id of a named secret: one value that every agent panel of a
+/// computer gets as an environment variable.
+pub const NAMED_PREFIX: &str = "named/";
+
 /// The most characters of an id: the prefix and the longest name behind it.
 pub const MAX_SECRET_ID_CHARS: usize = 80;
 
@@ -59,6 +64,9 @@ pub enum SecretKind {
     /// The value under one credential reference of a remote browser provider, in
     /// the OS credential store of this computer.
     Credential,
+    /// The value of one named secret, in the OS credential store of this computer
+    /// under the reference `named/<NAME>`.
+    Named,
 }
 
 impl SecretKind {
@@ -68,6 +76,7 @@ impl SecretKind {
         match self {
             Self::MachineKey => "machine-key",
             Self::Credential => "credential",
+            Self::Named => "named",
         }
     }
 }
@@ -128,6 +137,21 @@ impl SecretId {
         })
     }
 
+    /// The id of the named secret of `name`.
+    ///
+    /// # Errors
+    /// Refuses a name that is not one name of a named secret, including a name
+    /// that Horizon or the system own.
+    pub fn named(name: &str) -> Result<Self, SecretError> {
+        let name = crate::named_secrets::SecretName::parse(name).map_err(|error| SecretError::InvalidId {
+            message: error.to_string(),
+        })?;
+        Ok(Self {
+            text: format!("{NAMED_PREFIX}{name}"),
+            kind: SecretKind::Named,
+        })
+    }
+
     /// The id that `text` names.
     ///
     /// # Errors
@@ -138,6 +162,7 @@ impl SecretId {
         match prefix {
             "machine-key" => Self::machine_key(rest).map_err(|_| Self::invalid(text)),
             "credential" => Self::credential(rest).map_err(|_| Self::invalid(text)),
+            "named" => Self::named(rest).map_err(|_| Self::invalid(text)),
             _ => Err(Self::invalid(text)),
         }
     }
@@ -146,7 +171,7 @@ impl SecretId {
         let quoted: String = text.chars().take(MAX_SECRET_ID_CHARS).collect();
         SecretError::InvalidId {
             message: format!(
-                "The secret id {quoted:?} is not one id of this Horizon: machine-key/<name> or credential/<reference>"
+                "The secret id {quoted:?} is not one id of this Horizon: machine-key/<name>, credential/<reference> or named/<NAME>"
             ),
         }
     }
