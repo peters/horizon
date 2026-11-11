@@ -37,7 +37,7 @@ The store has schema version 1.
 
 | Table | Rows |
 |---|---|
-| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `browser_host`, `server`, `secrets`, `presets`, `workspaces`. |
+| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `browser_host`, `server`, `secrets`, `speech`, `presets`, `workspaces`. |
 | `meta` | `schema_version` and `saved_at`. |
 
 Each `settings` row has a `format` column. This build writes `json`. A build that
@@ -134,7 +134,7 @@ A session of an older build opens: `sessions/index.yaml` names its profile, and
 | The Usage panel | Nothing. The panel kind is gone, and the session notice names it. |
 | The Git Changes panel | Nothing. The diff of a folder is read in a terminal or in an agent panel. |
 | The setup board | The Settings window holds the settings that the board guided a person through. |
-| Speech input and its `features.speech` section | Nothing. Horizon has no dictation, and the section is ignored. |
+| Speech input and its `features.speech` section in `features` | Nothing. The section is ignored. Speech input of this build has its own `speech` section with a recorder line, a transcriber and a hotkey, so a start reads the defaults of that section and a store without the row reads them too. |
 | The attention feed and its `overlays.attention_feed_*` values | Nothing. An agent reports in its own panel. |
 | The cloud workspace profiles, `remote` | Nothing. A machine of the machine list and a browser host hold the remote work. |
 | The casting, native app testing and tailnet settings | Nothing. Their sections are ignored. |

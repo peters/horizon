@@ -898,9 +898,10 @@ person's input. Examples in the current UI:
 - The loading spinner (1.2 s per turn, repainting about every 32 ms while
   visible).
 - The three-dot "working" indicator on an agent panel (1 Hz pulse).
-- The microphone glyph in a panel titlebar: a slow pulse (about 0.8 Hz) in red
-  with an expanding ring while recording, and in `PALETTE_YELLOW` while a
-  transcription is in flight.
+- The state mark of speech input: a small pill at the bottom left of the panel of
+  a take, with the seconds of a recording, then one line of a transcription. It
+  repaints once per second while a take records and once at the end of the six
+  seconds of a sentence of a failure.
 - The history meter in a panel titlebar, which eases to its new fill over
   0.16 s.
 

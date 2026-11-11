@@ -448,6 +448,13 @@ when it names one of those kinds.
   to the editing settings, and its input buffers are scrubbed when the settings
   editor closes.
 
+- `horizon_core::speech` is the thin layer of speech input: `command` splits one
+  command line of the settings, `endpoint` checks the endpoint of a service,
+  `service` builds one multipart request, `text` cleans one answer, `clock` holds
+  the bounds that a test replaces, and `take` runs one take on a worker thread.
+  `app::speech` holds the hotkey, the insert and the state mark, and
+  `app::settings::speech` is the **Speech** tab.
+
 ## File Size Policy
 
 The automated line-limit and `too_many_lines` suppression checks cover

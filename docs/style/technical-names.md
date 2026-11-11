@@ -26,6 +26,8 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | operator | The person who runs the procedure and owns the provider accounts. | tester, user |
 | secrets file | The one SQLite file of a Horizon home that holds every secret value of that home: `<Horizon home>/secrets.sqlite`. | keyring, Keychain, credential store |
 | scripted agent | An HTTP agent in a test that answers each request from a list of expected requests and answers. It sends nothing to a network. | mock server |
+| stand-in recorder | The script `scripts/device-smoke/speech_standin_recorder.py`. It copies one prepared recording to the file of a take and waits for `SIGINT`. It opens no audio device. | fake microphone |
+| stand-in service | The script `scripts/device-smoke/speech_standin_service.py`. It answers one transcription request on a loopback address and records what it received, without the key. | mock service |
 
 ## Horizon objects
 
@@ -40,6 +42,12 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | session card | One session in the **Sessions** dialog, with its label, its counts and its **Delete** button. | session row, session entry |
 | backdrop | The dim rectangle that a dialog paints over the board behind it. | overlay, scrim, dim rectangle |
 | provider | A vendor that Horizon uses for a remote target, for example BrowserStack. | vendor, backend |
+| speech input | The hotkey, the recorder program and the transcriber of one text that Horizon inserts. | dictation, voice typing |
+| take | One recording of speech input, from the hotkey down to the transcribed text. | recording (for the take), dictation |
+| recorder | The one command line with `{file}` that records a take. | microphone client |
+| transcriber | The transcription service or the transcription command of one take. | speech engine, model |
+| state mark | The small pill at the bottom of the panel of a take, with its state and its sentences. | badge, indicator |
+| **Speech** tab | The tab of the Settings window that holds speech input. | dictation settings |
 | endpoint | One IPv4 host or DNS name and one TCP port. | network grant |
 | Remote Hosts overlay | The SSH host chooser. | remote chooser |
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts and Settings. | More menu, overflow menu |

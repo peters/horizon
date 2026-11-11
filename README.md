@@ -32,7 +32,8 @@
   <a href="#configuration">Config</a> ·
   <a href="#browse-any-website">Browse</a> ·
   <a href="#watch-an-app-over-vnc">VNC</a> ·
-  <a href="#browser-panels">Browser reference</a>
+  <a href="#browser-panels">Browser reference</a> ·
+  <a href="#speech-input">Speech</a>
 </p>
 
 ---
@@ -108,6 +109,7 @@ New here? [First steps](docs/first-steps.md) walks you from install to your firs
 
 - **Remote Hosts**. Open a terminal or a desktop on another machine, over SSH or from your Tailscale devices. See [Remote Hosts](#remote-hosts).
 - **Agent-driven desktops** — agents click and type in an isolated X11 desktop while you watch it in a Device panel. Linux only. See [Watch an app over VNC](#watch-an-app-over-vnc).
+- **Speech input** — hold **F9**, speak, and the text of the take waits at the prompt of your panel. Horizon runs a recorder program of your computer and one transcription service or command, with no speech engine in the build. See [Speech input](#speech-input).
 
 ## Highlights
 
@@ -202,8 +204,8 @@ Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and
 <tr>
 <td>
 
-### Markdown Editor
-Drop a `.md` file onto the canvas or create one from the palette. **Split view** with syntax highlighting and live preview, saved with **Ctrl+Shift+S**.
+### Speech Input
+Hold **F9** and speak. Horizon runs a recorder you name and sends the take to a transcription service or command, and the text lands at the prompt of the panel you were in. It keeps the text and sends no Enter key.
 
 </td>
 <td>
@@ -216,6 +218,34 @@ Agents discover one MCP browser contract automatically. Every action is correlat
 </table>
 
 ---
+
+## Speech input
+
+Hold **F9** and speak. Horizon records with a program that you name, sends the
+recording to a transcription service over HTTPS or to a transcription command,
+and inserts the text at the prompt of the panel that had the focus. It adds no
+line break: you decide when to send the line. **Escape** while the key is down
+drops the take.
+
+Horizon has no speech engine, no audio library and no model in its build. The
+settings decide the rest:
+
+- **The recorder** is one command line with `{file}`. Linux defaults to
+  `pw-record --rate 16000 --channels 1 --format s16 {file}` of PipeWire. macOS has
+  no recorder of its own: install one and write it in **Settings** › **Speech**,
+  for example `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000 -y {file}`.
+- **The transcriber** is a service with an endpoint, a model, an optional
+  language hint, and the name of the key, or one command whose output is the
+  text.
+- **The key** is a named secret of this computer. Store it once in **Settings** ›
+  **Secrets** under a name such as `SPEECH_API_KEY`, and the Speech tab says
+  whether this computer holds it.
+
+A take goes to the host of your endpoint, so read that host before you keep it.
+[The speech input procedure](docs/testing/procedures/speech-input.md) shows a run
+with a stand-in recorder and a stand-in service, and
+[the boundary of speech input](docs/review/trust-boundaries/speech-input.md)
+states what leaves your computer and what Horizon guarantees.
 
 ## Install
 
@@ -243,6 +273,7 @@ Horizon runs on Linux and macOS, and some features are Linux-only today:
 | Coding-agent panels | ✓ | ✓ |
 | Safari browser panels | — | ✓ |
 | Agent-driven desktops | X11 | — |
+| Speech input | ✓ with PipeWire | Needs a recorder program |
 
 The full list, with the reason for each gap, is in [Platform support](docs/platform-support.md).
 
