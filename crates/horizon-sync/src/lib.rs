@@ -29,14 +29,27 @@
 
 #![forbid(unsafe_code)]
 
+mod client;
 mod error;
+mod frame;
 mod intent;
+mod link;
+mod protocol;
+mod server;
 mod store;
 mod tip;
 
-pub use error::{Refusal, StoreError};
+pub use client::{Client, Link, LinkState, Mirror, ObjectMirror, PullOutcome, PushOutcome};
+pub use error::{Refusal, StoreError, SyncError};
+pub use frame::{FrameError, MAX_FRAME_BYTES, read_frame, write_frame};
 pub use intent::{
     Intent, IntentResult, KIND_MACHINE, KIND_PROBE, MAX_INTENTS_PER_PUSH, MAX_PROBES, Op, Outcome, PushReply,
 };
-pub use store::{Changes, Row, Store};
+pub use link::{SocketError, SocketServer, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
+pub use protocol::{
+    Changes, Frame, Hello, HelloOk, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, Wait,
+    check_device_name,
+};
+pub use server::{MAX_OPEN_WAITS, WAIT_BOUND, serve};
+pub use store::Store;
 pub use tip::tip;

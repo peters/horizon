@@ -182,6 +182,29 @@ boundary pages went away with their features.
     panel is an ordinary SSH terminal afterwards that no operation of
     `block_panel` reads or changes.
 
+- [`server-link`](trust-boundaries/server-link.md)
+  - Untrusted: every byte of one link, the device name of its hello, the intents
+    and the records that a computer sends, and the fields of a body of an
+    internal object.
+  - Guarantees: one writer holds the SQLite file and each push is one transaction
+    with no network call inside it, the answer leaves after the commit, and a
+    reader uses its own connection; each decided intent takes the next log index;
+    the identifier of an intent makes a resend answer its first result; the first
+    intent on a version wins and a later one is refused with both numbers; a
+    machine record passes `horizon_core::machines::check_record` at the server; a
+    frame of at most 256 KiB, 256 intents in one push, 64 machines, 64 probe
+    objects and 32 open waits for one link; the server stamps every change with
+    its own clock; the server runs no path and no command of a computer, opens no
+    network connection, and holds no private key, token, terminal content or
+    setting; a link that the server ends stops writing first, so the computer
+    reads the typed error; the socket and the queue file are `0600` in a `0700`
+    directory.
+  - Does not guarantee: who the computer is, because the device name is a claim
+    that the transport does not prove; availability, because a link holds a thread
+    and another process of the same user can open the file; the content of a probe
+    body, which is bounded JSON that the server does not read; the correctness of
+    the clock of the server.
+
 ## Follow-up work
 
 - Closed: `AGENTS.md` named `.github/` as the home of the review instructions,

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::frame::FrameError;
+
 /// Why the server refused one intent.
 ///
 /// A refusal changes nothing. It is deterministic for the state that the server
@@ -68,4 +70,33 @@ pub enum StoreError {
     /// The caller asked for more intents in one push than the protocol allows.
     #[error("one push holds at most {limit} intents")]
     TooManyIntents { limit: usize },
+}
+
+/// The errors of the computer side of a link.
+#[derive(Debug, thiserror::Error)]
+pub enum SyncError {
+    /// The link failed.
+    #[error(transparent)]
+    Frame(#[from] FrameError),
+    /// The server refused the frame with a typed error.
+    #[error("the server refused: {code}: {message}")]
+    Refused { code: &'static str, message: String },
+    /// The server answered a frame that this computer did not ask for.
+    #[error("this computer asked for a {asked} frame, and the server answered {answered}")]
+    Unexpected {
+        answered: &'static str,
+        asked: &'static str,
+    },
+    /// The link ended before the server answered.
+    #[error("the link ended before the server answered the {asked}")]
+    Ended { asked: &'static str },
+    /// The device name breaks the rule.
+    #[error("{0:?} is not one device name: 1 to 40 characters of a-z, 0-9 and -")]
+    Device(String),
+    /// The queue file cannot be read or written.
+    #[error("{0}")]
+    Queue(String),
+    /// The server store failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }

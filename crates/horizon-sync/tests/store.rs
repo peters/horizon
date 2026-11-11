@@ -436,6 +436,35 @@ fn a_kind_and_a_record_that_the_server_does_not_accept_are_refused() {
 }
 
 #[test]
+fn a_refusal_quotes_a_bounded_part_of_what_a_computer_sent() {
+    let (_temp, store) = store();
+    let long = "a".repeat(5000);
+    let refused = refused(
+        &store,
+        "mbp-7c1",
+        Intent {
+            device: "mbp-7c1".to_owned(),
+            id: 1,
+            seen: None,
+            op: Op::ObjectPut {
+                kind: long,
+                id: "p1".to_owned(),
+                body: json!({}),
+            },
+        },
+    );
+    let Refusal::UnknownKind { kind } = refused else {
+        panic!("the kind is unknown: {refused:?}");
+    };
+    assert_eq!(
+        kind.chars().count(),
+        67,
+        "a refusal quotes 64 characters and three dots, not a frame"
+    );
+    assert!(kind.ends_with("..."));
+}
+
+#[test]
 fn an_intent_of_another_computer_is_refused_and_the_probes_are_bounded() {
     let (_temp, store) = store();
     let other = refused(&store, "mbp-7c1", put_machine("other-2a", 1, "build-1"));

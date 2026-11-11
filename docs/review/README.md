@@ -67,6 +67,9 @@ gives the untrusted input, the guarantee and the limit of each boundary.
 3. **Agent-drawn UI** — an agent draws text of its own making inside the
    person's workspace, and it asks Horizon to open a terminal for the person.
    Boundaries: `block-panel`, `agent-terminal-open`.
+4. **Another computer** — a link carries every byte of a computer that the
+   transport let in, and the server stores what that computer says. Boundaries:
+   `server-link`.
 
 ## Checks
 

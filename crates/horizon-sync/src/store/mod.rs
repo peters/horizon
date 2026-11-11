@@ -117,6 +117,24 @@ impl Store {
         self.inner.read(rows::all)
     }
 
+    /// The changes after `since`, when the tip of the computer names this log at
+    /// that index. A computer that is ahead of this store, or that names another
+    /// log, gets every row with `reset: true`, so its mirror equals this store
+    /// afterwards.
+    ///
+    /// # Errors
+    /// Returns why the objects cannot be read.
+    pub fn pull(&self, since: u64, claimed: &str) -> Result<Changes, StoreError> {
+        self.inner.read(|connection| {
+            let index = schema::index_of(connection)?;
+            let same_log = since == 0 || claimed == crate::tip(&self.inner.store_id, since);
+            if since > index || !same_log {
+                return rows::all(connection);
+            }
+            rows::changes(connection, since)
+        })
+    }
+
     /// Waits for a change after `since`, or for `bound` to pass, and answers with
     /// what changed up to that moment.
     ///

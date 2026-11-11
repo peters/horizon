@@ -15,6 +15,9 @@ use crate::error::{Refusal, StoreError};
 use crate::intent::{Intent, IntentResult, KIND_MACHINE, KIND_PROBE, MAX_PROBES, Op, Outcome, PushReply};
 use crate::store::rows::to_sql;
 
+/// The most characters of a value of a frame that the log or a refusal quotes.
+const QUOTED_CHARS: usize = 64;
+
 /// Decides and writes the intents of one push. The caller commits the
 /// transaction and answers after the commit.
 ///
@@ -107,8 +110,8 @@ fn log(
             now_millis,
             device,
             to_sql(intent.id)?,
-            intent.op.kind(),
-            intent.op.object_id(),
+            quoted(intent.op.kind()),
+            quoted(intent.op.object_id()),
             result_json
         ],
     )?;
@@ -141,8 +144,9 @@ fn decide(transaction: &Transaction<'_>, device: &str, intent: &Intent, index: u
     if intent.device != device {
         return Ok(refused(Refusal::InvalidIntent {
             message: format!(
-                "The intent {} names the computer {:?}, but this link is {:?}",
-                intent.id, intent.device, device
+                "The intent {} names the computer {:?}, but this link is {device:?}",
+                intent.id,
+                quoted(&intent.device)
             ),
         }));
     }
@@ -196,7 +200,7 @@ fn object_put(
     index: u64,
 ) -> Result<Outcome, StoreError> {
     if kind != KIND_PROBE {
-        return Ok(refused(Refusal::UnknownKind { kind: kind.to_owned() }));
+        return Ok(refused(Refusal::UnknownKind { kind: quoted(kind) }));
     }
     if let Err(refusal) = check_object_id(id) {
         return Ok(refused(refusal));
@@ -226,7 +230,7 @@ fn object_put(
 /// wins, as the machine list is, and its tombstone is the change.
 fn object_remove(transaction: &Transaction<'_>, kind: &str, id: &str, index: u64) -> Result<Outcome, StoreError> {
     if kind != KIND_PROBE {
-        return Ok(refused(Refusal::UnknownKind { kind: kind.to_owned() }));
+        return Ok(refused(Refusal::UnknownKind { kind: quoted(kind) }));
     }
     if let Err(refusal) = check_object_id(id) {
         return Ok(refused(refusal));
@@ -290,8 +294,22 @@ fn check_object_id(id: &str) -> Result<(), Refusal> {
         return Ok(());
     }
     Err(Refusal::InvalidIntent {
-        message: format!("The object id {id:?} is not 1 to 64 characters of a-z, 0-9, '-', '_' and '.'"),
+        message: format!(
+            "The object id {:?} is not 1 to 64 characters of a-z, 0-9, '-', '_' and '.'",
+            quoted(id)
+        ),
     })
+}
+
+/// A value that the computer sent, as the log and a refusal quote it: at most 64
+/// characters, so one intent writes about one line of log and not a frame.
+fn quoted(text: &str) -> String {
+    if text.chars().count() <= QUOTED_CHARS {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(QUOTED_CHARS).collect();
+    out.push_str("...");
+    out
 }
 
 /// `count` as the number that the store holds.

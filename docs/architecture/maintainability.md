@@ -302,6 +302,25 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   Remote lifecycle transitions clear the evidence; the UI only sizes and
   truncates the cached label.
 
+### `horizon-sync`
+
+- Owns the server store and the link that a computer uses to reach it: the log,
+  the objects, the identifiers of decided intents, the frames, the local queue of
+  a computer and the socket that a later slice reaches over `ssh`. The design page
+  is [`horizon-server.md`](horizon-server.md) and the boundary is
+  [`server-link.md`](../review/trust-boundaries/server-link.md).
+- `store/` is the only code that opens the server file. `store/schema.rs` holds
+  the pragmas, the tables and the schema version; `store/apply.rs` decides one
+  intent; `store/writer.rs` is the one writer task; `store/rows.rs` shapes what a
+  pull returns. No other module of the crate reads or writes the file.
+- `protocol.rs` and `frame.rs` carry the frames over any pair of byte streams;
+  `server.rs` answers one link, `client.rs` is the computer side with its queue,
+  its mark and its mirror trait, and `link.rs` binds a socket and relays one
+  child. The crate holds no UI and no `ssh` call: a later slice adds both.
+- The crate may depend on `horizon-core` for a machine record and its validators.
+  It must not depend on `horizon-ui`, egui, eframe, wgpu or winit, so a server can
+  run without a desktop.
+
 ### `horizon-browser-cli`
 
 - Owns deterministic browser plans, bounded execution control, durable job
@@ -430,8 +449,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 The automated line-limit and `too_many_lines` suppression checks cover
 `horizon-device`, `horizon-browser-protocol`, `horizon-browser`, `horizon-core`,
-`horizon-terminal`, `horizon-ui` and `horizon-vnc`; extracting a new crate is
-not an escape hatch for oversized modules.
+`horizon-sync`, `horizon-terminal`, `horizon-ui` and `horizon-vnc`; extracting a
+new crate is not an escape hatch for oversized modules.
 
 - Start splitting a Rust source file before it reaches roughly 600 lines.
 - CI fails non-test Rust source files above 1000 lines in:
@@ -439,6 +458,7 @@ not an escape hatch for oversized modules.
   - `crates/horizon-browser-protocol/src`
   - `crates/horizon-browser/src`
   - `crates/horizon-core/src`
+  - `crates/horizon-sync/src`
   - `crates/horizon-terminal/src`
   - `crates/horizon-ui/src`
   - `crates/horizon-vnc/src`
