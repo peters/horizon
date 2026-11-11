@@ -136,4 +136,10 @@ if ! python3 "$ROOT_DIR/scripts/check-ui-thread-exceptions.py"; then
   status=1
 fi
 
+# Every trust boundary page under docs/review/trust-boundaries must name files
+# that exist, or a changed file of that area reaches its review without a page.
+if ! python3 "$ROOT_DIR/scripts/check-trust-boundary-globs.py"; then
+  status=1
+fi
+
 exit "$status"
