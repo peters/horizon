@@ -39,6 +39,7 @@ mod device_presentation;
 mod device_request_pump;
 mod device_requests;
 mod device_reveal_wait;
+mod device_video;
 mod editor_saves;
 mod file_drop;
 mod file_drop_highlight;

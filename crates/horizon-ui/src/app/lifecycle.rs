@@ -339,8 +339,10 @@ impl HorizonApp {
         // A panel that this frame created waits for the preparation of its
         // process on the coordination worker.
         self.queue_panel_starts();
-        // An editor buffer that the person saved goes to the coordination worker.
+        // An editor buffer that the person saved and the start of a Device video
+        // recording go to the coordination worker.
         self.queue_editor_saves();
+        self.queue_device_video_starts();
         // The pass that drew a card measured its content; the height that fits
         // it follows before the board is saved.
         self.fit_block_cards(ctx);

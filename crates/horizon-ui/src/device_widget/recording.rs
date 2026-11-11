@@ -27,6 +27,49 @@ pub(super) struct Recording {
     worker: Option<Worker>,
     directories: std::collections::VecDeque<Arc<tempfile::TempDir>>,
     error: Option<String>,
+    /// The start of a recording that waits for the coordination worker.
+    start: Option<PendingVideoStart>,
+}
+
+/// The pixels and the source of a recording that waits for its start on the
+/// coordination worker. The start takes the manifest lock of the capture, which
+/// waits up to 2 s for another writer, and it makes the folder of the video.
+pub(crate) struct PendingVideoStart {
+    frames: Arc<FrameSlot>,
+    source: Box<dyn Fn() -> Option<Arc<Frame>> + Send>,
+}
+
+/// A recording that the coordination worker started.
+pub(crate) struct VideoStarted {
+    directory: Arc<tempfile::TempDir>,
+    recorder: PixelVideoRecorder,
+    frames: Arc<FrameSlot>,
+    source: Box<dyn Fn() -> Option<Arc<Frame>> + Send>,
+}
+
+/// Starts the recorder of `pending`. This is the work of the coordination
+/// worker: the manifest lock of the capture waits for another writer and makes
+/// the folder of the video.
+pub(crate) fn start_video(pending: PendingVideoStart) -> Result<VideoStarted, String> {
+    horizon_core::ui_thread::blocking("the manifest lock of a video is taken");
+    let PendingVideoStart { frames, source } = pending;
+    let directory = tempfile::Builder::new()
+        .prefix("horizon-vnc-video-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    let options = BrowserVideoCaptureOptions {
+        fps: VNC_FPS,
+        max_file_bytes: MAX_BYTES,
+        ..Default::default()
+    };
+    let recorder = PixelVideoRecorder::start(directory.path(), "vnc", Arc::clone(&frames), &options)
+        .map_err(|error| error.message)?;
+    Ok(VideoStarted {
+        directory: Arc::new(directory),
+        recorder,
+        frames,
+        source,
+    })
 }
 
 impl Drop for Recording {
@@ -76,41 +119,65 @@ impl Recording {
         })
     }
 
+    /// Asks for the start of a recording of `first`. The frame keeps the pixels
+    /// and the source; the coordination worker starts the encoder.
     fn start(&mut self, first: &Frame, source: impl Fn() -> Option<Arc<Frame>> + Send + 'static) -> Result<(), String> {
-        if self
-            .worker
-            .as_ref()
-            .is_some_and(|worker| worker.thread.as_ref().is_some_and(|thread| !thread.is_finished()))
+        if self.start.is_some()
+            || self
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.thread.as_ref().is_some_and(|thread| !thread.is_finished()))
         {
             return Err("A VNC recording is already active or finalizing".into());
         }
-        let directory = tempfile::Builder::new()
-            .prefix("horizon-vnc-video-")
-            .tempdir()
-            .map_err(|error| error.to_string())?;
-        let directory = Arc::new(directory);
-        let retained_directory = Arc::clone(&directory);
         let frames = Arc::new(FrameSlot::new());
         if !publish(&frames, first) {
             return Err("The desktop dimensions exceed the recording limit".into());
         }
-        let options = BrowserVideoCaptureOptions {
-            fps: VNC_FPS,
-            max_file_bytes: MAX_BYTES,
-            ..Default::default()
-        };
-        // The start of a recording takes the manifest lock of the capture, which
-        // waits up to 2 s for another writer, and it makes the folder of the
-        // video. Part 2 moves the start to the coordination worker.
-        let _starting = horizon_core::ui_thread::exception("part 2: F11 a recording starts on the frame");
-        horizon_core::ui_thread::blocking("the manifest lock of a video is taken");
-        let mut recorder = PixelVideoRecorder::start(directory.path(), "vnc", Arc::clone(&frames), &options)
-            .map_err(|error| error.message)?;
+        self.error = None;
+        self.start = Some(PendingVideoStart {
+            frames,
+            source: Box::new(source),
+        });
+        Ok(())
+    }
+
+    /// Starts the recording now, off the UI thread, for a test that judges the
+    /// sampler and not the queue of the coordination worker.
+    #[cfg(test)]
+    fn start_now(
+        &mut self,
+        first: &Frame,
+        source: impl Fn() -> Option<Arc<Frame>> + Send + 'static,
+    ) -> Result<(), String> {
+        self.start(first, source)?;
+        let pending = self.take_start().expect("a queued start");
+        let started = start_video(pending)?;
+        self.finish_start(started);
+        Ok(())
+    }
+
+    /// The start that waits for the coordination worker, so the app queues it
+    /// once.
+    pub(super) fn take_start(&mut self) -> Option<PendingVideoStart> {
+        self.start.take()
+    }
+
+    /// Starts sampling with the recorder that the worker started. The sampler
+    /// thread is a process of this one; no frame waits for it.
+    pub(super) fn finish_start(&mut self, started: VideoStarted) {
+        let VideoStarted {
+            directory,
+            mut recorder,
+            frames,
+            source,
+        } = started;
+        let retained_directory = Arc::clone(&directory);
         let handle = recorder.handle();
         let stop = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&stop);
         let progress = Arc::clone(&handle);
-        let interval = Duration::from_secs_f64(1.0 / f64::from(options.fps));
+        let interval = Duration::from_secs_f64(1.0 / f64::from(VNC_FPS));
         let thread = std::thread::Builder::new()
             .name("vnc-recording".into())
             .spawn(move || {
@@ -133,18 +200,14 @@ impl Recording {
                     tracing::warn!(code = %error.code, "VNC recording finalization failed");
                 }
             })
-            .map_err(|error| error.to_string())?;
-        self.worker = Some(Worker {
-            stop,
-            handle,
-            thread: Some(thread),
-        });
+            .map_err(|error| error.to_string())
+            .ok();
+        self.worker = Some(Worker { stop, handle, thread });
         self.directories.push_back(directory);
         while self.directories.len() > MAX_FILES {
             self.directories.pop_front();
         }
         self.error = None;
-        Ok(())
     }
 }
 
@@ -195,6 +258,21 @@ fn recording_detail(status: &VideoRecording) -> String {
 }
 
 impl DeviceUiState {
+    /// The start of the recording that waits for the coordination worker, so
+    /// the app queues it once.
+    pub(crate) fn take_video_start(&mut self) -> Option<PendingVideoStart> {
+        self.recording.take_start()
+    }
+
+    /// Starts the sampler with the recorder that the coordination worker
+    /// started, or says why the recording did not start.
+    pub(crate) fn finish_video_start(&mut self, result: Result<VideoStarted, String>) {
+        match result {
+            Ok(started) => self.recording.finish_start(started),
+            Err(error) => self.recording.error = Some(error),
+        }
+    }
+
     pub(crate) fn video(&mut self, action: VideoAction) -> Outcome {
         let result = match action {
             VideoAction::Start => self.start_recording(),
@@ -343,8 +421,10 @@ mod tests {
     fn records_and_finalizes_without_ui_frames() {
         let mut recording = Recording::default();
         assert!(recording.status().is_err());
-        recording.start(&frame(), || Some(Arc::new(frame()))).expect("start");
-        assert!(recording.start(&frame(), || Some(Arc::new(frame()))).is_err());
+        recording
+            .start_now(&frame(), || Some(Arc::new(frame())))
+            .expect("start");
+        assert!(recording.start_now(&frame(), || Some(Arc::new(frame()))).is_err());
         std::thread::sleep(Duration::from_millis(350));
         recording.stop();
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -375,7 +455,7 @@ mod tests {
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         recording
-            .start(&frame(), move || {
+            .start_now(&frame(), move || {
                 let _ = entered_tx.send(());
                 let _ = release_rx.recv_timeout(Duration::from_secs(10));
                 None
@@ -395,7 +475,7 @@ mod tests {
     #[test]
     fn source_loss_stops_recording() {
         let mut recording = Recording::default();
-        recording.start(&frame(), || None).expect("start");
+        recording.start_now(&frame(), || None).expect("start");
         let deadline = Instant::now() + Duration::from_secs(20);
         while recording
             .worker

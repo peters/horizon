@@ -7,7 +7,7 @@ mod host;
 mod keys;
 mod observation;
 mod picture;
-mod recording;
+pub(super) mod recording;
 mod session;
 
 use std::sync::Arc;
