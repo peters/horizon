@@ -5,8 +5,12 @@ use std::time::{Duration, Instant};
 use rustix::process::{Pid, test_kill_process};
 
 use super::super::readers::{Bound, libsecret, platform, secret_tool, security};
-use super::super::{KeyringImportError, ProgramEnvironment};
+use super::super::{KeyringImportError, KeyringImportPlan, Platform, ProgramEnvironment};
+use super::fixtures::settings;
 use super::stand_in::{StandIns, found};
+
+/// The endpoint of the provider of these tests.
+const ENDPOINT: &str = "https://grid.example.net/wd/hub";
 
 /// One item of `secret-tool search`, as `on_retrieve_secret` of `tool/secret-tool.c`
 /// of libsecret writes it: the item on stdout, its attributes on stderr.
@@ -235,7 +239,9 @@ fn a_python_without_the_binding_names_the_package() {
 
     assert_eq!(
         platform::secret_service(&stand_ins.environment(), bound()).err(),
-        Some(KeyringImportError::ToolMissing)
+        Some(KeyringImportError::ToolMissing {
+            platform: Platform::SecretService
+        })
     );
 }
 
@@ -244,11 +250,93 @@ fn a_computer_with_neither_program_names_the_package() {
     let stand_ins = StandIns::new();
 
     let error = platform::secret_service(&stand_ins.environment(), bound()).expect_err("a refusal");
-    assert_eq!(error, KeyringImportError::ToolMissing);
+    assert_eq!(
+        error,
+        KeyringImportError::ToolMissing {
+            platform: Platform::SecretService
+        }
+    );
     assert!(
         error.to_string().contains("libsecret-tools"),
         "the line names the package that reads a keyring: {error}"
     );
+}
+
+/// The sentence of a keyring whose program is missing belongs to the platform value,
+/// so a Mac reads the words of macOS on either computer.
+#[test]
+fn a_missing_program_names_the_program_of_its_system() {
+    let plan = KeyringImportPlan::of(&settings(ENDPOINT, &["key"]));
+    let stand_ins = StandIns::new();
+
+    for (platform, sentence) in [
+        (
+            Platform::SecretService,
+            "Install the package `libsecret-tools` to read the values that an older version stored in the keyring.",
+        ),
+        (
+            Platform::Keychain,
+            "The program `security` of macOS was not found on this computer.",
+        ),
+    ] {
+        let error = platform
+            .entries(&plan, &stand_ins.environment(), bound())
+            .expect_err("a folder without the program of that keyring reads no entry");
+        assert_eq!(error, KeyringImportError::ToolMissing { platform }, "{platform:?}");
+        assert_eq!(error.to_string(), sentence, "{platform:?}");
+        assert_eq!(error.code(), "keyring_tool_missing", "{platform:?}");
+    }
+}
+
+/// No sentence names the program or the package of the keyring that it does not
+/// belong to: a person of either system reads the words of that system.
+#[test]
+fn a_sentence_names_no_program_of_the_other_system() {
+    let secret_service = KeyringImportError::ToolMissing {
+        platform: Platform::SecretService,
+    }
+    .to_string();
+    let keychain = KeyringImportError::ToolMissing {
+        platform: Platform::Keychain,
+    }
+    .to_string();
+
+    assert!(secret_service.contains("`libsecret-tools`"), "{secret_service}");
+    assert!(
+        !secret_service.contains("macOS") && !secret_service.contains("security"),
+        "the refusal of Linux names no program of macOS: {secret_service}"
+    );
+    assert!(keychain.contains("`security`"), "{keychain}");
+    for word in ["libsecret", "secret-tool", "python3", "Secret Service"] {
+        assert!(
+            !keychain.contains(word),
+            "the refusal of macOS names no `{word}`: {keychain}"
+        );
+    }
+
+    // The sentences that both systems read name neither of them.
+    for sentence in [
+        KeyringImportError::Locked.to_string(),
+        KeyringImportError::Absent.to_string(),
+        KeyringImportError::TimedOut { seconds: 1 }.to_string(),
+        KeyringImportError::Unreadable.to_string(),
+        KeyringImportError::RefusedReference {
+            reference: "key".to_string(),
+        }
+        .to_string(),
+        KeyringImportError::RefusedValue.to_string(),
+        KeyringImportError::FileNotOpen.to_string(),
+        KeyringImportError::Busy.to_string(),
+        KeyringImportError::NothingToDo.to_string(),
+        KeyringImportError::NotStarted.to_string(),
+    ] {
+        for word in ["libsecret", "secret-tool", "python3", "macOS", "Keychain"] {
+            assert!(
+                !sentence.contains(word),
+                "a sentence of both systems names no `{word}`: {sentence}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -256,7 +344,9 @@ fn the_python_reading_of_a_folder_without_python_names_the_package() {
     let stand_ins = StandIns::new();
     assert_eq!(
         libsecret::read(&stand_ins.environment(), bound()).err(),
-        Some(KeyringImportError::ToolMissing)
+        Some(KeyringImportError::ToolMissing {
+            platform: Platform::SecretService
+        })
     );
 }
 

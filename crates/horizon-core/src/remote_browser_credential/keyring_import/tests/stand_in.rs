@@ -6,6 +6,9 @@
 //! its whole `PATH`. The scripts use no program of the system beyond `/bin/sh`
 //! itself and, for the bound, `/bin/sleep`, so a stand-in cannot reach a real
 //! keyring even by accident.
+//!
+//! [`keyring`] writes the stand-in of one [`Platform`], so a test reads the keyring of
+//! either system on the computer that runs the tests.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -13,7 +16,51 @@ use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
+use super::super::Platform;
 use super::super::ProgramEnvironment;
+
+/// The item that the stand-in of the Secret Service answers: one item of the service,
+/// its account on stderr, in the format of `secret-tool` of libsecret.
+///
+/// `user` and `value` hold no single quote, because a `/bin/sh` script quotes its
+/// argument with one.
+fn secret_service(user: &str, value: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         printf '%s\\n' '[/org/freedesktop/secrets/collection/login/7]'\n\
+         printf '%s\\n' 'label = keyring@horizon-remote-browser'\n\
+         printf 'secret = %s\\n' '{value}'\n\
+         printf '%s\\n' 'created = '\n\
+         printf '%s\\n' 'modified = '\n\
+         printf '%s\\n' 'attribute.service = horizon-remote-browser' >&2\n\
+         printf '%s\\n' 'attribute.username = {user}' >&2\n"
+    )
+}
+
+/// The item that the stand-in of the Keychain answers: the value of the exact
+/// arguments of one reading on stdout, and status 44 for another account.
+fn keychain(user: &str, value: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = find-generic-password ] && [ \"$2\" = -s ] && \
+         [ \"$3\" = horizon-remote-browser ] && [ \"$4\" = -a ] && \
+         [ \"$5\" = '{user}' ] && [ \"$6\" = -w ]; then\n\
+         printf '%s\\n' '{value}'\n\
+         exit 0\n\
+         fi\n\
+         exit 44\n"
+    )
+}
+
+/// Write the stand-in that `platform` reads its keyring with, which answers `value`
+/// for the item of `user`.
+pub(super) fn keyring(stand_ins: &StandIns, platform: Platform, user: &str, value: &str) {
+    let (name, script) = match platform {
+        Platform::SecretService => ("secret-tool", secret_service(user, value)),
+        Platform::Keychain => ("security", keychain(user, value)),
+    };
+    stand_ins.program(name, &script);
+}
 
 /// A private folder of stand-in programs and the environment that finds them.
 pub(super) struct StandIns {

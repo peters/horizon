@@ -782,22 +782,41 @@ mod tests {
         }
     }
 
-    /// A stand-in for the program that reads the keyring of this system: one item on
-    /// stdout, its account on stderr, in the format of `secret-tool` of libsecret.
-    fn stand_in_secret_tool(folder: &std::path::Path, user: &str) {
+    /// A stand-in for the program that reads the keyring of `platform`: one item on
+    /// stdout, its account on stderr, in the format of `secret-tool` of libsecret, or
+    /// the value of one account for the Keychain of macOS.
+    fn stand_in_keyring(folder: &std::path::Path, platform: Platform, user: &str) {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let script = format!(
-            "#!/bin/sh\n\
-             printf '%s\\n' '[/org/freedesktop/secrets/collection/login/7]'\n\
-             printf '%s\\n' 'label = keyring@horizon-remote-browser'\n\
-             printf '%s\\n' 'secret = synthetic-token'\n\
-             printf '%s\\n' 'created = '\n\
-             printf '%s\\n' 'modified = '\n\
-             printf '%s\\n' 'attribute.service = horizon-remote-browser' >&2\n\
-             printf '%s\\n' 'attribute.username = {user}' >&2\n"
-        );
-        let path = folder.join("secret-tool");
+        let (name, script) = match platform {
+            Platform::SecretService => (
+                "secret-tool",
+                format!(
+                    "#!/bin/sh\n\
+                     printf '%s\\n' '[/org/freedesktop/secrets/collection/login/7]'\n\
+                     printf '%s\\n' 'label = keyring@horizon-remote-browser'\n\
+                     printf '%s\\n' 'secret = synthetic-token'\n\
+                     printf '%s\\n' 'created = '\n\
+                     printf '%s\\n' 'modified = '\n\
+                     printf '%s\\n' 'attribute.service = horizon-remote-browser' >&2\n\
+                     printf '%s\\n' 'attribute.username = {user}' >&2\n"
+                ),
+            ),
+            Platform::Keychain => (
+                "security",
+                format!(
+                    "#!/bin/sh\n\
+                     if [ \"$1\" = find-generic-password ] && [ \"$2\" = -s ] && \
+                     [ \"$3\" = horizon-remote-browser ] && [ \"$4\" = -a ] && \
+                     [ \"$5\" = '{user}' ] && [ \"$6\" = -w ]; then\n\
+                     printf '%s\\n' 'synthetic-token'\n\
+                     exit 0\n\
+                     fi\n\
+                     exit 44\n"
+                ),
+            ),
+        };
+        let path = folder.join(name);
         std::fs::write(&path, script).expect("the stand-in");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("an executable stand-in");
     }
@@ -834,18 +853,26 @@ mod tests {
 
     /// The line and the button appear while a reference of these settings has no
     /// value, the click reaches the one answer line, and both go when the value is
-    /// there.
+    /// there. The tab reads the keyring of either system on the computer that runs the
+    /// tests.
     #[test]
     fn the_remote_tab_offers_the_import_of_the_keyring_while_a_value_is_missing() {
+        for platform in [Platform::SecretService, Platform::Keychain] {
+            the_remote_tab_offers_the_import(platform);
+        }
+    }
+
+    fn the_remote_tab_offers_the_import(platform: Platform) {
         use horizon_core::remote_browser_credential::{Bound, KeyringImport, ProgramEnvironment};
 
         let mut config = Config::default();
         config.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
         let user = "https://grid.example.net|remote-browser/grid/key";
         let folder = tempfile::tempdir().expect("a folder");
-        stand_in_secret_tool(folder.path(), user);
+        stand_in_keyring(folder.path(), platform, user);
         let (values, mut workbench) = file_workbench();
         let mut keyring = KeyringImport::with_programs(
+            platform,
             ProgramEnvironment::with_path(folder.path()),
             Bound::WholeImport(std::time::Duration::from_secs(10)),
         );
@@ -868,6 +895,14 @@ mod tests {
         assert!(
             super::super::tests::texts_hold(&texts, "Import from the keyring"),
             "the tab holds the button: {texts:?}"
+        );
+        assert_eq!(
+            super::super::tests::texts_hold(
+                &texts,
+                "macOS can ask for your permission once for each value, because the Keychain belongs to you."
+            ),
+            platform == Platform::Keychain,
+            "only the Keychain asks the person of macOS for permission: {texts:?}"
         );
 
         // The click is what starts the import, and its answer is the one line of
@@ -919,6 +954,13 @@ mod tests {
             "a value on this computer takes the offer away: {texts:?}"
         );
         assert!(
+            !super::super::tests::texts_hold(
+                &texts,
+                "macOS can ask for your permission once for each value, because the Keychain belongs to you."
+            ),
+            "a value on this computer takes the permission of macOS away: {texts:?}"
+        );
+        assert!(
             super::super::tests::texts_hold(&texts, "Imported 1 value."),
             "the answer of the click stays with the person: {texts:?}"
         );
@@ -930,6 +972,12 @@ mod tests {
     /// answer of the worker routes its reference into the change list.
     #[test]
     fn the_row_that_an_import_writes_is_queued_for_the_link() {
+        for platform in [Platform::SecretService, Platform::Keychain] {
+            the_row_of_an_import_is_queued(platform);
+        }
+    }
+
+    fn the_row_of_an_import_is_queued(platform: Platform) {
         use horizon_core::RuntimeState;
         use horizon_core::remote_browser_credential::{Bound, KeyringImport, ProgramEnvironment};
 
@@ -939,7 +987,7 @@ mod tests {
         config.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
         let user = "https://grid.example.net|remote-browser/grid/key";
         let folder = tempfile::tempdir().expect("a folder");
-        stand_in_secret_tool(folder.path(), user);
+        stand_in_keyring(folder.path(), platform, user);
         let (_temp, ctx, mut app) = test_app_with_config_and_startup(
             &config,
             horizon_core::StartupDecision::Ephemeral {
@@ -947,6 +995,7 @@ mod tests {
             },
         );
         app.keyring_import = KeyringImport::with_programs(
+            platform,
             ProgramEnvironment::with_path(folder.path()),
             Bound::WholeImport(std::time::Duration::from_secs(10)),
         );
@@ -978,7 +1027,7 @@ mod tests {
         assert_eq!(
             app.keyring_import.line().map(|line| line.text.as_str()),
             Some("Imported 1 value."),
-            "the tab holds the line of the import"
+            "the tab holds the line of the import: {platform:?}"
         );
 
         // The frame cleared the presence that an import invalidates, so the read of
