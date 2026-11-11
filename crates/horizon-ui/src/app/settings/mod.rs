@@ -16,7 +16,7 @@ pub(super) use tests::{at, frame_of, texts_hold};
 use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
 use horizon_core::named_secrets::NamedSecretWorkbench;
-use horizon_core::remote_browser_credential::CredentialWorkbench;
+use horizon_core::remote_browser_credential::{CredentialWorkbench, KeyringImport};
 
 use super::settings_io::SettingsReply;
 use super::util;
@@ -159,6 +159,7 @@ impl HorizonApp {
             &mut self.remote_browser_credentials,
             &mut self.browser_create_host.remote_allocations,
             &mut self.named_secrets,
+            &mut self.keyring_import,
         );
         if changed {
             if let Some(editor) = self.settings.as_mut() {
@@ -355,6 +356,7 @@ fn render_settings_panel(
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
     named_secrets: &mut NamedSecretWorkbench,
+    keyring: &mut KeyringImport,
 ) -> (SettingsAction, bool) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -392,7 +394,7 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let changed = render_tab(ui, editor, credentials, allocations, named_secrets, available);
+            let changed = render_tab(ui, editor, credentials, allocations, named_secrets, keyring, available);
             (action, changed)
         })
         .inner
@@ -405,6 +407,7 @@ fn render_tab(
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
     named_secrets: &mut NamedSecretWorkbench,
+    keyring: &mut KeyringImport,
     available: Vec2,
 ) -> bool {
     let SettingsEditor {
@@ -440,6 +443,7 @@ fn render_tab(
                         credential_inputs,
                         portable_profile,
                         provider_usage,
+                        keyring,
                     )
                 }
                 SettingsTab::Secrets => secrets::render(ui, config, named_secrets, secret_inputs),

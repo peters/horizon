@@ -288,6 +288,32 @@ impl CredentialWorkbench {
         std::mem::take(&mut self.value_changes)
     }
 
+    /// Whether at least one reference of `plan` has no value in the secrets file of
+    /// this computer, as the last presence read answered. The Settings tab offers the
+    /// import of the keyring while this is true, and a reference whose presence is
+    /// still being read counts as neither, so the line does not flicker.
+    #[must_use]
+    pub fn any_reference_without_value(&self, plan: &super::KeyringImportPlan) -> bool {
+        if self.secrets_state != SecretsState::Ready {
+            return false;
+        }
+        plan.locators().any(|locator| {
+            os_address(locator).and_then(|address| self.presence.get(&address)) == Some(&CredentialState::Missing)
+        })
+    }
+
+    /// Take the references that an import of the keyring wrote, so the link to a
+    /// server carries them like a value that a person typed, and ask the file again
+    /// for presence, because the rows of an import arrived behind this cache.
+    pub fn adopt_imported_values(&mut self, changes: Vec<CredentialValueChange>) {
+        if changes.is_empty() {
+            return;
+        }
+        self.credentials_changed();
+        self.value_changes.extend(changes);
+        self.probed_at.clear();
+    }
+
     /// Drain worker events. Call once per frame; cheap when idle.
     pub fn poll(&mut self) {
         let mut events = Vec::new();

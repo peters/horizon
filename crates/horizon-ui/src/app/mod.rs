@@ -342,6 +342,9 @@ pub struct HorizonApp {
     settings_reload_pending: bool,
     /// Session-only and file-backed provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
+    /// The one-time import of the values that an older Horizon kept in the keyring of
+    /// this system. It runs only on a click in the Settings tab "Remote".
+    pub(in crate::app) keyring_import: horizon_core::remote_browser_credential::KeyringImport,
     /// The named secrets of this computer: the names of the settings and the values
     /// that its credential store holds, read on a worker thread.
     named_secrets: horizon_core::named_secrets::NamedSecretWorkbench,
@@ -403,6 +406,14 @@ impl HorizonApp {
             // store has opened and every probe or write has reported.
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        self.keyring_import.poll();
+        if self.keyring_import.is_busy() {
+            // The import of the keyring runs its programs on a worker thread, so its
+            // line arrives there too.
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        self.remote_browser_credentials
+            .adopt_imported_values(self.keyring_import.take_changes());
         self.queue_credential_secrets();
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
             ctx.request_repaint_after(delay);

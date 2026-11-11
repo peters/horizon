@@ -13,8 +13,8 @@ use horizon_core::browser::remote::{
 };
 use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
 use horizon_core::remote_browser_credential::{
-    CredentialReadiness, CredentialState, CredentialWorkbench, NoticeKind, RemoteCredentialError, SecretsState,
-    WorkbenchNotice, credential_destination,
+    CredentialReadiness, CredentialState, CredentialWorkbench, KeyringImport, KeyringImportPlan, NoticeKind,
+    RemoteCredentialError, SecretsState, WorkbenchNotice, credential_destination,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -231,6 +231,7 @@ pub(super) fn render(
     inputs: &mut CredentialInputs,
     portable: &mut PortableProfilePanel,
     usage: &mut super::remote_usage::UsagePanels,
+    keyring: &mut KeyringImport,
 ) -> bool {
     workbench.poll();
     // A store can relock while this tab is idle. The re-probe happens on a read,
@@ -246,6 +247,7 @@ pub(super) fn render(
     inputs.absorb(notices);
     inputs.retain_current(config);
     render_stores_section(ui, workbench);
+    render_keyring_section(ui, config, workbench, keyring);
     let mut changed = render_portable_section(ui, config, portable);
     let providers = &config.browser.remote.providers;
     usage.retain(|name, _| providers.contains_key(name));
@@ -271,6 +273,61 @@ pub(super) fn render(
         changed |= bind_reference(config, &provider, &reference, store);
     }
     changed
+}
+
+/// The one line and the one button that read the values of an older Horizon out of
+/// the keyring of this system, and the answer of the last click.
+///
+/// Nothing here runs by itself: a click starts one import on a worker thread. The
+/// line stays while a reference of these settings has no value on this computer, so
+/// a person can try again after installing the program that reads the keyring.
+fn render_keyring_section(
+    ui: &mut Ui,
+    config: &Config,
+    workbench: &mut CredentialWorkbench,
+    keyring: &mut KeyringImport,
+) {
+    let plan = KeyringImportPlan::of(&config.browser.remote);
+    let offered = !plan.is_empty() && workbench.any_reference_without_value(&plan);
+    let answer = keyring.line().cloned();
+    if !offered && answer.is_none() {
+        return;
+    }
+    super::section_heading(ui, "Keyring of this system");
+    super::section_card(ui, |ui| {
+        if offered {
+            super::dim_label(
+                ui,
+                "A value that an older version stored in the system keyring can be imported.",
+            );
+            ui.add_space(6.0);
+            let busy = keyring.is_busy();
+            let button = egui::Button::new(if busy { "Importing…" } else { "Import from the keyring" });
+            // A value of the keyring can be imported only into the secrets file, so
+            // the button waits for that file like the rows of the providers do.
+            let store = workbench.store_handle();
+            let ready = store.is_some();
+            if ui.add_enabled(ready && !busy, button).clicked()
+                && let Some(store) = store
+            {
+                keyring.start(plan.clone(), store);
+                ui.ctx().request_repaint();
+            }
+            #[cfg(target_os = "macos")]
+            super::dim_label(
+                ui,
+                "macOS can ask for your permission once for each value, because the Keychain belongs to you.",
+            );
+        }
+        if let Some(answer) = answer {
+            let color = if answer.error {
+                theme::PALETTE_RED()
+            } else {
+                theme::PALETTE_GREEN()
+            };
+            ui.add(egui::Label::new(egui::RichText::new(answer.text).color(color).size(11.0)).wrap());
+        }
+    });
 }
 
 /// A machine-local binding for a reference the imported profile left
@@ -652,6 +709,227 @@ mod tests {
             providers,
             targets: BTreeMap::new(),
         }
+    }
+
+    /// A stand-in for the program that reads the keyring of this system: one item on
+    /// stdout, its account on stderr, in the format of `secret-tool` of libsecret.
+    fn stand_in_secret_tool(folder: &std::path::Path, user: &str) {
+        let script = format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' '[/org/freedesktop/secrets/collection/login/7]'\n\
+             printf '%s\\n' 'label = keyring@horizon-remote-browser'\n\
+             printf '%s\\n' 'secret = synthetic-token'\n\
+             printf '%s\\n' 'created = '\n\
+             printf '%s\\n' 'modified = '\n\
+             printf '%s\\n' 'attribute.service = horizon-remote-browser' >&2\n\
+             printf '%s\\n' 'attribute.username = {user}' >&2\n"
+        );
+        let path = folder.join("secret-tool");
+        std::fs::write(&path, script).expect("the stand-in");
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("an executable stand-in");
+    }
+
+    /// A workbench of the secrets file of a test, and the store behind it.
+    fn file_workbench() -> (
+        std::sync::Arc<horizon_core::secret_store::SecretStore>,
+        CredentialWorkbench,
+    ) {
+        use std::sync::Arc;
+
+        use horizon_core::remote_browser_credential::RemoteCredentialStore;
+        use horizon_core::secret_store::SecretStore;
+
+        let values = SecretStore::in_memory().expect("a secrets file in memory");
+        let kept = Arc::clone(&values);
+        let mut workbench = CredentialWorkbench::with_opener(Box::new(move || {
+            Ok(Box::new(kept) as Box<dyn RemoteCredentialStore + Send>)
+        }));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let profile = remote_with("grid", "https://grid.example.net/wd/hub").providers["grid"].clone();
+        while std::time::Instant::now() < deadline {
+            workbench.poll();
+            let readiness = workbench.readiness(&profile);
+            if workbench.secrets_state() == &SecretsState::Ready
+                && readiness.iter().all(|entry| entry.state == CredentialState::Missing)
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        (values, workbench)
+    }
+
+    /// The line and the button appear while a reference of these settings has no
+    /// value, the click reaches the one answer line, and both go when the value is
+    /// there.
+    #[test]
+    fn the_remote_tab_offers_the_import_of_the_keyring_while_a_value_is_missing() {
+        use horizon_core::remote_browser_credential::{Bound, KeyringImport, ProgramEnvironment};
+
+        let mut config = Config::default();
+        config.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
+        let user = "https://grid.example.net|remote-browser/grid/key";
+        let folder = tempfile::tempdir().expect("a folder");
+        stand_in_secret_tool(folder.path(), user);
+        let (values, mut workbench) = file_workbench();
+        let mut keyring = KeyringImport::with_programs(
+            ProgramEnvironment::with_path(folder.path()),
+            Bound::WholeImport(std::time::Duration::from_secs(10)),
+        );
+        let draw = |workbench: &mut CredentialWorkbench, keyring: &mut KeyringImport| {
+            let (_changed, texts) = super::super::tests::frame_of(|ui| {
+                super::render_keyring_section(ui, &config, workbench, keyring);
+                false
+            });
+            texts
+        };
+
+        let texts = draw(&mut workbench, &mut keyring);
+        assert!(
+            super::super::tests::texts_hold(
+                &texts,
+                "A value that an older version stored in the system keyring can be imported."
+            ),
+            "the tab offers the import: {texts:?}"
+        );
+        assert!(
+            super::super::tests::texts_hold(&texts, "Import from the keyring"),
+            "the tab holds the button: {texts:?}"
+        );
+
+        // The click is what starts the import, and its answer is the one line of
+        // the card.
+        let plan = KeyringImportPlan::of(&config.browser.remote);
+        let store = workbench.store_handle().expect("the secrets file of the workbench");
+        keyring.start(plan, store);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while keyring.is_busy() && std::time::Instant::now() < deadline {
+            keyring.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!keyring.is_busy(), "the import answered");
+
+        let texts = draw(&mut workbench, &mut keyring);
+        assert!(
+            super::super::tests::texts_hold(&texts, "Imported 1 value."),
+            "the tab says what the import did: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text.contains("synthetic-token")),
+            "no value is drawn: {texts:?}"
+        );
+
+        // The value is on this computer now, so the presence read takes the line
+        // and the button away. The row is routed to the change list of the link
+        // exactly as the window does it after the worker of the import answered.
+        workbench.adopt_imported_values(keyring.take_changes());
+        let profile = config.browser.remote.providers["grid"].clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            workbench.poll();
+            if workbench.readiness(&profile)[0].state == CredentialState::Present {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            workbench.readiness(&profile)[0].state,
+            CredentialState::Present,
+            "the import wrote the row of the reference"
+        );
+        let texts = draw(&mut workbench, &mut keyring);
+        assert!(
+            !super::super::tests::texts_hold(
+                &texts,
+                "A value that an older version stored in the system keyring can be imported."
+            ),
+            "a value on this computer takes the offer away: {texts:?}"
+        );
+        assert!(
+            super::super::tests::texts_hold(&texts, "Imported 1 value."),
+            "the answer of the click stays with the person: {texts:?}"
+        );
+        drop(values);
+    }
+
+    /// The row that an import of the keyring writes is queued for the link to a
+    /// server exactly like a value that a person typed: the frame that takes the
+    /// answer of the worker routes its reference into the change list.
+    #[test]
+    fn the_row_that_an_import_writes_is_queued_for_the_link() {
+        use horizon_core::RuntimeState;
+        use horizon_core::remote_browser_credential::{Bound, KeyringImport, ProgramEnvironment};
+
+        use crate::app::test_support::{run_app_frame, test_app_with_config_and_startup};
+
+        let mut config = Config::default();
+        config.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
+        let user = "https://grid.example.net|remote-browser/grid/key";
+        let folder = tempfile::tempdir().expect("a folder");
+        stand_in_secret_tool(folder.path(), user);
+        let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+            &config,
+            horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+        );
+        app.keyring_import = KeyringImport::with_programs(
+            ProgramEnvironment::with_path(folder.path()),
+            Bound::WholeImport(std::time::Duration::from_secs(10)),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && app.remote_browser_credentials.store_handle().is_none() {
+            app.remote_browser_credentials.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let store = app
+            .remote_browser_credentials
+            .store_handle()
+            .expect("the workbench opened the secrets file of this home");
+        assert!(
+            app.remote_browser_credentials.take_value_changes().is_empty(),
+            "nothing changed yet"
+        );
+
+        app.keyring_import
+            .start(KeyringImportPlan::of(&config.browser.remote), store);
+        // A frame takes the answer of the import worker, and the same frame routes
+        // its reference into the change list that the link to a server reads. This
+        // app follows no server, so that list is empty again when the frame ends:
+        // the entry itself is the check of the core module.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.keyring_import.line().is_none() && std::time::Instant::now() < deadline {
+            run_app_frame(&ctx, &mut app);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            app.keyring_import.line().map(|line| line.text.as_str()),
+            Some("Imported 1 value."),
+            "the tab holds the line of the import"
+        );
+
+        // The frame cleared the presence that an import invalidates, so the read of
+        // this reference answers `present` at once instead of at the next
+        // revalidation. Without that routing the row would stay `missing` for the
+        // ten seconds of the cache.
+        let profile = config.browser.remote.providers["grid"].clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut state = CredentialState::Missing;
+        while state != CredentialState::Present && std::time::Instant::now() < deadline {
+            run_app_frame(&ctx, &mut app);
+            state = app.remote_browser_credentials.readiness(&profile)[0].state;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            state,
+            CredentialState::Present,
+            "the row of the imported value is on this computer, as a typed value would be"
+        );
+        assert!(
+            app.remote_browser_credentials.take_value_changes().is_empty(),
+            "this app follows no server, so the frame sent the change to nobody"
+        );
     }
 
     #[test]

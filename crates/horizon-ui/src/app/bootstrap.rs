@@ -156,6 +156,7 @@ impl HorizonApp {
             renaming_panel: None,
             panel_rename_buffer: String::new(),
             remote_browser_credentials: spawn_remote_browser_credentials(config, session_store.home()),
+            keyring_import: horizon_core::remote_browser_credential::KeyringImport::new(),
             session_store,
             active_session: None,
             startup_chooser: None,
