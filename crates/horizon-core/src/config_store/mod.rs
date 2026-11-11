@@ -1,14 +1,12 @@
 //! Settings in one SQLite file.
 //!
-//! `config.yaml` stays the file that a person may edit and that Horizon
-//! exports. The store is the authority: a save writes the copy and then the
-//! store, and a copy that differs from the last export is imported at the next
-//! load.
+//! The store is the settings, and it is the only settings file that Horizon
+//! reads or writes.
 //!
 //! This module owns only the file: one row for each configuration section, and
-//! one `meta` row for the schema, the export hash and the save time. The policy
-//! (which file, which sections, when to import) lives in [`crate::Config`], so a
-//! host process can use the same store with no copy next to it.
+//! one `meta` row for the schema and the save time. The policy (which file,
+//! which sections, when to import) lives in [`crate::Config`], so a host process
+//! can use the same store with no copy next to it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,16 +25,13 @@ pub use schema::SETTINGS_SCHEMA_VERSION;
 
 /// The row that holds the schema version of the store.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
-/// The SHA-256 of the `config.yaml` copy that Horizon wrote last.
-pub const META_MIRROR_SHA256: &str = "mirror_sha256";
 /// The time of the last save, in milliseconds since the Unix epoch.
 pub const META_SAVED_AT: &str = "saved_at";
 
-/// The settings of a store, with the hash of the copy that it exported.
+/// The settings of a store.
 #[derive(Clone, Debug)]
 pub struct StoredSettings {
     pub config: Config,
-    pub mirror_sha256: Option<String>,
 }
 
 /// The settings file of one configuration.
@@ -69,10 +64,10 @@ impl std::fmt::Display for StoreFault {
 impl ConfigStore {
     /// The store that holds the settings of `config_path`.
     ///
-    /// The store is next to the configuration file, so an isolated instance
-    /// that names its own configuration also names its own store:
-    /// `config.yaml` and `horizon.yaml` use `settings.sqlite`, and another name
-    /// uses `<name>.settings.sqlite`.
+    /// The store is next to the settings file, so an isolated instance that
+    /// names its own settings also names its own store: `config.json` and
+    /// `horizon.json` use `settings.sqlite`, and another name uses
+    /// `<name>.settings.sqlite`.
     #[must_use]
     pub fn resolve(config_path: &Path) -> Self {
         Self {
@@ -158,7 +153,7 @@ impl ConfigStore {
     ///
     /// Returns an error when the store cannot be written or a section cannot be
     /// encoded.
-    pub fn save(&self, config: &Config, mirror_sha256: Option<&str>) -> Result<()> {
+    pub fn save(&self, config: &Config) -> Result<()> {
         let rows = sections::encode(config)?;
         let mut connection = self.open_for_write()?;
         let transaction = connection
@@ -180,14 +175,6 @@ impl ConfigStore {
             }
             set_meta(&transaction, META_SCHEMA_VERSION, &SETTINGS_SCHEMA_VERSION.to_string())?;
             set_meta(&transaction, META_SAVED_AT, &now.to_string())?;
-            match mirror_sha256 {
-                Some(hash) => set_meta(&transaction, META_MIRROR_SHA256, hash)?,
-                None => {
-                    transaction
-                        .execute("DELETE FROM meta WHERE key = ?1", params![META_MIRROR_SHA256])
-                        .map_err(|error| state_error(&error))?;
-                }
-            }
         }
         transaction.commit().map_err(|error| state_error(&error))
     }
@@ -223,9 +210,11 @@ impl ConfigStore {
             }
             rows.insert(section, data);
         }
+        // An older build kept a `mirror_sha256` row that hashed an exported
+        // copy. This build writes no copy, so the row is inert: it is not read
+        // and it is not deleted, so an older Horizon still finds its store.
         Ok(StoredSettings {
             config: sections::decode(&rows).map_err(|error| StoreFault::Damaged(error.to_string()))?,
-            mirror_sha256: meta(&connection, META_MIRROR_SHA256)?,
         })
     }
 

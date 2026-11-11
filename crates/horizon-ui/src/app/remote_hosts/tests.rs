@@ -284,11 +284,14 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
 }
 
 #[test]
-fn setting_the_default_workspace_leaves_an_exported_copy_alone() {
+fn setting_the_default_workspace_leaves_a_settings_file_alone() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
     Config::save(&app.config_path, &app.template_config).expect("write the store");
-    Config::export(&app.config_path, &app.config_path).expect("export a copy");
-    let exported = std::fs::read_to_string(&app.config_path).expect("read the export");
+    let mut file = app.template_config.clone();
+    file.remote_hosts.default_workspace = "Elsewhere".to_string();
+    let document = file.to_yaml().expect("yaml");
+    std::fs::write(&app.config_path, &document).expect("write a settings file");
+    let exported = std::fs::read_to_string(&app.config_path).expect("read the file");
 
     assert!(app.set_remote_hosts_default_workspace("Ops"));
     app.wait_for_settings_io();

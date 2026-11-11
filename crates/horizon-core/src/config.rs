@@ -333,7 +333,7 @@ impl Config {
     /// A copy that is found with no store is imported one time, and the copy is
     /// then kept as `config.yaml.imported-<time>`, with every byte that a person
     /// wrote. Horizon never writes YAML again, and it never reads the copy after
-    /// that. [`Config::export`] writes a YAML copy for a person or for a tool.
+    /// that.
     ///
     /// # Errors
     ///
@@ -393,7 +393,7 @@ impl Config {
     /// neither the store nor a copy exists.
     ///
     /// This is the read for a caller that merges the settings and writes them
-    /// itself, such as a portable profile import, and for [`Config::export`].
+    /// itself, such as a portable profile import.
     /// The store comes first, because it is the authority: a copy is only the
     /// import source of a run that has no store yet.
     ///
@@ -431,8 +431,7 @@ impl Config {
 
     /// Save `config` to the store of `path`.
     ///
-    /// This is the only write of a setting. No YAML file is written: a copy is
-    /// made on request by [`Config::export`], and Horizon never reads it.
+    /// This is the only write of a setting, and it writes no other file.
     ///
     /// # Errors
     ///
@@ -445,60 +444,7 @@ impl Config {
         if let Err(fault @ StoreFault::OtherVersion(_)) = store.open() {
             return Err(store.fault_error(&fault));
         }
-        // The store keeps the hash of the canonical YAML of this save, so a
-        // caller can tell whether a copy on disk is still the export of it.
-        let mirror = sha256_hex(&config.to_yaml()?);
-        store.save(config, Some(&mirror))
-    }
-
-    /// Save the YAML text that a person typed in the Settings window.
-    ///
-    /// The store gets the settings that the text parses to, and no file is
-    /// written.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the text does not parse or validate, or when the
-    /// store cannot be written.
-    pub fn save_text(path: &Path, text: &str) -> Result<()> {
-        let (config, _) = import_config_copy(text)?;
-        Self::save(path, &config)
-    }
-
-    /// Write the settings of `path` as YAML to `destination`, for a person or a
-    /// tool that does not read the store.
-    ///
-    /// Horizon never reads the file that this writes. A person changes a setting
-    /// in the Settings window, or in the YAML tab of that window.
-    ///
-    /// The settings come from the store only, never from a YAML copy, so an
-    /// export can never replace a copy before the start that imports it. An
-    /// existing `destination` is replaced, with the usual temp file and rename.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the store cannot be read, when `path` has no store,
-    /// or when the file cannot be written.
-    pub fn export(path: &Path, destination: &Path) -> Result<()> {
-        // The store is the only source. Reading a copy here would let an export
-        // to the configuration path replace the hand-written file of a person
-        // with the canonical YAML, and the comments and unknown keys would be
-        // lost before the start that imports them.
-        let store = ConfigStore::resolve(path);
-        let Some(stored) = store.open().map_err(|fault| store.fault_error(&fault))? else {
-            return Err(Error::Config(format!(
-                "no settings to export: {} does not exist",
-                store.path().display()
-            )));
-        };
-        let mut config = stored.config;
-        config_migration::migrate_in_memory(&mut config)?;
-        config.validate()?;
-        let yaml = config.to_yaml()?;
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).map_err(Error::Io)?;
-        }
-        crate::session_store::writer::durable_write(destination, yaml.as_bytes())
+        store.save(config)
     }
 
     /// Parse and validate config YAML.
@@ -720,19 +666,6 @@ fn keep_copy_aside(path: &Path) {
     }
 }
 
-/// The SHA-256 of a text, as the store records the export that it describes.
-fn sha256_hex(text: &str) -> String {
-    use sha2::Digest as _;
-    use std::fmt::Write as _;
-
-    let digest = sha2::Sha256::digest(text.as_bytes());
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 /// A backup name that no file uses, so a second import in the same second keeps
 /// both copies. A rename replaces its destination, and a kept copy must never
 /// be lost.
@@ -787,7 +720,7 @@ fn read_latest_backup(path: &Path) -> Option<String> {
 /// The `config.yaml` copy that a run may import, or `None` when it is absent.
 ///
 /// A copy is read only while this build has no store, and once more when a store
-/// is damaged. [`Config::export`] writes a copy that is never read.
+/// is damaged.
 fn read_config_copy(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),

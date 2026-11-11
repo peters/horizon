@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{ConfigStore, META_MIRROR_SHA256, META_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION, set_meta};
+use super::{ConfigStore, META_SAVED_AT, META_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION, set_meta};
 use crate::Config;
 
 fn store_in(root: &Path) -> ConfigStore {
@@ -35,7 +35,7 @@ fn an_absent_store_has_no_settings() {
 }
 
 #[test]
-fn every_section_and_the_export_hash_round_trip() {
+fn every_section_round_trips() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());
     let mut config = Config::default();
@@ -50,18 +50,10 @@ fn every_section_and_the_export_hash_round_trip() {
         ssh_connection: None,
     });
 
-    store.save(&config, Some("abc123")).expect("save");
+    store.save(&config).expect("save");
     let stored = store.load().expect("load").expect("the store exists");
 
     assert_eq!(stored.config.to_yaml().expect("yaml"), config.to_yaml().expect("yaml"));
-    assert_eq!(stored.mirror_sha256.as_deref(), Some("abc123"));
-
-    store.save(&config, None).expect("a save with no copy");
-    assert_eq!(
-        store.load().expect("load").expect("exists").mirror_sha256,
-        None,
-        "a store with no exported copy records no hash"
-    );
 }
 
 #[test]
@@ -69,7 +61,7 @@ fn a_section_that_this_build_does_not_know_survives_a_save() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());
     let config = Config::default();
-    store.save(&config, None).expect("save");
+    store.save(&config).expect("save");
     let connection = rusqlite::Connection::open(store.path()).expect("open");
     connection
         .execute(
@@ -79,7 +71,7 @@ fn a_section_that_this_build_does_not_know_survives_a_save() {
         .expect("a section of a newer build");
     drop(connection);
 
-    store.save(&config, None).expect("second save");
+    store.save(&config).expect("second save");
 
     let connection = rusqlite::Connection::open(store.path()).expect("open");
     let kept: i64 = connection
@@ -94,7 +86,7 @@ fn a_section_that_this_build_does_not_know_survives_a_save() {
 fn the_store_is_one_file_at_rest() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());
-    store.save(&Config::default(), Some("hash")).expect("save");
+    store.save(&Config::default()).expect("save");
 
     let names: Vec<String> = std::fs::read_dir(root.path())
         .expect("read dir")
@@ -126,7 +118,7 @@ fn a_file_that_is_not_a_store_is_refused_with_its_path() {
 fn a_store_of_another_schema_is_refused() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());
-    store.save(&Config::default(), None).expect("save");
+    store.save(&Config::default()).expect("save");
     let connection = rusqlite::Connection::open(store.path()).expect("open");
     set_meta(&connection, META_SCHEMA_VERSION, "99").expect("a newer schema");
     drop(connection);
@@ -144,16 +136,16 @@ fn a_store_of_another_schema_is_refused() {
 fn a_row_of_another_format_is_refused() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());
-    store.save(&Config::default(), None).expect("save");
+    store.save(&Config::default()).expect("save");
     let connection = rusqlite::Connection::open(store.path()).expect("open");
     connection
-        .execute("UPDATE settings SET format = 'yaml' WHERE section = 'window'", [])
+        .execute("UPDATE settings SET format = 'toml' WHERE section = 'window'", [])
         .expect("another format");
     drop(connection);
 
     let error = store.load().expect_err("a format this build cannot read is refused");
 
-    assert!(error.to_string().contains("format yaml"), "{error}");
+    assert!(error.to_string().contains("format toml"), "{error}");
 }
 
 #[test]
@@ -161,20 +153,46 @@ fn a_saved_file_is_written_where_the_store_says() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = ConfigStore::at(root.path().join("elsewhere").join("mine.sqlite"));
 
-    store.save(&Config::default(), None).expect("save");
+    store.save(&Config::default()).expect("save");
 
     assert!(PathBuf::from(store.path()).is_file());
-    assert_eq!(
-        store.load().expect("load").expect("exists").mirror_sha256,
-        None,
+    let stored = store.load().expect("load").expect("exists");
+    assert_eq!(stored.config.window.width, Config::default().window.width);
+    assert!(
+        super::meta(&rusqlite::Connection::open(store.path()).expect("open"), META_SAVED_AT)
+            .expect("meta")
+            .is_some(),
         "the store answers after its folder was created"
     );
+}
+
+/// A store that an older build wrote still holds a `mirror_sha256` row. This
+/// build writes no exported copy, so it reads the settings and leaves the row
+/// where it is: nothing of an older Horizon is deleted behind its back.
+#[test]
+fn a_store_that_still_holds_the_export_hash_is_read_and_the_row_stays() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let store = store_in(root.path());
+    let mut config = Config::default();
+    config.window.height = 905.0;
+    store.save(&config).expect("save");
+    {
+        let connection = rusqlite::Connection::open(store.path()).expect("open");
+        set_meta(&connection, "mirror_sha256", "abc123").expect("the row of an older build");
+    }
+
+    let stored = store.load().expect("a store of an older build is not an error");
+    assert_eq!(stored.expect("settings").config.window.height, 905.0);
+
+    store.save(&config).expect("a save of this build");
     assert_eq!(
         super::meta(
             &rusqlite::Connection::open(store.path()).expect("open"),
-            META_MIRROR_SHA256
+            "mirror_sha256"
         )
-        .expect("meta"),
-        None
+        .expect("meta")
+        .as_deref(),
+        Some("abc123"),
+        "the row of an older build stays where it is"
     );
 }

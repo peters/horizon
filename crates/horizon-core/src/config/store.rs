@@ -331,7 +331,7 @@ fn a_save_writes_the_store_and_no_file() {
 
     assert!(
         !home.config_path().exists(),
-        "a save writes no YAML file; a person exports one on request"
+        "a save writes no settings file of its own"
     );
     let stored = ConfigStore::resolve(&home.config_path())
         .load()
@@ -346,146 +346,32 @@ fn a_save_writes_the_store_and_no_file() {
     assert_eq!(home.names(), vec!["settings.sqlite"], "one file holds the settings");
 }
 
+/// A settings file that lies beside the store is not a settings source, and a
+/// start leaves it exactly as the person left it: no backup, no rewrite.
 #[test]
-fn a_saved_text_reaches_the_store_and_writes_no_file() {
-    let home = Home::new();
-    let text = "\
-version: 11 # keep this comment
-remote_hosts:
-  default_workspace: Ops
-workspaces: []
-";
-
-    Config::save_text(&home.config_path(), text).expect("save");
-
-    assert!(
-        !home.config_path().exists(),
-        "the text of the window is stored, not written"
-    );
-    let stored = ConfigStore::resolve(&home.config_path())
-        .load()
-        .expect("store")
-        .expect("the store exists");
-    assert_eq!(
-        stored.config.remote_hosts.default_workspace, "Ops",
-        "the store holds the section that the text parses to"
-    );
-}
-
-#[test]
-fn a_saved_text_that_does_not_parse_writes_nothing() {
-    let home = Home::new();
-
-    let error = Config::save_text(&home.config_path(), "window: [not a map").expect_err("refuse");
-
-    assert!(error.to_string().contains("Config error"), "{error}");
-    assert!(home.names().is_empty(), "a refused text writes no store");
-}
-
-#[test]
-fn an_export_writes_a_copy_that_leaves_the_settings_alone() {
+fn a_settings_file_beside_the_store_does_not_change_the_settings() {
     let home = Home::new();
     let mut config = Config::default();
     config.window.height = 700.0;
     Config::save(&home.config_path(), &config).expect("save");
-    let export = home.root.path().join("exported.yaml");
-
-    Config::export(&home.config_path(), &export).expect("export");
-
-    let text = std::fs::read_to_string(&export).expect("read the export");
-    assert!(text.contains("height: 700"), "the export holds the settings");
-    assert_eq!(
-        Config::load(Some(&home.config_path())).expect("reload").window.height,
-        700.0,
-        "the next start reads the store"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&export).expect("read the export again"),
-        text,
-        "a start changes no byte of an export"
-    );
-}
-
-#[test]
-fn an_exported_copy_is_never_taken_as_a_setting_again() {
-    let home = Home::new();
-    let mut config = Config::default();
-    config.window.height = 700.0;
-    Config::save(&home.config_path(), &config).expect("save");
-    Config::export(&home.config_path(), &home.config_path()).expect("export next to the store");
-    let exported = std::fs::read_to_string(home.config_path()).expect("read the export");
-
-    let loaded = home.load().expect("load");
-
-    assert_eq!(loaded.window.height, 700.0, "the store still wins");
-    assert_eq!(
-        std::fs::read_to_string(home.config_path()).expect("read the export again"),
-        exported,
-        "the export of Horizon is not imported, and it is not moved aside"
-    );
-    assert_eq!(home.names().len(), 2, "an export adds no backup");
-}
-
-#[test]
-fn an_edited_export_does_not_change_the_settings() {
-    let home = Home::new();
-    let mut config = Config::default();
-    config.window.height = 700.0;
-    Config::save(&home.config_path(), &config).expect("save");
-    Config::export(&home.config_path(), &home.config_path()).expect("export next to the store");
-    let exported = std::fs::read_to_string(home.config_path()).expect("read the export");
-    let edited = edited_to(&exported, 900.0);
-    std::fs::write(home.config_path(), &edited).expect("edit the export");
+    let mut edited = config.clone();
+    edited.window.height = 900.0;
+    let document = edited.to_yaml().expect("yaml");
+    std::fs::write(home.config_path(), &document).expect("edit the file");
 
     let loaded = home.load().expect("load after the edit");
 
     assert_eq!(
         loaded.window.height, 700.0,
-        "a setting changes in the Settings window, not in an export"
+        "a setting changes in the Settings window, not in a file beside the store"
     );
     assert_eq!(
-        std::fs::read_to_string(home.config_path()).expect("read the edited export"),
-        edited,
-        "the edited file stays where the person left it"
+        std::fs::read_to_string(home.config_path()).expect("read the file again"),
+        document,
+        "the file stays where the person left it"
     );
     assert_eq!(backups(&home).len(), 0, "nothing is kept aside");
-}
-
-/// `text` with one height, as a person edits a copy in an editor.
-fn edited_to(text: &str, height: f32) -> String {
-    let mut config = Config::from_yaml(text).expect("parse the copy");
-    config.window.height = height;
-    config.to_yaml().expect("yaml")
-}
-
-#[test]
-fn an_export_never_reads_a_copy_before_the_first_start() {
-    let home = Home::new();
-    home.write_copy(FIRST);
-
-    let error = Config::export(&home.config_path(), &home.config_path()).expect_err("no store, no export");
-
-    assert!(error.to_string().contains("no settings to export"), "{error}");
-    assert_eq!(
-        std::fs::read_to_string(home.config_path()).expect("read the copy"),
-        FIRST,
-        "the hand-written copy keeps its bytes, comments and unknown keys"
-    );
-    assert!(
-        !ConfigStore::resolve(&home.config_path()).path().exists(),
-        "an export writes no store"
-    );
-}
-
-#[test]
-fn an_export_with_no_settings_is_an_error() {
-    let home = Home::new();
-    let export = home.root.path().join("exported.yaml");
-
-    let error = Config::export(&home.config_path(), &export).expect_err("nothing to export");
-
-    assert!(error.to_string().contains("no settings to export"), "{error}");
-    assert!(!export.exists(), "a refused export writes no file");
+    assert_eq!(home.names().len(), 2, "a start adds no third file");
 }
 
 #[test]

@@ -421,35 +421,12 @@ fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
     }
 }
 
-/// `--export-config [PATH]` writes the settings as YAML for a person or a tool.
-/// Horizon never reads that file: a setting changes in the Settings window.
 /// Run the one command of this launch and exit with its status.
 fn run_command(command: &Command, config_path: &std::path::Path) -> ! {
     let code = match command {
-        Command::ExportConfig(destination) => run_export_config_command(config_path, destination.as_deref()),
         Command::RemoteProfile(profile) => run_remote_profile_command(config_path, profile),
     };
     plugin_install::exit_after_releasing_plugins(code)
-}
-
-fn run_export_config_command(config_path: &std::path::Path, destination: Option<&std::path::Path>) -> i32 {
-    let destination = destination.map_or_else(|| config_path.to_path_buf(), std::path::Path::to_path_buf);
-    let store = horizon_core::config_store::ConfigStore::resolve(config_path);
-    match Config::export(config_path, &destination) {
-        Ok(()) => {
-            println!(
-                "exported the settings of {} to {}\n\
-                 Horizon does not read this file: change a setting in the Settings window.",
-                store.path().display(),
-                destination.display()
-            );
-            0
-        }
-        Err(error) => {
-            eprintln!("error: could not export the settings: {error}");
-            2
-        }
-    }
 }
 
 /// `--export-remote-profile PATH` writes the shareable half of
@@ -619,7 +596,6 @@ fn init_tracing() {
 }
 
 const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
-       horizon [--config <path>] --export-config [<path>]
        horizon [--config <path>] --export-remote-profile <path>
        horizon [--config <path>] --import-remote-profile <path>
        horizon --server
@@ -642,8 +618,6 @@ struct CliArgs {
 /// A command that finishes without opening a window.
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
-    /// Write the settings as YAML. `None` uses the settings path itself.
-    ExportConfig(Option<PathBuf>),
     RemoteProfile(RemoteProfileCommand),
 }
 
@@ -668,15 +642,6 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
         };
         match arg.as_str() {
             "--config" | "-c" => config_path = Some(operand(&arg)?),
-            "--export-config" => {
-                // The path is optional: with none, the export replaces the
-                // settings path, which is the file a person expects to read.
-                let path = match args.peek() {
-                    Some(value) if !value.starts_with('-') && !value.is_empty() => args.next().map(PathBuf::from),
-                    _ => None,
-                };
-                set_command(&mut command, Command::ExportConfig(path))?;
-            }
             "--export-remote-profile" | "--import-remote-profile" => {
                 let path = operand(&arg)?;
                 let profile = if arg == "--export-remote-profile" {
@@ -705,10 +670,7 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
 /// Keep one command, so a second one is an error instead of a silent winner.
 fn set_command(command: &mut Option<Command>, next: Command) -> Result<(), String> {
     if command.replace(next).is_some() {
-        return Err(
-            "give one command only, once: --export-config, --export-remote-profile or --import-remote-profile"
-                .to_string(),
-        );
+        return Err("give one command only, once: --export-remote-profile or --import-remote-profile".to_string());
     }
     Ok(())
 }
@@ -813,21 +775,24 @@ mod cli_args_tests {
     }
 
     #[test]
-    fn export_config_takes_an_optional_path_and_runs_alone() {
-        let args = parse(&["--export-config"]).expect("export to the settings path");
-        assert_eq!(args.command, Some(Command::ExportConfig(None)));
-        let args = parse(&["--export-config", "out.yaml"]).expect("export to a path");
-        assert_eq!(args.command, Some(Command::ExportConfig(Some("out.yaml".into()))));
-        let args = parse(&["--config", "c.yaml", "--export-config"]).expect("still one command");
-        assert_eq!(args.command, Some(Command::ExportConfig(None)));
-        assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.yaml")));
+    fn a_profile_command_takes_its_path_and_runs_alone() {
+        let args = parse(&["--config", "c.json", "--export-remote-profile", "out.json"]).expect("one profile command");
+        assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.json")));
+        assert_eq!(
+            args.command,
+            Some(Command::RemoteProfile(RemoteProfileCommand::Export("out.json".into())))
+        );
 
         for bad in [
-            &["--export-config", "a.yaml", "--export-remote-profile", "b.yaml"][..],
-            &["--export-config", "a.yaml", "--export-config", "b.yaml"],
+            &["--export-remote-profile", "a.json", "--import-remote-profile", "b.json"][..],
+            &["--export-remote-profile", "a.json", "--export-remote-profile", "b.json"],
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
+        assert!(
+            parse(&["--export-config"]).is_ok_and(|args| args.command.is_none()),
+            "a retired flag is not a command, so it falls through to an ordinary launch"
+        );
     }
 }
 
