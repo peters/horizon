@@ -237,9 +237,12 @@ const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
 
 /// Open a URL or file path with the platform's default handler.
 ///
+/// A thread starts the handler, so the frame that opens a link waits for no
+/// `fork` and no `exec`. A handler that cannot start is a warning in the log.
+///
 /// # Errors
 ///
-/// Returns the process spawn error when the platform handler cannot start.
+/// Returns the error of the thread that could not start.
 pub fn open_url(url: &str) -> std::io::Result<()> {
     // The start of the handler is a `fork` and an `exec`, which a slow disk can
     // stretch, so a small thread starts it and the frame returns at once.
