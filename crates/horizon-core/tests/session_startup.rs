@@ -12,7 +12,7 @@ fn temp_root() -> PathBuf {
 fn temp_store() -> (PathBuf, SessionStore) {
     let root = temp_root();
     let home = HorizonHome::from_root(root.join(".horizon"));
-    let config_path = root.join("config.yaml");
+    let config_path = root.join("config.json");
     let store = SessionStore::new(home, config_path);
     (root, store)
 }

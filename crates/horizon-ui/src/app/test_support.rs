@@ -27,7 +27,7 @@ pub(super) fn test_app_with_config_and_startup(
     startup: StartupDecision,
 ) -> (TempDir, Context, HorizonApp) {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_path = temp.path().join("config.yaml");
+    let config_path = temp.path().join("config.json");
     let session_store = SessionStore::new(
         HorizonHome::from_root(temp.path().join(".horizon")),
         config_path.clone(),

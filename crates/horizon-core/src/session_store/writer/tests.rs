@@ -5,7 +5,7 @@ fn store() -> (tempfile::TempDir, SessionStore) {
     let temp = tempfile::tempdir().unwrap();
     let store = SessionStore::new(
         HorizonHome::from_root(temp.path().join("home")),
-        temp.path().join("config.yaml"),
+        temp.path().join("config.json"),
     );
     (temp, store)
 }

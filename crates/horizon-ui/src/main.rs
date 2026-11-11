@@ -903,12 +903,12 @@ mod config_start_tests {
     #[test]
     fn settings_that_cannot_be_read_stop_the_start() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.yaml");
+        let path = dir.path().join("config.json");
         std::fs::write(dir.path().join("settings.sqlite"), b"not a database").expect("write");
 
         let error = load_config(&path).expect_err("a damaged store with no copy is an error");
         assert!(error.contains("cannot read the settings of"), "{error}");
-        assert!(error.contains("config.yaml"), "{error}");
+        assert!(error.contains("config.json"), "{error}");
     }
 
     /// A run with no settings at all starts with the defaults, and writes
@@ -916,7 +916,7 @@ mod config_start_tests {
     #[test]
     fn a_run_with_no_settings_starts_with_the_defaults() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.yaml");
+        let path = dir.path().join("config.json");
 
         let config = load_config(&path).expect("defaults");
         assert_eq!(config.version, horizon_core::Config::default().version);

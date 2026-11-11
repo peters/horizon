@@ -165,7 +165,7 @@ fn oversized_documents_are_refused_before_parsing() {
 #[test]
 fn an_export_reads_the_store() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let config_path = dir.path().join("config.yaml");
+    let config_path = dir.path().join("config.json");
     let mut config = Config::default();
     config.browser.remote = local();
     Config::save(&config_path, &config).expect("save");
@@ -182,7 +182,7 @@ fn an_export_reads_the_store() {
 #[test]
 fn an_import_keeps_the_settings_of_the_store() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let config_path = dir.path().join("config.yaml");
+    let config_path = dir.path().join("config.json");
     let mut config = Config {
         window: crate::config::WindowConfig {
             width: 1234.0,
@@ -214,10 +214,10 @@ fn profile_files_round_trip_through_a_second_configuration_file() {
         .any(|entry| entry.expect("entry").file_name().to_string_lossy().ends_with(".tmp"));
     assert!(!staged_left_behind);
 
-    let config_path = dir.path().join("second").join("config.yaml");
+    let config_path = dir.path().join("second").join("config.json");
     let summary = import_portable_file_into_config(&config_path, &profile_path).expect("import");
     assert_eq!(summary.providers_added, vec!["grid".to_string()]);
-    let written = Config::load(Some(&config_path)).expect("load").to_yaml().expect("yaml");
+    let written = Config::load(Some(&config_path)).expect("load").to_json().expect("json");
     assert!(!written.contains("credential_bindings"), "{written}");
     let loaded = Config::load(Some(&config_path)).expect("load");
     assert_eq!(loaded.browser.remote.targets["ios_phone"].provider, "grid");
@@ -242,13 +242,13 @@ fn profile_files_round_trip_through_a_second_configuration_file() {
 #[test]
 fn an_older_configuration_file_is_migrated_in_memory_and_only_rewritten_by_a_successful_import() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let config_path = dir.path().join("config.yaml");
+    let config_path = dir.path().join("config.json");
     let mut config = Config {
         version: CURRENT_CONFIG_VERSION - 1,
         ..Config::default()
     };
     config.browser.remote = local();
-    let old_text = config.to_yaml().expect("yaml");
+    let old_text = config.to_json().expect("json");
     std::fs::write(&config_path, &old_text).expect("write");
 
     // A conflicting profile fails without the migration reaching the disk.
@@ -274,15 +274,15 @@ fn an_older_configuration_file_is_migrated_in_memory_and_only_rewritten_by_a_suc
 #[test]
 fn the_configuration_file_is_never_a_profile_destination_or_source() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let config_path = dir.path().join("config.yaml");
+    let config_path = dir.path().join("config.json");
     let mut config = Config::default();
     config.browser.remote = local();
-    let text = config.to_yaml().expect("yaml");
+    let text = config.to_json().expect("json");
     std::fs::write(&config_path, &text).expect("write");
 
     let error = export_portable_file_from_config(&config_path, &config_path).expect_err("same file");
     assert!(matches!(error, RemoteProfileError::IsConfigPath { .. }), "{error}");
-    let error = export_portable_file_from_config(&config_path, &dir.path().join(".").join("config.yaml"))
+    let error = export_portable_file_from_config(&config_path, &dir.path().join(".").join("config.json"))
         .expect_err("same file spelled differently");
     assert!(matches!(error, RemoteProfileError::IsConfigPath { .. }), "{error}");
     let error = import_portable_file_into_config(&config_path, &config_path).expect_err("same file");
@@ -291,12 +291,12 @@ fn the_configuration_file_is_never_a_profile_destination_or_source() {
 
     // Paths that do not exist yet are normalised before the comparison, so
     // no spelling of the configuration path slips through as a destination.
-    let absent = dir.path().join("absent").join("config.yaml");
+    let absent = dir.path().join("absent").join("config.json");
     for alias in [
         absent.clone(),
-        dir.path().join("absent").join(".").join("config.yaml"),
-        dir.path().join("absent").join("sub").join("..").join("config.yaml"),
-        dir.path().join(".").join("absent").join("config.yaml"),
+        dir.path().join("absent").join(".").join("config.json"),
+        dir.path().join("absent").join("sub").join("..").join("config.json"),
+        dir.path().join(".").join("absent").join("config.json"),
     ] {
         assert!(
             matches!(
@@ -308,7 +308,7 @@ fn the_configuration_file_is_never_a_profile_destination_or_source() {
         );
     }
     refuse_config_path(&absent, &dir.path().join("absent").join("profile.yaml")).expect("different files");
-    refuse_config_path(&absent, &dir.path().join("absent2").join("config.yaml")).expect("different directories");
+    refuse_config_path(&absent, &dir.path().join("absent2").join("config.json")).expect("different directories");
 }
 
 #[test]
@@ -343,10 +343,10 @@ fn staging_never_follows_a_planted_name_and_leaves_nothing_behind() {
 #[test]
 fn a_failed_import_leaves_the_configuration_file_untouched() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let config_path = dir.path().join("config.yaml");
+    let config_path = dir.path().join("config.json");
     let mut config = Config::default();
     config.browser.remote = local();
-    std::fs::write(&config_path, config.to_yaml().expect("yaml")).expect("write");
+    std::fs::write(&config_path, config.to_json().expect("json")).expect("write");
     let before = std::fs::read_to_string(&config_path).expect("read");
 
     let profile_path = dir.path().join("redirect.yaml");

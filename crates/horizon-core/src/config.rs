@@ -326,14 +326,13 @@ impl Config {
     /// Load the settings of `path`, or of the standard locations, or a default
     /// configuration.
     ///
-    /// The settings live in one SQLite store next to the configuration file:
-    /// `settings.sqlite` beside `config.yaml`, or `<name>.settings.sqlite`
-    /// beside another name. `config.yaml` is not a live settings file.
+    /// The settings live in one SQLite store next to the settings file:
+    /// `settings.sqlite` beside `config.json`, or `<name>.settings.sqlite`
+    /// beside another name.
     ///
-    /// A copy that is found with no store is imported one time, and the copy is
-    /// then kept as `config.yaml.imported-<time>`, with every byte that a person
-    /// wrote. Horizon never writes YAML again, and it never reads the copy after
-    /// that.
+    /// A JSON file that is found with no store is imported one time, and it
+    /// stays exactly as it is; a start that finds a store does not read it. An
+    /// old `config.json` is not read at all.
     ///
     /// # Errors
     ///
@@ -354,7 +353,7 @@ impl Config {
         };
 
         let store = ConfigStore::resolve(&resolved);
-        let mut copy = read_config_copy(&resolved)?;
+        let copy = read_config_copy(&resolved)?;
         let stored = match store.open() {
             Ok(stored) => stored,
             // Another Horizon version owns this store. It may hold settings that
@@ -366,14 +365,10 @@ impl Config {
                 };
                 return start_from_copy_without_writing(&store, &resolved, text, &fault);
             }
-            // The file is damaged. A copy, or the newest copy that was kept at an
-            // earlier import, carries the settings: use it and write the store
-            // again. Without one there is nothing to carry them, and defaults
-            // must not replace them.
+            // The file is damaged. A JSON copy carries the settings: use it and
+            // write the store again. Without one there is nothing to carry them,
+            // and defaults must not replace them.
             Err(fault) => {
-                if copy.is_none() {
-                    copy = read_latest_backup(&resolved);
-                }
                 if copy.is_none() {
                     return Err(store.fault_error(&fault));
                 }
@@ -385,7 +380,7 @@ impl Config {
         let (mut config, migrated, origin) = start_settings(stored, copy.as_deref(), named, &store, &resolved)?;
         let migrated = config_migration::migrate_in_memory(&mut config)? || migrated;
         config.validate()?;
-        finish_start(&resolved, &config, copy.is_some(), migrated, origin);
+        finish_start(&resolved, &config, migrated, origin);
         Ok(config)
     }
 
@@ -408,7 +403,7 @@ impl Config {
         let mut config = match store.open() {
             Ok(Some(stored)) => stored.config,
             Ok(None) => match copy {
-                Some(text) => Config::deserialize_yaml(&text)?,
+                Some(text) => Config::deserialize_json(&text)?,
                 None => return Ok(None),
             },
             Err(fault @ StoreFault::OtherVersion(_)) => return Err(store.fault_error(&fault)),
@@ -419,7 +414,7 @@ impl Config {
                         store.path().display(),
                         path.display()
                     );
-                    Config::deserialize_yaml(&text)?
+                    Config::deserialize_json(&text)?
                 }
                 None => return Err(store.fault_error(&fault)),
             },
@@ -447,33 +442,39 @@ impl Config {
         store.save(config)
     }
 
-    /// Parse and validate config YAML.
+    /// Parse and validate a settings document in JSON.
     ///
     /// # Errors
     ///
-    /// Returns an error if deserialization or semantic validation fails.
-    pub fn from_yaml(contents: &str) -> Result<Self> {
-        let config = Self::deserialize_yaml(contents)?;
+    /// Returns an error when the document is not JSON, does not deserialize or
+    /// fails semantic validation. The message names the format, because a file
+    /// of an older Horizon was YAML.
+    pub fn from_json(contents: &str) -> Result<Self> {
+        let config = Self::deserialize_json(contents)?;
         config.validate()?;
         Ok(config)
     }
 
-    fn deserialize_yaml(contents: &str) -> Result<Self> {
+    fn deserialize_json(contents: &str) -> Result<Self> {
         let contents = crate::retired_panel_kinds::without_retired(contents);
-        serde_yaml::from_str(contents.as_ref()).map_err(|e| Error::Config(e.to_string()))
+        serde_json::from_str(contents.as_ref()).map_err(|error| {
+            Error::Config(format!(
+                "the settings file format is JSON now, and this document does not parse as JSON: {error}"
+            ))
+        })
     }
 
-    /// Serialize this config to YAML.
+    /// Serialize these settings as a JSON document.
     ///
     /// # Errors
     ///
     /// Returns an error if serialization fails.
-    pub fn to_yaml(&self) -> Result<String> {
-        serde_yaml::to_string(self).map_err(|e| Error::Config(e.to_string()))
+    pub fn to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))
     }
 
-    /// Return the default config file path: `config.yaml` in the Horizon home, which is
-    /// `HORIZON_HOME` when set, else `~/.horizon`.
+    /// Return the default config file path: `config.json` in the Horizon home,
+    /// which is `HORIZON_HOME` when set, else `~/.horizon`.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
         Some(HorizonHome::resolve().config_path())
@@ -625,102 +626,20 @@ fn start_settings(
     }
 }
 
-/// Write what the start owes, then keep a copy that this run read under a
-/// backup name so a person still finds their words.
-fn finish_start(resolved: &Path, config: &Config, had_copy: bool, migrated: bool, origin: Origin) {
+/// Write what the start owes.
+fn finish_start(resolved: &Path, config: &Config, migrated: bool, origin: Origin) {
     let owes_store = matches!(origin, Origin::Imported) || (matches!(origin, Origin::Stored) && migrated);
     if owes_store && let Err(error) = Config::save(resolved, config) {
-        // The copy is then the only place that holds settings the store does
-        // not have, so it stays where it is.
         tracing::warn!(%error, "could not save the settings of {}", resolved.display());
-        return;
-    }
-    // A copy that this start imported is kept aside, with every byte, so it
-    // cannot come back as a setting. A copy that sits beside a store that was
-    // not imported from it stays where the person left it.
-    if had_copy && matches!(origin, Origin::Imported) {
-        keep_copy_aside(resolved);
     }
 }
 
-/// Keep a copy that this run read under `config.yaml.imported-<time>`.
+/// The settings file of a run, which a start reads only while it has no store,
+/// or `None` when it is absent.
 ///
-/// A rename keeps every byte: the comments, the order and the keys that this
-/// build does not model survive exactly as the person wrote them.
-fn keep_copy_aside(path: &Path) {
-    let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
-        return;
-    };
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let backup = free_backup_name(path, &format!("{name}.imported-{stamp}"));
-    match std::fs::rename(path, &backup) {
-        Ok(()) => tracing::info!(
-            "{} is kept as {}; the settings of this computer live in the store from now on",
-            path.display(),
-            backup.display()
-        ),
-        Err(error) => tracing::warn!("could not keep {} as {}: {error}", path.display(), backup.display()),
-    }
-}
-
-/// A backup name that no file uses, so a second import in the same second keeps
-/// both copies. A rename replaces its destination, and a kept copy must never
-/// be lost.
-fn free_backup_name(path: &Path, name: &str) -> PathBuf {
-    let first = path.with_file_name(name);
-    if !first.exists() {
-        return first;
-    }
-    (1..1000)
-        .map(|index| path.with_file_name(format!("{name}-{index}")))
-        .find(|candidate| !candidate.exists())
-        .unwrap_or(first)
-}
-
-/// The newest `config.yaml.imported-<time>` copy of `path`, when one exists.
-fn read_latest_backup(path: &Path) -> Option<String> {
-    let name = path.file_name().and_then(std::ffi::OsStr::to_str)?;
-    let prefix = format!("{name}.imported-");
-    let directory = path.parent()?;
-    let mut newest: Option<(u64, PathBuf)> = None;
-    for entry in std::fs::read_dir(directory).ok()?.flatten() {
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        let Some(stamp) = file_name.strip_prefix(&prefix) else {
-            continue;
-        };
-        let Ok(stamp) = stamp.parse::<u64>() else {
-            continue;
-        };
-        if newest.as_ref().is_none_or(|(newest, _)| stamp > *newest) {
-            newest = Some((stamp, entry.path()));
-        }
-    }
-    let (_, backup) = newest?;
-    match std::fs::read_to_string(&backup) {
-        Ok(text) => {
-            tracing::warn!(
-                "the settings store is damaged; reading the copy that was kept at {}",
-                backup.display()
-            );
-            Some(text)
-        }
-        Err(error) => {
-            tracing::warn!(%error, "could not read {}", backup.display());
-            None
-        }
-    }
-}
-
-/// The `config.yaml` copy that a run may import, or `None` when it is absent.
-///
-/// A copy is read only while this build has no store, and once more when a store
-/// is damaged.
+/// It is JSON. A file of an older Horizon was YAML, and this build does not
+/// read it: a start with only that file begins with the default settings and
+/// leaves it exactly as the person left it.
 fn read_config_copy(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
@@ -729,11 +648,11 @@ fn read_config_copy(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Read a configuration copy into memory, with the migrations and the checks
+/// Read a settings document into memory, with the migrations and the checks
 /// that the file itself would get. The flag says whether the text was of an
 /// older version.
 fn import_config_copy(text: &str) -> Result<(Config, bool)> {
-    let mut config = Config::deserialize_yaml(text)?;
+    let mut config = Config::deserialize_json(text)?;
     let migrated = config_migration::migrate_in_memory(&mut config)?;
     config.validate()?;
     Ok((config, migrated))
@@ -841,15 +760,13 @@ fn config_candidates_with_env(
         push_config_dir_candidates(&mut paths, &xdg.join("horizon"));
     }
 
-    paths.push(PathBuf::from("horizon.yaml"));
-    paths.push(PathBuf::from("horizon.yml"));
+    paths.push(PathBuf::from("horizon.json"));
 
     paths
 }
 
 fn push_config_dir_candidates(paths: &mut Vec<PathBuf>, base: &Path) {
-    paths.push(base.join("config.yaml"));
-    paths.push(base.join("config.yml"));
+    paths.push(base.join("config.json"));
 }
 
 fn parse_shortcut(name: &str, value: &str) -> Result<ShortcutBinding> {
@@ -890,6 +807,16 @@ mod tests {
     use super::{Config, FeaturesConfig, PresetConfig, config_candidates_with_env, merge_discovered_ssh_presets};
     use crate::panel::PanelKind;
     use crate::ssh::{DiscoveredSshHost, SshConnection};
+
+    /// A settings file of an older Horizon was YAML. The message names the
+    /// format, so a person knows what to do with the file.
+    #[test]
+    fn a_settings_document_of_an_older_horizon_is_refused_with_the_format() {
+        let error = Config::from_json("version: 11\nwindow:\n  width: 1010\n")
+            .expect_err("a YAML document is not a settings file");
+
+        assert!(error.to_string().contains("JSON"), "{error}");
+    }
 
     #[test]
     fn a_vnc_preset_for_a_host_does_not_hide_its_discovered_ssh_preset() {
@@ -937,24 +864,17 @@ mod tests {
 
     #[test]
     fn a_config_that_still_names_a_removed_panel_kind_keeps_the_rest() {
-        let yaml = "\
-presets:
-  - name: Upkeep
-    kind: upkeep
-  - name: Shell
-    alias: sh
-    kind: shell
-workspaces:
-  - name: Upkeep
-    terminals:
-      - name: Upkeep
-        kind: upkeep
-  - name: Work
-    terminals:
-      - name: Shell
-        kind: shell
-";
-        let config = Config::from_yaml(yaml).expect("a removed panel kind must not refuse the whole config");
+        let document = r#"{
+  "presets": [
+    {"name": "Upkeep", "kind": "upkeep"},
+    {"name": "Shell", "alias": "sh", "kind": "shell"}
+  ],
+  "workspaces": [
+    {"name": "Upkeep", "terminals": [{"name": "Upkeep", "kind": "upkeep"}]},
+    {"name": "Work", "terminals": [{"name": "Shell", "kind": "shell"}]}
+  ]
+}"#;
+        let config = Config::from_json(document).expect("a removed panel kind must not refuse the whole config");
         assert_eq!(
             config
                 .presets
@@ -982,15 +902,20 @@ workspaces:
 
         assert_eq!(
             candidates.first(),
-            Some(&PathBuf::from("/tmp/horizon-home/.horizon/config.yaml"))
+            Some(&PathBuf::from("/tmp/horizon-home/.horizon/config.json"))
         );
-        assert!(candidates.iter().any(|path| path.ends_with(".horizon/config.yml")));
         assert!(
             candidates
                 .iter()
-                .any(|path| path.ends_with(".config/horizon/config.yaml"))
+                .any(|path| path.ends_with(".config/horizon/config.json"))
         );
-        assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.yaml")));
+        assert!(candidates.iter().any(|path| path == &PathBuf::from("horizon.json")));
+        assert!(
+            candidates
+                .iter()
+                .all(|path| path.extension().is_some_and(|extension| extension == "json")),
+            "an old YAML file is never a candidate, so a start with only one uses the defaults"
+        );
     }
 
     #[test]
@@ -1001,10 +926,7 @@ workspaces:
         let candidates =
             config_candidates_with_env(Some(private.clone()), Some(user_home.join(".config")), Some(user_home));
 
-        assert_eq!(
-            candidates,
-            vec![private.join("config.yaml"), private.join("config.yml")]
-        );
+        assert_eq!(candidates, vec![private.join("config.json")]);
     }
 
     #[test]
@@ -1024,18 +946,19 @@ workspaces:
     #[test]
     fn missing_sidebar_accordion_setting_keeps_it_disabled() {
         let config =
-            Config::from_yaml("features:\n  speech:\n    enabled: false\n").expect("config should deserialize");
+            Config::from_json(r#"{"features": {"speech": {"enabled": false}}}"#).expect("config should deserialize");
 
         assert!(!config.features.sidebar_accordion);
     }
 
     #[test]
     fn explicit_sidebar_accordion_true_is_preserved() {
-        let config = Config::from_yaml("features:\n  sidebar_accordion: true\n").expect("config should deserialize");
+        let config =
+            Config::from_json(r#"{"features": {"sidebar_accordion": true}}"#).expect("config should deserialize");
 
         assert!(config.features.sidebar_accordion);
-        let yaml = config.to_yaml().expect("config should serialize");
-        let round_tripped = Config::from_yaml(&yaml).expect("serialized config should deserialize");
+        let document = config.to_json().expect("config should serialize");
+        let round_tripped = Config::from_json(&document).expect("serialized config should deserialize");
         assert!(round_tripped.features.sidebar_accordion);
     }
 
@@ -1059,36 +982,36 @@ workspaces:
     #[test]
     fn missing_session_load_workspace_organization_setting_keeps_it_disabled() {
         let config =
-            Config::from_yaml("features:\n  speech:\n    enabled: false\n").expect("config should deserialize");
+            Config::from_json(r#"{"features": {"speech": {"enabled": false}}}"#).expect("config should deserialize");
 
         assert!(!config.features.organize_workspaces_on_session_load);
     }
 
     #[test]
     fn explicit_session_load_workspace_organization_true_is_preserved() {
-        let config = Config::from_yaml("features:\n  organize_workspaces_on_session_load: true\n")
+        let config = Config::from_json(r#"{"features": {"organize_workspaces_on_session_load": true}}"#)
             .expect("config should deserialize");
 
         assert!(config.features.organize_workspaces_on_session_load);
-        let yaml = config.to_yaml().expect("config should serialize");
-        let round_tripped = Config::from_yaml(&yaml).expect("serialized config should deserialize");
+        let document = config.to_json().expect("config should serialize");
+        let round_tripped = Config::from_json(&document).expect("serialized config should deserialize");
         assert!(round_tripped.features.organize_workspaces_on_session_load);
     }
 
     #[test]
     fn startup_workspace_organization_key_is_accepted_as_an_alias() {
-        let config = Config::from_yaml("features:\n  organize_workspaces_on_startup: true\n")
+        let config = Config::from_json(r#"{"features": {"organize_workspaces_on_startup": true}}"#)
             .expect("legacy key should deserialize");
 
         assert!(config.features.organize_workspaces_on_session_load);
-        let yaml = config.to_yaml().expect("config should serialize");
-        assert!(yaml.contains("organize_workspaces_on_session_load: true"));
-        assert!(!yaml.contains("organize_workspaces_on_startup:"));
+        let document = config.to_json().expect("config should serialize");
+        assert!(document.contains("\"organize_workspaces_on_session_load\": true"));
+        assert!(!document.contains("organize_workspaces_on_startup"));
     }
 
     #[test]
     fn appearance_defaults_to_auto_theme() {
-        let config: Config = serde_yaml::from_str("{}\n").expect("config should deserialize");
+        let config: Config = serde_json::from_str("{}").expect("config should deserialize");
 
         assert_eq!(config.appearance.theme, super::AppearanceTheme::Auto);
         assert_eq!(Config::default().appearance.theme, super::AppearanceTheme::Auto);
@@ -1096,39 +1019,43 @@ workspaces:
 
     #[test]
     fn explicit_auto_theme_is_preserved() {
-        let config: Config = serde_yaml::from_str("appearance:\n  theme: auto\n").expect("config should deserialize");
+        let config: Config =
+            serde_json::from_str(r#"{"appearance": {"theme": "auto"}}"#).expect("config should deserialize");
 
         assert_eq!(config.appearance.theme, super::AppearanceTheme::Auto);
     }
 
     #[test]
     fn explicit_light_theme_is_preserved() {
-        let config: Config = serde_yaml::from_str("appearance:\n  theme: light\n").expect("config should deserialize");
+        let config: Config =
+            serde_json::from_str(r#"{"appearance": {"theme": "light"}}"#).expect("config should deserialize");
 
         assert_eq!(config.appearance.theme, super::AppearanceTheme::Light);
     }
 
     #[test]
     fn retired_attention_feed_keys_are_ignored_and_dropped_on_save() {
-        let config =
-            Config::from_yaml("features:\n  attention_feed: false\noverlays:\n  attention_feed_width: 400.0\n")
-                .expect("config should deserialize");
+        let config = Config::from_json(
+            r#"{"features": {"attention_feed": false}, "overlays": {"attention_feed_width": 400.0}}"#,
+        )
+        .expect("config should deserialize");
 
-        let yaml = config.to_yaml().expect("config should serialize");
-        assert!(!yaml.contains("attention_feed"));
+        let document = config.to_json().expect("config should serialize");
+        assert!(!document.contains("attention_feed"));
     }
 
     #[test]
     fn duplicate_shortcuts_are_rejected() {
-        let error = Config::from_yaml("shortcuts:\n  command_palette: Ctrl+Shift+K\n  new_terminal: Ctrl+Shift+K\n")
-            .expect_err("config should reject duplicate shortcuts");
+        let error =
+            Config::from_json(r#"{"shortcuts": {"command_palette": "Ctrl+Shift+K", "new_terminal": "Ctrl+Shift+K"}}"#)
+                .expect_err("config should reject duplicate shortcuts");
 
         assert!(error.to_string().contains("duplicate shortcut"));
     }
 
     #[test]
     fn legacy_quick_nav_alias_is_accepted() {
-        let config = Config::from_yaml("shortcuts:\n  quick_nav: Alt+K\n").expect("config should deserialize");
+        let config = Config::from_json(r#"{"shortcuts": {"quick_nav": "Alt+K"}}"#).expect("config should deserialize");
 
         assert_eq!(config.shortcuts.command_palette, "Alt+K");
         assert_eq!(
@@ -1143,7 +1070,7 @@ workspaces:
 
     #[test]
     fn legacy_reset_view_alias_is_accepted() {
-        let config = Config::from_yaml("shortcuts:\n  reset_view: Alt+0\n").expect("config should deserialize");
+        let config = Config::from_json(r#"{"shortcuts": {"reset_view": "Alt+0"}}"#).expect("config should deserialize");
 
         assert_eq!(config.shortcuts.zoom_reset, "Alt+0");
         assert_eq!(
@@ -1154,8 +1081,8 @@ workspaces:
 
     #[test]
     fn workspace_navigation_shortcuts_resolve() {
-        let config = Config::from_yaml(
-            "shortcuts:\n  focus_active_workspace: Alt+W\n  fit_active_workspace: Alt+9\n  toggle_sessions: Alt+J\n",
+        let config = Config::from_json(
+            r#"{"shortcuts": {"focus_active_workspace": "Alt+W", "fit_active_workspace": "Alt+9", "toggle_sessions": "Alt+J"}}"#,
         )
         .expect("config should deserialize");
 
@@ -1177,8 +1104,9 @@ workspaces:
 
     #[test]
     fn overlapping_shortcuts_are_rejected() {
-        let error = Config::from_yaml("shortcuts:\n  toggle_sidebar: Ctrl+K\n  command_palette: Ctrl+Shift+K\n")
-            .expect_err("config should reject overlapping shortcuts");
+        let error =
+            Config::from_json(r#"{"shortcuts": {"toggle_sidebar": "Ctrl+K", "command_palette": "Ctrl+Shift+K"}}"#)
+                .expect_err("config should reject overlapping shortcuts");
 
         assert!(error.to_string().contains("conflicts with"));
         assert!(error.to_string().contains("toggle_sidebar"));
@@ -1186,18 +1114,18 @@ workspaces:
 
     #[test]
     fn chromium_screencast_quality_must_fit_protocol_range() {
-        let error = Config::from_yaml("browser:\n  quality: 101\n").expect_err("quality must be rejected");
+        let error = Config::from_json(r#"{"browser": {"quality": 101}}"#).expect_err("quality must be rejected");
         assert!(error.to_string().contains("browser.quality must be between 1 and 100"));
 
-        Config::from_yaml("browser:\n  quality: 1\n").expect("minimum quality should be accepted");
-        Config::from_yaml("browser:\n  quality: 100\n").expect("maximum quality should be accepted");
+        Config::from_json(r#"{"browser": {"quality": 1}}"#).expect("minimum quality should be accepted");
+        Config::from_json(r#"{"browser": {"quality": 100}}"#).expect("maximum quality should be accepted");
     }
 
     #[test]
     fn firefox_system_access_stays_off_unless_the_config_sets_it() {
-        let off = Config::from_yaml("browser:\n  backend: firefox\n").expect("firefox section loads");
+        let off = Config::from_json(r#"{"browser": {"backend": "firefox"}}"#).expect("firefox section loads");
         assert!(!off.browser.firefox_system_access);
-        let on = Config::from_yaml("browser:\n  backend: firefox\n  firefox_system_access: true\n")
+        let on = Config::from_json(r#"{"browser": {"backend": "firefox", "firefox_system_access": true}}"#)
             .expect("explicit system access loads");
         assert!(on.browser.firefox_system_access);
         assert_eq!(on.browser.backend, crate::browser::BackendKind::FirefoxBidi);
@@ -1205,56 +1133,58 @@ workspaces:
 
     #[test]
     fn browser_video_options_must_fit_engine_range() {
-        let error = Config::from_yaml("browser:\n  video:\n    fps: 0\n").expect_err("fps must be rejected");
+        let error = Config::from_json(r#"{"browser": {"video": {"fps": 0}}}"#).expect_err("fps must be rejected");
         assert!(error.to_string().contains("browser.video"));
-        let auto = Config::from_yaml("browser:\n  video:\n    quality: 90\n    compression_level: 4\n    fps: 10\n")
+        let auto = Config::from_json(r#"{"browser": {"video": {"quality": 90, "compression_level": 4, "fps": 10}}}"#)
             .expect("omitted max_width should be accepted as auto viewport width");
         assert!(auto.browser.video.max_width.is_none());
-        let explicit = Config::from_yaml("browser:\n  video:\n    quality: 90\n    fps: 10\n    max_width: 1280\n")
+        let explicit = Config::from_json(r#"{"browser": {"video": {"quality": 90, "fps": 10, "max_width": 1280}}}"#)
             .expect("explicit max_width should still be accepted");
         assert_eq!(explicit.browser.video.max_width, Some(1280));
-        let too_wide = Config::from_yaml("browser:\n  video:\n    max_width: 4096\n")
+        let too_wide = Config::from_json(r#"{"browser": {"video": {"max_width": 4096}}}"#)
             .expect_err("out-of-range max_width must be rejected");
         assert!(too_wide.to_string().contains("browser.video"));
     }
 
     #[test]
     fn browser_remote_section_round_trips_without_credential_values() {
-        let yaml = r#"
-browser:
-  remote:
-    providers:
-      device_remote:
-        adapter: webdriver
-        endpoint: https://grid.example.net/wd/hub
-        authentication:
-          kind: basic
-          username_ref: device-remote-user
-          password_ref: device-remote-key
-        credential_bindings:
-          device-remote-user:
-            store: os_keychain
-            slot: remote-browser/device-remote/username
-          device-remote-key:
-            store: session
-        limits:
-          max_sessions: 1
-          allocation_timeout_seconds: 120
-          idle_release_seconds: 180
-          max_session_seconds: 1800
-    targets:
-      ios_phone:
-        provider: device_remote
-        browser_name: safari
-        platform_name: iOS
-        device:
-          kind: physical
-          model: iPhone 16
-          os_version: "18"
-        capability_extensions:
-          appium:automationName: XCUITest
-"#;
-        let config = Config::from_yaml(yaml).expect("remote section parses");
+        let document = r#"{
+  "browser": {
+    "remote": {
+      "providers": {
+        "device_remote": {
+          "adapter": "webdriver",
+          "endpoint": "https://grid.example.net/wd/hub",
+          "authentication": {
+            "kind": "basic",
+            "username_ref": "device-remote-user",
+            "password_ref": "device-remote-key"
+          },
+          "credential_bindings": {
+            "device-remote-user": {"store": "os_keychain", "slot": "remote-browser/device-remote/username"},
+            "device-remote-key": {"store": "session"}
+          },
+          "limits": {
+            "max_sessions": 1,
+            "allocation_timeout_seconds": 120,
+            "idle_release_seconds": 180,
+            "max_session_seconds": 1800
+          }
+        }
+      },
+      "targets": {
+        "ios_phone": {
+          "provider": "device_remote",
+          "browser_name": "safari",
+          "platform_name": "iOS",
+          "device": {"kind": "physical", "model": "iPhone 16", "os_version": "18"},
+          "capability_extensions": {"appium:automationName": "XCUITest"}
+        }
+      }
+    }
+  }
+}"#;
+        let config = Config::from_json(document).expect("remote section parses");
         assert_eq!(
             config.browser.backend,
             crate::browser::BackendKind::ChromiumCdp,
@@ -1262,55 +1192,47 @@ browser:
         );
         let target = config.browser.remote.targets.get("ios_phone").expect("target");
         assert_eq!(target.provider, "device_remote");
-        let encoded = config.to_yaml().expect("serializes");
-        let decoded = Config::from_yaml(&encoded).expect("re-parses");
+        let encoded = config.to_json().expect("serializes");
+        let decoded = Config::from_json(&encoded).expect("re-parses");
         assert_eq!(decoded.browser.remote, config.browser.remote);
         assert!(!encoded.contains("password:"), "no credential value field exists");
     }
 
     #[test]
     fn browser_remote_section_is_absent_by_default_and_validated_on_load() {
-        let encoded = Config::default().to_yaml().expect("serializes");
-        assert!(!encoded.contains("remote:"), "{encoded}");
-        let legacy = Config::from_yaml("browser:\n  backend: firefox\n").expect("legacy browser section loads");
+        let encoded = Config::default().to_json().expect("serializes");
+        assert!(!encoded.contains("\"remote\""), "{encoded}");
+        let legacy = Config::from_json(r#"{"browser": {"backend": "firefox"}}"#).expect("legacy browser section loads");
         assert!(legacy.browser.remote.is_empty());
-        let unbound = Config::from_yaml(
-            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n        authentication:\n          kind: bearer\n          token_ref: grid-token\n",
+        let unbound = Config::from_json(
+            r#"{"browser": {"remote": {"providers": {"grid": {"endpoint": "https://grid.example.net", "authentication": {"kind": "bearer", "token_ref": "grid-token"}}}}}}"#,
         )
         .expect("an unbound reference still loads; readiness reports it");
         let presence = unbound.browser.remote.binding_presence();
         assert_eq!(presence["grid"].values().filter(|present| !**present).count(), 1);
-        let error = Config::from_yaml(
-            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n        authentication:\n          kind: bearer\n          token_ref: grid-token\n        credential_bindings:\n          grid-token:\n            store: os_keychain\n",
+        let error = Config::from_json(
+            r#"{"browser": {"remote": {"providers": {"grid": {"endpoint": "https://grid.example.net", "authentication": {"kind": "bearer", "token_ref": "grid-token"}, "credential_bindings": {"grid-token": {"store": "os_keychain"}}}}}}}"#,
         )
         .expect_err("a present binding without a slot is malformed configuration");
         assert!(error.to_string().contains("needs a slot"), "{error}");
-        let error = Config::from_yaml(
-            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n    targets:\n      phone:\n        provider: nowhere\n        browser_name: safari\n        platform_name: iOS\n",
+        let error = Config::from_json(
+            r#"{"browser": {"remote": {"providers": {"grid": {"endpoint": "https://grid.example.net"}}, "targets": {"phone": {"provider": "nowhere", "browser_name": "safari", "platform_name": "iOS"}}}}}"#,
         )
         .expect_err("unknown provider is rejected");
         let message = error.to_string();
         assert!(message.contains("browser.remote"), "{message}");
         assert!(message.contains("nowhere"), "{message}");
-        let error = Config::from_yaml(
-            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://me:pw@grid.example.net\n",
+        let error = Config::from_json(
+            r#"{"browser": {"remote": {"providers": {"grid": {"endpoint": "https://me:pw@grid.example.net"}}}}}"#,
         )
         .expect_err("userinfo is rejected");
         assert!(!error.to_string().contains("pw@"), "{error}");
     }
 
     #[test]
-    fn preset_ssh_connection_round_trips_from_yaml() {
-        let config = Config::from_yaml(
-            r"
-presets:
-  - name: prod-api
-    kind: ssh
-    ssh_connection:
-      host: prod-api
-      user: deploy
-      port: 2222
-",
+    fn preset_ssh_connection_round_trips_from_json() {
+        let config = Config::from_json(
+            r#"{"presets": [{"name": "prod-api", "kind": "ssh", "ssh_connection": {"host": "prod-api", "user": "deploy", "port": 2222}}]}"#,
         )
         .expect("config should deserialize");
 

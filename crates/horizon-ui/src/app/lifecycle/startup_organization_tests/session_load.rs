@@ -43,7 +43,7 @@ fn startup_organization_waits_for_async_board_restore() {
 fn startup_organization_waits_for_session_choice_and_activation() {
     let chooser = StartupChooser {
         reason: StartupPromptReason::MultipleRecoverable,
-        config_path: "/tmp/horizon-config.yaml".to_string(),
+        config_path: "/tmp/horizon-config.json".to_string(),
         sessions: Vec::new(),
     };
     let (_temp, ctx, mut app) = test_app_with_config_and_startup(&enabled_config(), StartupDecision::Choose(chooser));

@@ -97,17 +97,17 @@ mod tests {
 
     #[test]
     fn missing_section_and_partial_sections_fill_in_defaults() {
-        let config = Config::from_yaml("version: 11\n").unwrap();
+        let config = Config::from_json(r#"{"version": 11}"#).unwrap();
         assert_eq!(config.remote_hosts, RemoteHostsConfig::default());
 
-        let config = Config::from_yaml("version: 11\nremote_hosts:\n  vnc_port: 5901\n").unwrap();
+        let config = Config::from_json(r#"{"version": 11, "remote_hosts": {"vnc_port": 5901}}"#).unwrap();
         assert_eq!(config.remote_hosts.default_workspace_name(), "Remote Sessions");
         assert_eq!(
             config.remote_hosts.vnc_target("lab", "lab.example", None),
             "127.0.0.1:5901"
         );
 
-        let config = Config::from_yaml("version: 11\nremote_hosts:\n  default_workspace: '  Ops  '\n").unwrap();
+        let config = Config::from_json(r#"{"version": 11, "remote_hosts": {"default_workspace": "  Ops  "}}"#).unwrap();
         assert_eq!(
             config.remote_hosts.default_workspace_name(),
             "  Ops  ",
@@ -117,20 +117,20 @@ mod tests {
 
     #[test]
     fn blank_workspace_and_port_zero_are_rejected() {
-        let error = Config::from_yaml("version: 11\nremote_hosts:\n  default_workspace: '  '\n").unwrap_err();
+        let error = Config::from_json(r#"{"version": 11, "remote_hosts": {"default_workspace": "  "}}"#).unwrap_err();
         assert!(error.to_string().contains("remote_hosts.default_workspace"));
-        let error = Config::from_yaml("version: 11\nremote_hosts:\n  vnc_port: 0\n").unwrap_err();
+        let error = Config::from_json(r#"{"version": 11, "remote_hosts": {"vnc_port": 0}}"#).unwrap_err();
         assert!(error.to_string().contains("remote_hosts.vnc_port"));
-        let error = Config::from_yaml("version: 11\nremote_hosts:\n  vnc_ports:\n    lab: 0\n").unwrap_err();
+        let error = Config::from_json(r#"{"version": 11, "remote_hosts": {"vnc_ports": {"lab": 0}}}"#).unwrap_err();
         assert!(error.to_string().contains("remote_hosts.vnc_ports.lab"));
-        let error = Config::from_yaml("version: 11\nremote_hosts:\n  vnc_ports:\n    ' ': 5901\n").unwrap_err();
+        let error = Config::from_json(r#"{"version": 11, "remote_hosts": {"vnc_ports": {" ": 5901}}}"#).unwrap_err();
         assert!(error.to_string().contains("remote_hosts.vnc_ports keys"));
     }
 
     #[test]
     fn per_host_ports_resolve_override_then_label_then_host_then_global() {
-        let config = Config::from_yaml(
-            "version: 11\nremote_hosts:\n  vnc_port: 5901\n  vnc_ports:\n    lab: 5902\n    lab.example: 5903\n    db.example: 5904\n",
+        let config = Config::from_json(
+            r#"{"version": 11, "remote_hosts": {"vnc_port": 5901, "vnc_ports": {"lab": 5902, "lab.example": 5903, "db.example": 5904}}}"#,
         )
         .unwrap();
         let hosts = &config.remote_hosts;
@@ -158,21 +158,21 @@ mod tests {
     }
 
     #[test]
-    fn section_round_trips_through_yaml() {
+    fn section_round_trips_through_a_document() {
         let mut config = Config::default();
         config.remote_hosts.default_workspace = "Ops".into();
         config.remote_hosts.vnc_port = 5901;
-        let yaml = config.to_yaml().unwrap();
+        let document = config.to_json().unwrap();
         assert!(
-            yaml.contains("remote_hosts:\n  default_workspace: Ops\n  vnc_port: 5901\n"),
-            "an empty per-host map is not written"
+            document.contains("\"default_workspace\": \"Ops\""),
+            "the section is written: {document}"
         );
-        assert!(!yaml.contains("vnc_ports"));
-        assert_eq!(Config::from_yaml(&yaml).unwrap().remote_hosts, config.remote_hosts);
+        assert!(!document.contains("vnc_ports"), "an empty per-host map is not written");
+        assert_eq!(Config::from_json(&document).unwrap().remote_hosts, config.remote_hosts);
 
         config.remote_hosts.vnc_ports.insert("lab".into(), 5902);
-        let yaml = config.to_yaml().unwrap();
-        assert!(yaml.contains("  vnc_port: 5901\n  vnc_ports:\n    lab: 5902\n"));
-        assert_eq!(Config::from_yaml(&yaml).unwrap().remote_hosts, config.remote_hosts);
+        let document = config.to_json().unwrap();
+        assert!(document.contains("\"vnc_ports\": {"), "{document}");
+        assert_eq!(Config::from_json(&document).unwrap().remote_hosts, config.remote_hosts);
     }
 }

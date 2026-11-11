@@ -75,7 +75,7 @@ impl HorizonHome {
 
     #[must_use]
     pub fn config_path(&self) -> PathBuf {
-        self.root.join("config.yaml")
+        self.root.join("config.json")
     }
 
     #[must_use]
@@ -298,7 +298,7 @@ mod tests {
     fn session_paths_live_under_horizon_home() {
         let home = HorizonHome::from_root("/tmp/horizon-home".into());
 
-        assert_eq!(home.config_path(), PathBuf::from("/tmp/horizon-home/config.yaml"));
+        assert_eq!(home.config_path(), PathBuf::from("/tmp/horizon-home/config.json"));
         assert_eq!(
             home.session_index_path(),
             PathBuf::from("/tmp/horizon-home/sessions/index.yaml")
@@ -402,7 +402,7 @@ mod tests {
 
         assert_eq!(home.root(), root);
         assert!(root.is_dir());
-        assert_eq!(home.config_path(), root.join("config.yaml"));
+        assert_eq!(home.config_path(), root.join("config.json"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

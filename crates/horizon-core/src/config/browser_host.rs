@@ -264,20 +264,20 @@ mod tests {
             browser_host: entry(Some("browser-vm"), Some("mail")),
             ..Config::default()
         };
-        let yaml = config.to_yaml().expect("yaml");
+        let document = config.to_json().expect("serialize");
         assert!(
-            yaml.contains("browser_host:\n  ssh_target: browser-vm\n  profile: mail\n"),
-            "{yaml}"
+            document.contains("\"ssh_target\": \"browser-vm\"") && document.contains("\"profile\": \"mail\""),
+            "{document}"
         );
         assert_eq!(
-            Config::from_yaml(&yaml).expect("parse").browser_host,
+            Config::from_json(&document).expect("parse").browser_host,
             config.browser_host
         );
 
-        let yaml = Config::default().to_yaml().expect("yaml");
+        let document = Config::default().to_json().expect("serialize");
         assert!(
-            !yaml.contains("browser_host") || !yaml.contains("ssh_target"),
-            "an entry that names no host writes no field: {yaml}"
+            !document.contains("ssh_target"),
+            "an entry that names no host writes no field: {document}"
         );
     }
 }

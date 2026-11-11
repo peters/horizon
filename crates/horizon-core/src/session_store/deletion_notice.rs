@@ -177,7 +177,7 @@ mod tests {
         let root = tempfile::tempdir().expect("home");
         let store = SessionStore::new(
             crate::HorizonHome::from_root(root.path().into()),
-            root.path().join("config.yaml"),
+            root.path().join("config.json"),
         );
         store
             .save_session_deletion_notice(&SessionDeletionNotice::new("Retained bundle: /synthetic/recovery"))
@@ -213,7 +213,7 @@ mod tests {
         let root = tempfile::tempdir().expect("home");
         let first = SessionStore::new(
             crate::HorizonHome::from_root(root.path().into()),
-            root.path().join("config.yaml"),
+            root.path().join("config.json"),
         );
         let second = first.clone();
         first
@@ -238,7 +238,7 @@ mod tests {
         let root = tempfile::tempdir().expect("home");
         let store = SessionStore::new(
             crate::HorizonHome::from_root(root.path().into()),
-            root.path().join("config.yaml"),
+            root.path().join("config.json"),
         );
         let calls = std::cell::Cell::new(0);
         let notice = SessionDeletionNotice::new("Retained recovery path");
@@ -271,7 +271,7 @@ mod tests {
         let root = tempfile::tempdir().expect("home");
         let store = SessionStore::new(
             crate::HorizonHome::from_root(root.path().into()),
-            root.path().join("config.yaml"),
+            root.path().join("config.json"),
         );
         store
             .save_session_deletion_notice(&SessionDeletionNotice::new("Reviewed recovery path"))
@@ -301,7 +301,7 @@ mod tests {
         let root = tempfile::tempdir().expect("home");
         let store = SessionStore::new(
             crate::HorizonHome::from_root(root.path().into()),
-            root.path().join("config.yaml"),
+            root.path().join("config.json"),
         );
         let notice = SessionDeletionNotice::new("Recovery path");
         store.save_session_deletion_notice(&notice).expect("first");

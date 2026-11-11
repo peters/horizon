@@ -157,7 +157,7 @@ mod tests {
 
         let decoded = decode(&rows(&config)).expect("decode");
 
-        assert_eq!(decoded.to_yaml().expect("yaml"), config.to_yaml().expect("yaml"));
+        assert_eq!(decoded.to_json().expect("json"), config.to_json().expect("json"));
     }
 
     #[test]

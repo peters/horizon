@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn the_portable_panel_imports_into_the_editing_config_and_exports_without_bindings() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let config_path = dir.path().join("config.yaml");
+        let config_path = dir.path().join("config.json");
         let mut panel = PortableProfilePanel::new(&config_path);
         assert_eq!(
             panel.path,
@@ -700,7 +700,7 @@ mod tests {
         assert!(is_error && notice.contains("absent.yaml"), "{notice}");
 
         // The configuration file is never exported over or imported from.
-        std::fs::write(&config_path, first.to_yaml().expect("yaml")).expect("config");
+        std::fs::write(&config_path, first.to_json().expect("json")).expect("config");
         let saved = std::fs::read_to_string(&config_path).expect("read");
         panel.path = config_path.display().to_string();
         panel.export(&first);
@@ -763,7 +763,7 @@ mod tests {
         use crate::test_egui::DiscardTextures;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut panel = PortableProfilePanel::new(&dir.path().join("config.yaml"));
+        let mut panel = PortableProfilePanel::new(&dir.path().join("config.json"));
         let mut config = Config::default();
         let ctx = egui::Context::default();
         let mut changed = None;

@@ -4,13 +4,13 @@ use super::{ConfigStore, META_SAVED_AT, META_SCHEMA_VERSION, SETTINGS_SCHEMA_VER
 use crate::Config;
 
 fn store_in(root: &Path) -> ConfigStore {
-    ConfigStore::resolve(&root.join("config.yaml"))
+    ConfigStore::resolve(&root.join("config.json"))
 }
 
 #[test]
 fn the_store_sits_next_to_its_configuration() {
     assert_eq!(
-        ConfigStore::resolve(Path::new("/tmp/a/config.yaml")).path(),
+        ConfigStore::resolve(Path::new("/tmp/a/config.json")).path(),
         Path::new("/tmp/a/settings.sqlite")
     );
     assert_eq!(
@@ -53,7 +53,7 @@ fn every_section_round_trips() {
     store.save(&config).expect("save");
     let stored = store.load().expect("load").expect("the store exists");
 
-    assert_eq!(stored.config.to_yaml().expect("yaml"), config.to_yaml().expect("yaml"));
+    assert_eq!(stored.config.to_json().expect("json"), config.to_json().expect("json"));
 }
 
 #[test]

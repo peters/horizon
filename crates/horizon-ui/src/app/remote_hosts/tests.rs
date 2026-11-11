@@ -289,7 +289,7 @@ fn setting_the_default_workspace_leaves_a_settings_file_alone() {
     Config::save(&app.config_path, &app.template_config).expect("write the store");
     let mut file = app.template_config.clone();
     file.remote_hosts.default_workspace = "Elsewhere".to_string();
-    let document = file.to_yaml().expect("yaml");
+    let document = file.to_json().expect("json");
     std::fs::write(&app.config_path, &document).expect("write a settings file");
     let exported = std::fs::read_to_string(&app.config_path).expect("read the file");
 

@@ -227,17 +227,18 @@ mod tests {
             server: entry(Some("server-vm"), Some("/opt/horizon --server-link")),
             ..Config::default()
         };
-        let yaml = config.to_yaml().expect("yaml");
+        let document = config.to_json().expect("serialize");
         assert!(
-            yaml.contains("server:\n  ssh_target: server-vm\n  command: /opt/horizon --server-link\n"),
-            "{yaml}"
+            document.contains("\"ssh_target\": \"server-vm\"")
+                && document.contains("\"command\": \"/opt/horizon --server-link\""),
+            "{document}"
         );
-        assert_eq!(Config::from_yaml(&yaml).expect("parse").server, config.server);
+        assert_eq!(Config::from_json(&document).expect("parse").server, config.server);
 
-        let yaml = Config::default().to_yaml().expect("yaml");
+        let document = Config::default().to_json().expect("serialize");
         assert!(
-            !yaml.contains("server:") || !yaml.contains("ssh_target"),
-            "an entry that names no server writes no field: {yaml}"
+            !document.contains("ssh_target"),
+            "an entry that names no server writes no field: {document}"
         );
     }
 }

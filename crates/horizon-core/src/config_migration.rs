@@ -288,38 +288,45 @@ mod tests {
 
     use super::*;
 
-    const V1_YAML: &str = "\
-shortcuts:
-  command_palette: Ctrl+K
-  new_terminal: Ctrl+N
-  open_remote_hosts: Ctrl+Shift+R
-  toggle_sidebar: Ctrl+B
-  toggle_hud: Ctrl+Shift+H
-  toggle_settings: \"Ctrl+,\"
-  reset_view: Ctrl+0
-  zoom_in: Ctrl+Plus
-  zoom_out: Ctrl+Minus
-  fullscreen_window: Ctrl+F11
-  save_editor: Ctrl+S
-";
+    const V1_DOCUMENT: &str = r#"{
+  "shortcuts": {
+    "command_palette": "Ctrl+K",
+    "new_terminal": "Ctrl+N",
+    "open_remote_hosts": "Ctrl+Shift+R",
+    "toggle_sidebar": "Ctrl+B",
+    "toggle_hud": "Ctrl+Shift+H",
+    "toggle_settings": "Ctrl+,",
+    "reset_view": "Ctrl+0",
+    "zoom_in": "Ctrl+Plus",
+    "zoom_out": "Ctrl+Minus",
+    "fullscreen_window": "Ctrl+F11",
+    "save_editor": "Ctrl+S"
+  }
+}"#;
 
-    const V2_YAML: &str = "\
-version: 2
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-  - name: Codex
-    alias: cx
-    kind: codex
-    args:
-      - --no-alt-screen
-    resume: last
-";
+    const V2_DOCUMENT: &str = r#"{
+  "version": 2,
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell"
+    },
+    {
+      "name": "Codex",
+      "alias": "cx",
+      "kind": "codex",
+      "args": [
+        "--no-alt-screen"
+      ],
+      "resume": "last"
+    }
+  ]
+}"#;
 
     #[test]
     fn missing_version_defaults_to_one() {
-        let config: Config = serde_yaml::from_str("{}\n").expect("should deserialize");
+        let config: Config = serde_json::from_str("{}").expect("should deserialize");
         assert_eq!(config.version, 1);
     }
 
@@ -330,7 +337,7 @@ presets:
 
     #[test]
     fn migration_rewrites_old_defaults() {
-        let mut config: Config = serde_yaml::from_str(V1_YAML).expect("should deserialize");
+        let mut config: Config = serde_json::from_str(V1_DOCUMENT).expect("should deserialize");
         assert_eq!(config.shortcuts.command_palette, "Ctrl+K");
 
         migrate_v1_to_v2(&mut config);
@@ -351,7 +358,7 @@ presets:
     #[test]
     fn migration_preserves_custom_bindings() {
         let mut config: Config =
-            serde_yaml::from_str("shortcuts:\n  command_palette: Alt+K\n  save_editor: Ctrl+Shift+X\n")
+            serde_json::from_str(r#"{"shortcuts": {"command_palette": "Alt+K", "save_editor": "Ctrl+Shift+X"}}"#)
                 .expect("should deserialize");
 
         migrate_v1_to_v2(&mut config);
@@ -372,10 +379,10 @@ presets:
     #[test]
     fn migration_persists_into_the_store() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("config.yaml");
-        std::fs::write(&path, V1_YAML).expect("write");
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, V1_DOCUMENT).expect("write");
 
-        let mut config: Config = serde_yaml::from_str(V1_YAML).expect("should deserialize");
+        let mut config: Config = serde_json::from_str(V1_DOCUMENT).expect("should deserialize");
         let migrated = migrate_in_memory(&mut config).expect("should succeed");
         Config::save(&path, &config).expect("save");
 
@@ -392,21 +399,21 @@ presets:
         );
         assert_eq!(
             std::fs::read_to_string(&path).expect("read the copy"),
-            V1_YAML,
-            "a save writes no YAML, so the copy still says what the person wrote"
+            V1_DOCUMENT,
+            "a save writes no settings file, so the copy still says what the person wrote"
         );
     }
 
     #[test]
     fn serialized_config_includes_version() {
-        let yaml = Config::default().to_yaml().expect("should serialize");
-        assert!(yaml.contains(&format!("version: {CURRENT_CONFIG_VERSION}")));
+        let document = Config::default().to_json().expect("should serialize");
+        assert!(document.contains(&format!("\"version\": {CURRENT_CONFIG_VERSION}")));
     }
 
     #[test]
     fn migration_restores_standard_zoom_shortcuts() {
-        let mut config: Config = serde_yaml::from_str(
-            "version: 4\nshortcuts:\n  reset_view: Ctrl+Shift+0\n  zoom_in: Ctrl+Shift+Plus\n  zoom_out: Ctrl+Shift+Minus\n",
+        let mut config: Config = serde_json::from_str(
+            r#"{"version": 4, "shortcuts": {"reset_view": "Ctrl+Shift+0", "zoom_in": "Ctrl+Shift+Plus", "zoom_out": "Ctrl+Shift+Minus"}}"#,
         )
         .expect("should deserialize");
 
@@ -419,18 +426,19 @@ presets:
 
     #[test]
     fn migration_to_v6_adds_default_appearance_block() {
-        let mut config: Config = serde_yaml::from_str("version: 5\nworkspaces: []\n").expect("should deserialize");
+        let mut config: Config =
+            serde_json::from_str(r#"{"version": 5, "workspaces": []}"#).expect("should deserialize");
 
         migrate_v5_to_v6(&mut config);
 
-        let yaml = config.to_yaml().expect("should serialize");
-        assert!(yaml.contains("appearance:"));
-        assert!(yaml.contains("theme: auto"));
+        let document = config.to_json().expect("should serialize");
+        assert!(document.contains("\"appearance\""));
+        assert!(document.contains("\"theme\": \"auto\""));
     }
 
     #[test]
     fn migration_adds_missing_opencode_presets() {
-        let mut config: Config = serde_yaml::from_str(V2_YAML).expect("should deserialize");
+        let mut config: Config = serde_json::from_str(V2_DOCUMENT).expect("should deserialize");
 
         migrate_v2_to_v3(&mut config);
 
@@ -445,19 +453,24 @@ presets:
 
     #[test]
     fn migration_does_not_duplicate_existing_opencode_presets() {
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 2
-presets:
-  - name: My OpenCode
-    alias: custom-oc
-    kind: open_code
-    resume: last
-  - name: OpenCode (Fresh)
-    alias: ocf
-    kind: open_code
-    resume: fresh
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 2,
+  "presets": [
+    {
+      "name": "My OpenCode",
+      "alias": "custom-oc",
+      "kind": "open_code",
+      "resume": "last"
+    },
+    {
+      "name": "OpenCode (Fresh)",
+      "alias": "ocf",
+      "kind": "open_code",
+      "resume": "fresh"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -475,14 +488,17 @@ presets:
 
     #[test]
     fn migration_adds_missing_gemini_and_kilo_presets() {
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 3
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 3,
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -504,57 +520,79 @@ presets:
         assert_eq!(kilo.resume, PanelResume::Fresh);
     }
 
-    const V6_DEFAULT_AGENT_PRESETS_YAML: &str = "\
-version: 6
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-    resume: fresh
-  - name: Codex
-    alias: cx
-    kind: codex
-    args:
-      - --no-alt-screen
-    resume: last
-  - name: Codex (YOLO)
-    alias: cxy
-    kind: codex
-    args:
-      - --yolo
-      - --no-alt-screen
-    resume: fresh
-  - name: Claude Code
-    alias: cc
-    kind: claude
-    resume: last
-  - name: Claude Code (Auto)
-    alias: cca
-    kind: claude
-    args:
-      - --dangerously-skip-permissions
-    resume: fresh
-  - name: OpenCode
-    alias: oc
-    kind: open_code
-    resume: last
-  - name: OpenCode (Fresh)
-    alias: ocf
-    kind: open_code
-    resume: fresh
-  - name: KiloCode
-    alias: kc
-    kind: kilo_code
-    resume: last
-  - name: KiloCode (Fresh)
-    alias: kcf
-    kind: kilo_code
-    resume: fresh
-";
+    const V6_DEFAULT_AGENT_PRESETS: &str = r#"{
+  "version": 6,
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell",
+      "resume": "fresh"
+    },
+    {
+      "name": "Codex",
+      "alias": "cx",
+      "kind": "codex",
+      "args": [
+        "--no-alt-screen"
+      ],
+      "resume": "last"
+    },
+    {
+      "name": "Codex (YOLO)",
+      "alias": "cxy",
+      "kind": "codex",
+      "args": [
+        "--yolo",
+        "--no-alt-screen"
+      ],
+      "resume": "fresh"
+    },
+    {
+      "name": "Claude Code",
+      "alias": "cc",
+      "kind": "claude",
+      "resume": "last"
+    },
+    {
+      "name": "Claude Code (Auto)",
+      "alias": "cca",
+      "kind": "claude",
+      "args": [
+        "--dangerously-skip-permissions"
+      ],
+      "resume": "fresh"
+    },
+    {
+      "name": "OpenCode",
+      "alias": "oc",
+      "kind": "open_code",
+      "resume": "last"
+    },
+    {
+      "name": "OpenCode (Fresh)",
+      "alias": "ocf",
+      "kind": "open_code",
+      "resume": "fresh"
+    },
+    {
+      "name": "KiloCode",
+      "alias": "kc",
+      "kind": "kilo_code",
+      "resume": "last"
+    },
+    {
+      "name": "KiloCode (Fresh)",
+      "alias": "kcf",
+      "kind": "kilo_code",
+      "resume": "fresh"
+    }
+  ]
+}"#;
 
     #[test]
     fn migration_v6_to_v7_collapses_default_agent_pairs() {
-        let mut config: Config = serde_yaml::from_str(V6_DEFAULT_AGENT_PRESETS_YAML).expect("should deserialize");
+        let mut config: Config = serde_json::from_str(V6_DEFAULT_AGENT_PRESETS).expect("should deserialize");
 
         migrate_v6_to_v7(&mut config);
 
@@ -608,7 +646,7 @@ presets:
 
     #[test]
     fn migration_v6_to_v7_inserts_replacements_at_first_removed_slot() {
-        let mut config: Config = serde_yaml::from_str(V6_DEFAULT_AGENT_PRESETS_YAML).expect("should deserialize");
+        let mut config: Config = serde_json::from_str(V6_DEFAULT_AGENT_PRESETS).expect("should deserialize");
 
         migrate_v6_to_v7(&mut config);
 
@@ -652,22 +690,28 @@ presets:
 
     #[test]
     fn migration_v6_to_v7_preserves_customised_opencode_presets() {
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 6
-presets:
-  - name: OpenCode
-    alias: oc
-    kind: open_code
-    args:
-      - --model
-      - gpt-5
-    resume: last
-  - name: OpenCode (Fresh)
-    alias: ocf
-    kind: open_code
-    resume: fresh
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 6,
+  "presets": [
+    {
+      "name": "OpenCode",
+      "alias": "oc",
+      "kind": "open_code",
+      "args": [
+        "--model",
+        "gpt-5"
+      ],
+      "resume": "last"
+    },
+    {
+      "name": "OpenCode (Fresh)",
+      "alias": "ocf",
+      "kind": "open_code",
+      "resume": "fresh"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -703,18 +747,22 @@ presets:
         // Dev users who ran the broken commit (eff9335) ended up with
         // --full-auto in their YOLO preset; v6→v7 must still recognise and
         // replace it.
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 6
-presets:
-  - name: Codex (YOLO)
-    alias: cxy
-    kind: codex
-    args:
-      - --full-auto
-      - --no-alt-screen
-    resume: fresh
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 6,
+  "presets": [
+    {
+      "name": "Codex (YOLO)",
+      "alias": "cxy",
+      "kind": "codex",
+      "args": [
+        "--full-auto",
+        "--no-alt-screen"
+      ],
+      "resume": "fresh"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -734,28 +782,35 @@ presets:
         // User customised the Codex (YOLO) and Claude Code (Auto) presets with
         // extra args. Neither matches the default predicate, so both are kept,
         // and the new "Codex" / "Claude Code" replacements are inserted alongside.
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 6
-presets:
-  - name: Codex (YOLO)
-    alias: cxy
-    kind: codex
-    args:
-      - --yolo
-      - --no-alt-screen
-      - --model
-      - gpt-5
-    resume: fresh
-  - name: Claude Code (Auto)
-    alias: cca
-    kind: claude
-    args:
-      - --dangerously-skip-permissions
-      - --model
-      - opus
-    resume: fresh
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 6,
+  "presets": [
+    {
+      "name": "Codex (YOLO)",
+      "alias": "cxy",
+      "kind": "codex",
+      "args": [
+        "--yolo",
+        "--no-alt-screen",
+        "--model",
+        "gpt-5"
+      ],
+      "resume": "fresh"
+    },
+    {
+      "name": "Claude Code (Auto)",
+      "alias": "cca",
+      "kind": "claude",
+      "args": [
+        "--dangerously-skip-permissions",
+        "--model",
+        "opus"
+      ],
+      "resume": "fresh"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -785,19 +840,23 @@ presets:
         // match the default predicate, so it stays. Because a preset named
         // "Codex" already exists, the replacement is not inserted — we don't
         // want two presets sharing the same name in the menu.
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 6
-presets:
-  - name: Codex
-    alias: cx
-    kind: codex
-    args:
-      - --no-alt-screen
-      - --model
-      - gpt-5
-    resume: last
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 6,
+  "presets": [
+    {
+      "name": "Codex",
+      "alias": "cx",
+      "kind": "codex",
+      "args": [
+        "--no-alt-screen",
+        "--model",
+        "gpt-5"
+      ],
+      "resume": "last"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -818,14 +877,17 @@ presets:
 
     #[test]
     fn migration_v7_to_v8_adds_missing_pi_preset() {
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 7
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 7,
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -846,30 +908,11 @@ presets:
     #[test]
     fn migration_v7_to_v8_does_not_duplicate_existing_pi_preset() {
         for existing in [
-            "\
-version: 7
-presets:
-  - name: Pi
-    alias: custom-pi
-    kind: shell
-",
-            "\
-version: 7
-presets:
-  - name: Custom Pi
-    alias: pi
-    kind: shell
-",
-            "\
-version: 7
-presets:
-  - name: Custom Agent
-    alias: custom
-    kind: pi
-    resume: last
-",
+            r#"{"version": 7, "presets": [{"name": "Pi", "alias": "custom-pi", "kind": "shell"}]}"#,
+            r#"{"version": 7, "presets": [{"name": "Custom Pi", "alias": "pi", "kind": "shell"}]}"#,
+            r#"{"version": 7, "presets": [{"name": "Custom Agent", "alias": "custom", "kind": "pi", "resume": "last"}]}"#,
         ] {
-            let mut config: Config = serde_yaml::from_str(existing).expect("should deserialize");
+            let mut config: Config = serde_json::from_str(existing).expect("should deserialize");
 
             migrate_v7_to_v8(&mut config);
 
@@ -879,14 +922,17 @@ presets:
 
     #[test]
     fn migration_v8_to_v9_adds_missing_grok_preset() {
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 8
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 8,
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -907,30 +953,11 @@ presets:
     #[test]
     fn migration_v8_to_v9_does_not_duplicate_existing_grok_preset() {
         for existing in [
-            "\
-version: 8
-presets:
-  - name: Grok
-    alias: custom-gb
-    kind: shell
-",
-            "\
-version: 8
-presets:
-  - name: My Grok
-    alias: gb
-    kind: shell
-",
-            "\
-version: 8
-presets:
-  - name: Custom Agent
-    alias: custom
-    kind: grok
-    resume: last
-",
+            r#"{"version": 8, "presets": [{"name": "Grok", "alias": "custom-gb", "kind": "shell"}]}"#,
+            r#"{"version": 8, "presets": [{"name": "My Grok", "alias": "gb", "kind": "shell"}]}"#,
+            r#"{"version": 8, "presets": [{"name": "Custom Agent", "alias": "custom", "kind": "grok", "resume": "last"}]}"#,
         ] {
-            let mut config: Config = serde_yaml::from_str(existing).expect("should deserialize");
+            let mut config: Config = serde_json::from_str(existing).expect("should deserialize");
 
             migrate_v8_to_v9(&mut config);
 
@@ -940,14 +967,17 @@ presets:
 
     #[test]
     fn migration_v9_to_v10_adds_missing_browser_preset() {
-        let mut config: Config = serde_yaml::from_str(
-            "\
-version: 9
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-",
+        let mut config: Config = serde_json::from_str(
+            r#"{
+  "version": 9,
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell"
+    }
+  ]
+}"#,
         )
         .expect("should deserialize");
 
@@ -966,29 +996,11 @@ presets:
     #[test]
     fn migration_v9_to_v10_preserves_browser_conflicts() {
         for existing in [
-            "\
-version: 9
-presets:
-  - name: Browser
-    alias: custom-web
-    kind: shell
-",
-            "\
-version: 9
-presets:
-  - name: My Browser
-    alias: web
-    kind: shell
-",
-            "\
-version: 9
-presets:
-  - name: Custom Browser
-    alias: custom
-    kind: browser
-",
+            r#"{"version": 9, "presets": [{"name": "Browser", "alias": "custom-web", "kind": "shell"}]}"#,
+            r#"{"version": 9, "presets": [{"name": "My Browser", "alias": "web", "kind": "shell"}]}"#,
+            r#"{"version": 9, "presets": [{"name": "Custom Browser", "alias": "custom", "kind": "browser"}]}"#,
         ] {
-            let mut config: Config = serde_yaml::from_str(existing).expect("should deserialize");
+            let mut config: Config = serde_json::from_str(existing).expect("should deserialize");
 
             migrate_v9_to_v10(&mut config);
 
@@ -999,21 +1011,25 @@ presets:
     #[test]
     fn migration_from_v6_lands_on_codex_preset() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("config.yaml");
-        let v6_yaml = "\
-version: 6
-presets:
-  - name: Codex (YOLO)
-    alias: cxy
-    kind: codex
-    args:
-      - --yolo
-      - --no-alt-screen
-    resume: fresh
-";
-        std::fs::write(&path, v6_yaml).expect("write");
+        let path = dir.path().join("config.json");
+        let v6_document = r#"{
+  "version": 6,
+  "presets": [
+    {
+      "name": "Codex (YOLO)",
+      "alias": "cxy",
+      "kind": "codex",
+      "args": [
+        "--yolo",
+        "--no-alt-screen"
+      ],
+      "resume": "fresh"
+    }
+  ]
+}"#;
+        std::fs::write(&path, v6_document).expect("write");
 
-        let mut config: Config = serde_yaml::from_str(v6_yaml).expect("should deserialize");
+        let mut config: Config = serde_json::from_str(v6_document).expect("should deserialize");
         let migrated = migrate_in_memory(&mut config).expect("should succeed");
         Config::save(&path, &config).expect("save");
 

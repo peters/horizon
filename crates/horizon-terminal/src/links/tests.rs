@@ -168,10 +168,10 @@ fn absolute_file_path_detected() {
 
 #[test]
 fn home_relative_path_detected() {
-    let line: Vec<char> = "see ~/project/config.yaml for details".chars().collect();
+    let line: Vec<char> = "see ~/project/config.json for details".chars().collect();
     assert_eq!(
         find_file_path_at_column(&line, 5),
-        Some("~/project/config.yaml".to_string()),
+        Some("~/project/config.json".to_string()),
     );
 }
 

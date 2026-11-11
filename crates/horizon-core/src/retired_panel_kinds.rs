@@ -8,12 +8,16 @@ use std::borrow::Cow;
 
 use serde_yaml::Value;
 
-/// Panel kinds that a later release removed, as they appear in YAML.
+/// Panel kinds that a later release removed, as they appear in a document.
 const RETIRED: [&str; 1] = ["upkeep"];
 
 const KIND: &str = "kind";
 
 /// `content` with every entry that names a retired panel kind removed.
+///
+/// The settings of a computer are JSON and a saved board is still YAML, so the
+/// walk reads YAML, which also reads JSON, and answers JSON, which both readers
+/// accept.
 ///
 /// `content` that this walk does not understand comes back unchanged, so the typed parse
 /// reports the problem in its own terms.
@@ -24,7 +28,7 @@ pub(crate) fn without_retired(content: &str) -> Cow<'_, str> {
     if !drop_entries(&mut value) {
         return Cow::Borrowed(content);
     }
-    match serde_yaml::to_string(&value) {
+    match serde_json::to_string(&value) {
         Ok(scrubbed) => Cow::Owned(scrubbed),
         Err(_) => Cow::Borrowed(content),
     }
@@ -35,7 +39,7 @@ fn drop_entries(value: &mut Value) -> bool {
     match value {
         Value::Mapping(mapping) => {
             let mut removed = false;
-            for (_, entry) in mapping.iter_mut() {
+            for entry in mapping.values_mut() {
                 removed |= drop_entries(entry);
             }
             removed
@@ -65,52 +69,55 @@ mod tests {
 
     #[test]
     fn an_upkeep_terminal_goes_and_the_others_stay() {
+        let content = r#"{
+  "workspaces": [
+    {"name": "Upkeep", "terminals": [{"name": "Upkeep", "kind": "upkeep"}]},
+    {"name": "Work", "terminals": [{"name": "Shell", "kind": "shell"}]}
+  ]
+}"#;
+        let scrubbed = without_retired(content);
+        assert!(!scrubbed.contains("upkeep"), "{scrubbed}");
+        assert!(scrubbed.contains("\"Work\""), "{scrubbed}");
+        assert!(scrubbed.contains("\"Shell\""), "{scrubbed}");
+    }
+
+    #[test]
+    fn a_saved_board_in_yaml_is_scrubbed_too() {
         let content = "\
 workspaces:
-- name: Upkeep
-  terminals:
+- name: Work
+  panels:
   - name: Upkeep
     kind: upkeep
-- name: Work
-  terminals:
   - name: Shell
     kind: shell
 ";
         let scrubbed = without_retired(content);
         assert!(!scrubbed.contains("upkeep"), "{scrubbed}");
-        assert!(scrubbed.contains("name: Work"), "{scrubbed}");
-        assert!(scrubbed.contains("name: Shell"), "{scrubbed}");
+        assert!(scrubbed.contains("\"Shell\""), "the answer is JSON: {scrubbed}");
     }
 
     #[test]
     fn a_preset_and_a_panel_of_the_retired_kind_go_too() {
-        let content = "\
-presets:
-- name: Upkeep
-  kind: upkeep
-- name: Shell
-  kind: shell
-workspaces:
-- name: Work
-  panels:
-  - kind: upkeep
-  - kind: shell
-";
+        let content = r#"{
+  "presets": [{"name": "Upkeep", "kind": "upkeep"}, {"name": "Shell", "kind": "shell"}],
+  "workspaces": [{"name": "Work", "panels": [{"kind": "upkeep"}, {"kind": "shell"}]}]
+}"#;
         let scrubbed = without_retired(content);
         assert!(!scrubbed.contains("upkeep"), "{scrubbed}");
-        assert!(scrubbed.contains("name: Shell"), "{scrubbed}");
-        assert!(scrubbed.contains("kind: shell"), "{scrubbed}");
+        assert!(scrubbed.contains("\"name\":\"Shell\""), "{scrubbed}");
+        assert!(scrubbed.contains("\"kind\":\"shell\""), "{scrubbed}");
     }
 
     #[test]
     fn content_without_a_retired_kind_comes_back_untouched() {
-        let content = "workspaces:\n- name: Work\n  terminals:\n  - name: Shell\n    kind: shell\n";
+        let content = r#"{"workspaces": [{"name": "Work", "terminals": [{"name": "Shell", "kind": "shell"}]}]}"#;
         assert!(matches!(without_retired(content), Cow::Borrowed(_)), "no rewrite");
     }
 
     #[test]
-    fn content_that_is_not_yaml_comes_back_untouched() {
-        let content = "workspaces: [unclosed\n";
+    fn content_that_parses_as_neither_format_comes_back_untouched() {
+        let content = "{\"workspaces\": [unclosed\n";
         assert!(matches!(without_retired(content), Cow::Borrowed(_)), "no rewrite");
     }
 }

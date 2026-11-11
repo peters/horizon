@@ -23,7 +23,7 @@ mod recovery_deduplication;
 
 fn test_persistent_recovery_app(runtime_state: RuntimeState) -> (TempDir, HorizonApp, std::path::PathBuf) {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_path = temp.path().join("config.yaml");
+    let config_path = temp.path().join("config.json");
     let session_store = SessionStore::new(
         HorizonHome::from_root(temp.path().join(".horizon")),
         config_path.clone(),
@@ -495,7 +495,7 @@ fn failed_recovery_save_keeps_pending_state_until_retry_succeeds() {
     let (temp, mut app, runtime_path) = test_persistent_recovery_app(runtime_state);
     let blocked_home = temp.path().join("blocked-home");
     std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
-    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
+    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.json"));
     app.startup_receiver = None;
     app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
         message: "missing".to_string(),
@@ -524,7 +524,7 @@ fn failed_recovery_save_keeps_pending_state_until_retry_succeeds() {
 
     app.session_store = SessionStore::new(
         HorizonHome::from_root(temp.path().join(".horizon")),
-        temp.path().join("config.yaml"),
+        temp.path().join("config.json"),
     );
     app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::Retry);
 
@@ -563,7 +563,7 @@ fn failed_recovery_save_can_open_the_repaired_state_without_persisting() {
     let (temp, mut app, _runtime_path) = test_persistent_recovery_app(runtime_state);
     let blocked_home = temp.path().join("blocked-open-home");
     std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
-    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
+    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.json"));
     app.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
         message: "missing".to_string(),
         unavailable_exact_session_ids: HashSet::from(["session-child".to_string()]),
@@ -638,7 +638,7 @@ fn automatic_repair_is_saved_before_the_board_opens() {
     };
     let blocked_home = temp.path().join("blocked-ready-home");
     std::fs::write(&blocked_home, "not a directory").expect("create blocked home path");
-    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.yaml"));
+    app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.json"));
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(StartupBootstrapOutcome::Ready(Box::new(StartupBootstrap {
         runtime_state: repaired_runtime_state,
@@ -663,7 +663,7 @@ fn automatic_repair_is_saved_before_the_board_opens() {
 
     app.session_store = SessionStore::new(
         HorizonHome::from_root(temp.path().join(".horizon")),
-        temp.path().join("config.yaml"),
+        temp.path().join("config.json"),
     );
     app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::Retry);
 

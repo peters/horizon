@@ -1,28 +1,22 @@
-//! The policy of the settings store: when a copy is imported, and what a person
-//! gets when the store or the copy is missing or unreadable.
+//! The policy of the settings store: when a settings file is imported, and what
+//! a person gets when the store or the file is missing or unreadable.
 
 use std::path::PathBuf;
 
 use crate::config_store::ConfigStore;
 use crate::{Config, config_migration::CURRENT_CONFIG_VERSION};
 
-const FIRST: &str = "\
-version: 11
-window:
-  width: 1010
-  height: 700
-appearance:
-  theme: light
-";
+const FIRST: &str = r#"{
+  "version": 11,
+  "window": {"width": 1010, "height": 700},
+  "appearance": {"theme": "light"}
+}"#;
 
-const SECOND: &str = "\
-version: 11
-window:
-  width: 1010
-  height: 880
-appearance:
-  theme: dark
-";
+const SECOND: &str = r#"{
+  "version": 11,
+  "window": {"width": 1010, "height": 880},
+  "appearance": {"theme": "dark"}
+}"#;
 
 struct Home {
     root: tempfile::TempDir,
@@ -36,7 +30,7 @@ impl Home {
     }
 
     fn config_path(&self) -> PathBuf {
-        self.root.path().join("config.yaml")
+        self.root.path().join("config.json")
     }
 
     fn store_path(&self) -> PathBuf {
@@ -61,15 +55,8 @@ impl Home {
     }
 }
 
-fn backups(home: &Home) -> Vec<String> {
-    home.names()
-        .into_iter()
-        .filter(|name| name.contains(".imported-"))
-        .collect()
-}
-
 #[test]
-fn a_configuration_file_is_imported_one_time_and_kept_aside() {
+fn a_settings_file_is_imported_one_time() {
     let home = Home::new();
     home.write_copy(FIRST);
 
@@ -77,23 +64,39 @@ fn a_configuration_file_is_imported_one_time_and_kept_aside() {
 
     assert_eq!(loaded.window.width, 1010.0, "the values of the file arrive");
     assert_eq!(loaded.appearance.theme, crate::AppearanceTheme::Light);
-    assert!(home.store_path().is_file(), "the store is written next to the copy");
-    assert!(
-        !home.config_path().exists(),
-        "the copy stops being a settings file once the store holds its values"
-    );
-    let kept = backups(&home);
-    assert_eq!(kept.len(), 1, "the words of the person are kept exactly once");
+    assert!(home.store_path().is_file(), "the store is written next to the file");
     assert_eq!(
-        std::fs::read_to_string(home.root.path().join(&kept[0])).expect("read the kept copy"),
+        std::fs::read_to_string(home.config_path()).expect("read the file"),
         FIRST,
-        "every byte of the copy survives the import"
+        "the imported file stays exactly as it is"
     );
 
     let again = home.load().expect("second load");
 
     assert_eq!(again.window.width, 1010.0);
     assert_eq!(home.names().len(), 2, "the second start writes no third file");
+}
+
+/// A file of an older Horizon was YAML. This build reads JSON only, refuses such
+/// a file with the format in the message, and writes nothing in its place.
+#[test]
+fn a_settings_file_of_an_older_horizon_is_refused_with_its_format() {
+    let home = Home::new();
+    let old = "version: 11\nwindow:\n  width: 1010\n";
+    home.write_copy(old);
+
+    let error = home.load().expect_err("a YAML file is not a settings file");
+
+    assert!(
+        error.to_string().contains("JSON"),
+        "the message names the format: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.config_path()).expect("read the file"),
+        old,
+        "the refused file keeps every byte"
+    );
+    assert!(!home.store_path().exists(), "a refused file writes no store");
 }
 
 #[test]
@@ -115,33 +118,27 @@ fn a_copy_beside_a_store_is_not_read() {
         SECOND,
         "the copy stays exactly as the person left it"
     );
-    assert_eq!(backups(&home).len(), 1, "no second copy is kept");
+    assert_eq!(home.names().len(), 2, "no third file is written");
 }
 
 #[test]
 fn an_import_keeps_everything_that_this_build_does_not_read() {
     let home = Home::new();
-    let text = "\
-version: 11 # the theme of this machine
-appearance:
-  theme: light
-remote_hosts:
-  default_workspace: Ops
-  future_key: true
-a_section_of_a_newer_build:
-  keep: me
-";
+    let text = r#"{
+  "version": 11,
+  "appearance": {"theme": "light"},
+  "remote_hosts": {"default_workspace": "Ops", "future_key": true},
+  "a_section_of_a_newer_build": {"keep": "me"}
+}"#;
     home.write_copy(text);
 
     let loaded = home.load().expect("load");
 
     assert_eq!(loaded.appearance.theme, crate::AppearanceTheme::Light);
-    let kept = backups(&home);
-    assert_eq!(kept.len(), 1);
     assert_eq!(
-        std::fs::read_to_string(home.root.path().join(&kept[0])).expect("read the kept copy"),
+        std::fs::read_to_string(home.config_path()).expect("read the file"),
         text,
-        "an import loses no comment, no unknown key and no unknown section"
+        "an import loses no unknown key and no unknown section"
     );
     assert_eq!(
         Config::load(Some(&home.config_path()))
@@ -151,7 +148,11 @@ a_section_of_a_newer_build:
         "Ops",
         "a second start reads the store"
     );
-    assert_eq!(backups(&home).len(), 1, "the second start keeps nothing new");
+    assert_eq!(
+        std::fs::read_to_string(home.config_path()).expect("read the file again"),
+        text,
+        "the second start changes no byte of the file"
+    );
 }
 
 #[test]
@@ -159,8 +160,7 @@ fn a_store_without_a_copy_keeps_working_and_writes_no_file() {
     let home = Home::new();
     home.write_copy(FIRST);
     home.load().expect("first load");
-    let kept = backups(&home);
-    std::fs::remove_file(home.root.path().join(&kept[0])).expect("remove the kept copy");
+    std::fs::remove_file(home.config_path()).expect("remove the copy");
 
     let loaded = home.load().expect("load without any copy");
 
@@ -170,21 +170,19 @@ fn a_store_without_a_copy_keeps_working_and_writes_no_file() {
 }
 
 #[test]
-fn a_damaged_store_is_repaired_from_the_kept_copy() {
+fn a_damaged_store_is_repaired_from_the_copy() {
     let home = Home::new();
     home.write_copy(FIRST);
     home.load().expect("first load");
-    let kept = backups(&home);
-    let kept_text = std::fs::read_to_string(home.root.path().join(&kept[0])).expect("read the kept copy");
     std::fs::write(home.store_path(), b"not a database").expect("damage the store");
 
-    let loaded = home.load().expect("a damaged store reads its kept copy");
+    let loaded = home.load().expect("a damaged store reads its copy");
 
-    assert_eq!(loaded.window.width, 1010.0, "the kept copy carries the settings");
+    assert_eq!(loaded.window.width, 1010.0, "the copy carries the settings");
     assert_eq!(
-        std::fs::read_to_string(home.root.path().join(&kept[0])).expect("read the kept copy"),
-        kept_text,
-        "the repair changes no byte of the kept copy"
+        std::fs::read_to_string(home.config_path()).expect("read the copy"),
+        FIRST,
+        "the repair changes no byte of the copy"
     );
     assert_eq!(
         ConfigStore::resolve(&home.config_path())
@@ -208,8 +206,7 @@ fn a_damaged_store_without_a_copy_is_an_error_and_not_a_default() {
     let home = Home::new();
     home.write_copy(FIRST);
     home.load().expect("first load");
-    let kept = backups(&home);
-    std::fs::remove_file(home.root.path().join(&kept[0])).expect("remove the kept copy");
+    std::fs::remove_file(home.config_path()).expect("remove the copy");
     std::fs::write(home.store_path(), b"not a database").expect("damage the store");
 
     let error = home.load().expect_err("nothing carries the settings");
@@ -229,8 +226,7 @@ fn a_store_of_another_version_with_no_copy_stops_the_start() {
     let home = Home::new();
     home.write_copy(FIRST);
     home.load().expect("first load");
-    let kept = backups(&home);
-    std::fs::remove_file(home.root.path().join(&kept[0])).expect("remove the kept copy");
+    std::fs::remove_file(home.config_path()).expect("remove the copy");
     let connection = rusqlite::Connection::open(home.store_path()).expect("store");
     connection
         .execute(
@@ -254,7 +250,7 @@ fn a_store_of_another_version_with_no_copy_stops_the_start() {
         "a store of another version is never rewritten"
     );
     assert!(
-        home.names().iter().all(|name| name != "config.yaml"),
+        home.names().iter().all(|name| name != "config.json"),
         "no copy is written"
     );
 }
@@ -356,7 +352,7 @@ fn a_settings_file_beside_the_store_does_not_change_the_settings() {
     Config::save(&home.config_path(), &config).expect("save");
     let mut edited = config.clone();
     edited.window.height = 900.0;
-    let document = edited.to_yaml().expect("yaml");
+    let document = edited.to_json().expect("serialize");
     std::fs::write(home.config_path(), &document).expect("edit the file");
 
     let loaded = home.load().expect("load after the edit");
@@ -370,14 +366,14 @@ fn a_settings_file_beside_the_store_does_not_change_the_settings() {
         document,
         "the file stays where the person left it"
     );
-    assert_eq!(backups(&home).len(), 0, "nothing is kept aside");
     assert_eq!(home.names().len(), 2, "a start adds no third file");
 }
 
 #[test]
 fn a_legacy_file_reaches_the_store_at_the_current_version() {
     let home = Home::new();
-    home.write_copy("shortcuts:\n  command_palette: Alt+K\n");
+    let text = r#"{"shortcuts": {"command_palette": "Alt+K"}}"#;
+    home.write_copy(text);
 
     let loaded = home.load().expect("load");
 
@@ -390,20 +386,17 @@ fn a_legacy_file_reaches_the_store_at_the_current_version() {
         stored.config.version, CURRENT_CONFIG_VERSION,
         "the store holds the migrated version, not the file's"
     );
-    let kept = backups(&home);
-    assert_eq!(kept.len(), 1, "the text before the migration is kept");
     assert_eq!(
-        std::fs::read_to_string(home.root.path().join(&kept[0])).expect("read the kept text"),
-        "shortcuts:\n  command_palette: Alt+K\n",
-        "the kept text is exactly the text that the person wrote"
+        std::fs::read_to_string(home.config_path()).expect("read the file"),
+        text,
+        "the migrated file is exactly the text that the person wrote"
     );
-    assert!(!home.config_path().exists(), "a migration never writes the copy again");
 }
 
 #[test]
 fn the_store_of_a_smoke_configuration_is_separate() {
     let home = Home::new();
-    let smoke = home.root.path().join("smoke.yml");
+    let smoke = home.root.path().join("smoke.json");
     std::fs::write(&smoke, FIRST).expect("write the smoke configuration");
 
     Config::load(Some(&smoke)).expect("load the smoke configuration");
@@ -416,19 +409,24 @@ fn the_store_of_a_smoke_configuration_is_separate() {
         !home.store_path().exists(),
         "the smoke run does not write the store of the usual configuration"
     );
-    assert!(!smoke.exists(), "the smoke copy stops being a settings file too");
+    assert_eq!(
+        std::fs::read_to_string(&smoke).expect("read the smoke configuration"),
+        FIRST,
+        "the smoke settings file stays exactly as it is"
+    );
 }
 
 #[test]
 fn a_server_section_of_a_copy_reaches_the_store_and_a_bad_one_is_refused() {
     let home = Home::new();
     home.write_copy(
-        "\
-version: 11
-server:
-  ssh_target: server-vm
-  command: /Users/x/my_tools/horizon --server-link
-",
+        r#"{
+  "version": 11,
+  "server": {
+    "ssh_target": "server-vm",
+    "command": "/Users/x/my_tools/horizon --server-link"
+  }
+}"#,
     );
 
     let loaded = home.load().expect("load");
@@ -442,11 +440,10 @@ server:
 
     let other = Home::new();
     other.write_copy(
-        "\
-version: 11
-server:
-  ssh_target: -oProxyCommand=evil
-",
+        r#"{
+  "version": 11,
+  "server": {"ssh_target": "-oProxyCommand=evil"}
+}"#,
     );
     let error = other.load().expect_err("a target that ssh reads as an option");
     assert!(
