@@ -15,8 +15,10 @@
 
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
-    io, io::Read, io::Write,
-    os::unix::fs::{PermissionsExt, OpenOptionsExt},
+    io,
+    io::Read,
+    io::Write,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -84,11 +86,7 @@ impl HostError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::NoServer { .. } => EXIT_NO_SERVER,
-            Self::NoHome
-            | Self::Io { .. }
-            | Self::AlreadyRunning { .. }
-            | Self::Socket(_)
-            | Self::Store(_) => 1,
+            Self::NoHome | Self::Io { .. } | Self::AlreadyRunning { .. } | Self::Socket(_) | Self::Store(_) => 1,
         }
     }
 }
@@ -342,11 +340,7 @@ mod tests {
         let home = home(&directory);
         home.prepare().expect("the home");
         assert_eq!(
-            std::fs::metadata(home.root())
-                .expect("the home")
-                .permissions()
-                .mode()
-                & 0o777,
+            std::fs::metadata(home.root()).expect("the home").permissions().mode() & 0o777,
             0o700,
             "the server home is the server user's alone"
         );
@@ -374,10 +368,7 @@ mod tests {
         );
         stop.store(true, Ordering::SeqCst);
         running.join().expect("the server thread").expect("a clean stop");
-        assert!(
-            !home.socket_path().exists(),
-            "a stopped server removes its socket"
-        );
+        assert!(!home.socket_path().exists(), "a stopped server removes its socket");
     }
 
     #[test]
@@ -421,9 +412,7 @@ mod tests {
             store: None,
         });
         crate::write_frame(&mut request, &hello).expect("the hello");
-        let answered = crate::read_frame(&mut answer)
-            .expect("the answer")
-            .expect("one frame");
+        let answered = crate::read_frame(&mut answer).expect("the answer").expect("one frame");
         assert!(matches!(answered, crate::Frame::HelloOk(_)), "{answered:?}");
         drop(request);
         drop(answer);

@@ -782,7 +782,10 @@ mod cli_args_tests {
 
     #[test]
     fn the_server_and_its_link_are_one_flag_alone() {
-        assert_eq!(parse_sync_mode(["--server"].map(Into::into).into_iter()).expect("server"), Some(SyncMode::Server));
+        assert_eq!(
+            parse_sync_mode(["--server"].map(Into::into).into_iter()).expect("server"),
+            Some(SyncMode::Server)
+        );
         assert_eq!(
             parse_sync_mode(["--server-link"].map(Into::into).into_iter()).expect("link"),
             Some(SyncMode::Link)

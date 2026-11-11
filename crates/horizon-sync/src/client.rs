@@ -41,6 +41,31 @@ pub enum LinkState {
     Away { pending: usize },
 }
 
+impl LinkState {
+    /// The stable code of this state, for a sidebar line, a log line and a tool
+    /// answer.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Connecting => "connecting",
+            Self::InStep { .. } => "in_step",
+            Self::Behind => "behind",
+            Self::Away { .. } => "away",
+        }
+    }
+
+    /// The intents that wait for the server, which is none for a link that
+    /// answers.
+    #[must_use]
+    pub fn pending(&self) -> usize {
+        match self {
+            Self::Away { pending } => *pending,
+            Self::Off | Self::Connecting | Self::InStep { .. } | Self::Behind => 0,
+        }
+    }
+}
+
 /// Where a computer keeps the objects that it pulled.
 pub trait Mirror {
     /// Applies one row: the object is stored, or removed when the row says that it
@@ -218,6 +243,7 @@ impl Client {
             op,
         });
         self.save()?;
+        self.queue_changed();
         Ok(id)
     }
 
@@ -227,14 +253,44 @@ impl Client {
     /// # Errors
     /// Returns why the link failed or the server refused the hello.
     pub fn hello<R: Read, W: Write>(&mut self, link: &mut Link<R, W>) -> Result<HelloOk, SyncError> {
-        self.link = LinkState::Connecting;
-        let answer = match link.hello(&self.state.device, self.state.store.as_deref()) {
-            Ok(answer) => answer,
+        let frame = self.hello_frame();
+        link.send(&frame)?;
+        let answer = match link.receive("hello_ok") {
+            Ok(Frame::HelloOk(answer)) => answer,
+            Ok(frame) => {
+                let error = SyncError::Unexpected {
+                    answered: frame_name(&frame),
+                    asked: "hello_ok",
+                };
+                self.away();
+                return Err(error);
+            }
             Err(error) => {
                 self.away();
                 return Err(error);
             }
         };
+        self.accept_hello(&answer)?;
+        Ok(answer)
+    }
+
+    /// The hello of this computer, for a caller that owns the two halves of the
+    /// link itself, such as the supervisor of a child process.
+    pub fn hello_frame(&mut self) -> Frame {
+        self.link = LinkState::Connecting;
+        Frame::Hello(Hello {
+            protocol: PROTOCOL_VERSION,
+            device: self.state.device.clone(),
+            store: self.state.store.clone(),
+        })
+    }
+
+    /// Remembers the store that the server answered. A store that this computer
+    /// did not see before makes the next pull a full reset.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn accept_hello(&mut self, answer: &HelloOk) -> Result<(), SyncError> {
         if self.state.store.as_deref() != Some(answer.store.as_str()) {
             self.state.store = Some(answer.store.clone());
             self.state.index = 0;
@@ -242,7 +298,7 @@ impl Client {
             self.save()?;
         }
         self.link = LinkState::Behind;
-        Ok(answer)
+        Ok(())
     }
 
     /// Sends the queued intents in order, with the identifiers that they already
@@ -253,8 +309,7 @@ impl Client {
     /// server did not decide.
     pub fn push_pending<R: Read, W: Write>(&mut self, link: &mut Link<R, W>) -> Result<PushOutcome, SyncError> {
         let mut outcome = PushOutcome::default();
-        while !self.state.pending.is_empty() {
-            let chunk: Vec<Intent> = self.state.pending.iter().take(MAX_INTENTS_PER_PUSH).cloned().collect();
+        while let Some(chunk) = self.next_push() {
             let reply = match link.push(&chunk) {
                 Ok(reply) => reply,
                 Err(error) => {
@@ -262,10 +317,32 @@ impl Client {
                     return Err(error);
                 }
             };
-            self.settle(&reply, &mut outcome)?;
-            if !outcome.applied.is_empty() {
-                self.link = LinkState::Behind;
-            }
+            let settled = self.accept_push(&reply)?;
+            outcome.applied.extend(settled.applied);
+            outcome.refused.extend(settled.refused);
+        }
+        Ok(outcome)
+    }
+
+    /// The intents of the next push, or `None` when every intent is decided.
+    #[must_use]
+    pub fn next_push(&self) -> Option<Vec<Intent>> {
+        if self.state.pending.is_empty() {
+            return None;
+        }
+        Some(self.state.pending.iter().take(MAX_INTENTS_PER_PUSH).cloned().collect())
+    }
+
+    /// Removes the intents that one answer decided from the queue and writes the
+    /// queue file.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn accept_push(&mut self, reply: &PushReply) -> Result<PushOutcome, SyncError> {
+        let mut outcome = PushOutcome::default();
+        self.settle(reply, &mut outcome)?;
+        if !outcome.applied.is_empty() {
+            self.link = LinkState::Behind;
         }
         Ok(outcome)
     }
@@ -280,7 +357,8 @@ impl Client {
         link: &mut Link<R, W>,
         mirror: &mut M,
     ) -> Result<PullOutcome, SyncError> {
-        let changes = match link.pull(self.state.index, &self.state.tip) {
+        let frame = self.pull_frame();
+        let changes = match link.ask(&frame) {
             Ok(changes) => changes,
             Err(error) => {
                 self.away();
@@ -288,6 +366,24 @@ impl Client {
             }
         };
         self.apply(&changes, mirror)
+    }
+
+    /// The pull frame of this computer: the index and the tip that it holds.
+    #[must_use]
+    pub fn pull_frame(&self) -> Frame {
+        Frame::Pull(Pull {
+            since: self.state.index,
+            tip: self.state.tip.clone(),
+        })
+    }
+
+    /// The wait frame of this computer, which the server answers at its bound or
+    /// at the next change.
+    #[must_use]
+    pub fn wait_frame(&self) -> Frame {
+        Frame::Wait(Wait {
+            since: self.state.index,
+        })
     }
 
     /// Waits for the next change of the server and applies it. The server answers
@@ -300,7 +396,8 @@ impl Client {
         link: &mut Link<R, W>,
         mirror: &mut M,
     ) -> Result<PullOutcome, SyncError> {
-        let changes = match link.wait(self.state.index) {
+        let frame = self.wait_frame();
+        let changes = match link.ask(&frame) {
             Ok(changes) => changes,
             Err(error) => {
                 self.away();
@@ -308,6 +405,32 @@ impl Client {
             }
         };
         self.apply(&changes, mirror)
+    }
+
+    /// Moves the mark of this computer to `index`, which the server answered,
+    /// and writes the queue file.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written.
+    pub fn accept_mark(&mut self, index: u64) -> Result<(), SyncError> {
+        self.state.index = index;
+        self.state.tip = match self.state.store.as_deref() {
+            Some(store) => tip(store, index),
+            None => String::new(),
+        };
+        self.save()?;
+        self.link = LinkState::InStep { index };
+        Ok(())
+    }
+
+    /// Reports the queue of a link that is away again, so a change that waits
+    /// for the server is counted at once instead of at the next attempt.
+    pub fn queue_changed(&mut self) {
+        if matches!(self.link, LinkState::Away { .. }) {
+            self.link = LinkState::Away {
+                pending: self.state.pending.len(),
+            };
+        }
     }
 
     /// Marks the link as away, with the queue that waits for it.
@@ -346,13 +469,7 @@ impl Client {
                 mirror.apply(row)?;
             }
         }
-        self.state.index = changes.index;
-        self.state.tip = match self.state.store.as_deref() {
-            Some(store) => tip(store, changes.index),
-            None => String::new(),
-        };
-        self.save()?;
-        self.link = LinkState::InStep { index: changes.index };
+        self.accept_mark(changes.index)?;
         Ok(PullOutcome {
             index: changes.index,
             reset: changes.reset,
@@ -436,6 +553,15 @@ impl<R: Read, W: Write> Link<R, W> {
         self.changes()
     }
 
+    /// Sends a pull or a wait frame and reads the changes that answer it.
+    ///
+    /// # Errors
+    /// Returns why the link failed or the server refused the frame.
+    pub fn ask(&mut self, frame: &Frame) -> Result<Changes, SyncError> {
+        self.send(frame)?;
+        self.changes()
+    }
+
     fn changes(&mut self) -> Result<Changes, SyncError> {
         match self.receive("changes")? {
             Frame::Changes(changes) => Ok(changes),
@@ -446,11 +572,20 @@ impl<R: Read, W: Write> Link<R, W> {
         }
     }
 
-    fn send(&mut self, frame: &Frame) -> Result<(), SyncError> {
+    /// Sends one frame.
+    ///
+    /// # Errors
+    /// Returns why the frame cannot be written.
+    pub fn send(&mut self, frame: &Frame) -> Result<(), SyncError> {
         write_frame(&mut self.writer, frame).map_err(SyncError::Frame)
     }
 
-    fn receive(&mut self, asked: &'static str) -> Result<Frame, SyncError> {
+    /// Reads one frame, and a typed error frame as the refusal that it is.
+    ///
+    /// # Errors
+    /// Returns why the link failed, why the server refused the frame, or why it
+    /// ended before the answer.
+    pub fn receive(&mut self, asked: &'static str) -> Result<Frame, SyncError> {
         match read_frame(&mut self.reader).map_err(SyncError::Frame)? {
             Some(Frame::Error(error)) => Err(SyncError::Refused {
                 code: error.code.as_str(),

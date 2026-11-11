@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+horizon-browser-control.workspace = true
 horizon-core.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

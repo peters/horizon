@@ -15,6 +15,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    sync::Mutex,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -50,6 +51,7 @@ pub struct SocketServer {
     path: PathBuf,
     stop: Arc<AtomicBool>,
     accepting: Option<JoinHandle<()>>,
+    links: Arc<Links>,
 }
 
 impl SocketServer {
@@ -59,14 +61,49 @@ impl SocketServer {
         &self.path
     }
 
-    /// Stops accepting links and removes the socket file. A link that is open
-    /// ends when its computer closes it; the store stays with the caller.
+    /// Stops accepting links, ends the links that are open, and removes the
+    /// socket file. The store stays with the caller.
+    ///
+    /// An open link is ended the same way a stopped process ends it: its socket
+    /// closes, so the computer reads the end of the link and reaches the server
+    /// again when it is back.
     pub fn stop(self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(accepting) = self.accepting {
             let _ = accepting.join();
         }
+        self.links.shutdown();
         let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// The links that a server socket accepted and that are still open, so a stop
+/// closes them instead of leaving a computer with a link to nothing.
+#[derive(Debug, Default)]
+struct Links {
+    open: Mutex<Vec<Option<UnixStream>>>,
+}
+
+impl Links {
+    fn add(&self, stream: UnixStream) -> usize {
+        let mut open = self.open.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        open.push(Some(stream));
+        open.len() - 1
+    }
+
+    fn close(&self, id: usize) {
+        let mut open = self.open.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(slot) = open.get_mut(id) {
+            *slot = None;
+        }
+        open.retain(Option::is_some);
+    }
+
+    fn shutdown(&self) {
+        let mut open = self.open.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for stream in open.drain(..).flatten() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
 }
 
@@ -81,19 +118,22 @@ pub fn run_server_on_unix_socket(path: &Path, store: Store) -> Result<SocketServ
     listener.set_nonblocking(true).map_err(|error| io_error(path, error))?;
     let stop = Arc::new(AtomicBool::new(false));
     let accepting_stop = Arc::clone(&stop);
+    let links = Arc::new(Links::default());
+    let accepting_links = Arc::clone(&links);
     let accepting = thread::Builder::new()
         .name("horizon-sync-socket".to_owned())
-        .spawn(move || accept_links(&listener, &store, &accepting_stop))
+        .spawn(move || accept_links(&listener, &store, &accepting_stop, &accepting_links))
         .map_err(|error| io_error(path, error))?;
     Ok(SocketServer {
         path: path.to_path_buf(),
         stop,
         accepting: Some(accepting),
+        links,
     })
 }
 
 /// Answers one link of `listener` per connection, one thread each.
-fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool) {
+fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool, links: &Arc<Links>) {
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _address)) => {
@@ -109,11 +149,18 @@ fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool) {
                     continue;
                 };
                 let store = store.clone();
+                // A clone of the socket stays with the server, so a stop closes
+                // the link of a computer that is still connected.
+                let id = stream.try_clone().ok().map(|closing| links.add(closing));
+                let links = Arc::clone(links);
                 let spawned = thread::Builder::new()
                     .name("horizon-sync-connection".to_owned())
                     .spawn(move || {
                         if let Err(error) = serve(reading, stream, &store) {
                             tracing::debug!(%error, "a link ended");
+                        }
+                        if let Some(id) = id {
+                            links.close(id);
                         }
                     });
                 if let Err(error) = spawned {

@@ -2168,6 +2168,7 @@ dependencies = [
 name = "horizon-sync"
 version = "0.2.7"
 dependencies = [
+ "horizon-browser-control",
  "horizon-core",
  "rusqlite",
  "serde",

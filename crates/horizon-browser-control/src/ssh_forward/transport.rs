@@ -50,8 +50,11 @@ pub fn ssh_program() -> String {
 /// The log level is `ERROR` and not the quieter `-q`, which is `QUIET` and drops
 /// the fatal line as well: a target that `ssh` could not resolve then reported
 /// an empty reason, so a refusal said nothing that a person could act on.
+///
+/// The command is one argument that the remote shell reads, so a caller keeps
+/// every value of it inside the allowed words of that shell.
 #[must_use]
-pub(super) fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
+pub fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
     let mut command = Command::new(program);
     command.args([
         "-T".to_string(),
