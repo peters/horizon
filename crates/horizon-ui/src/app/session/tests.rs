@@ -14,7 +14,7 @@ use horizon_core::{
 };
 use tempfile::TempDir;
 
-use crate::app::test_support::test_app;
+use crate::app::test_support::{test_app, wait_for_lease_writes};
 use crate::input;
 
 mod dynamic_assignment;
@@ -271,6 +271,9 @@ fn failed_startup_bootstrap_keeps_a_slow_repaint() {
 
 #[test]
 fn failed_startup_bootstrap_refreshes_a_persistent_session_lease() {
+    // The frame path of the lease runs under the guard in strict mode: a
+    // regression that writes the lease on the frame panics here.
+    horizon_core::ui_thread::use_strict_mode();
     let ctx = Context::default();
     let (temp, mut app, _runtime_path) = test_persistent_recovery_app(RuntimeState::default());
     let session_id = app
@@ -280,6 +283,7 @@ fn failed_startup_bootstrap_refreshes_a_persistent_session_lease() {
         .session_id
         .clone();
     let lease_path = HorizonHome::from_root(temp.path().join(".horizon")).session_lease_path(&session_id);
+    wait_for_lease_writes(&mut app);
     let before: SessionLease =
         serde_yaml::from_str(&std::fs::read_to_string(&lease_path).expect("read acquired lease"))
             .expect("parse acquired lease");
@@ -296,6 +300,7 @@ fn failed_startup_bootstrap_refreshes_a_persistent_session_lease() {
         })
         .discard_textures();
 
+    wait_for_lease_writes(&mut app);
     let after: SessionLease = serde_yaml::from_str(&std::fs::read_to_string(lease_path).expect("read refreshed lease"))
         .expect("parse refreshed lease");
     assert!(after.last_heartbeat_at > before.last_heartbeat_at);

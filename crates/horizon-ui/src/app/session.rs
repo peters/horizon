@@ -146,15 +146,14 @@ impl HorizonApp {
         self.release_active_session_lease();
         self.transcript_root = Some(session.transcript_root.clone());
         self.startup_chooser = None;
+        // The lease of the session is a file of this home, so the session writer
+        // takes it and its answer reaches a later frame.
+        let lease = self.session_store.new_lease(&session.session_id);
+        let answer = self.session_store.queue_lease(lease.clone());
         self.active_session = Some(ActiveSession {
             session_id: session.session_id.clone(),
-            lease: match self.session_store.acquire_lease(&session.session_id) {
-                Ok(lease) => Some(lease),
-                Err(error) => {
-                    tracing::warn!("failed to acquire session lease: {error}");
-                    None
-                }
-            },
+            lease: Some(lease),
+            lease_answers: vec![answer],
             last_lease_refresh: Some(Instant::now()),
             persistent: true,
         });
@@ -166,6 +165,7 @@ impl HorizonApp {
         self.active_session = Some(ActiveSession {
             session_id: "ephemeral".to_string(),
             lease: None,
+            lease_answers: Vec::new(),
             last_lease_refresh: None,
             persistent: false,
         });
@@ -475,10 +475,33 @@ impl HorizonApp {
             return;
         }
 
-        match self.session_store.refresh_lease(lease) {
-            Ok(()) => active_session.last_lease_refresh = Some(Instant::now()),
-            Err(error) => tracing::warn!("failed to refresh session lease: {error}"),
-        }
+        // The heartbeat is a field in memory; the file follows on the session
+        // writer, and its answer reaches a later frame.
+        lease.heartbeat();
+        let answer = self.session_store.queue_lease(lease.clone());
+        active_session.lease_answers.push(answer);
+        active_session.last_lease_refresh = Some(Instant::now());
+    }
+
+    /// Applies the answers of the lease writes that the session writer finished.
+    pub(super) fn poll_lease_answers(&mut self) {
+        let Some(active_session) = self.active_session.as_mut() else {
+            return;
+        };
+        active_session
+            .lease_answers
+            .retain_mut(|answer| match answer.try_recv() {
+                Ok(Ok(())) => false,
+                Ok(Err(reason)) => {
+                    tracing::warn!(reason, "the lease of this session was not written");
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    tracing::warn!("the session writer stopped before it wrote the lease of this session");
+                    false
+                }
+            });
     }
 
     pub(super) fn release_active_session_lease(&mut self) {
@@ -489,9 +512,10 @@ impl HorizonApp {
             return;
         }
 
-        if let Err(error) = self.session_store.release_lease(&active_session.session_id) {
-            tracing::warn!("failed to release session lease: {error}");
-        }
+        // The removal runs on the session writer, in the order of the writes of
+        // this session.
+        let answer = self.session_store.queue_lease_release(&active_session.session_id);
+        active_session.lease_answers.push(answer);
         active_session.lease = None;
         active_session.last_lease_refresh = None;
     }

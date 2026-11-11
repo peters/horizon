@@ -179,6 +179,12 @@ impl SessionLease {
         }
     }
 
+    /// Moves the heartbeat of this lease to now, for the next write of the
+    /// session writer. This reads a clock and writes nothing.
+    pub fn heartbeat(&mut self) {
+        self.last_heartbeat_at = super::current_unix_millis();
+    }
+
     #[must_use]
     pub fn is_live(&self) -> bool {
         let now = super::current_unix_millis();

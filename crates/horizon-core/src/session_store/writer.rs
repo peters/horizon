@@ -10,16 +10,19 @@
 //! later, while the saves of other sessions go on.
 mod index_queue;
 
-use super::{SessionStore, index_file::IndexChange};
+use super::{SessionLease, SessionStore, index_file::IndexChange};
 use crate::RuntimeState;
 use crate::error::{Error, Result as StoreResult};
 use index_queue::IndexQueue;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     io::Write as _,
     path::Path,
-    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard, PoisonError,
+        mpsc::{Receiver, Sender},
+    },
     time::{Duration, Instant},
 };
 
@@ -56,11 +59,24 @@ struct State {
     /// Sessions that a save outside the queue writes now; the worker leaves them alone.
     direct: BTreeSet<String>,
     index: IndexQueue,
+    /// The writes and removals of a lease, in the order the window sent them, with
+    /// the answer of each one.
+    leases: VecDeque<(LeaseWrite, Sender<Result<(), String>>)>,
+}
+
+/// One write of the lease of a session, which the session writer runs.
+#[derive(Clone, Debug)]
+pub(in crate::session_store) enum LeaseWrite {
+    /// Writes the lease of a session, which takes it or refreshes its heartbeat.
+    Write(Box<SessionLease>),
+    /// Removes the lease of a session, which its Horizon no longer holds.
+    Remove(String),
 }
 
 enum Job {
     Index(IndexChange),
     Board(String, Box<Queued>),
+    Lease(LeaseWrite, Sender<Result<(), String>>),
 }
 
 struct Failure {
@@ -84,7 +100,10 @@ impl State {
     }
 
     fn pending(&self) -> bool {
-        self.writing.is_some() || self.index.pending() || self.queued.values().any(|queued| queued.retry.is_none())
+        self.writing.is_some()
+            || self.index.pending()
+            || !self.leases.is_empty()
+            || self.queued.values().any(|queued| queued.retry.is_none())
     }
 }
 
@@ -139,6 +158,18 @@ impl Writer {
             let (writer, store) = (self.clone(), store.clone());
             std::thread::spawn(move || writer.run(&store));
         }
+    }
+
+    /// Queues one write of a lease; a worker of `store` runs it in the order the
+    /// window sent it, and answers it through the returned receiver.
+    pub(super) fn queue_lease(&self, store: &SessionStore, write: LeaseWrite) -> Receiver<Result<(), String>> {
+        let (answers, answer) = std::sync::mpsc::channel();
+        let mut state = self.lock();
+        state.leases.push_back((write, answers));
+        self.start(&mut state, store);
+        drop(state);
+        self.shared.changed.notify_all();
+        answer
     }
 
     /// Queues `change` of the session index; a worker of `store` writes it in queue order.
@@ -316,6 +347,19 @@ impl Writer {
                     continue;
                 }
                 Some(Job::Board(session_id, queued)) => (session_id, *queued),
+                Some(Job::Lease(write, answers)) => {
+                    let written = match &write {
+                        LeaseWrite::Write(lease) => store.write_lease(lease),
+                        LeaseWrite::Remove(session_id) => store.release_lease(session_id),
+                    };
+                    let answer = written.map_err(|error| error.to_string());
+                    if let Err(reason) = &answer {
+                        tracing::warn!(?write, %reason, "the lease of a session was not written");
+                    }
+                    let _ = answers.send(answer);
+                    self.shared.changed.notify_all();
+                    continue;
+                }
             };
             // Index changes queued before this board are written with it, so it never overtakes them.
             let ahead = self.lock().index.ahead_of(queued.generation);
@@ -360,6 +404,9 @@ impl Writer {
         let mut state = self.lock();
         loop {
             let now = Instant::now();
+            if let Some((write, answers)) = state.leases.pop_front() {
+                return Some(Job::Lease(write, answers));
+            }
             let due = (state.queued.iter())
                 .filter(|(session_id, _)| !state.direct.contains(*session_id))
                 .filter(|(_, queued)| queued.retry.is_none_or(|at| at <= now))
@@ -384,7 +431,7 @@ impl Writer {
                 .wait_timeout(state, wait)
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
-            if timeout.timed_out() && state.queued.is_empty() && state.index.is_empty() {
+            if timeout.timed_out() && state.queued.is_empty() && state.index.is_empty() && state.leases.is_empty() {
                 state.running = false;
                 return None;
             }

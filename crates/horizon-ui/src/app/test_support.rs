@@ -49,6 +49,10 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
 }
 
 pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> egui::FullOutput {
+    // The whole suite runs under the guard: a frame that does work which can
+    // wait panics here instead of freezing the window of a person.
+    horizon_core::ui_thread::use_strict_mode();
+    let _frame = horizon_core::ui_thread::FrameScope::enter();
     let mut frame = eframe::Frame::_new_kittest();
     ctx.run_ui(input, |ui| {
         eframe::App::ui(app, ui, &mut frame);
@@ -107,6 +111,27 @@ pub(super) fn editor_workspace_state(local_id: &str, position: [f32; 2]) -> Work
             [position[0] + 20.0, position[1] + 60.0],
         )],
         ..WorkspaceState::default()
+    }
+}
+
+/// Waits until the session writer wrote every lease of the active session, so a
+/// test can read the lease file on disk.
+pub(super) fn wait_for_lease_writes(app: &mut HorizonApp) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        app.poll_lease_answers();
+        let pending = app
+            .active_session
+            .as_ref()
+            .is_some_and(|session| !session.lease_answers.is_empty());
+        if !pending {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the session writer wrote no lease"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 

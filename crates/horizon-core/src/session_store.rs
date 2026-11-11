@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc::Receiver};
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -94,6 +94,7 @@ impl SessionStore {
     /// Returns an error if the stored profile snapshot cannot be read, or if
     /// the selected session cannot be created or loaded from disk.
     pub fn prepare_startup(&self, config: &Config) -> Result<StartupDecision> {
+        crate::ui_thread::blocking("the sessions of this profile are read");
         let profile = self.load_profile_snapshot()?;
 
         if profile.sessions.is_empty() {
@@ -150,6 +151,7 @@ impl SessionStore {
     /// Returns an error if the initial runtime state or session metadata
     /// cannot be serialized or written to disk.
     pub fn create_new_session(&self, config: &Config) -> Result<ResolvedSession> {
+        crate::ui_thread::blocking("a session folder is made and written");
         let runtime_state = RuntimeState::from_config(config);
         self.create_session_from_runtime(runtime_state)
     }
@@ -161,6 +163,7 @@ impl SessionStore {
     /// Returns an error if the source session cannot be loaded or if the new
     /// session data cannot be persisted.
     pub fn duplicate_session(&self, source_session_id: &str) -> Result<ResolvedSession> {
+        crate::ui_thread::blocking("the folder of a session is copied");
         let (mut runtime_state, left_out) = self
             .load_runtime_reporting(source_session_id)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {source_session_id}")))?;
@@ -180,6 +183,7 @@ impl SessionStore {
     ///
     /// Returns an error if the session runtime state or metadata cannot be read.
     pub fn resume_session(&self, session_id: &str) -> Result<ResolvedSession> {
+        crate::ui_thread::blocking("a session of this profile is read");
         self.load_existing_session(session_id)
     }
 
@@ -189,6 +193,7 @@ impl SessionStore {
     ///
     /// Returns an error if the session runtime state or metadata cannot be read.
     pub fn take_over_session(&self, session_id: &str) -> Result<ResolvedSession> {
+        crate::ui_thread::blocking("a session of this profile is read");
         self.load_existing_session(session_id)
     }
 
@@ -198,6 +203,7 @@ impl SessionStore {
     ///
     /// Returns an error if the stored session index or metadata cannot be read.
     pub fn list_profile_sessions(&self) -> Result<Vec<SessionSummary>> {
+        crate::ui_thread::blocking("the sessions of this profile are listed");
         Ok(self
             .load_profile_snapshot()?
             .sessions
@@ -219,6 +225,7 @@ impl SessionStore {
     /// if the session does not belong to the current profile, is still live, or its files
     /// cannot be removed.
     pub fn delete_session(&self, session_id: &str) -> Result<()> {
+        crate::ui_thread::blocking("a session folder and its browser profiles are removed");
         self.remove_session(session_id, UnreadableBoard::Keep)
     }
 
@@ -313,10 +320,42 @@ impl SessionStore {
     /// The board or metadata cannot be serialized or written, or the session writer
     /// writes this session now.
     pub fn save_runtime_state(&self, session_id: &str, runtime_state: &RuntimeState) -> Result<()> {
+        crate::ui_thread::blocking("a session board is written and synced");
         let _direct = self.writer.supersede(session_id)?;
         self.write_runtime_state(session_id, runtime_state, atomic_write)?;
         self.writer.queue_index(self, IndexChange::Touch(session_id.to_owned()));
         Ok(())
+    }
+
+    /// Writes the lease of a session on the session writer thread, in the order
+    /// of the other writes of this Horizon. A window that takes or refreshes a
+    /// lease never waits for the disk, and the answer of the write reaches a later
+    /// frame through the returned receiver.
+    #[must_use]
+    pub fn queue_lease(&self, lease: SessionLease) -> Receiver<std::result::Result<(), String>> {
+        self.writer
+            .queue_lease(self, writer::LeaseWrite::Write(Box::new(lease)))
+    }
+
+    /// Removes the lease of `session_id` on the session writer thread, with the
+    /// same order and the same answer.
+    #[must_use]
+    pub fn queue_lease_release(&self, session_id: &str) -> Receiver<std::result::Result<(), String>> {
+        self.writer
+            .queue_lease(self, writer::LeaseWrite::Remove(session_id.to_owned()))
+    }
+
+    /// The lease of `session_id` of this Horizon, in memory, for a write that runs
+    /// on the session writer.
+    #[must_use]
+    pub fn new_lease(&self, session_id: &str) -> SessionLease {
+        SessionLease::new(session_id.to_owned())
+    }
+
+    /// Writes `lease` as it stands. Only the session writer calls it.
+    pub(super) fn write_lease(&self, lease: &SessionLease) -> Result<()> {
+        let json = serde_json::to_vec_pretty(lease).map_err(|error| Error::State(error.to_string()))?;
+        atomic_write(&self.home.session_lease_path(&lease.session_id), &json)
     }
 
     /// Queues the board of `session_id` for a durable save on a worker thread and returns
@@ -481,6 +520,7 @@ impl SessionStore {
     /// Returns an error if the runtime state or session metadata cannot be
     /// serialized or written to disk.
     pub fn create_session_from_runtime(&self, mut runtime_state: RuntimeState) -> Result<ResolvedSession> {
+        crate::ui_thread::blocking("a session folder is made and written");
         runtime_state.ensure_local_ids();
         let session_id = Uuid::new_v4().to_string();
         let now = current_unix_millis();
@@ -542,6 +582,7 @@ impl SessionStore {
     }
 
     fn load_profile_snapshot(&self) -> Result<ProfileSnapshot> {
+        crate::ui_thread::blocking("the sessions, boards and leases of this profile are read");
         // Read before the file: no change is missed, but one written meanwhile can show an older order once.
         let unwritten = self.writer.unwritten_index_changes();
         let mut index = IndexFile::at(&self.home.session_index_path()).load()?;
@@ -601,6 +642,7 @@ impl SessionStore {
     }
 
     fn load_session_meta(&self, session_id: &str) -> Result<SessionMeta> {
+        crate::ui_thread::blocking("the metadata of a session is read");
         let contents = fs::read_to_string(self.home.session_meta_path(session_id))?;
         let mut meta =
             serde_yaml::from_str::<SessionMeta>(&contents).map_err(|error| Error::State(error.to_string()))?;

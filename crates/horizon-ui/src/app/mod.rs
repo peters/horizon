@@ -142,6 +142,8 @@ use self::settings_io::SettingsIo;
 struct ActiveSession {
     session_id: String,
     lease: Option<SessionLease>,
+    /// The answers of the lease writes that the session writer has not finished.
+    lease_answers: Vec<Receiver<std::result::Result<(), String>>>,
     last_lease_refresh: Option<Instant>,
     persistent: bool,
 }
@@ -454,6 +456,7 @@ impl HorizonApp {
         // Never in tests, which must not touch the real home.
         if switching_session {
             self.refresh_active_session_lease();
+            self.poll_lease_answers();
             self.render_session_switch_overlay(ui);
             return;
         }

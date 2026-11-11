@@ -246,6 +246,83 @@ fn only_an_explicit_removal_takes_a_session_whose_board_this_horizon_cannot_read
 }
 
 #[test]
+fn the_session_writer_writes_the_lease_of_a_session_in_order() {
+    let root_dir = test_root("lease-on-the-writer");
+    let home = HorizonHome::from_root(root_dir.path().to_path_buf());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let created = store.create_new_session(&Config::default()).expect("create session");
+    let lease_path = home.session_lease_path(&created.session_id);
+    let mut lease = store.new_lease(&created.session_id);
+
+    let written = store.queue_lease(lease.clone());
+    assert!(
+        written
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok_and(|answer| answer.is_ok()),
+        "the writer answered the write of the lease"
+    );
+    let first: crate::SessionLease = serde_json::from_str(&std::fs::read_to_string(&lease_path).expect("the lease"))
+        .expect("the lease of the session");
+    assert_eq!(first.session_id, created.session_id);
+
+    // The removal is queued after the write, so it lands after it, and the
+    // session holds no lease at the end.
+    lease.heartbeat();
+    let order = [store.queue_lease(lease), store.queue_lease_release(&created.session_id)];
+    for answer in order {
+        assert!(
+            answer
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok_and(|answer| answer.is_ok()),
+            "the writer answered the write and the removal of the lease"
+        );
+    }
+    assert!(
+        !lease_path.exists(),
+        "the removal of the lease is the last write of the session"
+    );
+}
+
+#[test]
+fn a_lease_that_another_process_took_still_refuses_the_session() {
+    let root_dir = test_root("lease-taken-elsewhere");
+    let home = HorizonHome::from_root(root_dir.path().to_path_buf());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let created = store.create_new_session(&Config::default()).expect("create session");
+    // The lease of a Horizon that runs now: its process is alive, and its
+    // heartbeat is young. Another process writes it, so the frames of this one
+    // only read it.
+    let mut lease = store.new_lease(&created.session_id);
+    lease.pid = std::process::id();
+    lease.heartbeat();
+    std::fs::create_dir_all(
+        home.session_lease_path(&created.session_id)
+            .parent()
+            .expect("the lease folder"),
+    )
+    .expect("the lease folder");
+    std::fs::write(
+        home.session_lease_path(&created.session_id),
+        serde_json::to_vec_pretty(&lease).expect("the lease"),
+    )
+    .expect("the lease of the other process");
+
+    let decision = store.prepare_startup(&Config::default()).expect("startup decision");
+    match decision {
+        StartupDecision::Choose(chooser) => assert_eq!(
+            chooser.reason,
+            super::StartupPromptReason::LiveConflict,
+            "the session that another process holds is the same conflict"
+        ),
+        other => panic!("unexpected decision: {other:?}"),
+    }
+    let error = store
+        .delete_session(&created.session_id)
+        .expect_err("a live session of another process does not delete");
+    assert!(error.to_string().contains("cannot delete live session"));
+}
+
+#[test]
 fn delete_session_rejects_live_sessions() {
     let root_dir = test_root("delete-live-store");
     let root = root_dir.path().to_path_buf();

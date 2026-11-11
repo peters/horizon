@@ -360,6 +360,7 @@ impl HorizonApp {
         self.render_browser_file_chooser(ctx, None);
         self.sync_window_config(ctx);
         self.refresh_active_session_lease();
+        self.poll_lease_answers();
 
         if (self.board.workspaces.len() != workspace_count_before || self.board.panels.len() != panel_count_before)
             && !self.auto_save_runtime_state()
