@@ -535,11 +535,37 @@ impl HorizonApp {
     /// again. An idle frame reads no store and builds no list.
     pub(super) fn poll_named_secrets(&mut self, ctx: &egui::Context) {
         self.named_secrets.poll();
+        self.poll_speech_key_state();
         if self.named_secrets.is_busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.named_secrets.refresh_if_stale();
         self.queue_named_secret_changes();
+    }
+
+    /// Reads the state of the named secret of the key of speech input, so the
+    /// Settings tab "Speech" says whether this computer holds it. One read runs for
+    /// one name, and never for every frame.
+    fn poll_speech_key_state(&mut self) {
+        let name = {
+            let config = self
+                .settings
+                .as_ref()
+                .map_or(&self.template_config, |editor| &editor.config);
+            config.speech.key_secret()
+        };
+        let Some(name) = name else {
+            return;
+        };
+        if self.speech.asked_key() == Some(&name) {
+            return;
+        }
+        let mut names = self.template_config.secrets.secret_names();
+        names.push(name.clone());
+        names.sort();
+        names.dedup();
+        self.named_secrets.refresh(&names);
+        self.speech.set_asked_key(name);
     }
 
     /// Queues a named secret that the person stored or deleted on this computer, so

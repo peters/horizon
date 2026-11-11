@@ -177,6 +177,9 @@ pub struct SpeechWorker {
     pub clock: Arc<dyn Clock>,
     /// The named secrets of this computer, which the take reads on its own thread.
     pub keys: Arc<dyn SpeechKeyStore>,
+    /// Called after every event, so a window applies the answer in its next frame
+    /// instead of holding a frame open for it.
+    pub wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl SpeechWorker {
@@ -188,7 +191,15 @@ impl SpeechWorker {
             bounds: TakeBounds::default(),
             clock: Arc::new(SystemClock::new()),
             keys,
+            wake: None,
         }
+    }
+
+    /// The worker wakes `wake` after every event of a take.
+    #[must_use]
+    pub fn with_wake(mut self, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.wake = Some(wake);
+        self
     }
 
     /// A worker with the clock and the bounds of a test.
@@ -511,6 +522,9 @@ impl Worker {
 
     fn send(&self, target: PanelId, kind: SpeechEventKind) {
         let _ = self.events.send(SpeechEvent { target, kind });
+        if let Some(wake) = &self.worker.wake {
+            wake();
+        }
     }
 
     fn failed(&self, target: PanelId, message: &str) {

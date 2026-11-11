@@ -132,6 +132,38 @@ impl SpeechConfig {
         self.plan().is_some()
     }
 
+    /// The sentence that says why speech input is off, or `None` while it is on.
+    ///
+    /// This reads the values and not the rule: a section that the rule refuses
+    /// says so in [`Self::validate`], and the Settings tab shows both.
+    #[must_use]
+    pub fn off_reason(&self) -> Option<&'static str> {
+        if self.is_on() {
+            return None;
+        }
+        if self.recorder.trim().is_empty() {
+            return Some("The recorder line is empty.");
+        }
+        if !CommandLine::parse(&self.recorder).is_ok_and(|line| line.has_placeholder()) {
+            return Some("The recorder line needs {file}.");
+        }
+        match self.transcriber.kind {
+            TranscriberKind::Command if self.transcriber.command.trim().is_empty() => {
+                Some("Choose the service, or write the command that prints the text.")
+            }
+            TranscriberKind::Command
+                if !CommandLine::parse(&self.transcriber.command).is_ok_and(|line| line.has_placeholder()) =>
+            {
+                Some("The transcriber command needs {file}.")
+            }
+            TranscriberKind::Service if self.key_secret().is_none() => {
+                Some("The name of the named secret of the key is not one that Horizon keeps.")
+            }
+            TranscriberKind::Service => Some("The endpoint or the model of the service is not one that Horizon reads."),
+            TranscriberKind::Command => Some("The transcriber command is not one that Horizon can run."),
+        }
+    }
+
     /// The name of the named secret that holds the key, when the service is the
     /// transcriber and the name passes the rule.
     #[must_use]

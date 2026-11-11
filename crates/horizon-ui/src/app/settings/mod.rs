@@ -10,6 +10,7 @@ mod remote_usage;
 mod secrets;
 pub(in crate::app) mod server;
 mod shortcuts;
+mod speech;
 #[cfg(test)]
 mod tests;
 
@@ -31,12 +32,13 @@ pub(super) const SETTINGS_BAR_HEIGHT: f32 = 48.0;
 pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
 
 const TAB_CORNER_RADIUS: f32 = 8.0;
-/// The horizontal padding of one tab button. The seven tabs must fit one row of
+/// The horizontal padding of one tab button. The eight tabs must fit one row of
 /// the panel that a window of 1480 points opens, which is 396 points of content,
-/// so the padding and the gap stay small.
-const TAB_BUTTON_PADDING: f32 = 4.0;
+/// so the padding and the gap stay small and the labels stay short: the row needs
+/// about 389 of the 396 points.
+const TAB_BUTTON_PADDING: f32 = 3.0;
 /// The gap between two tab buttons.
-const TAB_ITEM_GAP: f32 = 3.0;
+const TAB_ITEM_GAP: f32 = 2.0;
 /// The size of a tab label.
 const TAB_LABEL_SIZE: f32 = 12.0;
 /// The margin that the panel frame takes on each side.
@@ -51,18 +53,20 @@ enum SettingsTab {
     RemoteBrowsers,
     Secrets,
     Server,
+    Speech,
 }
 
 impl SettingsTab {
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
-            Self::Shortcuts => "Shortcuts",
+            Self::Shortcuts => "Keys",
             Self::Presets => "Presets",
             Self::Browser => "Browser",
             Self::RemoteBrowsers => "Remote",
             Self::Secrets => "Secrets",
             Self::Server => "Server",
+            Self::Speech => "Speech",
         }
     }
 
@@ -74,6 +78,7 @@ impl SettingsTab {
         Self::RemoteBrowsers,
         Self::Secrets,
         Self::Server,
+        Self::Speech,
     ];
 }
 
@@ -180,7 +185,14 @@ impl HorizonApp {
         // The canvas takes this rectangle from the editor, so it ends at the panel
         // whatever the active tab asked for.
         editor.panel_rect = Some(panel_rect(ui));
-        let (action, changed) = render_settings_panel(
+        let speech_view = speech::SpeechView {
+            answer: self.speech.try_answer(),
+            running: self.speech.try_running(),
+            secret: self
+                .named_secrets
+                .state_of(&editor.config.speech.transcriber.key_secret),
+        };
+        let (action, changed, try_take) = render_settings_panel(
             ui,
             panel_state,
             editor,
@@ -189,9 +201,13 @@ impl HorizonApp {
                 allocations: &mut self.browser_create_host.remote_allocations,
                 named_secrets: &mut self.named_secrets,
                 keyring: &mut self.keyring_import,
+                speech: &speech_view,
             },
             &view,
         );
+        if try_take {
+            self.try_speech(ui.ctx());
+        }
         if changed {
             if let Some(editor) = self.settings.as_mut() {
                 editor.dirty = true;
@@ -362,6 +378,7 @@ impl HorizonApp {
     }
 
     pub(super) fn apply_runtime_config(&mut self, config: &Config) {
+        self.apply_speech_config(&config.speech);
         if self.template_config.browser.remote != config.browser.remote {
             self.remote_browser_credentials
                 .load_environment_bindings(&config.browser.remote);
@@ -425,7 +442,7 @@ fn render_settings_panel(
     editor: &mut SettingsEditor,
     workbenches: &mut TabWorkbenches<'_>,
     view: &server::ServerView,
-) -> (SettingsAction, bool) {
+) -> (SettingsAction, bool, bool) {
     let rect = panel_rect(ui);
     egui::Panel::right(SETTINGS_PANEL_ID)
         // One width for every tab, and the same width that the panel opens with.
@@ -460,8 +477,8 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let changed = render_tab(ui, editor, workbenches, available, view);
-            (action, changed)
+            let (changed, try_take) = render_tab(ui, editor, workbenches, available, view);
+            (action, changed, try_take)
         })
         .inner
 }
@@ -473,6 +490,7 @@ struct TabWorkbenches<'a> {
     allocations: &'a mut horizon_core::browser::remote_recovery::RemoteAllocations,
     named_secrets: &'a mut NamedSecretWorkbench,
     keyring: &'a mut KeyringImport,
+    speech: &'a speech::SpeechView<'a>,
 }
 
 fn render_tab(
@@ -481,12 +499,13 @@ fn render_tab(
     workbenches: &mut TabWorkbenches<'_>,
     available: Vec2,
     view: &server::ServerView,
-) -> bool {
+) -> (bool, bool) {
     let TabWorkbenches {
         credentials,
         allocations,
         named_secrets,
         keyring,
+        speech: speech_view,
     } = workbenches;
     let SettingsEditor {
         config,
@@ -509,24 +528,31 @@ fn render_tab(
             // take the width of its widest tab.
             ui.set_width(ui.available_width());
             match active_tab {
-                SettingsTab::General => general::render(ui, config),
-                SettingsTab::Shortcuts => shortcuts::render(ui, config),
-                SettingsTab::Presets => presets::render(ui, config),
-                SettingsTab::Browser => browser::render(ui, config),
+                SettingsTab::General => (general::render(ui, config), false),
+                SettingsTab::Shortcuts => (shortcuts::render(ui, config), false),
+                SettingsTab::Presets => (presets::render(ui, config), false),
+                SettingsTab::Browser => (browser::render(ui, config), false),
                 SettingsTab::RemoteBrowsers => {
                     remote_recovery::render(ui, allocations);
-                    remote_browsers::render(
-                        ui,
-                        config,
-                        credentials,
-                        credential_inputs,
-                        portable_profile,
-                        provider_usage,
-                        keyring,
+                    (
+                        remote_browsers::render(
+                            ui,
+                            config,
+                            credentials,
+                            credential_inputs,
+                            portable_profile,
+                            provider_usage,
+                            keyring,
+                        ),
+                        false,
                     )
                 }
-                SettingsTab::Secrets => secrets::render(ui, config, named_secrets, secret_inputs),
-                SettingsTab::Server => server::render(ui, config, server, view),
+                SettingsTab::Secrets => (secrets::render(ui, config, named_secrets, secret_inputs), false),
+                SettingsTab::Server => (server::render(ui, config, server, view), false),
+                SettingsTab::Speech => {
+                    let outcome = speech::render(ui, config, named_secrets, speech_view);
+                    (outcome.changed, outcome.try_take)
+                }
             }
         })
         .inner

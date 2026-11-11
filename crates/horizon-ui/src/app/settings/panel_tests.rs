@@ -106,13 +106,7 @@ fn every_tab_draws_on_one_line_at_the_default_panel_width() {
         measured.1
     );
     for tab in [
-        "General",
-        "Shortcuts",
-        "Presets",
-        "Browser",
-        "Remote",
-        "Secrets",
-        "Server",
+        "General", "Keys", "Presets", "Browser", "Remote", "Secrets", "Server", "Speech",
     ] {
         assert!(texts_hold(&texts, tab), "the row draws {tab}: {texts:?}");
     }
@@ -739,4 +733,57 @@ fn widest_panel_width(ctx: &egui::Context, app: &mut crate::app::HorizonApp, vie
         widths.push(panel_background_rect(&output.shapes, reserved_panel_rect(app)).width());
     }
     widths.into_iter().fold(0.0_f32, f32::max)
+}
+
+#[test]
+fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() {
+    use horizon_core::TranscriberKind;
+    use horizon_core::named_secrets::{NamedSecretState, NamedSecretWorkbench};
+
+    let mut config = Config::default();
+    config.speech.transcriber.kind = TranscriberKind::Service;
+    let workbench = NamedSecretWorkbench::new(None, &[]);
+    let answer: Result<String, String> = Ok("hei".to_owned());
+    let view = super::speech::SpeechView {
+        answer: Some(&answer),
+        running: false,
+        secret: NamedSecretState::Present,
+    };
+    let (changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
+
+    assert!(!changed, "drawing the tab changes no value");
+    assert!(
+        texts_hold(&texts, "SPEECH_API_KEY: stored on this computer."),
+        "the tab says that this computer holds the key: {texts:?}"
+    );
+    assert!(
+        texts_hold(&texts, "hei"),
+        "the tab shows the text of its take: {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("goes to the service of the endpoint")),
+        "the tab says where a take goes: {texts:?}"
+    );
+}
+
+#[test]
+fn the_speech_tab_says_that_speech_input_is_off_while_no_transcriber_is_set() {
+    let mut config = Config::default();
+    let workbench = horizon_core::named_secrets::NamedSecretWorkbench::new(None, &[]);
+    let view = super::speech::SpeechView {
+        answer: None,
+        running: false,
+        secret: horizon_core::named_secrets::NamedSecretState::NoValue,
+    };
+    let (_changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
+    assert!(
+        texts.iter().any(|text| text.contains("Speech input is off.")),
+        "the tab says that speech input is off: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("standard output is the text")),
+        "the tab shows the command line of its transcriber: {texts:?}"
+    );
 }

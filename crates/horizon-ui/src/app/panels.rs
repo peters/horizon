@@ -430,6 +430,7 @@ impl HorizonApp {
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ui.ctx(), panel_id, &url);
                         }
+                        self.paint_speech_mark(&ui.painter_at(rect), panel_id, rect);
                     },
                 );
             });
@@ -510,6 +511,28 @@ impl HorizonApp {
         }
 
         self.panels_to_close = panels_to_close;
+        // The mark of a take is painted after every panel, so the body of its panel
+        // cannot cover it and no panel pays for it on a frame without a take.
+        if let Some(target) = self.speech_target_on_screen() {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique("speech_state_mark"),
+            ));
+            self.paint_speech_mark(&painter, target, self.panel_screen_rects[&target]);
+        }
+    }
+
+    /// The panel of the take of speech input, when this frame drew it and the
+    /// Settings panel does not cover it.
+    fn speech_target_on_screen(&self) -> Option<PanelId> {
+        let target = self.speech.target()?;
+        let rect = *self.panel_screen_rects.get(&target)?;
+        let covered = self
+            .settings
+            .as_ref()
+            .and_then(|editor| editor.panel_rect)
+            .is_some_and(|panel| panel.intersects(rect));
+        (!covered).then_some(target)
     }
 
     #[profiling::function]

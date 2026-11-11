@@ -30,6 +30,30 @@ pub(crate) fn event_uses_shortcut_key(event: &Event, binding: ShortcutBinding) -
     )
 }
 
+/// Whether `events` hold a release of the key of `binding`, whatever the
+/// modifiers are: a person who lets go of a modifier first still ends the gesture
+/// that the press started.
+pub(crate) fn shortcut_released_in_events(events: &[Event], binding: ShortcutBinding) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            Event::Key {
+                key,
+                physical_key,
+                pressed: false,
+                ..
+            } if key_matches(*key, *physical_key, binding.key)
+        )
+    })
+}
+
+/// Whether `events` hold a press of `key`, for a key that a gesture reserves.
+pub(crate) fn key_pressed_in_events(events: &[Event], key: Key) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, Event::Key { key: pressed_key, pressed: true, repeat: false, .. } if *pressed_key == key))
+}
+
 pub(crate) fn shortcut_event_matches(event: &Event, binding: ShortcutBinding) -> bool {
     let modifiers = egui_modifiers(binding.modifiers);
     matches!(

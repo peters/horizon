@@ -75,6 +75,7 @@ mod settings_io;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
+mod speech;
 mod ssh_hosts;
 mod ssh_upload;
 mod startup_session;
@@ -443,6 +444,9 @@ pub struct HorizonApp {
     /// Transcripts whose delete runs on the coordination worker, so a panel
     /// that comes back with the same local id keeps its own.
     transcript_deletes: transcript_deletes::PendingTranscriptDeletes,
+    /// Speech input: the hotkey, the take that the worker thread runs, and the
+    /// state mark of the panel of that take.
+    speech: speech::SpeechUi,
 }
 
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {

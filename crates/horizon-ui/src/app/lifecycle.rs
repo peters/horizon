@@ -55,15 +55,19 @@ impl HorizonApp {
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
         self.poll_saved_session_deletion(ctx);
-        self.filter_held_navigation_keys(ctx);
         let input_blocked = self.host_dialog_open()
             || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        if !input_blocked {
+            // The hotkey of speech input reads its key events before the filter of
+            // the held keys takes the release of a held key.
+            self.handle_speech_key(ctx);
+        }
+        self.filter_held_navigation_keys(ctx);
         if input_blocked {
             self.clear_file_drop_state(ctx);
         } else {
             self.sync_panel_focus_from_pointer_press(ctx);
-        }
-        if !input_blocked {
+            self.poll_speech(ctx);
             self.handle_fullscreen_toggle(ctx);
             self.handle_shortcuts(ctx);
             self.handle_root_file_drop(ctx);
