@@ -451,7 +451,7 @@ steps are not executed through the current per-tool completion path.
 - One lease per routine profile; concurrent scheduled runs are refused.
 
 Cookies live only in the routine-owned profile. Later runs try that profile
-first and continue without the OS credential store when an authenticated-state
+first and continue without a value of the secrets file when an authenticated-state
 assertion holds.
 
 ## Scheduling

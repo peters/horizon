@@ -116,21 +116,19 @@ Rules the configuration PR enforces:
   any other `bstack:options` keys the target's extensions carry.
 - `credential_bindings` hold references only. `store: session` binds a value
   entered in Horizon and held in a scoped in-memory sink until explicit clear or
-  exit. `store: os_keychain` uses `keyring-core` with the native store crates
-  the routine-credential ADR selected (macOS Keychain, Linux Secret Service),
-  under the distinct service name
-  `horizon-remote-browser` and items keyed by endpoint origin plus slot. The
-  `keyring` facade crate itself is not linked: its 4.x documentation directs
-  applications that choose their stores to `keyring-core`. `store: environment`
-  names a process environment variable in `slot` (for example
-  `REMOTE_BROWSER_USERNAME`). Horizon copies that variable from the launching
-  process into the in-memory sink at startup and does not look at session or
-  OS-store values for the same reference. There is no implicit interpolation of
-  arbitrary `$VARS` in the settings, and no silent fallback to another store. Spawned
-  agent and terminal children inherit these variables normally. The Horizon
-  process, its children, the container specification and process environment
-  inspection can expose launch-time values. Use session or keychain bindings
-  when credentials should not be delivered through the environment. No file store.
+  exit. `store: secrets_file` writes the value to the one secrets file of the
+  Horizon home, under the id `credential/<reference>`, at `0600` in a `0700`
+  home. The token `os_keychain` of an older settings file reads as this store;
+  the value that an older build kept in the credential store of the operating
+  system is not read. `store: environment` names a process environment variable
+  in `slot` (for example `REMOTE_BROWSER_USERNAME`). Horizon copies that variable
+  from the launching process into the in-memory sink at startup and does not look
+  at session or file values for the same reference. There is no implicit
+  interpolation of arbitrary `$VARS` in the settings, and no silent fallback to
+  another store. Spawned agent and terminal children inherit these variables
+  normally. The Horizon process, its children, the container specification and
+  process environment inspection can expose launch-time values. Use session or
+  file bindings when credentials should not be delivered through the environment.
 - Exported profiles carry providers, targets, limits and authentication
   references; machine-local `credential_bindings` are stripped, and whether a
   reference has a value on this machine is a live readiness query rather than
@@ -141,7 +139,7 @@ Rules the configuration PR enforces:
 - The portable profile is its own JSON document, one
   `horizon_remote_browser_profile` number followed by a `remote` object with the
   same `providers` and `targets` schema as `browser.remote`
-  (`horizon_core::browser::remote_profile`). Settings > Remote browsers exports
+  (`horizon_core::browser::remote_profile`). Settings > Remote exports
   and imports it from a path next to the configuration file by default
   (`remote-browser-profile.json`); an import lands in the editing configuration
   and is written by Save. The same two operations are available
@@ -440,7 +438,7 @@ cancelling after allocation releases the owned session.
   readable for compatibility. Allocation records still retain ownership and
   uncertain outcomes for exact-session cleanup. Allocation, idle, and lifetime
   timeouts remain enforced. Provider usage never decides local admission.
-- Settings > Remote browsers shows each supported provider's shared running /
+- Settings > Remote shows each supported provider's shared running /
   allowed and queued sessions. `browser::remote_usage` normalizes provider APIs;
   its first adapter reads `GET /automate/plan.json` at `api.browserstack.com`
   with the configured session credentials. The displayed allowance is the
@@ -585,7 +583,7 @@ as a ready state.
 1. This document and `scripts/remote-browser-spike/` (done in this PR).
 2. Configuration and credential bindings, in three PRs: the `browser.remote`
    schema with validation, portable export and import (`horizon-browser-protocol::remote`);
-   the session-only sink and the `keyring` adapter behind a fake-store seam;
+   the session-only sink and the secrets file behind a store seam;
    then credential entry and redacted readiness in the UI.
 3. Remote transport and lifecycle: `ureq` transport, generic WebDriver session
    owner, timeouts, cancellation, limits, watchdog, ambiguous allocation and
@@ -605,7 +603,7 @@ as a ready state.
 `browser_remote_allocations` lists allocations owned by the calling agent in
 its current workspace. `operation: reconcile` with a returned safe `reference`
 checks the exact retired session using its original transport and authorization.
-Settings > Remote browsers exposes the same operation for the host user.
+Settings > Remote exposes the same operation for the host user.
 
 The engine keeps private session identity in a shared `RemoteAllocation` handle,
 including allocations rejected during startup. Driver completion makes the handle

@@ -580,7 +580,8 @@ panels.
 ### Segmented control / tabs
 
 The settings tab bar is the segmented pattern: a row with 4 px gaps of buttons
-at radius 8, 12 text. Selected: fill `blend(PANEL_BG_ALT, ACCENT, 0.20)`, 1 px
+at radius 8, 12 text, and 6 px of horizontal button padding so the six short
+labels stay on one row at the default panel width. Selected: fill `blend(PANEL_BG_ALT, ACCENT, 0.20)`, 1 px
 outline `blend(BORDER_SUBTLE, ACCENT, 0.5)`, label `FG`. Unselected:
 transparent fill, no outline, label `FG_DIM`. Choice toggles inside forms (for
 example storage tier) use `Button::selected(true)` at radius 8 and 12.5 text,

@@ -24,7 +24,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | fixture terminal | A local terminal panel of the candidate. Its commands run inside the fixture. | — |
 | synthetic repository | A Git repository that a run makes. It contains only test content. | test repo |
 | operator | The person who runs the procedure and owns the provider accounts. | tester, user |
-| Secret Service | The D-Bus service that keeps the keys of applications on Linux, for example `gnome-keyring-daemon`. | keyring (as a service name) |
+| secrets file | The one SQLite file of a Horizon home that holds every secret value of that home: `<Horizon home>/secrets.sqlite`. | keyring, Keychain, credential store |
 | scripted agent | An HTTP agent in a test that answers each request from a list of expected requests and answers. It sends nothing to a network. | mock server |
 
 ## Horizon objects

@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-core/src/secret/**,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,packaging/horizon-server/**"
+applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-core/src/secret/**,crates/horizon-core/src/secret_store/**,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,packaging/horizon-server/**"
 ---
 
 # Trust boundary of the server store and its link
@@ -89,10 +89,10 @@ never on the UI thread.
   machine key, one credential reference or one named secret. A machine key body is
   JSON of a key pair with a private key and a public line; a body that is not one
   is refused with a line of the log and the local value stays. A credential body is
-  written at the address that the settings of this computer bind to that reference,
-  and a reference that no provider binds is refused with a line of the log. A named
-  secret body is checked against the value rule of the named secrets and written
-  under the reference `named/<NAME>`, and a body that breaks the rule is refused.
+  written to the secrets file of this computer under `credential/<reference>`, and a
+  reference that no provider binds is refused with a line of the log. A named secret
+  body is checked against the value rule of the named secrets and written under the
+  id `named/<NAME>`, and a body that breaks the rule is refused.
 - **A restored or malicious server can change the machine records, the key
   bindings and the values of the secrets.** That is what the person asked for,
   and it is bounded: an id is never a path and a body of the wrong kind is
@@ -102,6 +102,8 @@ never on the UI thread.
 - **It cannot make a computer write outside its own files.** The mirror, the
   queue and the device name are three files of the machine directory of the
   Horizon home, at 0600 in a 0700 directory, and an object id is never a path. A
+  secret value is a row of the secrets file of that home, at 0600, and never a file
+  whose name a server chooses. A
   machine key is the three files of `machine-keys/<name>`, and a conflict copy is
   the same three files under `<name>.conflict-<time>`, a name that no key rule
   accepts.
@@ -214,3 +216,7 @@ never on the UI thread.
 - **A credential value that no provider of a computer binds.** It has no address
   on that computer, so it is refused with a line of the log and the value of the
   server stays unread there. The person binds the reference in the settings.
+- **The local copy of a value is in clear text.** A secret body is sealed at the
+  server and stored as it is in the secrets file of a computer, at 0600 in a 0700
+  home. A person who reads that file, or a backup of it, reads every value.
+  [`named-secrets.md`](named-secrets.md) states that boundary.

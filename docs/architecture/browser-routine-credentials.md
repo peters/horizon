@@ -1,5 +1,13 @@
 # Browser routine credentials
 
+> **This storage decision is superseded.** Horizon keeps every secret value in the
+> secrets file of its home, `<Horizon home>/secrets.sqlite`, at `0600` in a `0700`
+> home, and it no longer uses the credential store of the operating system. A
+> routine credential goes to that file when the slice of this page lands, with the
+> modes and the boundary that
+> [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md)
+> states. The rest of this page is the threat model, and it still holds.
+
 Threat model and platform-store decision for optional username/password
 storage on [#342](https://github.com/peters/horizon/issues/342). Read with
 [browser-routines.md](browser-routines.md). This document does not add a

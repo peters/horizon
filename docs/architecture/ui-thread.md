@@ -51,8 +51,8 @@ time, or uses a lot of CPU.
 - Network calls: HTTP, provider APIs, WebDriver and DNS lookups.
 - A start of a process, or a wait for a process: `docker`, `ssh`, `git` and
   others. `Command::output` and `Command::status` wait for the process to end.
-- The keychain and other OS credential stores. A locked store can show an
-  unlock prompt and wait for the person.
+- The secrets file and any other store of a value. A read or a commit waits for
+  the disk.
 - `thread::sleep`, `JoinHandle::join`, `Receiver::recv` and
   `Receiver::recv_timeout`. Use `try_recv` or `try_iter` on the UI thread.
 - Heavy CPU work, for example the parse of a large log or the decode or
@@ -141,7 +141,7 @@ start one thread for each write.
 
 - `CredentialWorkbench` in
   [`workbench.rs`](../../crates/horizon-core/src/remote_browser_credential/workbench.rs)
-  owns the OS credential store on one thread. The UI sends commands, and
+  owns the secrets file on one thread. The UI sends commands, and
   `poll` reads the events.
 - `HostIo` in
   [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)

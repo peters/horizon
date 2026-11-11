@@ -539,13 +539,13 @@ Provider-backed overview controls and workspace setup remain separate integratio
 | `--new-session` | Start a new saved session from the current config |
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
 | `--export-remote-profile <path>` | Write the shareable remote browser profile (providers, targets, credential references; no credential values or bindings) and exit |
-| `--import-remote-profile <path>` | Merge a portable remote browser profile into the settings store and exit (one profile command per launch); credentials are entered afterwards in Settings > Remote browsers, or bound in the settings to environment variable names for unattended launches |
+| `--import-remote-profile <path>` | Merge a portable remote browser profile into the settings store and exit (one profile command per launch); credentials are entered afterwards in Settings > Remote, or bound in the settings to environment variable names for unattended launches |
 
 Machine-local `credential_bindings` name a store, never a secret. `store:
-session` and `store: os_keychain` are entered in Settings > Remote browsers.
+session` and `store: secrets_file` are entered in Settings > Remote.
 `store: environment` with `slot: REMOTE_BROWSER_USERNAME` (and a matching
 access-key variable) copies those values from the launching process at startup
-so a container or CI job can authenticate without a desktop keychain. Agent and
+so a container or CI job can authenticate without a value on the computer. Agent and
 terminal children inherit launch environment variables normally. Each
 reference selects its own variable, so multiple providers and credentials work
 together. See the [configuration examples](docs/architecture/remote-browser-sessions.md#unattended-containers-and-ci). The Horizon process,
@@ -648,7 +648,7 @@ What to expect:
 
 The same kind of panel can show a page running on BrowserStack: a desktop browser, or a physical phone. Horizon allocates the session, draws the live page, and releases the device when the panel closes.
 
-Name the account and the targets in Settings → **Remote browsers**, or in the `browser` section of a settings file. The settings store credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
+Name the account and the targets in Settings → **Remote**, or in the `browser` section of a settings file. The settings store credential references, never the access key. The example below binds both references to the secrets file of this computer. Open **Settings** (**Ctrl+Shift+,**) → **Remote** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
 
 ```json
 {
@@ -665,11 +665,11 @@ Name the account and the targets in Settings → **Remote browsers**, or in the 
           },
           "credential_bindings": {
             "browserstack-user": {
-              "store": "os_keychain",
+              "store": "secrets_file",
               "slot": "remote-browser/browserstack/username"
             },
             "browserstack-key": {
-              "store": "os_keychain",
+              "store": "secrets_file",
               "slot": "remote-browser/browserstack/access-key"
             }
           }
@@ -731,7 +731,7 @@ target/debug/horizon-browser run open-site.json
 }
 ```
 
-The panel's top row names the BrowserStack browser and device once the session is ready. The address bar loads another page in that same session. Closing the panel releases the device. When a release stays unresolved, **Settings → Remote browsers** lists it under **Remote allocations**, and **Reconcile** checks that session with BrowserStack.
+The panel's top row names the BrowserStack browser and device once the session is ready. The address bar loads another page in that same session. Closing the panel releases the device. When a release stays unresolved, **Settings → Remote** lists it under **Remote allocations**, and **Reconcile** checks that session with BrowserStack.
 
 Local Chromium and Firefox panels also capture network traffic, record a WebM, and let you take the page until you press **Done — hand back to agent**. A BrowserStack panel shows the live page and is driven with the same navigate, click, and fill actions. The full provider schema, including a generic WebDriver grid and environment variables for CI, is in [remote browser sessions](docs/architecture/remote-browser-sessions.md).
 

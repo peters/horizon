@@ -87,6 +87,15 @@ through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:616`).
 2. The release workflow and the packaging scripts have no signing or
    notarization step.
 
+## Secret values
+
+Every secret value of Horizon is a row of `<Horizon home>/secrets.sqlite`, on both
+platforms. Horizon therefore needs no keyring service, no Secret Service over
+D-Bus and no Keychain, and a Linux install needs no desktop session for a
+credential. The file mode is the protection, as
+[the boundary of the named secrets](review/trust-boundaries/named-secrets.md)
+states.
+
 ## Agent skills
 
 Horizon installs the `horizon-browser` and `horizon-device` skills on both

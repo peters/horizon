@@ -120,6 +120,6 @@ None of the steps deletes data, rents compute or changes access.
 ## 8. Pass criteria
 
 - The panel keeps its width on every tab, with long lines in the editor. The
-  tabs are General, Shortcuts, Presets, Browser and Remote browsers.
+  tabs are General, Shortcuts, Presets, Browser, Remote and Secrets.
 - Wide content scrolls inside the panel in both directions.
 - The canvas stays visible beside the panel at every window size.

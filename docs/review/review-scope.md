@@ -41,7 +41,7 @@ winit callbacks. New code on this thread must not do any of this work:
 - File I/O: an open, a read, a write, a metadata read, a folder listing,
   `fsync`, `rename` or a file lock.
 - The start of a process, or a wait for a process.
-- A network call, or a call to an OS credential store.
+- A network call, or a read or write of the secrets file.
 - A blocking wait: `recv`, `recv_timeout`, `join`, `sleep`, or a `lock()` on a
   mutex that a worker thread holds during I/O, a process or a wait. A bounded
   wait at exit is permitted.

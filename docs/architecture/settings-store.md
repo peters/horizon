@@ -21,6 +21,14 @@ A second configuration in one folder keeps its own store. A run that names
 `--config` or `HORIZON_HOME` therefore never reads or writes the store of the
 user. See [the Horizon home procedure](../testing/procedures/horizon-home.md).
 
+Every secret value of the home is one file beside these: `secrets.sqlite`. The
+home is `0700`, the file and its `-wal` and `-shm` files are `0600` from the first
+byte, and the file holds the values of the credential references of the remote
+browser providers and of the named secrets. It holds no setting, and the settings
+store holds no value. A value is stored as it is, and the file mode is its whole
+protection; [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md)
+states what that does and does not protect.
+
 ## The tables
 
 The store has schema version 1.
@@ -102,8 +110,11 @@ typed value of its section:
 | Shortcuts | `shortcuts` |
 | Presets | `presets` |
 | Browser | `browser`: the engine programs, the live view, the recording defaults and the passkey command |
-| Remote browsers | `browser.remote`: the providers, the targets and their credential bindings |
+| Remote | `browser.remote`: the providers, the targets and their credential bindings |
 | Secrets | `secrets`: the names of the named secrets, and no value |
+
+The six tabs stay on one row at the default width of the panel, so no tab label
+wraps onto a second line.
 
 A numeric field does not clamp a value that the store already holds, so a value
 that a settings file or an older Horizon wrote stays exactly as it is until a
@@ -114,11 +125,17 @@ sections, so the window and a start read one sentence per refusal.
 ### The values that no settings row holds
 
 The `secrets` section holds the names of the named secrets of this computer and
-nothing else. A value lives in the OS credential store under the reference
+nothing else. A value lives in `secrets.sqlite` of the same home under the id
 `named/<NAME>`, and the server link carries it as one sealed secret. The `secrets`
 row of the store therefore holds no value, and a copy of the settings of a person
 holds no value. See
 [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md).
+
+This build reads no credential store of the operating system. A value that an older
+build stored in the keyring or the Keychain is not read and does not move: the row
+of the reference or the name behaves as a value that this computer does not hold,
+the window shows `no value on this computer`, and the person types the value once
+more. There is no migration step and the first start shows nothing special.
 
 ### The values that have no field
 
@@ -161,6 +178,7 @@ credential binding and no credential value.
 | The store has a schema of another Horizon version | Horizon refuses the store and reports both versions. It writes nothing in its place. |
 | A settings file that a start reads is not JSON | Horizon reports the format and keeps the file. |
 | The store does not exist and no settings file exists | Horizon uses the default settings. It writes no file until a setting changes. |
+| `secrets.sqlite` cannot be opened | The Settings window says which file and why under each name of the Secrets tab, and the link writes one line of the log. The settings and the machine keys still work. |
 
 ## What is not in the store
 
@@ -168,7 +186,7 @@ credential binding and no credential value.
 |---|---|
 | Browser profiles, cookies and site storage | Chromium and Firefox. |
 | Audit records in `~/.horizon/audit` | The append-only audit log. |
-| Credential values | The OS credential store. The configuration holds only references. |
+| Credential values and named secret values | `secrets.sqlite` of the same home. The configuration holds only references and names. |
 | Agent plugin manifests | The agents that read them. |
 | Board, panels and workspaces of a session | `sessions/<id>/runtime.sqlite`. |
 

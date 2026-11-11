@@ -332,13 +332,13 @@ gone, and that it catches up when the server returns.
 
 ### 6.8 S8 — a credential value that one computer sets is used on the other
 
-> **CAUTION: THIS TASK WRITES A VALUE INTO THE OS CREDENTIAL STORE OF EACH
-> COMPUTER.** Use a synthetic value such as `test-value-1`, and delete it at the
-> end of the task.
+> **CAUTION: THIS TASK WRITES A VALUE INTO THE SECRETS FILE OF EACH COMPUTER.**
+> Use a synthetic value such as `test-value-1`, and delete it at the end of the
+> task.
 
-1. On client computer A, open the settings, the tab Remote browsers. Add a
-   provider with one endpoint, one reference and the store `OS credential store`,
-   or use a provider that the test configuration already holds.
+1. On client computer A, open the settings, the tab Remote. Add a provider with
+   one endpoint, one reference and the store **Secrets file**, or use a provider
+   that the test configuration already holds.
 
 2. Save the value `test-value-1` for that reference, and press Save in the
    settings.

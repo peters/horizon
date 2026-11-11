@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/named_secrets/**,crates/horizon-core/src/config/secrets.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-ui/src/app/settings/secrets.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-sync/src/supervisor/secrets.rs,scripts/device-smoke/serve.py"
+applyTo: "crates/horizon-core/src/named_secrets/**,crates/horizon-core/src/secret_store/**,crates/horizon-core/src/config/secrets.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-ui/src/app/settings/secrets.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-sync/src/supervisor/secrets.rs,scripts/device-smoke/serve.py"
 ---
 
 # Trust boundary of the named secrets
@@ -13,12 +13,12 @@ the server half, and the module comment of
 [`crates/horizon-core/src/named_secrets/mod.rs`](../../../crates/horizon-core/src/named_secrets/mod.rs)
 for this half.
 
-The names live in the `secrets` section of the settings. The values live in the OS
-credential store under the reference `named/<NAME>`, and, when a server is set, in
-the server as one sealed secret of the id `named/<NAME>`. The id rules of a
-secret, the sealing of a server body and the link that carries it are the boundary
-of [`server-link.md`](server-link.md); this page states what a name and a value
-are, where a value is allowed to go, and what it never reaches.
+The names live in the `secrets` section of the settings. The values live in the one
+secrets file of this Horizon home under the id `named/<NAME>`, and, when a server
+is set, in the server as one sealed secret of the id `named/<NAME>`. The id rules
+of a secret, the sealing of a server body and the link that carries it are the
+boundary of [`server-link.md`](server-link.md); this page states what a name and a
+value are, where a value is allowed to go, and what it never reaches.
 
 ## Untrusted: the name and the value that a person types
 
@@ -76,18 +76,64 @@ are, where a value is allowed to go, and what it never reaches.
 - **The queue of the link holds the id and never the body**, as it does for every
   secret.
 
-## The store of an isolated fixture
+## The secrets file of this computer
+
+- **Every value is a row of one file.** The file is
+  `<Horizon home>/secrets.sqlite`. Schema version 1 holds the table
+  `secrets(id TEXT PRIMARY KEY, body BLOB NOT NULL, version INTEGER NOT NULL,
+  updated_millis INTEGER NOT NULL)` and the table `meta`. A named secret is the id
+  `named/<NAME>`, and a provider credential is the id `credential/<reference>`.
+- **The file mode is the whole protection.** The Horizon home is `0700`. The file
+  and its `-wal` and `-shm` files are `0600` from the first byte: the store makes
+  the file private before SQLite opens it, and SQLite gives the two files beside it
+  the mode of that file. A file that a copy or a restore left readable is made
+  private again at the next open.
+- **A value is stored as it is, and it is not sealed.** A person who can read this
+  file reads every value, and that is the same rule as the machine keys under
+  `machine-keys/` of this home and as the person's own keys under `~/.ssh`.
+- **A process of the same user can read it.** The file mode protects a value from
+  another user and from nothing else. An agent, a script or a tool that runs as the
+  person reads the file as the person does. A named secret is as private as the
+  login of the person, not more.
+- **A backup of the home holds every value.** A copy of `~/.horizon` holds every
+  value in clear text, and so does a copy of the disk. Keep that copy as private as
+  the computer. A file that a person copies to another place carries the values.
+- **The server copy is sealed, and its key file is beside it.** The server seals a
+  secret body with the key in `<server home>/secret.key`, mode `0600`, and keeps
+  that key in the same home as the database. A person who can log in to the server
+  account reads the database and the key, so the sealing protects a copy of
+  `server.sqlite` alone. The boundary of that copy is
+  [`server-link.md`](server-link.md).
+- **One writer per process, and no write on the UI thread.** The settings worker,
+  the named-secrets worker and the link to a server each open the file on a worker
+  thread. One connection per process is behind one lock, each write is one
+  transaction with `synchronous=FULL`, and a write-ahead log lets a reader of
+  another process read while this one writes.
+- **A file that cannot be read is one typed error with its path.** The Settings
+  window shows that error under a name, the link writes one line of the log, and
+  the machine keys still follow the server. There is no state that says that this
+  computer has no credential store: a SQLite file can always be opened, and a file
+  that cannot be opened is a fault with a reason.
+- **This build does not read the OS credential store.** A value that a person
+  stored in the keyring or the Keychain with an older build stays there and is not
+  read. A reference or a name with no row of the file behaves as a value that this
+  computer does not hold: the Settings window shows `no value on this computer`, and
+  the person types the value once more.
+
+## The secrets file of an isolated fixture
 
 [`scripts/device-smoke/serve.py`](../../../scripts/device-smoke/serve.py) starts
-Horizon on an isolated desktop that has no OS credential store of its own. Its
-`--named-secret NAME=VALUE` writes the values into the private state of that
-fixture, in one JSON file at `0600`, and names that file in
-`HORIZON_TEST_NAMED_SECRETS_FILE`. A Horizon that this variable names reads that
-file instead of the OS credential store
-([`crates/horizon-core/src/named_secrets/test_file.rs`](../../../crates/horizon-core/src/named_secrets/test_file.rs)).
-The values in that file are in clear text. The file belongs to one fixture state,
-it is deleted with that state, and a Horizon that a person starts has no such
-variable, so it reads the OS credential store and no file.
+Horizon on an isolated desktop that holds no value of the person. Its
+`--named-secret NAME=VALUE` writes one row `named/<NAME>` into the `secrets.sqlite`
+of the private home of that fixture with Python's `sqlite3`, and `--secret-row
+ID=VALUE` writes one `credential/<reference>` row the same way. Both run the schema
+of [`crates/horizon-core/src/secret_store/schema.sql`](../../../crates/horizon-core/src/secret_store/schema.sql),
+which the store of Horizon includes, so the fixture and Horizon write one file and
+cannot drift. A test of the crate runs that Python path and opens its file.
+
+The values in that file are in clear text, as they are in the file of a person. The
+file belongs to one fixture state, at `0600` in a `0700` folder, and it is deleted
+with that state.
 
 ## What the guarantees do not cover
 
@@ -103,9 +149,11 @@ variable, so it reads the OS credential store and no file.
 - **A panel keeps the environment of its start.** A value that the person adds,
   replaces or deletes applies to the panels that start after that. A running panel
   keeps the value that it started with, and the Settings text says so.
-- **A computer without a credential store keeps no value.** Its names stay in the
-  settings, its panels get no variable, and the Settings window says that this
-  computer holds no value for the name.
+- **A values file that a person deletes loses every value.** A row that is gone is
+  no value: the names stay in the settings, the panels get no variable, and the
+  Settings window says that this computer holds no value for the name. The server
+  sends a value again to a computer that has none only after a new change of that
+  secret. Keep a backup of the file if a value must survive.
 - **A value that the person typed into the window is in the memory of this
   process.** The field is masked, its undo history is cleared and its buffer is
   wiped when the value is sent, but the window still holds it while it is typed.

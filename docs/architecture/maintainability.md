@@ -283,18 +283,19 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 - `remote_browser_credential` owns provider credentials for remote browser
   sessions: the value-free store trait and sink, the session-only in-memory
-  store, the launch-time environment snapshot (`environment`), the `keyring-core`
-  adapter (`keyring_store`), the fake store seam,
+  store, the launch-time environment snapshot (`environment`), the resolved-value
+  store that a caller offers back, the shared handle of one store,
   and the resolver that turns bindings into one origin-bound authorization
   header through `horizon-browser-control::remote_authorization`. It never serializes values, never writes a secret back into the
   process environment, and holds no transport, allocation or UI code. `workbench`
-  runs OS-store operations on a worker thread with a presence cache the UI
-  reads, so a locked store or an unlock prompt never blocks the render loop.
+  runs file operations on a worker thread with a presence cache the UI
+  reads, so a disk write never blocks the render loop. The file itself is
+  `secret_store`, which owns the schema, the modes and the rows of every value.
 - `browser/remote_session.rs` turns a configured remote target into the
   driver's `RemoteSessionRequest`: endpoint and limits from the provider,
   `alwaysMatch` capabilities from the target (device fields placed by the
   provider's adapter kind), and the authorization header resolved from the
-  credential stores at create time. Nothing here allocates or renders; the
+  secrets file of this computer at create time. Nothing here allocates or renders; the
   panel keeps the request for Retry and never consults a store again.
 
 - `browser/remote_identity.rs` caches friendly remote-session labels and full

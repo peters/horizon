@@ -74,8 +74,9 @@ computer that follows one server reads the same value.
    ```
 
    Result: The manifest prints `vnc_address`. The Settings store of the fixture
-   lists `HORIZON_TEST_TOKEN` in its `secrets` section, and the file
-   `<evidence>/fixture/data/named-secrets.json` holds the value at mode `0600`.
+   lists `HORIZON_TEST_TOKEN` in its `secrets` section, and the secrets file
+   `<evidence>/fixture/data/secrets.sqlite` holds the row `named/HORIZON_TEST_TOKEN`
+   at mode `0600`.
 
 2. Open the Device panel of the calling workspace on `vnc_address`, and check
    that `frame_sequence` advances.
@@ -133,15 +134,16 @@ computer that follows one server reads the same value.
 3. Read the text of the restored panel `Secrets agent`.
 
    Result: The panel shows `agent token:<marker2>`. The value came from the
-   credential store of the fixture, because the saved session holds no value.
+   secrets file of the fixture, because the saved session holds no value.
 
 ### 6.5 NS-5 — A name whose value this computer does not hold
 
-> **CAUTION:** THIS STEP DELETES THE FILE OF THE VALUES OF THE FIXTURE. It is the
-> file of this run only.
+> **CAUTION:** THIS STEP DELETES THE SECRETS FILE OF THE FIXTURE, AND WITH IT EVERY
+> VALUE OF THAT PRIVATE HOME. It is the file of this run only.
 
-1. Stop the fixture, delete `<evidence>/fixture/data/named-secrets.json`, and
-   start it again with `--reuse-state --resume-session`.
+1. Stop the fixture, delete `<evidence>/fixture/data/secrets.sqlite` and its
+   `-wal` and `-shm` files, and start it again with `--reuse-state
+   --resume-session`.
 
    Result: The tab `Secrets` lists `HORIZON_TEST_TOKEN` and shows `no value on
    this computer`.

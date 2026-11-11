@@ -118,8 +118,8 @@ the server and the queue of that computer in one view:
 
 A computer that kept its machine list in `machines/registry.json`, its key
 bindings in `machines/keys.json`, its keys in `machine-keys/` and its credential
-values in the OS store before it followed a server keeps all of them at its first
-link. The first pull of the server comes before any push, so the computer knows
+values in the secrets file of its home before it followed a server keeps all of them
+at its first link. The first pull of the server comes before any push, so the computer knows
 which records, bindings and secrets the server has:
 
 - A local record, binding or secret whose name the server does not have is
@@ -276,8 +276,9 @@ person. The server therefore holds, beside the machine list:
   machine as its id. A machine record holds no key name, because a record is
   checked by the same code on both sides and the binding is the value that the
   server decides.
-- **Every credential value that Horizon keeps in the OS credential store**, as one
-  secret of the id `credential/<reference>` of the remote browser configuration.
+- **Every credential value that Horizon keeps in the secrets file of a computer**,
+  as one secret of the id `credential/<reference>` of the remote browser
+  configuration.
 - **Every named secret of the person**, as one secret of the id `named/<NAME>`. The
   body is the value that the agent panels of a computer read as the environment
   variable `NAME`, so a second computer gives its agent panels the same variable
@@ -287,17 +288,25 @@ person. The server therefore holds, beside the machine list:
   [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md).
 
 A computer writes such a value where its own code already reads it: a machine key
-into `machine-keys/<name>` with the modes of a private key, a credential value
-into the OS credential store at the address that its own settings bind to the
-reference, and a named secret into the same store under the reference
-`named/<NAME>`. All then work without the server afterwards, and a named secret is
-in the environment of the next agent panel that the computer starts. The settings
-of that computer list the name and never the value.
+into `machine-keys/<name>` with the modes of a private key, a credential value into
+the secrets file of its Horizon home under `credential/<reference>`, and a named
+secret into the same file under `named/<NAME>`. All then work without the server
+afterwards, and a named secret is in the environment of the next agent panel that
+the computer starts. The settings of that computer list the name and never the
+value.
+
+**The local copy is in clear text.** One file, `<Horizon home>/secrets.sqlite` at
+`0600` in a `0700` home, holds every value of the computer, and its file mode is
+the whole protection. The server seals its own copy with `secret.key`, but that key
+is a file of the same server home, so the sealing protects a copy of
+`server.sqlite` alone. See
+[the boundary of the named secrets](../review/trust-boundaries/named-secrets.md)
+for what protects a value and what does not.
 
 **One secret is one value, and the first write on a version wins.** A computer
 that loses keeps its local value: a machine key as `<name>.conflict-<time>`,
 which is not a key name and is never used by an agent, and a credential value as
-one notice for the person, because the OS store holds one value per reference.
+one notice for the person, because the secrets file holds one value per reference.
 The queue of a computer holds the id of a secret and never its body.
 
 A value that the server holds the same way is no conflict. The private key and the
