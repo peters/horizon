@@ -29,6 +29,7 @@ fn startup_organization_waits_for_async_board_restore() {
 
     bootstrap_tx
         .send(StartupBootstrapOutcome::Ready(Box::new(StartupBootstrap {
+            busy_claude_session_ids: std::collections::HashSet::new(),
             runtime_state: two_workspace_runtime(Some(CanvasViewState::default())),
             session_catalog: AgentSessionCatalog::default(),
             runtime_state_changed: false,

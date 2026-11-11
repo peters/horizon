@@ -185,7 +185,7 @@ impl HorizonApp {
             startup_receiver: None,
             pending_startup_runtime_state: None,
             pending_startup_runtime_state_changed: false,
-            startup_bootstrap_failure: None,
+            startup_bootstrap_failure: None, busy_claude_session_ids: std::collections::HashSet::new(),
             session_catalog_refresh: super::session::SessionCatalogRefreshState::default(),
             saved_session_deletion: super::panels::SavedSessionDeletionState::default(),
             remote_hosts_overlay: None,

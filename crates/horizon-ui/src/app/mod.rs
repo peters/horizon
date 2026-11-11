@@ -80,7 +80,7 @@ mod work_resume;
 mod workspace;
 mod workspace_destination;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -361,6 +361,9 @@ pub struct HorizonApp {
     pending_startup_runtime_state: Option<RuntimeState>,
     pending_startup_runtime_state_changed: bool,
     startup_bootstrap_failure: Option<StartupBootstrapFailure>,
+    /// The live Claude conversations that the startup bootstrap thread read, so
+    /// an answer of the person reuses them.
+    busy_claude_session_ids: HashSet<String>,
     session_catalog_refresh: session::SessionCatalogRefreshState,
     saved_session_deletion: panels::SavedSessionDeletionState,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,

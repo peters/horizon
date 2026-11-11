@@ -239,14 +239,19 @@ impl HorizonApp {
                             unavailable_exact_session_ids: exact_session_ids,
                             all_exact_session_ids: true,
                             runtime_state_changed: false,
+                            busy_claude_session_ids: live_claude_session_ids(),
                         },
                     )));
                     return;
                 }
             };
             let unavailable_exact_session_ids = bootstrap_catalog.unavailable_exact_session_ids().clone();
+            // The set is read once here, so the answer of a person who continues
+            // without the exact resumes reuses it instead of reading it again on
+            // a frame.
+            let busy_claude_session_ids = live_claude_session_ids();
             let busy_session_ids = if needs_live_claude_sessions {
-                live_claude_session_ids()
+                busy_claude_session_ids.clone()
             } else {
                 HashSet::new()
             };
@@ -265,6 +270,7 @@ impl HorizonApp {
                         unavailable_exact_session_ids,
                         all_exact_session_ids: false,
                         runtime_state_changed,
+                        busy_claude_session_ids,
                     },
                 )));
                 return;
@@ -273,6 +279,7 @@ impl HorizonApp {
                 runtime_state,
                 session_catalog: bootstrap_catalog.into_catalog(),
                 runtime_state_changed,
+                busy_claude_session_ids,
             })));
         });
         rx
@@ -298,6 +305,7 @@ impl HorizonApp {
 
         match receiver.try_recv() {
             Ok(StartupBootstrapOutcome::Ready(bootstrap)) => {
+                self.busy_claude_session_ids = bootstrap.busy_claude_session_ids;
                 self.session_catalog = bootstrap.session_catalog;
                 self.session_catalog_refresh.last_full_refresh = Some(Instant::now());
                 let runtime_state_changed =
@@ -317,6 +325,7 @@ impl HorizonApp {
                 true
             }
             Ok(StartupBootstrapOutcome::ExactValidationFailed(failure)) => {
+                self.busy_claude_session_ids = failure.busy_claude_session_ids;
                 self.pending_startup_runtime_state = Some(failure.runtime_state);
                 self.pending_startup_runtime_state_changed |= failure.runtime_state_changed;
                 self.startup_bootstrap_failure = Some(StartupBootstrapFailure::ExactValidationFailed {
@@ -398,8 +407,9 @@ impl HorizonApp {
                     Some(StartupBootstrapFailure::RecoverySaveFailed { .. }) | None => return,
                 };
                 runtime_state.neutralize_unverified_session_bindings(&unavailable_exact_session_ids);
-                let busy_claude_session_ids = live_claude_session_ids();
-                runtime_state.normalize_agent_bindings(&busy_claude_session_ids);
+                // The bootstrap thread read the live conversations of this
+                // computer, so this click reuses the set that it sent.
+                runtime_state.normalize_agent_bindings(&self.busy_claude_session_ids);
                 self.pending_startup_runtime_state = Some(runtime_state.clone());
                 self.pending_startup_runtime_state_changed = true;
                 if let Err(error) = self.save_recovered_startup_runtime_state(&runtime_state) {
@@ -765,3 +775,67 @@ fn runtime_state_selection_was_restored(board: &Board, runtime_state: &horizon_c
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod busy_claude_tests {
+    use std::collections::HashSet;
+
+    use horizon_core::{PanelKind, RuntimeState, StartupDecision};
+
+    use super::{StartupBootstrapFailureAction, tests_support::saved_claude_state};
+    use crate::app::test_support::test_app_with_startup;
+
+    #[test]
+    fn continuing_without_exact_resumes_reuses_the_set_of_the_bootstrap_thread() {
+        let (_temp, _ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        // The bootstrap thread of this computer read this conversation as live.
+        app.busy_claude_session_ids = HashSet::from(["synthetic-live".to_owned()]);
+        app.pending_startup_runtime_state = Some(saved_claude_state("synthetic-live"));
+        app.pending_startup_runtime_state_changed = false;
+        app.startup_bootstrap_failure = Some(super::StartupBootstrapFailure::ExactValidationFailed {
+            message: "one saved exact resume could not be verified".to_owned(),
+            unavailable_exact_session_ids: HashSet::new(),
+            all_exact_session_ids: false,
+        });
+        app.handle_startup_bootstrap_failure(StartupBootstrapFailureAction::ContinueWithoutExactResumes);
+        let session = app
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.kind == PanelKind::Claude)
+            .and_then(horizon_core::Panel::session_id)
+            .map(str::to_owned);
+        assert_ne!(
+            session.as_deref(),
+            Some("synthetic-live"),
+            "the conversation that the bootstrap thread read as live is not resumed"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_support {
+    use horizon_core::{AgentSessionBinding, PanelKind, PanelState, RuntimeState, WorkspaceState};
+
+    /// A saved board of one Claude panel that would resume `session_id`.
+    pub(super) fn saved_claude_state(session_id: &str) -> RuntimeState {
+        let binding = AgentSessionBinding::new(PanelKind::Claude, session_id.to_owned(), None, None, None);
+        RuntimeState {
+            workspaces: vec![WorkspaceState {
+                local_id: "workspace".to_owned(),
+                name: "workspace".to_owned(),
+                panels: vec![PanelState {
+                    local_id: "saved-claude".to_owned(),
+                    name: "saved-claude".to_owned(),
+                    kind: PanelKind::Claude,
+                    session_binding: Some(binding),
+                    ..PanelState::default()
+                }],
+                ..WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        }
+    }
+}

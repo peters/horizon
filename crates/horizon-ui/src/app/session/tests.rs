@@ -381,6 +381,7 @@ fn partial_validation_failure_keeps_repaired_and_unverified_pending_ids() {
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(StartupBootstrapOutcome::ExactValidationFailed(Box::new(
         StartupBootstrapValidationFailure {
+            busy_claude_session_ids: std::collections::HashSet::new(),
             runtime_state: repaired_runtime_state,
             message: "one resume could not be verified".to_string(),
             unavailable_exact_session_ids: HashSet::from(["session-missing".to_string()]),
@@ -646,6 +647,7 @@ fn automatic_repair_is_saved_before_the_board_opens() {
     app.session_store = SessionStore::new(HorizonHome::from_root(blocked_home), temp.path().join("config.json"));
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(StartupBootstrapOutcome::Ready(Box::new(StartupBootstrap {
+        busy_claude_session_ids: std::collections::HashSet::new(),
         runtime_state: repaired_runtime_state,
         session_catalog: horizon_core::AgentSessionCatalog::default(),
         runtime_state_changed: true,
