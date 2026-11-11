@@ -373,7 +373,8 @@ reported.
 
 ### KB1 — The status line of tmux is off
 
-Horizon runs `tmux new-session -A -s <session> \; set-option status off`, so the
+Horizon runs `tmux new-session -A -s <session> \; set-option status off`, and a
+terminal that a click on a machine row opens runs the same command, so the
 panel has no tmux status line at its bottom. The last row of the panel is the
 last row of the shell. A person who starts a session of their own on the machine
 keeps the default status line.

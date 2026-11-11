@@ -144,7 +144,7 @@ fn an_agent_terminal_of_a_machine_opens_the_panel_of_the_record() {
             "ServerAliveCountMax=1".to_string(),
             "-t".to_string(),
             "root@203.0.113.10".to_string(),
-            "tmux new -A -s work".to_string(),
+            "tmux new-session -A -s work \\; set-option status off".to_string(),
         ],
         "the agent's terminal is the argv of the record"
     );

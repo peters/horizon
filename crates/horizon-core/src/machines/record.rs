@@ -82,11 +82,13 @@ impl Machine {
             port: self.port.map(i64::from),
         };
         let session = self.session.as_deref().map(session_name).transpose()?;
-        block_terminal::check(
-            &route,
-            session.map(|session| format!("tmux new -A -s {session}")).as_deref(),
-        )
-        .map_err(MachineError::from)
+        // The route passes the rule of an SSH terminal and the session passes the
+        // tmux rule; the command itself is Horizon's own text, built by the one
+        // builder that a placed workspace terminal uses, so a click on a machine
+        // hides the tmux status line exactly as a terminal of a place does.
+        let mut terminal = block_terminal::check(&route, None).map_err(MachineError::from)?;
+        terminal.remote_command = session.as_deref().map(session_command);
+        Ok(terminal)
     }
 
     /// The `ssh` command line of a click on this machine, with the key `key`.
@@ -172,6 +174,17 @@ pub fn machine_key_name(key: &str) -> Result<String, MachineError> {
         .map_err(|refusal| MachineError::InvalidKey {
             message: refusal.message,
         })
+}
+
+/// The remote command that attaches to `session`, or makes it, and keeps the tmux
+/// status line out of the last row of the panel.
+///
+/// One builder serves a terminal of a machine and a terminal of a workspace that
+/// is placed on a machine, so no person sees the status line in one kind of
+/// panel and not in the other.
+#[must_use]
+pub fn session_command(session: &str) -> String {
+    format!("tmux new-session -A -s {session} \\; set-option status off")
 }
 
 /// Check one tmux session name.

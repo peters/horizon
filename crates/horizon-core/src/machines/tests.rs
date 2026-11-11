@@ -302,8 +302,66 @@ fn the_argv_of_a_machine_with_a_session_attaches_that_tmux_session() {
     let args = machine.ssh_args(&key("build-1")).expect("the argv");
     assert_eq!(args[args.len() - 3], "-t", "a remote command needs a terminal");
     assert_eq!(args[args.len() - 2], "root@203.0.113.10");
-    assert_eq!(args[args.len() - 1], "tmux new -A -s work");
+    assert_eq!(
+        args[args.len() - 1],
+        "tmux new-session -A -s work \\; set-option status off",
+        "a click on a machine hides the tmux status line"
+    );
     assert_eq!(machine.ssh_args(&key("build-1")).expect("argv"), args);
+}
+
+#[test]
+fn a_click_on_a_machine_and_a_terminal_of_a_place_build_one_command() {
+    // The two paths that open a terminal of a machine: the click on the machine
+    // row, and a new terminal of a workspace that is placed on the machine.
+    let registry = MachineRegistry::new(std::env::temp_dir().join("hz-machine-command-test"));
+    let machines = Machines::with_records(
+        registry,
+        vec![checked("build-1", "203.0.113.10", Some("work")).record(1)],
+    )
+    .with_key("build-1", "build-1");
+    let keys = crate::MachineKeys::new(std::env::temp_dir().join("hz-machine-command-test-keys"));
+    let mut options = crate::PanelOptions {
+        kind: crate::PanelKind::Shell,
+        ..crate::PanelOptions::default()
+    };
+    crate::place_command(
+        &mut options,
+        &crate::WorkspacePlace::Machine("build-1".to_owned()),
+        &machines,
+        &keys,
+        &crate::place::PlaceWorkspace {
+            local_id: "c8dfe3af-0e07-4889-99ed-403b4a5a4c8a",
+            sessions: &[],
+        },
+    )
+    .expect("the place of the workspace");
+    let placed = options
+        .ssh_connection
+        .expect("the connection of the place")
+        .to_command_args();
+    let clicked = machines
+        .find("build-1")
+        .expect("the machine")
+        .ssh_args(&keys.binding("build-1"))
+        .expect("the argv of the click");
+    let placed = placed.last().expect("the command of the place").clone();
+    let clicked = clicked.last().expect("the command of the click").clone();
+    assert_eq!(
+        clicked,
+        crate::machines::session_command("work"),
+        "the click runs the one builder"
+    );
+    let suffix = "\\; set-option status off";
+    assert!(
+        placed.starts_with("tmux new-session -A -s hz-c8dfe3af-1 ")
+            && clicked.starts_with("tmux new-session -A -s work "),
+        "both attach a session of their own: {placed} and {clicked}"
+    );
+    assert!(
+        placed.ends_with(suffix) && clicked.ends_with(suffix),
+        "a placed terminal and a click hide the status line with one command: {placed} and {clicked}"
+    );
 }
 
 #[test]

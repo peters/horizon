@@ -30,7 +30,9 @@ mod registry;
 mod tests;
 
 pub use bindings::MachineBindings;
-pub use record::{CheckedMachine, Machine, check, check_record, machine_key_name, machine_name, session_name};
+pub use record::{
+    CheckedMachine, Machine, check, check_record, machine_key_name, machine_name, session_command, session_name,
+};
 pub use registry::{LoadedMachines, MachineRegistry, MachineStore, Machines};
 
 pub use horizon_browser_control::manifest::block_machines::{

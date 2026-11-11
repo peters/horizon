@@ -111,7 +111,7 @@ fn a_click_opens_one_terminal_and_the_second_click_focuses_it() {
             .ssh_connection
             .as_ref()
             .and_then(|connection| connection.remote_command.as_deref()),
-        Some("tmux new -A -s work"),
+        Some("tmux new-session -A -s work \\; set-option status off"),
         "the click attaches the session of the record"
     );
 
@@ -225,7 +225,7 @@ fn the_saved_panel_keeps_its_machine_and_its_session() {
             .ssh_connection
             .as_ref()
             .and_then(|connection| connection.remote_command.as_deref()),
-        Some("tmux new -A -s work"),
+        Some("tmux new-session -A -s work \\; set-option status off"),
         "the panel re-attaches to the same tmux session after a restart"
     );
 }

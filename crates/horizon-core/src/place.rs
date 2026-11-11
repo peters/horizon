@@ -261,12 +261,10 @@ fn fnv1a(text: &str) -> u32 {
     hash
 }
 
-/// The remote command of a place session: attach to `session` (`-A`), or make
-/// it, and keep the tmux status line out of the panel's last row.
-#[must_use]
-pub fn session_command(session: &str) -> String {
-    format!("tmux new-session -A -s {session} \\; set-option status off")
-}
+/// The remote command of a session of a machine, which a terminal of a place and
+/// a click on a machine row both run: attach to `session` (`-A`), or make it, and
+/// keep the tmux status line out of the panel's last row.
+pub use crate::machines::session_command;
 
 /// The remote command that ends `session`.
 #[must_use]

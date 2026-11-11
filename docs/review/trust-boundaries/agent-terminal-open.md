@@ -99,9 +99,10 @@ without the field.
   `open_terminal` apply and a violation is `invalid_ssh_route`.
 - **The tmux session is one word.** `session` is 1 to 40 characters of `A-Z`,
   `a-z`, `0-9`, `_` and `-`, and it cannot start with `-`. Horizon builds
-  `tmux new -A -s <session>` itself from that name, so a space, a quote, a `;`
-  or a leading `-` never reaches the command. A violation is
-  `invalid_session_name`.
+  `tmux new-session -A -s <session> \; set-option status off` itself from that
+  name, with the one builder that a terminal of a workspace on a machine also
+  runs, so a space, a quote, a `;` or a leading `-` never reaches the command. A
+  violation is `invalid_session_name`.
 - **The key name is a key name.** The `key` of `machine_set` passes the key rule
   (`invalid_key_name`) and its file must be there (`key_unavailable` when it is
   not). It becomes the binding of this computer and it is not written into the
@@ -122,9 +123,9 @@ without the field.
   `SshConnection::for_agent_terminal_with_key`: the key that this computer binds
   to the record, the two
   keepalive options, `-p` when the record has a port, `-t` when it has a session,
-  `user@host` as one argument and `tmux new -A -s <session>` last. A hand-edited
-  registry cannot add an ssh option, a proxy, an identity file or a second
-  command.
+  `user@host` as one argument and `tmux new-session -A -s <session> \; set-option
+  status off` last. A hand-edited registry cannot add an ssh option, a proxy, an
+  identity file or a second command.
 - **The list is private to the person.** It is one file of the Horizon home, in a
   `0700` directory, written as `0600` through a temporary file and a rename, on
   the coordination worker. It is not part of a session or a workspace.

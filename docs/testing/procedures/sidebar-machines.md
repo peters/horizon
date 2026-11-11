@@ -98,7 +98,8 @@ a forgotten record leaves its key.
    Result: A new SSH panel opens in the active workspace with the title
    `build-1`, the titlebar mark `opened by Machines`, and a prompt from the
    loopback server. The row dot turns green and the hover text says
-   `connected`.
+   `connected`. The last row of the panel holds the output of the session, and
+   no green tmux status line stands at the bottom of the panel.
 
 2. Read the command line of the `ssh` child of the fixture process.
 
@@ -111,7 +112,8 @@ a forgotten record leaves its key.
    `-o UserKnownHostsFile=<state>/data/home/.horizon/machine-keys/build-1.known_hosts`,
    `-o StrictHostKeyChecking=accept-new`, `-t`, `root@127.0.0.1` or the user of
    the record, the port `-p 2222` when the record has it, and
-   `tmux new -A -s build-1` last.
+   `tmux new-session -A -s build-1 \; set-option status off` last. That is the
+   same command that a terminal of a workspace on the machine runs.
 
 3. Click the row `build-1` again.
 
