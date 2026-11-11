@@ -43,6 +43,17 @@ impl HorizonApp {
         let keys = MachineKeys::from_home(self.session_store.home());
         let (name, title) = (name.to_owned(), record.title());
         let key = self.machine_list.key(name.as_str()).map(str::to_owned);
+        // A machine that only the server gave has no key on this computer, and a
+        // login with the keys of the person would reach a host that this computer
+        // never agreed to. The server keeps the public lines in a later slice.
+        let foreign = self
+            .server_sync
+            .as_ref()
+            .is_some_and(|sync| sync.handle().is_foreign(&name));
+        if let Some(notice) = missing_key_notice(&name, foreign, key.as_deref()) {
+            self.set_sidebar_notice(notice);
+            return;
+        }
         let opening = ctx.clone();
         self.browser_create_host.io.then(
             move || required_key(&keys, key.as_deref()),
@@ -76,6 +87,13 @@ impl HorizonApp {
     fn machine_refused(&mut self, name: &str, error: &MachineError) {
         self.set_sidebar_notice(format!("{name}: {} ({})", error, error.code()));
     }
+}
+
+/// The notice of a machine whose record arrived from the server and which has
+/// no key binding on this computer. A click on it opens nothing, because the only
+/// login it could try is the one of the keys of the person.
+pub(in crate::app) fn missing_key_notice(name: &str, foreign: bool, key: Option<&str>) -> Option<String> {
+    (foreign && key.is_none()).then(|| format!("This computer has no key for {name} yet"))
 }
 
 #[cfg(test)]

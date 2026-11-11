@@ -197,10 +197,19 @@ name was already there and the record replaced the old one.
 ```
 
 `machines` answers every record in name order, each with `name`, `host`,
-`user`, `port`, `key`, `session`, `provider`, `added_at_millis` and
-`terminal_open`. `terminal_open` says whether a terminal of that machine is open
-in this Horizon now. It is not a reachability check, and Horizon never polls a
-machine.
+`user`, `port`, `key`, `session`, `provider`, `added_at_millis`,
+`terminal_open` and, when one waits, `pending`. `terminal_open` says whether a
+terminal of that machine is open in this Horizon now. It is not a reachability
+check, and Horizon never polls a machine. `pending: true` says that the server
+of the person has not decided the last change to that machine yet; it settles by
+itself. The answer also carries `server`: `off` when this Horizon keeps its
+machine list on this computer alone, or `connecting`, `in_step`, `behind` or
+`away`.
+
+A Horizon that follows a server shares its machine list with the other computers
+of the person. A machine that another computer added appears in the Machines
+section here too, and it may have no key on this computer: a click on it opens
+nothing until that computer has the key, and Horizon says so.
 
 ```json
 {"operation": "machine_delete", "name": "build-1"}

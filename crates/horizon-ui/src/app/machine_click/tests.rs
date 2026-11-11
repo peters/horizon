@@ -55,6 +55,24 @@ fn keep(app: &mut HorizonApp, machines: Vec<Machine>, keys: &[(&str, &str)]) {
 }
 
 #[test]
+fn a_machine_that_only_arrived_from_the_server_has_no_key_here() {
+    assert_eq!(
+        missing_key_notice("build-1", true, None).as_deref(),
+        Some("This computer has no key for build-1 yet")
+    );
+    assert_eq!(
+        missing_key_notice("build-1", true, Some("build-1")),
+        None,
+        "a key binding of this computer opens the terminal"
+    );
+    assert_eq!(
+        missing_key_notice("build-1", false, None),
+        None,
+        "a machine that this computer wrote may use its own keys"
+    );
+}
+
+#[test]
 fn a_click_opens_one_terminal_and_the_second_click_focuses_it() {
     let (_temp, ctx, mut app) = app();
     plant_key(&app, "build-1");

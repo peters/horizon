@@ -150,7 +150,7 @@ fn an_agent_terminal_of_a_machine_opens_the_panel_of_the_record() {
     );
     let listed = answered(&mut app, &ctx, &root, block::Operation::Machines);
     assert!(
-        matches!(&listed, Outcome::Machines { machines } if machines[0].terminal_open),
+        matches!(&listed, Outcome::Machines { machines, .. } if machines[0].terminal_open),
         "the machine reports its open terminal: {listed:?}"
     );
 }

@@ -86,8 +86,9 @@ impl HorizonApp {
         let mut app = Self::initial_state(config, bootstrap);
         app.restore_saved_session_deletion_notice();
         // The machines belong to the person and not to the session that the
-        // startup decision opens, so they are read once, before any session.
-        app.load_machines();
+        // startup decision opens, so they are read once, before any session. A
+        // link to a server wakes this context when the list changes.
+        app.load_machines(egui_ctx);
 
         match startup {
             StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
@@ -135,7 +136,7 @@ impl HorizonApp {
             reconnects: super::reconnect::ReconnectWaits::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
             machine_epoch: 0,
-            machine_load_rx: None,
+            machine_load_rx: None, server_sync: None,
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),

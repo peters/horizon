@@ -20,18 +20,25 @@ use super::block_requests::BlockAnswer;
 
 impl HorizonApp {
     /// The registry file of this Horizon home.
-    fn machine_registry(&self) -> MachineRegistry {
+    pub(in crate::app) fn machine_registry(&self) -> MachineRegistry {
         MachineRegistry::from_home(self.session_store.home())
     }
 
     /// Reads the machine list of this Horizon home once, on its own thread at
-    /// startup, so no frame reads the file. The list is empty until the read
-    /// answers, a few milliseconds later.
-    pub(super) fn load_machines(&mut self) {
+    /// startup, so no frame reads the file and no frame starts the child of a
+    /// link. A start that names a server starts the link of that server in the
+    /// same thread. The list is empty until the read answers, a few
+    /// milliseconds later.
+    pub(super) fn load_machines(&mut self, ctx: &Context) {
         let registry = self.machine_registry();
+        let server = horizon_core::server().cloned();
+        let wake = {
+            let ctx = ctx.clone();
+            move || ctx.request_repaint()
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(Machines::load(registry));
+            let _ = tx.send(super::server_sync::load(registry, server, wake));
         });
         self.machine_load_rx = Some(rx);
     }
@@ -44,9 +51,13 @@ impl HorizonApp {
         };
         let asked_at = self.machine_epoch;
         match rx.try_recv() {
-            Ok(Ok(machines)) if asked_at == self.machine_epoch => {
-                tracing::info!(count = machines.records().len(), "loaded the machine list");
-                self.machine_list = machines;
+            Ok(Ok(load)) if asked_at == self.machine_epoch => {
+                tracing::info!(count = load.machines.records().len(), "loaded the machine list");
+                self.machine_list = load.machines;
+                if let Some(reason) = load.server_failure {
+                    self.set_sidebar_notice(format!("The machine list: {reason}"));
+                }
+                self.server_sync = load.server;
             }
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
@@ -97,6 +108,7 @@ impl HorizonApp {
         let record = checked.record(u64::try_from(manifest::now_millis()).unwrap_or(0));
         let keys = horizon_core::MachineKeys::from_home(self.session_store.home());
         let registry = self.machine_registry();
+        let store = self.machine_store(&registry);
         let name = record.name.clone();
         self.queue_machine_answer(
             request,
@@ -106,7 +118,7 @@ impl HorizonApp {
                 if let Some(key) = key.as_deref() {
                     keys.require(key)?;
                 }
-                let (next, created) = Machines::load(registry)?.with_record(record, key.as_deref())?;
+                let (next, created) = Machines::from_store(&registry, store)?.with_record(record, key.as_deref())?;
                 next.save()?;
                 Ok::<_, MachineError>((next, created))
             },
@@ -135,6 +147,7 @@ impl HorizonApp {
             return;
         }
         let registry = self.machine_registry();
+        let store = self.machine_store(&registry);
         let asked = name.to_owned();
         let answer_name = asked.clone();
         self.queue_machine_answer(
@@ -142,7 +155,7 @@ impl HorizonApp {
             root,
             ctx,
             move || {
-                let machines = Machines::load(registry)?;
+                let machines = Machines::from_store(&registry, store)?;
                 if machines.find(&asked).is_none() {
                     return Err(MachineError::Unavailable {
                         reason: format!("This Horizon has no machine {asked}; call machines to list the ones it has"),
@@ -168,6 +181,7 @@ impl HorizonApp {
     pub(super) fn answer_machines(&mut self, request: &block::Request, root: Option<&Path>, ctx: &Context) {
         let outcome = block::Outcome::Machines {
             machines: self.machine_summaries(),
+            server: self.server_sync.as_ref().map(|sync| sync.state_code().to_owned()),
         };
         self.write_block_answer(BlockAnswer::new(root, request.clone(), outcome));
         ctx.request_repaint();
@@ -177,12 +191,13 @@ impl HorizonApp {
     /// and a terminal that is already open keeps its own saved connection.
     pub(in crate::app) fn forget_machine(&mut self, name: &str, ctx: &Context) {
         let registry = self.machine_registry();
+        let store = self.machine_store(&registry);
         let forgetting = name.to_owned();
         let notice_name = forgetting.clone();
         let writing = ctx.clone();
         self.browser_create_host.io.then(
             move || {
-                let machines = Machines::load(registry)?;
+                let machines = Machines::from_store(&registry, store)?;
                 let next = machines.without_record(&forgetting);
                 if next.records().len() == machines.records().len() {
                     return Err(MachineError::Unavailable {
@@ -207,10 +222,12 @@ impl HorizonApp {
 
     /// The machines of this Horizon as `machines` reports them.
     pub(in crate::app) fn machine_summaries(&self) -> Vec<block::MachineSummary> {
+        let pending = self.pending_machines();
         self.machine_list
             .records()
             .iter()
             .map(|machine| block::MachineSummary {
+                pending: pending.contains(machine.name.as_str()),
                 name: machine.name.clone(),
                 host: machine.host.clone(),
                 user: machine.user.clone(),
@@ -222,6 +239,14 @@ impl HorizonApp {
                 terminal_open: self.machine_panel(&machine.name).is_some(),
             })
             .collect()
+    }
+
+    /// The machines that have an intent which the server has not decided.
+    pub(in crate::app) fn pending_machines(&self) -> std::collections::BTreeSet<String> {
+        self.server_sync
+            .as_ref()
+            .map(|sync| sync.handle().pending())
+            .unwrap_or_default()
     }
 
     /// The frame of a terminal that this machine opened, in any workspace.

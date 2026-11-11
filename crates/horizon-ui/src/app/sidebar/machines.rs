@@ -3,9 +3,11 @@
 //!
 //! A row says the state of the terminal that this machine opened, and nothing
 //! when no terminal of it is open: Horizon does not poll a machine, so an empty
-//! dot is the honest answer. The row text is read again only when the list or a
-//! terminal of a machine changes, so an idle frame reads no machine and builds
-//! no string.
+//! dot is the honest answer. A machine that follows a server carries a quiet
+//! `pending` mark while the server has not decided its last change, and the
+//! section says the state of that link above its rows. The row text is read again
+//! only when the list, a terminal of a machine, the queue or the link changes, so
+//! an idle frame reads no machine and builds no string.
 
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
@@ -25,6 +27,8 @@ pub(super) const ROW_HEIGHT: f32 = 38.0;
 pub(super) const DOT_SIDE: f32 = 9.0;
 /// How long the reason of a refused machine stays in the section.
 pub(super) const NOTICE: Duration = Duration::from_secs(10);
+/// The quiet mark of a machine whose last change the server has not decided.
+pub(super) const PENDING_MARK: &str = "pending";
 /// The circular radius of a machine row behind the pointer.
 const CARD_RADIUS: u8 = 10;
 
@@ -73,6 +77,8 @@ pub(in crate::app) struct MachineRow {
     /// The provider line as the agent reported it, or nothing.
     pub(in crate::app) provider: Option<String>,
     pub(in crate::app) state: MachineState,
+    /// Whether the server has not decided the last change to this machine yet.
+    pub(in crate::app) pending: bool,
     /// The frame of the terminal of this machine, when one is open.
     pub(in crate::app) panel: Option<PanelId>,
     pub(in crate::app) workspace: Option<WorkspaceId>,
@@ -83,6 +89,9 @@ pub(in crate::app) struct MachineRow {
 #[derive(Default)]
 pub(in crate::app) struct MachineRows {
     rows: Vec<MachineRow>,
+    /// The line of the link to the server, built once for its state, or `None`
+    /// when this Horizon keeps its machine list on this computer alone.
+    server_line: Option<String>,
     read_from: Option<u64>,
 }
 
@@ -90,6 +99,11 @@ impl MachineRows {
     /// The rows of the last read.
     pub(in crate::app) fn rows(&self) -> &[MachineRow] {
         &self.rows
+    }
+
+    /// The state line of the link to the server, when the settings name one.
+    pub(in crate::app) fn server_line(&self) -> Option<&str> {
+        self.server_line.as_deref()
     }
 
     /// What the rows were read from, so a test can see that nothing was read
@@ -109,6 +123,7 @@ impl HorizonApp {
         if self.machine_rows.read_from == Some(read_from) {
             return;
         }
+        let pending = self.pending_machines();
         let rows = self
             .machine_list
             .records()
@@ -123,13 +138,17 @@ impl HorizonApp {
                     name: machine.name.clone(),
                     provider: machine.provider.clone(),
                     state: MachineState::of(panel.and_then(horizon_core::Panel::ssh_status)),
+                    pending: pending.contains(machine.name.as_str()),
                     panel: panel.map(|panel| panel.id),
                     workspace: panel.map(|panel| panel.workspace_id),
                 }
             })
             .collect();
+        // The line is built on the frame that the state changes and on no other.
+        let server_line = self.server_sync.as_ref().map(|sync| sync.line().text());
         self.machine_rows = MachineRows {
             rows,
+            server_line,
             read_from: Some(read_from),
         };
     }
@@ -157,7 +176,10 @@ impl HorizonApp {
         if self.machine_rows.rows().is_empty() && self.sidebar_notice.is_none() {
             return;
         }
-        if !self.machine_rows.rows().is_empty() {
+        // The rows are borrowed out for the pass, because a press changes the
+        // actions and the board; nothing in the pass reads the cache again.
+        let rows = std::mem::take(&mut self.machine_rows);
+        if !rows.rows().is_empty() {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
@@ -170,12 +192,21 @@ impl HorizonApp {
                     120.0,
                 ));
             });
+            if let Some(line) = rows.server_line() {
+                ui.horizontal(|ui| {
+                    ui.add_space(18.0);
+                    ui.label(text::line(
+                        ui,
+                        line,
+                        11.0,
+                        text::REGULAR,
+                        text::secondary(),
+                        ui.available_width() - 18.0,
+                    ));
+                });
+            }
             ui.add_space(2.0);
         }
-
-        // The rows are borrowed out for the pass, because a press changes the
-        // actions and the board; nothing in the pass reads the cache again.
-        let rows = std::mem::take(&mut self.machine_rows);
         for row in rows.rows() {
             self.render_sidebar_machine(ui, row, actions);
         }
@@ -213,10 +244,33 @@ impl HorizonApp {
 
         let text_left = dot.x + DOT_SIDE / 2.0 + 10.0;
         let text_right = card.max.x - 8.0;
-        let name = text::line(ui, &row.name, 13.0, text::MEDIUM, theme::FG(), text_right - text_left);
+        let mark = row.pending.then(|| {
+            text::line(
+                ui,
+                PENDING_MARK,
+                10.0,
+                text::REGULAR,
+                text::secondary(),
+                (text_right - text_left).max(1.0),
+            )
+        });
+        let mark_width = mark.as_ref().map_or(0.0, |mark| mark.size().x + 6.0);
+        let name = text::line(
+            ui,
+            &row.name,
+            13.0,
+            text::MEDIUM,
+            theme::FG(),
+            text_right - text_left - mark_width,
+        );
         let name_rect = Rect::from_min_size(pos2(text_left, card.min.y + 6.0), name.size());
         let elided = name.elided;
         ui.painter().galley(name_rect.min, name, theme::FG());
+        if let Some(mark) = mark {
+            let left = text_right - mark.size().x;
+            ui.painter()
+                .galley(pos2(left, card.min.y + 9.0), mark, text::secondary());
+        }
         if let Some(provider) = row.provider.as_deref() {
             let galley = text::line(
                 ui,
@@ -235,7 +289,7 @@ impl HorizonApp {
             ui.make_persistent_id(("sidebar_machine", row.name.as_str())),
             Sense::click(),
         );
-        let spoken = format!("{}, {}", row.name, row.state.spoken());
+        let spoken = spoken(row);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
         let response = if elided {
             response.on_hover_text(format!("{}\n{spoken}", row.name))
@@ -246,6 +300,15 @@ impl HorizonApp {
             machine_click(row, actions);
         }
         self.show_machine_context_menu(&response, row, actions);
+    }
+}
+
+/// What a screen reader and a hover say about one row.
+pub(super) fn spoken(row: &MachineRow) -> String {
+    if row.pending {
+        format!("{}, {}, {PENDING_MARK}", row.name, row.state.spoken())
+    } else {
+        format!("{}, {}", row.name, row.state.spoken())
     }
 }
 
@@ -299,6 +362,9 @@ pub(super) fn paint_machine_dot(painter: &egui::Painter, center: egui::Pos2, sta
 /// frame knows without building a row whether it must read them again.
 fn machine_fingerprint(app: &HorizonApp) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // A queue and a link are the work of another thread, so they are read once
+    // for the whole fingerprint and not for each machine.
+    let pending = app.pending_machines();
     for machine in app.machine_list.records() {
         machine.name.hash(&mut hasher);
         machine.host.hash(&mut hasher);
@@ -307,6 +373,12 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         app.machine_list.key(&machine.name).hash(&mut hasher);
         machine.session.hash(&mut hasher);
         machine.provider.hash(&mut hasher);
+        pending.contains(machine.name.as_str()).hash(&mut hasher);
+    }
+    if let Some(sync) = app.server_sync.as_ref() {
+        let state = sync.handle().state();
+        state.code().hash(&mut hasher);
+        state.pending().hash(&mut hasher);
     }
     for panel in app.board.panels.iter().filter(|panel| panel.machine().is_some()) {
         panel.machine().hash(&mut hasher);

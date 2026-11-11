@@ -7,7 +7,7 @@ use egui::Context;
 use horizon_browser_control::manifest::block::{self, Outcome};
 use horizon_browser_control::manifest::block_terminal::TerminalRoute;
 use horizon_core::browser::manifest;
-use horizon_core::{MachineKeys, MachineRegistry, Machines, PanelKind, RuntimeState, StartupDecision};
+use horizon_core::{Machine, MachineKeys, MachineRegistry, Machines, PanelKind, RuntimeState, StartupDecision};
 
 use super::*;
 use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
@@ -93,7 +93,7 @@ fn answered(app: &mut HorizonApp, ctx: &Context, root: &Path, operation: block::
 
 fn machines(app: &mut HorizonApp, ctx: &Context, root: &Path) -> Vec<block::MachineSummary> {
     match answered(app, ctx, root, block::Operation::Machines) {
-        Outcome::Machines { machines } => machines,
+        Outcome::Machines { machines, .. } => machines,
         other => panic!("expected the machine list: {other:?}"),
     }
 }
@@ -258,6 +258,37 @@ fn a_forget_from_the_sidebar_removes_the_row_and_keeps_the_key() {
 }
 
 #[test]
+fn a_start_without_a_server_setting_keeps_the_file_store_and_starts_no_link() {
+    let (_temp, _ctx, mut app) = app();
+    settle_machine_load(&mut app);
+    assert!(
+        app.server_sync.is_none(),
+        "a start that names no server starts no link and no child"
+    );
+    assert!(
+        app.pending_machines().is_empty(),
+        "a machine list of one computer has nothing pending"
+    );
+    let registry = app.machine_registry();
+    let record = Machine {
+        name: "build-9".to_owned(),
+        host: "203.0.113.10".to_owned(),
+        added_at_millis: 3,
+        ..Machine::default()
+    };
+    let list = Machines::from_store(&registry, app.machine_store(&registry))
+        .expect("the store of this computer")
+        .with_record(record, None)
+        .expect("a new record")
+        .0;
+    list.save().expect("the record is written");
+    assert!(
+        registry.path().is_file(),
+        "without a server the machine list is the file of this home"
+    );
+}
+
+#[test]
 fn a_machine_record_carries_no_command_line_of_its_own() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);
@@ -307,7 +338,7 @@ fn the_machine_list_of_the_home_belongs_to_every_workspace() {
         .expect("the answer is readable")
         .expect("the worker answered");
     assert!(
-        matches!(&answer, Outcome::Machines { machines } if machines.len() == 1),
+        matches!(&answer, Outcome::Machines { machines, .. } if machines.len() == 1),
         "the machines are the person's, not one workspace's: {answer:?}"
     );
 }

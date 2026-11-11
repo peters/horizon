@@ -2,7 +2,7 @@
 
 use super::super::super::test_support::{run_app_frame, test_app};
 use super::super::SidebarActions;
-use super::{MachineRow, MachineRows, MachineState, machine_click};
+use super::{MachineRow, MachineRows, MachineState, machine_click, spoken};
 use horizon_core::{Machine, MachineRegistry, Machines, PanelId, SshConnectionStatus};
 
 fn record(name: &str, provider: Option<&str>) -> Machine {
@@ -90,11 +90,30 @@ fn a_row_says_the_state_of_its_own_terminal() {
 }
 
 #[test]
+fn a_machine_that_waits_for_the_server_says_so() {
+    let row = MachineRow {
+        name: "build-1".into(),
+        provider: Some("Hetzner, hel1".into()),
+        state: MachineState::Closed,
+        pending: true,
+        panel: None,
+        workspace: None,
+    };
+    let line = spoken(&row);
+    assert!(line.contains("build-1"), "{line}");
+    assert!(line.contains("no terminal open"), "{line}");
+    assert!(line.contains("pending"), "{line}");
+    let quiet = MachineRow { pending: false, ..row };
+    assert!(!spoken(&quiet).contains("pending"), "a settled row says nothing");
+}
+
+#[test]
 fn a_press_on_a_closed_machine_opens_one_and_a_press_on_an_open_machine_focuses_it() {
     let mut closed = MachineRow {
         name: "build-1".into(),
         provider: None,
         state: MachineState::Closed,
+        pending: false,
         panel: None,
         workspace: None,
     };

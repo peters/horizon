@@ -5,8 +5,8 @@ use std::sync::{Mutex, PoisonError};
 
 use horizon_core::browser::manifest;
 use horizon_core::{
-    BrowserHostConfig, Config, HorizonHome, browser_mcp_args, browser_mcp_executable, codex_home_dir, grok_home_dir,
-    user_home_dir,
+    BrowserHostConfig, Config, HorizonHome, ServerConfig, browser_mcp_args, browser_mcp_executable, codex_home_dir,
+    grok_home_dir, user_home_dir,
 };
 
 mod grok_mcp;
@@ -461,6 +461,12 @@ struct AgentMcpEntry<'a> {
 pub(crate) fn browser_host_setting(config_path: &Path) -> Option<BrowserHostConfig> {
     let config = Config::read(config_path).ok().flatten()?;
     config.browser_host.names_host().then_some(config.browser_host)
+}
+
+/// The server that the settings name, for the start that follows it.
+pub(crate) fn server_setting(config_path: &Path) -> Option<ServerConfig> {
+    let config = Config::read(config_path).ok().flatten()?;
+    config.server.names_server().then_some(config.server)
 }
 
 pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHostGuard {

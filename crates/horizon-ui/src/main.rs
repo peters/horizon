@@ -89,6 +89,9 @@ fn main() -> eframe::Result {
     let agent_integrations = AgentIntegrations::from_environment();
     let browser_host = plugin_install::browser_host_setting(&resolved_config_path);
     horizon_core::configure_browser_host(browser_host.clone());
+    // The machine list of this start follows one server, or stays on this
+    // computer. The entry travels to the app beside the browser host.
+    horizon_core::configure_server(plugin_install::server_setting(&resolved_config_path));
     let _agent_plugin_host = agent_integrations.install_plugins(&horizon_home);
     if let Some(command) = cli_args.command.as_ref() {
         run_command(command, &resolved_config_path);

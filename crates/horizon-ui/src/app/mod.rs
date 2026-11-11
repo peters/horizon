@@ -54,6 +54,7 @@ mod reconnect;
 mod remote_hosts;
 mod root_chrome;
 mod root_viewport;
+mod server_sync;
 mod session;
 mod session_kill;
 mod session_manager;
@@ -81,7 +82,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, Machines, PanelId,
+    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, PanelId,
     PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
     StartupChooser, WindowConfig, WorkspaceId,
 };
@@ -288,8 +289,11 @@ pub struct HorizonApp {
     /// Counts the writes of the machine list, so a read asked for before a write
     /// never replaces it.
     machine_epoch: u64,
-    /// The startup read of the machine list, on its own thread.
-    machine_load_rx: Option<Receiver<Result<Machines, horizon_core::MachineError>>>,
+    /// The startup read of the machine list and of the link to its server, on
+    /// its own thread.
+    machine_load_rx: Option<Receiver<Result<server_sync::MachineLoad, horizon_core::MachineError>>>,
+    /// The link of this Horizon to its server, when the settings name one.
+    pub(in crate::app) server_sync: Option<server_sync::ServerSync>,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
@@ -402,6 +406,7 @@ impl HorizonApp {
         self.apply_browser_host_io();
         self.apply_settings_io(ctx);
         self.poll_machine_load();
+        self.poll_server_sync();
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);

@@ -227,6 +227,10 @@ pub struct MachineSummary {
     pub added_at_millis: u64,
     /// Whether a terminal panel of this machine is open in this Horizon.
     pub terminal_open: bool,
+    /// Whether the server has not decided a change to this machine yet, so the
+    /// sidebar shows it as pending.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
 }
 
 /// One card as `list` reports it.
@@ -322,6 +326,11 @@ pub enum Outcome {
     /// The machines of this Horizon, in name order.
     Machines {
         machines: Vec<MachineSummary>,
+        /// The state of the link to the server: `off` when this Horizon keeps
+        /// its machine list on this computer alone, or `connecting`, `in_step`,
+        /// `behind` or `away`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<String>,
     },
     /// One machine key pair that the caller deleted.
     DeletedMachineKey {
@@ -848,6 +857,7 @@ mod tests {
         assert_eq!(answer["status"], serde_json::json!("machine_set"));
         assert_eq!(answer["created"], serde_json::json!(true));
         let listed = serde_json::to_value(Outcome::Machines {
+            server: Some("in_step".into()),
             machines: vec![MachineSummary {
                 name: "build-1".into(),
                 host: "203.0.113.10".into(),
@@ -858,11 +868,14 @@ mod tests {
                 provider: Some("Hetzner, hel1".into()),
                 added_at_millis: 7,
                 terminal_open: true,
+                pending: true,
             }],
         })
         .expect("serialize");
         assert_eq!(listed["status"], serde_json::json!("machines"));
         assert_eq!(listed["machines"][0]["terminal_open"], serde_json::json!(true));
+        assert_eq!(listed["machines"][0]["pending"], serde_json::json!(true));
+        assert_eq!(listed["server"], serde_json::json!("in_step"));
     }
 
     #[test]
