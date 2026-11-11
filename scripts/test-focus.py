@@ -91,6 +91,17 @@ def git_lines(*args: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def existing_paths(paths: list[str], root: Path = ROOT) -> list[str]:
+    """Return the paths that are in the working tree.
+
+    The diff of a branch names a deleted file as well, and a file that is gone has
+    no test target: `--test image_destinations` names nothing after the file went.
+    The module that declared the file is a changed path of its own, so the target of
+    that module still runs.
+    """
+    return [path for path in paths if (root / path).exists()]
+
+
 def changed_paths() -> list[str]:
     """Return the paths this branch changes, including uncommitted work."""
     base = os.environ.get("HORIZON_TEST_FOCUS_BASE")
@@ -101,7 +112,7 @@ def changed_paths() -> list[str]:
     seen: dict[str, None] = {}
     for path in paths:
         seen.setdefault(path, None)
-    return list(seen)
+    return existing_paths(list(seen))
 
 
 def crate_root(path: Path, root: Path = ROOT) -> Path | None:
@@ -400,6 +411,61 @@ def build_plan(paths: list[str], root: Path = ROOT) -> Plan:
     return plan
 
 
+def crate_directory(name: str, root: Path = ROOT) -> Path | None:
+    """Return the directory of the crate whose package is `name`."""
+    for manifest in sorted(root.glob("crates/*/Cargo.toml")):
+        directory = manifest.parent
+        if crate_name(directory) == name:
+            return directory
+    return None
+
+
+def declared_targets(crate: Path) -> set[tuple[str, str | None]]:
+    """Return the targets that cargo finds in `crate`.
+
+    A selection names a target of this set, or the run fails with `no test target
+    named <name>` instead of running a test.
+    """
+    targets: set[tuple[str, str | None]] = set()
+    if (crate / "src" / "lib.rs").is_file():
+        targets.add(("lib", None))
+    names = bin_names(crate)
+    if names:
+        targets.add(("bins", None))
+        targets.update(("bin", name) for name in names)
+    tests = crate / "tests"
+    if tests.is_dir():
+        targets.add(("tests", None))
+        targets.update(
+            ("test", path.stem) for path in tests.glob("*.rs") if path.is_file()
+        )
+    examples = crate / "examples"
+    if examples.is_dir():
+        targets.add(("examples", None))
+        targets.update(
+            ("example", path.stem) for path in examples.glob("*.rs") if path.is_file()
+        )
+        targets.update(
+            ("example", path.parent.name)
+            for path in examples.glob("*/main.rs")
+            if path.is_file()
+        )
+    return targets
+
+
+def missing_targets(plan: Plan, root: Path = ROOT) -> list[Selection]:
+    """Return the selections of `plan` that name a target that does not exist."""
+    missing: list[Selection] = []
+    for selection in plan.selections:
+        crate = crate_directory(selection.crate, root)
+        if crate is None:
+            missing.append(selection)
+            continue
+        if selection.target not in declared_targets(crate):
+            missing.append(selection)
+    return missing
+
+
 def filterset(selection: Selection) -> str:
     """Return the nextest filterset expression of one selection."""
     return " | ".join(f"test({item})" for item in selection.filters or ())
@@ -496,6 +562,14 @@ def main(argv: list[str] | None = None) -> int:
     paths = arguments.paths or changed_paths()
     plan = build_plan(paths)
     report(plan)
+    missing = missing_targets(plan)
+    for selection in missing:
+        flag, name = selection.target
+        named = f"{flag} {name}" if name is not None else flag
+        print(f"  {selection.crate}: {named} is no target of the workspace: skipped")
+    plan.selections = [
+        selection for selection in plan.selections if selection not in missing
+    ]
     if not plan.selections:
         return 0
 

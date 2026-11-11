@@ -466,6 +466,72 @@ class PlanTests(unittest.TestCase):
         self.assertIn("full matrix", plan.unselected[1][1])
 
 
+class TargetTests(unittest.TestCase):
+    """A selection names a target that the crate declares, or nothing runs."""
+
+    def setUp(self):
+        self.hold = tempfile.TemporaryDirectory()
+        self.root = Path(self.hold.name)
+        (self.root / "Cargo.toml").write_text(
+            "[workspace]\nmembers = []\n", encoding="utf-8"
+        )
+        write_crate(
+            self.root,
+            "crates/one",
+            "one",
+            ["src/lib.rs", "tests/kept.rs", "examples/demo.rs"],
+        )
+
+    def tearDown(self):
+        self.hold.cleanup()
+
+    def test_a_target_of_the_crate_is_declared(self):
+        crate = self.root / "crates" / "one"
+        declared = focus.declared_targets(crate)
+        self.assertIn(("lib", None), declared)
+        self.assertIn(("test", "kept"), declared)
+        self.assertIn(("tests", None), declared)
+        self.assertIn(("example", "demo"), declared)
+        self.assertNotIn(("test", "gone"), declared)
+
+    def test_a_deleted_test_file_is_no_selection(self):
+        # The diff of a branch names the file that the cloud code removed, and
+        # `--test image_destinations` then names a target that does not exist.
+        self.assertEqual(
+            focus.existing_paths(
+                ["crates/one/tests/kept.rs", "crates/one/tests/gone.rs"], self.root
+            ),
+            ["crates/one/tests/kept.rs"],
+        )
+
+    def test_a_selection_that_names_no_target_of_the_workspace_is_missing(self):
+        plan = focus.Plan()
+        plan.add(focus.Selection("one", ("test", "gone")))
+        plan.add(focus.Selection("one", ("test", "kept")))
+        self.assertEqual(
+            focus.missing_targets(plan, self.root),
+            [focus.Selection("one", ("test", "gone"))],
+        )
+
+    def test_every_target_that_the_workspace_names_is_a_target(self):
+        # Every file of every crate of this workspace, as a change would name it:
+        # no path of the workspace may select a target that cargo cannot run.
+        paths = sorted(
+            str(path.relative_to(focus.ROOT))
+            for path in (focus.ROOT / "crates").rglob("*")
+            if path.is_file()
+        )
+        plan = focus.build_plan(paths)
+        self.assertTrue(plan.selections, "the workspace names test targets")
+        self.assertEqual(
+            [
+                (selection.crate, selection.target)
+                for selection in focus.missing_targets(plan)
+            ],
+            [],
+        )
+
+
 class CommandTests(unittest.TestCase):
     """The same selection renders as one nextest command or one per filter."""
 
