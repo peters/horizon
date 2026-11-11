@@ -66,7 +66,7 @@ pub use intent::{
     MAX_SECRET_BYTES, MAX_SECRETS, MAX_SECRETS_PER_PUSH, Op, Outcome, PushReply, SecretBody,
 };
 pub use invite::{InviteError, SERVER_DEVICE, ask, first_invitation, greet, invitation_text};
-pub use join::{JoinError, join};
+pub use join::{JoinBounds, JoinError, join, join_with};
 pub use link::{SocketError, SocketServer, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
 pub use listener::{ListenError, ListenerInfo, TcpServer, run_server_on_tcp};
 pub use login::{hash_code, hash_token, new_code, new_token};

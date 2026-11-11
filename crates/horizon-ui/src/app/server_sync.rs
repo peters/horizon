@@ -356,19 +356,22 @@ impl HorizonApp {
     /// invitation, the list and the removal work over `ssh` as well as over the
     /// listener. The answer comes back on a channel that the tab polls.
     pub(in crate::app) fn apply_server_action(&mut self, action: ServerAction, ctx: egui::Context) {
+        // The join comes first, and it needs no link: a computer that has no server
+        // joins one with a link, which is the only way that it gets a link at all.
+        if let ServerAction::Join { link, device } = &action {
+            self.start_server_join(link.clone(), device.clone(), ctx);
+            return;
+        }
         let Some(sync) = self.server_sync.as_ref() else {
             self.server_notice("This computer has no link to the server now.".to_owned());
             return;
         };
         let handle = sync.handle().clone();
         let asked = match &action {
-            ServerAction::Join { link, device } => {
-                self.start_server_join(link.clone(), device.clone(), ctx);
-                return;
-            }
             ServerAction::Invite => handle.ask(ServerRequest::Invite),
             ServerAction::RefreshDevices => handle.ask(ServerRequest::Devices),
             ServerAction::Remove(device) => handle.ask(ServerRequest::Remove(device.clone())),
+            ServerAction::Join { .. } => return,
         };
         let Some(editor) = self.settings.as_mut() else {
             return;

@@ -25,6 +25,34 @@ use crate::protocol::{Frame, Join, Joined};
 /// How long one address of the server may take to accept a join.
 const CONNECT_BOUND: Duration = Duration::from_secs(10);
 
+/// How long the server may take to answer a join once the link is open. A server
+/// that accepts the link and answers nothing is a server that no join waits for.
+const ANSWER_BOUND: Duration = Duration::from_secs(20);
+
+/// The bounds of one join, so a test sees a join that the server kept silent
+/// within a second instead of a minute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JoinBounds {
+    /// How long one address of the server may take to accept the link.
+    pub connect: Duration,
+    /// How long the server may take to answer the join once the link is open.
+    pub answer: Duration,
+}
+
+impl JoinBounds {
+    /// The bounds of a real join.
+    pub const STANDARD: Self = Self {
+        connect: CONNECT_BOUND,
+        answer: ANSWER_BOUND,
+    };
+}
+
+impl Default for JoinBounds {
+    fn default() -> Self {
+        Self::STANDARD
+    }
+}
+
 /// Why this computer did not join a server.
 #[derive(Debug, thiserror::Error)]
 pub enum JoinError {
@@ -51,6 +79,11 @@ pub enum JoinError {
     /// The token could not be written to the secrets file of this computer.
     #[error("The token of this computer could not be written: {0}")]
     Token(String),
+    /// The server accepted the link and answered nothing inside the bound.
+    #[error(
+        "The server did not answer the join in time. Try again, or make a new invitation on a computer that is logged in."
+    )]
+    Timeout,
 }
 
 impl JoinError {
@@ -64,6 +97,7 @@ impl JoinError {
             Self::Io(_) => "link_failed",
             Self::Refused { code, .. } => code,
             Self::Token(_) => "token_not_written",
+            Self::Timeout => "join_timeout",
         }
     }
 
@@ -97,6 +131,15 @@ fn sentence_of(code: &str, message: &str) -> String {
 /// Refuses text that is not one join link, an address outside the ranges of a link,
 /// and every typed refusal of the server.
 pub fn join(text: &str, device: &str, store: &SecretStore) -> Result<Joined, JoinError> {
+    join_with(text, device, store, JoinBounds::STANDARD)
+}
+
+/// [`join`] with the bounds of one test.
+///
+/// # Errors
+/// Refuses text that is not one join link, an address outside the ranges of a link,
+/// and every typed refusal of the server.
+pub fn join_with(text: &str, device: &str, store: &SecretStore, bounds: JoinBounds) -> Result<Joined, JoinError> {
     horizon_core::ui_thread::blocking("the join of a server is made");
     let link = JoinLink::parse(text)?;
     if !crate::protocol::check_device_name(device) {
@@ -106,9 +149,14 @@ pub fn join(text: &str, device: &str, store: &SecretStore) -> Result<Joined, Joi
     let mut last = None;
     for socket in resolved {
         horizon_core::check_address(socket.ip())?;
-        match TcpStream::connect_timeout(&socket, CONNECT_BOUND) {
+        match TcpStream::connect_timeout(&socket, bounds.connect) {
             Ok(mut stream) => {
                 let _ = stream.set_nonblocking(false);
+                let bound = Some(bounds.answer);
+                stream
+                    .set_read_timeout(bound)
+                    .and_then(|()| stream.set_write_timeout(bound))
+                    .map_err(|error| JoinError::Io(error.to_string()))?;
                 return exchange(&mut stream, &link, device, store);
             }
             Err(error) => last = Some(format!("{socket}: {error}")),
@@ -146,8 +194,8 @@ fn exchange(stream: &mut TcpStream, link: &JoinLink, device: &str, store: &Secre
         code: link.code().to_owned(),
         device: device.to_owned(),
     });
-    write_frame(stream, &join).map_err(|error| JoinError::Io(error.to_string()))?;
-    let answer = read_frame(stream).map_err(|error| JoinError::Io(error.to_string()))?;
+    write_frame(stream, &join).map_err(|error| frame_error(&error))?;
+    let answer = read_frame(stream).map_err(|error| frame_error(&error))?;
     match answer {
         Some(Frame::Joined(joined)) => {
             if joined.device != device {
@@ -180,6 +228,23 @@ fn exchange(stream: &mut TcpStream, link: &JoinLink, device: &str, store: &Secre
     }
 }
 
+/// Why one frame of a join did not travel. A socket that reaches its bound reads
+/// as the typed timeout, so a server that accepts the link and answers nothing
+/// ends the join with a sentence of its own.
+fn frame_error(error: &crate::frame::FrameError) -> JoinError {
+    match error {
+        crate::frame::FrameError::Io(io_error)
+            if matches!(
+                io_error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            JoinError::Timeout
+        }
+        _ => JoinError::Io(error.to_string()),
+    }
+}
+
 fn name_of(frame: &Frame) -> &'static str {
     match frame {
         Frame::Hello(_) => "hello",
@@ -204,6 +269,43 @@ fn name_of(frame: &Frame) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_that_accepts_a_join_and_answers_nothing_ends_it_at_its_bound() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let address = listener.local_addr().expect("the address of the listener");
+        let holding = std::thread::spawn(move || {
+            // The link is accepted and held open without one frame of an answer.
+            if let Ok((stream, _peer)) = listener.accept() {
+                std::thread::sleep(Duration::from_secs(3));
+                drop(stream);
+            }
+        });
+        let directory = tempfile::tempdir().expect("a directory");
+        let store = SecretStore::open(directory.path().join("secrets.sqlite")).expect("the secrets file");
+        let link = format!("horizon://127.0.0.1:{}/join#ABCD-EFGH-JKMN", address.port());
+        let started = std::time::Instant::now();
+        let error = join_with(
+            &link,
+            "laptop-b",
+            &store,
+            JoinBounds {
+                connect: Duration::from_secs(2),
+                answer: Duration::from_millis(200),
+            },
+        )
+        .expect_err("the server answered nothing");
+        assert_eq!(error.code(), "join_timeout");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the join ends at its own bound"
+        );
+        assert!(
+            secret_store::read_token(&store).expect("no token").is_none(),
+            "a join that no answer reached writes no token"
+        );
+        holding.join().expect("the link of the test");
+    }
 
     #[test]
     fn a_refusal_is_one_sentence_without_a_code() {
