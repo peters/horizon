@@ -139,14 +139,16 @@ fn an_agent_terminal_of_a_machine_opens_the_panel_of_the_record() {
             "-o".to_string(),
             "StrictHostKeyChecking=accept-new".to_string(),
             "-o".to_string(),
-            "ServerAliveInterval=15".to_string(),
+            "ConnectTimeout=10".to_string(),
             "-o".to_string(),
-            "ServerAliveCountMax=1".to_string(),
+            "ServerAliveInterval=5".to_string(),
+            "-o".to_string(),
+            "ServerAliveCountMax=3".to_string(),
             "-t".to_string(),
             "root@203.0.113.10".to_string(),
             "tmux new-session -A -s work \\; set-option status off".to_string(),
         ],
-        "the agent's terminal is the argv of the record"
+        "the agent's terminal is the argv of the record, with the bounds of a machine"
     );
     let listed = answered(&mut app, &ctx, &root, block::Operation::Machines);
     assert!(

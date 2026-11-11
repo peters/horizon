@@ -181,7 +181,8 @@ pub(super) fn required_key(keys: &MachineKeys, key: Option<&str>) -> Result<Opti
 }
 
 /// The connection of a machine terminal, with the key of the record when it has
-/// one.
+/// one. A click, an agent's request and a placed workspace terminal all build
+/// this connection, so all three hold the bounds of a machine.
 pub(super) fn connection_for(
     terminal: &horizon_browser_control::manifest::block_terminal::CheckedTerminal,
     key: Option<&MachineKeyRef>,
@@ -190,6 +191,7 @@ pub(super) fn connection_for(
         || SshConnection::for_agent_terminal(terminal),
         |key| SshConnection::for_agent_terminal_with_key(terminal, key),
     )
+    .as_machine_terminal()
 }
 
 /// The options of a terminal that a machine opens: an SSH panel tied to the

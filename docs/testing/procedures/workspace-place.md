@@ -337,36 +337,51 @@ reported.
    Result: The panel shows `Connecting...` at once, before the delay that was
    due, and the next loss of the link waits 3 seconds again.
 
-7. Restore the link: start the loopback SSH server again, or remove the firewall
+7. Read the command line of the `ssh` child of the new attempt.
+
+   ```sh
+   ps -o pid=,args= -C ssh | grep 2222
+   ```
+
+   Result: The line holds `-o ConnectTimeout=10`, `-o ServerAliveInterval=5` and
+   `-o ServerAliveCountMax=3`.
+
+8. Cut the link again with the rule of step 2, and press one key while the mark
+   reads `Connecting...` of an attempt that does not end.
+
+   Result: The mark reads `Connecting...` for the new attempt at once. The attempt
+   that hung ended: no `ssh` child of it stays in the list of step 7.
+
+9. Restore the link: start the loopback SSH server again, or remove the firewall
    rule of step 2.
 
    Result: Within 30 seconds the mark reads `Connected` in green, and the last
    output is still `lost-link`. No output of the session was lost, and the body
    never went blank while the attempts ran.
 
-8. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
-   ls` in the second terminal.
+10. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
+    ls` in the second terminal.
 
    Result: The command runs on the machine, and the session of the panel is the
    one before the cut. No second session exists.
 
-9. Type `exit` in the shell of the panel.
+11. Type `exit` in the shell of the panel.
 
    Result: The tmux session ends, the mark reads `Disconnected` in red, and it
    stays `Disconnected` for at least 30 seconds. Horizon does not start the
    command again, because a new `tmux new-session -A` would make an empty
    session without the person.
 
-10. Press the shortcut for a new terminal in the workspace, run one command in
+12. Press the shortcut for a new terminal in the workspace, run one command in
     it, and cut the link again as in step 2. When the mark reads
     `Reconnecting`, close the panel with its titlebar close button.
 
     Result: The panel goes away, Horizon shows no error dialog, and Horizon
     starts no further attempt.
 
-11. Restore the link as in step 7.
+13. Restore the link as in step 9.
 
-    Result: The machine answers again, and the `tmux ls` command of step 8 lists
+    Result: The machine answers again, and the `tmux ls` command of step 10 lists
     no session of the two panels that ended.
 
 ## 7. Known behaviour
@@ -414,6 +429,22 @@ local shell never reconnect. A panel that the person closed tries nothing, and
 the attempts of a panel that a machine record opened stop when that record is
 forgotten. Quitting Horizon starts the delays again in the next run.
 
+Every ssh that Horizon starts for a machine terminal, which is a click on a
+machine row, a terminal of a placed workspace and the attempt after a lost link,
+holds `-o ConnectTimeout=10`, `-o ServerAliveInterval=5` and
+`-o ServerAliveCountMax=3`. A connect that a network drops therefore ends in ten
+seconds, and an open connection whose machine stops answering ends after fifteen,
+so the delays above run on a dead network. ssh reads the first value of an option
+that it meets, and the value of a command line comes before the value of a
+configuration file, so these three options decide for the connection that Horizon
+starts, also when the ssh config of the person names other values. A plain SSH
+panel of the remote hosts chooser keeps the values of today, 15 and 1.
+
+A key press in a machine terminal whose attempt is in flight, which is the state
+`Connecting`, ends that attempt and starts the next one at once, as a key press in
+a panel that waits for its attempt does. Horizon kills and reaps the child of the
+ended attempt, so no process of the dead network stays.
+
 ### KB6 — A known list of panels follows the place
 
 Only a shell or a command panel moves to the machine. An agent, browser, Device,
@@ -434,6 +465,9 @@ before the workspace had a place.
   the session is still there.
 - A lost link of a terminal of the machine reconnects by itself, without a key
   press, and the panel attaches to the same session with its output.
+- A machine terminal holds `ConnectTimeout=10`, `ServerAliveInterval=5` and
+  `ServerAliveCountMax=3`, and a key press in a panel whose attempt is in flight
+  ends that attempt and starts a new one at once.
 - A session that ended does not reconnect, and a panel that a person closed
   starts no attempt.
 - Two workspaces on one machine hold two sessions.

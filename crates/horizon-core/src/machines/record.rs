@@ -91,12 +91,18 @@ impl Machine {
         Ok(terminal)
     }
 
-    /// The `ssh` command line of a click on this machine, with the key `key`.
+    /// The `ssh` command line of a click on this machine, with the key `key`: the
+    /// command line that `connection_for` builds for the panel, with the bounds of
+    /// a machine terminal.
     ///
     /// # Errors
     /// Refuses a record that no longer passes its rule.
     pub fn ssh_args(&self, key: &MachineKeyRef) -> Result<Vec<String>, MachineError> {
-        Ok(SshConnection::for_agent_terminal_with_key(&self.checked_terminal()?, key).to_command_args())
+        Ok(
+            SshConnection::for_agent_terminal_with_key(&self.checked_terminal()?, key)
+                .as_machine_terminal()
+                .to_command_args(),
+        )
     }
 
     /// The title of a terminal that this machine opens.

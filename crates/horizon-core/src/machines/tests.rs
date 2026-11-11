@@ -287,12 +287,14 @@ fn the_argv_of_a_machine_without_a_session_is_the_plain_login() {
             "-o".to_string(),
             "StrictHostKeyChecking=accept-new".to_string(),
             "-o".to_string(),
-            "ServerAliveInterval=15".to_string(),
+            "ConnectTimeout=10".to_string(),
             "-o".to_string(),
-            "ServerAliveCountMax=1".to_string(),
+            "ServerAliveInterval=5".to_string(),
+            "-o".to_string(),
+            "ServerAliveCountMax=3".to_string(),
             "root@203.0.113.10".to_string(),
         ],
-        "a machine without a session opens a login shell"
+        "a machine without a session opens a login shell, with the bounds of a machine"
     );
 }
 
@@ -345,6 +347,14 @@ fn a_click_on_a_machine_and_a_terminal_of_a_place_build_one_command() {
         .expect("the machine")
         .ssh_args(&keys.binding("build-1"))
         .expect("the argv of the click");
+    for argv in [&placed, &clicked] {
+        for expected in ["ConnectTimeout=10", "ServerAliveInterval=5", "ServerAliveCountMax=3"] {
+            assert!(
+                argv.iter().any(|argument| argument == expected),
+                "a machine terminal bounds its attempt with {expected}: {argv:?}"
+            );
+        }
+    }
     let placed = placed.last().expect("the command of the place").clone();
     let clicked = clicked.last().expect("the command of the click").clone();
     assert_eq!(

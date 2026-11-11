@@ -22,7 +22,9 @@ pub(crate) fn handle_terminal_keyboard_input(
     clipboard_images: &ClipboardImages,
     local_ssh_reconnect_enabled: bool,
 ) -> bool {
-    if local_ssh_reconnect_enabled && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), events) {
+    if local_ssh_reconnect_enabled
+        && disconnected_ssh_reconnect_requested(panel.kind, panel.ssh_status(), panel.attaches_a_tmux_session(), events)
+    {
         return true;
     }
 
@@ -159,6 +161,7 @@ fn take_selection_for_copy(terminal: &horizon_core::Terminal) -> Option<String> 
 fn disconnected_ssh_reconnect_requested(
     kind: PanelKind,
     ssh_status: Option<SshConnectionStatus>,
+    machine_tied: bool,
     events: &[TerminalInputEvent],
 ) -> bool {
     if kind != PanelKind::Ssh {
@@ -173,6 +176,11 @@ fn disconnected_ssh_reconnect_requested(
         // A panel that waits for its next attempt has no shell to type into, so
         // any key asks for the connection now instead of waiting.
         Some(SshConnectionStatus::Reconnecting) => pressed_keys(events).next().is_some(),
+        // An attempt of a machine terminal that reaches no machine has nothing to
+        // type into either: any key ends that attempt and starts a new one at
+        // once. A network that drops packets keeps the connect open for minutes,
+        // so the person must be able to hurry the panel.
+        Some(SshConnectionStatus::Connecting) if machine_tied => pressed_keys(events).next().is_some(),
         Some(SshConnectionStatus::Connecting | SshConnectionStatus::Connected) | None => false,
     }
 }
@@ -464,6 +472,7 @@ mod tests {
         assert!(disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Disconnected),
+            false,
             &[key_event(
                 Key::R,
                 Some(Key::R),
@@ -480,6 +489,7 @@ mod tests {
         assert!(disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Reconnecting),
+            true,
             &[key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::NONE)],
         ));
     }
@@ -489,8 +499,40 @@ mod tests {
         assert!(!disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Reconnecting),
+            true,
             &[key_event(Key::A, Some(Key::A), Some("a"), true, true, Modifiers::NONE)],
         ));
+    }
+
+    #[test]
+    fn a_key_ends_the_attempt_of_a_machine_terminal_that_is_in_flight() {
+        // The connect of a machine terminal hangs in a network that drops its
+        // packets, so the panel is `connecting` and the key of the person has
+        // nothing to type into.
+        assert!(disconnected_ssh_reconnect_requested(
+            PanelKind::Ssh,
+            Some(SshConnectionStatus::Connecting),
+            true,
+            &[key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::NONE)],
+        ));
+        assert!(
+            !disconnected_ssh_reconnect_requested(
+                PanelKind::Ssh,
+                Some(SshConnectionStatus::Connecting),
+                true,
+                &[key_event(Key::A, Some(Key::A), Some("a"), true, true, Modifiers::NONE)],
+            ),
+            "a held key starts one attempt, not one for each repeat"
+        );
+        assert!(
+            !disconnected_ssh_reconnect_requested(
+                PanelKind::Ssh,
+                Some(SshConnectionStatus::Connecting),
+                false,
+                &[key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::NONE)],
+            ),
+            "a plain ssh panel that runs a silent command keeps its attempt"
+        );
     }
 
     #[test]
@@ -498,6 +540,7 @@ mod tests {
         assert!(!disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Connected),
+            true,
             &[key_event(
                 Key::R,
                 Some(Key::R),
@@ -514,6 +557,7 @@ mod tests {
         assert!(!disconnected_ssh_reconnect_requested(
             PanelKind::Shell,
             None,
+            false,
             &[key_event(
                 Key::R,
                 Some(Key::R),
@@ -530,6 +574,7 @@ mod tests {
         assert!(!disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Disconnected),
+            false,
             &[key_event(
                 Key::R,
                 Some(Key::R),

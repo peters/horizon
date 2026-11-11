@@ -195,7 +195,8 @@ pub fn place_command(
     let connection = match machines.key(&record.name) {
         Some(key) => SshConnection::for_agent_terminal_with_key(&terminal, &keys.binding(key)),
         None => SshConnection::for_agent_terminal(&terminal),
-    };
+    }
+    .as_machine_terminal();
     opts.kind = PanelKind::Ssh;
     opts.command = None;
     opts.args.clear();

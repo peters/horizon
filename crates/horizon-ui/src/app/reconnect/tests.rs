@@ -1,5 +1,6 @@
 //! A machine terminal that reaches its tmux session again after a lost link.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use egui::Context;
@@ -294,4 +295,97 @@ fn a_panel_that_waits_names_the_attempt_that_it_reached() {
         Some(3),
         "the mark of a panel that keeps trying says which attempt it reached"
     );
+}
+
+/// The arguments of a stand-in that hangs in its connect, as a network that drops
+/// packets does: it writes its process id and then waits for ever. It is the
+/// command of the panel, so no test starts an ssh.
+fn a_hanging_attempt(marker: &Path) -> Vec<String> {
+    vec![
+        "-c".to_owned(),
+        format!("printf '%s\\n' \"$$\" >> '{}'; exec sleep 300", marker.display()),
+    ]
+}
+
+/// The process ids that the stand-in of `marker` wrote, in order.
+fn attempts(marker: &Path) -> Vec<i32> {
+    std::fs::read_to_string(marker)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .collect()
+}
+
+/// Waits for the stand-in to write `count` process ids.
+fn wait_for_attempts(marker: &Path, count: usize) -> Vec<i32> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let written = attempts(marker);
+        if written.len() >= count {
+            return written;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in wrote {} process ids and not {count}",
+            written.len()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Whether the process `pid` is gone, including a child that waits as a zombie
+/// for a reap. Linux reports the state of a process in its `/proc` entry, so the
+/// test reads it there; macOS has no such file, and the test then proves the new
+/// attempt alone.
+#[cfg(target_os = "linux")]
+fn is_gone(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return true;
+    };
+    stat.split_whitespace().nth(2).is_none_or(|state| state == "Z")
+}
+
+#[test]
+fn a_key_press_ends_an_attempt_that_is_in_flight_and_starts_a_new_one() {
+    let (temp, _ctx, mut app, _workspace) = app_on_a_machine();
+    let marker = temp.path().join("attempts.txt");
+    let workspace = app.board.create_workspace("machine");
+    // An SSH panel whose child hangs, as the `ssh` of a machine terminal hangs in
+    // a network that drops its packets. The command of the panel is the stand-in,
+    // so the restart of the same panel runs the stand-in again.
+    let options = PanelOptions {
+        kind: PanelKind::Ssh,
+        name: Some("build-1".to_owned()),
+        command: Some("/bin/sh".to_owned()),
+        args: a_hanging_attempt(&marker),
+        ..PanelOptions::default()
+    };
+    let panel_id = app.create_panel_with_options(options, workspace).expect("the terminal");
+    let first = wait_for_attempts(&marker, 1);
+    assert_eq!(first.len(), 1, "one attempt runs");
+    assert_eq!(
+        status(&app, panel_id),
+        Some(SshConnectionStatus::Connecting),
+        "the attempt hangs in its connect"
+    );
+
+    // The key press of the person ends the attempt and starts the next one now,
+    // and not after the delay of the reconnect.
+    app.reconnect_panel_now(panel_id);
+    app.apply_panel_transitions();
+    let both = wait_for_attempts(&marker, 2);
+
+    assert_ne!(both[0], both[1], "a new process runs the attempt");
+    #[cfg(target_os = "linux")]
+    assert!(
+        is_gone(first[0]),
+        "the child of the attempt that hung was killed and reaped"
+    );
+    assert_eq!(
+        status(&app, panel_id),
+        Some(SshConnectionStatus::Connecting),
+        "the new attempt is in flight"
+    );
+    assert!(!app.reconnects.is_waiting(panel_id), "the panel waits for no delay");
+    app.close_panel(panel_id);
 }

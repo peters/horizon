@@ -10,6 +10,18 @@ pub use machine_keys::{MachineKey, MachineKeyError, MachineKeyRef, MachineKeys};
 
 use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
 
+/// How long the connect of a machine terminal may take, in seconds. The delays of
+/// the reconnect of a lost link start at three seconds, so an attempt that hangs
+/// in the connect must end long before the system default of two minutes.
+const MACHINE_CONNECT_TIMEOUT_SECS: u16 = 10;
+
+/// How often an open connection of a machine terminal asks the machine to answer,
+/// in seconds.
+const MACHINE_SERVER_ALIVE_INTERVAL_SECS: u16 = 5;
+
+/// How many of those questions may stay unanswered before the connection ends.
+const MACHINE_SERVER_ALIVE_COUNT_MAX: u16 = 3;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SshConnection {
@@ -25,6 +37,13 @@ pub struct SshConnection {
     /// person's own keys and ssh agent are not offered to the machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_key: Option<MachineKeyRef>,
+    /// Whether this terminal is one of a machine of the machine list, so it
+    /// holds the time bounds of a machine terminal. A click on a machine row, an
+    /// agent's `open_terminal` of that machine and the reconnect of that panel all
+    /// set it, and it is saved, so the attempt after a lost link is bounded the
+    /// same way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub machine_terminal: bool,
 }
 
 impl SshConnection {
@@ -59,6 +78,19 @@ impl SshConnection {
         let mut connection = Self::for_agent_terminal(terminal);
         connection.machine_key = Some(key.clone());
         connection
+    }
+
+    /// The connection as one of a machine of the machine list.
+    ///
+    /// A machine terminal holds the bounds of a machine: an attempt that the
+    /// network drops ends in ten seconds, and an attempt whose machine stops
+    /// answering ends after fifteen. Without them one attempt of a dead network
+    /// hung in the connect for two minutes, so the delays of the reconnect of a
+    /// lost link never ran.
+    #[must_use]
+    pub fn as_machine_terminal(mut self) -> Self {
+        self.machine_terminal = true;
+        self
     }
 
     #[must_use]
@@ -139,14 +171,36 @@ impl SshConnection {
             args.extend(key.ssh_option_args());
         }
 
-        args.extend(default_keepalive_args());
+        args.extend(keepalive_args(self.machine_terminal));
         args.extend(self.extra_args.iter().cloned());
         args
     }
 }
 
-fn default_keepalive_args() -> impl IntoIterator<Item = String> {
-    [
+/// The keepalive and connect options of one connection, as command-line options.
+///
+/// `ssh` reads the first value of an option that it meets, and a value of the
+/// command line comes before the value of a configuration file, so these options
+/// decide for the connection that Horizon starts, also when the ssh config of the
+/// person names another value. A machine terminal is the case that needs them
+/// most: a network that drops packets keeps a connect open until the system ends
+/// it, and a person who presses a key in the panel then has nothing to hurry.
+fn keepalive_args(machine_terminal: bool) -> Vec<String> {
+    if machine_terminal {
+        return vec![
+            "-o".to_string(),
+            format!("ConnectTimeout={MACHINE_CONNECT_TIMEOUT_SECS}"),
+            "-o".to_string(),
+            format!("ServerAliveInterval={MACHINE_SERVER_ALIVE_INTERVAL_SECS}"),
+            "-o".to_string(),
+            format!("ServerAliveCountMax={MACHINE_SERVER_ALIVE_COUNT_MAX}"),
+        ];
+    }
+    default_keepalive_args()
+}
+
+fn default_keepalive_args() -> Vec<String> {
+    vec![
         "-o".to_string(),
         "ServerAliveInterval=15".to_string(),
         "-o".to_string(),
@@ -329,6 +383,59 @@ mod tests {
             args.iter().filter(|argument| argument.starts_with("-o")).count(),
             2,
             "an agent adds no ssh option: {args:?}"
+        );
+    }
+
+    #[test]
+    fn a_machine_terminal_bounds_its_attempt_with_its_own_options() {
+        let route = TerminalRoute {
+            host: "203.0.113.10".into(),
+            user: Some("root".into()),
+            port: None,
+        };
+        let checked = block_terminal::check(&route, Some("tmux new-session -A -s work")).expect("the route");
+        let plain = SshConnection::for_agent_terminal(&checked).to_command_args();
+        let machine = SshConnection::for_agent_terminal(&checked).as_machine_terminal();
+        let args = machine.to_command_args();
+
+        // The command line decides over the ssh config of the person: ssh reads
+        // the first value of an option that it meets, and these come first.
+        assert_eq!(
+            args,
+            vec![
+                "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
+                "ServerAliveInterval=5".to_string(),
+                "-o".to_string(),
+                "ServerAliveCountMax=3".to_string(),
+                "-t".to_string(),
+                "root@203.0.113.10".to_string(),
+                "tmux new-session -A -s work".to_string(),
+            ],
+            "a machine attempt ends in ten seconds and an open one in fifteen"
+        );
+        assert!(
+            !plain.iter().any(|argument| argument == "ConnectTimeout=10"),
+            "a plain ssh panel keeps the bounds of today: {plain:?}"
+        );
+        assert!(
+            args.iter().position(|argument| argument == "ConnectTimeout=10")
+                < args.iter().position(|argument| argument == "root@203.0.113.10"),
+            "the options come before the destination: {args:?}"
+        );
+
+        // The saved panel keeps the machine bounds, so the attempt after a lost
+        // link is bounded the same way.
+        let saved = serde_json::to_value(&machine).expect("a saved connection");
+        assert_eq!(saved["machine_terminal"], serde_json::json!(true));
+        let restored: SshConnection = serde_json::from_value(saved).expect("a restored connection");
+        assert_eq!(restored.to_command_args(), args);
+        let older: SshConnection =
+            serde_json::from_value(serde_json::json!({"host": "lab-1"})).expect("a connection of an older snapshot");
+        assert!(
+            !older.machine_terminal,
+            "a plain ssh panel of an older snapshot stays plain"
         );
     }
 

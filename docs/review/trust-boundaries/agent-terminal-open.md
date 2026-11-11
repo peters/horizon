@@ -120,12 +120,14 @@ without the field.
   the binding of this computer on the coordination worker. A record that no longer passes a rule
   opens nothing, and the sidebar says the typed reason.
 - **The argv is Horizon's.** A click runs `ssh` with the argv of
-  `SshConnection::for_agent_terminal_with_key`: the key that this computer binds
-  to the record, the two
-  keepalive options, `-p` when the record has a port, `-t` when it has a session,
-  `user@host` as one argument and `tmux new-session -A -s <session> \; set-option
-  status off` last. A hand-edited registry cannot add an ssh option, a proxy, an
-  identity file or a second command.
+  `SshConnection::for_agent_terminal_with_key().as_machine_terminal()`: the key
+  that this computer binds
+  to the record, the three bounds of a machine terminal (`ConnectTimeout=10`,
+  `ServerAliveInterval=5`, `ServerAliveCountMax=3`), `-p` when the record has a
+  port, `-t` when it has a session, `user@host` as one argument and `tmux
+  new-session -A -s <session> \; set-option status off` last. A hand-edited
+  registry cannot add an ssh option, a proxy, an identity file or a second
+  command.
 - **The list is private to the person.** It is one file of the Horizon home, in a
   `0700` directory, written as `0600` through a temporary file and a rename, on
   the coordination worker. It is not part of a session or a workspace.
