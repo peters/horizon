@@ -88,8 +88,8 @@ impl Drop for FrameScope {
 /// repository accepts them.
 ///
 /// The reason is one line in the code and one line in *Known UI-thread work* of
-/// the guide. A reason of work that a later change moves to a worker starts with
-/// `part 2:` and names the finding, so the next change finds it again.
+/// the guide. Work that a later change moves to a worker takes a reason that
+/// names the change, so the next change finds the scope again.
 #[derive(Debug)]
 #[must_use = "the scope ends when this value is dropped"]
 pub struct ExceptionScope {
