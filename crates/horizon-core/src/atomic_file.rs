@@ -1,9 +1,10 @@
-//! One private JSON file under the Horizon home, read whole and replaced whole.
+//! One private file of a Horizon home, read whole and replaced whole.
 //!
-//! A reader of the machine list sees either the old document or the new one: the
-//! write goes to a temporary file in the same directory, is synced, and is
-//! renamed over the document. The directory is private and the file is private,
-//! because both name hosts of the person.
+//! A reader sees either the old document or the new one: the write goes to a
+//! temporary file in the same directory, is synced, and is renamed over the
+//! document. The directory and the file are private, because they hold hosts,
+//! keys and records of the person. A caller reads and writes this file on a
+//! worker thread, never on the UI thread.
 
 use std::{
     fs, io,
@@ -11,26 +12,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{MachineError, unavailable};
+/// The mode of a directory that holds a private file.
+pub const DIRECTORY_MODE: u32 = 0o700;
 
-/// The mode of a directory that holds a file of the machine list.
-const DIRECTORY_MODE: u32 = 0o700;
-
-/// The mode of a file that names hosts. It is the person's, not the server's.
-const FILE_MODE: u32 = 0o600;
+/// The mode of a private file.
+pub const FILE_MODE: u32 = 0o600;
 
 /// One document that Horizon reads and replaces as a whole.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AtomicFile {
     path: PathBuf,
-    label: &'static str,
 }
 
 impl AtomicFile {
-    /// The document at `path`, named `label` in a refusal.
+    /// The document at `path`.
     #[must_use]
-    pub fn new(path: PathBuf, label: &'static str) -> Self {
-        Self { path, label }
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
     }
 
     /// The path of the document.
@@ -43,15 +41,11 @@ impl AtomicFile {
     ///
     /// # Errors
     /// Returns why the document cannot be read.
-    pub fn read(&self) -> Result<Option<String>, MachineError> {
+    pub fn read(&self) -> io::Result<Option<String>> {
         match fs::read_to_string(&self.path) {
             Ok(text) => Ok(Some(text)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(unavailable(format!(
-                "Horizon could not read {} at {}: {error}",
-                self.label,
-                self.path.display()
-            ))),
+            Err(error) => Err(error),
         }
     }
 
@@ -60,9 +54,9 @@ impl AtomicFile {
     ///
     /// # Errors
     /// Returns why the directory or the document cannot be written.
-    pub fn write(&self, encoded: &[u8]) -> Result<(), MachineError> {
+    pub fn write(&self, encoded: &[u8]) -> io::Result<()> {
         let directory = self.path.parent().unwrap_or_else(|| Path::new("."));
-        private_directory(directory, self.label)?;
+        private_directory(directory)?;
         let temporary = self.path.with_extension("json.tmp");
         let written = fs::OpenOptions::new()
             .write(true)
@@ -78,27 +72,17 @@ impl AtomicFile {
             .and_then(|()| fs::rename(&temporary, &self.path));
         if let Err(error) = written {
             let _ = fs::remove_file(&temporary);
-            return Err(unavailable(format!(
-                "Horizon could not write {} at {}: {error}",
-                self.label,
-                self.path.display()
-            )));
+            return Err(error);
         }
         Ok(())
     }
 }
 
 /// Makes `directory` private, creating it when it is not there.
-fn private_directory(directory: &Path, label: &'static str) -> Result<(), MachineError> {
+fn private_directory(directory: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
         .recursive(true)
         .mode(DIRECTORY_MODE)
         .create(directory)
         .and_then(|()| fs::set_permissions(directory, fs::Permissions::from_mode(DIRECTORY_MODE)))
-        .map_err(|error| {
-            unavailable(format!(
-                "Horizon could not make the directory of {label} at {} private: {error}",
-                directory.display()
-            ))
-        })
 }

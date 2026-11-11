@@ -2,6 +2,7 @@
 
 pub mod agent_work;
 mod agents;
+mod atomic_file;
 mod block_panel;
 mod board;
 pub mod browser;
@@ -45,6 +46,7 @@ pub use agents::{
 };
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
+pub use atomic_file::AtomicFile;
 pub use block_panel::{
     BlockPanelState, CLICK_RETENTION_MILLIS, CardFrames, CardRuntime, ClickQueue, MAX_PENDING_CLICKS, PendingClick,
     WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
@@ -68,7 +70,7 @@ pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use machines::{
     CheckedMachine, MAX_MACHINES, MAX_PROVIDER_CHARS, MAX_SESSION_CHARS, Machine, MachineBindings, MachineError,
-    MachineRegistry, MachineStore, Machines,
+    MachineRegistry, MachineStore, Machines, check_record,
 };
 pub use panel::{
     DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,

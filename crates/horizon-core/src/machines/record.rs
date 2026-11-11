@@ -129,6 +129,27 @@ pub fn check(
     })
 }
 
+/// Check one record that already exists, as a computer that did not make it reads
+/// it: the name, the route, the tmux session and the provider line pass the same
+/// rules as `machine_set`, and the returned record holds the checked values.
+///
+/// # Errors
+/// Describes the first refused field with the code of [`MachineError::code`].
+pub fn check_record(record: &Machine) -> Result<Machine, MachineError> {
+    let route = TerminalRoute {
+        host: record.host.clone(),
+        user: record.user.clone(),
+        port: record.port.map(i64::from),
+    };
+    let checked = check(
+        &record.name,
+        &route,
+        record.session.as_deref(),
+        record.provider.as_deref(),
+    )?;
+    Ok(checked.record(record.added_at_millis))
+}
+
 /// Check one machine name. It is the key name rule, so a record and the keys
 /// that it may use have one name.
 ///

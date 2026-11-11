@@ -21,15 +21,16 @@
 //! path from the key name, so a hand-edited registry cannot turn a click into a
 //! different program or an ssh option.
 
+use std::{io, path::Path};
+
 mod bindings;
-mod file;
 mod record;
 mod registry;
 #[cfg(test)]
 mod tests;
 
 pub use bindings::MachineBindings;
-pub use record::{CheckedMachine, Machine, check, machine_key_name, machine_name, session_name};
+pub use record::{CheckedMachine, Machine, check, check_record, machine_key_name, machine_name, session_name};
 pub use registry::{LoadedMachines, MachineRegistry, MachineStore, Machines};
 
 pub use horizon_browser_control::manifest::block_machines::{
@@ -107,4 +108,12 @@ fn in_name_order(mut records: Vec<Machine>) -> Vec<Machine> {
 
 fn unavailable(reason: String) -> MachineError {
     MachineError::Unavailable { reason }
+}
+
+/// The refusal of a document of the machine list that cannot be read or written.
+fn file_error(action: &str, label: &str, path: &Path, error: &io::Error) -> MachineError {
+    unavailable(format!(
+        "Horizon could not {action} {label} at {}: {error}",
+        path.display()
+    ))
 }

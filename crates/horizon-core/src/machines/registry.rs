@@ -13,8 +13,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::file::AtomicFile;
-use super::{MAX_MACHINES, Machine, MachineBindings, MachineError, in_name_order, unavailable};
+use super::{MAX_MACHINES, Machine, MachineBindings, MachineError, file_error, in_name_order, unavailable};
+use crate::AtomicFile;
 
 /// The label of the registry in a refusal.
 const LABEL: &str = "the machine list";
@@ -66,7 +66,7 @@ impl MachineRegistry {
     pub fn new(mut root: PathBuf) -> Self {
         root.push("registry.json");
         Self {
-            file: AtomicFile::new(root, LABEL),
+            file: AtomicFile::new(root),
         }
     }
 
@@ -91,7 +91,11 @@ impl MachineRegistry {
 
 impl MachineStore for MachineRegistry {
     fn load(&self) -> Result<LoadedMachines, MachineError> {
-        let Some(text) = self.file.read()? else {
+        let Some(text) = self
+            .file
+            .read()
+            .map_err(|error| file_error("read", LABEL, self.file.path(), &error))?
+        else {
             return Ok(LoadedMachines::default());
         };
         let mut document: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
@@ -118,7 +122,9 @@ impl MachineStore for MachineRegistry {
             machines: records.to_vec(),
         })
         .map_err(|error| unavailable(format!("Horizon could not encode {LABEL}: {error}")))?;
-        self.file.write(&encoded)
+        self.file
+            .write(&encoded)
+            .map_err(|error| file_error("write", LABEL, self.file.path(), &error))
     }
 }
 

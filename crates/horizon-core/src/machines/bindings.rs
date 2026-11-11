@@ -12,8 +12,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::file::AtomicFile;
-use super::{MachineError, unavailable};
+use super::{MachineError, file_error, unavailable};
+use crate::AtomicFile;
 
 /// The name of the binding file inside the machine directory.
 const FILE_NAME: &str = "keys.json";
@@ -46,7 +46,7 @@ impl MachineBindings {
     #[must_use]
     pub fn at(path: PathBuf) -> Self {
         Self {
-            file: AtomicFile::new(path, LABEL),
+            file: AtomicFile::new(path),
             names: BTreeMap::new(),
         }
     }
@@ -63,7 +63,11 @@ impl MachineBindings {
     /// # Errors
     /// Returns why the file cannot be read or parsed.
     pub fn load(&self) -> Result<Self, MachineError> {
-        let Some(text) = self.file.read()? else {
+        let Some(text) = self
+            .file
+            .read()
+            .map_err(|error| file_error("read", LABEL, self.path(), &error))?
+        else {
             return Ok(Self {
                 file: self.file.clone(),
                 names: BTreeMap::new(),
@@ -121,6 +125,8 @@ impl MachineBindings {
     pub fn save(&self) -> Result<(), MachineError> {
         let encoded = serde_json::to_vec_pretty(&self.names)
             .map_err(|error| unavailable(format!("Horizon could not encode {LABEL}: {error}")))?;
-        self.file.write(&encoded)
+        self.file
+            .write(&encoded)
+            .map_err(|error| file_error("write", LABEL, self.path(), &error))
     }
 }

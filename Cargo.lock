@@ -2165,6 +2165,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-sync"
+version = "0.2.7"
+dependencies = [
+ "horizon-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-terminal"
 version = "0.2.7"
 dependencies = [
