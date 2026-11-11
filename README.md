@@ -334,6 +334,8 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 
 Horizon keeps its settings in one SQLite file, `~/.horizon/settings.sqlite` (in [`HORIZON_HOME`](#state-folder) when you set it). Change a setting in the Settings window; you never edit a file by hand. A run that names its own settings with `--config <path>` reads a JSON file, and the sections below are its form. You can seed workspaces, panel presets, feature flags, and shortcuts that way.
 
+If you upgrade from an older Horizon, your settings and your sessions come with you. Horizon reads the `config.yaml` of an older release from its home, writes its store from it, and leaves that file exactly as it is. A value that an older version kept in the credential store of your operating system is not moved: type it once more in Settings → Secrets. [The settings store](docs/architecture/settings-store.md#upgrade-from-an-older-horizon) lists what changes.
+
 Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys are ignored, so a `panels:` block will not create anything.
 
 ```json
@@ -509,7 +511,7 @@ Provider-backed overview controls and workspace setup remain separate integratio
 
 | Flag | What it does |
 |:-----|:-------------|
-| `--config <path>` / `-c <path>` | Use an explicit settings location: the store is `settings.sqlite` in that folder, or `<stem>.settings.sqlite` for another name; the file is JSON |
+| `--config <path>` / `-c <path>` | Use an explicit settings location: the store is `settings.sqlite` in that folder, or `<stem>.settings.sqlite` for another name; the file is JSON, and a YAML file of an older Horizon is imported one time |
 | `--ephemeral` | Do not persist this run |
 | `--new-session` | Start a new saved session from the current config |
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |

@@ -54,8 +54,13 @@ Horizon does not delete the settings of a newer one.
 
 `--config <path>` names a settings file. The file is JSON: one object with the
 sections of the table above. The default path of a run is
-`~/.horizon/config.json`. A file that is not JSON is refused, and the message
-says that the format is JSON.
+`~/.horizon/config.json`.
+
+The format of a document is its content. A JSON object is the settings file of
+this build. A document that is not a JSON object and is a YAML mapping is the
+settings file of an older Horizon, and a start imports it one time, as the next
+section says. A document that reads as neither is refused, and the message says
+that the format is JSON.
 
 A run reads that file only while it has no store:
 
@@ -69,9 +74,71 @@ A start that finds a store does not read the file. A file that lies next to a
 store stays as the person left it, and one log line names the file that holds the
 settings.
 
-The file of an older Horizon was YAML. This build does not read a YAML file. A
-start that finds only an old `config.yaml` and no store begins with the default
-settings, and it leaves that file exactly as it is.
+## Upgrade from an older Horizon
+
+A person who upgrades keeps the settings and the sessions of the build that they
+ran before. A release up to v0.2.7 kept its settings in `config.yaml`, in the
+Horizon home, and had no store. A build of `main` wrote `settings.sqlite` and kept
+`config.yaml` beside it as a copy.
+
+A start with no store and no JSON settings file reads the YAML settings file of the
+older build in the folder of its settings file, `config.yaml` and then
+`config.yml`. It migrates the document from its configuration version, checks the
+values and writes the store. The YAML file keeps every byte, so a person who goes
+back to the older build still has it. One `info` line names the file.
+
+| What a start finds | What it becomes |
+|---|---|
+| A store and a YAML file | The store is the settings. The YAML file is not read, not imported and not rewritten. |
+| A YAML file and no store | The YAML file is imported one time into the store, with the migrations and the checks of this build. The file stays as it is. |
+| A YAML file that main moved aside, `config.yaml.imported-<time>` | That name is not one that a start reads. The store of main holds the settings. |
+| A store that main wrote | It opens. `schema_version` is 1 in both builds. A section that this build does not know stays in the file and is not read, and the `mirror_sha256` row stays for the older build. A section that main has and this build does not, such as `features.speech`, is ignored. |
+| A YAML file that cannot be read, or one of a configuration version above this build | The start stops with a sentence that names the file and the line, and it writes no store. The defaults never replace the settings of a person. |
+| A settings file that main wrote, `config.yaml` | The same as the row above: it is imported one time, because its content is YAML. |
+| `--config <path>` that names a YAML file | Imported one time, with a log line that says that a YAML file is read for import only. The file stays as it is. |
+
+Every key that this build no longer has is ignored, and every value that it still
+has arrives unchanged: the window, the appearance and the theme, the shortcuts,
+the presets, the workspaces, the features that remain and the browser settings
+that remain. A panel kind that a release removed leaves the presets and the
+boards, and the rest loads. The list of the removed features and of what a person
+sees in their place is [below](#what-an-upgrade-removes).
+
+### The profile of a home
+
+The session store keeps one profile for each settings path, and the profile id is
+the hash of that path. A default run keeps the id that release v0.2.7 and `main`
+gave it: the id of `<home>/config.yaml`, which was the settings path of both. The
+settings file of this build is `<home>/config.json`, and its hash would be a second
+profile with an empty board, so the sessions, the last session and the browser
+profiles of a person would look gone, and a person who goes back would not find
+what this build wrote. A run that names its settings file, such as a smoke run
+with `--config smoke.json`, keeps the id of that path.
+
+### The saved sessions
+
+A session of an older build opens: `sessions/index.yaml` names its profile, and
+`runtime.yaml` and `meta.yaml` hold the board and its metadata.
+
+| What a start finds in a session | What it becomes |
+|---|---|
+| A panel of a kind that this build still has | It comes back in its workspace at its place. |
+| A panel of a kind that this build removed | It is left out, and one line in the sidebar names the count of each removed kind. |
+| A field that this build does not know | It is ignored. The rest of the session loads, and one field never stops a session. |
+| A board of an older board version, or one that lost a panel | The first write of this build copies the file to `runtime.yaml.before-<version>` beside it, so a person who goes back finds the board. The load itself writes nothing. |
+
+## What an upgrade removes
+
+| Removed item | What a person sees in its place |
+|---|---|
+| The Usage panel | Nothing. The panel kind is gone, and the session notice names it. |
+| The Git Changes panel | Nothing. The diff of a folder is read in a terminal or in an agent panel. |
+| The setup board | The Settings window holds the settings that the board guided a person through. |
+| Speech input and its `features.speech` section | Nothing. Horizon has no dictation, and the section is ignored. |
+| The attention feed and its `overlays.attention_feed_*` values | Nothing. An agent reports in its own panel. |
+| The cloud workspace profiles, `remote` | Nothing. A machine of the machine list and a browser host hold the remote work. |
+| The casting, native app testing and tailnet settings | Nothing. Their sections are ignored. |
+| A credential value of the OS credential store | `no value on this computer` under the name or the reference, and the Secrets tab says to type the value once more. The value is not read and does not move. |
 
 ## No setting is lost
 
@@ -137,8 +204,8 @@ holds no value. See
 This build reads no credential store of the operating system. A value that an older
 build stored in the keyring or the Keychain is not read and does not move: the row
 of the reference or the name behaves as a value that this computer does not hold,
-the window shows `no value on this computer`, and the person types the value once
-more. There is no migration step and the first start shows nothing special.
+the window shows `no value on this computer`, and the Secrets tab says that a value
+of an older Horizon must be typed once more. There is no migration step.
 
 ### The values that have no field
 
@@ -179,7 +246,8 @@ credential binding and no credential value.
 | The store is damaged and a settings file exists | Horizon reports the store, moves the damaged file to `settings.sqlite.damaged-<time>`, writes a new store from the file, and leaves the file where it is. |
 | The store is damaged and no settings file exists | Horizon reports the path and the reason. It does not use the default settings, and the damaged file stays where it is. |
 | The store has a schema of another Horizon version | Horizon refuses the store and reports both versions. It writes nothing in its place. |
-| A settings file that a start reads is not JSON | Horizon reports the format and keeps the file. |
+| A settings file that a start reads is neither JSON nor a YAML mapping | Horizon reports that the format is JSON and keeps the file. |
+| A YAML settings file of an older Horizon cannot be read | Horizon reports the file and the line, writes no store, and keeps the file. |
 | The store does not exist and no settings file exists | Horizon uses the default settings. It writes no file until a setting changes. |
 | `secrets.sqlite` cannot be opened | The Settings window says which file and why under each name of the Secrets tab, and the link writes one line of the log. The settings and the machine keys still work. |
 
