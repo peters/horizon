@@ -114,9 +114,6 @@ impl HorizonApp {
     }
 
     pub(super) fn render_settings(&mut self, ui: &mut egui::Ui) {
-        if self.settings.is_none() {
-            return;
-        }
         let Some(editor) = self.settings.as_mut() else {
             return;
         };

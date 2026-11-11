@@ -331,8 +331,8 @@ impl Config {
     /// beside another name.
     ///
     /// A JSON file that is found with no store is imported one time, and it
-    /// stays exactly as it is; a start that finds a store does not read it. An
-    /// old `config.json` is not read at all.
+    /// stays exactly as it is; a start that finds a store does not read it. The
+    /// YAML file of an older Horizon is not read at all.
     ///
     /// # Errors
     ///
