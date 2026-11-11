@@ -1,6 +1,10 @@
 mod bar;
 mod browser;
+#[cfg(test)]
+mod footer_tests;
 mod general;
+#[cfg(test)]
+mod panel_test_support;
 #[cfg(test)]
 mod panel_tests;
 mod presets;

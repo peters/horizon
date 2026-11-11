@@ -3,6 +3,10 @@
 
 use horizon_core::{Config, RuntimeState, StartupDecision};
 
+use super::panel_test_support::{
+    BUTTON_LABELS, canvas_background_clip, for_each_painted, panel_background_rect, panel_texts, reserved_panel_rect,
+    text_rects, text_start,
+};
 use super::tests::{collect_texts, ephemeral, texts_hold};
 use crate::app::test_support::test_app_with_startup;
 
@@ -260,26 +264,6 @@ fn assert_no_word_lies_under_a_button(shapes: &[egui::epaint::ClippedShape]) {
     }
 }
 
-/// The labels of the controls of the settings panel, so a test knows which text
-/// of the panel is a word and which one is a control.
-const BUTTON_LABELS: &[&str] = &[
-    "Add a computer",
-    "Copy link",
-    "Delete",
-    "Join",
-    "Keep",
-    "Read the list",
-    "Remove",
-    "Replace value",
-    "Store",
-    "Cancel",
-    "Save",
-    "Revert",
-    "Close",
-    "Add",
-    "Reset Defaults",
-];
-
 /// One link whose child ends at once, one open invitation and three computers of
 /// the server, so the Server tab draws its plate, its link and its list.
 fn seed_server_tab(app: &mut crate::app::HorizonApp, directory: &std::path::Path) {
@@ -377,7 +361,7 @@ fn the_secrets_tab_fits_the_panel_that_ends_the_canvas() {
 /// One application frame that shows the Settings panel, with two named secrets
 /// that this computer holds a value for: `HZ_DEMO_TOKEN`, and a name of 64
 /// characters.
-fn app_with_stored_secrets() -> (tempfile::TempDir, egui::Context, crate::app::HorizonApp, [String; 2]) {
+pub(super) fn app_with_stored_secrets() -> (tempfile::TempDir, egui::Context, crate::app::HorizonApp, [String; 2]) {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
@@ -458,7 +442,7 @@ fn app_with_stored_secrets() -> (tempfile::TempDir, egui::Context, crate::app::H
 
 /// Three frames of `app`, after the panel settled, and the shapes of the last
 /// one. The panel is selected on `tab` first.
-fn settings_frame(
+pub(super) fn settings_frame(
     ctx: &egui::Context,
     app: &mut crate::app::HorizonApp,
     viewport: [f32; 2],
@@ -628,134 +612,6 @@ fn same_rect(left: egui::Rect, right: egui::Rect) -> bool {
         && (left.max.y - right.max.y).abs() <= 1.0
 }
 
-/// Runs `visit` over every painted primitive, with the rectangle that it paints
-/// and the rectangle that it is clipped to.
-fn for_each_painted(
-    shapes: &[egui::epaint::ClippedShape],
-    visit: &mut impl FnMut(&egui::Shape, egui::Rect, egui::Rect),
-) {
-    for clipped in shapes {
-        visit_shape(&clipped.shape, clipped.clip_rect, visit);
-    }
-}
-
-fn visit_shape(shape: &egui::Shape, clip: egui::Rect, visit: &mut impl FnMut(&egui::Shape, egui::Rect, egui::Rect)) {
-    if let egui::Shape::Vec(shapes) = shape {
-        for shape in shapes {
-            visit_shape(shape, clip, visit);
-        }
-        return;
-    }
-    // A shape without vertices, such as an empty mesh, has no rectangle.
-    let painted = shape.visual_bounding_rect();
-    if [painted.min.x, painted.min.y, painted.max.x, painted.max.y]
-        .iter()
-        .all(|value| value.is_finite())
-    {
-        visit(shape, painted, clip);
-    }
-}
-
-/// The rectangle that the panel reserved in the last frame, which is where its
-/// background begins.
-fn reserved_panel_rect(app: &crate::app::HorizonApp) -> egui::Rect {
-    app.settings
-        .as_ref()
-        .and_then(|editor| editor.panel_rect)
-        .expect("the open panel reserved its rectangle")
-}
-
-/// The rectangle that the Settings panel paints: the tallest shape that covers
-/// the whole width that the panel reserved, which is its background. The
-/// rectangle of that shape is what the panel asked for, and the clip of a panel
-/// that overflows is still the panel, so only the rectangle tells a panel that
-/// fits from one that does not.
-fn panel_background_rect(shapes: &[egui::epaint::ClippedShape], reserved: egui::Rect) -> egui::Rect {
-    let mut panel: Option<egui::Rect> = None;
-    for_each_painted(shapes, &mut |_, painted, _| {
-        if painted.min.x > reserved.min.x + 2.0 || painted.max.x < reserved.max.x - 2.0 {
-            return;
-        }
-        if panel.is_none_or(|current| painted.height() > current.height()) {
-            panel = Some(painted);
-        }
-    });
-    panel.unwrap_or(egui::Rect::NOTHING)
-}
-
-/// The clip rectangle of the canvas: the widest clip of the frame that starts at
-/// the window corner and stops before the window edge. The canvas is the only
-/// surface with such a rectangle; the toolbar and the overlays cover the whole
-/// window, and the sidebar and the panel start beside a corner.
-fn canvas_background_clip(shapes: &[egui::epaint::ClippedShape], viewport: [f32; 2]) -> egui::Rect {
-    let mut widest: Option<egui::Rect> = None;
-    for clipped in shapes {
-        let clip = clipped.clip_rect;
-        if clip.min.x.abs() > 0.5 || clip.min.y.abs() > 0.5 || clip.width() >= viewport[0] - 0.5 {
-            continue;
-        }
-        if widest.is_none_or(|current| clip.width() > current.width()) {
-            widest = Some(clip);
-        }
-    }
-    widest.unwrap_or(egui::Rect::NOTHING)
-}
-
-/// The rectangles of one drawn text.
-fn text_rects(shapes: &[egui::epaint::ClippedShape], text: &str) -> Vec<egui::Rect> {
-    let mut rects = Vec::new();
-    for_each_painted(shapes, &mut |shape, painted, _| {
-        if let egui::Shape::Text(drawn) = shape
-            && drawn.galley.text() == text
-        {
-            rects.push(painted);
-        }
-    });
-    rects
-}
-
-/// The texts that the panel paints, with the place where each one starts.
-fn panel_texts(shapes: &[egui::epaint::ClippedShape], panel: egui::Rect) -> Vec<(&str, egui::Pos2)> {
-    let mut texts = Vec::new();
-    for clipped in shapes {
-        if !panel.expand(1.0).contains_rect(clipped.clip_rect) {
-            continue;
-        }
-        collect_panel_texts(&clipped.shape, &mut texts);
-    }
-    texts
-}
-
-fn collect_panel_texts<'a>(shape: &'a egui::Shape, texts: &mut Vec<(&'a str, egui::Pos2)>) {
-    match shape {
-        egui::Shape::Text(drawn) => texts.push((drawn.galley.text(), drawn.pos)),
-        egui::Shape::Vec(shapes) => {
-            for shape in shapes {
-                collect_panel_texts(shape, texts);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Where the first character of one drawn text begins.
-fn text_start(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Pos2> {
-    for clipped in shapes {
-        if let Some(start) = text_start_in(&clipped.shape, text) {
-            return Some(start);
-        }
-    }
-    None
-}
-
-fn text_start_in(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
-    match shape {
-        egui::Shape::Text(drawn) if drawn.galley.text() == text => Some(drawn.pos),
-        egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| text_start_in(shape, text)),
-        _ => None,
-    }
-}
-
 /// The widest panel background over three frames, after the panel settles.
 fn widest_panel_width(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: [f32; 2]) -> f32 {
     let mut widths = Vec::new();
@@ -821,204 +677,4 @@ fn the_speech_tab_says_that_speech_input_is_off_while_no_transcriber_is_set() {
         texts.iter().any(|text| text.contains("standard output is the text")),
         "the tab shows the command line of its transcriber: {texts:?}"
     );
-}
-
-/// The footer of the panel: its status line and its four buttons. The bar is the
-/// widest shape of the last band of the panel, and every text of that band is
-/// either the label of a button or the status line.
-fn footer_texts(shapes: &[egui::epaint::ClippedShape], panel: egui::Rect) -> Vec<(String, egui::Rect)> {
-    let band = footer_band(shapes, panel);
-    let mut texts = Vec::new();
-    for_each_painted(shapes, &mut |shape, painted, clip| {
-        // A text that the clip of the tab cuts is scrolled under the bar, so the
-        // person does not read it in the footer.
-        if let egui::Shape::Text(drawn) = shape
-            && clip.contains_rect(painted)
-            && painted.center().y >= band.min.y + 4.0
-            && painted.center().y <= band.max.y - 4.0
-        {
-            texts.push((drawn.galley.text().to_owned(), painted));
-        }
-    });
-    texts
-}
-
-/// The band that the footer bar covers: the widest shape that ends at the bottom
-/// of the panel content and is as tall as the bar.
-fn footer_band(shapes: &[egui::epaint::ClippedShape], panel: egui::Rect) -> egui::Rect {
-    let mut band = egui::Rect::NOTHING;
-    for_each_painted(shapes, &mut |_shape, painted, _clip| {
-        let at_the_bottom = painted.max.y <= panel.max.y + 1.0 && panel.max.y - painted.max.y <= 20.0;
-        if at_the_bottom && painted.height() > 40.0 && painted.height() < 56.0 && painted.width() > band.width() {
-            band = painted;
-        }
-    });
-    assert!(!band.is_negative(), "the panel {panel:?} draws its footer bar");
-    band
-}
-
-/// One state of the save that the footer shows.
-#[derive(Clone, Copy)]
-enum FooterState {
-    None,
-    LivePreview,
-    Saving,
-    Saved,
-    Error,
-}
-
-impl FooterState {
-    /// The state of the editor, as the frame that applies the save sets it.
-    fn status(self, error: &str) -> super::SettingsStatus {
-        match self {
-            Self::None => super::SettingsStatus::None,
-            Self::LivePreview => super::SettingsStatus::LivePreview,
-            Self::Saving => super::SettingsStatus::Saving,
-            Self::Saved => super::SettingsStatus::Saved,
-            Self::Error => super::SettingsStatus::Error(error.to_owned()),
-        }
-    }
-
-    /// The text of the footer: the state, or the line of an error that is longer
-    /// than the place of the status line.
-    fn text(self) -> Option<&'static str> {
-        match self {
-            Self::LivePreview => Some("Live preview"),
-            Self::Saving => Some("Saving"),
-            Self::Saved => Some("Saved"),
-            Self::None | Self::Error => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::None => "no state",
-            Self::LivePreview => "live preview",
-            Self::Saving => "saving",
-            Self::Saved => "saved",
-            Self::Error => "an error",
-        }
-    }
-}
-
-/// The footer keeps its text and its buttons in the panel, whatever the tab and
-/// whatever the state of the save says.
-///
-/// The status line takes the width that the buttons leave, so no state can put a
-/// button over it: a footer that draws "Live preview" under the Close button
-/// reads "Live prev" and hides the rest.
-#[test]
-fn the_footer_row_fits_the_panel_in_every_state() {
-    let viewport = [1480.0_f32, 900.0];
-    let (_temp, ctx, mut app, _names) = app_with_stored_secrets();
-    let error = "The endpoint of the transcriber must be an address that starts with https, and this \
-                 line of an error is longer than the place of the status line";
-    let cases = [
-        (FooterState::None, false),
-        (FooterState::LivePreview, true),
-        (FooterState::Saving, true),
-        (FooterState::Saved, false),
-        (FooterState::Error, true),
-    ];
-
-    for (case, dirty) in cases {
-        let state = case.name();
-        for tab in super::SettingsTab::ALL {
-            if let Some(editor) = app.settings.as_mut() {
-                editor.status = case.status(error);
-                editor.dirty = dirty;
-            }
-            let shapes = settings_frame(&ctx, &mut app, viewport, *tab);
-            let panel = panel_background_rect(&shapes, reserved_panel_rect(&app));
-            let band = footer_band(&shapes, panel);
-            let texts = footer_texts(&shapes, panel);
-            let buttons: Vec<egui::Rect> = texts
-                .iter()
-                .filter(|(text, _)| BUTTON_LABELS.contains(&text.as_str()))
-                .map(|(_, rect)| *rect)
-                .collect();
-            let expected_buttons = if dirty { 4 } else { 3 };
-            assert_eq!(
-                buttons.len(),
-                expected_buttons,
-                "the {} tab draws {expected_buttons} buttons of its footer in {state}: {texts:?}",
-                tab.label()
-            );
-
-            // The buttons are in the panel, and in the row that the bar gives them.
-            for button in &buttons {
-                assert!(
-                    button.min.x >= panel.min.x + 1.0 && button.max.x <= panel.max.x - 1.0,
-                    "the {state} footer draws a button at {button:?} beside the panel {panel:?}"
-                );
-                assert!(
-                    band.expand(1.0).contains_rect(*button),
-                    "the {state} footer draws a button at {button:?} and its bar is {band:?}"
-                );
-            }
-
-            // The status line is the one text of the band that is not a button, it
-            // keeps the place that the buttons leave, and it shows the state.
-            let lines: Vec<&(String, egui::Rect)> = texts
-                .iter()
-                .filter(|(text, _)| !BUTTON_LABELS.contains(&text.as_str()))
-                .collect();
-            let line_text = match case {
-                FooterState::None => {
-                    assert!(
-                        lines.is_empty(),
-                        "the {state} footer of the {} tab draws no line: {lines:?}",
-                        tab.label()
-                    );
-                    continue;
-                }
-                FooterState::Error => error,
-                other => other.text().unwrap_or_default(),
-            };
-            assert_eq!(
-                lines.len(),
-                1,
-                "the {state} footer of the {} tab draws one line: {texts:?}",
-                tab.label()
-            );
-            let (drawn, line) = lines[0];
-            for button in &buttons {
-                assert!(
-                    !line.intersects(*button) && line.max.x + 6.0 <= button.min.x,
-                    "the {state} footer draws {drawn:?} at {line:?} under the button {button:?}"
-                );
-            }
-            assert!(
-                band.expand(1.0).contains_rect(*line),
-                "the {state} footer draws {drawn:?} at {line:?} and its bar is {band:?}"
-            );
-            assert_eq!(
-                drawn,
-                line_text,
-                "the {} tab says the state of the save in its footer",
-                tab.label()
-            );
-            if matches!(case, FooterState::Error) {
-                // A line of an error can be longer than the place of the status
-                // line. It is then cut inside that place, and the person reads the
-                // whole line when the pointer rests on it.
-                let whole = status_line_width(&ctx, error);
-                assert!(
-                    line.width() + 1.0 < whole,
-                    "a line of {whole} points is cut in a place of {} points: {line:?}",
-                    line.width()
-                );
-            }
-        }
-    }
-}
-
-/// The width of `text` in the font and the size of the status line of the footer.
-fn status_line_width(ctx: &egui::Context, text: &str) -> f32 {
-    ctx.fonts_mut(|fonts| {
-        fonts
-            .layout_no_wrap(text.to_owned(), egui::FontId::proportional(12.0), egui::Color32::WHITE)
-            .size()
-            .x
-    })
 }
