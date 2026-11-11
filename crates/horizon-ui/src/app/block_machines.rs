@@ -13,7 +13,7 @@ use std::path::Path;
 use egui::Context;
 use horizon_browser_control::manifest::block;
 use horizon_browser_control::manifest::block_terminal::TerminalRoute;
-use horizon_core::{MachineError, MachineRegistry, Machines, browser::manifest};
+use horizon_core::{MachineError, MachineKeys, MachineRegistry, Machines, browser::manifest};
 
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
@@ -182,14 +182,53 @@ impl HorizonApp {
     }
 
     /// Answers `machines`: every record of this Horizon, in name order, with
-    /// whether a terminal of it is open now.
+    /// whether a terminal of it is open now and whether its key is on this
+    /// computer.
+    ///
+    /// The keys are files of this home, so the answer comes from the coordination
+    /// worker: no frame reads them.
     pub(super) fn answer_machines(&mut self, request: &block::Request, root: Option<&Path>, ctx: &Context) {
-        let outcome = block::Outcome::Machines {
-            machines: self.machine_summaries(),
-            server: self.server_sync.as_ref().map(|sync| sync.state_code().to_owned()),
-        };
-        self.write_block_answer(BlockAnswer::new(root, request.clone(), outcome));
-        ctx.request_repaint();
+        let mut summaries = self.machine_summaries();
+        let keys = MachineKeys::from_home(self.session_store.home());
+        let server = self.server_sync.as_ref().map(|sync| sync.state_code().to_owned());
+        let (root, request) = (root.map(Path::to_path_buf), request.clone());
+        let writing = ctx.clone();
+        self.block_claim.key_job_started();
+        self.browser_create_host.io.then(
+            move || {
+                keys.list().map(|keys| {
+                    keys.into_iter()
+                        .map(|key| key.name)
+                        .collect::<std::collections::BTreeSet<String>>()
+                })
+            },
+            move |app, listed| {
+                app.block_claim.key_job_finished();
+                let outcome = match listed {
+                    Some(Ok(present)) => {
+                        for summary in &mut summaries {
+                            summary.key_missing = summary.key.as_deref().is_some_and(|key| !present.contains(key));
+                        }
+                        block::Outcome::Machines {
+                            machines: summaries,
+                            server,
+                        }
+                    }
+                    // A key folder that this computer cannot read answers no
+                    // missing key, because the answer would be a guess.
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "the machine keys of this home were not read for a list answer");
+                        block::Outcome::Machines {
+                            machines: summaries,
+                            server,
+                        }
+                    }
+                    None => stopped(),
+                };
+                app.write_block_answer(BlockAnswer::new(root.as_deref(), request, outcome));
+                writing.request_repaint();
+            },
+        );
     }
 
     /// Forgets one machine from its sidebar menu: the record goes, its key stays,
@@ -242,6 +281,7 @@ impl HorizonApp {
                 provider: machine.provider.clone(),
                 added_at_millis: machine.added_at_millis,
                 terminal_open: self.machine_panel(&machine.name).is_some(),
+                key_missing: false,
             })
             .collect()
     }

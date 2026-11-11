@@ -132,6 +132,7 @@ fn a_machine_set_writes_the_record_of_this_horizon_home() {
     assert_eq!(record.provider.as_deref(), Some("Hetzner, hel1"));
     assert!(!record.terminal_open, "no terminal of the machine is open yet");
     assert!(record.added_at_millis > 0, "the record says when it was added");
+    assert!(!record.key_missing, "the key of the record is on this computer");
 
     let path = MachineRegistry::from_home(app.session_store.home()).path();
     assert!(
@@ -152,6 +153,40 @@ fn a_machine_set_writes_the_record_of_this_horizon_home() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].host, "203.0.113.11");
     assert_eq!(listed[0].key, None, "a set without a key forgets the old one");
+}
+
+#[test]
+fn a_machine_whose_key_was_deleted_reports_the_missing_key() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+    answered(
+        &mut app,
+        &ctx,
+        &root,
+        set("build-1", "203.0.113.10", Some("build-1"), None),
+    );
+    assert!(!machines(&mut app, &ctx, &root)[0].key_missing);
+
+    // The person deletes the key on this computer, as the key operation does. The
+    // record keeps its binding, so the machine says that the key is not here.
+    fs::remove_file(
+        MachineKeys::from_home(app.session_store.home())
+            .key_directory()
+            .join("build-1"),
+    )
+    .expect("the private key is deleted");
+
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        listed[0].key.as_deref(),
+        Some("build-1"),
+        "the record keeps its binding"
+    );
+    assert!(
+        listed[0].key_missing,
+        "the answer says that the key of the machine is not on this computer"
+    );
 }
 
 #[test]

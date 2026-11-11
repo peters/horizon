@@ -59,13 +59,24 @@ impl HorizonApp {
             return;
         }
         let opening = ctx.clone();
+        let bound = key.clone();
         self.browser_create_host.io.then(
             move || required_key(&keys, key.as_deref()),
             move |app, required| {
                 let key = match required {
                     Some(Ok(key)) => key,
                     Some(Err(error)) => {
-                        app.machine_refused(&name, &error);
+                        // A record that binds a key which this computer no longer
+                        // holds is a key that a person deleted here or on another
+                        // computer, and the only login left is the one of the
+                        // person's own keys.
+                        if error.code() == horizon_browser_control::manifest::block_keys::KEY_UNAVAILABLE
+                            && bound.is_some()
+                        {
+                            app.set_sidebar_notice(deleted_key_notice(&name));
+                        } else {
+                            app.machine_refused(&name, &error);
+                        }
                         opening.request_repaint();
                         return;
                     }
@@ -93,10 +104,17 @@ impl HorizonApp {
     }
 }
 
+/// The notice of a machine whose key is not on this computer: a person deleted it
+/// here or on another computer, so a click opens nothing. The person asks an agent
+/// for a new key, and the agent installs the new public line on the machine.
+pub(in crate::app) fn deleted_key_notice(name: &str) -> String {
+    format!("The key of {name} was deleted. Ask an agent to make a new key and install it.")
+}
+
 /// The notice of a machine that this computer cannot open yet: a record that
-/// arrived from the server with no key binding here, or a key that the server has
-/// not brought to this computer yet. A click on it opens nothing, because the only
-/// login it could try is the one of the keys of the person.
+/// arrived from the server with no key binding here, or a record whose binding
+/// names a key that this computer does not hold. A click on it opens nothing,
+/// because the only login it could try is the one of the keys of the person.
 ///
 /// `link_has_key` is `None` when this computer follows no server, and then the
 /// key files themselves decide, with the error of the key that is not there.
@@ -106,12 +124,11 @@ pub(in crate::app) fn missing_key_notice(
     key: Option<&str>,
     link_has_key: Option<bool>,
 ) -> Option<String> {
-    let missing = match (key, link_has_key) {
-        (Some(_), Some(has_key)) => !has_key,
-        (Some(_), None) => false,
-        (None, _) => foreign,
-    };
-    missing.then(|| format!("This computer has no key for {name} yet"))
+    match (key, link_has_key) {
+        (Some(_), Some(false)) => Some(deleted_key_notice(name)),
+        (Some(_), Some(true) | None) => None,
+        (None, _) => foreign.then(|| format!("This computer has no key for {name} yet")),
+    }
 }
 
 #[cfg(test)]

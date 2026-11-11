@@ -107,9 +107,12 @@ the server and the queue of that computer in one view:
    restart.
 4. The key of a machine is a binding of `machines/keys.json`. The binding follows
    the server too, and the key value with it, so a machine that another computer
-   added opens here as soon as the key arrived. Until then the section says
-   `This computer has no key for <name> yet`, and a server that has no key for
-   that machine keeps that notice.
+   added opens here as soon as the key arrived. A record whose key this computer
+   does not hold opens nothing, and the section says `The key of <name> was
+   deleted. Ask an agent to make a new key and install it.` while `machines`
+   answers `key_missing: true` for it. A record that arrived from the server with
+   no binding here says `This computer has no key for <name> yet` instead, because
+   there is no key name to report.
 
 ### The first link of a computer that has a list, keys and values
 

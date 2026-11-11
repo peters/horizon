@@ -246,6 +246,35 @@ a forgotten record leaves its key.
    Result: Within 30 seconds the dot is filled in green again, the hover text
    says `connected`, and the last output of the panel is still `row-state`.
 
+### 6.8a M7a — A machine whose key was deleted
+
+> **CAUTION: THIS TASK DELETES A KEY OF THE TEST HOME.** The key belongs to the
+> private home of the fixture. A key of your own Horizon is not touched.
+
+1. Call `block_panel` with `{"operation":"delete_machine_key","name":"build-2"}`,
+   for the machine that the earlier tasks made.
+
+   Result: The answer is `status: deleted_machine_key`. The three files of that
+   key go from the key folder.
+
+2. Click the row `build-2`.
+
+   Result: No panel opens, and the section shows
+   `The key of build-2 was deleted. Ask an agent to make a new key and install it.`
+   for ten seconds. No `ssh` child starts for that machine.
+
+3. Call `block_panel` with `{"operation":"machines"}`.
+
+   Result: The record of `build-2` says `key_missing: true` and keeps its key
+   name.
+
+4. Call `block_panel` with `{"operation":"machine_key","name":"build-2"}`, and
+   click the row again.
+
+   Result: A new key pair exists, the answer says `created: true`, and the click
+   opens a panel whose error is the one of ssh for a key that the machine does not
+   accept yet. `machines` says `key_missing: false`.
+
 ### 6.9 M8 — Visual regression
 
 1. Look at the section at the default sidebar width, then drag the window narrow
@@ -260,7 +289,19 @@ a forgotten record leaves its key.
    Result: The dot, the name and the provider text do not move or jump. No row
    flickers between two states.
 
-## 7. Clean-up
+## 7. Pass criteria
+
+- The section shows no header and no row while this Horizon has no machine.
+- A machine that an agent sets appears in name order, and its row names the
+  machine, its provider line and whether a terminal of it is open.
+- One click connects without an agent, and a second click focuses the same panel.
+- A record that no longer passes its rule opens nothing and says the typed reason.
+- A machine whose key was deleted opens nothing, says that the key was deleted,
+  and reports `key_missing: true` to an agent.
+- A terminal of a machine reconnects by itself after a lost link, and a key press
+  in a panel whose attempt is in flight starts the new attempt at once.
+
+## 8. Clean-up
 
 1. Close the exact test window normally. Close the Device panel of the test
    through `device_panel`.
@@ -270,7 +311,7 @@ a forgotten record leaves its key.
    Result: No process of the test is left, and the fixture-owned home and
    desktop are gone.
 
-## 8. Limits of this procedure
+## 9. Limits of this procedure
 
 - The loopback server answers in milliseconds, so the procedure does not test a
   slow first contact or a host that disappears.
@@ -279,3 +320,6 @@ a forgotten record leaves its key.
   that does not answer.
 - The procedure does not test a machine without `tmux`.
 - The procedure does not test more than two machines in the section.
+- The task of the deleted key proves the notice and `key_missing` of one
+  computer. The other computer that follows the same server is the task of
+  [the server procedure](horizon-server.md).

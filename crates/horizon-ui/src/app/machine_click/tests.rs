@@ -62,8 +62,8 @@ fn a_machine_that_only_arrived_from_the_server_has_no_key_here() {
     );
     assert_eq!(
         missing_key_notice("build-1", true, Some("build-1"), Some(false)).as_deref(),
-        Some("This computer has no key for build-1 yet"),
-        "a key that the server has not brought here yet opens nothing"
+        Some("The key of build-1 was deleted. Ask an agent to make a new key and install it."),
+        "a record whose key is not here names the reason, and opens nothing"
     );
     assert_eq!(
         missing_key_notice("build-1", true, Some("build-1"), Some(true)),
@@ -79,6 +79,32 @@ fn a_machine_that_only_arrived_from_the_server_has_no_key_here() {
         missing_key_notice("build-1", false, Some("build-1"), None),
         None,
         "without a server the key file itself decides, with its own error"
+    );
+}
+
+#[test]
+fn a_click_on_a_machine_whose_key_was_deleted_says_what_to_do() {
+    let (_temp, ctx, mut app) = app();
+    // The record binds a key that this computer no longer holds, as a deletion on
+    // another computer leaves it.
+    keep(
+        &mut app,
+        vec![record("build-1", Some("work"))],
+        &[("build-1", "build-1")],
+    );
+    let before = app.board.panels.len();
+
+    app.connect_machine("build-1", &ctx);
+    app.settle_browser_host_io();
+
+    assert_eq!(
+        app.board.panels.len(),
+        before,
+        "a click opens nothing with the keys of the person"
+    );
+    assert_eq!(
+        app.sidebar_notice.as_deref(),
+        Some("The key of build-1 was deleted. Ask an agent to make a new key and install it.")
     );
 }
 

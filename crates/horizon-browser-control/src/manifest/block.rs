@@ -231,6 +231,11 @@ pub struct MachineSummary {
     /// sidebar shows it as pending.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pending: bool,
+    /// Whether the key of this machine is not on this computer, because a person
+    /// deleted it here or on another computer. A click on the machine then opens
+    /// nothing, because the only login left is the one of the person's own keys.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub key_missing: bool,
 }
 
 /// One card as `list` reports it.
@@ -869,12 +874,18 @@ mod tests {
                 added_at_millis: 7,
                 terminal_open: true,
                 pending: true,
+                key_missing: true,
             }],
         })
         .expect("serialize");
         assert_eq!(listed["status"], serde_json::json!("machines"));
         assert_eq!(listed["machines"][0]["terminal_open"], serde_json::json!(true));
         assert_eq!(listed["machines"][0]["pending"], serde_json::json!(true));
+        assert_eq!(
+            listed["machines"][0]["key_missing"],
+            serde_json::json!(true),
+            "a machine whose key was deleted says so"
+        );
         assert_eq!(listed["server"], serde_json::json!("in_step"));
     }
 

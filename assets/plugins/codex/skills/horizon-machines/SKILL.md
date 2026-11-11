@@ -62,16 +62,19 @@ own words in the subtitle. Tell the person which command to run, and wait.
 A new session can find the machines that an earlier session registered with
 `{"operation": "machines"}`: each record has its name, route, key, tmux session
 and provider line, and `terminal_open` says whether a terminal of it is open now.
-Tell the person that the same machines are in the Machines section of the
-sidebar, where one click connects.
+`key_missing` says that the record binds a key that this computer does not hold,
+because a person deleted it here or on another computer. Tell the person that the
+same machines are in the Machines section of the sidebar, where one click
+connects.
 
 The same answer also says whether a change waits for the server of the person and
 what the link to that server does now: `pending` on a record and `server` on the
 answer, `off` when this Horizon keeps its machine list alone. A machine that
 another computer added is in this list too, and its key arrives with the server, so
-a click on it connects as soon as the key is here. A machine that the server has no
-key for opens nothing here: tell the person that, and do not work around it with a
-key of your own for the second computer.
+a click on it connects as soon as the key is here. A machine whose key is missing
+opens nothing here: ask the person before you call `machine_key` for a new key,
+then put the new public line in the `authorized_keys` of the machine. Do not work
+around a missing key with a key of the person for the second computer.
 
 "What is rented", "show my machines" and "overview" mean one overview card, not
 one card per machine. It is a list of every machine that the providers hold, in

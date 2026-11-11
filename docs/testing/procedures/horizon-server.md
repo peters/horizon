@@ -130,9 +130,9 @@ also proves that a computer without a server in its settings behaves as before.
 
 3. On client computer B, click the row of `build-1`.
 
-   Result: the section shows `This computer has no key for build-1 yet` while the
-   server has no key for that machine, and no terminal opens. A key that the server
-   has arrives with the next task.
+   Result: the section shows `The key of build-1 was deleted. Ask an agent to make a
+   new key and install it.` while the server has no key for that machine, and no
+   terminal opens. A key that the server has arrives with the next task.
 
 4. On client computer B, forget the machine with the row menu, or with this
    request:
@@ -307,8 +307,16 @@ gone, and that it catches up when the server returns.
    Result: a terminal opens and runs `ssh` with
    `-i <key folder>/build-1` and
    `-o UserKnownHostsFile=<key folder>/build-1.known_hosts`. The section no longer
-   says `This computer has no key for build-1 yet`. The login reaches the machine
-   when its `authorized_keys` holds the public line of that key.
+   says that the key was deleted. The login reaches the machine when its
+   `authorized_keys` holds the public line of that key.
+
+4.1. On client computer B, ask an agent for the machine list with this request:
+
+   ```json
+   {"operation": "machines"}
+   ```
+
+   Result: the record of `build-1` says `key_missing: false`.
 
 5. On client computer B, delete the key with this request:
 
@@ -316,7 +324,11 @@ gone, and that it catches up when the server returns.
    {"operation": "delete_machine_key", "name": "build-1"}
    ```
 
-   Result: the three files go from client computer A within a few seconds.
+   Result: the three files go from client computer A within a few seconds. The
+   machine list of both computers says `key_missing: true` for the record of
+   `build-1`, and a click on the row of `build-1` on either computer opens no
+   terminal and says `The key of build-1 was deleted. Ask an agent to make a new key
+   and install it.`
 
 ### 6.8 S8 — a credential value that one computer sets is used on the other
 
