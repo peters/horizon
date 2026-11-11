@@ -683,7 +683,15 @@ impl Client {
         if !std::mem::take(&mut self.unsaved) {
             return None;
         }
-        serde_json::to_vec_pretty(&self.state).ok()
+        match serde_json::to_vec_pretty(&self.state) {
+            Ok(encoded) => Some(encoded),
+            Err(error) => {
+                // The queue file keeps the intents that it holds: an empty file
+                // would lose them, so this change waits for the next one.
+                tracing::error!(%error, "the queue of the link was not encoded");
+                None
+            }
+        }
     }
 }
 
