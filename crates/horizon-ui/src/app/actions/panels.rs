@@ -405,6 +405,7 @@ mod tests {
         );
     }
 
+    mod close;
     mod placed;
 
     fn shell_preset() -> PresetConfig {
