@@ -514,9 +514,9 @@ fn load_config(config_path: &std::path::Path, named: bool) -> Result<Config, Str
             // The message of an old settings file already names the file and the
             // line of its fault, so it is not wrapped in the settings path of this
             // build.
-            horizon_core::Error::OldSettingsFile { .. } => format!(
-                "{error}\nMove the file aside to start with the default settings."
-            ),
+            horizon_core::Error::OldSettingsFile { .. } => {
+                format!("{error}\nMove the file aside to start with the default settings.")
+            }
             error => format!(
                 "cannot read the settings of {}: {error}\n\
                  Move the file aside to start with the default settings.",
