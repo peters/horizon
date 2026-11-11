@@ -270,26 +270,15 @@ pub(super) fn default_presets() -> Vec<PresetConfig> {
     presets.extend(default_kilo_presets());
     insert_missing_pi_presets(&mut presets);
     presets.extend(default_grok_presets());
-    presets.extend([
-        PresetConfig {
-            name: "Markdown".to_string(),
-            alias: Some("md".to_string()),
-            kind: PanelKind::Editor,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
-        PresetConfig {
-            name: "Usage".to_string(),
-            alias: Some("u".to_string()),
-            kind: PanelKind::Usage,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
-    ]);
+    presets.extend([PresetConfig {
+        name: "Markdown".to_string(),
+        alias: Some("md".to_string()),
+        kind: PanelKind::Editor,
+        command: None,
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    }]);
     insert_missing_browser_preset(&mut presets);
     presets
 }

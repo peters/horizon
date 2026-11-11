@@ -3,7 +3,7 @@ use horizon_core::{Config, PanelKind, PanelResume, PresetConfig};
 
 use crate::theme;
 
-const ALL_KINDS: [PanelKind; 14] = [
+const ALL_KINDS: [PanelKind; 13] = [
     PanelKind::Shell,
     PanelKind::Ssh,
     PanelKind::Codex,
@@ -15,7 +15,6 @@ const ALL_KINDS: [PanelKind; 14] = [
     PanelKind::Grok,
     PanelKind::Command,
     PanelKind::Editor,
-    PanelKind::Usage,
     PanelKind::Browser,
     PanelKind::Device,
 ];

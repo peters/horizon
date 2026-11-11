@@ -33,8 +33,6 @@ mod shortcuts;
 mod ssh;
 mod terminal;
 mod transcript;
-mod usage_dashboard;
-mod usage_stats;
 mod util;
 mod view;
 mod workspace;
@@ -102,8 +100,6 @@ pub use ssh::{
 };
 pub use terminal::{ClipboardTarget, ClipboardWrite, Terminal, open_url};
 pub use transcript::PanelTranscript;
-pub use usage_dashboard::UsageDashboard;
-pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use util::{stand_in_program, truncate_chars};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};

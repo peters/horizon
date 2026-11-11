@@ -198,7 +198,7 @@ def named_secret_names(ids):
 # board instead of the board the procedure tests.
 PANEL_KINDS = frozenset({
     'shell', 'ssh', 'codex', 'claude', 'open_code', 'gemini', 'kilo_code', 'pi', 'grok',
-    'command', 'editor', 'usage', 'browser', 'device', 'setup_board',
+    'command', 'editor', 'browser', 'device', 'setup_board',
 })
 
 

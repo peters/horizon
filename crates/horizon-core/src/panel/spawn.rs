@@ -21,7 +21,6 @@ use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, claude_session_transcript_exists, new_local_id};
 use crate::ssh::SshConnection;
 use crate::transcript::PanelTranscript;
-use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 use crate::{AgentIntegrationKind, AgentResumeMode, BlockPanelState, agent_definition};
 
@@ -200,10 +199,6 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_editor(seed, command)
         }
-        PanelKind::Usage => {
-            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
-            Ok(spawn_usage(seed))
-        }
         PanelKind::Device => {
             let command = opts.command.take();
             let is_restore = opts.is_restore;
@@ -362,20 +357,6 @@ fn spawn_editor(mut seed: StaticPanelSeed, command: Option<String>) -> Result<Pa
     ))
 }
 
-fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
-    let (title, has_custom_name) = seed.take_title(|| "Usage".to_string());
-    tracing::info!("created usage panel '{}' (id={})", title, seed.id.0);
-
-    seed.into_panel(
-        title,
-        PanelKind::Usage,
-        PanelContent::Usage(UsageDashboard::new()),
-        None,
-        None,
-        has_custom_name,
-    )
-}
-
 /// Where a browser panel's session runs.
 enum BrowserSpawnMode {
     Local(Option<String>),
@@ -513,9 +494,7 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::Usage | PanelKind::Browser | PanelKind::Device | PanelKind::Block => {
-            (String::new(), Vec::new())
-        }
+        PanelKind::Editor | PanelKind::Browser | PanelKind::Device | PanelKind::Block => (String::new(), Vec::new()),
         PanelKind::Shell => {
             let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
             let program = command.unwrap_or_else(default_shell);
@@ -826,7 +805,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor | PanelKind::Usage | PanelKind::Browser | PanelKind::Device | PanelKind::Block => 0,
+            PanelKind::Editor | PanelKind::Browser | PanelKind::Device | PanelKind::Block => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode

@@ -3,7 +3,6 @@ use crate::error::{Error, Result};
 use crate::runtime_state::claude_session_transcript_exists;
 use crate::ssh::SshConnectionStatus;
 use crate::terminal::{Terminal, TerminalSpawnOptions};
-use crate::usage_dashboard::UsageDashboard;
 
 use super::spawn::{
     AgentLaunchContext, agent_env, current_unix_millis, kitty_keyboard_for_kind, resolve_launch_command,
@@ -26,15 +25,6 @@ impl Panel {
         self.terminal().map(Terminal::screen_replay_bytes).unwrap_or_default()
     }
 
-    /// The content a board panel restarts with: the usage dashboard starts empty.
-    /// `None` for any other panel.
-    fn fresh_board_content(&self) -> Option<PanelContent> {
-        match &self.content {
-            PanelContent::Usage(_) => Some(PanelContent::Usage(UsageDashboard::new())),
-            _ => None,
-        }
-    }
-
     /// Restart panel content while keeping the same identity and layout.
     /// Terminal agent panels resume their existing session. Browser panels
     /// only schedule an asynchronous relaunch; `Ok(())` confirms that the
@@ -50,11 +40,6 @@ impl Panel {
     pub fn restart(&mut self) -> Result<()> {
         if let PanelContent::Browser(browser) = &mut self.content {
             browser.relaunch();
-            return Ok(());
-        }
-
-        if let Some(fresh) = self.fresh_board_content() {
-            self.content = fresh;
             return Ok(());
         }
 

@@ -16,8 +16,6 @@ use crate::error::Result;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::Terminal;
-#[cfg(test)]
-use crate::usage_dashboard::UsageDashboard;
 use crate::workspace::WorkspaceId;
 
 use self::spawn::spawn_panel;
@@ -55,7 +53,6 @@ pub enum PanelKind {
     Grok,
     Command,
     Editor,
-    Usage,
     Browser,
     Device,
     Block,
@@ -72,7 +69,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::Usage | Self::Device | Self::Block)
+        !matches!(self, Self::Device | Self::Block)
     }
 
     #[must_use]
@@ -96,7 +93,6 @@ impl PanelKind {
             Self::Ssh => "SSH",
             Self::Command => "Command",
             Self::Editor => "Editor",
-            Self::Usage => "Usage",
             Self::Browser => "Browser",
             Self::Device => "Device",
             Self::Block => "Card",
@@ -823,7 +819,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {}
+            PanelContent::Device(_) | PanelContent::Block(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -847,7 +843,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => true,
+            PanelContent::Device(_) | PanelContent::Block(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -860,7 +856,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => true,
+            PanelContent::Device(_) | PanelContent::Block(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -957,8 +953,8 @@ mod tests {
     use super::{
         AGENT_PANEL_SCROLLBACK_LIMIT, AgentLaunchContext, AgentSessionBinding, AgentStatus,
         DEFAULT_PANEL_SCROLLBACK_LIMIT, Panel, PanelContent, PanelId, PanelKind, PanelLayout, PanelResume,
-        SshConnectionStatus, UsageDashboard, WorkspaceId, kitty_keyboard_for_kind, platform_default_shell,
-        resolve_launch_command, scrollback_limit_for_kind,
+        SshConnectionStatus, WorkspaceId, kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command,
+        scrollback_limit_for_kind,
     };
     use crate::ssh::SshConnection;
 
@@ -968,13 +964,13 @@ mod tests {
             local_id: "panel-1".to_string(),
             title: title.to_string(),
             terminal_title: terminal_title.to_string(),
-            kind: PanelKind::Usage,
+            kind: PanelKind::Block,
             resume: PanelResume::Fresh,
             work_resume: crate::agent_work::ResumePolicy::default(),
             layout: PanelLayout::default(),
             visible: true,
             workspace_id: WorkspaceId(1),
-            content: PanelContent::Usage(UsageDashboard::new()),
+            content: PanelContent::Block(crate::BlockPanelState::default()),
             disconnected_browser_profile: None,
             disconnected_device_identity: None,
             session_binding: None,
@@ -1311,7 +1307,7 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::Usage, PanelKind::Block] {
+        for kind in [PanelKind::Device, PanelKind::Block] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }

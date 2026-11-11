@@ -11,7 +11,6 @@ use super::super::terminal_widget::{
     TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView,
 };
 use super::super::theme;
-use super::super::usage_widget::UsageDashboardView;
 pub(super) use super::panel_chrome::{
     PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
@@ -180,7 +179,6 @@ fn show_panel_body_contents(
     match panel.kind {
         PanelKind::Editor => MarkdownEditorView::new(panel, body_context.editor_preview_cache)
             .show(ui, body_context.editor_save_shortcut),
-        PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         PanelKind::Device if panel.device().is_some() => {
             if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {
                 state.show(ui, device, interactive);
