@@ -2,7 +2,7 @@ use super::{
     SidebarPanelEntry, SidebarWorkspaceInsert, sidebar_workspace_drop_should_dock, sidebar_workspace_insert_dock_side,
     sidebar_workspace_shows_panels,
 };
-use horizon_core::WorkspaceDockSide;
+use horizon_core::{WorkspaceDockSide, stand_in_program};
 
 #[test]
 fn sidebar_drop_docks_attached_workspace_against_attached_target() {
@@ -394,9 +394,9 @@ fn the_row_says_which_panels_hold_a_session_of_the_machine() {
             ..Machine::default()
         }],
     );
-    // The panel runs `/bin/true` in place of ssh, so the test starts no ssh.
+    // The panel runs the stand-in program in place of ssh, so the test starts no ssh.
     let options = PanelOptions {
-        launch_wrapper: vec!["/bin/true".to_owned()],
+        launch_wrapper: vec![stand_in_program().to_owned()],
         ..PanelOptions::default()
     };
     app.create_panel_with_options(options, workspace)

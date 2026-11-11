@@ -5,6 +5,7 @@ use crate::machines::{Machine, MachineRegistry, Machines};
 use crate::panel::{PanelKind, PanelOptions};
 use crate::runtime_state::PanelState;
 use crate::ssh::MachineKeys;
+use crate::util::stand_in_program;
 
 use super::*;
 
@@ -440,7 +441,7 @@ fn a_kill_that_does_not_end_in_its_time_limit_is_stopped() {
 fn a_kill_that_ends_at_once_is_quiet() {
     let quick = SessionKill {
         session: "hz-c8dfe3af-1".to_owned(),
-        program: "/bin/true".to_owned(),
+        program: stand_in_program().to_owned(),
         args: Vec::new(),
     };
     quick.run_within(Duration::from_secs(5));

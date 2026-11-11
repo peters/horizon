@@ -2,6 +2,21 @@
 
 use std::borrow::Cow;
 
+/// A program that ends at once with success, for a test that must start no
+/// shell, no ssh and no kill command.
+///
+/// The path exists on Linux and on macOS: macOS keeps `true` in `/usr/bin`, and
+/// a smaller Linux keeps it in `/bin`. A test that names one of those paths
+/// passes on one system and fails on the other, so it asks for this program.
+#[doc(hidden)]
+#[must_use]
+pub fn stand_in_program() -> &'static str {
+    ["/usr/bin/true", "/bin/true"]
+        .into_iter()
+        .find(|candidate| std::path::Path::new(candidate).exists())
+        .unwrap_or("/usr/bin/true")
+}
+
 /// Caps `value` at `max_chars` characters, ending a truncated result with an
 /// ellipsis that counts toward the budget. Borrows when nothing is cut.
 ///
@@ -31,7 +46,15 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_chars;
+    use super::{stand_in_program, truncate_chars};
+
+    #[test]
+    fn stand_in_program_names_a_program_that_exists() {
+        assert!(
+            std::path::Path::new(stand_in_program()).exists(),
+            "the stand-in program of a test exists on this system"
+        );
+    }
 
     #[test]
     fn truncate_chars_keeps_short_values_untouched() {

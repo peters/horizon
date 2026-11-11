@@ -3,7 +3,7 @@
 
 use horizon_core::{
     Machine, MachineKeys, MachineRegistry, Machines, PanelKind, PanelOptions, RuntimeState, StartupDecision,
-    WorkspaceId, WorkspacePlace, WorkspaceState,
+    WorkspaceId, WorkspacePlace, WorkspaceState, stand_in_program,
 };
 
 use crate::app::HorizonApp;
@@ -48,10 +48,11 @@ fn app_in(place: WorkspacePlace) -> (tempfile::TempDir, HorizonApp, WorkspaceId)
     (temp, app, workspace)
 }
 
-/// The options of a panel that runs `/bin/true` instead of its program, so a
-/// test starts no ssh. The panel's own saved command line is what it reads.
+/// The options of a panel that runs the stand-in program instead of its own
+/// program, so a test starts no ssh. The panel's own saved command line is what
+/// it reads.
 fn harmless(mut options: PanelOptions) -> PanelOptions {
-    options.launch_wrapper = vec!["/bin/true".to_owned()];
+    options.launch_wrapper = vec![stand_in_program().to_owned()];
     options
 }
 

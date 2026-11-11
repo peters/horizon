@@ -9,7 +9,9 @@ use egui::Context;
 use horizon_browser_control::manifest::block::{Operation, Outcome, Request};
 use horizon_browser_control::manifest::{self};
 use horizon_core::browser::BrowserPanelState;
-use horizon_core::{Panel, PanelContent, PanelId, PanelKind, PanelOptions, RuntimeState, StartupDecision, WorkspaceId};
+use horizon_core::{
+    Panel, PanelContent, PanelId, PanelKind, PanelOptions, RuntimeState, StartupDecision, WorkspaceId, stand_in_program,
+};
 
 use super::HorizonApp;
 use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
@@ -171,10 +173,10 @@ fn overlaps(left: [f32; 4], right: [f32; 4]) -> bool {
 fn a_panel_created_beside_a_card_never_covers_it() {
     let (_temp, _ctx, mut app, card, workspace) = app();
     let card_bounds = bounds(&app, card);
-    // The terminal runs `/bin/true` in place of a shell, so the test starts no
-    // terminal session.
+    // The terminal runs the stand-in program in place of a shell, so the test
+    // starts no terminal session.
     let options = PanelOptions {
-        launch_wrapper: vec!["/bin/true".to_owned()],
+        launch_wrapper: vec![stand_in_program().to_owned()],
         ..PanelOptions::default()
     };
 
